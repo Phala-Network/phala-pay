@@ -132,12 +132,23 @@ jobs:
         run: make -C sdk/python check
 
   sdk-js:
+    needs: sdk-js-react18
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: sdk/js
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require the React 18 floor job to pass
+        working-directory: .
+        env:
+          FLOOR_RESULT: ${{ needs.sdk-js-react18.result }}
+        run: |
+          if [[ "$FLOOR_RESULT" != "success" ]]; then
+            echo "sdk-js-react18 finished with '$FLOOR_RESULT'; refusing to run the default SDK check" >&2
+            exit 1
+          fi
       - uses: ./.github/actions/sdk-js
       - name: Typecheck, lint, unit tests, and build
         run: pnpm run check
@@ -157,6 +168,47 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sdk-js-playwright-report
+          path: |
+            sdk/js/playwright-report
+            sdk/js/test-results
+          retention-days: 7
+
+  # Keep the advertised React 18 floor covered independently of the default React 19 toolchain.
+  # The exact versions are intentional: this job verifies the SDK's peer range at its lower bound.
+  sdk-js-react18:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/js
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/sdk-js
+        with:
+          e2e: "true"
+      - name: Install the pinned React 18 floor
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(path, 'utf8'));
+          Object.assign(packageJson.devDependencies, {
+            react: '18.2.0',
+            'react-dom': '18.2.0',
+            '@types/react': '18.3.31',
+            '@types/react-dom': '18.3.7',
+          });
+          fs.writeFileSync(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+          pnpm install --no-frozen-lockfile
+      - name: Typecheck, unit tests, and build on React 18
+        run: pnpm run check
+      - name: Browser tests on React 18
+        run: pnpm run e2e:docker
+      - name: Keep the React 18 Playwright report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-js-react18-playwright-report
           path: |
             sdk/js/playwright-report
             sdk/js/test-results

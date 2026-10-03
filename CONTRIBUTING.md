@@ -112,6 +112,11 @@ make sdk-generate                               # Python: regenerate the client 
 scripts/version.sh                              # Both: the SDKs name the Cargo workspace version
 ```
 
+The JavaScript SDK's CI check also runs the full unit, type, build, and browser suite against the
+advertised React 18 floor (React and React DOM 18.2.0 with React types 18.3.31 and DOM types
+18.3.7). Keep the default local check on the committed React 19 toolchain; use the pinned floor
+versions above when reproducing that compatibility job locally.
+
 A pull request that changes `crates/topup/openapi.json` regenerates the Python client in the same
 pull request; CI fails if regeneration is not a no-op.
 
