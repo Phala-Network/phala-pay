@@ -8,22 +8,30 @@ const PROVIDER_TRANSPORT_TARGETS: [&str; 3] = ["alloy_transport_http", "reqwest"
 
 /// Builds the production JSON log subscriber, with the Sentry layer when reporting is enabled.
 ///
-/// The INFO ceiling and the silenced transport targets are a redaction boundary: alloy's DEBUG
+/// The INFO default and silenced transport targets are a redaction boundary: alloy's DEBUG
 /// `ReqwestTransport` span records the credentialed provider URL. The target filter is a global
 /// layer, so a later `EnvFilter` or `RUST_LOG` cannot re-enable those targets, and the Sentry
-/// layer sees only the lines the JSON log shows. Start reporting first
+/// layer sees only the lines the JSON log shows. `TOPUP_RPC_PROBE_DEBUG=1` enables only
+/// sanitized group probe events; it cannot enable transport targets. Start reporting first
 /// ([`super::init_reporting`]).
 pub fn log_subscriber<W>(writer: W) -> impl Subscriber + Send + Sync
 where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
 {
+    let probe_level = if std::env::var("TOPUP_RPC_PROBE_DEBUG").as_deref() == Ok("1") {
+        LevelFilter::DEBUG
+    } else {
+        LevelFilter::INFO
+    };
     let targets = PROVIDER_TRANSPORT_TARGETS.into_iter().fold(
-        Targets::new().with_default(LevelFilter::INFO),
+        Targets::new()
+            .with_default(LevelFilter::INFO)
+            .with_target("topup_adapters::chain::evm::group", probe_level),
         |targets, target| targets.with_target(target, LevelFilter::OFF),
     );
     tracing_subscriber::fmt()
         .json()
-        .with_max_level(LevelFilter::INFO)
+        .with_max_level(LevelFilter::DEBUG)
         .with_target(false)
         .with_writer(writer)
         .finish()

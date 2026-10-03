@@ -7,7 +7,9 @@ and restore-check in the environment's compose overlay. No RPC sidecar or cache 
 
 ## Configuration and acceptance
 
-Start with the committed singleton groups: Tenderly A and PublicNode B per chain. Keep the
+Staging uses Tenderly/Sentio A on both chains, PublicNode/ethPandaOps B on Sepolia, and
+PublicNode alone for B on Base Sepolia (see
+[staging routes](phala.md#staging-routes)). Keep the
 existing member ids so usage series continue. Add credentials or backups through a reviewed PR;
 review company ownership independently of DNS names, including resellers and aliases. Companies
 in A must never appear in B. Same templates with distinct credentials are permitted in one group.
@@ -17,11 +19,28 @@ active replicas with the same budgets: admission is process-local, under the exi
 
 Run the pinned image's `topup config check --secrets FILE`, then `topup rpc check --config FILE`
 with the sealed environment. The latter uses each member's actual key and returns only validated
-member ids. A failed backup does not block first acceptance when another member in each group
+member ids as a JSON array on stdout. Logs and failure summaries go to stderr and name each
+failed member, probe and sanitized error class; the Deploy preflight preserves that summary.
+Set `TOPUP_RPC_PROBE_DEBUG=1` to trace sanitized RPC method/tag attempts and decoded head
+heights; this never enables raw transport logs, URLs, credentials or upstream response bodies.
+A failed backup does not block first acceptance when another member in each group
 passes. Runtime persists the public configuration digest and per-member chain/genesis evidence.
 On the same digest, restart may be degraded; a returning member needs complete probes and the
 configured number of successes before readmission. A new digest still requires one serving
 member in each group. Neither path permits credit using only A or B.
+
+`policy.probe: { attempts: 3, deadline: 30000 }` explicitly configures the default acceptance
+and readmission bounds. Attempts includes the first send of each RPC; deadline is milliseconds
+for the complete member probe. Transport/timeouts, classified server errors and throttling
+retry through Tower, with exponential backoff from `retry_delay_ms` and quota admission honoring
+`Retry-After`. Wrong chain/genesis, missing or mismatched code, unsupported capabilities,
+malformed replies and stale heads fail immediately. `recovery_successes` (default 2) requires
+consecutive complete successful probes before readmission; retries are not recovery successes.
+Owner recovery also gives each member a fresh `probe.deadline`; after both groups finish,
+anchor agreement starts with fresh copies and its own shared `total_deadline_ms` bound.
+Same-height snapshot, persisted-anchor and later-read hash conflicts fail immediately.
+A must serve address-less Transfer logs over an unsplit 2 000-block window; B must serve a
+100-block addressed recent log range. All probes check canonical Multicall3 and route contracts.
 
 ## Outages, lag and quotas
 

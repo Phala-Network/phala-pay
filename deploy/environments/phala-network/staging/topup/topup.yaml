@@ -6,8 +6,8 @@ public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1
   public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=
-# Each chain's own two providers (deploy/phala.md, "RPC providers"); all four are keyless. The
-# first a route names is provider A, which makes every log request.
+# Independent A/B groups per chain, with keyless public backups (deploy/phala.md).
+# A makes the scanner's log requests; a company belongs to only one group per chain.
 rpc_companies:
   tenderly:
     domains:
@@ -15,6 +15,14 @@ rpc_companies:
   publicnode:
     domains:
     - publicnode.com
+  ethereum-foundation:
+    # ethPandaOps team: github.com/ethpandaops; public Sepolia RPC, no API key.
+    domains:
+    - ethpandaops.io
+  sentio:
+    # Sentio's public testnet RPCs; reviewed against sentio.xyz and its official docs.
+    domains:
+    - sentio.xyz
 rpc_budgets:
   tenderly-account:
     requests_per_second: 10
@@ -34,33 +42,74 @@ rpc_budgets:
   base-sepolia-b-key:
     requests_per_second: 10
     burst: 5
+  sentio-account:
+    requests_per_second: 5
+    burst: 5
+  sentio-sepolia-key:
+    requests_per_second: 5
+    burst: 2
+  sentio-base-sepolia-key:
+    requests_per_second: 5
+    burst: 2
+  ethpandaops-account:
+    requests_per_second: 2
+    burst: 2
+  ethpandaops-sepolia-key:
+    requests_per_second: 2
+    burst: 2
 rpc_groups:
   provider-a:
     chain_id: 11155111
+    policy:
+      probe: { attempts: 3, deadline: 30000 }
     members:
     - id: provider-a
       company: tenderly
       url: https://sepolia.gateway.tenderly.co
       account_budget: tenderly-account
       key_budget: provider-a-key
+    - id: sentio-sepolia-a
+      company: sentio
+      url: https://sepolia.rpc.sentio.xyz
+      account_budget: sentio-account
+      key_budget: sentio-sepolia-key
+      priority: 10
   provider-b:
     chain_id: 11155111
+    policy:
+      probe: { attempts: 3, deadline: 30000 }
     members:
     - id: provider-b
       company: publicnode
       url: https://ethereum-sepolia-rpc.publicnode.com
       account_budget: publicnode-account
       key_budget: provider-b-key
+    - id: ethpandaops-sepolia-b
+      company: ethereum-foundation
+      url: https://rpc.sepolia.ethpandaops.io
+      account_budget: ethpandaops-account
+      key_budget: ethpandaops-sepolia-key
+      priority: 10
   base-sepolia-a:
     chain_id: 84532
+    policy:
+      probe: { attempts: 3, deadline: 30000 }
     members:
     - id: base-sepolia-a
       company: tenderly
       url: https://base-sepolia.gateway.tenderly.co
       account_budget: tenderly-account
       key_budget: base-sepolia-a-key
+    - id: sentio-base-sepolia-a
+      company: sentio
+      url: https://base-sepolia.rpc.sentio.xyz
+      account_budget: sentio-account
+      key_budget: sentio-base-sepolia-key
+      priority: 10
   base-sepolia-b:
     chain_id: 84532
+    policy:
+      probe: { attempts: 3, deadline: 30000 }
     members:
     - id: base-sepolia-b
       company: publicnode

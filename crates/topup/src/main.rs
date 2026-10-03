@@ -315,14 +315,25 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Err(error) = topup::observability::log_subscriber(std::io::stdout).try_init() {
+    let logging = if matches!(
+        &cli.command,
+        TopupCommand::Rpc {
+            command: RpcCommand::Check { .. }
+        }
+    ) {
+        // Machine-readable RPC results and diagnostics must use separate streams.
+        topup::observability::log_subscriber(std::io::stderr).try_init()
+    } else {
+        topup::observability::log_subscriber(std::io::stdout).try_init()
+    };
+    if let Err(error) = logging {
         eprintln!("failed to initialize tracing: {error}");
         return ExitCode::FAILURE;
     }
 
     let result = match cli.command {
         TopupCommand::Run(args) => {
-            // Only here: other commands print their result on stdout, which the log shares.
+            // Only `run` reports the configured reporting mode at startup.
             tracing::info!(
                 sentry_enabled = reporting.is_some(),
                 "error reporting configured"

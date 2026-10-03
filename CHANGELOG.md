@@ -13,6 +13,25 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- RPC acceptance and readmission now retry only transient failures within explicit probe attempt
+  and deadline bounds, honoring throttling delays. Capability checks share one finalized snapshot
+  so redundant tagged reads cannot spuriously reject a load-balanced endpoint's regressing head.
+  Persisted head floors, chain/genesis identity and contract validation remain mandatory.
+- `topup rpc check` reserves stdout for JSON and reports sanitized member/probe failure reasons
+  on stderr, which the Deploy preflight now surfaces. A capability probes require an unsplit
+  address-less 2 000-block log window; B probes verify recent addressed logs.
+- Staging has keyless Sentio A backups on both chains and ethPandaOps B on Sepolia, with
+  endpoint/operator evidence, distinct company domains and shared quota budgets. Base Sepolia B
+  stays singleton after rejecting Coinbase's pruned genesis and removing Pocket's unverifiable
+  Supplier independence; the Phala Cloud template routes are unchanged.
+- Member probes reject same-height snapshot/anchor/read hash conflicts and persistently freeze
+  the chain when finalized validation detects a conflict, including early snapshot rejection.
+  Owner recovery uses fresh full-probe deadlines for each member and an independent full
+  operation deadline for anchor agreement, allowing healthy low-rate providers to complete
+  route verification.
+
 ### JS SDK
 
 - **Breaking:** React components require an explicit `@phala/pay/styles.css` import. Removed

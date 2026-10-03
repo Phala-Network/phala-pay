@@ -83,20 +83,23 @@ pub(crate) async fn verify_on(client: &EvmClient, route: &RouteFile) -> Result<(
     let contracts = &route.chain.contracts;
     let factory = contracts.forwarder_factory;
     let implementation = contracts.implementation;
-    let read = |error: ChainError| error.to_string();
+    let read = |probe: &str, error: ChainError| format!("{probe}: {error}");
 
     // Every balance and `addressOf` read, including the sample below, goes through Multicall3.
-    let multicall = client.code_at(MULTICALL3).await.map_err(read)?;
+    let multicall = client
+        .code_at(MULTICALL3)
+        .await
+        .map_err(|e| read("Multicall3 code", e))?;
     if multicall.is_empty() {
         return Err(format!(
-            "Multicall3 {MULTICALL3:#x} has no code on chain {}; balance and addressOf reads \
+            "RPC capability unavailable: Multicall3 {MULTICALL3:#x} has no code on chain {}; balance and addressOf reads \
              are aggregated through it",
             route.chain.chain_id
         ));
     }
     if keccak256(&multicall) != MULTICALL3_RUNTIME_CODE_HASH {
         return Err(format!(
-            "Multicall3 {MULTICALL3:#x} on chain {} is not the canonical deployment (code hash \
+            "RPC member identity invalid: Multicall3 {MULTICALL3:#x} on chain {} is not the canonical deployment (code hash \
              {:#x})",
             route.chain.chain_id,
             keccak256(&multicall)
@@ -106,45 +109,51 @@ pub(crate) async fn verify_on(client: &EvmClient, route: &RouteFile) -> Result<(
     let actual = client
         .contract_address(factory, ContractAddressGetter::Implementation)
         .await
-        .map_err(read)?;
+        .map_err(|e| read("factory implementation() capability", e))?;
     if actual != implementation {
         return Err(format!(
-            "factory implementation() is {actual:#x}, route expects {implementation:#x}"
+            "RPC member identity invalid: factory implementation() is {actual:#x}, route expects {implementation:#x}"
         ));
     }
     let owner = client
         .contract_address(implementation, ContractAddressGetter::Factory)
         .await
-        .map_err(read)?;
+        .map_err(|e| read("implementation factory() capability", e))?;
     if owner != factory {
         return Err(format!(
-            "implementation factory() is {owner:#x}, route expects {factory:#x}"
+            "RPC member identity invalid: implementation factory() is {owner:#x}, route expects {factory:#x}"
         ));
     }
-    let factory_code = client.code_at(factory).await.map_err(read)?;
+    let factory_code = client
+        .code_at(factory)
+        .await
+        .map_err(|e| read("factory code", e))?;
     verify_code(
         &factory_code,
         &[(implementation, FACTORY_IMPLEMENTATION_OFFSETS)],
         FACTORY_RUNTIME_TEMPLATE_HASH,
     )
-    .map_err(|error| format!("factory {factory:#x} {error} of the ForwarderFactory build"))?;
-    let implementation_code = client.code_at(implementation).await.map_err(read)?;
+    .map_err(|error| format!("RPC member identity invalid: factory {factory:#x} {error} of the ForwarderFactory build"))?;
+    let implementation_code = client
+        .code_at(implementation)
+        .await
+        .map_err(|e| read("implementation code", e))?;
     verify_code(
         &implementation_code,
         &[(factory, FORWARDER_FACTORY_OFFSETS)],
         FORWARDER_RUNTIME_TEMPLATE_HASH,
     )
     .map_err(|error| {
-        format!("implementation {implementation:#x} {error} of the Forwarder build")
+        format!("RPC member identity invalid: implementation {implementation:#x} {error} of the Forwarder build")
     })?;
     let sample = client
         .factory_addresses(factory, sample_treasury(), &[sample_salt()])
         .await
-        .map_err(read)?;
+        .map_err(|e| read("Multicall3 factory addressOf capability", e))?;
     let expected = forwarder_address(factory, implementation, sample_treasury(), sample_salt());
     if sample.as_slice() != [expected] {
         return Err(format!(
-            "factory addressOf(treasury, sample) is {sample:?}, local derivation gives \
+            "RPC member identity invalid: factory addressOf(treasury, sample) is {sample:?}, local derivation gives \
              {expected:#x}"
         ));
     }

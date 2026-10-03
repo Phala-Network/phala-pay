@@ -31,6 +31,7 @@
 set -euo pipefail
 source "$(dirname -- "$0")/contracts/common.sh"
 source "$(dirname -- "$0")/preflight-phala.sh"
+source "$(dirname -- "$0")/preflight-rpc.sh"
 
 networks="$DEPLOY_CONTRACTS_DIR/networks.json"
 # The owner-approved OS image (deploy/README.md, "OS image"): production, dstack 0.5.9.
@@ -191,12 +192,7 @@ else
         ETH_RPC_URL=$url cast "$@" 2>"$tmp/cast.err" ||
             printf 'error: %s' "$(redact "$(tool_error "$tmp/cast.err")")"
     }
-    if topup rpc check --config >"$tmp/healthy.json" 2>"$tmp/probe.err"; then
-        ok "RPC groups have a fully validated serving member each"
-    else
-        fail "RPC group preflight failed: $(redact "$(tool_error "$tmp/probe.err")")"
-        printf '[]' >"$tmp/healthy.json"
-    fi
+    check_rpc_groups "$tmp"
     # Manifest checks only use fully validated members; failing backups do not block startup.
     while IFS=$'\t' read -r name chain_id factory implementation contract oracle decimals providers; do
         read -ra configured_ids <<<"$providers"

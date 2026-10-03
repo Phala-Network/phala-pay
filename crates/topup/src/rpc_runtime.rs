@@ -19,19 +19,16 @@ async fn probe(
     routes: &[&RouteFile],
 ) -> Result<String, String> {
     let copy = group.probe_copy().map_err(|e| e.to_string())?;
-    let result = tokio::time::timeout(
-        Duration::from_millis(group.policy.total_deadline_ms),
-        async {
-            let hash = probe_inner(&copy, index, routes).await?;
-            group
-                .validate_probe(index, &copy)
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok(hash)
-        },
-    )
+    let result = tokio::time::timeout(Duration::from_millis(group.policy.probe.deadline), async {
+        let hash = probe_inner(&copy, index, routes).await?;
+        group
+            .validate_probe(index, &copy)
+            .await
+            .map_err(|e| format!("persisted head/genesis anchor: {e}"))?;
+        Ok(hash)
+    })
     .await
-    .map_err(|_| "RPC preflight deadline".to_owned())?;
+    .map_err(|_| "probe total deadline: RPC deadline expired".to_owned())?;
     if copy.quarantined(index) {
         group.failed(index, topup_adapters::chain::evm::group::Failure::Identity);
     }
@@ -43,7 +40,7 @@ async fn probe_inner(
     routes: &[&RouteFile],
 ) -> Result<String, String> {
     let deadline = Instant::now()
-        .checked_add(Duration::from_millis(group.policy.total_deadline_ms))
+        .checked_add(Duration::from_millis(group.policy.probe.deadline))
         .unwrap_or_else(Instant::now);
     let chain = group
         .send(
@@ -52,14 +49,16 @@ async fn probe_inner(
             deadline,
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("chain id: {e}"))?;
     if chain.get("result").and_then(serde_json::Value::as_str)
         != Some(format!("0x{:x}", group.chain).as_str())
     {
         group.failed(index, topup_adapters::chain::evm::group::Failure::Identity);
-        return Err("RPC chain identity mismatch".to_owned());
+        return Err("chain id: RPC member identity invalid (mismatch)".to_owned());
     }
-    let genesis = block(group, index, 0, deadline).await?;
+    let genesis = block(group, index, 0, deadline)
+        .await
+        .map_err(|e| format!("genesis: {e}"))?;
     let client = EvmClient::from_group(group.clone(), Some(index)).map_err(|e| e.to_string())?;
     let mut contracts = std::collections::BTreeSet::new();
     for route in routes {
@@ -67,45 +66,62 @@ async fn probe_inner(
             route.chain.contracts.forwarder_factory,
             route.chain.contracts.implementation,
         )) {
-            crate::contracts::verify_on(&client, route).await?;
+            crate::contracts::verify_on(&client, route)
+                .await
+                .map_err(|e| format!("route {} contracts/multicall: {e}", route.route))?;
         }
     }
     group
         .head(index, "latest", deadline)
         .await
-        .map_err(|e| e.to_string())?;
-    group
-        .head(index, "finalized", deadline)
-        .await
-        .map_err(|e| e.to_string())?;
-    group
-        .head(index, "safe", deadline)
-        .await
-        .map_err(|e| e.to_string())?;
-    group.send(index,&json!({"jsonrpc":"2.0","id":1,"method":"eth_getTransactionReceipt","params":[format!("0x{}","00".repeat(32))]}),deadline).await.map_err(|e|e.to_string())?;
+        .map_err(|e| format!("latest head: {e}"))?;
+    // Use one finalized snapshot for every numeric capability/log check. Tagged heads
+    // from a load-balanced endpoint can regress between redundant reads.
     let head = group
         .head(index, "finalized", deadline)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("finalized head: {e}"))?;
+    group
+        .head(index, "safe", deadline)
+        .await
+        .map_err(|e| format!("safe head: {e}"))?;
+    group.send(index,&json!({"jsonrpc":"2.0","id":1,"method":"eth_getTransactionReceipt","params":[format!("0x{}","00".repeat(32))]}),deadline).await.map_err(|e|format!("receipt capability: {e}"))?;
     if routes
         .iter()
         .any(|r| r.chain.rpc_providers.first() == Some(&group.id))
     {
         let logs = json!({"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":[{"fromBlock":format!("0x{:x}",head.number.saturating_sub(1999)),"toBlock":format!("0x{:x}",head.number),"topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",null,[format!("0x{}","00".repeat(32))]]}]});
         group
-            .send_logs(index, &logs, deadline)
+            .send(index, &logs, deadline)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("address-less transfer logs (2000 blocks): {e}"))?;
+    } else {
+        for route in routes {
+            let logs = json!({"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":[{
+                "fromBlock":format!("0x{:x}",head.number.saturating_sub(99)),
+                "toBlock":format!("0x{:x}",head.number), "address":format!("{:#x}",route.asset.contract),
+                "topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",null,[format!("0x{}","00".repeat(32))]]
+            }]});
+            group.send(index, &logs, deadline).await.map_err(|e| {
+                format!(
+                    "route {} recent-range transfer logs (100 blocks): {e}",
+                    route.route
+                )
+            })?;
+        }
     }
     for route in routes {
         for contract in [route.asset.contract, route.screening.sanctions_oracle] {
             if client
                 .code_at(contract)
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("route {} contract code {contract:#x}: {e}", route.route))?
                 .is_empty()
             {
-                return Err("RPC route token/oracle code unavailable".to_owned());
+                return Err(format!(
+                    "route {} contract code {contract:#x}: RPC capability unavailable (missing code)",
+                    route.route
+                ));
             }
         }
     }
@@ -118,12 +134,15 @@ async fn probe_inner(
                 Some(head.number.into()),
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("route {} token decimals capability: {e}", route.route))?;
         if decimals.len() != 32
             || alloy_primitives::U256::from_be_slice(&decimals)
                 != alloy_primitives::U256::from(route.asset.decimals)
         {
-            return Err("RPC token decimals mismatch".to_owned());
+            return Err(format!(
+                "route {} token decimals capability: RPC member identity invalid (mismatch)",
+                route.route
+            ));
         }
         let hash = alloy_primitives::keccak256("isSanctioned(address)");
         let mut data = hash
@@ -140,11 +159,14 @@ async fn probe_inner(
                 Some(head.number.into()),
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("route {} oracle capability: {e}", route.route))?;
         if answer.len() != 32
             || alloy_primitives::U256::from_be_slice(&answer) > alloy_primitives::U256::from(1)
         {
-            return Err("RPC oracle capability malformed".to_owned());
+            return Err(format!(
+                "route {} oracle capability: RPC malformed response",
+                route.route
+            ));
         }
     }
     Ok(genesis.hash)
@@ -464,22 +486,41 @@ pub async fn recover_members(
 pub async fn preflight(routes: &RouteSet) -> Result<Vec<String>, String> {
     let mut healthy = Vec::new();
     let mut genesis = BTreeMap::new();
+    let mut failures = Vec::new();
     for (group, files) in groups(routes)?.values() {
+        let mut reasons = Vec::new();
         for index in 0..group.members.len() {
             group.verified(index, false);
-            if let Ok(hash) = probe(group, index, files).await {
+            let member = group.members.get(index).ok_or("missing member")?;
+            let result = probe(group, index, files).await.and_then(|hash| {
                 if genesis.get(&group.chain).is_some_and(|old| old != &hash) {
                     group.failed(index, topup_adapters::chain::evm::group::Failure::Identity);
-                    continue;
+                    return Err("genesis: RPC member identity invalid (mismatch)".to_owned());
                 }
-                genesis.insert(group.chain, hash.clone());
-                group.verified(index, true);
-                healthy.push(group.members.get(index).ok_or("missing member")?.id.clone());
+                Ok(hash)
+            });
+            match result {
+                Ok(hash) => {
+                    genesis.insert(group.chain, hash);
+                    group.verified(index, true);
+                    healthy.push(member.id.clone());
+                }
+                Err(error) => {
+                    tracing::warn!(group=%group.id, member=%member.id, %error, "RPC member preflight failed");
+                    reasons.push(format!("{}: {error}", member.id));
+                }
             }
         }
         if group.eligible() == 0 {
-            return Err(format!("RPC group {} has no verified member", group.id));
+            failures.push(format!(
+                "RPC group {} has no verified member [{}]",
+                group.id,
+                reasons.join("; ")
+            ));
         }
+    }
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
     }
     Ok(healthy)
 }
@@ -527,58 +568,92 @@ pub async fn recover_watermark(
             .provider(chain, 0)
             .map_err(|e| e.to_string())?
             .group()
-            .ok_or("A group missing")?
-            .probe_copy()
-            .map_err(|e| e.to_string())?;
+            .ok_or("A group missing")?;
         let b = routes
             .provider(chain, 1)
             .map_err(|e| e.to_string())?
             .group()
-            .ok_or("B group missing")?
-            .probe_copy()
-            .map_err(|e| e.to_string())?;
-        // Owner-authorized recovery must probe below poisoned floors without modifying them.
-        for group in [&a, &b] {
-            let files = routes
-                .routes()
-                .iter()
-                .filter(|r| r.chain.chain_id == chain)
-                .collect::<Vec<_>>();
-            for index in 0..group.members.len() {
-                let result = tokio::time::timeout(
-                    Duration::from_millis(group.policy.total_deadline_ms),
-                    // Capability probes must not share tentative head acceptance.
-                    // A failed member may advertise an arbitrarily high head.
-                    probe_inner(
-                        &group.probe_copy().map_err(|e| e.to_string())?,
-                        index,
-                        &files,
-                    ),
-                )
-                .await;
-                if let Ok(Ok(hash)) = result {
-                    let expected: Option<String> = sqlx::query_scalar(
-                        "SELECT genesis_hash FROM rpc_member_validations WHERE chain_id=$1 LIMIT 1",
-                    )
-                    .bind(i64::try_from(chain).map_err(|e| e.to_string())?)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                    group.verified(index, expected.as_ref().is_none_or(|v| v == &hash));
-                }
+            .ok_or("B group missing")?;
+        let files = routes
+            .routes()
+            .iter()
+            .filter(|r| r.chain.chain_id == chain)
+            .collect::<Vec<_>>();
+        let expected: Option<String> = sqlx::query_scalar(
+            "SELECT genesis_hash FROM rpc_member_validations WHERE chain_id=$1 LIMIT 1",
+        )
+        .bind(i64::try_from(chain).map_err(|e| e.to_string())?)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        // Probe below poisoned floors without publishing evidence. Each member gets a fresh
+        // full-probe deadline; anchor operations start only after both groups finish probing.
+        let valid_a = probe_recovery_members(a, &files, expected.as_deref()).await;
+        let valid_b = probe_recovery_members(b, &files, expected.as_deref()).await;
+        let ah = recovery_anchor(a, &valid_a, b, &valid_b, height).await?;
+        db::rpc::recover(pool, chain, &ah, actor, reason)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    .await;
+    lock.release().await.map_err(|e| e.to_string())?;
+    result
+}
+async fn probe_recovery_members(
+    group: &Arc<RpcGroup>,
+    files: &[&RouteFile],
+    expected: Option<&str>,
+) -> Vec<usize> {
+    let mut verified = Vec::new();
+    for index in 0..group.members.len() {
+        let result = async {
+            let copy = group.probe_copy().map_err(|e| e.to_string())?;
+            let deadline = copy.probe_deadline().ok_or("missing probe deadline")?;
+            tokio::time::timeout_at(deadline, probe_inner(&copy, index, files))
+                .await
+                .map_err(|_| "probe total deadline: RPC deadline expired".to_owned())?
+        }
+        .await;
+        match result {
+            Ok(hash) if expected.is_none_or(|v| v == hash) => verified.push(index),
+            Ok(_) => {
+                tracing::warn!(group=%group.id, member=%group.members[index].id, "recovery genesis mismatch")
+            }
+            Err(error) => {
+                tracing::warn!(group=%group.id, member=%group.members[index].id, %error, "RPC recovery member probe failed")
             }
         }
-        let ai = a
-            .select(&Default::default(), None)
-            .map_err(|e| e.to_string())?;
-        let bi = b
-            .select(&Default::default(), None)
-            .map_err(|e| e.to_string())?;
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(
-                a.policy.total_deadline_ms.min(b.policy.total_deadline_ms),
-            ))
-            .unwrap_or_else(Instant::now);
+    }
+    verified
+}
+
+async fn recovery_anchor(
+    a: &Arc<RpcGroup>,
+    valid_a: &[usize],
+    b: &Arc<RpcGroup>,
+    valid_b: &[usize],
+    height: u64,
+) -> Result<HeadAnchor, String> {
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(
+            a.policy.total_deadline_ms.min(b.policy.total_deadline_ms),
+        ))
+        .unwrap_or_else(Instant::now);
+    let a = a.isolated_copy(deadline).map_err(|e| e.to_string())?;
+    let b = b.isolated_copy(deadline).map_err(|e| e.to_string())?;
+    for index in valid_a {
+        a.verified(*index, true);
+    }
+    for index in valid_b {
+        b.verified(*index, true);
+    }
+    let ai = a
+        .select(&Default::default(), None)
+        .map_err(|e| e.to_string())?;
+    let bi = b
+        .select(&Default::default(), None)
+        .map_err(|e| e.to_string())?;
+    tokio::time::timeout_at(deadline, async {
         if a.head(ai, "finalized", deadline)
             .await
             .map_err(|e| e.to_string())?
@@ -597,14 +672,12 @@ pub async fn recover_watermark(
         if ah != bh || ah.number != height {
             return Err("RPC recovery requires A/B anchor agreement".into());
         }
-        db::rpc::recover(pool, chain, &ah, actor, reason)
-            .await
-            .map_err(|e| e.to_string())
-    }
-    .await;
-    lock.release().await.map_err(|e| e.to_string())?;
-    result
+        Ok(ah)
+    })
+    .await
+    .map_err(|_| "recovery anchor deadline: RPC deadline expired".to_owned())?
 }
+
 /// Bounded stopped-service replay. Repeated invocations retain atomic address progress. Unfreeze
 /// occurs only after all address backfills and every credited deposit's canonical block check.
 pub async fn resume_recovery(
@@ -691,4 +764,366 @@ pub async fn resume_recovery(
     }.await;
     lock.release().await.map_err(|e| e.to_string())?;
     result
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use alloy::providers::bindings::IMulticall3::{Result as Call3Result, aggregate3Call};
+    use alloy::sol_types::SolCall;
+    use alloy_primitives::{Address, Bytes, U256};
+    use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::post};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use topup_adapters::{
+        chain::evm::{
+            MULTICALL3,
+            group::{
+                GroupPolicy, Member,
+                budget::{BudgetSpec, Budgets},
+            },
+        },
+        redaction::Redacted,
+    };
+
+    struct MockProbe {
+        routes: Vec<RouteFile>,
+        finalized_reads: AtomicUsize,
+        oracle_reads: AtomicUsize,
+        logs: Mutex<Vec<serde_json::Value>>,
+        numeric_calls: Mutex<Vec<serde_json::Value>>,
+        regress_finalized: bool,
+        throttle_oracle: bool,
+        reject_wide_logs: bool,
+        block_delay: Duration,
+    }
+    impl MockProbe {
+        fn new() -> Self {
+            let config = crate::config::Config::parse(include_str!(
+                "../../../deploy/environments/phala-network/staging/topup/topup.yaml"
+            ))
+            .unwrap();
+            Self {
+                routes: config
+                    .routes
+                    .into_iter()
+                    .filter(|r| r.chain.chain_id == 11155111)
+                    .collect(),
+                finalized_reads: AtomicUsize::new(0),
+                oracle_reads: AtomicUsize::new(0),
+                logs: Mutex::new(Vec::new()),
+                numeric_calls: Mutex::new(Vec::new()),
+                regress_finalized: false,
+                throttle_oracle: false,
+                reject_wide_logs: false,
+                block_delay: Duration::ZERO,
+            }
+        }
+        fn response(&self, request: &serde_json::Value) -> axum::response::Response {
+            let first = &self.routes[0];
+            let contracts = &first.chain.contracts;
+            let params = &request["params"];
+            let result = match request["method"].as_str().unwrap() {
+                "eth_chainId" => json!("0xaa36a7"),
+                "eth_getTransactionReceipt" => serde_json::Value::Null,
+                "eth_getBlockByNumber" => {
+                    let tag = params[0].as_str().unwrap();
+                    let number = match tag {
+                        "finalized" => {
+                            let read = self.finalized_reads.fetch_add(1, Ordering::SeqCst);
+                            if self.regress_finalized && read > 0 {
+                                1999
+                            } else {
+                                2000
+                            }
+                        }
+                        "latest" => 3000,
+                        "safe" => 2500,
+                        _ => u64::from_str_radix(tag.strip_prefix("0x").unwrap(), 16).unwrap(),
+                    };
+                    let mut block = serde_json::to_value(alloy::rpc::types::Block::<
+                        alloy::rpc::types::Transaction,
+                    >::default())
+                    .unwrap();
+                    block["number"] = json!(format!("0x{number:x}"));
+                    block["hash"] = json!(format!("0x{}", "11".repeat(32)));
+                    block["parentHash"] = json!(format!("0x{}", "22".repeat(32)));
+                    block
+                }
+                "eth_getCode" => {
+                    let address: Address = serde_json::from_value(params[0].clone()).unwrap();
+                    if address == MULTICALL3 {
+                        let recorded: serde_json::Value = serde_json::from_str(include_str!(
+                            "../../../deploy/contracts/multicall3.json"
+                        ))
+                        .unwrap();
+                        recorded["runtime_code"].clone()
+                    } else if address == contracts.forwarder_factory
+                        || address == contracts.implementation
+                    {
+                        // Recorded Foundry runtime templates; production verification checks their
+                        // audited hashes and the exact immutable addresses before any capability.
+                        let recorded: serde_json::Value = serde_json::from_str(include_str!(
+                            "../tests/fixtures/rpc-probe-contract-code.json"
+                        ))
+                        .unwrap();
+                        let (name, immutable, offsets): (&str, Address, &[usize]) =
+                            if address == contracts.forwarder_factory {
+                                (
+                                    "ForwarderFactory",
+                                    contracts.implementation,
+                                    &[105, 480, 606, 887],
+                                )
+                            } else {
+                                ("Forwarder", contracts.forwarder_factory, &[208, 319])
+                            };
+                        let mut code = hex::decode(
+                            recorded[name].as_str().unwrap().strip_prefix("0x").unwrap(),
+                        )
+                        .unwrap();
+                        for offset in offsets {
+                            code[*offset..*offset + 32]
+                                .copy_from_slice(immutable.into_word().as_slice());
+                        }
+                        json!(format!("0x{}", hex::encode(code)))
+                    } else {
+                        json!("0x6000")
+                    }
+                }
+                "eth_getLogs" => {
+                    self.logs.lock().unwrap().push(params[0].clone());
+                    if self.reject_wide_logs {
+                        return Json(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32005,"message":"block range too wide"}})).into_response();
+                    }
+                    json!([])
+                }
+                "eth_call" => {
+                    let to: Address = serde_json::from_value(params[0]["to"].clone()).unwrap();
+                    if to == MULTICALL3 {
+                        let input: Bytes = serde_json::from_value(
+                            params[0].get("input").unwrap_or(&params[0]["data"]).clone(),
+                        )
+                        .unwrap();
+                        let calls = aggregate3Call::abi_decode(&input).unwrap().calls;
+                        assert_eq!(calls.len(), 1);
+                        assert_eq!(calls[0].target, contracts.forwarder_factory);
+                        let derived = topup_core::address::forwarder_address(
+                            contracts.forwarder_factory,
+                            contracts.implementation,
+                            crate::contracts::sample_treasury(),
+                            crate::contracts::sample_salt(),
+                        );
+                        json!(Bytes::from(aggregate3Call::abi_encode_returns(&vec![
+                            Call3Result {
+                                success: true,
+                                returnData: derived.into_word().as_slice().to_vec().into()
+                            }
+                        ])))
+                    } else if to == contracts.forwarder_factory {
+                        json!(contracts.implementation.into_word())
+                    } else if to == contracts.implementation {
+                        json!(contracts.forwarder_factory.into_word())
+                    } else {
+                        self.numeric_calls.lock().unwrap().push(params[1].clone());
+                        let route = self
+                            .routes
+                            .iter()
+                            .find(|r| r.asset.contract == to || r.screening.sanctions_oracle == to)
+                            .unwrap();
+                        let value = if to == route.screening.sanctions_oracle {
+                            if self.oracle_reads.fetch_add(1, Ordering::SeqCst) == 0
+                                && self.throttle_oracle
+                            {
+                                return (StatusCode::TOO_MANY_REQUESTS, [("retry-after", "1")], Json(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32005,"message":"quota exceeded"}}))).into_response();
+                            }
+                            0
+                        } else {
+                            route.asset.decimals
+                        };
+                        json!(format!(
+                            "0x{}",
+                            hex::encode(U256::from(value).to_be_bytes::<32>())
+                        ))
+                    }
+                }
+                _ => panic!("unexpected method"),
+            };
+            Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result})).into_response()
+        }
+    }
+    async fn server(mock: Arc<MockProbe>) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/",
+                    post(move |Json(request): Json<serde_json::Value>| {
+                        let mock = mock.clone();
+                        async move {
+                            if request["method"] == "eth_getBlockByNumber" {
+                                tokio::time::sleep(mock.block_delay).await;
+                            }
+                            mock.response(&request)
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        (url, task)
+    }
+    fn group(url: &str, id: &str, rps: u32, policy: GroupPolicy) -> Arc<RpcGroup> {
+        let spec = BudgetSpec {
+            requests_per_second: rps,
+            burst: if rps == 2 { 2 } else { 100 },
+        };
+        let budgets = Arc::new(
+            Budgets::new(&BTreeMap::from([
+                ("account".into(), spec.clone()),
+                ("key".into(), spec),
+            ]))
+            .unwrap(),
+        );
+        RpcGroup::new(
+            id.into(),
+            11155111,
+            policy,
+            vec![Member {
+                id: "one".into(),
+                company: "company".into(),
+                endpoint: Redacted::parse(url).unwrap(),
+                account: "account".into(),
+                key: "key".into(),
+                priority: 0,
+                weight: 1,
+            }],
+            budgets,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn acceptance_uses_one_finalized_snapshot_for_numeric_capabilities() {
+        let mock = Arc::new(MockProbe {
+            regress_finalized: true,
+            ..MockProbe::new()
+        });
+        let (url, task) = server(mock.clone()).await;
+        let group = group(&url, "provider-a", 100, GroupPolicy::default());
+        let files = mock.routes.iter().collect::<Vec<_>>();
+        let result = probe(&group, 0, &files).await;
+        task.abort();
+        assert_eq!(result.unwrap(), format!("0x{}", "11".repeat(32)));
+        assert_eq!(mock.finalized_reads.load(Ordering::SeqCst), 1);
+        let calls = mock.numeric_calls.lock().unwrap();
+        assert_eq!(calls.len(), 6);
+        assert!(calls.iter().all(|tag| tag == "0x7d0"));
+        let logs = mock.logs.lock().unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["fromBlock"], "0x1");
+        assert_eq!(logs[0]["toBlock"], "0x7d0");
+        assert!(logs[0].get("address").is_none());
+        assert_eq!(group.eligible(), 0);
+    }
+    #[tokio::test]
+    async fn real_route_oracle_throttle_retries_until_valid_numeric_result() {
+        let mock = Arc::new(MockProbe {
+            throttle_oracle: true,
+            ..MockProbe::new()
+        });
+        let (url, task) = server(mock.clone()).await;
+        let group = group(&url, "provider-b", 100, GroupPolicy::default());
+        let result = probe(&group, 0, &mock.routes.iter().collect::<Vec<_>>()).await;
+        task.abort();
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(mock.oracle_reads.load(Ordering::SeqCst), 4);
+        assert_eq!(mock.logs.lock().unwrap().len(), 3);
+        assert!(
+            mock.numeric_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|tag| tag == "0x7d0")
+        );
+    }
+    #[tokio::test]
+    async fn real_route_a_rejects_unsplit_log_range_without_retry_or_admission() {
+        let mock = Arc::new(MockProbe {
+            reject_wide_logs: true,
+            ..MockProbe::new()
+        });
+        let (url, task) = server(mock.clone()).await;
+        let group = group(&url, "provider-a", 100, GroupPolicy::default());
+        let result = probe(&group, 0, &mock.routes.iter().collect::<Vec<_>>()).await;
+        task.abort();
+        assert!(
+            result
+                .unwrap_err()
+                .contains("address-less transfer logs (2000 blocks): RPC log window too large")
+        );
+        assert_eq!(mock.logs.lock().unwrap().len(), 1);
+        assert_eq!(mock.oracle_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(group.eligible(), 0);
+    }
+    #[tokio::test]
+    async fn slow_recovery_has_fresh_member_and_anchor_deadlines() {
+        let mock = Arc::new(MockProbe::new());
+        let (url, task) = server(mock.clone()).await;
+        // Three real routes at ethPandaOps's 2 RPS/burst 2 exceed the old 10 s wrapper.
+        let a = group(&url, "provider-a", 100, GroupPolicy::default());
+        let b = group(&url, "provider-b", 2, GroupPolicy::default());
+        let files = mock.routes.iter().collect::<Vec<_>>();
+        let start = Instant::now();
+        let valid_a = probe_recovery_members(&a, &files, None).await;
+        let valid_b = probe_recovery_members(&b, &files, None).await;
+        assert!(start.elapsed() > Duration::from_secs(10));
+        assert_eq!(valid_a, vec![0]);
+        assert_eq!(valid_b, vec![0]);
+        assert_eq!(
+            recovery_anchor(&a, &valid_a, &b, &valid_b, 2000)
+                .await
+                .unwrap()
+                .number,
+            2000
+        );
+        // Also outlive the original copies' probe deadlines before anchor creation.
+        let mut short = GroupPolicy::default();
+        short.probe.deadline = 1000;
+        short.attempt_timeout_ms = 100;
+        let fresh_a = group(&url, "provider-a", 100, short.clone());
+        let fresh_b = group(&url, "provider-b", 100, short);
+        let expired_a = fresh_a.probe_copy().unwrap();
+        let expired_b = fresh_b.probe_copy().unwrap();
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let anchor = recovery_anchor(&expired_a, &valid_a, &expired_b, &valid_b, 2000)
+            .await
+            .unwrap();
+        assert_eq!(anchor.number, 2000);
+        assert_eq!(anchor.hash, format!("0x{}", "11".repeat(32)));
+        task.abort();
+    }
+    #[tokio::test]
+    async fn recovery_anchor_uses_full_operation_budget_beyond_probe_deadline() {
+        let mock = Arc::new(MockProbe {
+            block_delay: Duration::from_millis(350),
+            ..MockProbe::new()
+        });
+        let (url, task) = server(mock).await;
+        let mut policy = GroupPolicy::default();
+        policy.probe.deadline = 1000;
+        policy.attempt_timeout_ms = 800;
+        // The four sequential anchor RPCs take >= 1.4 s, within the independent 10 s budget.
+        let a = group(&url, "provider-a", 100, policy.clone());
+        let b = group(&url, "provider-b", 100, policy);
+        let started = Instant::now();
+        let result = recovery_anchor(&a, &[0], &b, &[0], 2000).await;
+        task.abort();
+        assert!(started.elapsed() > Duration::from_secs(1));
+        assert_eq!(result.unwrap().number, 2000);
+    }
 }

@@ -32,6 +32,8 @@ fn classification_precedence_and_every_error_class() {
         (408, 0, "", Failure::Transport),
         (429, 0, "", Failure::Throttled),
         (503, 0, "", Failure::Server),
+        (501, 0, "", Failure::Server),
+        (599, 0, "", Failure::Server),
         (200, -32603, "internal", Failure::Server),
         (200, -32005, "quota exceeded", Failure::Throttled),
         (200, -32005, "block range too wide", Failure::Range),
@@ -851,5 +853,294 @@ async fn typed_decode_is_inside_the_attempt_and_enters_cooldown() {
         0,
         "malformed typed replies must count against cooldown"
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn pinned_probe_retries_transients_but_never_deterministic_errors() {
+    for (status, code, expected_attempts) in [
+        (503, -32603, 3),
+        (429, -32005, 3),
+        (200, -32601, 1),
+        (200, -32602, 1),
+        (200, -32005, 1),
+        (401, -32000, 1),
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let (url, task) = server(Router::new().route(
+            "/",
+            post(move |Json(request): Json<Value>| {
+                let count = count.clone();
+                async move {
+                    let attempt = count.fetch_add(1, Ordering::SeqCst);
+                    let transient = status == 503 || status == 429;
+                    if transient && attempt == 2 {
+                        return (StatusCode::OK, [("retry-after", "0")], Json(json!({"jsonrpc":"2.0","id":request["id"],"result":[]})));
+                    }
+                    (StatusCode::from_u16(status).unwrap(), [("retry-after", "0")], Json(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":code,"message":"block range too wide; https://secret.example/key"}})))
+                }
+            }),
+        )).await;
+        let probe = group(&url).probe_copy().unwrap();
+        let result = probe
+            .send(
+                0,
+                &json!({"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":[]}),
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await;
+        assert_eq!(result.is_ok(), status == 503 || status == 429);
+        assert_eq!(calls.load(Ordering::SeqCst), expected_attempts);
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn probe_deadline_includes_retry_after_and_all_nested_sends() {
+    for retry_after in ["2", "18446744073709551615"] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let (url, task) = server(Router::new().route("/", post(move || {
+        let count = count.clone();
+        async move {
+            count.fetch_add(1, Ordering::SeqCst);
+            (StatusCode::TOO_MANY_REQUESTS, [("retry-after", retry_after)], Json(json!({"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"rate limit"}})))
+        }
+    }))).await;
+        let mut policy = GroupPolicy::default();
+        policy.probe.deadline = 250;
+        policy.attempt_timeout_ms = 100;
+        let base = group(&url);
+        let probe = RpcGroup::new(
+            base.id.clone(),
+            base.chain,
+            policy,
+            base.members.clone(),
+            base.budgets.clone(),
+        )
+        .unwrap()
+        .probe_copy()
+        .unwrap();
+        let started = Instant::now();
+        let result = probe
+            .send(
+                0,
+                &json!({"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}),
+                Instant::now() + Duration::from_secs(10),
+            )
+            .await;
+        assert_eq!(result, Err(Failure::Deadline));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        // Later sends cannot bypass the complete-probe deadline or its quota pause.
+        assert_eq!(
+            probe
+                .send(
+                    0,
+                    &json!({"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}),
+                    Instant::now() + Duration::from_secs(10)
+                )
+                .await,
+            Err(Failure::Deadline)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn probe_timeouts_retry_and_connection_errors_stop_at_attempt_bound() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let (url, task) = server(Router::new().route(
+        "/",
+        post(move |Json(request): Json<Value>| {
+            let count = count.clone();
+            async move {
+                if count.fetch_add(1, Ordering::SeqCst) < 2 {
+                    sleep(Duration::from_millis(300)).await;
+                }
+                Json(json!({"jsonrpc":"2.0","id":request["id"],"result":"0x1"}))
+            }
+        }),
+    ))
+    .await;
+    let base = group(&url);
+    let policy = GroupPolicy {
+        attempt_timeout_ms: 100,
+        retry_delay_ms: 10,
+        probe: ProbePolicy {
+            attempts: 3,
+            deadline: 1000,
+        },
+        ..Default::default()
+    };
+    let probe = RpcGroup::new(
+        base.id.clone(),
+        base.chain,
+        policy.clone(),
+        base.members.clone(),
+        base.budgets.clone(),
+    )
+    .unwrap()
+    .probe_copy()
+    .unwrap();
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]});
+    assert!(
+        probe
+            .send(0, &request, Instant::now() + Duration::from_secs(2))
+            .await
+            .is_ok()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    task.abort();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let connections = Arc::new(AtomicUsize::new(0));
+    let count = connections.clone();
+    let task = tokio::spawn(async move {
+        for _ in 0..3 {
+            let (socket, _) = listener.accept().await.unwrap();
+            count.fetch_add(1, Ordering::SeqCst);
+            drop(socket);
+        }
+    });
+    let base = group(&url);
+    let probe = RpcGroup::new(
+        base.id.clone(),
+        base.chain,
+        policy,
+        base.members.clone(),
+        base.budgets.clone(),
+    )
+    .unwrap()
+    .probe_copy()
+    .unwrap();
+    assert_eq!(
+        probe
+            .send(0, &request, Instant::now() + Duration::from_secs(2))
+            .await,
+        Err(Failure::Transport)
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 3);
+    task.abort();
+}
+
+#[derive(Default)]
+struct FinalizedFloor {
+    frozen: std::sync::atomic::AtomicBool,
+}
+#[async_trait]
+impl WatermarkStore for FinalizedFloor {
+    async fn blocked(&self, _: u64) -> Result<(), Failure> {
+        if self.frozen.load(Ordering::SeqCst) {
+            Err(Failure::Fork)
+        } else {
+            Ok(())
+        }
+    }
+    async fn freeze(&self, _: u64) -> Result<(), Failure> {
+        self.frozen.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn load(&self, _: u64, _: &str, tag: &str) -> Result<Option<HeadAnchor>, Failure> {
+        Ok(matches!(tag, "finalized" | "cursor")
+            .then(|| HeadAnchor::parse(&header("0x64".into())).unwrap()))
+    }
+    async fn accept(
+        &self,
+        _: u64,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &HeadAnchor,
+    ) -> Result<(), Failure> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn probe_rejects_snapshot_conflicting_with_same_height_persisted_anchor() {
+    let numeric = Arc::new(AtomicUsize::new(0));
+    let reads = numeric.clone();
+    let (url, task) = server(Router::new().route(
+        "/",
+        post(move |Json(request): Json<Value>| {
+            let reads = reads.clone();
+            async move {
+                let mut value = header("0x64".into());
+                if request["params"][0] == "finalized" {
+                    value["hash"] = json!(format!("0x{}", "33".repeat(32)));
+                } else if request["params"][0] == "0x64" {
+                    reads.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    value["number"] = json!("0xc8");
+                }
+                Json(json!({"jsonrpc":"2.0","id":request["id"],"result":value}))
+            }
+        }),
+    ))
+    .await;
+    let group = group(&url);
+    let store = Arc::new(FinalizedFloor::default());
+    group.set_store(store.clone());
+    let probe = group.probe_copy().unwrap();
+    for tag in ["latest", "safe", "finalized"] {
+        probe
+            .head(0, tag, Instant::now() + Duration::from_secs(2))
+            .await
+            .unwrap();
+    }
+    assert_eq!(group.validate_probe(0, &probe).await, Err(Failure::Fork));
+    assert!(store.frozen.load(Ordering::SeqCst));
+    assert_eq!(
+        numeric.load(Ordering::SeqCst),
+        0,
+        "a good numeric answer must not override the conflicting snapshot"
+    );
+    assert_eq!(group.eligible(), 0);
+    task.abort();
+}
+
+#[tokio::test]
+async fn probe_rejects_later_numeric_hash_conflicting_with_snapshot_without_retry() {
+    let numeric = Arc::new(AtomicUsize::new(0));
+    let reads = numeric.clone();
+    let (url, task) = server(Router::new().route(
+        "/",
+        post(move |Json(request): Json<Value>| {
+            let reads = reads.clone();
+            async move {
+                let mut value = header("0x64".into());
+                if request["params"][0] == "0x64" {
+                    reads.fetch_add(1, Ordering::SeqCst);
+                    value["hash"] = json!(format!("0x{}", "33".repeat(32)));
+                }
+                Json(json!({"jsonrpc":"2.0","id":request["id"],"result":value}))
+            }
+        }),
+    ))
+    .await;
+    let group = group(&url);
+    let store = Arc::new(FinalizedFloor::default());
+    group.set_store(store.clone());
+    let probe = group.probe_copy().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    for tag in ["latest", "safe", "finalized"] {
+        probe.head(0, tag, deadline).await.unwrap();
+    }
+    assert_eq!(group.validate_probe(0, &probe).await, Err(Failure::Fork));
+    assert!(store.frozen.load(Ordering::SeqCst));
+    // Serving requests must be prevented from advancing after the rejected probe.
+    let other = self::group(&url);
+    other.set_store(store.clone());
+    other.verified(0, true);
+    assert_eq!(
+        other.head(0, "finalized", deadline).await,
+        Err(Failure::Fork)
+    );
+    assert_eq!(numeric.load(Ordering::SeqCst), 1);
     task.abort();
 }

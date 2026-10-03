@@ -520,7 +520,7 @@ impl EvmClient {
             provider: RootProvider::new(client.clone()),
             receipts: RootProvider::new(client),
             endpoint,
-            request_timeout: deadline.map_or_else(
+            request_timeout: deadline.or_else(|| group.probe_deadline()).map_or_else(
                 || Duration::from_millis(group.policy.total_deadline_ms),
                 |at| at.saturating_duration_since(tokio::time::Instant::now()),
             ),

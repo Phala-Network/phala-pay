@@ -35,12 +35,31 @@ pub enum Selection {
     /// Smooth weighted round robin across eligible members.
     WeightedRoundRobin,
 }
+/// Retry bounds for a complete member acceptance/readmission probe.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProbePolicy {
+    /// Maximum attempts per RPC, including the first.
+    pub attempts: u32,
+    /// Total deadline for the complete probe, in milliseconds.
+    pub deadline: u64,
+}
+impl Default for ProbePolicy {
+    fn default() -> Self {
+        Self {
+            attempts: 3,
+            deadline: 30_000,
+        }
+    }
+}
 /// Bounded group policy; millisecond fields avoid ambiguous duration units.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GroupPolicy {
     /// Selection algorithm.
     pub selection: Selection,
+    /// First acceptance and readmission probe bounds.
+    pub probe: ProbePolicy,
     /// Total operation deadline including admission and retry.
     pub total_deadline_ms: u64,
     /// Per-send timeout.
@@ -62,6 +81,7 @@ impl Default for GroupPolicy {
     fn default() -> Self {
         Self {
             selection: Selection::Failover,
+            probe: ProbePolicy::default(),
             total_deadline_ms: 10_000,
             attempt_timeout_ms: 3_000,
             max_attempts: 3,
@@ -76,7 +96,11 @@ impl Default for GroupPolicy {
 impl GroupPolicy {
     /// Checks bounds before constructing clients.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if !(1..=16).contains(&self.max_attempts)
+        if !(1..=16).contains(&self.probe.attempts)
+            || !(1..=120_000).contains(&self.probe.deadline)
+            || self.attempt_timeout_ms > self.probe.deadline
+            || self.retry_delay_ms >= self.probe.deadline
+            || !(1..=16).contains(&self.max_attempts)
             || self.total_deadline_ms == 0
             || self.total_deadline_ms > 120_000
             || self.attempt_timeout_ms == 0
@@ -250,7 +274,7 @@ pub fn classify(method: &str, reply: &transport::HttpReply) -> Option<Failure> {
     if status == 408 {
         return Some(Failure::Transport);
     }
-    if matches!(status, 500 | 502 | 503 | 504) || code == Some(-32603) {
+    if (500..600).contains(&status) || code == Some(-32603) {
         return Some(Failure::Server);
     }
     if error.is_some() {
@@ -402,10 +426,12 @@ pub struct RpcGroup {
     pub policy: GroupPolicy,
     /// Configured members.
     pub members: Vec<Member>,
+    probe_deadline: Option<Instant>,
     budgets: Arc<Budgets>,
     http: reqwest::Client,
     health: Mutex<Vec<Health>>,
     heads: tokio::sync::Mutex<BTreeMap<String, HeadAnchor>>,
+    probe_blocks: tokio::sync::Mutex<BTreeMap<u64, String>>,
     store: RwLock<Option<Arc<dyn WatermarkStore>>>,
 }
 impl fmt::Debug for RpcGroup {
@@ -433,9 +459,11 @@ impl RpcGroup {
             policy,
             members,
             budgets,
+            probe_deadline: None,
             http: transport::client()?,
             health: Mutex::new(health),
             heads: tokio::sync::Mutex::new(BTreeMap::new()),
+            probe_blocks: tokio::sync::Mutex::new(BTreeMap::new()),
             store: RwLock::new(None),
         });
         metrics::register(&group);
@@ -443,17 +471,32 @@ impl RpcGroup {
     }
     /// Isolated, uncached preflight view sharing the real credentials and account/key budgets.
     pub fn probe_copy(&self) -> Result<Arc<Self>, Failure> {
+        self.isolated_copy(
+            Instant::now()
+                .checked_add(Duration::from_millis(self.policy.probe.deadline))
+                .unwrap_or_else(Instant::now),
+        )
+    }
+    /// Isolated read-only operation sharing budgets and probe retry rules, bounded by its
+    /// caller's absolute deadline rather than the complete member-probe configuration.
+    pub fn isolated_copy(&self, deadline: Instant) -> Result<Arc<Self>, Failure> {
         Ok(Arc::new(Self {
             id: self.id.clone(),
             chain: self.chain,
             policy: self.policy.clone(),
             members: self.members.clone(),
+            probe_deadline: Some(deadline),
             budgets: self.budgets.clone(),
             http: self.http.clone(),
             health: Mutex::new(self.members.iter().map(|_| Health::default()).collect()),
             heads: tokio::sync::Mutex::new(BTreeMap::new()),
+            probe_blocks: tokio::sync::Mutex::new(BTreeMap::new()),
             store: RwLock::new(None),
         }))
+    }
+    /// Absolute deadline shared by all RPCs in an isolated member probe.
+    pub fn probe_deadline(&self) -> Option<Instant> {
+        self.probe_deadline
     }
     /// Redirect/auth quarantine is never readmitted by recovery probing.
     pub fn quarantined(&self, index: usize) -> bool {
@@ -481,8 +524,23 @@ impl RpcGroup {
                     if current.number < previous.number {
                         return Err(Failure::Stale);
                     }
+                    if current.number == previous.number && current.hash != previous.hash {
+                        if tag == "finalized" || floor == "cursor" {
+                            store.freeze(self.chain).await?;
+                        }
+                        return Err(Failure::Fork);
+                    }
                     if tag == "finalized" {
-                        let value=probe.send(index,&json!({"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":[format!("0x{:x}",previous.number),false]}),Instant::now().checked_add(Duration::from_millis(self.policy.total_deadline_ms)).unwrap_or_else(Instant::now)).await?;
+                        let value=probe.send(index,&json!({"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":[format!("0x{:x}",previous.number),false]}),Instant::now().checked_add(Duration::from_millis(self.policy.total_deadline_ms)).unwrap_or_else(Instant::now)).await;
+                        let value = match value {
+                            Err(Failure::Fork) => {
+                                // Snapshot consistency can reject before canonical comparison.
+                                // Conflicting finalized evidence still closes the durable gate.
+                                store.freeze(self.chain).await?;
+                                return Err(Failure::Fork);
+                            }
+                            result => result?,
+                        };
                         let canonical =
                             HeadAnchor::parse(value.get("result").ok_or(Failure::Malformed)?)?;
                         if canonical.number != previous.number || canonical.hash != previous.hash {
@@ -662,6 +720,74 @@ impl RpcGroup {
         request: &Value,
         deadline: Instant,
     ) -> Result<Value, Failure> {
+        let deadline = self
+            .probe_deadline
+            .map_or(deadline, |end| end.min(deadline));
+        if self.probe_deadline.is_none() {
+            return self.send_once(index, request, deadline).await;
+        }
+        let operation = Operation {
+            value: request.clone(),
+            deadline,
+            tried: Arc::new(Mutex::new(BTreeSet::new())),
+        };
+        let service = tower::service_fn(|operation: Operation| async move {
+            let method = operation
+                .value
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            // Only known method/tag names and contract addresses; never URLs, params or bodies.
+            let tag = operation
+                .value
+                .get("params")
+                .and_then(|p| p.get(0))
+                .and_then(Value::as_str)
+                .filter(|tag| matches!(*tag, "latest" | "safe" | "finalized" | "0x0"));
+            tracing::debug!(group=%self.id, member=%self.members.get(index).map(|m|m.id.as_str()).unwrap_or("unknown"), probe=method, ?tag, "RPC probe attempt");
+            let result = async {
+                let value = self
+                    .send_once(index, &operation.value, operation.deadline)
+                    .await?;
+                validate_typed(method, &value)?;
+                if method == "eth_getBlockByNumber" {
+                    let head = HeadAnchor::parse(value.get("result").ok_or(Failure::Malformed)?)?;
+                    // Preserve every hash observed in this single probe, including its tagged
+                    // snapshot. A later numeric read must not hide conflicting evidence.
+                    let mut blocks = self.probe_blocks.lock().await;
+                    if blocks
+                        .get(&head.number)
+                        .is_some_and(|hash| hash != &head.hash)
+                    {
+                        return Err(Failure::Fork);
+                    }
+                    blocks.insert(head.number, head.hash);
+                }
+                Ok(value)
+            }
+            .await;
+            if let Err(error) = &result {
+                tracing::warn!(group=%self.id, member=%self.members.get(index).map(|m|m.id.as_str()).unwrap_or("unknown"), probe=method, ?tag, class=error.code(), "RPC probe attempt failed");
+            }
+            result
+        });
+        Retry::new(
+            RetryPolicy {
+                remaining: self.policy.probe.attempts.saturating_sub(1),
+                delay: Duration::from_millis(self.policy.retry_delay_ms),
+                probe: true,
+            },
+            service,
+        )
+        .oneshot(operation)
+        .await
+    }
+    async fn send_once(
+        &self,
+        index: usize,
+        request: &Value,
+        deadline: Instant,
+    ) -> Result<Value, Failure> {
         let store = self
             .store
             .read()
@@ -745,10 +871,21 @@ impl RpcGroup {
                     } else {
                         &member.account
                     },
-                    reply
-                        .retry_after
-                        .unwrap_or(Duration::from_secs(1))
-                        .min(Duration::from_secs(60)),
+                    if self.probe_deadline.is_some() {
+                        let delay = reply.retry_after.unwrap_or(Duration::from_secs(1));
+                        // An unrepresentable delay must not overflow into immediate admission.
+                        // A bounded pause beyond this probe prevents another send instead.
+                        if Instant::now().checked_add(delay).is_some() {
+                            delay
+                        } else {
+                            deadline.saturating_duration_since(Instant::now())
+                        }
+                    } else {
+                        reply
+                            .retry_after
+                            .unwrap_or(Duration::from_secs(1))
+                            .min(Duration::from_secs(60))
+                    },
                 );
             }
             return Err(error);
@@ -890,6 +1027,7 @@ impl RpcGroup {
         let value=self.send(index,&json!({"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":[tag,false]}),deadline).await?;
         validate_typed("eth_getBlockByNumber", &value)?;
         let head = HeadAnchor::parse(value.get("result").ok_or(Failure::Malformed)?)?;
+        tracing::debug!(group=%self.id, member=%self.members.get(index).map(|m|m.id.as_str()).unwrap_or("unknown"), probe=tag, height=head.number, "RPC head decoded");
         let mut heads = self.heads.lock().await;
         let store = self
             .store
@@ -918,6 +1056,7 @@ impl RpcGroup {
         }
         if let Some(previous) = heads.get(tag) {
             if head.number < previous.number {
+                tracing::warn!(group=%self.id, member=%self.members.get(index).map(|m|m.id.as_str()).unwrap_or("unknown"), probe=tag, previous_height=previous.number, height=head.number, class="stale", "RPC head regressed");
                 return Err(Failure::Stale);
             }
             {
@@ -1046,6 +1185,7 @@ impl RpcGroup {
             RetryPolicy {
                 remaining: self.policy.max_attempts.saturating_sub(1),
                 delay: Duration::from_millis(self.policy.retry_delay_ms),
+                probe: false,
             },
             Attempt(self.clone()),
         );
@@ -1068,6 +1208,7 @@ struct Operation {
 }
 #[derive(Clone)]
 struct RetryPolicy {
+    probe: bool,
     remaining: u32,
     delay: Duration,
 }
@@ -1082,12 +1223,22 @@ impl Policy<Operation, Value, Failure> for RetryPolicy {
             || Instant::now()
                 .checked_add(self.delay)
                 .is_none_or(|t| t >= request.deadline)
-            || !result.as_ref().err().is_some_and(|e| e.retryable())
+            || !result.as_ref().err().is_some_and(|e| {
+                if self.probe {
+                    matches!(e, Failure::Transport | Failure::Server | Failure::Throttled)
+                } else {
+                    e.retryable()
+                }
+            })
         {
             return None;
         }
         self.remaining = self.remaining.saturating_sub(1);
-        Some(Box::pin(sleep(self.delay)))
+        let delay = self.delay;
+        if self.probe {
+            self.delay = self.delay.saturating_mul(2);
+        }
+        Some(Box::pin(sleep(delay)))
     }
     fn clone_request(&mut self, request: &Operation) -> Option<Operation> {
         Some(request.clone())
@@ -1199,11 +1350,13 @@ impl Service<RequestPacket> for GroupTransport {
             let value = serde_json::to_value(packet)
                 .map_err(|_| TransportErrorKind::custom(Failure::Request))?;
             let result = if let Some(index) = pinned {
-                let deadline = deadline.unwrap_or_else(|| {
-                    Instant::now()
-                        .checked_add(Duration::from_millis(group.policy.total_deadline_ms))
-                        .unwrap_or_else(Instant::now)
-                });
+                let deadline = deadline
+                    .or_else(|| group.probe_deadline())
+                    .unwrap_or_else(|| {
+                        Instant::now()
+                            .checked_add(Duration::from_millis(group.policy.total_deadline_ms))
+                            .unwrap_or_else(Instant::now)
+                    });
                 if value.get("method").and_then(Value::as_str) == Some("eth_getLogs") {
                     group.send_logs(index, &value, deadline).await
                 } else {

@@ -89,6 +89,7 @@ rpc_groups:
       failures: 3
       cooldown_ms: 30000
       recovery_successes: 2 # bounded worker schedules full probes every 5s
+      probe: { attempts: 3, deadline: 30000 } # per-RPC attempts, complete-probe milliseconds
       rpc_error_rules: [] # reviewed provider-specific code/message mappings
   sepolia-b:
     chain_id: 11155111
@@ -211,7 +212,21 @@ contracts and heads/anchors at the group's current floor; A additionally probes 
 capabilities. Failed probes renew cooldown; auth/redirect/identity quarantine requires
 operator repair and revalidation. Each member's recovery probe has isolated tentative head
 state: a failed high-head capability probe cannot make the next member stale. Probes use the
-same deadlines, keys, budgets and counts.
+same keys, budgets and counters. The explicit `policy.probe` bounds each RPC to three attempts
+by default and the complete member probe to 30 seconds, including budget waits and backoff.
+Tower retries only transport/timeouts, classified server errors and throttling, on the same
+member with exponential backoff from `retry_delay_ms`; 429 admission honors `Retry-After`.
+Deterministic capability/identity/code failures, malformed responses and stale evidence never
+retry. `recovery_successes` counts complete successful probes, not individual RPC attempts.
+Acceptance takes one finalized snapshot for numeric capabilities and the unsplit 2 000-block
+address-less A logs test, avoiding a redundant tagged read against a different gateway backend.
+B checks a 100-block addressed recent log range. Persisted floors and finalized canonical hashes
+are still checked before readmission. Same-height hashes must agree across the snapshot,
+persisted anchors and every subsequent block read within a probe. Owner recovery gives each
+member a fresh `probe.deadline`, then starts anchor agreement on fresh copies with a separate
+shared `total_deadline_ms` bound after both groups finish probing; `probe.deadline` does not
+cap anchor operations. A finalized conflict detected during numeric validation freezes the
+chain even when snapshot consistency rejects the response before canonical comparison.
 
 ## Heads, forks and logs windows
 

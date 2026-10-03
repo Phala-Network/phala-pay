@@ -207,7 +207,7 @@ async fn recovery_repairs_poisoned_address_progress_and_preserves_audit() -> Res
     result
 }
 #[test]
-fn singleton_staging_migration_preserves_roles_and_rejects_old_schema() -> Result<()> {
+fn redundant_staging_preserves_roles_and_rejects_old_schema() -> Result<()> {
     let config = topup::config::Config::parse(include_str!(
         "../../../deploy/environments/phala-network/staging/topup/topup.yaml"
     ))
@@ -215,7 +215,18 @@ fn singleton_staging_migration_preserves_roles_and_rejects_old_schema() -> Resul
     for route in &config.routes {
         for (role, id) in route.chain.rpc_providers.iter().enumerate() {
             let group = &config.rpc_groups[id];
-            ensure!(group.members.len() == 1);
+            if id == "base-sepolia-b" {
+                // No independently operated backup passed the genesis/capability requirements.
+                ensure!(group.members.len() == 1);
+            } else {
+                ensure!(group.members.len() >= 2);
+            }
+            ensure!(
+                group
+                    .members
+                    .iter()
+                    .all(|member| member.sealed_key.is_none())
+            );
             ensure!(group.members[0].company == if role == 0 { "tenderly" } else { "publicnode" });
         }
     }
@@ -447,6 +458,7 @@ fn repeated_templates_allow_distinct_credentials_and_aliases_share_quota_scopes(
         .rpc_groups
         .get_mut("provider-a")
         .context("Tenderly A")?;
+    let original_members = group.members.len();
     let member = group.members.first_mut().context("member")?;
     member.url.push_str("/{key}");
     member.sealed_key = Some("TOPUP_RPC_FIRST_KEY".into());
@@ -480,7 +492,7 @@ fn repeated_templates_allow_distinct_credentials_and_aliases_share_quota_scopes(
             .context("group")?
             .members
             .len()
-            == 2
+            == original_members.saturating_add(1)
     );
     let aliases = topup::rpc_groups::clients(&config.rpc_groups, &config.rpc_budgets, |_| {
         Some("same-test-credential".into())
@@ -499,9 +511,6 @@ fn reviewed_company_aliases_cannot_split_one_registrable_domain_across_roles() -
     let config = topup::config::Config::parse(original).map_err(anyhow::Error::msg)?;
     let mut groups = config.rpc_groups.clone();
     let mut companies = config.rpc_companies.clone();
-    for spec in companies.values_mut() {
-        spec.domains = vec!["unused.invalid".into()];
-    }
     companies.get_mut("tenderly").context("tenderly")?.domains = vec!["a.vendor.co.uk".into()];
     companies
         .get_mut("publicnode")
@@ -511,8 +520,10 @@ fn reviewed_company_aliases_cannot_split_one_registrable_domain_across_roles() -
         for member in &mut group.members {
             let host = if member.company == "tenderly" {
                 "a.vendor.co.uk"
-            } else {
+            } else if member.company == "publicnode" {
                 "b.vendor.co.uk"
+            } else {
+                continue;
             };
             let path = if member.sealed_key.is_some() {
                 "/{key}"

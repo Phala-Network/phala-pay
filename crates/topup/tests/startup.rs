@@ -305,7 +305,11 @@ async fn rpc_first_acceptance_tolerates_backup_and_restart_preserves_legacy_hash
             let target=target.clone();let heads=heads.clone();let failures=failures.clone();async move {
                 if request["method"]=="eth_getLogs" {failures.fetch_add(1,std::sync::atomic::Ordering::SeqCst);return axum::Json(serde_json::json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"capability fails after heads"}}));}
                 let mut response:serde_json::Value=reqwest::Client::new().post(target).json(&request).send().await.unwrap().json().await.unwrap();
-                if request["method"]=="eth_getBlockByNumber" && ["latest","safe","finalized"].iter().any(|tag|request["params"][0]==*tag) {heads.fetch_add(1,std::sync::atomic::Ordering::SeqCst);response["result"]["number"]=serde_json::json!("0xf4240");}
+                if request["method"]=="eth_getBlockByNumber" && ["latest","safe","finalized"].iter().any(|tag|request["params"][0]==*tag) {heads.fetch_add(1,std::sync::atomic::Ordering::SeqCst);response["result"]["number"]=serde_json::json!("0xf4240");
+                    // These tags advertise one synthetic block: keep its hash consistent so
+                    // rejection tests the failed log capability, rather than a snapshot fork.
+                    response["result"]["hash"]=serde_json::json!(format!("0x{}","88".repeat(32)));
+                    response["result"]["parentHash"]=serde_json::json!(format!("0x{}","99".repeat(32)));}
                 axum::Json(response)
             }
         }));

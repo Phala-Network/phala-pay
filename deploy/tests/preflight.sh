@@ -185,4 +185,19 @@ fi
 TOPUP='' expect_failure absent-image "the pinned image is not present locally; docker pull" \
     --env "$tmp/complete.env" --compose "$tmp/service.yml" --environment-dir "$staging"
 
-echo "preflight local checks test passed"
+# Exercise the same online RPC failure path, without pulling images or reaching live systems.
+source "$root/deploy/contracts/common.sh"
+source "$root/deploy/preflight-phala.sh"
+source "$root/deploy/preflight-rpc.sh"
+(
+    topup() { printf '%s\n' '{"level":"ERROR","message":"RPC group base-sepolia-a has no verified member [tenderly: finalized head: RPC transport failure]"}' >&2; return 1; }
+    ok() { :; }
+    fail() { printf 'FAIL: %s\n' "$*" >&2; }
+    redact() { printf '%s' "$1"; }
+    check_rpc_groups "$tmp"
+) >"$tmp/rpc.out" 2>"$tmp/rpc.err"
+grep -Fq 'FAIL: RPC group preflight failed:' "$tmp/rpc.err"
+grep -Fq 'tenderly: finalized head: RPC transport failure' "$tmp/rpc.err"
+jq -e '. == []' "$tmp/healthy.json" >/dev/null
+[[ ! -s "$tmp/rpc.out" ]]
+echo "preflight local checks and RPC diagnostics tests passed"

@@ -50,10 +50,12 @@ rpc_budgets:
 rpc_groups:
   sepolia-a:
     chain_id: 11155111
+    policy: { probe: { attempts: 3, deadline: 30000 } }
     members: [{id: provider-a, company: tenderly, url: 'https://sepolia.gateway.tenderly.co',
                account_budget: tenderly-account, key_budget: tenderly-public}]
   sepolia-b:
     chain_id: 11155111
+    policy: { probe: { attempts: 3, deadline: 30000 } }
     members: [{id: provider-b, company: publicnode, url: 'https://ethereum-sepolia-rpc.publicnode.com',
                account_budget: publicnode-account, key_budget: publicnode-public}]
 routes:                                    # every enabled route version, as route files are written
@@ -81,6 +83,16 @@ routes:                                    # every enabled route version, as rou
   Repeated templates with different credentials are allowed; identical URL/credential identities
   and conflicting shared quota scopes are refused. Keyless endpoints still have synthetic key
   budgets. Public policies resolve to bounded failover defaults; weighted round robin is optional.
+  `policy.probe: { attempts: 3, deadline: 30000 }` is the default acceptance/readmission policy:
+  attempts includes the first send of each RPC; deadline is milliseconds for the complete member
+  probe, including all calls, quota admission, backoff and `Retry-After`. Attempts must be 1–16
+  and deadline 1–120000, at least `attempt_timeout_ms` and greater than `retry_delay_ms`.
+  Only transport/timeouts, classified server errors and throttling retry on the same member,
+  with exponential backoff starting at `retry_delay_ms` (100 ms by default). A 429 honors
+  `Retry-After`; a pause beyond the deadline fails without another send. Identity/genesis/code
+  mismatches, capability failures, stale heads and malformed replies do not retry or admit.
+  `recovery_successes` (default 2) counts consecutive complete successful probes, independently
+  of the per-RPC attempt count.
   See [the design schema and error table](design/rpc-failover.md#configuration) and
   [the RPC runbook](../deploy/RPC.md) for preflight, recovery and migration.
 - **`routes`** are route files, one list item each; their fields and defaults are in
