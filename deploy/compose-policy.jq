@@ -103,7 +103,8 @@ def allowed_envs_violations($variant; $allowed):
       else ["allowed_envs must be a list of names"] end;
 
 def common_violations($variant; $project):
-    [ check(([.services[].image] | all(test("^[^@]+@sha256:[0-9a-f]{64}$") and (test("@sha256:0{64}$") | not)));
+    . as $root
+    | [ check(([.services[].image] | all(test("^[^@]+@sha256:[0-9a-f]{64}$") and (test("@sha256:0{64}$") | not)));
             "every image must be a nonzero repository@sha256 digest"),
       check(.name == $project; "the project must be \($project)"),
       check([.volumes // {} | to_entries[] | .value.name == "\($project)_\(.key)" and (.value.external | not)]
@@ -119,7 +120,27 @@ def common_violations($variant; $project):
       check([.services | to_entries[] | .key as $service | .value.volumes[]?
               | select(.type == "bind") | select(.source != "/var/run/dstack.sock")] == [];
             "only the dstack socket may be bind-mounted")
-    ] + secret_violations($variant);
+    ] + secret_violations($variant)
+      + (if $variant == "product" then [] elif $variant == "restore-check" then ["topup"] else ["topup", "smokescreen", "heartbeat"] end | map(
+        . as $service
+        | $root | [
+          check(.services[$service].read_only == true; "\($service) must use a read-only root filesystem"),
+          check((.services[$service].tmpfs // []) | length > 0; "\($service) must declare tmpfs"),
+          check(.services[$service].cap_drop == ["ALL"]; "\($service) must drop all capabilities"),
+          check((.services[$service].security_opt // []) | index("no-new-privileges:true") != null;
+                "\($service) must disable privilege escalation"),
+          check((.services[$service].mem_limit // "") | type == "string" and test("^[1-9][0-9]*[bkmgBKMG]$");
+                "\($service) must set a positive finite memory limit"),
+          check((.services[$service].pids_limit // 0) | type == "number" and . > 0;
+                "\($service) must set a positive pids limit"),
+          check((.services[$service].privileged // false) != true;
+                "\($service) must not be privileged"),
+          check((.services[$service].cap_add // []) == [];
+                "\($service) must not add capabilities"),
+          check((.services[$service].security_opt // []) == ["no-new-privileges:true"];
+                "\($service) must use only no-new-privileges")
+        ] | flatten
+      ) | flatten);
 
 # The derived credentials (deploy/README.md, "Database credentials"): each volume is the committed
 # tmpfs, mounted by exactly these services, and written only by `keys`, which derives them.

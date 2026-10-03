@@ -4,7 +4,7 @@ use std::time::Duration;
 use alloy_primitives::{Address, U256};
 use serde_json::json;
 use sqlx::{Connection as _, PgConnection, PgPool, Row};
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::time::{MissedTickBehavior, interval, timeout};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -224,7 +224,11 @@ impl LeaseOwnerLock {
             tokio::select! {
                 () = shutdown.cancelled() => return Ok(self),
                 _ = ticks.tick() => {
-                    if let Err(error) = self.connection.ping().await {
+                    let ping = timeout(Duration::from_secs(5), self.connection.ping());
+                    if let Err(error) = match ping.await {
+                        Ok(result) => result,
+                        Err(_) => Err(sqlx::Error::PoolTimedOut),
+                    } {
                         shutdown.cancel();
                         return Err(error.into());
                     }
@@ -277,16 +281,23 @@ async fn try_lease_owner_lock(
     pool: &PgPool,
     exclusive: bool,
 ) -> Result<Option<LeaseOwnerLock>, ReconciliationError> {
-    let mut connection = pool.acquire().await?.detach();
+    let mut connection = timeout(Duration::from_secs(5), pool.acquire())
+        .await
+        .map_err(|_| ReconciliationError::LeaseOwnerLock("timed out acquiring lock connection"))??
+        .detach();
     let lock = if exclusive {
         "SELECT pg_try_advisory_lock($1)"
     } else {
         "SELECT pg_try_advisory_lock_shared($1)"
     };
-    let held: bool = sqlx::query_scalar(lock)
-        .bind(LEASE_OWNER_LOCK)
-        .fetch_one(&mut connection)
-        .await?;
+    let held: bool = timeout(
+        Duration::from_secs(5),
+        sqlx::query_scalar(lock)
+            .bind(LEASE_OWNER_LOCK)
+            .fetch_one(&mut connection),
+    )
+    .await
+    .map_err(|_| ReconciliationError::LeaseOwnerLock("timed out acquiring advisory lock"))??;
     Ok(held.then_some(LeaseOwnerLock {
         connection,
         exclusive,

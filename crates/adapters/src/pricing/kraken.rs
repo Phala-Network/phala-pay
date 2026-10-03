@@ -9,7 +9,7 @@ use topup_core::valuation::{Observation, SourceId};
 use crate::redaction::Redacted;
 
 use super::decimal::parse_scaled;
-use super::{PriceError, PriceSource, http_client, unix_now};
+use super::{PriceError, PriceSource, http_client, response_bytes, unix_now};
 
 const ENDPOINT: &str = "https://api.kraken.com/0/public/Ticker";
 
@@ -69,9 +69,7 @@ impl PriceSource for Kraken {
         if !response.status().is_success() {
             return Err(PriceError::HttpStatus(response.status().as_u16()));
         }
-        let body = response.bytes().await.map_err(|error| {
-            PriceError::Request(self.endpoint.request_error("kraken body", &error))
-        })?;
+        let body = response_bytes(response, &self.endpoint, "kraken body").await?;
         self.parse_response(&body)
     }
 }

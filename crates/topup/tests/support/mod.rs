@@ -101,11 +101,7 @@ impl TestDatabase {
 
         let mut owner_url = Url::parse(&owner_template)?;
         owner_url.set_path(&format!("/{database_name}"));
-        let owner_pool = PgPoolOptions::new()
-            .max_connections(4)
-            .acquire_timeout(DB_ACQUIRE_TIMEOUT)
-            .connect(owner_url.as_str())
-            .await?;
+        let owner_pool = topup::db::connect(owner_url.as_str(), "migrate", 4).await?;
         topup::db::migrate(&owner_pool).await?;
 
         admin_pool
@@ -121,11 +117,7 @@ impl TestDatabase {
             .set_password(Some(&password))
             .map_err(|()| anyhow::anyhow!("DATABASE_URL cannot accept a password"))?;
         app_url.set_path(&format!("/{database_name}"));
-        let app_pool = PgPoolOptions::new()
-            .max_connections(8)
-            .acquire_timeout(DB_ACQUIRE_TIMEOUT)
-            .connect(app_url.as_str())
-            .await?;
+        let app_pool = topup::db::connect(app_url.as_str(), "run", 8).await?;
 
         sqlx::query("SELECT pg_advisory_unlock(704_209_001)")
             .execute(&admin_pool)

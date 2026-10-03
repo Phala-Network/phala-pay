@@ -114,3 +114,40 @@ pub async fn settle<T, E: From<sqlx::Error>>(
         }
     }
 }
+
+/// Connects with the production session budgets for a runtime command.
+pub async fn connect(
+    url: &str,
+    command: &str,
+    max_connections: u32,
+) -> Result<PgPool, sqlx::Error> {
+    use std::time::Duration;
+    let (statement, lock, idle) = if command == "migrate" || command == "restore-check" {
+        (
+            Duration::from_secs(300),
+            Duration::from_secs(30),
+            Duration::from_secs(300),
+        )
+    } else {
+        (
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+        )
+    };
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(max_connections)
+        .after_connect(move |connection, _| {
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('statement_timeout', $1, false), set_config('lock_timeout', $2, false), set_config('idle_in_transaction_session_timeout', $3, false)")
+                    .bind(format!("{}ms", statement.as_millis()))
+                    .bind(format!("{}ms", lock.as_millis()))
+                    .bind(format!("{}ms", idle.as_millis()))
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(url)
+        .await
+}

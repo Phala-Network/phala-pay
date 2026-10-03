@@ -176,6 +176,26 @@ policy no-archive "${service[@]}" '.services.postgres.environment.TOPUP_RESTORE_
     "the service must archive"
 policy admin-key "${service[@]}" '.services.topup.environment.TOPUP_ADMIN_PUBLIC_KEY = "${TOPUP_ADMIN_PUBLIC_KEY:-}"' \
     "a sealed value may not fill services.topup.environment.TOPUP_ADMIN_PUBLIC_KEY"
+# Stateless services must carry finite budgets and cannot regain privileges.
+for value in 0 -1 null; do
+    policy "memory-$value" "${service[@]}" ".services.topup.mem_limit = $value" \
+        "topup must set a positive finite memory limit"
+done
+for value in 0 -1 null; do
+    policy "pids-$value" "${service[@]}" ".services.topup.pids_limit = $value" \
+        "topup must set a positive pids limit"
+done
+policy memory-absent "${service[@]}" 'del(.services.topup.mem_limit)' \
+    "topup must set a positive finite memory limit"
+policy pids-absent "${service[@]}" 'del(.services.topup.pids_limit)' \
+    "topup must set a positive pids limit"
+policy privileged "${service[@]}" '.services.topup.privileged = true' \
+    "topup must not be privileged"
+policy cap-add "${service[@]}" '.services.topup.cap_add = ["NET_ADMIN"]' \
+    "topup must not add capabilities"
+policy security-opt "${service[@]}" '.services.topup.security_opt += ["seccomp:unconfined"]' \
+    "topup must use only no-new-privileges"
+
 # The restore-check variant never reads the live storage credentials.
 policy live-credentials restore-check "$tmp/restore-check.json" \
     '.services.postgres.environment.AWS_ACCESS_KEY_ID = "${AWS_ACCESS_KEY_ID:-}"' \

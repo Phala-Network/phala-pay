@@ -11,7 +11,7 @@ use topup_core::valuation::{Observation, SourceId, UnixSeconds};
 use crate::redaction::Redacted;
 
 use super::decimal::parse_scaled;
-use super::{PriceError, PriceSource, http_client};
+use super::{PriceError, PriceSource, http_client, response_bytes};
 
 const ENDPOINT: &str = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics";
 /// Reference-rate metric required by the valuation policy (docs/architecture.md §8).
@@ -97,9 +97,7 @@ impl PriceSource for CoinMetrics {
         if !response.status().is_success() {
             return Err(PriceError::HttpStatus(response.status().as_u16()));
         }
-        let body = response.bytes().await.map_err(|error| {
-            PriceError::Request(self.endpoint.request_error("coinmetrics body", &error))
-        })?;
+        let body = response_bytes(response, &self.endpoint, "coinmetrics body").await?;
         self.parse_response(&body)
     }
 }

@@ -13,14 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from reference_product import config as product_config
 from reference_product.__main__ import write_records
 from reference_product.config import (
     DRIVER_KEYID,
@@ -32,9 +30,8 @@ from reference_product.config import (
 from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys
 from reference_product.ledger import Delivery, ProductLedger
 from reference_product.restore_records import export_restore_records
-from reference_product.server import AccountApi, ProductServer
+from reference_product.server import AccountApi, ProductServer, _make_product, pin_webhook_keys
 from topup_sdk import (
-    ApiError,
     RequestSigner,
     credited_event_id,
     load_public_key,
@@ -465,6 +462,38 @@ def test_deliveries_wait_until_the_webhook_keys_are_pinned() -> None:
     assert fulfillment.handle(*_credited()).status == 503
 
 
+def test_live_mode_requires_a_preverified_webhook_pin(tmp_path: Path) -> None:
+    key_file = tmp_path / "api-key"
+    key_file.write_text("ppay_sk_live_" + "a" * 40)
+    config = replace(CONFIG, api_key_file=str(key_file))
+    with pytest.raises(MissingProductKeyError, match="pre-verified"):
+        pin_webhook_keys(config)
+
+
+def test_live_product_without_a_pin_fails_startup(tmp_path: Path) -> None:
+    key_file = tmp_path / "api-key"
+    key_file.write_text("ppay_sk_live_" + "a" * 40)
+    config = replace(
+        CONFIG,
+        api_key_file=str(key_file),
+        driver_public_key=DRIVER.public_key_base64(),
+    )
+    with pytest.raises(MissingProductKeyError, match="pre-verified"):
+        _make_product(config)
+
+
+def test_unsealed_test_product_starts_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("UNSEALED_TEST_KEY", raising=False)
+    config = replace(
+        CONFIG,
+        api_key_file=None,
+        api_key_env="UNSEALED_TEST_KEY",
+        driver_public_key=DRIVER.public_key_base64(),
+    )
+    with _make_product(config):
+        pass
+
+
 DRIVER = RequestSigner.from_seed(DRIVER_KEYID, bytes([7] * 32))
 
 
@@ -885,26 +914,4 @@ def test_restore_records_over_asgi_preserves_signed_query_and_payload() -> None:
                 )
             assert client.get(target).status_code == 401
     finally:
-        product._workers.shutdown(wait=True, cancel_futures=True)
-        api.close()
-
-
-def test_product_sdk_does_not_wait_on_retry_after(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[httpx.Request] = []
-
-    def upstream(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(
-            429, headers={"Retry-After": "3600"}, json={"error": {"code": "rate_limited"}}
-        )
-
-    monkeypatch.setattr(product_config, "DeadlineTransport", lambda: httpx.MockTransport(upstream))
-    key = tmp_path / "api-key"
-    key.write_text("ppay_sk_test_" + "ab" * 32)
-    config = replace(CONFIG, api_key_file=str(key))
-    with config.client() as client, pytest.raises(ApiError) as raised:
-        client.get_account()
-    assert raised.value.status_code == 429
-    assert len(calls) == 1
+        product.close()

@@ -79,6 +79,14 @@ services:
   topup:
     image: phala-pay
     user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 360s
     command: [topup, run, --config, /etc/topup/topup.yaml, --webhook-proxy, "http://smokescreen:4750"]
     environment:
       DATABASE_URL: postgres://topup_service@postgres:5432/topup
@@ -124,6 +132,13 @@ services:
   # address that is not publicly routable (deploy/README.md, "Webhook egress").
   smokescreen:
     image: phala-pay
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 128
     command:
       - smokescreen
       - --listen-ip=0.0.0.0
@@ -141,6 +156,13 @@ services:
   heartbeat:
     image: phala-pay
     user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
     command: [topup, heartbeat]
     environment:
       DATABASE_URL: postgres://topup_service@postgres:5432/topup

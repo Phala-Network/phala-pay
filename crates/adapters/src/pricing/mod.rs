@@ -9,13 +9,40 @@ pub mod kraken;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
+use reqwest::Response;
 
-use crate::redaction::RedactedTransportError;
+use crate::redaction::{Redacted, RedactedTransportError};
 
 pub use topup_core::valuation::Observation;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+
+async fn response_bytes(
+    response: Response,
+    endpoint: &Redacted,
+    operation: &'static str,
+) -> Result<Vec<u8>, PriceError> {
+    if response
+        .content_length()
+        .is_some_and(|size| size > u64::try_from(MAX_RESPONSE_BYTES).unwrap_or(u64::MAX))
+    {
+        return Err(PriceError::MalformedResponse("body too large"));
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk
+            .map_err(|error| PriceError::Request(endpoint.request_error(operation, &error)))?;
+        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(PriceError::MalformedResponse("body too large"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
 
 /// A timestamped USD price observation provider.
 #[async_trait]

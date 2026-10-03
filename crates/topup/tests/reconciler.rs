@@ -397,6 +397,34 @@ async fn losing_the_lease_owner_connection_stops_guarded_pumps() -> Result<()> {
     .await
 }
 
+/// Shutdown retains the lock until tasks end, even if its backend dies after cancellation.
+#[tokio::test]
+async fn losing_the_lock_connection_during_shutdown_does_not_hang_cleanup() -> Result<()> {
+    with_database(|pool| async move {
+        let shutdown = CancellationToken::new();
+        let lock = hold_lease_owner_lock(&pool).await?;
+        let watch = tokio::spawn(lock.watch(StdDuration::from_millis(50), shutdown.clone()));
+        shutdown.cancel();
+        let lock = tokio::time::timeout(StdDuration::from_secs(10), watch).await???;
+        let terminated: bool = sqlx::query_scalar(
+            "SELECT pg_terminate_backend(pid) FROM pg_locks \
+             WHERE locktype = 'advisory' AND mode = 'ShareLock' \
+             AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+        )
+        .fetch_one(&pool)
+        .await?;
+        ensure!(terminated);
+        ensure!(
+            tokio::time::timeout(StdDuration::from_secs(10), lock.release())
+                .await?
+                .is_err()
+        );
+        tokio::time::timeout(StdDuration::from_secs(10), pool.close()).await?;
+        Ok(())
+    })
+    .await
+}
+
 #[tokio::test]
 async fn checks_are_independent_and_a_failed_round_recovers() -> Result<()> {
     with_database(|pool| async move {

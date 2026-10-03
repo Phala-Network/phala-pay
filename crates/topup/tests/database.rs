@@ -33,6 +33,8 @@ use support::with_database;
 async fn migrations_apply_from_scratch_and_are_idempotent() -> Result<()> {
     with_database(|context| {
         Box::pin(async move {
+            assert_session_budgets(&context.owner_pool, ("5min", "30s", "5min")).await?;
+            assert_session_budgets(&context.app_pool, ("30s", "5s", "1min")).await?;
             db::migrate(&context.owner_pool).await?;
             let migrate = |url: &str| {
                 Command::new(env!("CARGO_BIN_EXE_topup"))
@@ -198,11 +200,13 @@ async fn tenant_rows_cannot_join_another_accounts_or_modes_rows() -> Result<()> 
 async fn restore_check_accepts_a_current_schema_and_fresh_heartbeat() -> Result<()> {
     with_database(|context| {
         Box::pin(async move {
+            let restore_pool = db::connect(&context.owner_url, "restore-check", 4).await?;
+            assert_session_budgets(&restore_pool, ("5min", "30s", "5min")).await?;
             let heartbeat = heartbeat::record(&context.app_pool).await?;
 
-            let reconciler = restore_reconciler(&context.owner_pool)?;
+            let reconciler = restore_reconciler(&restore_pool)?;
             let expectations = restore_expectations(&heartbeat);
-            let report = restore::check(&context.owner_pool, &expectations, &reconciler)
+            let report = restore::check(&restore_pool, &expectations, &reconciler)
                 .await
                 .map_err(anyhow::Error::msg)?;
             ensure!(report.status == "ok");
@@ -232,6 +236,7 @@ async fn restore_check_accepts_a_current_schema_and_fresh_heartbeat() -> Result<
                     .iter()
                     .any(|finding| finding.incomplete)
             );
+            restore_pool.close().await;
             Ok(())
         })
     })
@@ -1336,6 +1341,20 @@ fn assert_sqlstate(error: Option<sqlx::Error>, expected: &str) -> Result<()> {
     ensure!(
         database_error.code().as_deref() == Some(expected),
         "expected SQLSTATE {expected}, got {error}"
+    );
+    Ok(())
+}
+
+async fn assert_session_budgets(pool: &PgPool, expected: (&str, &str, &str)) -> Result<()> {
+    let actual: (String, String, String) = sqlx::query_as(
+        "SELECT current_setting('statement_timeout'), current_setting('lock_timeout'), \
+         current_setting('idle_in_transaction_session_timeout')",
+    )
+    .fetch_one(pool)
+    .await?;
+    ensure!(
+        (actual.0.as_str(), actual.1.as_str(), actual.2.as_str()) == expected,
+        "unexpected session budgets: {actual:?}"
     );
     Ok(())
 }

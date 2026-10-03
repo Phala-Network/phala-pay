@@ -9,9 +9,12 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::tenancy::Scope;
+use governor::{DefaultKeyedRateLimiter, Quota};
+use std::num::NonZeroU32;
 
 const SECOND: Duration = Duration::from_secs(1);
 /// Tracked scopes beyond which idle ones are dropped; an idle scope is indistinguishable from a
@@ -47,6 +50,8 @@ pub struct ApiRateLimiter {
     limits: RateLimits,
     clock: Clock,
     state: Mutex<State>,
+    source_limiter: DefaultKeyedRateLimiter<String>,
+    source_housekeeping: AtomicUsize,
 }
 
 impl std::fmt::Debug for ApiRateLimiter {
@@ -72,6 +77,18 @@ impl Default for ApiRateLimiter {
 }
 
 impl ApiRateLimiter {
+    /// Counts an unauthenticated request by its transport peer.
+    pub fn allow_source(&self, source: &str) -> bool {
+        if self
+            .source_housekeeping
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(1024)
+        {
+            self.source_limiter.retain_recent();
+            self.source_limiter.shrink_to_fit();
+        }
+        self.source_limiter.check_key(&source.to_owned()).is_ok()
+    }
     /// A limiter enforcing `limits`.
     #[must_use]
     pub fn new(limits: RateLimits) -> Self {
@@ -89,6 +106,10 @@ impl ApiRateLimiter {
             limits,
             clock: Box::new(clock),
             state: Mutex::default(),
+            source_limiter: DefaultKeyedRateLimiter::keyed(Quota::per_second(
+                NonZeroU32::new(10_000).unwrap(),
+            )),
+            source_housekeeping: AtomicUsize::new(0),
         }
     }
 
@@ -209,5 +230,18 @@ mod tests {
             admitted(&limiter, now, Scope::new(Uuid::from_u128(9), true), 10),
             10
         );
+    }
+
+    #[test]
+    fn ingress_budget_is_keyed_by_source() {
+        let limiter = ApiRateLimiter::default();
+        assert_eq!(
+            (0..10_000)
+                .filter(|_| limiter.allow_source("198.51.100.1"))
+                .count(),
+            10_000
+        );
+        assert!(limiter.allow_source("198.51.100.2"));
+        assert!(limiter.allow_source("198.51.100.2"));
     }
 }

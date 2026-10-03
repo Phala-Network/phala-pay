@@ -83,6 +83,9 @@ services:
         condition: service_completed_successfully
 
   topup:
+    # Docker Compose cannot mount an inline config into a read-only service; the rehearsal
+    # uses rendered configs from the workstation and does not model the CVM rootfs policy.
+    read_only: false
     command: [topup, run, --config, /etc/topup/topup.yaml, --public-origin, "http://topup:8080"]
     volumes: !override
       - dstack_socket:/var/run

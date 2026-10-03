@@ -13,28 +13,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
-### JS SDK
+### Security
 
-- **Breaking:** React components require an explicit `@phala/pay/styles.css` import. Removed
-  `appearance.variables`; set the `--pp-*` custom properties in your stylesheet. Components no
-  longer inject inline styles, allowing `style-src 'self'` in integrations. The demo permits
-  only its own CSS and the exact hash of Radix's fixed scrollbar stylesheet.
-- Public reads accept a composable `AbortSignal` and a request deadline (10 seconds by default).
-  **Breaking:** Node.js 20.3 or later is required for the standard `AbortSignal.any` API.
-  Sessions and React components abort active reads on destruction or unmount.
-- Checkout calls `onSuccess` after a local expiry followed by credit, once per quote and
-  notification type. DepositAddress uses native keyboard-accessible network/token radio groups.
-
-### Reference product
-
-- Replace the HTTP development server with pinned Starlette and Granian, bounded connections
-  and workers, streamed body limits, request deadlines, uniform application transport errors,
-  and graceful shutdown. Bound worker-accepted connections to 32 with a five-second total
-  header-read deadline after acceptance; excess connections wait in the OS listen backlog
-  configured at 128 (Granian's minimum), rather than entering the worker. Outbound SDK calls share a 25-second operation deadline without automatic
-  retries; a single supervised worker has a 35-second shutdown limit within the container's
-  45-second grace period. The demo forwards TanStack Query cancellation to deadline-bound fetches
-  and uses a native network select to avoid dynamic inline scrollbar styles.
+- **Breaking:** live reference products now require pre-verified pinned webhook keys; unpinned
+  attestation key fetches remain available only in test mode.
+- Price-provider responses are bounded while streaming, and API ingress and service containers
+  have bounded resource and privilege exposure.
+- Database sessions use role-specific time budgets; service shutdown bounds task draining,
+  advisory-lock cleanup, and pool closure, including read-only restore instances.
 
 ## [0.7.0] - 2026-10-02
 

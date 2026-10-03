@@ -36,6 +36,7 @@ use crate::refunds::DestinationScreener;
 use crate::routes::RouteSet;
 use crate::tenancy::{Permission, Scope};
 use crate::treasuries::ContractSignatures;
+use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Extension, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -45,6 +46,7 @@ use axum::{Json, Router};
 use sqlx::PgPool;
 use topup_core::route::RouteFile;
 
+use tower::{ServiceBuilder, limit::GlobalConcurrencyLimitLayer, load_shed::LoadShedLayer};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -477,7 +479,13 @@ pub fn router(state: AppState) -> (Router, ApiDocs) {
         state.clone(),
         auth::authenticate_admin,
     ));
-    let (merchant_router, merchant_doc) = merchant.merge(client_secret).split_for_parts();
+    let (merchant_router, merchant_doc) = merchant
+        .merge(client_secret)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::ingress_budget,
+        ))
+        .split_for_parts();
     let (admin_router, admin_doc) = admin.split_for_parts();
     let docs = ApiDocs {
         merchant: openapi::merchant(&merchant_doc),
@@ -486,6 +494,15 @@ pub fn router(state: AppState) -> (Router, ApiDocs) {
     let router = merchant_router
         .merge(admin_router)
         .route("/healthz", get(healthz))
+        // Bound unauthenticated work before API-key verification can touch PostgreSQL.
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|_| async {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }))
+                .layer(LoadShedLayer::new())
+                .layer(GlobalConcurrencyLimitLayer::new(256)),
+        )
         .with_state(state)
         .route("/openapi.json", get(serve_openapi))
         .route("/openapi.admin.json", get(serve_admin_openapi))

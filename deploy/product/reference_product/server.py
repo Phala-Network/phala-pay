@@ -449,15 +449,18 @@ def pin_webhook_keys(config: ProductConfig, *, wait_s: float = 0) -> PinnedKeys:
 
     `verify_attestation_binding` checks that the report data binds the nonce, the account, the
     mode, and the keys. Production integrators must also verify the TDX quote with the dstack
-    verifier (deploy/dstack-verifier.sh, deploy/README.md) and then pin the keys in
-    configuration; configured `webhook_public_keys` skip the fetch. While the service is
-    unreachable this retries for up to `wait_s` seconds; without the API key it raises
-    `MissingProductKeyError`.
+    verifier and then pin the keys in configuration. Test mode may fetch keys after checking the
+    report-data binding. While the service is unreachable this retries for up to `wait_s` seconds;
+    without the API key it raises `MissingProductKeyError`.
     """
     livemode = config.livemode()
     if config.webhook_public_keys:
         return PinnedKeys(
             livemode, [load_webhook_public_key(key) for key in config.webhook_public_keys]
+        )
+    if livemode:
+        raise MissingProductKeyError(
+            "live mode requires pre-verified webhook_public_keys; refusing unpinned attestation"
         )
     deadline = time.monotonic() + wait_s
     while True:
@@ -555,6 +558,15 @@ def _make_product(config: ProductConfig, *, pin_wait_s: float = 0) -> ProductSer
     try:
         webhook_keys(wait_s=pin_wait_s)
     except MissingProductKeyError:
+        # A CVM starts before its secret is sealed.  An actually configured live key still
+        # requires a pre-verified pin; an absent key has no mode to enforce yet and is allowed
+        # to start so the provisioning health check can run.
+        try:
+            key = config.api_key()
+        except MissingProductKeyError:
+            key = ""
+        if key.startswith(("ppay_sk_live_", "ppay_rk_live_")):
+            raise
         LOG.warning("the product key is not configured; webhook keys are pinned once it is")
     ledger = ProductLedger(config.ledger_path)
     fulfillment = Fulfillment(config, ledger, webhook_keys)

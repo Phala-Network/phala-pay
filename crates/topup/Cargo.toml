@@ -27,6 +27,7 @@ clap.workspace = true
 crc.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
+governor.workspace = true
 hex.workspace = true
 hmac.workspace = true
 httpdate.workspace = true
@@ -45,6 +46,7 @@ topup-adapters = { path = "../adapters" }
 topup-core = { path = "../core" }
 tokio.workspace = true
 tokio-util.workspace = true
+tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 utoipa.workspace = true
@@ -58,7 +60,6 @@ psl = "2.1.215"
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
 sentry = { workspace = true, features = ["test"] }
-tower.workspace = true
 tracing-test = { version = "=0.2.6", features = ["no-env-filter"] }
 
 [lints.rust]
