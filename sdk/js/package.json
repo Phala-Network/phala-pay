@@ -43,7 +43,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "THIRD_PARTY_NOTICES"
   ],
   "publishConfig": {
     "access": "public"
@@ -54,6 +55,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "icons:generate": "node scripts/generate-icons.mjs",
     "prepare": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

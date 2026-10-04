@@ -298,6 +298,33 @@ const batchFile = safeBatch(1, TREASURY_SAFE, calls); // Safe Transaction Builde
 `quoteAddress`, `depositAddress`, `forwarderAddress`, `quoteSalt`, and `depositAddressSalt`
 recompute an address offline from a treasury you pass, as the Python SDK does.
 
+## Chain and token icons
+
+`Checkout` and `DepositAddress` include compact inline icons for Ethereum, Base, USDC, USDT,
+PHA, and ETH. Testnets use their mainnet artwork with visible **Testnet** text. Unknown chains
+and assets show a neutral first-letter monogram. Symbols are case-insensitive.
+
+```tsx
+import { NetworkIcon, AssetIcon } from "@phala/pay/react";
+
+<NetworkIcon chainId={8453} size={16} />; // decorative beside visible "Base" text
+<AssetIcon asset="usdc" size={20} decorative={false} />; // accessible when used alone
+```
+
+Import `@phala/pay/styles.css` for alignment and the compact testnet indicator. The default
+size is 18px. Icons use SVG width/height attributes and React elements, so they need no inline
+styles, data URI allowance, or extra CSP directives, including with `style-src 'self'`.
+
+Framework-free hosts can call `networkIcon(chainId)` or `assetIcon(symbol)` from `@phala/pay`
+for decorative SVG markup (network testnets also include a visible `Testnet` span). Keep the
+name visible alongside it; when used alone, supply an accessible label on the host wrapper.
+
+Only six branded SVGs from `@web3icons/core@4.0.57` are vendored, under the MIT license in
+`THIRD_PARTY_NOTICES`. Regenerate both the markup and JSX modules with
+`npx -y pnpm@12.6.0 run icons:generate`; the script packs the pinned package into a temporary
+directory, rejects unexpected SVG tags/attributes, and cleans up. No web3icons runtime package
+is installed.
+
 ## Development
 
 ```sh

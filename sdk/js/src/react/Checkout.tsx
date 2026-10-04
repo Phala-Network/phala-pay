@@ -22,6 +22,7 @@ import {
   type Wallet,
 } from "../wallet.js";
 import type { Appearance } from "./appearance.js";
+import { AssetIcon, NetworkIcon } from "./Icons.js";
 import { Field } from "./Field.js";
 import { QrCode } from "./QrCode.js";
 import { useCheckout } from "./useCheckout.js";
@@ -132,10 +133,12 @@ export function Checkout({
       {quote !== null && (
         <>
           <p className="pp-amount">
+            <AssetIcon asset={quote.asset} size={20} />{" "}
             {formatTokenAmount(quote)} {quote.asset.toUpperCase()}
           </p>
           <p className="pp-subtitle">
-            {formatAmount(quote)} top-up · {networkName(quote.chain_id)}
+            {formatAmount(quote)} top-up · <NetworkIcon chainId={quote.chain_id} size={16} />{" "}
+            {networkName(quote.chain_id)}
             {!quote.livemode && <span className="pp-badge"> · Test mode</span>}
           </p>
         </>

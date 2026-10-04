@@ -12,6 +12,7 @@ import { CheckoutError, pollDelay } from "../checkout.js";
 import { formatWait } from "../format.js";
 import { depositAddressTransfer, type DepositAddressDetails } from "../payment.js";
 import type { Appearance } from "./appearance.js";
+import { AssetIcon, NetworkIcon } from "./Icons.js";
 import { Field } from "./Field.js";
 import { QrCode } from "./QrCode.js";
 
@@ -93,6 +94,7 @@ export function DepositAddress({
                 checked={each.chain_id === network.chain_id}
                 onChange={() => setSelectedChain(each.chain_id)}
               />
+              <NetworkIcon chainId={each.chain_id} size={16} />{" "}
               {networkName(each.chain_id)}
             </label>
           ))}
@@ -109,6 +111,7 @@ export function DepositAddress({
                 checked={each.asset === token.asset}
                 onChange={() => setSelectedAsset(each.asset)}
               />
+              <AssetIcon asset={each.asset} size={16} />{" "}
               {each.asset.toUpperCase()}
             </label>
           ))}

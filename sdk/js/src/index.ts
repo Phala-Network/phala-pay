@@ -44,3 +44,4 @@ export {
   type WalletErrorCode,
   type WalletInfo,
 } from "./wallet.js";
+export { networkIcon, assetIcon } from "./icons.js";

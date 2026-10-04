@@ -76,10 +76,10 @@ describe("DepositAddress", () => {
   it("supports native radio keyboard selection and has no accessibility violations", async () => {
     const user = userEvent.setup();
     const { container } = render(<DepositAddress depositAddress={details()} />);
-    const first = screen.getByRole("radio", { name: "Sepolia" });
+    const first = screen.getByRole("radio", { name: "Testnet Sepolia" });
     first.focus();
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("radio", { name: "Base Sepolia" })).toBe(document.activeElement);
+    expect(screen.getByRole("radio", { name: "Testnet Base Sepolia" })).toBe(document.activeElement);
     expect(screen.getByRole("img").getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
     await user.keyboard("{ArrowRight}");
     expect(first).toBe(document.activeElement);
@@ -111,7 +111,7 @@ describe("DepositAddress", () => {
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for USDC on Sepolia");
     expect(screen.getByText(USDC)).toBeDefined();
 
-    fireEvent.click(screen.getByRole("radio", { name: "Base Sepolia" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Testnet Base Sepolia" }));
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
     expect(screen.getByText("Base Sepolia (chain ID 84532)")).toBeDefined();
     // One token on this network: no token tabs.
