@@ -20,8 +20,8 @@ services:
 
 configs:
   test_tls_proxy:
-    file: ${TOPUP_TEST_TLS_SOURCE:?}
+    content: ${TOPUP_TEST_TLS_PROXY:?}
   test_tls_certificate:
-    file: ${TOPUP_TEST_TLS_DIR:?}/cert.pem
+    content: ${TOPUP_TEST_TLS_CERTIFICATE:?}
   test_tls_key:
-    file: ${TOPUP_TEST_TLS_DIR:?}/key.pem
+    content: ${TOPUP_TEST_TLS_KEY:?}

@@ -54,7 +54,6 @@ registry_image="registry:3.1.1@sha256:325b4b29b041e82803abeb703e201655e4e23ab832
 # driver (the reference product itself runs from its own image).
 client_image="ghcr.io/astral-sh/uv:0.12.18-python3.14-trixie-slim@sha256:00facf17b58b02b725155862c5cd637f688f906bf7eb5b5194647886d8805cf3"
 export TOPUP_TEST_TLS_IMAGE="$client_image" TOPUP_TEST_TLS_DIR="$tmp/tls"
-export TOPUP_TEST_TLS_SOURCE="$root/deploy/local/tls_proxy.py"
 registry="$project-registry"
 client="$project-client"
 product_project="$project-product"
@@ -130,7 +129,7 @@ cleanup() {
     set +e
     if ((status != 0)); then
         echo "--- workload logs (last 60 lines per service) ---" >&2
-        dc logs --no-color --tail 60 keys postgres migrate topup backup >&2
+        dc logs --no-color --tail 60 keys postgres migrate topup topup-tls backup >&2
     fi
     docker rm -f "$client" >/dev/null 2>&1
     if ((status != 0)) && [[ -f "$tmp/product.yml" ]]; then
@@ -167,6 +166,10 @@ from pathlib import Path
 roots = "".join(ssl.DER_cert_to_PEM_cert(c) for c in ssl.create_default_context().get_ca_certs(binary_form=True))
 Path(sys.argv[2]).write_text(roots + Path(sys.argv[1]).read_text())
 PYTHON
+export TOPUP_TEST_TLS_PROXY TOPUP_TEST_TLS_CERTIFICATE TOPUP_TEST_TLS_KEY
+TOPUP_TEST_TLS_PROXY="$(<"$root/deploy/local/tls_proxy.py")"
+TOPUP_TEST_TLS_CERTIFICATE="$(<"$TOPUP_TEST_TLS_DIR/cert.pem")"
+TOPUP_TEST_TLS_KEY="$(<"$TOPUP_TEST_TLS_DIR/key.pem")"
 
 wait_for() {
     local description=$1 attempts=$2
@@ -243,6 +246,7 @@ docker run -d --name "$client" --network "${project}_default" "$client_image" sl
     >/dev/null
 # `docker cp` streams through the API, so this works where the daemon cannot see the checkout.
 docker exec "$client" mkdir /opt/repo
+docker cp "$TOPUP_TEST_TLS_DIR/ca.pem" "$client:/opt/test-ca.pem"
 tar -C "$root" --exclude=.venv --exclude='*_cache' --exclude=__pycache__ -cf - sdk/python \
     deploy/product/reference_product |
     docker cp - "$client:/opt/repo"
@@ -426,6 +430,12 @@ healthy() {
     [[ "$(http_status http://topup:8080/healthz)" == 200 ]]
 }
 wait_for "GET /healthz" 90 healthy
+tls_healthy() {
+    product_python -c 'import ssl, httpx; print(httpx.get("https://topup-tls:8443/healthz", verify=ssl.create_default_context(cafile="/opt/test-ca.pem"), timeout=5).status_code)' |
+        grep -qx 200
+}
+wait_for "verified HTTPS GET /healthz" 30 tls_healthy
+echo "ok: the disposable TLS ingress serves /healthz with certificate verification"
 # `topup run` checks the route's contracts on every provider before it touches the database
 # and binds the listener, so a served /healthz means the check passed.
 if dc logs topup 2>&1 | grep -q 'on-chain contract check failed'; then
@@ -607,7 +617,8 @@ configs:
   rehearsal_product_$digest:
     content: '$config'
   rehearsal_tls_certificate:
-    file: $TOPUP_TEST_TLS_DIR/ca.pem
+    content: |
+$(sed 's/^/      /' "$TOPUP_TEST_TLS_DIR/ca.pem")
 networks:
   default:
     name: ${project}_default

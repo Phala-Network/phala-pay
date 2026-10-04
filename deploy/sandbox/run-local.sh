@@ -25,7 +25,6 @@ compose=("$root/deploy/local/compose.sh" --environment-dir "$environment" -p "$p
 # drops traffic from containers to the host.
 client_image="ghcr.io/astral-sh/uv:0.12.18-python3.14-trixie-slim@sha256:00facf17b58b02b725155862c5cd637f688f906bf7eb5b5194647886d8805cf3"
 export TOPUP_TEST_TLS_IMAGE="$client_image" TOPUP_TEST_TLS_DIR="$tmp/tls"
-export TOPUP_TEST_TLS_SOURCE="$root/deploy/local/tls_proxy.py"
 client="$project-product"
 
 # shellcheck disable=SC2329  # invoked by the trap
@@ -53,6 +52,10 @@ from pathlib import Path
 roots = "".join(ssl.DER_cert_to_PEM_cert(c) for c in ssl.create_default_context().get_ca_certs(binary_form=True))
 Path(sys.argv[2]).write_text(roots + Path(sys.argv[1]).read_text())
 PYTHON
+export TOPUP_TEST_TLS_PROXY TOPUP_TEST_TLS_CERTIFICATE TOPUP_TEST_TLS_KEY
+TOPUP_TEST_TLS_PROXY="$(<"$root/deploy/local/tls_proxy.py")"
+TOPUP_TEST_TLS_CERTIFICATE="$(<"$TOPUP_TEST_TLS_DIR/cert.pem")"
+TOPUP_TEST_TLS_KEY="$(<"$TOPUP_TEST_TLS_DIR/key.pem")"
 
 wait_for() {
     local description=$1 attempts=90
