@@ -16,7 +16,8 @@ cleanup() {
         docker logs "$name-api" >&2 2>/dev/null || true
         docker logs "$name-kms" >&2 2>/dev/null || true
     fi
-    docker rm -f "$name-api" "$name-kms" "$name-db" >/dev/null 2>&1 || true
+    # PostgreSQL declares an anonymous data volume; remove it with its test container.
+    docker rm -fv "$name-api" "$name-kms" "$name-db" >/dev/null 2>&1 || true
     docker network rm "$name" >/dev/null 2>&1 || true
     for image in "${images[@]}"; do docker image rm "$image" >/dev/null 2>&1 || true; done
     rm -rf "$tmp"
