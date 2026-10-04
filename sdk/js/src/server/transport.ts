@@ -20,8 +20,8 @@ export interface TransportOptions {
   requestDeadlineMs?: number;
   fetch?: typeof globalThis.fetch;
 }
-export function positive(value: number): number {
-  if (!Number.isFinite(value) || value <= 0)
+export function positive(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
     throw new ConfigurationError("Timeouts and deadlines must be finite and positive");
   return value;
 }
@@ -107,6 +107,8 @@ export class Transport {
     options: RequestOptions = {},
     responseSchema?: Schema,
   ): Promise<unknown> {
+    if (!isRecord(options) || (method === "GET" && params !== undefined && !isRecord(params)))
+      throw new ConfigurationError("Invalid request controls or query parameters");
     if (options.signal !== undefined && !(options.signal instanceof AbortSignal))
       throw new ConfigurationError("Invalid cancellation signal");
     const deadline = positive(
@@ -181,8 +183,10 @@ export class Transport {
         replayed = response.headers.get("idempotent-replayed")?.toLowerCase() === "true";
         minimum = (retryAfter(response.headers.get("retry-after")) ?? 0) * 1000;
         const invalid = () => new ResponseValidationError(undefined, response.status, requestId);
-        if ((response.status >= 300 && response.status < 400) || response.redirected)
+        if ((response.status >= 300 && response.status < 400) || response.redirected) {
+          controller.abort();
           throw invalid();
+        }
         const text = await bounded(response.text(), signal);
         let data: unknown;
         try {

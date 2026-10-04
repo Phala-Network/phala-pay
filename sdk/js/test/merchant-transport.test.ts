@@ -316,6 +316,9 @@ describe("merchant transport", () => {
         },
       }),
     ).rejects.toBeInstanceOf(ConfigurationError);
+    await expect(
+      transport(fetch).request("GET", "/v1/test", ["not-a-query"]),
+    ).rejects.toBeInstanceOf(ConfigurationError);
     expect(fetch).not.toHaveBeenCalled();
     await transport(fetch).request("GET", "/v1/test", {
       "expand[]": ["deposit", "x&key=y"],
