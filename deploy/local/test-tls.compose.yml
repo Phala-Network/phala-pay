@@ -1,0 +1,27 @@
+# The local stand-in for dstack's TLS ingress. Certificates and configs belong to the run's
+# temporary directory; Compose copies them through the API and publishes no host port.
+services:
+  topup-tls:
+    image: ${TOPUP_TEST_TLS_IMAGE:?}
+    entrypoint: [python, /etc/test-tls/proxy.py]
+    configs:
+      - source: test_tls_proxy
+        target: /etc/test-tls/proxy.py
+      - source: test_tls_certificate
+        target: /etc/test-tls/cert.pem
+      - source: test_tls_key
+        target: /etc/test-tls/key.pem
+    depends_on:
+      topup:
+        condition: service_started
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
+configs:
+  test_tls_proxy:
+    file: ${TOPUP_TEST_TLS_SOURCE:?}
+  test_tls_certificate:
+    file: ${TOPUP_TEST_TLS_DIR:?}/cert.pem
+  test_tls_key:
+    file: ${TOPUP_TEST_TLS_DIR:?}/key.pem

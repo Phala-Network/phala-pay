@@ -91,7 +91,7 @@ ignore = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = ["src", "../examples", "../../deploy/product", "../../deploy/sandbox/scenarios"]
+mypy_path = ["src", "../examples", "../../deploy/product", "../../deploy/sandbox/scenarios", "../../deploy/local"]
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]

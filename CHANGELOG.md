@@ -21,6 +21,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   emit on state transitions with hourly reminders and log recovery without an event. Outbox
   queue alerts detect overdue processing and exclude known failing merchant endpoints; backlog
   warnings require at least two eligible endpoints.
+- Local SDK sandbox and CVM rehearsals use a disposable TLS ingress with a run-scoped
+  certificate, preserving HTTPS validation and normal system trust roots.
 - CI retries image builds once without caches only for recognized Actions cache transport failures;
   cache export failures no longer fail builds, with diagnostics retained.
 - Backup health requires a current-timeline base backup and fresh WAL data, backlog and LSN
