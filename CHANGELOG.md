@@ -13,6 +13,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-04
+
 ### JS SDK (`@phala/pay`)
 
 #### Added
@@ -1325,7 +1327,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.8.2...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.3
 [0.8.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.2
 [0.8.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.1
 [0.8.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.0
