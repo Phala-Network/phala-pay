@@ -86,7 +86,8 @@ class PhalaPay:
         api_base: str | None = None,
         timeout: float = 15.0,
         max_attempts: int = 4,
-        request_deadline: float = 60.0,
+        request_deadline: float | None = None,
+        upgrade_tolerance: bool = False,
         transport: httpx.BaseTransport | None = None,
         **legacy_kwargs: object,
     ) -> None:
@@ -138,6 +139,7 @@ class PhalaPay:
             timeout=timeout,
             max_attempts=max_attempts,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             transport=transport,
         )
         self.account = AccountResource(self._client)
@@ -228,22 +230,26 @@ class AccountResource:
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> AccountObject:
         """The key's account, in the key's mode."""
         return self._client.get_account(
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def pause_quotes(
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> AccountObject:
         """Stops issuing quotes, deposit addresses, and networks in both modes, for an
         emergency; existing addresses keep being credited."""
         return self._client.pause_quotes(
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -251,11 +257,13 @@ class AccountResource:
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> AccountObject:
         """Lifts your own `quotes` pause; an operator's pause stays."""
         return self._client.resume_quotes(
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -264,6 +272,7 @@ class AccountResource:
         *,
         expires_in: int = 172_800,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> AccountObject:
         """Rolls this mode's webhook signing key; the old one signs beside it for `expires_in`
@@ -271,6 +280,7 @@ class AccountResource:
         return self._client.roll_webhook_key(
             expires_in=expires_in,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -283,11 +293,13 @@ class PaymentSettingsResource:
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> PaymentSettingsObject:
         """What the account accepts in the key's mode and on what terms, with the operator's
         catalog and bounds in `available`; a new account accepts nothing."""
         return self._client.get_payment_settings(
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def update(
@@ -296,6 +308,7 @@ class PaymentSettingsResource:
         chains: Sequence[Mapping[str, Any]] | Unset = UNSET,
         quote_creations_per_customer_per_minute: int | Unset | None = UNSET,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> PaymentSettingsObject:
         """Sets the chains and assets the account accepts, replacing the list when given, with a
@@ -305,6 +318,7 @@ class PaymentSettingsResource:
             chains=chains,
             quote_creations_per_customer_per_minute=quote_creations_per_customer_per_minute,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -317,10 +331,12 @@ class ConfigResource:
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> Config:
         """The payable assets, limits, quote terms, and confirmations, for the product's UI."""
         return self._client.get_config(
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
 
@@ -339,6 +355,7 @@ class Quotes:
         idempotency_key: str | None = None,
         metadata: Mapping[str, str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> Quote:
         """Quotes `amount` cents for the customer `client_reference_id`, payable in `asset` on
         `chain_id`.
@@ -361,6 +378,7 @@ class Quotes:
             idempotency_key=idempotency_key,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
         issued_quotes = self._client._issued_quotes
         quote_key = id(quote)
@@ -376,11 +394,13 @@ class Quotes:
         *,
         expand: Sequence[str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> Quote:
         return self._client.get_quote(
             quote_id,
             expand=None if expand is None else list(expand),
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def list(
@@ -389,6 +409,7 @@ class Quotes:
         client_reference_id: str | None = None,
         status: QuoteStatus | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> Iterator[Quote]:
@@ -397,6 +418,7 @@ class Quotes:
             client_reference_id=client_reference_id,
             status=status,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -407,6 +429,7 @@ class Quotes:
         client_reference_id: str | None = None,
         status: QuoteStatus | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
@@ -414,6 +437,7 @@ class Quotes:
             client_reference_id=client_reference_id,
             status=status,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             limit=limit,
             starting_after=starting_after,
         )
@@ -424,6 +448,7 @@ class Quotes:
         *,
         metadata: Metadata | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Quote:
         """Merges `metadata` into the quote's: a key set to `""` is unset, and `metadata=""`
@@ -432,6 +457,7 @@ class Quotes:
             quote_id,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -440,12 +466,14 @@ class Quotes:
         quote_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Quote:
         """Cancels an open quote no payment has reached; repeating it returns the canceled quote."""
         return self._client.cancel_quote(
             quote_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -461,11 +489,13 @@ class Deposits:
         *,
         expand: Sequence[str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> Deposit:
         return self._client.get_deposit(
             deposit_id,
             expand=None if expand is None else list(expand),
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def update(
@@ -474,6 +504,7 @@ class Deposits:
         *,
         metadata: Metadata | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Deposit:
         """Merges `metadata` into the deposit's, which started as a copy of its quote's or its
@@ -482,6 +513,7 @@ class Deposits:
             deposit_id,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -499,6 +531,7 @@ class Deposits:
         created_lte: int | None = None,
         expand: Sequence[str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> Iterator[Deposit]:
@@ -516,6 +549,7 @@ class Deposits:
             created_lte=created_lte,
             expand=None if expand is None else list(expand),
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -534,6 +568,7 @@ class Deposits:
         created_lte: int | None = None,
         expand: Sequence[str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
@@ -549,6 +584,7 @@ class Deposits:
             created_lte=created_lte,
             expand=None if expand is None else list(expand),
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             limit=limit,
             starting_after=starting_after,
         )
@@ -574,6 +610,7 @@ class DepositAddresses:
         client_reference_id: str,
         metadata: Metadata | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> DepositAddress:
         """Returns the customer's active address, recomputed; the same call keeps returning it
@@ -585,6 +622,7 @@ class DepositAddresses:
             client_reference_id,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -594,6 +632,7 @@ class DepositAddresses:
         *,
         metadata: Metadata | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> DepositAddress:
         """Merges `metadata` into the address's (a key set to `""` is unset, `""` unsets all)."""
@@ -601,6 +640,7 @@ class DepositAddresses:
             deposit_address_id,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -609,10 +649,12 @@ class DepositAddresses:
         deposit_address_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> DepositAddress:
         return self._client.get_deposit_address(
             deposit_address_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def list(
@@ -621,6 +663,7 @@ class DepositAddresses:
         client_reference_id: str | None = None,
         status: DepositAddressStatus | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> Iterator[DepositAddress]:
@@ -629,6 +672,7 @@ class DepositAddresses:
             client_reference_id=client_reference_id,
             status=status,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -639,6 +683,7 @@ class DepositAddresses:
         client_reference_id: str | None = None,
         status: DepositAddressStatus | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
@@ -646,6 +691,7 @@ class DepositAddresses:
             client_reference_id=client_reference_id,
             status=status,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             limit=limit,
             starting_after=starting_after,
         )
@@ -656,6 +702,7 @@ class DepositAddresses:
         *,
         idempotency_key: str | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> DepositAddress:
         """Retires the address and returns the customer's new one, a new address on every
         network; the retired address is still credited, so stop showing it rather than telling
@@ -664,6 +711,7 @@ class DepositAddresses:
             deposit_address_id,
             idempotency_key=idempotency_key,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
 
@@ -680,6 +728,7 @@ class Refunds:
         idempotency_key: str | None = None,
         metadata: Mapping[str, str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> Refund:
         """Creates a pending refund of a final `deposit` (its unrefunded remainder unless
         `amount_atomic` is given) to an address the customer controls; pay it from its
@@ -691,6 +740,7 @@ class Refunds:
             idempotency_key=idempotency_key,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def mark_paid(
@@ -700,6 +750,7 @@ class Refunds:
         transaction_hash: str,
         receipt_log_index: int | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Refund:
         """Attaches the transaction that pays the refund; it is verified at finality. From then
@@ -710,6 +761,7 @@ class Refunds:
             transaction_hash,
             receipt_log_index=receipt_log_index,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -718,12 +770,14 @@ class Refunds:
         refund_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Refund:
         """Cancels a pending refund."""
         return self._client.cancel_refund(
             refund_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -733,11 +787,13 @@ class Refunds:
         *,
         expand: Sequence[str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> Refund:
         return self._client.get_refund(
             refund_id,
             expand=None if expand is None else list(expand),
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def update(
@@ -746,6 +802,7 @@ class Refunds:
         *,
         metadata: Metadata | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Refund:
         """Merges `metadata` into the refund's."""
@@ -753,6 +810,7 @@ class Refunds:
             refund_id,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -762,6 +820,7 @@ class Refunds:
         deposit: str | None = None,
         status: RefundStatus | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> Iterator[Refund]:
@@ -770,6 +829,7 @@ class Refunds:
             deposit=deposit,
             status=status,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -780,6 +840,7 @@ class Refunds:
         deposit: str | None = None,
         status: RefundStatus | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
@@ -787,6 +848,7 @@ class Refunds:
             deposit=deposit,
             status=status,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             limit=limit,
             starting_after=starting_after,
         )
@@ -800,10 +862,12 @@ class BalanceResource:
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> Balance:
         """What the account's forwarders hold, per chain and token, and the final part of it."""
         return self._client.get_balance(
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
 
@@ -823,6 +887,7 @@ class Sweeps:
         forwarder: str | None = None,
         token: str | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> Iterator[Sweep]:
@@ -832,6 +897,7 @@ class Sweeps:
             forwarder=forwarder,
             token=token,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -843,6 +909,7 @@ class Sweeps:
         forwarder: str | None = None,
         token: str | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
@@ -851,6 +918,7 @@ class Sweeps:
             forwarder=forwarder,
             token=token,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             limit=limit,
             starting_after=starting_after,
         )
@@ -868,6 +936,7 @@ class Forwarders:
         deposit_address: str | None = None,
         sweepable: str | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> Iterator[Forwarder]:
@@ -880,6 +949,7 @@ class Forwarders:
             deposit_address=deposit_address,
             sweepable=sweepable,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -892,6 +962,7 @@ class Forwarders:
         deposit_address: str | None = None,
         sweepable: str | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
@@ -901,6 +972,7 @@ class Forwarders:
             deposit_address=deposit_address,
             sweepable=sweepable,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             limit=limit,
             starting_after=starting_after,
         )
@@ -920,6 +992,7 @@ class Treasuries:
         chain_id: int,
         address: str,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> TreasuryChallenge:
         """The EIP-4361 message that proves `address` as the treasury of `chain_id`."""
@@ -927,6 +1000,7 @@ class Treasuries:
             chain_id,
             address,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -937,6 +1011,7 @@ class Treasuries:
         message: str,
         signature: str,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Treasury:
         """Submits a signed challenge `message`."""
@@ -945,6 +1020,7 @@ class Treasuries:
             message,
             signature,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -960,10 +1036,12 @@ class Treasuries:
         treasury_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> Treasury:
         return self._client.get_treasury(
             treasury_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def list(
@@ -972,6 +1050,7 @@ class Treasuries:
         chain_id: int | None = None,
         status: TreasuryStatus | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> list[Treasury]:
@@ -980,6 +1059,7 @@ class Treasuries:
             chain_id=chain_id,
             status=status,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -990,6 +1070,7 @@ class Treasuries:
         chain_id: int | None = None,
         status: TreasuryStatus | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
@@ -997,6 +1078,7 @@ class Treasuries:
             chain_id=chain_id,
             status=status,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             limit=limit,
             starting_after=starting_after,
         )
@@ -1006,12 +1088,14 @@ class Treasuries:
         treasury_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Treasury:
         """Cancels a pending treasury change before it applies."""
         return self._client.cancel_treasury(
             treasury_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1020,6 +1104,7 @@ class Treasuries:
         treasury_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Treasury:
         """Pauses crediting of deposits to every forwarder over the treasury, for an incident
@@ -1027,6 +1112,7 @@ class Treasuries:
         return self._client.pause_treasury(
             treasury_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1035,12 +1121,14 @@ class Treasuries:
         treasury_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Treasury:
         """Lifts your crediting pause; an operator's pause stays."""
         return self._client.resume_treasury(
             treasury_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1055,6 +1143,7 @@ class ApiKeys:
         name: str = "",
         permissions: Sequence[str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> ApiKeyObject:
         """A new key of this mode; its `secret` is in this response only. With `permissions`
@@ -1066,6 +1155,7 @@ class ApiKeys:
             name=name,
             permissions=permissions,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1074,22 +1164,26 @@ class ApiKeys:
         api_key_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> ApiKeyObject:
         return self._client.get_api_key(
             api_key_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def list(
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> list[ApiKeyObject]:
         """This mode's keys, without their secrets."""
         return self._client.list_api_keys(
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -1098,11 +1192,15 @@ class ApiKeys:
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
         return self._client.list_api_keys_page(
-            request_deadline=request_deadline, limit=limit, starting_after=starting_after
+            request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
+            limit=limit,
+            starting_after=starting_after,
         )
 
     def roll(
@@ -1111,6 +1209,7 @@ class ApiKeys:
         *,
         expires_in: int = 0,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> ApiKeyObject:
         """A replacement key of the same kind and permissions with its `secret`; the old one
@@ -1119,6 +1218,7 @@ class ApiKeys:
             api_key_id,
             expires_in=expires_in,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1127,11 +1227,13 @@ class ApiKeys:
         api_key_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> ApiKeyObject:
         return self._client.revoke_api_key(
             api_key_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1148,6 +1250,7 @@ class WebhookEndpoints:
         description: str | None = None,
         metadata: Mapping[str, str] | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> WebhookEndpointObject:
         return self._client.create_webhook_endpoint(
@@ -1156,6 +1259,7 @@ class WebhookEndpoints:
             description=description,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1164,10 +1268,12 @@ class WebhookEndpoints:
         endpoint_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> WebhookEndpointObject:
         return self._client.get_webhook_endpoint(
             endpoint_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def update(
@@ -1180,6 +1286,7 @@ class WebhookEndpoints:
         disabled: bool | None = None,
         metadata: Metadata | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> WebhookEndpointObject:
         return self._client.update_webhook_endpoint(
@@ -1190,6 +1297,7 @@ class WebhookEndpoints:
             disabled=disabled,
             metadata=metadata,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1198,10 +1306,12 @@ class WebhookEndpoints:
         endpoint_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> DeletedWebhookEndpoint:
         return self._client.delete_webhook_endpoint(
             endpoint_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def test(
@@ -1209,12 +1319,14 @@ class WebhookEndpoints:
         endpoint_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> EventObjectResponse:
         """Sends a test event to the endpoint."""
         return self._client.test_webhook_endpoint(
             endpoint_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1222,11 +1334,13 @@ class WebhookEndpoints:
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> Iterator[WebhookEndpointObject]:
         return self._client.list_webhook_endpoints(
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -1235,11 +1349,15 @@ class WebhookEndpoints:
         self,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
         return self._client.list_webhook_endpoints_page(
-            request_deadline=request_deadline, limit=limit, starting_after=starting_after
+            request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
+            limit=limit,
+            starting_after=starting_after,
         )
 
 
@@ -1254,10 +1372,12 @@ class Events:
         event_id: str,
         *,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
     ) -> EventObjectResponse:
         return self._client.get_event(
             event_id,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
         )
 
     def resend(
@@ -1266,6 +1386,7 @@ class Events:
         *,
         webhook_endpoint: str,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
     ) -> EventObjectResponse:
         """Delivers the event again to one enabled endpoint."""
@@ -1273,6 +1394,7 @@ class Events:
             event_id,
             webhook_endpoint=webhook_endpoint,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             idempotency_key=idempotency_key,
         )
 
@@ -1287,6 +1409,7 @@ class Events:
         created_lt: int | None = None,
         created_lte: int | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> Iterator[EventObjectResponse]:
@@ -1305,6 +1428,7 @@ class Events:
             created_lt=created_lt,
             created_lte=created_lte,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             page_size=limit,
             starting_after=starting_after,
         )
@@ -1320,6 +1444,7 @@ class Events:
         created_lt: int | None = None,
         created_lte: int | None = None,
         request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
         limit: int = 100,
         starting_after: str | None = None,
     ) -> dict[str, Any]:
@@ -1332,6 +1457,7 @@ class Events:
             created_lt=created_lt,
             created_lte=created_lte,
             request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
             limit=limit,
             starting_after=starting_after,
         )

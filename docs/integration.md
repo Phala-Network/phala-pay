@@ -48,7 +48,7 @@ connection failures or 502/503/504 without Retry-After (sometimes HTML). The obs
 upgrade was unavailable for about 160 seconds. Payments remain on-chain and are scanned after
 restart; webhook outbox delivery retries automatically.
 
-For merchant backend work that can wait, enable JS upgrade tolerance:
+For merchant backend work that can wait, enable SDK upgrade tolerance:
 
 ```ts
 import { PhalaPay } from "@phala/pay/server";
@@ -57,20 +57,31 @@ const pay = new PhalaPay({ apiKey, pins, upgradeTolerance: true });
 const created = await pay.quotes.create(params, { idempotencyKey: orderId });
 ```
 
+Python uses the same opt-in:
+
+```python
+from phala_pay import PhalaPay
+
+pay = PhalaPay(api_key, pins=pins, upgrade_tolerance=True)
+created = pay.quotes.create(**params, idempotency_key=order_id)
+```
+
 It retries GETs and idempotent POSTs through those failures for up to five minutes, with bounded
 backoff, one body/key, and cancellation support. The opt-in keeps the normal interactive defaults
 (15 seconds per attempt, four attempts, 60 seconds total) intact. Explicit `requestDeadlineMs`
-settings remain hard limits. Enable it per call with `{ upgradeTolerance: true }`, or disable it
-per call on an enabled client. Keep your application's request budget long enough, or create the
-payment asynchronously and let the payer wait. On deadline exhaustion, preserve the order's key
-for a later retry; do not turn an uncertain network outcome into a new logical payment.
+or Python `request_deadline` settings remain hard limits. Enable it per call with
+`{ upgradeTolerance: true }` or Python `upgrade_tolerance=True`, or disable it per call on an
+enabled client. Python interrupts (`KeyboardInterrupt`) terminate retries, including waits;
+run synchronous SDK calls in a worker thread in async routes. Keep your application's request budget
+long enough, or create the payment asynchronously and let the payer wait. On deadline exhaustion,
+preserve the order's key for a later retry; do not turn an uncertain network outcome into a new
+logical payment.
 
 `<Checkout>` and `<DepositAddress>` poll through temporary 5xx/network failures automatically,
 retain the last view and selection, show a neutral reconnecting message, and resume once reachable.
 They do not create a new checkout. Normal invalid-secret and address-mismatch handling remains.
-Python's matching `upgrade_tolerance` rule is specified in the
-[SDK contract amendment](design/sdk-ergonomics-reference.md#upgrade-tolerance-amendment-js-implemented-python-phase-2-handoff)
-for its phase 2 implementation; it is not yet a Python option in this release.
+Both SDKs follow the
+[SDK contract amendment](design/sdk-ergonomics-reference.md#upgrade-tolerance-amendment-js-and-python-implemented).
 
 ## Quickstart
 

@@ -16,6 +16,7 @@ from .errors import ConfigurationError, TransportError
 class RequestState:
     deadline: float
     idempotency_key: str | None
+    upgrade_deadline: float | None = None
     request: httpx.Request | None = None
     response: httpx.Response | None = None
 
