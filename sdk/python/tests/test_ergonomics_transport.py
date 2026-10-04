@@ -24,6 +24,7 @@ from phala_pay import (
     TopupError,
     TransportError,
 )
+from topup_client.types import Unset
 from topup_sdk.client import TopupClient
 
 from .test_phala_pay import (
@@ -834,3 +835,12 @@ def test_iterator_rejects_long_cursor_cycles_before_yielding_duplicate_items() -
         with pytest.raises(ResponseValidationError, match="repeated"):
             next(iterator)
     assert len(requests) == 3
+
+
+def test_retrieval_never_invents_a_client_secret() -> None:
+    with pay(lambda _: httpx.Response(200, json=_quote())) as client:
+        quote = client.quotes.retrieve(QUOTE_ID)
+        assert isinstance(quote.client_secret, Unset)
+        assert "client_secret" not in quote.to_dict()
+        with pytest.raises(ResponseValidationError):
+            client.checkout_params(quote)
