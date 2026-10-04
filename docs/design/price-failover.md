@@ -129,8 +129,10 @@ under weaker settings. A restart with a gap exceeding the age limit needs a new 
 it cannot reuse a thirty-minute-old endpoint across an unobserved outage. Jump refusals do not
 advance the previous accepted sample. A persistent jump or a stored reorg requires investigation;
 there is no automatic price override or history reset. The expand-only migration
-`20261029000000_uniswap_twap` adds an immutable table only, retains it on binary rollback, and
-keeps compatibility floor `20261028000002` for N-1.
+`20261029000000_uniswap_twap` adds an immutable table only, retains it on protocol-aware compatible
+binary rollback, and keeps compatibility floor `20261028000002`. The inherited 0.9.0 declaration
+requires restoring the pre-upgrade backup for legacy 0.8.x; the N-1 gate validates that declaration
+in `declared` mode rather than demonstrating old-image startup.
 
 Each refusal emits `price_source_refusals_total{code=...}` plus existing source health and
 `price-outage` alerts: `twap_history`, `twap_liquidity`, `twap_spot_divergence`,

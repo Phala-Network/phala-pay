@@ -308,6 +308,8 @@ old evidence and repairs derived address/backfill progress under the exclusive w
 `20261029000000_uniswap_twap` adds independent, append-only service observations for the pinned
 Ethereum PHA/WETH pair. It does not change existing rows, columns, constraints or grants.
 Quote, credit and sampler workers serialize insertion by the complete guard rail policy and keep
-at most one new sample per minute. Samples survive restarts and binary rollback; the down migration
-is intentionally a no-op. Compatibility floor remains `20261028000002`, so N-1 can ignore the new
-table and ledger entry with its previous configuration. Changing policies starts a separate window.
+at most one new sample per minute. Samples survive restarts and protocol-aware compatible binary
+rollback; the down migration is intentionally a no-op. Compatibility floor remains `20261028000002`,
+so compatible N-1 can ignore the new table and ledger entry with its previous configuration.
+The inherited 0.9.0 declaration requires restore for legacy 0.8.x; its N-1 gate runs in `declared`
+mode and skips old-image startup. Changing policies starts a separate window.

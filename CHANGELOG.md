@@ -95,7 +95,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   production still refuses Kraken pending written permission and an attested Allowed verdict.
 - Expand-only migration `20261029000000_uniswap_twap` adds immutable observation history without
   changing existing payment tables or permissions. Compatibility floor remains `20261028000002`;
-  N-1 binary rollback uses its previous config and retains the new table and observations.
+  Protocol-aware compatible binary rollback uses its previous config and retains observations.
+  The 0.9.0 restore-only declaration above still applies to legacy 0.8.x releases.
 
 - Proposed recovery-domain design for a fenced warm standby, key/storage dependencies,
   promotion and DNS switch, estimated cost and achievable recovery targets; no HA implementation.
