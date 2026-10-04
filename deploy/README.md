@@ -842,7 +842,7 @@ write the ledger. A rollback never lowers existing floors or edits migration his
 restore required**, and no rollback to any 0.8.x release: follow [RESTORE.md](RESTORE.md) using the
 pre-upgrade backup. Earlier immutable images cannot understand newer migrations; route configuration
 and SDK changes also prevent rollback. CI resolves the latest stable release as N-1 automatically.
-For any N-1, an exact **no rollback to <N-1 version>; restore required** declaration in
+For any N-1, an exact `no rollback to <N-1 version>; restore required` declaration in
 `### Breaking (operators)` under `## [Unreleased]` (the dated release section after tagging)
 selects `declared` mode: CI skips the image smoke and prints the declaration in its job summary.
 For protocol-era N-1, `COMPATIBILITY_FLOOR` must also exceed the value in N-1's tag; CI fails

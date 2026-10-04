@@ -305,7 +305,7 @@ Release rollback rules:
 - `COMPATIBILITY_FLOOR` in `crates/topup/src/db/migrations.rs` must equal the maximum migration
   known to N-1 for compatible new migrations. Review this value whenever adding migrations.
   Applied ledger entries are immutable across rollback. Breaking migrations set the floor to
-  the new schema's maximum and declare **no rollback to <N-1 version>; restore required** in
+  the new schema's maximum and declare `no rollback to <N-1 version>; restore required` in
   `### Breaking (operators)` under `## [Unreleased]` (the dated release section after tagging),
   with a tested pre-upgrade restore/reconciliation plan and owner acceptance.
 - CI resolves N-1 as the latest stable release. 0.9.0 is the first compatibility-ledger protocol
