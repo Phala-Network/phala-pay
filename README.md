@@ -128,8 +128,8 @@ from [crates/topup/openapi.json](crates/topup/openapi.json), the API's OpenAPI d
 
 ## Status
 
-Phala Pay is pre-1.0 and has not had its independent security review. Phala's production instance
-is not deployed yet; its staging instance (`https://pay-api-staging.phala.com`) serves test routes
+Phala Pay is pre-1.0 and has had no third-party security audit. Phala's production instance is
+not deployed yet; its staging instance (`https://pay-api-staging.phala.com`) serves test routes
 on Sepolia and Base Sepolia. [The plan to production](docs/plan.md) lists what remains.
 
 ## Contributing
