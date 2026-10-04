@@ -267,11 +267,13 @@ quote's `payment_uri`, after checking that it pays exactly `amount_atomic` to `a
 holding less of the token than that sends nothing: `WalletError` with `code`
 `insufficient_balance`.
 
-## Merchant server client (Node.js)
+## Merchant server client
 
-Import `PhalaPay` from `@phala/pay/server` on Node.js >=20.3. The root `@phala/pay`
-entry remains keyless and browser-safe. The merchant entry rejects browsers, Deno, Bun and edge
-runtimes before reading environment credentials.
+Import `PhalaPay` from `@phala/pay/server` on Node.js >=20.3, Bun or Deno. Server runtimes
+must provide `fetch`, `AbortSignal.any` and WebCrypto (including `randomUUID`). The root
+`@phala/pay` entry remains keyless and browser-safe. The merchant entry rejects browser-like
+environments before reading credentials; its `browser` export resolves to a throwing module
+without merchant exports, so browser bundlers reject merchant imports.
 
 ```ts
 import { PhalaPay, ApiError, SignatureVerificationError } from "@phala/pay/server";
@@ -386,8 +388,8 @@ raise `LedgerSnapshotError`. These helpers provide no SQL adapter or authorizati
 ## Server helpers
 
 Keyless pins, ledger, address, signature and sweep builders live at `@phala/pay/server/helpers`, including for
-WebCrypto-capable non-Node runtimes. Existing exports from `/server` remain available on Node;
-non-Node callers must move to `/server/helpers`:
+WebCrypto-capable non-Node runtimes. Existing exports from `/server` remain available on supported server runtimes;
+browser callers must move to `/server/helpers`:
 
 ```ts
 import { constructEvent, flushTransactions, safeBatch, verifyQuoteAddress } from "@phala/pay/server/helpers";

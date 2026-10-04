@@ -1,4 +1,4 @@
-import process from "node:process";
+import { requireServer, serverEnv } from "./runtime.js";
 import type { CheckoutParams } from "../checkout-params.js";
 import type { Quote, Deposit, EventObjectResponse } from "./types.js";
 import {
@@ -32,16 +32,6 @@ export type Event = Omit<EventObjectResponse, "data" | "pending_webhooks"> & {
   readonly pending_webhooks?: EventObjectResponse["pending_webhooks"];
   readonly deposit?: Deposit;
 };
-function nodeOnly(): void {
-  if (
-    typeof process === "undefined" ||
-    !process.versions.node ||
-    "bun" in process.versions ||
-    "Deno" in globalThis ||
-    typeof window !== "undefined"
-  )
-    throw new ConfigurationError("Merchant clients require Node.js");
-}
 export class PhalaPay {
   readonly #pins: Pins;
   readonly #transport: Transport;
@@ -71,7 +61,7 @@ export class PhalaPay {
   readonly forwarders = new Resources.ForwardersResource(this.#execute.bind(this));
   readonly webhooks = Object.freeze({ constructEvent: this.#constructEvent.bind(this) });
   constructor(options: PhalaPayOptions) {
-    nodeOnly();
+    requireServer();
     this.#pins =
       typeof options.pins === "string" ? parsePins(options.pins) : validatePins(options.pins);
     if (keyLivemode(options.apiKey) !== this.livemode)
@@ -89,8 +79,8 @@ export class PhalaPay {
     env?: Readonly<Record<string, string | undefined>>,
     options: { apiBase?: string } = {},
   ): PhalaPay {
-    nodeOnly();
-    const values = env ?? process.env;
+    requireServer();
+    const values = env ?? serverEnv();
     const apiKey = values["PHALA_PAY_API_KEY"];
     const pins = values["PHALA_PAY_PINS"];
     if (!apiKey || !pins)

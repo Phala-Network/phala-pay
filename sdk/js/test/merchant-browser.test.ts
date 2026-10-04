@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 describe("server entry exclusion", () => {
   it("rejects browser import before a merchant key can be read", async () => {
-    await expect(import("../src/server/index.js")).rejects.toThrow("requires Node.js");
+    await expect(import("../src/server/index.js")).rejects.toThrow("server-only; never ship a key to the browser");
   });
   it("keeps offline helpers available without a merchant client", async () => {
     const helpers = await import("../src/server/helpers.js");

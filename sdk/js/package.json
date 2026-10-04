@@ -26,7 +26,9 @@
   "sideEffects": [
     "**/*.css",
     "./dist/server/index.js",
-    "./src/server/index.ts"
+    "./src/server/index.ts",
+    "./dist/server/browser.js",
+    "./src/server/browser.ts"
   ],
   "exports": {
     ".": {
@@ -39,6 +41,7 @@
     },
     "./server": {
       "types": "./dist/server/index.d.ts",
+      "browser": "./dist/server/browser.js",
       "default": "./dist/server/index.js"
     },
     "./styles.css": "./src/styles.css",

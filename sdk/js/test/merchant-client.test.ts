@@ -42,8 +42,8 @@ const makeClient = (response: unknown) =>
     fetch: vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(jsonResponse(response))),
   });
 describe("merchant client resources and checkout", () => {
-  it("rejects non-Node compatibility shims before reading credentials", () => {
-    vi.stubGlobal("Deno", {});
+  it("rejects browser-like environments before reading credentials", () => {
+    vi.stubGlobal("document", {});
     const getter = vi.fn(() => apiKey);
     const options = {
       get apiKey() {

@@ -39,7 +39,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
-- Node merchant client at `@phala/pay/server`: all OpenAPI resources, typed parameters/responses,
+- Merchant server client at `@phala/pay/server`: all OpenAPI resources, typed parameters/responses,
   verified quote/address results, two-variable `PhalaPay.fromEnv()`, frozen pins parse/encode,
   bound Ed25519 webhooks and `checkoutParams` with browser-exported `CheckoutParams`.
 - Deadline-bounded transport with attempt timeouts, jitter, Retry-After, frozen POST idempotency,
@@ -47,14 +47,16 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Pure `depositNetAmount` / `balanceDelta` helpers with monotone ledger convergence and strict
   validation; JS implements all five shared fixture groups.
 - `@phala/pay/server/helpers` for keyless address, webhook and offline sweep builders. Existing
-  Node helper exports remain available; `ForwarderResponse` names the generated API forwarder
+  server helper exports remain available; `ForwarderResponse` names the generated API forwarder
   while `Forwarder` retains its legacy contract-pins type.
 
 #### Changed (breaking)
 
-- `@phala/pay/server` now requires Node.js and rejects browser, Deno, Bun and edge use before
-  reading credentials. Move existing non-Node offline helper imports to
-  `@phala/pay/server/helpers`. The browser root entry and existing checkout props remain keyless.
+- `@phala/pay/server` rejects browser-like environments before reading credentials; its
+  `browser` export refuses merchant imports. Move browser offline helper imports to
+  `@phala/pay/server/helpers`. Node.js >=20.3, Bun and Deno server runtimes are supported when
+  fetch, AbortSignal.any and WebCrypto are available. The browser root entry and existing
+  checkout props remain keyless.
 - Duplicate webhook signing headers and non-exact UTF-8 bodies are rejected. The legacy
   `WebhookSignatureError` export is an alias of `SignatureVerificationError`.
 
