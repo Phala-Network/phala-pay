@@ -33,6 +33,7 @@ from .test_phala_pay import (
     SERVICE_KEY,
     SERVICE_PUBLIC_KEY,
     _delivery,
+    _deposit,
     _deposit_address,
     _quote,
 )
@@ -565,3 +566,31 @@ def test_legacy_live_constructor_requires_all_address_pins_at_construction(missi
     del arguments[missing]
     with pytest.raises(ConfigurationError, match="live mode requires"):
         PhalaPay("https://service.test", valid_key(live=True), **arguments)
+
+
+@pytest.mark.parametrize("event_type", ["deposit.credited", "quote.expired"])
+def test_bound_webhook_resource_mode_must_match_pins(event_type: str) -> None:
+    resource = _deposit() if event_type == "deposit.credited" else _quote()
+    resource["livemode"] = True
+    body, headers = _delivery(event_type, resource)
+    with (
+        pay(lambda _: pytest.fail("verification must stay offline")) as client,
+        pytest.raises(SignatureVerificationError, match="mode"),
+    ):
+        client.webhooks.construct_event(body, headers)
+
+
+def test_webhook_request_and_previous_attributes_secret_reprs_are_redacted() -> None:
+    body, _ = _delivery()
+    envelope = json.loads(body)
+    envelope["request"] = {"id": KEY, "idempotency_key": SECRET}
+    envelope["data"]["previous_attributes"] = {"client_secret": SECRET, "api_key": KEY}
+    body = json.dumps(envelope).encode()
+    headers = sign_webhook(SERVICE_KEY, EVENT_ID, int(time.time()), body)
+    with pay(lambda _: httpx.Response(200)) as client:
+        event = client.webhooks.construct_event(body, headers)
+    assert event.request.id == KEY
+    assert event.request.idempotency_key == SECRET
+    assert event.data.previous_attributes == {"client_secret": SECRET, "api_key": KEY}
+    assert KEY not in repr(event)
+    assert SECRET not in repr(event)

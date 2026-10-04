@@ -1340,7 +1340,7 @@ class _BoundWebhook:
         if not isinstance(payload, bytes | str):
             raise SignatureVerificationError("webhook requires original bytes or exact UTF-8 text")
         try:
-            return Webhook.construct_event(
+            event = Webhook.construct_event(
                 payload,
                 headers,
                 [key for _, key in self._pins.webhook_keys],
@@ -1348,6 +1348,13 @@ class _BoundWebhook:
                 expected_livemode=self._pins.livemode,
                 tolerance=tolerance,
             )
+            resource = event.data.object
+            if (
+                isinstance(resource, Deposit | Quote | Refund)
+                and resource.livemode != self._pins.livemode
+            ):
+                raise SignatureVerificationError("webhook resource is for the other mode")
+            return event
         except (ValueError, TypeError, KeyError, AttributeError):
             pass
         raise SignatureVerificationError("malformed webhook envelope or resource")

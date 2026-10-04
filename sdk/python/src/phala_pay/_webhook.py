@@ -150,16 +150,18 @@ class Webhook:
             raise SignatureVerificationError("webhook event is for the other mode")
         previous = data.get("previous_attributes")
         return Event(
-            event_id,
+            protect(event_id),
             account,
             livemode,
-            event_type,
+            protect(event_type),
             created,
-            actor,
-            None if request is None else EventRequest(request["id"], request["idempotency_key"]),
+            protect(actor),
+            None
+            if request is None
+            else EventRequest(protect(request["id"]), protect(request["idempotency_key"])),
             EventData(
                 _resource(event_type, data["object"]),
-                previous if isinstance(previous, dict) else None,
+                protect(previous) if isinstance(previous, dict) else None,
             ),
         )
 
