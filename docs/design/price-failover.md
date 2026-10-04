@@ -1,6 +1,7 @@
 # Price failover
 
-Status: Proposed
+Status: Accepted (owner-delegated, 2026-10-04); production sources pending legal confirmation of
+commercial use (Chainlink, Kraken, Binance)
 
 ## Decision
 
@@ -19,6 +20,9 @@ The quoted text below was retrieved with `curl -L` on 2026-10-04 from the exact 
 must re-check it before enabling a source. A quote that cannot be reproduced verbatim is **Unclear**;
 only **Allowed** may be a default. “Allowed” also requires rate-limit and jurisdiction compliance.
 
+Until Legal confirms, staging may run the new sources; production must not enable a source whose
+verdict is not **Allowed**.
+
 | Candidate | Evidence and quoted clause | Verdict / use |
 |---|---|---|
 | Chainlink Data Feeds | `curl -L https://docs.chain.link/data-feeds` (“**Data Feeds provide your smart contracts with access to real-world data**”). Consumer ToS is not exposed as stable text. | **Unclear** until Legal accepts consumer terms. |
@@ -32,8 +36,8 @@ only **Allowed** may be a default. “Allowed” also requires rate-limit and ju
 | Other PHA listings | No fetched commercial-use clause. | **Unclear** until reviewed. |
 
 At implementation start, record URL, retrieval date, clause, legal owner and rate limits in the
-attested provider registry. If Legal does not mark an independent PHA source **Allowed**, PHA
-quotes and spot credit remain paused; checks are never weakened to one source.
+attested provider registry. If Legal does not mark an independent PHA source **Allowed**, production
+PHA quotes and spot credit remain paused; checks are never weakened to one source.
 
 ## Valuation rules
 
@@ -70,8 +74,8 @@ FX is independently checked and is required for USDT-quoted markets.
 | check | **Binance PHAUSDT** | normalize with USDT/USD; Binance differs from Kraken |
 | fx | Chainlink USDT/USD, then an **Allowed** exchange USDT/USD | fresh and within FX band |
 
-If Binance is unavailable, or Legal has not marked both Kraken and Binance **Allowed**, pause PHA
-quotes and spot credit. No other Allowed PHA listing is currently verified; do not substitute a
+If Binance is unavailable, pause PHA quotes and spot credit; in production, also pause until Legal
+marks both Kraken and Binance **Allowed**. No other Allowed PHA listing is currently verified; do not substitute a
 second endpoint of the same company or weaken the two-source rule.
 
 ## Route schema and migration
