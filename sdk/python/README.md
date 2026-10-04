@@ -147,11 +147,8 @@ private_key=)` (install `phala-pay[eoa]`); a Safe's owners sign the challenge's 
 message with the Safe{Core} SDK and submit it with `pay.treasuries.create` (docs/integration.md
 §1.6, "Safe treasuries").
 
-`metadata` follows [Stripe's](https://docs.stripe.com/api/metadata): up to 50 string key/value
-pairs, keys of up to 40 characters without square brackets, values of up to 500 characters. An
-`update` merges: a key set to `""` is unset, and `metadata=""` unsets every key. A deposit starts
-with a copy of its quote's metadata, so an order id set on the quote arrives in the
-`deposit.credited` webhook's `data.object.metadata`. Do not store sensitive information in it.
+For metadata limits, merge semantics, and sensitive-data guidance, see
+[Metadata](../../docs/integration.md#14-metadata).
 
 Lower-level modules: `topup_sdk` (webhook and admin request signatures, address derivation,
 attestation, `TopupClient`) and `topup_client` (generated from `crates/topup/openapi.json`; do not

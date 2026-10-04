@@ -1,7 +1,6 @@
 # Architecture
 
-Status: v8 (multi-tenant, API-only; [design](design/multi-tenant.md)). Single specification and
-implementation design. Numbers marked *(policy)* are set by the operator's finance and risk owners;
+Implementation specification (multi-tenant, API-only; [design](design/multi-tenant.md)). Numbers marked *(policy)* are set by the operator's finance and risk owners;
 this document fixes what they mean. Code comments and other documents cite its sections as
 "architecture §N". For an introduction, read [How Phala Pay works](overview.md) first.
 
@@ -202,8 +201,7 @@ contract ForwarderFactory {                            // no roles, no admin, no
   implementation's `factory()`, and `addressOf(sample treasury, sample salt)` against local
   derivation.
 - The contracts are two files built from audited OpenZeppelin components (Clones, SafeERC20,
-  ReentrancyGuardTransient); unit, fuzz, and invariant tests cover them. The independent review
-  before mainnet (`docs/plan.md`) covers them.
+  ReentrancyGuardTransient); unit, fuzz, and invariant tests cover them.
 
 ## 5. Stack
 
@@ -216,7 +214,7 @@ features (commit `f67b4f67ebabef0a27795705121698280a1038dc`); changing the SDK o
 requires a spec change. The dstack 0.6 `/v1` guest API derives different keys for the same domain and no Phala
 Cloud node offers a 0.6 image, so it is out of scope until a key migration is specified. `core` denies `arithmetic_side_effects`, `float_arithmetic`, `as_conversions`,
 `unwrap_used`. `cargo-deny`, committed lockfile, reproducible distroless image by digest.
-Contracts: Solidity with OpenZeppelin, Foundry; an independent review before mainnet (§4).
+Contracts: Solidity with OpenZeppelin and Foundry (§4).
 
 ```mermaid
 flowchart TB
@@ -1381,9 +1379,9 @@ from fetched state, never from webhook order.
 | Detected, N confirmations | none yet: the quote's `payment.status` `seen` (display only) | "Payment received: N confirmations. Crediting in about T." (T from `typical_credit_seconds`) When `matches_quote` is false, add: "This payment does not match the quote, so it will be credited at the rate when it is confirmed." |
 | Confirming | `detected` | "Confirmed on Ethereum. Checking the payment and fixing the rate." |
 | Crediting | `confirmed`, or `credited` before the merchant has applied the credit | "Crediting your balance." |
-| Completed | `credited`, `swept`, and the merchant's own credit recorded | "Credited $X at $rate." When a payment to a quote's address was valued at spot (late, wrong amount, second payment), add: "Credited at the rate when your payment became final because it did not match the quote." |
+| Completed | `credited`, `swept`, and the merchant's own credit recorded | "Credited $X at $rate." When a payment to a quote's address was valued at spot (late, wrong amount, second payment), add: "Credited at the rate when your payment was confirmed because it did not match the quote." |
 | Needs attention | `rejected` | By reason, below. The reason code itself is never shown. |
-| Reversed | `reversed` | "This payment was dropped from the Ethereum chain before it became final, so its credit was reversed. If you still want to top up, pay a new quote." |
+| Reversed | `reversed` | "A reorganization proved this payment replaced before finality, so its credit was reversed. If you still want to top up, pay a new quote." |
 
 | `reason` | "Needs attention" copy |
 |---|---|
@@ -1495,7 +1493,7 @@ defaulted addresses from it. The defaults and why:
 | `chain.confirmations` | per chain family (§8): 2 on Ethereum L1, 3 on OP-stack, `finalized` elsewhere; a route may require more (for example `finalized`), and a family accepts only its values |
 | `chain.implementation` | the factory's first `CREATE` (nonce 1), which its constructor deploys; startup verifies `implementation()` on chain (§4) |
 | `chain.sanctions_oracle` | the Chainalysis oracle published for the chain (Ethereum and most EVM chains `0x40C5…aC8fb`, Base `0x3A91…D739B`); required on any other chain, such as Sepolia |
-| `chain.rpc_groups` | required explicit `{ a: group-a, b: group-b }`; the attested `rpc_groups` registries contain reviewed company-disjoint member pools, URL/key references and bounded selection policies ([RPC design](design/rpc-failover.md), [runbook](../deploy/RPC.md)) |
+| `chain.rpc_groups` | required explicit `{ a: group-a, b: group-b }`; the attested `rpc_groups` registries contain reviewed company-disjoint member pools, URL/key references and bounded selection policies ([RPC configuration](configuration.md#the-configuration-file), [runbook](../deploy/RPC.md)) |
 | `asset.backstop` | `token`: every transfer of the token is requested and kept locally, one request per block range whatever the address count; `addresses` for a token with many transfers per block, such as USDC (§8) |
 | `pricing.mode`, `pricing.check.fx` | `spot`; Kraken `USDT/USD` for a USDT-quoted market, required otherwise |
 | `pricing.max_age_s`, `max_deviation_bps`, `max_fx_deviation_bps` | 120 (two Coin Metrics intervals), 100, 50 |
@@ -1632,9 +1630,8 @@ too. The restore drill runs weekly in CI
 on a local stack, including the freeze and the reconciliation; the staging drill restores
 staging's real backups. Ingress via the
 dstack gateway to dstack-ingress, which terminates TLS for the custom domain in the CVM; egress limited to providers, price sources, object storage, Sentry, and merchants' webhook URLs,
-which leave only through the smokescreen proxy (§11). The CVM runs the non-dev OS image `dstack-0.5.9`, the latest dstack release a Phala
-Cloud node offers; deploy preflight refuses any other image and a node set that does not offer
-it. Upgrade = release tag on `main` → reproducible build → digest and attested deploy kit (Release)
+which leave only through the smokescreen proxy (§11). The CVM runs the approved non-dev OS image `dstack-0.5.9`; deploy preflight refuses any other image
+and a node set that does not offer it. Upgrade = release tag on `main` → reproducible build → digest and attested deploy kit (Release)
 → compose hash of the operator's environment directory → CI deploy (the reusable Deploy workflow,
 called from the operator's environment repository; the dispatcher is accountable; no approval
 gate) → attested read-back. Keys come from Phala Cloud's

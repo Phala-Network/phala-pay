@@ -1,6 +1,6 @@
 # RPC load balancing and failover
 
-Status: implementation target for 0.7.0. Base: 0.6.0.
+Status: implemented in v0.7.0; current operations are in [the RPC runbook](../../deploy/RPC.md).
 
 ## Decision and scope
 

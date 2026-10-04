@@ -90,30 +90,11 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 
 ## Exercise status
 
-The exercises of Phala's instance; an operator records its own. Local exercises ran against
-PostgreSQL and Anvil with the `topup` CLI or the integration tests; Safe, Compliance, and
-publication steps are human-only and were never exercised. Except the restore drills, every
-exercise ran a database-level form of these runbooks. The full CVM restore drill of 2026-09-30 ran
-[RESTORE.md](../RESTORE.md) and [Reconciliation after a restore](restore.md) as they were at
-`e39b06b` (#247), in a drill app isolated from staging.
+Operators record exercises for their own instance. Run `make runbook-check` to validate the
+commands against the current CLI and OpenAPI; local payment scenarios are in the
+[sandbox](../sandbox/README.md#scenarios). Contact verification, Safe operations, and publication
+require human exercises.
 
-| Runbook | Last run | Outcome | Evidence |
-|---|---|---|---|
-| Chain frozen | 2026-09-22, local | complete: freeze, dual-provider check, owner lift, re-freeze | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Reconciliation mismatch | 2026-09-22, local | complete: findings, blocks, owner-only lift | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Lock exposure near cap | 2026-09-22, local | complete: cap enforcement; the alert itself not evaluated | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Restore | 2026-09-30 04:55–06:20 UTC, full CVM drill (drill app, own domain and prefix; Release images run 36669475654) | complete: the service provisioned on the release, archiving cut at 05:34:02 UTC by sealing invalid storage credentials into the source (a drill-only step, so later writes were lost), failure declared 05:38:20; a restore-check instance of the same app: attestation `UpToDate` for the original app id, report `ok`, reconciliation complete, restored heartbeat 05:33:51 (11 s before the cut; lost window 05:34:22–05:38:20, last segment 05:34:22); resumed to the service compose on the domain (TXT to the new instance, certificate evidence, 8081 closed), a new base backup and WAL on timeline 2 (no `.history` archived: archiving is off at promotion); unfrozen 06:17:04, **RTO 38 min 44 s**. Found and fixed in step 2: CLI 1.1.22 `cvms attestation` fails while the app has two instances. Deviations: read-write storage credentials on the restore instance (no read-only token), no Sentry DSN. The staging drill of 2026-09-25 ([#126](https://github.com/Phala-Network/phala-pay/pull/126)) ran steps 1–5 on staging's own backups | [#248](https://github.com/Phala-Network/phala-pay/pull/248) |
-| Reconciliation after a restore | 2026-09-30, full CVM drill | complete except the security re-application: the merchant's records fetched from the reference product (`fetch-restore-records --since`); the lost deposit address (rotated after the restore point) and the lost quote re-issued with their ids, addresses, and client secrets; three signed deliveries imported (two `imported`, one `matches`), a tampered body refused; the rescan rebuilt both lost deposits under their original ids, nothing credited while frozen, no `contradicted` finding; after the unfreeze both credited at the delivered credits (the quote's at the quote price, the address's at the delivered spot rate), nothing delivered again, the receiver's balances unchanged, and a new quote paid, credited, and its webhook delivered. A lost test-mode treasury change verified `missing` (the treasury it replaced `differs`) and `treasuries/apply` refused its deliveries, now in step 3; the merchant proved it again after the unfreeze. Not exercised on a CVM: a key revoked after the restore point (the re-revoke answered for one revoked before it), a pending change restored by `treasuries/apply` (test-mode changes apply at once: `restore_mode.rs` and `make restore-drill`), deleted endpoints, reversed deposits; merchant contact | [#248](https://github.com/Phala-Network/phala-pay/pull/248) |
-| Lock expiry worker failure | 2026-09-22, local | partial: exercised a counter since removed | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Provider disagreement | 2026-09-22, local | partial: sanctions truth table; no disagreeing-provider fixture | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Price outage | 2026-09-22, local | partial: route pause; no controllable price-source fixture | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Rejected funds at treasury | 2026-09-22, local | partial: report; Compliance and Safe steps human-only | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Treasury change | 2026-09-22, local | partial: tooling refuses without Safe expectations; the rest is human-only | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Outbox backlog | 2026-09-22, local | partial: no controllable webhook receiver | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Scanner lag | 2026-09-22, local | partial: no controllable finalized-chain fixture | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Backup age | 2026-09-22, local | partial: predates encrypted backups; local restore drills cover archiving | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Incident communication | 2026-09-22, local | partial: publication and roles human-only | [#59](https://github.com/Phala-Network/phala-pay/pull/59) |
-| Wrong-network deposit | — | not exercised; every step is human-only | — |
-| API key compromise and key recovery | 2026-09-28, local | partial: the merchant roll and the operator recovery in the API tests `keys_authenticate_by_bearer_and_expire_or_revoke` and `operator_onboards_accounts_enables_live_mode_and_recovers_keys`; the contact verification not exercised | [#191](https://github.com/Phala-Network/phala-pay/pull/191) |
-| Route or chain retirement | — | not exercised; the upgrade is human-only | — |
-| Treasury crediting pause | 2026-09-28, local | partial: merchant and operator pause and resume, and the held deposit, in the API test `crediting_pauses_per_treasury_and_resumes`; the contact verification not exercised | [#203](https://github.com/Phala-Network/phala-pay/pull/203) |
+Phala's historical exercise results and limitations are in the evidence for
+[the local runbooks](https://github.com/Phala-Network/phala-pay/pull/59) and
+[the full CVM restore drill](https://github.com/Phala-Network/phala-pay/pull/248).

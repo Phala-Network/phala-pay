@@ -12,8 +12,7 @@ only shared piece is the forwarder factory, a permissionless contract at one add
 chain.
 
 This guide is the order of the steps, from nothing to a credited test deposit and on to
-operations. The linked documents hold the detail and are the reference; where they and this guide
-differ, they win. Steps marked **HUMAN-ONLY** change a registry, Phala Cloud, a CVM, a contract,
+operations. The linked documents hold the detailed procedures and reference. Steps marked **HUMAN-ONLY** change a registry, Phala Cloud, a CVM, a contract,
 DNS, or a secret, and are run by a person from their own machine, never by CI or an agent.
 
 | Role | Who | Reads |
@@ -282,9 +281,8 @@ Deploy `upgrade`, never a runtime setting.
   reference deployment.
   Only where it is missing, deploy it (**HUMAN-ONLY**, a funded throwaway EOA) as in
   [deploy/CONTRACTS.md](../deploy/CONTRACTS.md); if anyone deployed it first, the broadcast sends
-  nothing. It is deployed on Sepolia and Base Sepolia; Phala deploys it on mainnet after the
-  contracts' independent security review ([plan](plan.md)), which an operator going live before
-  then should weigh.
+  nothing. It is deployed on Sepolia and Base Sepolia; mainnet deployment remains in
+  [Phala's production plan](plan.md#before-mainnet).
 
 ## 4. Release and provision
 

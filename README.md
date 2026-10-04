@@ -33,8 +33,6 @@ webhooks, and refunds, running in an attested confidential VM.
   signup, or merchant UI; merchants use the API and the SDKs.
 - **Not a compliance service.** Beyond direct sanctions screening, compliance (KYC, KYT, the
   Travel Rule) is each operator's and merchant's responsibility.
-- **Not production-ready yet.** The software is pre-1.0 and has not had its independent security
-  review ([status](#status)).
 
 ## Quickstart
 
@@ -42,30 +40,12 @@ Pick the path that matches your role:
 
 - **Merchants** integrating with an operator's instance: the
   [integration quickstart](docs/integration.md#quickstart).
-- **Operators** running their own instance: deploy a verified release of Phala Pay to your own
-  Phala Cloud workspace with one command, a testnet quick start or your own domain
-  ([one-command deploy](docs/self-hosting.md#one-command-deploy)):
-
-  ```sh
-  curl -fsSL https://pay.phala.com/deploy.sh | bash
-  ```
-
-  Every instance with merchants then runs from an environment repository of your settings, which
-  the reusable Deploy workflow provisions and upgrades from
-  ([self-hosting guide](docs/self-hosting.md)); a one-click Phala Cloud template is coming.
-- **Evaluators and contributors**: run the whole stack locally. The sandbox builds the images,
-  starts PostgreSQL, the dstack simulator, and an Anvil chain, and pays and credits a quote end to
-  end through the reference merchant backend.
-
-  ```sh
-  git clone --recurse-submodules https://github.com/Phala-Network/phala-pay.git
-  cd phala-pay
-  deploy/sandbox/run-local.sh happy_path
-  ```
-
-  It needs Docker Compose, [Foundry](https://getfoundry.sh/) v1.8.3, `jq`, [uv](https://docs.astral.sh/uv/),
-  Python 3, `curl`, and OpenSSL 3, and internet access for live prices. It removes everything it
-  starts on exit. See [deploy/sandbox/README.md](deploy/sandbox/README.md) for every scenario.
+- **Operators** running their own instance: the
+  [one-command deploy](docs/self-hosting.md#one-command-deploy) starts a verified release on
+  Phala Cloud; the [self-hosting guide](docs/self-hosting.md) covers the environment repository,
+  merchant onboarding, and upgrades.
+- **Evaluators and contributors**: the [local sandbox](deploy/sandbox/README.md#run-everything-locally)
+  builds and runs the stack, then pays and credits a quote end to end.
 
 To see it running, [pay.phala.com](https://pay.phala.com/) has a live demo: a cloud console's
 billing page that takes the test tokens of Phala's [staging routes](deploy/phala.md#staging-routes)

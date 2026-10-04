@@ -82,10 +82,12 @@ mode; only the key selects the mode (design §9). Account creation is a human st
    (`ppay_rk_test_…`) holding only the permissions it needs.
 3. With the key, and no further help from the operator: pin your account's test-mode webhook keys
    from the attestation (docs/integration.md §5.3) and the forwarder factory and implementation
-   (the deterministic addresses of [CONTRACTS.md](../CONTRACTS.md)); read the test-mode assets
-   (`chain_id`, token `contract`, `quote_ttl_seconds`) from `GET /v1/config`; prove your Sepolia
-   treasury (below); and register your webhook receiver (`POST /v1/webhook_endpoints`,
-   docs/integration.md §5.11).
+   (the deterministic addresses of [CONTRACTS.md](../CONTRACTS.md)); prove your testnet treasury (below); accept the test assets with
+   `POST /v1/payment_settings` ([payment settings](../../docs/integration.md#19-payment-settings));
+   then read the effective assets (`chain_id`, token `contract`, `quote_ttl_seconds`) from
+   `GET /v1/config` and register your webhook receiver (`POST /v1/webhook_endpoints`,
+   [webhook endpoints](../../docs/integration.md#511-webhook-endpoints-and-events)). New accounts
+   accept nothing until their payment settings are configured.
 
 Live mode is a later decision of the operator, on the same admin endpoint, which returns your first
 live key. Production test mode needs a Sepolia route in the production deployment; ask the operator
