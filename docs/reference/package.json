@@ -8,6 +8,6 @@
     "build": "redocly build-docs ../../crates/topup/openapi.json --output dist/index.html --title \"Phala Pay API reference\""
   },
   "devDependencies": {
-    "@redocly/cli": "2.56.0"
+    "@redocly/cli": "2.57.0"
   }
 }
