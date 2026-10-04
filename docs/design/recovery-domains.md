@@ -1,6 +1,8 @@
 # Recovery across failure domains
 
-Status: **Proposed — owner decision on cost**
+Status: **Declined (owner, 2026-10-04)**: no permanent second CVM. Recovery stays the single-CVM
+restore from backup ([RESTORE.md](../../deploy/RESTORE.md)); planned upgrades are addressed by
+zero-downtime upgrade work instead. Kept as the reference if the decision is revisited.
 
 This proposal implements nothing. Today one CVM contains PostgreSQL, ingress, egress and workers.
 Its replacement requires Phala Cloud/KMS, object storage, DNS and an operator. A second CVM
