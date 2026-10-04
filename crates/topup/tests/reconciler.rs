@@ -1618,7 +1618,8 @@ fn route_set(route: RouteFile) -> Result<Arc<topup::routes::RouteSet>> {
 /// payment to the old cancelled quote on the final page is still recorded.
 #[tokio::test]
 async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposits() -> Result<()> {
-    with_database(|pool| async move {
+    support::with_database(|database| Box::pin(async move {
+        let pool=database.app_pool.clone();
         let route=route()?;
         let seed=seed_identity(&pool,&route,1).await?;
         let original=seed_deposit(&pool,&route,&seed,DepositSeed::new(2,DepositState::Credited).block(3).credit(101)).await?;
@@ -1634,8 +1635,8 @@ async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposit
                 .bind(start).bind(end).bind(original).execute(&pool).await?;
         }
         sqlx::query("UPDATE addresses SET backfilled=true WHERE id=$1").bind(seed.address_id).execute(&pool).await?;
-        sqlx::query("ANALYZE addresses").execute(&pool).await?;
-        sqlx::query("ANALYZE deposits").execute(&pool).await?;
+        sqlx::query("ANALYZE addresses").execute(&database.owner_pool).await?;
+        sqlx::query("ANALYZE deposits").execute(&database.owner_pool).await?;
         let before=std::time::Instant::now();
         let all=db::list_scan_addresses(&pool,CHAIN_ID).await?;
         let old_time=before.elapsed();
@@ -1718,7 +1719,7 @@ async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposit
         let next:i64=sqlx::query_scalar("SELECT next_block FROM reconciliation_deposit_cursors WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
         ensure!(next==6);
         Ok(())
-    }).await
+    })).await
 }
 
 struct ScaleReader {
