@@ -55,7 +55,15 @@ reject zero answers), and RPC groups A and B return the same round/value. Chainl
 `now - updatedAt <= heartbeat + margin`, where heartbeat is pinned per feed and verified against
 the [Chainlink feed registry](https://data.chain.link/). A deviation update remains valid until
 the heartbeat bound: worst-case age is heartbeat plus margin, and movement is bounded by the
-feed's deviation threshold. Exchanges use receive-time `max_age_s`.
+feed's deviation threshold during normal feed operation. The pinned publication margin is **600 s**.
+Review of the last eight Ethereum rounds observed USDC/USD intervals of **82,812–82,836 s**
+(heartbeat **82,800 s**) and USDT/USD intervals of **86,412–86,436 s** (heartbeat **86,400 s**).
+Updates already arrive up to **36 s late in calm conditions**; a 60 s margin leaves too little
+allowance for congestion and needlessly drops a source. The 600 s margin accommodates publication
+delay while deviation-triggered updates continue to constrain movement. This assumes the feed is
+operating: completeness, A/B agreement, peg/deviation checks and the heartbeat + margin cutoff
+remain mandatory. The [pinned registry evidence](price-feed-registry.json) records this allowance.
+Exchanges use receive-time `max_age_s`.
 
 Credit exactly 1.00 iff at least one fresh source is within the peg band and **no fresh source is
 outside it**. Any fresh source outside the band halts and alerts; no fresh source also halts.

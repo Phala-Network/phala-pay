@@ -1502,7 +1502,7 @@ defaulted addresses from it. The defaults and why:
 | `chain.rpc_groups` | required explicit `{ a: group-a, b: group-b }`; the attested `rpc_groups` registries contain reviewed company-disjoint member pools, URL/key references and bounded selection policies ([RPC configuration](configuration.md#the-configuration-file), [runbook](../deploy/RPC.md)) |
 | `asset.backstop` | `token`: every transfer of the token is requested and kept locally, one request per block range whatever the address count; `addresses` for a token with many transfers per block, such as USDC (§8) |
 | `price.mode`, role lists | explicit `volatile` or `stablecoin`; no implicit providers |
-| `price.max_age_s`, `peg_band_bps`, `max_deviation_bps`, `max_fx_deviation_bps` | 90, 100, 100, 100; Chainlink uses its pinned heartbeat + 60 s |
+| `price.max_age_s`, `peg_band_bps`, `max_deviation_bps`, `max_fx_deviation_bps` | 90, 100, 100, 100; Chainlink uses its pinned heartbeat + 600 s |
 | `merchant.min_amount`, `max_deposit_atomic`, `min_refund_atomic` | the default is required; an account may raise the minimum credit and lower the maximum deposit, and keeps the refund floor unless the operator sets `min` and `max` |
 | `merchant.min_deposit_atomic` | 0, which an account may raise: `min_amount` rejects dust *(policy: finance confirms before production)* |
 | `merchant.quote_ttl_seconds`, `quote_spread_bps`, `quote_tolerance_bps` | defaults 900, 50, 100; bounds 30 to 3 600 seconds and 0 to 500 basis points. The code refuses an operator bound above 86 400 seconds, a spread above 5 000, or a tolerance above 1 000 basis points |

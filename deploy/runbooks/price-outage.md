@@ -19,7 +19,10 @@ curl --fail --max-time 8 -sS 'https://data-api.binance.vision/api/v3/ticker/pric
 Read each configured Chainlink proxy through **both observation groups**, using the approved RPC
 probe workflow in [RPC operations](../RPC.md). Never print expanded keyed URLs. Check
 `decimals()`, `latestRoundData()` round/value agreement, `answeredInRound >= roundId`, positive
-answer, and `updatedAt <= now`. Age must be at most the pinned heartbeat plus 60 seconds.
+answer, and `updatedAt <= now`. Age must be at most the pinned heartbeat plus 600 seconds.
+The last eight Ethereum rounds arrived up to 36 seconds after their heartbeat in calm conditions;
+the pinned margin allows publication delay under congestion while deviation-triggered updates
+and agreement/peg checks remain active (see the design and registry evidence).
 Ethereum USDC uses 82,800 seconds; Ethereum USDT and Base stablecoin feeds use 86,400 seconds.
 Testnet tokens deliberately observe Ethereum mainnet; verify `observation_chain_id` and the
 configured `mainnet-a`/`mainnet-b` pair, not a nonexistent testnet price feed.

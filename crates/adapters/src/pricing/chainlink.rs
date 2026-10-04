@@ -190,6 +190,18 @@ mod tests {
     fn pinned_heartbeat_margin_bound_and_incomplete_rounds() {
         let feed = topup_core::price::feed("USDC_USD", 1).unwrap();
         let r = round();
+        for name in ["USDC_USD", "USDT_USD"] {
+            let feed = topup_core::price::feed(name, 1).unwrap();
+            for publication_delay in [36, 61, 600] {
+                assert!(
+                    validate_round(&r, feed, 100 + feed.heartbeat_s + publication_delay).is_ok()
+                );
+            }
+            assert_eq!(
+                validate_round(&r, feed, 100 + feed.heartbeat_s + 601),
+                Err(PriceError::Stale)
+            );
+        }
         assert!(validate_round(&r, feed, 100 + feed.heartbeat_s + feed.margin_s).is_ok());
         assert_eq!(
             validate_round(&r, feed, 101 + feed.heartbeat_s + feed.margin_s),

@@ -87,7 +87,7 @@ pub struct Feed {
     pub address: &'static str,
     /// Aggregator decimals.
     pub decimals: u8,
-    /// Maximum interval between updates.
+    /// Published heartbeat interval; publication can arrive later.
     pub heartbeat_s: u64,
     /// Clock and publication allowance.
     pub margin_s: u64,
@@ -95,6 +95,12 @@ pub struct Feed {
     pub deviation_bps: u16,
 }
 /// Unsupported/testnet feeds never resolve implicitly.
+/// Review of the last eight Ethereum rounds observed USDC/USD intervals of 82,812–82,836 s
+/// (82,800 s heartbeat) and USDT/USD intervals of 86,412–86,436 s (86,400 s heartbeat).
+/// Updates already arrive up to 36 s late in calm conditions. A 600 s publication margin
+/// accommodates congestion without needless source loss; deviation-triggered updates still
+/// constrain movement during normal feed operation. Completeness, A/B agreement and peg gates
+/// remain mandatory, and rounds beyond heartbeat + margin remain stale.
 pub fn feed(name: &str, chain: u64) -> Option<Feed> {
     let (address, heartbeat_s, deviation_bps) = match (chain, name) {
         (1, "USDC_USD") => ("0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6", 82800, 25),
@@ -114,7 +120,7 @@ pub fn feed(name: &str, chain: u64) -> Option<Feed> {
         address,
         decimals: if heartbeat_s == 0 { 0 } else { 8 },
         heartbeat_s,
-        margin_s: 60,
+        margin_s: 600,
         deviation_bps,
     })
 }

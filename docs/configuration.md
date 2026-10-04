@@ -202,6 +202,9 @@ they do not scan payment contracts. Their capability probes read pinned feed dec
 payment receipts or logs. Staging includes `mainnet-a`/`mainnet-b` (chain 1) for price
 feeds and `base-mainnet-a`/`base-mainnet-b` (8453) for uptime. Feed addresses and heartbeat values
 are pinned in the image; operators configure group references, not arbitrary feed addresses.
+Chainlink freshness allows heartbeat + **600 s** for publication delay: the last eight Ethereum
+round intervals were already up to 36 s late in calm conditions (see the feed evidence and design
+above). Deviation-triggered updates and all agreement/peg checks remain in effect.
 Ethereum B uses `https://eth.drpc.org` (company `drpc`): PublicNode Ethereum prunes genesis
 history and cannot pass group identity acceptance. Base B remains PublicNode. Both groups require
 latest feed state, not archive-state contract calls.
