@@ -21,12 +21,12 @@
         "livemode": false,
         "client_reference_id": "team-42",
         "currency": "usd",
-        "status": "refunded",
+        "status": "credited",
         "amount": 2500,
         "amount_refunded": 500,
         "amount_reversed": 0
       },
-      "expected": 0
+      "expected": 2000
     }
   ],
   "convergence_cases": [
@@ -74,7 +74,7 @@
           "livemode": false,
           "client_reference_id": "team-42",
           "currency": "usd",
-          "status": "refunded",
+          "status": "credited",
           "amount": 2500,
           "amount_refunded": 500,
           "amount_reversed": 0
@@ -90,7 +90,7 @@
           "livemode": false,
           "client_reference_id": "team-42",
           "currency": "usd",
-          "status": "refunded",
+          "status": "credited",
           "amount": 2500,
           "amount_refunded": 500,
           "amount_reversed": 0
