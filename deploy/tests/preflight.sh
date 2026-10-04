@@ -208,5 +208,7 @@ expect_failure production-missing-sentry "topup config check refused" \
 valid_dsn=https://0123456789abcdef0123456789abcdef@o123.ingest.sentry.io/456
 sed "s|^SENTRY_DSN=.*|SENTRY_DSN=$valid_dsn|" "$tmp/complete.env" >"$tmp/sentry.env"
 passes --env "$tmp/sentry.env" --compose "$tmp/service.yml" --environment-dir "$staging" --require-sentry --unsealed
-! grep -Fq "$valid_dsn" "$tmp/pass.out" "$tmp/pass.err"
+if grep -Fq "$valid_dsn" "$tmp/pass.out" "$tmp/pass.err"; then
+    echo "preflight printed the Sentry DSN" >&2; exit 1
+fi
 echo 'production Sentry requirement passed'
