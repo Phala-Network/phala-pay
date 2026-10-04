@@ -5,8 +5,9 @@
 #   scripts/version.sh            prints it, and fails unless sdk/js/package.json, sdk/js-react/package.json, sdk/js-server/package.json,
 #                                 sdk/python/pyproject.toml, sdk/python/uv.lock, and the Python SDK
 #                                 deploy/deploy.sh pins name it too
-#   scripts/version.sh VERSION    sets it in Cargo.toml, Cargo.lock, all three npm package manifests, and the Python files (needs cargo,
-#                                 jq, and uv)
+#   scripts/version.sh VERSION    sets it in Cargo.toml, Cargo.lock, all three npm package manifests,
+#                                 the npm workspace lockfile, and the Python files (needs cargo, jq,
+#                                 npx, and uv)
 #
 # VERSION is X.Y.Z, or X.Y.Z-rc.N for a pre-release, which Python spells X.Y.ZrcN (PEP 440).
 set -euo pipefail
@@ -42,6 +43,9 @@ if (($# == 1)); then
         fi
         mv "$package.tmp" "$package"
     done
+    # React's exact core dependency is also an importer specifier in the workspace lockfile.
+    # Keep the release's frozen install valid, without running package lifecycle scripts.
+    npx -y "$(jq -r .packageManager sdk/js/package.json)" --dir sdk/js install --lockfile-only --ignore-scripts >&2
     uv version --quiet --project sdk/python --no-sync "$1"
     sed -i "s/^sdk=phala-pay==.*\$/sdk=phala-pay==${1/-rc./rc}/" deploy/deploy.sh
 elif (($# != 0)); then

@@ -7,6 +7,7 @@
 #   another release candidate in Python;
 # - setting a version that is not X.Y.Z or X.Y.Z-rc.N is refused before any file changes.
 # - setting a version updates all npm versions and React's exact core dependency, without adding a peer.
+# - the stable and prerelease version setters leave the npm workspace's frozen install valid.
 set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
@@ -17,14 +18,16 @@ fail() {
     exit 1
 }
 files=(Cargo.toml sdk/js/package.json sdk/js-react/package.json sdk/js-server/package.json sdk/python/pyproject.toml sdk/python/uv.lock deploy/deploy.sh)
+npm_lock_files=(sdk/js/pnpm-workspace.yaml sdk/js/pnpm-lock.yaml)
 # fixture: a fresh copy of the script and the version files, in $tmp/repo.
 fixture() {
+    local file
     rm -rf "$tmp/repo"
     mkdir -p "$tmp/repo/scripts" "$tmp/repo/sdk/js" "$tmp/repo/sdk/js-react" "$tmp/repo/sdk/js-server" "$tmp/repo/sdk/python" "$tmp/repo/deploy"
     cp "$root/scripts/version.sh" "$tmp/repo/scripts/"
     cp "$root/sdk/js-react/package.json" "$tmp/repo/sdk/js-react/"
     cp "$root/sdk/js-server/package.json" "$tmp/repo/sdk/js-server/"
-    for file in "${files[@]}"; do cp "$root/$file" "$tmp/repo/$file"; done
+    for file in "${files[@]}" "${npm_lock_files[@]}"; do cp "$root/$file" "$tmp/repo/$file"; done
 }
 # set_version FILE VERSION: the version as each file spells it.
 set_version() {
@@ -77,7 +80,7 @@ fixture
 status=0
 "$tmp/repo/scripts/version.sh" 0.5 2>/dev/null || status=$?
 ((status == 64)) || fail "setting 0.5 exited $status, not 64"
-for file in "${files[@]}"; do
+for file in "${files[@]}" "${npm_lock_files[@]}"; do
     cmp -s "$root/$file" "$tmp/repo/$file" || fail "setting 0.5 changed $file"
 done
 
@@ -101,6 +104,9 @@ for version in 0.9.0 0.9.0-rc.1; do
         fail "setting $version missed React's exact core dependency"
     jq -e '.peerDependencies | has("@phala/pay") | not' "$tmp/repo/sdk/js-react/package.json" >/dev/null ||
         fail "setting $version added a core peer dependency"
+    npx -y "$(jq -r .packageManager "$tmp/repo/sdk/js/package.json")" --dir "$tmp/repo/sdk/js" \
+        install --frozen-lockfile --lockfile-only --ignore-scripts >/dev/null ||
+        fail "setting $version left the npm workspace lockfile out of date"
 done
 
 echo "version test passed"
