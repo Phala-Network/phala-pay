@@ -40,8 +40,7 @@ deploy, makes it detectable.
 
 ### OS image
 
-The approved OS image is `dstack-0.5.9`, non-dev: the latest dstack release a Phala Cloud node
-offers. [preflight.sh](preflight.sh) accepts only that name and, online, requires a node of the
+The approved OS image is `dstack-0.5.9`, non-dev. [preflight.sh](preflight.sh) accepts only that name and, online, requires a node of the
 workspace to offer it. The service speaks the dstack 0.5 guest API (`dstack-sdk = "=0.1.3"`); the
 local simulator is built from the same release. dstack 0.6 derives different keys for the same
 domain, so moving to it changes every account's webhook keys (which merchants pin), the backup
@@ -672,8 +671,8 @@ jq -e '.passed == true' sepolia-contract-verification.json
 The dry run must print the two addresses above; if the factory already has that code (anyone may
 deploy it), the broadcast sends nothing. Then run **Verify contracts** (Actions), which re-checks the
 deployment, the Safe of `contracts/safe-expectations.json` (Phala's), and the committed routes daily,
-in the `staging` Environment. Mainnet repeats this after the security review
-([CONTRACTS.md, "Mainnet"](CONTRACTS.md#mainnet)).
+in the `staging` Environment. Repeat the verification for
+[mainnet deployment](CONTRACTS.md#mainnet).
 
 ## Operator onboarding
 

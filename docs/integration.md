@@ -101,6 +101,7 @@ manual payment, with live status until the payment is credited.
 ```tsx
 "use client";
 import { Checkout } from "@phala/pay/react";
+import "@phala/pay/styles.css";
 
 <Checkout
   clientSecret={clientSecret}
@@ -339,18 +340,17 @@ under a `safe` policy, 15 minutes at `finalized`), that they can close the page,
 automatically. `onSuccess(quote)` is called once credited; `quote.amount_credited` is what was
 credited.
 
-**Theme it.** `appearance` takes a `theme` (`light` or `dark`) and `variables` named as in Stripe's
-Appearance API: `colorPrimary`, `accessibleColorOnColorPrimary` (text on the primary color; set a
-dark one with a light brand color), `colorBackground`, `colorText`, `colorTextSecondary`,
-`colorBorder`, `colorDanger`, `colorSuccess`, `fontFamily`, `borderRadius`
-([sdk/js/README.md](../sdk/js/README.md#appearance)).
+**Theme it.** Import `"@phala/pay/styles.css"` once in your application entry point.
+`appearance` only selects `theme` (`light` or `dark`); customize the `--pp-*` CSS properties on
+`.pp-root` in your stylesheet. See [Appearance](../sdk/js/README.md#appearance) for the tokens
+and how to map your application's light/dark theme without selector conflicts.
 
 ```tsx
 <Checkout
   clientSecret={clientSecret}
   expectedAddress={expectedAddress}
   apiBase={PHALA_PAY_API_BASE}
-  appearance={{ theme: "dark", variables: { colorPrimary: "#cdfa50", accessibleColorOnColorPrimary: "#161616" } }}
+  appearance={{ theme: "dark" }}
   onChange={({ status }) => setPaymentInFlight(status === "seen" || status === "confirming")}
   onSuccess={() => { forgetClientSecret(account.id); router.refresh(); }}
   onExpire={() => forgetClientSecret(account.id)}
@@ -1557,7 +1557,7 @@ release only fixes or adds.
 #### Compatibility
 
 Use the SDK version equal to your operator's service version, `info.version` of its
-`GET /openapi.json`: against service v0.5.0, `@phala/pay` 0.5.0 and `phala-pay` 0.5.0. No other
+`GET /openapi.json`: against service v0.8.2, `@phala/pay` 0.8.2 and `phala-pay` 0.8.2. No other
 pairing is supported, so upgrade the SDKs when your operator upgrades the service.
 [CHANGELOG.md](../CHANGELOG.md) records each release's SDK changes under "JS SDK" and "Python SDK".
 

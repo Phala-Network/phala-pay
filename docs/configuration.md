@@ -1,7 +1,7 @@
 # Service configuration
 
 This page is the reference for the `topup` binary: its commands, its configuration file, its flags,
-and the few environment variables it reads. A deployment's configuration file is committed in its
+and the environment variables it reads. A deployment's configuration file is committed in its
 environment directory in the operator's environment repository, for example
 `production/topup/topup.yaml` (Phala's staging:
 `deploy/environments/phala-network/staging/topup/topup.yaml`), and inlined into the attested
@@ -19,9 +19,11 @@ is in [design/deploy-config.md](design/deploy-config.md).
 | Command | Purpose |
 |---|---|
 | `topup run --config FILE` | The service: the HTTP API and every worker loop. |
-| `topup migrate` | Applies the database migrations as the database owner. |
+| `topup migrate [--config FILE]` | Applies migrations as the database owner. `--config` also binds existing deposits and quotes during the payment settings cutover. |
 | `topup config check [--secrets] FILE`, `topup config show FILE` | Validates a configuration file without any secret; prints it resolved, as JSON with every route default written out and each keyed provider's URL still carrying its `{key}`. `--secrets` also checks each provider's sealed key (`TOPUP_RPC_<ID>_KEY`) against its URL and prints no value. |
 | `topup route validate FILE`, `topup route show FILE` | The same for one route file (`examples/`, the sandbox template). `--template` permits the zero factory and implementation placeholders of a deployment template. |
+| `topup rpc check --config FILE` | Probes RPC members with their sealed credentials; prints validated member ids. |
+| `topup rpc recover --config FILE --chain N --block N --actor NAME --reason TEXT`, `topup rpc resume --config FILE --chain N [--max-windows N]` | Stopped-service owner recovery and bounded replay; see [RPC recovery](../deploy/RPC.md#wrong-watermark-recovery). |
 | `topup reconcile --config FILE` | Runs one reconciliation pass and exits. |
 | `topup attest --nonce HEX --account acct_… [--live] [--version N]` | Prints the attestation evidence that `GET /v1/attestation` returns to that account. |
 | `topup keys` | Derives the backup key and the database credentials from dstack into tmpfs files. |
@@ -93,8 +95,9 @@ routes:                                    # every enabled route version, as rou
   mismatches, capability failures, stale heads and malformed replies do not retry or admit.
   `recovery_successes` (default 2) counts consecutive complete successful probes, independently
   of the per-RPC attempt count.
-  See [the design schema and error table](design/rpc-failover.md#configuration) and
-  [the RPC runbook](../deploy/RPC.md) for preflight, recovery and migration.
+  See [the RPC runbook](../deploy/RPC.md) for preflight, recovery and migration; the policy
+  fields and validation bounds are defined in
+  [`GroupPolicy`](../crates/adapters/src/chain/evm/group/mod.rs).
 - **`routes`** are route files, one list item each; their fields and defaults are in
   [architecture §14](architecture.md#14-configuration-and-deployment).
 
@@ -110,9 +113,9 @@ The files it refuses include:
 
 - an invalid origin or admin key;
 - a route that fails validation, or routes that disagree on a chain;
-- a provider a route names but the file does not configure, or one no route names;
-- a provider named on two chains;
-- a chain whose providers share a URL;
+- an unknown or unused RPC group, or a group assigned to the wrong chain;
+- overlapping company ownership between A and B;
+- duplicate member ids or URL/credential identities, or invalid quota references;
 - a misplaced `{key}`.
 
 ## Flags
@@ -157,7 +160,8 @@ application role included, before touching the schema.
 | Variable | Read by | Meaning |
 |---|---|---|
 | `DATABASE_URL` | database commands | The login above; its password is in `PGPASSFILE`. |
-| `TOPUP_RPC_<ID>_KEY` | `run`, `reconcile`, `restore-check`, `config check --secrets` | The sealed key that fills provider `<ID>`'s `{key}`. |
+| `TOPUP_RPC_*_KEY` | `run`, `reconcile`, `restore-check`, `config check --secrets`, `rpc` | Each member's explicit `sealed_key`, which fills its URL's `{key}`. |
+| `TOPUP_RPC_PROBE_DEBUG` | RPC commands and service startup | Set to `1` for sanitized probe diagnostics ([RPC runbook](../deploy/RPC.md#configuration-and-acceptance)). |
 | `DSTACK_APP_DOMAIN`, `TOPUP_ADMIN_PUBLIC_KEY` | `run`, only when named by the flags above | The Phala Cloud template's origin host and admin key. |
 | `SENTRY_DSN` | `run` | Sentry reporting, off while unset or empty ([deploy/README.md, "Sentry"](../deploy/README.md#sentry)). The environment is the file's `environment`; the release is the source commit compiled into the image. |
 
@@ -167,9 +171,10 @@ attestation; local stacks use the dstack simulator (`DSTACK_SIMULATOR_ENDPOINT`)
 ## Restore mode
 
 A database restored from backup starts in **restore mode**
-([architecture §14](architecture.md#14-configuration-and-deployment)). Reads work, every merchant
-write answers `503 service_restoring`, and nothing is credited or delivered until the operator has
+([architecture §14](architecture.md#14-configuration-and-deployment)). Every request authenticated with a merchant API key, reads and writes alike,
+answers `503 service_restoring`, and nothing is credited or delivered until the operator has
 reconciled the restore with each merchant's records through `/v1/admin/restore/…` and unfrozen
-it. `topup restore-check` validates the restored database read-only and records the restore; the
+it. `topup restore-check` requires stopped writers and the database owner: it validates the restore,
+runs reconciliation, and may repair the ledger. The
 [restore guide](../deploy/RESTORE.md) and the
 [reconciliation runbook](../deploy/runbooks/restore.md) have the steps.

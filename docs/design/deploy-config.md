@@ -1,6 +1,8 @@
 # Design: a lean, standard deployment configuration
 
-Status: implemented. Scope: the attested compose, its variants, every setting of `topup` and of the
+Status: implemented in v0.3.0; RPC configuration superseded by [RPC groups](../../deploy/RPC.md).
+
+Scope: the attested compose, its variants, every setting of `topup` and of the
 deployment, and the scripts, workflows, and docs around them. Owner's rules:
 "精简优雅重构compose和各种配置项"; use a standard mechanism wherever one exists; don't abuse env.
 

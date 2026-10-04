@@ -1,6 +1,8 @@
 # Design: per-account payment settings
 
-Status: **accepted** (2026-10-02). Astra's review approved the model with a change list, and the
+Status: implemented in v0.6.0; current behavior is in [the integration guide](../integration.md#19-payment-settings).
+
+Accepted (2026-10-02). Astra's review approved the model with a change list, and the
 re-check added three final fixes. The owner adopted every recommendation, and this document
 applies them. Ships in 0.6.0, breaking, with no backward compatibility. When
 accepted, it amends [multi-tenant design](multi-tenant.md) D1, D16, §12, §14, and §15, and the

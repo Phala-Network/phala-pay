@@ -1,5 +1,7 @@
 # RPC queue query plans
 
+Status: implemented in v0.8.0; query-plan and migration recovery evidence.
+
 The database/API audit uses PostgreSQL 18.6 and SQLx 0.9.0. The reproducible test is
 [`rpc_query_plans.rs`](../../crates/topup/tests/rpc_query_plans.rs). It creates an isolated migrated
 database, inserts 120,000 review windows and 120,000 reorg ranges across four chains and three

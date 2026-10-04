@@ -282,9 +282,8 @@ Deploy `upgrade`, never a runtime setting.
   reference deployment.
   Only where it is missing, deploy it (**HUMAN-ONLY**, a funded throwaway EOA) as in
   [deploy/CONTRACTS.md](../deploy/CONTRACTS.md); if anyone deployed it first, the broadcast sends
-  nothing. It is deployed on Sepolia and Base Sepolia; Phala deploys it on mainnet after the
-  contracts' independent security review ([plan](plan.md)), which an operator going live before
-  then should weigh.
+  nothing. It is deployed on Sepolia and Base Sepolia; mainnet deployment remains in
+  [Phala's production plan](plan.md#before-mainnet).
 
 ## 4. Release and provision
 

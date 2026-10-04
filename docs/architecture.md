@@ -1,7 +1,6 @@
 # Architecture
 
-Status: v8 (multi-tenant, API-only; [design](design/multi-tenant.md)). Single specification and
-implementation design. Numbers marked *(policy)* are set by the operator's finance and risk owners;
+Implementation specification (multi-tenant, API-only; [design](design/multi-tenant.md)). Numbers marked *(policy)* are set by the operator's finance and risk owners;
 this document fixes what they mean. Code comments and other documents cite its sections as
 "architecture §N". For an introduction, read [How Phala Pay works](overview.md) first.
 
@@ -202,8 +201,7 @@ contract ForwarderFactory {                            // no roles, no admin, no
   implementation's `factory()`, and `addressOf(sample treasury, sample salt)` against local
   derivation.
 - The contracts are two files built from audited OpenZeppelin components (Clones, SafeERC20,
-  ReentrancyGuardTransient); unit, fuzz, and invariant tests cover them. The independent review
-  before mainnet (`docs/plan.md`) covers them.
+  ReentrancyGuardTransient); unit, fuzz, and invariant tests cover them.
 
 ## 5. Stack
 
@@ -216,7 +214,7 @@ features (commit `f67b4f67ebabef0a27795705121698280a1038dc`); changing the SDK o
 requires a spec change. The dstack 0.6 `/v1` guest API derives different keys for the same domain and no Phala
 Cloud node offers a 0.6 image, so it is out of scope until a key migration is specified. `core` denies `arithmetic_side_effects`, `float_arithmetic`, `as_conversions`,
 `unwrap_used`. `cargo-deny`, committed lockfile, reproducible distroless image by digest.
-Contracts: Solidity with OpenZeppelin, Foundry; an independent review before mainnet (§4).
+Contracts: Solidity with OpenZeppelin and Foundry (§4).
 
 ```mermaid
 flowchart TB
@@ -1632,9 +1630,8 @@ too. The restore drill runs weekly in CI
 on a local stack, including the freeze and the reconciliation; the staging drill restores
 staging's real backups. Ingress via the
 dstack gateway to dstack-ingress, which terminates TLS for the custom domain in the CVM; egress limited to providers, price sources, object storage, Sentry, and merchants' webhook URLs,
-which leave only through the smokescreen proxy (§11). The CVM runs the non-dev OS image `dstack-0.5.9`, the latest dstack release a Phala
-Cloud node offers; deploy preflight refuses any other image and a node set that does not offer
-it. Upgrade = release tag on `main` → reproducible build → digest and attested deploy kit (Release)
+which leave only through the smokescreen proxy (§11). The CVM runs the approved non-dev OS image `dstack-0.5.9`; deploy preflight refuses any other image
+and a node set that does not offer it. Upgrade = release tag on `main` → reproducible build → digest and attested deploy kit (Release)
 → compose hash of the operator's environment directory → CI deploy (the reusable Deploy workflow,
 called from the operator's environment repository; the dispatcher is accountable; no approval
 gate) → attested read-back. Keys come from Phala Cloud's

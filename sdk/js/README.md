@@ -76,7 +76,7 @@ mode".
 | `rejected` | Will not be credited; the payer contacts support |
 | `reversed` | Credited, then its transaction left the chain before finality: the payment did not happen |
 | `expired`, `canceled` | The address is hidden; `onExpire` is called once |
-| `error` | The client secret is not valid |
+| `error` | Invalid client secret or address mismatch; nothing to pay |
 
 `onChange(state)` is called once per status change with `{ status, quote, error }`, like Stripe
 Elements' `onChange`, for example to hide your own "new payment" control while a payment is
@@ -208,6 +208,11 @@ selector such as `.pp-root[data-theme]`. For a light primary color, set a dark
 }
 ```
 
+To map your own light/dark tokens on `.pp-root`, omit `appearance.theme` and load your mapping
+after the SDK stylesheet. Passing `theme: "dark"` sets `data-theme="dark"`, whose SDK selector
+`.pp-root[data-theme="dark"]` overrides a plain `.pp-root` mapping. If you also pass the dark
+theme, target `.pp-root[data-theme="dark"]` (or `.pp-root[data-theme]`) in your mapping.
+
 ### Content Security Policy
 
 The components inject no style elements or style attributes. Serve the bundled CSS from your
@@ -270,7 +275,7 @@ import { constructEvent, flushTransactions, safeBatch, verifyQuoteAddress } from
 const pins = { account: "acct_…", factory: FACTORY, implementation: IMPLEMENTATION, treasuries: { 1: TREASURY } };
 const expectedAddress = verifyQuoteAddress(pins, quote); // pass it to <Checkout expectedAddress>
 
-// Standard Webhooks v1a (ed25519, WebCrypto: Node 20+, Deno, Bun, edge runtimes). Fails closed
+// Standard Webhooks v1a (ed25519, WebCrypto: Node 20.3+, Deno, Bun, edge runtimes). Fails closed
 // unless the signature verifies with a pinned key and the event is your account's in this mode.
 // WEBHOOK_PUBLIC_KEYS: your account's keys in this mode, `whpk_…`, pinned from GET /v1/attestation.
 const event = await constructEvent(rawBody, request.headers, WEBHOOK_PUBLIC_KEYS, {
