@@ -106,7 +106,7 @@ impl Chainlink {
     }
 }
 fn round_evidence(r: &Round, feed: Feed) -> serde_json::Value {
-    serde_json::json!({"round":r.id.to_string(),"answer":r.answer.to_string(),"answered_in_round":r.answered_in_round.to_string(),"started_at":r.started_at,"updated_at":r.updated_at,"heartbeat_s":feed.heartbeat_s,"margin_s":feed.margin_s,"age_s":unix_now().ok().and_then(|now|now.value().checked_sub(r.updated_at))})
+    serde_json::json!({"feed":feed.name,"chain_id":feed.chain_id,"address":feed.address,"decimals":feed.decimals,"round":r.id.to_string(),"answer":r.answer.to_string(),"answered_in_round":r.answered_in_round.to_string(),"started_at":r.started_at,"updated_at":r.updated_at,"heartbeat_s":feed.heartbeat_s,"margin_s":feed.margin_s,"age_s":unix_now().ok().and_then(|now|now.value().checked_sub(r.updated_at))})
 }
 
 /// Pure completeness/freshness validation; preserves the feed update time.
@@ -169,10 +169,7 @@ impl PriceSource for Chainlink {
                 evidence: round_evidence(&r, self.feed),
             }
         })?;
-        Ok((
-            o,
-            serde_json::json!({"round": r.id.to_string(), "answered_in_round": r.answered_in_round.to_string(), "updated_at": r.updated_at, "heartbeat_s": self.feed.heartbeat_s, "margin_s": self.feed.margin_s}),
-        ))
+        Ok((o, round_evidence(&r, self.feed)))
     }
 }
 

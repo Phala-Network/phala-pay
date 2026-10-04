@@ -24,6 +24,7 @@ struct Entry {
     asset: Option<String>,
     max_age_s: Option<u64>,
     usdt_quoted: bool,
+    descriptor: Option<Value>,
 }
 /// Per-role ordered sources, shared by every valuation path.
 pub struct PricingRuntime {
@@ -94,6 +95,9 @@ impl PricingRuntime {
                         asset: Some(s.asset().to_owned()),
                         max_age_s,
                         usdt_quoted: matches!(s, Source::Binance { .. }),
+                        descriptor: Some(
+                            serde_json::to_value(s).map_err(|_| "price source encoding failed")?,
+                        ),
                     })
                 })
                 .collect()
@@ -134,6 +138,7 @@ impl PricingRuntime {
             asset: None,
             max_age_s: None,
             usdt_quoted: true,
+            descriptor: None,
         };
         Self {
             sources: vec![],
@@ -367,13 +372,13 @@ async fn observe(
     });
     let (evidence, observation) = match result {
         Ok((o, data)) => (
-            json!({"role":role, "company":entry.company, "source":o.source.as_str(), "price_scaled":o.price.value().to_string(), "observed_at":o.observed_at.value(), "age_s":now.value().saturating_sub(o.observed_at.value()), "data":data}),
+            json!({"role":role, "company":entry.company, "source":o.source.as_str(), "descriptor":entry.descriptor, "price_scaled":o.price.value().to_string(), "observed_at":o.observed_at.value(), "age_s":now.value().saturating_sub(o.observed_at.value()), "data":data}),
             Some(o),
         ),
         Err(error) => {
             let code = error_code(&error);
             if let Some(list) = audit["observations"].as_array_mut() {
-                list.push(json!({"role":role,"company":entry.company,"source":entry.company,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
+                list.push(json!({"role":role,"company":entry.company,"source":entry.company,"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
             }
             price_metrics::health(route, role, entry.company, false);
             if code == "divergent" {
@@ -468,6 +473,7 @@ mod tests {
             asset: None,
             max_age_s: None,
             usdt_quoted: true,
+            descriptor: None,
         }
     }
     fn runtime() -> PricingRuntime {
