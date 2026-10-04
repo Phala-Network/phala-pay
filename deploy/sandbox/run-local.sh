@@ -5,7 +5,7 @@
 # Usage: deploy/sandbox/run-local.sh [SCENARIO ...]
 #
 # Requires docker compose, Foundry (forge, cast), jq, uv, curl, and OpenSSL 3. Prices come from the
-# live Coin Metrics, Binance, and Kraken endpoints, exactly as on Sepolia.
+# live Chainlink, Binance, and Kraken endpoints, exactly as on Sepolia.
 set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)

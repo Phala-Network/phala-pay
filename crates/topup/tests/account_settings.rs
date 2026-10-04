@@ -757,7 +757,7 @@ fn cutover_test_config() -> Result<std::path::PathBuf> {
     std::fs::write(
         &config,
         format!(
-            "environment: test\npublic_origin: https://topup.example\nadmin_key:\n  \
+            "environment: staging\npublic_origin: https://topup.example\nadmin_key:\n  \
              id: admin/v1\n  public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n\
 {rpc}\nroutes:\n  -\n{routes}\n",
             rpc = include_str!("fixtures/rpc-groups.yaml")

@@ -1,4 +1,4 @@
-//! Kraken USDT/USD last-trade adapter.
+//! Kraken PHA/USD, USDC/USD and USDT/USD last-trade adapter.
 
 use std::collections::BTreeMap;
 
@@ -24,6 +24,9 @@ pub struct Kraken {
 impl Kraken {
     /// Creates a source for one Kraken market pair.
     pub fn new(pair: String) -> Result<Self, PriceError> {
+        if !matches!(pair.as_str(), "PHAUSD" | "USDCUSD" | "USDTUSD") {
+            return Err(PriceError::MalformedResponse("pair"));
+        }
         Ok(Self {
             client: http_client()?,
             endpoint: Redacted::parse(ENDPOINT).map_err(|_| PriceError::InvalidUrl)?,
@@ -31,16 +34,23 @@ impl Kraken {
         })
     }
 
-    fn parse_response(&self, body: &[u8]) -> Result<Observation, PriceError> {
-        let response: Response =
+    pub(super) fn parse_response(&self, body: &[u8]) -> Result<Observation, PriceError> {
+        let mut response: Response =
             serde_json::from_slice(body).map_err(|_| PriceError::MalformedResponse("body"))?;
         if !response.error.is_empty() {
             return Err(PriceError::MalformedResponse("error"));
         }
+        if response.result.len() != 1 {
+            return Err(PriceError::MalformedResponse("result"));
+        }
+        let expected = if self.pair == "USDTUSD" {
+            "USDTZUSD"
+        } else {
+            &self.pair
+        };
         let ticker = response
             .result
-            .into_values()
-            .next()
+            .remove(expected)
             .ok_or(PriceError::MalformedResponse("result"))?;
         let price = ticker
             .last_trade
@@ -57,6 +67,7 @@ impl Kraken {
 #[async_trait]
 impl PriceSource for Kraken {
     async fn observe(&self) -> Result<Observation, PriceError> {
+        super::admit("kraken").await;
         let response = self
             .client
             .get(self.endpoint.expose().clone())

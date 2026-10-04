@@ -19,3 +19,6 @@ pub use reporting::{CronMonitor, ReportingError, init_reporting, require_sentry_
 pub use request::request_context;
 pub use spans::{deposit_step_span, outbox_delivery_span, scanner_window_span};
 pub use status::{ReconciliationStatus, reconciliation, record_reconciliation};
+
+/// Price metrics and alert integration.
+pub mod price_metrics;

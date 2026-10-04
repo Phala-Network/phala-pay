@@ -1010,7 +1010,7 @@ async fn run_confirm_scenario(
     route.merchant.min_amount = topup_core::route::Bounded::at(1);
     let now = u64::try_from(chrono::Utc::now().timestamp())?;
     let primary_price: Arc<dyn PriceSource> =
-        Arc::new(FixedPrice(observation("coinmetrics", 10_000_000, now)));
+        Arc::new(FixedPrice(observation("kraken", 10_000_000, now)));
     let check_price: Arc<dyn PriceSource> =
         Arc::new(FixedPrice(observation("binance", 10_000_000, now)));
     let fx_price: Arc<dyn PriceSource> =

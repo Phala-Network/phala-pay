@@ -207,6 +207,24 @@ pub fn validate(
             return Err("RPC A/B groups share a reviewed provider company".to_owned());
         }
     }
+    for route in routes {
+        for (a, b, chain) in price_pairs(route)? {
+            let ga = groups.get(&a).ok_or("price A group missing")?;
+            let gb = groups.get(&b).ok_or("price B group missing")?;
+            if a == b
+                || ga.chain_id != chain
+                || gb.chain_id != chain
+                || ga
+                    .members
+                    .iter()
+                    .any(|m| gb.members.iter().any(|n| n.company == m.company))
+            {
+                return Err("price RPC A/B must have matching chain and disjoint companies".into());
+            }
+            used.insert(a);
+            used.insert(b);
+        }
+    }
     if used.len() != groups.len() {
         return Err("unused RPC group".to_owned());
     }
@@ -272,4 +290,58 @@ pub fn clients(
         );
     }
     Ok(clients)
+}
+
+/// Observation-only group pairs, including sequencer checks, validated like route groups.
+pub fn price_pairs(route: &RouteFile) -> Result<Vec<(String, String, u64)>, String> {
+    let resolve = |id: &str| -> Result<String, String> {
+        match id {
+            "a" => route
+                .chain
+                .rpc_providers
+                .first()
+                .cloned()
+                .ok_or("RPC A missing".into()),
+            "b" => route
+                .chain
+                .rpc_providers
+                .get(1)
+                .cloned()
+                .ok_or("RPC B missing".into()),
+            _ => Ok(id.to_owned()),
+        }
+    };
+    let mut pairs = Vec::new();
+    for (_, sources) in route.pricing.roles() {
+        for source in sources {
+            if let topup_core::price::Source::Chainlink {
+                chain_id,
+                rpc_group,
+                rpc_group_b,
+                ..
+            } = source
+            {
+                let a = resolve(rpc_group)?;
+                let b = match rpc_group_b {
+                    Some(b) => resolve(b)?,
+                    None => {
+                        let ra = resolve("a")?;
+                        let rb = resolve("b")?;
+                        if a == ra {
+                            rb
+                        } else if a == rb {
+                            ra
+                        } else {
+                            return Err("explicit price group requires rpc_group_b".into());
+                        }
+                    }
+                };
+                pairs.push((a, b, *chain_id));
+            }
+        }
+    }
+    if let Some(s) = &route.pricing.sequencer_uptime {
+        pairs.push((s.rpc_group.clone(), s.rpc_group_b.clone(), 8453));
+    }
+    Ok(pairs)
 }

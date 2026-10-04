@@ -57,6 +57,18 @@ rpc_budgets:
   ethpandaops-sepolia-key:
     requests_per_second: 2
     burst: 2
+  price-mainnet-a-key:
+    requests_per_second: 5
+    burst: 2
+  price-mainnet-b-key:
+    requests_per_second: 5
+    burst: 2
+  price-base-mainnet-a-key:
+    requests_per_second: 5
+    burst: 2
+  price-base-mainnet-b-key:
+    requests_per_second: 5
+    burst: 2
 rpc_groups:
   provider-a:
     chain_id: 11155111
@@ -118,6 +130,39 @@ rpc_groups:
       key_budget: base-sepolia-b-key
 # Every value a route does not write is a code default (docs/architecture.md §14);
 # `topup config show` prints the resolved routes.
+  # Observation-only groups: no scanning or deployed payment contracts on these mainnets.
+  mainnet-a:
+    chain_id: 1
+    members:
+    - id: price-mainnet-a
+      company: tenderly
+      url: https://mainnet.gateway.tenderly.co
+      account_budget: tenderly-account
+      key_budget: price-mainnet-a-key
+  mainnet-b:
+    chain_id: 1
+    members:
+    - id: price-mainnet-b
+      company: publicnode
+      url: https://ethereum-rpc.publicnode.com
+      account_budget: publicnode-account
+      key_budget: price-mainnet-b-key
+  base-mainnet-a:
+    chain_id: 8453
+    members:
+    - id: price-base-mainnet-a
+      company: tenderly
+      url: https://base.gateway.tenderly.co
+      account_budget: tenderly-account
+      key_budget: price-base-mainnet-a-key
+  base-mainnet-b:
+    chain_id: 8453
+    members:
+    - id: price-base-mainnet-b
+      company: publicnode
+      url: https://base-rpc.publicnode.com
+      account_budget: publicnode-account
+      key_budget: price-base-mainnet-b-key
 routes:
   # Staging route on Base Sepolia, the PHA route of Sepolia on a second chain: a test-mode route
   # (`livemode: false`) any account can quote on and pay its own treasury through. Test PHA here is
@@ -147,9 +192,15 @@ routes:
       # request per range. The USDC route still puts the whole chain in address mode (architecture §8).
       backstop: token
 
-    pricing:
-      primary: { source: coinmetrics, asset: pha }
-      check: { source: binance, symbol: PHAUSDT }
+    price:
+      mode: volatile
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
+      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
+      check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+      fx:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
+        - { source: kraken, symbol: USDTUSD, company: kraken }
 
     merchant:
       min_amount: { default: 100 }
@@ -186,9 +237,14 @@ routes:
       # requests by recipient (architecture §8).
       backstop: addresses
 
-    pricing:
-      mode: stablecoin # credited at 1.00 while Coin Metrics' USDC reference rate is within 1% of it
-      primary: { source: coinmetrics, asset: usdc }
+    price:
+      mode: stablecoin
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
+      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
+        - { source: kraken, symbol: USDCUSD, company: kraken }
+      peg_band_bps: 100
 
     merchant:
       min_amount: { default: 100 } # USD 1.00, as on the PHA route
@@ -226,9 +282,14 @@ routes:
       # still puts the whole chain in address mode (architecture §8).
       backstop: token
 
-    pricing:
-      mode: stablecoin # credited at 1.00 while Coin Metrics' USDT reference rate is within 1% of it
-      primary: { source: coinmetrics, asset: usdt }
+    price:
+      mode: stablecoin
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
+      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      sources:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
+        - { source: kraken, symbol: USDTUSD, company: kraken }
+      peg_band_bps: 100
 
     merchant:
       min_amount: { default: 100 } # USD 1.00, as on the PHA route
@@ -257,9 +318,14 @@ routes:
       decimals: 18
       backstop: token # few transfers per block: one token-wide log request per range (architecture §8)
 
-    pricing:
-      primary: { source: coinmetrics, asset: pha }
-      check: { source: binance, symbol: PHAUSDT }
+    price:
+      mode: volatile
+      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
+      check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+      fx:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+        - { source: kraken, symbol: USDTUSD, company: kraken }
 
     merchant:
       min_amount: { default: 100 }
@@ -292,9 +358,13 @@ routes:
       # (architecture §8).
       backstop: addresses
 
-    pricing:
-      mode: stablecoin # credited at 1.00 while Coin Metrics' USDC reference rate is within 1% of it
-      primary: { source: coinmetrics, asset: usdc }
+    price:
+      mode: stablecoin
+      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+        - { source: kraken, symbol: USDCUSD, company: kraken }
+      peg_band_bps: 100
 
     merchant:
       min_amount: { default: 100 } # USD 1.00, as on the PHA route
@@ -327,9 +397,13 @@ routes:
       # range. The USDC route still puts the whole chain in address mode (architecture §8).
       backstop: token
 
-    pricing:
-      mode: stablecoin # credited at 1.00 while Coin Metrics' USDT reference rate is within 1% of it
-      primary: { source: coinmetrics, asset: usdt }
+    price:
+      mode: stablecoin
+      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      sources:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+        - { source: kraken, symbol: USDTUSD, company: kraken }
+      peg_band_bps: 100
 
     merchant:
       min_amount: { default: 100 } # USD 1.00, as on the PHA route

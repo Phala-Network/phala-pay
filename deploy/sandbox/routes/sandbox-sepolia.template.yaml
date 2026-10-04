@@ -23,9 +23,12 @@ asset:
   decimals: 18
   backstop: token
 
-pricing:
-  primary: { source: coinmetrics, asset: pha }
-  check: { source: binance, symbol: PHAUSDT }
+price:
+  mode: volatile
+  allow_unclear_sources: true # staging only; production refuses Unclear sources
+  primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
+  check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+  fx: [{ source: kraken, symbol: USDTUSD, company: kraken }]
 
 merchant:
   min_amount: { default: 100 }

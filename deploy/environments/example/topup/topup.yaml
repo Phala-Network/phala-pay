@@ -61,9 +61,13 @@ routes:
       contract: "0x8F40e7E99678F44c88158f049E62817580ab113B"
       decimals: 18
       backstop: token
-    pricing:
-      primary: { source: coinmetrics, asset: pha }
-      check: { source: binance, symbol: PHAUSDT }
+    price:
+      mode: volatile
+      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
+      check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+      fx: [{ source: kraken, symbol: USDTUSD, company: kraken }]
+
     merchant:
       min_amount: { default: 100 }
       max_deposit_atomic: { default: "200000000000000000000000" }

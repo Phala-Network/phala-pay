@@ -48,6 +48,36 @@ mod tests {
     }
 
     #[test]
+    fn old_route_migrates_but_restricted_source_cannot_be_enabled() {
+        let legacy = include_str!("../tests/fixtures/legacy-price-route.yaml");
+        let route: RouteFile = serde_saphyr::from_str(legacy).expect("migration parser");
+        let resolved = resolved_json(&route).expect("resolved migration");
+        assert!(resolved.contains("\"price\""));
+        assert!(!resolved.contains("\"pricing\""));
+        assert_eq!(route.pricing.primary.len(), 1);
+        assert_eq!(route.pricing.check.len(), 1);
+        assert_eq!(route.pricing.fx.len(), 1);
+        assert!(
+            route
+                .validate()
+                .expect_err("restricted source")
+                .to_string()
+                .contains("price")
+        );
+        let migrated = legacy.replace("source: coinmetrics", "source: kraken");
+        let mut route: RouteFile = serde_saphyr::from_str(&migrated).expect("exchange migration");
+        route.pricing.allow_unclear_sources = true;
+        assert!(route.validate().is_ok());
+        assert!(route.pricing.validate_licensing(false).is_err());
+        assert_eq!(
+            parse_and_validate(&resolved_json(&route).unwrap(), false),
+            Ok(route)
+        );
+        let mixed = format!("{legacy}\nprice: {{mode: stablecoin}}\n");
+        assert!(serde_saphyr::from_str::<RouteFile>(&mixed).is_err());
+    }
+
+    #[test]
     fn valid_fixture_parses_and_validates() {
         parse_and_validate(VALID, false).expect("valid fixture must pass");
     }
@@ -85,12 +115,11 @@ mod tests {
             usdt.pricing.mode,
             topup_core::route::PricingMode::Stablecoin
         );
-        assert_eq!(
-            (
-                usdt.pricing.primary.source.as_str(),
-                usdt.pricing.primary.asset.as_str()
-            ),
-            ("coinmetrics", "usdt")
+        assert!(
+            usdt.pricing
+                .sources
+                .iter()
+                .all(|s| s.asset() == usdt.asset.symbol)
         );
         assert_eq!(usdt.merchant.quote_spread_bps.default.value(), 0);
     }
@@ -109,15 +138,8 @@ mod tests {
             "0x49f2f1f1a25269ea0c6ff2ab1c7b09dcbe9c5ba9"
         );
         assert_eq!(route.chain.rpc_providers, ["provider-a", "provider-b"]);
-        let check = route
-            .pricing
-            .check
-            .as_ref()
-            .expect("spot route has a check");
-        assert_eq!(
-            (check.fx.source.as_str(), check.fx.pair.as_str()),
-            ("kraken", "USDT/USD")
-        );
+        assert_eq!(route.pricing.check[0].company(), "binance");
+        assert_eq!(route.pricing.fx[0].asset(), "usdt");
         assert!(route.merchant.min_deposit_atomic.default.value().is_zero());
         assert_eq!(route.merchant.quote_ttl_seconds.default, 900);
         assert_eq!(route.merchant.quote_spread_bps.default.value(), 50);
@@ -142,14 +164,13 @@ mod tests {
             usdc.pricing.mode,
             topup_core::route::PricingMode::Stablecoin
         );
-        assert_eq!(
-            (
-                usdc.pricing.primary.source.as_str(),
-                usdc.pricing.primary.asset.as_str()
-            ),
-            ("coinmetrics", "usdc")
+        assert!(
+            usdc.pricing
+                .sources
+                .iter()
+                .all(|s| s.asset() == usdc.asset.symbol)
         );
-        assert_eq!(usdc.pricing.check, None);
+        assert!(usdc.pricing.check.is_empty());
         assert_eq!(
             usdc.merchant.quote_spread_bps.default.value(),
             0,
@@ -185,14 +206,13 @@ mod tests {
                 usdt.pricing.mode,
                 topup_core::route::PricingMode::Stablecoin
             );
-            assert_eq!(
-                (
-                    usdt.pricing.primary.source.as_str(),
-                    usdt.pricing.primary.asset.as_str()
-                ),
-                ("coinmetrics", "usdt")
+            assert!(
+                usdt.pricing
+                    .sources
+                    .iter()
+                    .all(|s| s.asset() == usdt.asset.symbol)
             );
-            assert_eq!(usdt.pricing.check, None);
+            assert!(usdt.pricing.check.is_empty());
             assert_eq!(usdt.merchant.quote_spread_bps.default.value(), 0);
             assert_eq!(
                 (
@@ -303,7 +323,7 @@ mod tests {
         assert!(
             parse_and_validate(&not_usdt, false)
                 .expect_err("a non-USDT market needs its FX leg")
-                .contains("pricing.check.fx")
+                .contains("price")
         );
     }
 
@@ -486,28 +506,12 @@ mod tests {
     }
 
     #[test]
-    fn pricing_mode_defaults_to_spot_and_stablecoin_may_omit_check() {
-        let route = parse_and_validate(VALID, false).expect("valid fixture");
+    fn volatile_requires_two_roles_and_stablecoin_forbids_them() {
+        let mut route = parse_and_validate(VALID, false).expect("valid fixture");
         assert_eq!(route.pricing.mode, topup_core::route::PricingMode::Spot);
-        assert_eq!(
-            route.pricing.max_fx_deviation_bps.map(|bps| bps.value()),
-            Some(50)
-        );
-
-        let stablecoin = VALID.replacen(
-            "  check: { source: binance, symbol: PHAUSDT }\n",
-            "  mode: stablecoin\n",
-            1,
-        );
-        let route = parse_and_validate(&stablecoin, false).expect("stablecoin check is optional");
-        assert_eq!(route.pricing.max_fx_deviation_bps, None);
-
-        let spot_without_check =
-            VALID.replacen("  check: { source: binance, symbol: PHAUSDT }\n", "", 1);
-        assert!(
-            parse_and_validate(&spot_without_check, false)
-                .expect_err("spot check must be required")
-                .contains("pricing.check")
-        );
+        route.pricing.check.clear();
+        assert!(route.validate().is_err());
+        route.pricing.mode = topup_core::route::PricingMode::Stablecoin;
+        assert!(route.validate().is_err());
     }
 }

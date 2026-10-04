@@ -1598,6 +1598,12 @@ async fn the_client_view_reports_the_credit_of_a_spot_valued_underpayment() -> R
         seed::set_treasury(pool, product.id, true, BASE, seed::FIXTURE_TREASURY).await?;
         let mut route = test_route();
         route.chain.chain_id = BASE;
+        route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
+            feed: "BASE_SEQUENCER_UPTIME".into(),
+            grace_s: 3600,
+            rpc_group: "a".into(),
+            rpc_group_b: "b".into(),
+        });
         route.chain.confirmations = topup_core::route::ChainFamily::OpStack.default_confirmations();
         seed::accept_routes(pool, product.id, true, &[&route]).await?;
         let admin_key = SigningKey::from_bytes(&[44; 32]);

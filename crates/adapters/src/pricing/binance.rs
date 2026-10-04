@@ -22,6 +22,9 @@ pub struct Binance {
 impl Binance {
     /// Creates a source for one Binance market symbol.
     pub fn new(symbol: String) -> Result<Self, PriceError> {
+        if symbol != "PHAUSDT" {
+            return Err(PriceError::MalformedResponse("symbol"));
+        }
         Ok(Self {
             client: http_client()?,
             endpoint: Redacted::parse(ENDPOINT).map_err(|_| PriceError::InvalidUrl)?,
@@ -29,7 +32,7 @@ impl Binance {
         })
     }
 
-    fn parse_response(&self, body: &[u8]) -> Result<Observation, PriceError> {
+    pub(super) fn parse_response(&self, body: &[u8]) -> Result<Observation, PriceError> {
         let response: Response =
             serde_json::from_slice(body).map_err(|_| PriceError::MalformedResponse("body"))?;
         if response.symbol != self.symbol {
@@ -46,6 +49,7 @@ impl Binance {
 #[async_trait]
 impl PriceSource for Binance {
     async fn observe(&self) -> Result<Observation, PriceError> {
+        super::admit("binance").await;
         let response = self
             .client
             .get(self.endpoint.expose().clone())

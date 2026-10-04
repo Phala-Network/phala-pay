@@ -211,6 +211,12 @@ fn routes_confirmations(
     let mut route: RouteFile =
         serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml"))?;
     route.chain.chain_id = CHAIN;
+    route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
+        feed: "BASE_SEQUENCER_UPTIME".into(),
+        grace_s: 3600,
+        rpc_group: "a".into(),
+        rpc_group_b: "b".into(),
+    });
     route.livemode = false;
     route.chain.confirmations = confirmations;
     route.chain.rpc_providers = vec![a.id.clone(), b.id.clone()];

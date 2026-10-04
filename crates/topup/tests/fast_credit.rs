@@ -988,6 +988,14 @@ impl FastChain {
                     &format!("{token:#x}"),
                 ),
         )?;
+        if matches!(chain_id, 8453 | 84532) {
+            route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
+                feed: "BASE_SEQUENCER_UPTIME".into(),
+                grace_s: 3600,
+                rpc_group: "a".into(),
+                rpc_group_b: "b".into(),
+            });
+        }
         route.chain.confirmations = network.confirmations;
         route.asset.decimals = 2;
         route.asset.quote_amount_decimals = 2;
@@ -1014,7 +1022,7 @@ impl FastChain {
             route.clone(),
             reader(&anvil.rpc_url)?,
             secondary(&anvil.rpc_url)?,
-            price("coinmetrics", 10_000_000),
+            price("kraken", 10_000_000),
             Some(price("binance", 10_000_000)),
             Some(price("kraken", 100_000_000)),
         );

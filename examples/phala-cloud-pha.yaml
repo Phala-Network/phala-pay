@@ -20,13 +20,13 @@ asset:
   decimals: 18
   backstop: token                  # `token` for few transfers per block (PHA); `addresses` for busy tokens such as USDC
 
-pricing:
-  primary: { source: coinmetrics, asset: pha }
-  check:   { source: binance, symbol: PHAUSDT } # FX leg: Kraken USDT/USD
+price:
+  mode: volatile
+  allow_unclear_sources: true # staging only; production refuses Unclear sources
+  primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
+  check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+  fx: [{ source: kraken, symbol: USDTUSD, company: kraken }]
 
-# Each account's terms on this route: the operator's default, and the bounds an account's payment
-# settings stay within (docs/design/payment-settings.md §5). A bound left out keeps the account at
-# the default, except the quote window (30 to 3600 s) and the spread and tolerance (0 to 500 bps).
 merchant:
   min_amount: { default: 100 } # USD 1.00; smaller deposits are rejected below_minimum
   max_deposit_atomic: { default: "200000000000000000000000" } # 200,000 PHA (pilot bound; product enforces its own caps too)

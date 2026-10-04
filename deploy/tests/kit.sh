@@ -23,7 +23,9 @@ tar -xzf "$tmp/dist/phala-pay-deploy-$version.tar.gz" -C "$operator/kit" --strip
 kit="$operator/kit"
 cp -r "$kit/deploy/environments/example/topup" "$operator/production/topup"
 env_dir="$operator/production/topup"
-sed -i -e 's|pay-api.example.com|pay-api.operator.test|' \
+# Rehearse the example under an explicit staging licensing opt-in. Production stays gated.
+sed -i -e 's|environment: production|environment: staging|' \
+    -e 's|pay-api.example.com|pay-api.operator.test|' \
     -e 's|11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=|23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=|' \
     "$env_dir/topup.yaml"
 sed -i -e 's|s3://BUCKET/PATH|s3://operator-backups/production|' \
@@ -63,6 +65,6 @@ ENV
 kit/deploy/preflight.sh --env .env.production --compose docker-compose.production.yml \
     --environment-dir production/topup --offline >"$tmp/preflight.out" 2>&1 ||
     { cat "$tmp/preflight.out" >&2; fail "the kit's preflight refused the operator's environment"; }
-kit/deploy/check-route-modes.sh production docker-compose.production.yml >/dev/null ||
+kit/deploy/check-route-modes.sh staging docker-compose.production.yml >/dev/null ||
     fail "the kit's route-mode check refused the operator's routes"
 echo "deploy kit test passed"

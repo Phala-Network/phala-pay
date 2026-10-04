@@ -27,13 +27,14 @@ asset:
   decimals: 6
   backstop: addresses              # many transfers per block: requests by recipient (architecture §8)
 
-pricing:
-  mode: stablecoin                 # credited at 1.00 while Coin Metrics' USDT reference rate is within 1% of it
-  primary: { source: coinmetrics, asset: usdt }
+price:
+  mode: stablecoin
+  allow_unclear_sources: true # staging only; production refuses Unclear sources
+  sources:
+    - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: a }
+    - { source: kraken, symbol: USDTUSD, company: kraken }
+  peg_band_bps: 100
 
-# Each account's terms on this route: the operator's default, and the bounds an account's payment
-# settings stay within (docs/design/payment-settings.md §5). A bound left out keeps the account at
-# the default, except the quote window (30 to 3600 s) and the spread and tolerance (0 to 500 bps).
 merchant:
   min_amount: { default: 100 } # USD 1.00; smaller deposits are rejected below_minimum
   max_deposit_atomic: { default: "10000000000" } # 10,000 USDT (pilot bound; product enforces its own caps too)

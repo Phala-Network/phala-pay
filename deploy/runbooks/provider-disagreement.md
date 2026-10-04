@@ -14,14 +14,19 @@ deposit at once.
    `stage: "finality"` with `error` `rpc_disagreement`, `rpc_failure`, `recipient_mismatch`, or
    `log_absent_at_finality`; `stage: "valuation"` (a price failure: [Price outage](price-outage.md));
    or, in `confirmed`, the oracle answers of `provider_a` and `provider_b`.
-2. Compare the providers:
+2. For price evidence, compare every observation's source/company/role, scaled price, age,
+   round, heartbeat and decision in the deposit timeline. Chainlink A/B disagreement halts;
+   no role may fail over to conceal a fresh conflicting answer. Any fresh stablecoin depeg
+   halts even when another source agrees with one dollar. Mainnet observations on test routes
+   must carry the explicit route-chain marker; check Base sequencer status and recovery grace.
+3. Compare the chain providers:
 
    ```sh
    cast block finalized --json --rpc-url "$RPC_PROVIDER_A_URL" | jq '(.data // .) | {number,hash}'
    cast block finalized --json --rpc-url "$RPC_PROVIDER_B_URL" | jq '(.data // .) | {number,hash}'
    ```
 
-3. For chain-evidence disagreement only, pause settlement on the route (not for a sanctions hit):
+4. For chain-evidence disagreement only, pause settlement on the route (not for a sanctions hit):
 
    ```sh
    admin POST "/v1/admin/routes/$ROUTE/pause" '{"scopes":["settlement"]}'
@@ -43,7 +48,9 @@ deposit at once.
 ## Fix
 
 Open provider incidents with the exact block and log evidence. Replacing a provider is a route
-config change and Deploy `upgrade`.
+config change and Deploy `upgrade`. Price-source replacement also needs a Legal **Allowed**
+verdict in the attested registry and disjoint primary/check companies. Never override a price
+or substitute another endpoint of the same company. After repair, observe two policy windows.
 
 ## Done when
 

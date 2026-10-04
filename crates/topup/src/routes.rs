@@ -17,6 +17,7 @@ use crate::rpc_provider::{ProviderUrl, environment_key, provider_label};
 #[derive(Debug, Default)]
 pub struct RouteSet {
     routes: Vec<RouteFile>,
+    groups: BTreeMap<String, Arc<EvmClient>>,
     current: BTreeMap<(u64, Address), usize>,
     chains: BTreeMap<u64, ChainEntry>,
 }
@@ -110,6 +111,7 @@ impl RouteSet {
         })?;
         Ok(Self {
             routes,
+            groups: clients,
             current,
             chains,
         })
@@ -119,6 +121,29 @@ impl RouteSet {
     /// secret: the validation `topup config check` shares with the service.
     pub fn check(routes: &[RouteFile]) -> Result<(), String> {
         index(routes, |_| Vec::new()).map(drop)
+    }
+
+    /// Shared clients including observation-only mainnet groups.
+    pub fn groups(&self) -> &BTreeMap<String, Arc<EvmClient>> {
+        &self.groups
+    }
+    /// Resolves explicit observation groups or route A/B roles.
+    pub fn price_group(&self, route: &RouteFile, id: &str) -> Result<Arc<EvmClient>, String> {
+        match id {
+            "a" => self
+                .provider(route.chain.chain_id, 0)
+                .cloned()
+                .map_err(|e| e.to_string()),
+            "b" => self
+                .provider(route.chain.chain_id, 1)
+                .cloned()
+                .map_err(|e| e.to_string()),
+            _ => self
+                .groups
+                .get(id)
+                .cloned()
+                .ok_or_else(|| format!("price RPC group {id} missing")),
+        }
     }
 
     fn from_resolver(
@@ -137,6 +162,7 @@ impl RouteSet {
         })?;
         Ok(Self {
             routes,
+            groups: BTreeMap::new(),
             current,
             chains,
         })
@@ -358,6 +384,7 @@ mod tests {
             confirmations.map_or_else(String::new, |value| format!("  confirmations: {value}\n"));
         serde_saphyr::from_str(
             &include_str!("../tests/fixtures/phala-cloud-pha.yaml")
+                .replace("price:\n", "price:\n  sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: a, rpc_group_b: b }\n")
                 .replace("chain_id: 1\n", "chain_id: 8453\n")
                 .replace("phala-cloud-ethereum-pha-usd", route)
                 .replace("  confirmations: finalized\n", &written)

@@ -32,7 +32,7 @@ impl ConfigFile {
         std::fs::write(
             &path,
             format!(
-                "environment: test\npublic_origin: {origin}\nadmin_key:\n  id: admin/v1\n  \
+                "environment: staging\npublic_origin: {origin}\nadmin_key:\n  id: admin/v1\n  \
                  public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n{rpc}\nroutes:\n  -\n{route}\n",
             rpc=include_str!("fixtures/rpc-groups.yaml")
             ),

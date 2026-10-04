@@ -36,7 +36,7 @@ is in [design/deploy-config.md](design/deploy-config.md).
 One YAML file, parsed with unknown fields refused, holds every public setting of a deployment:
 
 ```yaml
-environment: staging                       # the Sentry environment: a tag, never a policy input
+environment: staging                       # the Sentry environment: also gates staging-only price licensing opt-in
 public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1                     # the key id admin requests sign with
@@ -178,3 +178,42 @@ it. `topup restore-check` requires stopped writers and the database owner: it va
 runs reconciliation, and may repair the ledger. The
 [restore guide](../deploy/RESTORE.md) and the
 [reconciliation runbook](../deploy/runbooks/restore.md) have the steps.
+
+## Price sources
+
+Routes use `price:` with explicit `mode: volatile` or `mode: stablecoin`. Stablecoins require
+`sources` and forbid role lists. A source set must cover USDC and USDT or explicitly configure
+an Ethereum-mainnet fallback for the route asset. Runtime uses only that asset's observations;
+another stablecoin's price cannot authorize its credit. Volatile assets require ordered `primary`, `check`, and `fx`
+lists, with disjoint primary/check company identities. PHA uses Kraken `PHAUSD` and Binance
+`PHAUSDT` with fresh, peg-checked USDT/USD normalization. Missing either company pauses PHA.
+
+Source descriptors are `source: kraken`/`binance`, `symbol`, and the canonical `company`, or
+`source: chainlink`, `feed`, `chain_id`, `rpc_group`, and an independent `rpc_group_b` for explicit
+cross-network groups. Role ids `a`/`b` resolve the route's groups. Testnet mainnet observations
+also require `observation_chain_id` equal to the test route chain. Supported pinned feeds are
+USDC_USD and USDT_USD on Ethereum (1) and Base (8453). See the
+[feed evidence](design/price-feed-registry.json) and [accepted design](design/price-failover.md).
+
+Base and Base Sepolia require `sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600,
+rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }`. Observation-only groups use existing
+shared RPC budgets, counted transports, independent company validation, and recovery probes;
+they do not scan payment contracts. Staging includes `mainnet-a`/`mainnet-b` (chain 1) for price
+feeds and `base-mainnet-a`/`base-mainnet-b` (8453) for uptime. Feed addresses and heartbeat values
+are pinned in the image; operators configure group references, not arbitrary feed addresses.
+
+All new provider verdicts are currently Unclear, pending Phala Legal. Production config checks
+refuse them. Only explicit non-production environments (`staging`, `testnet`, `local`, `sandbox`) and route
+`allow_unclear_sources: true` opt in for rehearsal;
+Restricted sources are always refused. Deploy's production target also refuses a staging opt-in
+regardless of the reporting environment label. Mainnet examples intentionally cannot enable production
+before an attested Legal-approved registry change. `topup config check` prints ordered source
+lists, verdicts, pinned feed metadata and testnet markers; `config show` emits resolved `price`.
+
+For one migration window the parser accepts old `pricing.primary` and `pricing.check` shapes,
+maps each to a one-item role list and the FX leg to `fx`, and emits only `price`. Mixing old and
+new sections is rejected. Coin Metrics migrates as restricted evidence and fails validation:
+replace it explicitly with Kraken PHAUSD or the configured stablecoin mainnet/exchange sources.
+Add an independent check and FX for volatile assets; do not reduce the source count. Existing
+route versions and RPC bindings are retained. Release this breaking schema in the next minor
+version; rollback requires the previous compatible image and its configuration.

@@ -202,6 +202,13 @@ fn groups(routes: &RouteSet) -> Result<Groups<'_>, String> {
             }
         }
     }
+    for (id, client) in routes.groups() {
+        if let Some(group) = client.group() {
+            result
+                .entry(id.clone())
+                .or_insert_with(|| (group.clone(), Vec::new()));
+        }
+    }
     Ok(result)
 }
 /// First acceptance needs one fully verified member in each group; offline backups do not veto it.

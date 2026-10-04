@@ -584,6 +584,7 @@ async fn the_public_view_states_each_networks_credit_time() -> Result<()> {
             let mut base = fixture.other_route.clone();
             base.route = "phala-cloud-base-pha-usd".to_owned();
             base.chain.chain_id = BASE;
+            base.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {feed:"BASE_SEQUENCER_UPTIME".into(),grace_s:3600,rpc_group:"a".into(),rpc_group_b:"b".into()});
             base.chain.confirmations = ChainFamily::OpStack.default_confirmations();
             let fixture = fixture.with_routes(vec![ethereum, base, fixture.test_route.clone()])?;
             let (object, secret) = fixture
@@ -978,7 +979,7 @@ impl Fixture {
                 .replace("chain_id: 1", &format!("chain_id: {TEST_CHAIN}"))
                 .replace("livemode: true", "livemode: false"),
         )?;
-        let usdc_route: RouteFile = serde_saphyr::from_str(
+        let mut usdc_route: RouteFile = serde_saphyr::from_str(
             &include_str!("fixtures/phala-cloud-pha.yaml")
                 .replace(
                     "route: phala-cloud-ethereum-pha-usd",
@@ -987,6 +988,23 @@ impl Fixture {
                 .replace("symbol: pha", "symbol: usdc")
                 .replace("0x6c5bA91642F10282b576d91922Ae6448C9d52f4E", USDC),
         )?;
+        usdc_route.pricing.mode = topup_core::route::PricingMode::Stablecoin;
+        usdc_route.pricing.primary.clear();
+        usdc_route.pricing.check.clear();
+        usdc_route.pricing.fx.clear();
+        usdc_route.pricing.sources = vec![
+            topup_core::price::Source::Chainlink {
+                feed: "USDC_USD".into(),
+                chain_id: 1,
+                rpc_group: "a".into(),
+                rpc_group_b: None,
+                observation_chain_id: None,
+            },
+            topup_core::price::Source::Kraken {
+                symbol: "USDCUSD".into(),
+                company: "kraken".into(),
+            },
+        ];
         let other_route: RouteFile = serde_saphyr::from_str(
             &include_str!("fixtures/phala-cloud-pha.yaml")
                 .replace(

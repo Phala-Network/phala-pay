@@ -50,8 +50,8 @@ struct AdminKeySpec {
 /// A validated service configuration.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// The deployment's name, reported to Sentry (`<environment>-restore` while read-only). A tag
-    /// only: no deployment policy reads it.
+    /// The deployment's name, reported to Sentry (`<environment>-restore` while read-only). Explicit non-production names
+    /// permit staging-only price opt-in; every other name requires Allowed licensing.
     pub environment: String,
     /// The API's one public origin: admin signatures and treasury challenges name it. `None` when
     /// `topup run` takes it from its environment.
@@ -151,6 +151,15 @@ impl Config {
             return Err("routes must list at least one route".to_owned());
         }
         RouteSet::check(&spec.routes)?;
+        for route in &spec.routes {
+            route
+                .pricing
+                .validate_licensing(matches!(
+                    spec.environment.as_str(),
+                    "staging" | "testnet" | "local" | "sandbox"
+                ))
+                .map_err(|e| e.to_string())?;
+        }
 
         Ok(Self {
             environment: spec.environment,
@@ -450,7 +459,15 @@ mod tests {
         }
         assert!(files.len() >= 2, "{files:?}");
         for file in files {
-            Config::load(&file).unwrap_or_else(|error| panic!("{error}"));
+            if file.components().any(|c| c.as_os_str() == "example") {
+                assert!(
+                    Config::load(&file)
+                        .unwrap_err()
+                        .contains("Allowed licensing")
+                );
+            } else {
+                Config::load(&file).unwrap_or_else(|error| panic!("{error}"));
+            }
         }
     }
 

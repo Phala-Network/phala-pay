@@ -28,7 +28,7 @@ Every mechanism follows a named practice. Where this design adapts a practice, t
 | Contract roles | None: public `flush` (BitGo's `flush()`), per-target failure isolation (Multicall3 `allowFailure`) | — |
 | Rate-locked deposits | Invoice model (BTCPay Server, Coinbase Commerce): unique address, fixed amount, expiry | Exception rules (§9) are this service's policy profile, not a processor standard |
 | Chain reads | JSON-RPC `latest`, `safe`, and `finalized` tags, `eth_getLogs`, receipts, two independent providers | Credit at a confirmation depth like exchanges and BTCPay's confirmation setting; watch to finality |
-| Price | Coin Metrics Reference Rate (benchmark methodology), checked against the deepest market | — |
+| Price | Chainlink and independent public exchange observations | — |
 | Sanctions | Chainalysis sanctions oracle `isSanctioned(address)` | Direct list screening only; not KYT |
 | Deposit identity | UUIDv5 (RFC 9562) over `chain_id:lowercase_tx_hash:decimal_receipt_log_index`; reorg handling as in chain indexers: the orphaned record is rolled back and the canonical log indexed as a new record | The log's position in its transaction's receipt, which survives re-inclusion. The position does not fix the content: when another transfer is final at a reversed deposit's position, it is a new deposit with the next revision, `…:decimal_revision`, that `replaces` it (§7) |
 | Reversal | Etherscan "Dropped & Replaced", ethers `TRANSACTION_REPLACED`; Stripe's dispute after a failed ACH payment | A proven-dropped deposit becomes `reversed` and `deposit.reversed` |
@@ -247,7 +247,7 @@ flowchart TB
 
 ```text
 crates/core       pure, no I/O: money, route schema, CREATE2 math, state machine, valuation, screening
-crates/adapters   chain::evm, signer::dstack, pricing::{coinmetrics,binance,kraken}, risk::oracle
+crates/adapters   chain::evm, signer::dstack, pricing::{chainlink,binance,kraken}, risk::oracle
 crates/topup      binary: db, pump, scanner, finality, outbox, reconciler, api, cli
 contracts/        Forwarder.sol, ForwarderFactory.sol, deploy scripts, Foundry tests
 deploy/           compose, deployment scripts, runbooks; deploy/environments: each deployment's attested settings and routes
@@ -655,13 +655,19 @@ detection and one receipt per provider at credit and at finality (below, and §7
 read only for specific deposits.
 
 **Valuation** happens inside the confirm step, so `valuation_at` is the confirmation
-observation and the price is always current at fetch time. Every route's pricing configuration declares
-`mode: spot | stablecoin`; the service never infers the mode from an asset symbol. Spot: primary
-Coin Metrics `ReferenceRateUSD` (1-minute), check Binance `PHAUSDT` × Kraken `USDT/USD`; each
-observation aged ≤ `max_age` *(policy)* at fetch; `|primary − check| / primary ≤
-max_deviation_bps / 10 000`; FX within `max_fx_deviation_bps`; the primary is used. Any failure
-retries the whole step. Stablecoin routes use fixed `1.0` with the primary reference rate as a
-depeg guard; check and FX observations are not required for that mode.
+observation and the price uses current validated evidence. Routes declare `price.mode:
+volatile | stablecoin`. PHA uses Kraken PHA/USD and independent Binance PHAUSDT normalized
+with a fresh, peg-checked USDT/USD FX observation. Ordered role failover advances only on
+unavailable, stale or malformed data; disagreement halts. Primary/check company sets are disjoint.
+Stablecoins credit exactly one dollar iff a fresh source is within the peg band and no fresh
+source is outside it. All source observations and the decision are audited.
+
+Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, complete positive
+rounds and independent RPC A/B agreement. Base additionally gates on the sequencer uptime
+feed with recovery grace. Test tokens explicitly observe configured mainnet groups. Licensing
+verdicts are compiled into the attested provider registry: only Allowed can run in production;
+`environment: staging` plus an explicit route opt-in permits Unclear sources for rehearsal.
+See [price failover](design/price-failover.md) and [configuration](configuration.md#price-sources).
 
 **Screening** is direct sanctions-list screening plus per-deposit bounds. KYC, KYT, and the Travel
 Rule are not part of the software: they are the operator's and the merchant's responsibility (§15).
@@ -1495,8 +1501,8 @@ defaulted addresses from it. The defaults and why:
 | `chain.sanctions_oracle` | the Chainalysis oracle published for the chain (Ethereum and most EVM chains `0x40C5…aC8fb`, Base `0x3A91…D739B`); required on any other chain, such as Sepolia |
 | `chain.rpc_groups` | required explicit `{ a: group-a, b: group-b }`; the attested `rpc_groups` registries contain reviewed company-disjoint member pools, URL/key references and bounded selection policies ([RPC configuration](configuration.md#the-configuration-file), [runbook](../deploy/RPC.md)) |
 | `asset.backstop` | `token`: every transfer of the token is requested and kept locally, one request per block range whatever the address count; `addresses` for a token with many transfers per block, such as USDC (§8) |
-| `pricing.mode`, `pricing.check.fx` | `spot`; Kraken `USDT/USD` for a USDT-quoted market, required otherwise |
-| `pricing.max_age_s`, `max_deviation_bps`, `max_fx_deviation_bps` | 120 (two Coin Metrics intervals), 100, 50 |
+| `price.mode`, role lists | explicit `volatile` or `stablecoin`; no implicit providers |
+| `price.max_age_s`, `peg_band_bps`, `max_deviation_bps`, `max_fx_deviation_bps` | 90, 100, 100, 100; Chainlink uses its pinned heartbeat + 60 s |
 | `merchant.min_amount`, `max_deposit_atomic`, `min_refund_atomic` | the default is required; an account may raise the minimum credit and lower the maximum deposit, and keeps the refund floor unless the operator sets `min` and `max` |
 | `merchant.min_deposit_atomic` | 0, which an account may raise: `min_amount` rejects dust *(policy: finance confirms before production)* |
 | `merchant.quote_ttl_seconds`, `quote_spread_bps`, `quote_tolerance_bps` | defaults 900, 50, 100; bounds 30 to 3 600 seconds and 0 to 500 basis points. The code refuses an operator bound above 86 400 seconds, a spread above 5 000, or a tolerance above 1 000 basis points |
@@ -1534,8 +1540,8 @@ aggregated through the canonical Multicall3 (`0xcA11bde05977b3631167028862bE2a17
 calldata and gas), at the block each read needs (`finalized` for custody reconciliation). They
 never use JSON-RPC batches, which public providers throttle far below their single-request limits
 (Tenderly's public gateway refuses a batch of more than five `eth_call`s), nor one request per
-address, which grows with every address ever issued. The price scale (8) and the Coin Metrics
-metric (`ReferenceRateUSD`, 1m) are fixed by §8 and §11, not configured.
+address, which grows with every address ever issued. The price scale (8) is fixed by §8 and §11;
+Chainlink feed metadata is pinned in the attested provider registry, not configured at runtime.
 
 ```yaml
 services:

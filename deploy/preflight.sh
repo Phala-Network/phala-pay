@@ -130,7 +130,7 @@ if [[ -z "${TOPUP:-}" ]] && ! docker image inspect "$topup_image" >/dev/null 2>&
     fail "the pinned image is not present locally; docker pull $topup_image, then run preflight again"
 elif topup config check "${sentry_args[@]}" "${secrets[@]}" >"$tmp/check.out" 2>&1 &&
     topup config show >"$tmp/config.json" 2>"$tmp/show.err"; then
-    ok "$(tail -n 1 "$tmp/check.out")"
+    ok "$(head -n 1 "$tmp/check.out")"
 else
     fail "topup config check refused the configuration: $(tool_error "$tmp/check.out")"
 fi
