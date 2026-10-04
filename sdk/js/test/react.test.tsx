@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { createWalletClient, custom, encodeFunctionResult, erc20Abi } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +34,23 @@ async function renderCheckout(props: Partial<Parameters<typeof Checkout>[0]> = {
   await screen.findByText("Waiting for your payment");
   return view;
 }
+
+it("shows neutral reconnecting while preserving checkout details for a three-minute outage", async () => {
+  let online = true;
+  vi.stubGlobal("fetch", () => online ? Promise.resolve(Response.json(served)) : Promise.resolve(new Response("Bad Gateway", { status: 502 })));
+  const { container } = await renderCheckout();
+  fireEvent.click(screen.getByRole("tab", { name: "Manual transfer" }));
+  const address = container.querySelector(".pp-fields")?.textContent;
+  expect(address).toContain(ADDRESS);
+  online = false;
+  await act(() => vi.advanceTimersByTimeAsync(180000));
+  expect(screen.getByRole("status").textContent).toContain("reconnecting…");
+  expect(container.querySelector(".pp-status")?.getAttribute("data-tone")).toBe("neutral");
+  expect(container.querySelector(".pp-fields")?.textContent).toBe(address);
+  online = true;
+  await act(() => vi.advanceTimersByTimeAsync(30000));
+  expect(screen.getByRole("status").textContent).not.toContain("reconnecting");
+});
 
 /** A browser wallet on the quote's chain whose account holds `balance` of the token; it records
  * the methods called. */

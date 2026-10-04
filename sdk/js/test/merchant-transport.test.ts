@@ -36,6 +36,59 @@ describe("merchant transport", () => {
   });
   const transport = (fetch: typeof globalThis.fetch, options = {}) =>
     new Transport({ apiKey, apiBase: pins.api_base, fetch, ...options });
+  for (const method of ["GET", "POST"]) {
+    it(`rides out a three-minute upgrade for ${method} with one key and body`, async () => {
+      const started = performance.now();
+      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(() => {
+        const elapsed = performance.now() - started;
+        if (elapsed < 5000)
+          return Promise.resolve(errorResponse(503, "service_maintenance", { "retry-after": "5" }));
+        if (elapsed < 60000) return Promise.reject(new TypeError("connection refused"));
+        if (elapsed < 180000) return Promise.resolve(new Response("Bad Gateway", { status: 502 }));
+        return Promise.resolve(jsonResponse({ ok: true }));
+      });
+      const promise = transport(fetch, { upgradeTolerance: true }).request(method, "/v1/quotes", { value: 42 });
+      const assertion = expect(promise).resolves.toEqual({ ok: true });
+      await vi.advanceTimersByTimeAsync(179999);
+      expect(fetch.mock.calls.length).toBeGreaterThan(10);
+      expect(performance.now() - started).toBeLessThan(180000);
+      await vi.advanceTimersByTimeAsync(10001);
+      await assertion;
+      if (method === "POST") {
+        expect(new Set(fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("idempotency-key"))).size).toBe(1);
+        expect(new Set(fetch.mock.calls.map(([, init]) => init?.body))).toEqual(new Set(['{"value":42}']));
+      }
+    });
+  }
+  it("bounds upgrade retries at five minutes", async () => {
+    const started = performance.now();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response("down", { status: 503 }));
+    const assertion = expect(transport(fetch, { upgradeTolerance: true }).request("GET", "/v1/config", undefined)).rejects.toBeInstanceOf(TransportError);
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(performance.now() - started).toBeLessThanOrEqual(300000);
+    expect(performance.now() - started).toBeGreaterThan(290000);
+  });
+  it("keeps explicit deadlines and cancellation effective during upgrades", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new TypeError("offline"));
+    const assertion = expect(transport(fetch, { upgradeTolerance: true }).request("GET", "/v1/config", undefined, { requestDeadlineMs: 2000 })).rejects.toBeInstanceOf(TransportError);
+    await vi.runAllTimersAsync();
+    await assertion;
+    const controller = new AbortController();
+    const pending = transport(fetch, { upgradeTolerance: true }).request("GET", "/v1/config", undefined, { signal: controller.signal });
+    const cancelled = expect(pending).rejects.toMatchObject({ code: "cancelled" });
+    await vi.advanceTimersByTimeAsync(100);
+    controller.abort();
+    await cancelled;
+  });
+  it("does not prolong DELETE or replayed execution failures", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(errorResponse(503, "service_maintenance", { "idempotent-replayed": "true" }));
+    await expect(transport(fetch, { upgradeTolerance: true }).request("POST", "/v1/quotes", {})).rejects.toBeInstanceOf(ApiError);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    fetch.mockClear().mockRejectedValue(new TypeError("offline"));
+    await expect(transport(fetch, { upgradeTolerance: true }).request("DELETE", "/v1/test", undefined)).rejects.toBeInstanceOf(TransportError);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   for (const vector of scenarios)
     it(`shared fixture: ${vector.name}`, async () => {
       const fetch = vi.fn<typeof globalThis.fetch>();

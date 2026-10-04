@@ -80,6 +80,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let app = topup::api::router(AppState {
         pool: pool.clone(),
         routes: Arc::clone(&route_set),
+        maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(
             "admin/v1".to_owned(),
             &public_key_base64(&admin_key),

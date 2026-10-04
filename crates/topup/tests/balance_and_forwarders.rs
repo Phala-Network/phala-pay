@@ -414,6 +414,7 @@ impl Fixture {
                 topup::routes::RouteSet::new(vec![self.route.clone()])
                     .map_err(anyhow::Error::msg)?,
             ),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 "admin/v1".to_owned(),
                 &public_key_base64(&admin_key),

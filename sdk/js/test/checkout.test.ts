@@ -25,6 +25,22 @@ function start(fetch: typeof globalThis.fetch) {
 }
 
 describe("createCheckout", () => {
+  it("retains payment state through a three-minute outage even past local expiry", async () => {
+    const initial = quote({ payment_status: "seen", confirmations: 1, expires_at: NOW / 1000 + 30 });
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(() => {
+      if (Date.now() === NOW) return Promise.resolve(Response.json(initial));
+      if (Date.now() < NOW + 180000) return Promise.resolve(new Response("offline", { status: 503 }));
+      return Promise.resolve(Response.json(quote({ status: "complete", payment_status: "credited" })));
+    });
+    const { checkout } = start(fetch);
+    await vi.advanceTimersByTimeAsync(179999);
+    expect(checkout.getState()).toMatchObject({ status: "seen", quote: initial, error: null, reconnecting: true });
+    await vi.advanceTimersByTimeAsync(30001);
+    expect(checkout.getState()).toMatchObject({ status: "credited", error: null });
+    expect(checkout.getState().reconnecting).toBeUndefined();
+    checkout.destroy();
+  });
+
   it("polls the public view until the payment is credited", async () => {
     const { fetch, calls } = fakeFetch(
       quote(),
@@ -65,9 +81,9 @@ describe("createCheckout", () => {
     const { fetch, calls } = fakeFetch(quote(), new TypeError("offline"), 503, quote());
     const { checkout, states } = start(fetch);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(checkout.getState()).toMatchObject({ status: "waiting", error: { code: "network_error" } });
+    expect(checkout.getState()).toMatchObject({ status: "waiting", error: null, reconnecting: true });
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(checkout.getState()).toMatchObject({ status: "waiting", error: { code: "api_error" } });
+    expect(checkout.getState()).toMatchObject({ status: "waiting", error: null, reconnecting: true });
     // The third failure-free read waits 2^2 intervals after two failures.
     await vi.advanceTimersByTimeAsync(3_999);
     expect(calls).toHaveLength(3);

@@ -156,8 +156,8 @@ uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@<release commit or ta
 Its inputs are `version`, `environment` (the GitHub Environment), `target` (`topup`, or `product`
 for Phala's reference product), `mode` (`provision` or `upgrade`), and `environment_dir` (the
 target's directory in the caller's repository). The caller grants `contents: read` and
-`attestations: read`, and the only secret Deploy reads is its declared, optional
-`PHALA_CLOUD_API_KEY`. A caller in the Phala-Network organisation passes `secrets: inherit`, and the
+`attestations: read`, and Deploy reads `PHALA_CLOUD_API_KEY` plus
+`TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` for topup upgrade admission control. A caller in the Phala-Network organisation passes `secrets: inherit`, and the
 key is the Environment's secret (an Environment secret resolves empty in a called workflow without
 it, [actions/runner#4453](https://github.com/actions/runner/issues/4453)); a caller in another
 organisation, where `inherit` is not supported, passes it from a repository secret ([self-hosting,
@@ -167,6 +167,94 @@ the deploy with the kit's pre-launch script, and the verification of the atteste
 official dstack verifier; it uploads the rendered compose and the verification as the run's record.
 [Deploy Phala's instance](../.github/workflows/deploy-phala.yml) is Phala's caller, the same way;
 adopting a release is a pull request that changes its release.
+
+#### Planned upgrade admission and downtime
+
+Before a topup upgrade calls Phala Cloud, the workflow admin-signs
+`POST /v1/admin/instance/pause` with scope `mutations`, its run/attempt owner, and a 900-second
+lease. Configure the protected GitHub Environment's `TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` secret
+(Ed25519 PEM) and `TOPUP_MAINTENANCE_KEY_ID` variable to match an entry in the running instance's
+attested `maintenance_keys`. External callers pass the declared signing secret alongside the
+Cloud key; organisation callers inherit both. This separate key authorizes only
+`POST /v1/admin/instance/pause` and `POST /v1/admin/instance/resume`; all other admin routes,
+including maintenance inspection, return audited `403 permission_denied`. The operator's full
+admin key still works, but stays with the operator and is never a deployment secret. Restrict
+Environment access and deployment branches as for the Cloud key. Key material is temporary, never part of
+the uploaded deployment record, and is deleted after each signed request.
+
+Generate an independent key per Environment on the owner's machine using the installed Python
+SDK CLI. Convert its seed to the PEM the workflow helper accepts:
+
+```sh
+topup-sdk keygen --keyid maintenance/production-v1 --seed-out maintenance.seed &&
+(umask 077 && { printf '302e020100300506032b657004220420'; tr -d '\n' < maintenance.seed; } \
+  | xxd -r -p | openssl pkey -inform DER -out maintenance.pem)
+```
+
+The CLI prints `keyid` and standard-base64 `public_key`. Commit only those public values in the
+Environment's `topup/topup.yaml`, next to `admin_key`, before adopting this workflow:
+
+```yaml
+maintenance_keys:
+  - id: maintenance/production-v1
+    public_key: <public_key printed by topup-sdk keygen>
+```
+
+The list is optional (empty by default), at most eight keys. IDs and public keys must be unique
+and distinct from the admin key; missing/invalid public keys refuse configuration. Configure
+`TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` from the complete `maintenance.pem` through the owner's
+secret-management flow, and `TOPUP_MAINTENANCE_KEY_ID=maintenance/production-v1`. Never upload the
+admin seed or PEM. Maintenance signatures use the same origin, digest, five-minute freshness,
+and single-use replay checks as admin signatures; successful changes record the actual key id.
+
+**Rotation:** generate v2 independently, retain v1 and add v2's public entry in a reviewed config
+upgrade, using v1 to drain that upgrade. After health and resume pass, switch the Environment's
+maintenance PEM/key id to v2, verify a signed maintenance operation, then remove v1's public
+entry in another reviewed upgrade using v2. Keep the old credential until the first upgrade's
+cleanup completes. Do not rotate credentials during a running deployment. For first adoption,
+install the public key in the feature rollout allowed by `bootstrap_maintenance` below; a
+pre-feature service cannot recognize the key. Any policy-permitted rollback to a release
+predating `maintenance_keys` also needs that release's compatible config without this field,
+because its strict config parser rejects unknown fields. This does not override the 0.9.0
+declaration: **no rollback to 0.8.3; restore required**, and no rollback to any 0.8.x release.
+
+New authenticated mutations return `503 service_maintenance`, `Retry-After: 5`, before idempotent
+execution; reads and already admitted requests continue. Scanners and outbox workers continue until the
+existing graceful shutdown drains them. A replacement process starts with a `startup` mutation pause, lifted only by its first successful
+`/healthz` database check; the old process's health probes never lift its explicit deployment
+drain. The workflow then confirms resume with the deployment owner after health checks. Failed
+runs attempt to resume the serving process. Each process lease expires after at most 900 seconds
+according to its monotonic clock, even without a runner or expiry worker. Process exit discards
+its lease; startup health protects the replacement, so a failed deploy cannot persist maintenance.
+Pause/resume are audited using the existing audit table; maintenance adds no database migration
+or persistent lease to carry across process replacement. The release's
+[rollback compatibility policy](#rollback-compatibility) still governs recovery. Account,
+customer, treasury, and route incident pauses remain. See the
+[stuck-maintenance runbook](runbooks/instance-maintenance.md) for inspection and manual clear.
+
+Upgrade probes run from before the upgrade call through service readiness, sampling `/healthz`
+every 2 seconds with a 3-second timeout. `unavailability.json` records `first_failed_at`,
+`first_healthy_at`, and `unavailability_seconds`; the job summary shows the same window in PT
+and UTC. Maintenance admission and clear responses are separate artifacts. Failed/canceled runs
+keep an incomplete window if recovery was not observed; no observed failure is not a claim of
+zero downtime. Staging run 37215125136 took about 160 seconds (upgrade step to service readiness),
+which motivates the SDK's opt-in 300-second budget. This masks transient failures for clients;
+the CVM still restarts and raw HTTP callers must implement retries.
+
+**First rollout:** a running pre-feature release has no instance pause API, so it cannot emit a
+maintenance signal retroactively. Distribute the tolerant JS SDK first. The owner may explicitly
+pass `bootstrap_maintenance: true` to the new reusable workflow for that one upgrade: only an
+HTTP 404 from the old pause path allows bootstrap. A feature-capable service still requires the
+normal signed pause, and missing credentials or any other pause failure aborts before the upgrade
+call. Bootstrap is recorded in the job summary and disabled by default; remove it after rollout.
+When adopting the feature release in a caller workflow, expose this boolean only if the first
+upgrade needs it (the currently pinned Phala caller remains unchanged until release adoption).
+For a policy-permitted rollback to a pre-feature release, the new process has no inherited
+maintenance lease; a resume response may be 404, but normal admission is already open. This
+maintenance compatibility behavior does not authorize rollback to 0.8.3 or any 0.8.x release:
+restore from the pre-upgrade backup as declared in [rollback compatibility](#rollback-compatibility).
+Deadline expiry remains the fallback if the original process is still serving after a failed
+upgrade. No compatibility bypass is automatic.
 
 1. Merge the change to the environment repository's `main`: a setting, or a new `version`.
 2. First deployment: Deploy with `mode: provision`, then set `TOPUP_CVM_ID` (or, for the product,

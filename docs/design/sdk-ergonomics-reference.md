@@ -38,7 +38,7 @@ rounding using lossless decoding; requests and arithmetic reject unsafe integers
 
 ### Transport and errors
 
-- Options: `{idempotencyKey?, signal?, requestDeadlineMs?}`. One UUID per logical POST; freeze
+- Options: `{idempotencyKey?, signal?, requestDeadlineMs?, upgradeTolerance?}`. One UUID per logical POST; freeze
   body/key across retries, validate 255-character header limit, encode path/query input. Explicit
   order keys survive restart; automatic keys cover one invocation. No DELETE retries or unreplayable
   POST bodies.
@@ -63,6 +63,36 @@ rounding using lossless decoding; requests and arithmetic reject unsafe integers
   fields null. Malformed responses raise ResponseValidationError with status/request ID, no raw
   body. Redact secrets in logs/reprs/ causes; handlers expose generic codes, never exception text.
   Wrapping raw httpx errors is breaking.
+
+### Upgrade tolerance amendment (JS implemented; Python phase 2 handoff)
+
+Add boolean `upgradeTolerance` (JS) / `upgrade_tolerance` (Python) to client configuration and
+per-call controls; default **false**, with a per-call value overriding the client. Preserve the
+interactive defaults: 15-second attempt timeout, 60-second total deadline, four attempts. Opt-in
+lets a backend wait through the measured approximately 160-second CVM outage without making every
+interactive request wait five minutes.
+
+For GET and replayable idempotent POST only, a network failure (including connection refusal and
+attempt timeout), HTTP 502/503/504, or `503 service_maintenance` activates the upgrade retry
+budget: at most **300 seconds from the original request start**, including attempts, response body
+reads, and sleeps. This budget replaces the ordinary attempt-count cap for those failures only.
+An explicitly configured client or per-call deadline remains a hard limit and takes precedence;
+never extend it. Other responses retain the ordinary attempt cap. Keep one serialized body and one
+Idempotency-Key across every retry. Never retry DELETE, canceled requests, replayed responses
+(`Idempotent-Replayed: true`), redirects, invalid successful responses, or permanent 4xx errors.
+
+Use exponential jitter from 500 ms, with a 10-second cap during upgrade failures (uniform half to
+full cap); honor Retry-After seconds or HTTP-date as a minimum, and never sleep/retry beyond the
+remaining deadline. Gateway 502/503/504 without Retry-After, including HTML, empty, or malformed
+error envelopes, are retryable transport failures in this mode; do not expose their raw bodies.
+Ordinary response validation remains unchanged outside this mode. Cancellation/close (JS) and
+interrupts (Python) stop waits immediately. Test with a fake clock: maintenance + Retry-After,
+connection failure, then HTML 502 for three minutes, followed by success; assert unchanged key/body,
+recovery beyond four attempts, five-minute exhaustion, explicit shorter deadline, cancellation,
+and no retries of DELETE or replayed execution failures.
+
+Python implementation is intentionally outside the graceful-upgrades PR; apply this amendment in
+`feat/sdk-python-ergonomics` before advertising Python upgrade tolerance as available.
 
 ## Pins validation
 

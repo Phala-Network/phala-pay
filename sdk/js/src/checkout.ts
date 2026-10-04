@@ -32,6 +32,7 @@ export type CheckoutErrorCode =
   | "address_mismatch"
   | "rate_limited"
   | "network_error"
+  | "service_unavailable"
   | "invalid_response"
   | "api_error";
 
@@ -70,6 +71,13 @@ export function responseError(response: Response, notFound: string): CheckoutErr
   if (response.status === 404) {
     return new CheckoutError("invalid_client_secret", notFound, requestId);
   }
+  if (response.status >= 500) {
+    const seconds = Number(response.headers.get("retry-after"));
+    return new CheckoutError("service_unavailable", "the payment service is temporarily unavailable", {
+      ...requestId,
+      ...(Number.isFinite(seconds) && seconds > 0 ? { retryAfter: seconds } : {}),
+    });
+  }
   if (response.status === 429) {
     const seconds = Number(response.headers.get("retry-after"));
     return new CheckoutError("rate_limited", "too many status requests", {
@@ -92,8 +100,10 @@ export function pollDelay(interval: number, failures: number, error: CheckoutErr
 
 export interface CheckoutState {
   status: CheckoutStatus;
+  /** The last known view is retained while polling reconnects after a temporary outage. */
+  reconnecting?: boolean;
   quote: ClientQuote | null;
-  /** The last failed refresh; polling continues after every error but `invalid_client_secret`. */
+  /** Permanent/validation failure details; temporary outages use `reconnecting` instead. */
   error: CheckoutError | null;
 }
 
@@ -223,12 +233,14 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
   let state: CheckoutState = { status: "loading", quote: null, error: null };
   let timer: ReturnType<typeof setTimeout> | undefined;
   let failures = 0;
+  let lastFailure: CheckoutError | null = null;
   let destroyed = false;
   let inFlight: Promise<void> | undefined;
 
   function setState(next: CheckoutState): void {
     if (
       next.status === state.status &&
+      next.reconnecting === state.reconnecting &&
       next.error === state.error &&
       JSON.stringify(next.quote) === JSON.stringify(state.quote)
     ) {
@@ -261,6 +273,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
         return;
       }
       failures = 0;
+      lastFailure = null;
       setState({ status: checkoutStatus(quote, now() / 1000), quote, error: null });
     } catch (cause) {
       if (destroyed || signal.aborted) {
@@ -271,12 +284,16 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
           ? cause
           : new CheckoutError("network_error", "could not reach the payment service", { cause });
       failures += 1;
+      lastFailure = error;
       const quote = state.quote;
       if (error.code === "address_mismatch") {
         // Fail closed: forget the quote, so nothing about its address is shown.
         setState({ status: "error", quote: null, error });
       } else if (error.code === "invalid_client_secret") {
         setState({ status: "error", quote, error });
+      } else if (error.code === "network_error" || error.code === "service_unavailable") {
+        // Do not infer expiry or discard the payer's view while chain progress is unknown.
+        setState({ status: state.status, quote, error: null, reconnecting: true });
       } else {
         setState({
           status: quote === null ? state.status : checkoutStatus(quote, now() / 1000),
@@ -301,7 +318,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
     if (finished()) {
       return;
     }
-    const delay = pollDelay(interval, failures, state.error);
+    const delay = pollDelay(interval, failures, lastFailure);
     timer = setTimeout(() => {
       void refresh().then(schedule);
     }, delay);

@@ -81,6 +81,7 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 | Merchant reports a secret key exposed or lost, or requests it did not make | [API key compromise and key recovery](api-key-compromise.md) |
 | Unswept credited deposits, a `FlushFailed` target | Not a platform alert: the merchant sweeps with its own wallet, and a target whose transfer failed (a token or treasury refusing it) is the merchant's to resolve ([deploy/README.md, "Sweeping"](../README.md#sweeping)) |
 | Database loss, restore drill | [RESTORE.md](../RESTORE.md) |
+| After a failed upgrade: mutations get `503 service_maintenance` | [Instance maintenance](instance-maintenance.md) |
 | After a restore: merchants get `503 service_restoring`, `GET /v1/admin/restore` shows `frozen` | [Reconciliation after a restore](restore.md) |
 | A merchant's refund stays `pending` or `failed` | Not a platform action: the merchant pays refunds from the treasury of the deposit's address and attaches the transaction with `POST /v1/refunds/{id}/mark_paid`; a `failed` refund's `failure_reason` says why ([integration guide, §3](../../docs/integration.md#3-refunds)) |
 | A merchant's treasury change, or a pending `treasury.created` it did not request | [Treasury change](treasury-change.md) |

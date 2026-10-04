@@ -52,6 +52,12 @@ pub(super) fn schema(name: &str) -> Option<Value> {
         "QuoteView" => quote(),
         "ClientQuote" => client_quote(),
         "QuoteList" => list("/v1/quotes", quote()),
+        "InstancePauseRequest" => {
+            json!({"owner":"37215125136-1", "reason":"planned upgrade", "duration_seconds":900})
+        }
+        "InstancePauseResponse" => {
+            json!({"owner":"37215125136-1", "paused_scopes":["mutations"], "expires_at":1790000900})
+        }
         "CreateQuoteRequest" => json!({
             "client_reference_id": "team-42",
             "amount": 2500,

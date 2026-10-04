@@ -36,6 +36,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- Planned upgrade admission via an audited, process-owned expiring instance mutation pause: `503
+  service_maintenance` with `Retry-After`, reads and in-flight work continue, automatic resume
+  after deployment health checks, failure cleanup, and a manual-clear runbook. Business pauses
+  are preserved. Deploy records sampled first-failed/first-healthy downtime in artifacts and
+  the job summary. Topup upgrades use an independent maintenance signing key and key id:
+  attested `maintenance_keys` authorize only instance pause/resume; other admin routes return
+  audited `403 permission_denied`. Full operator admin authority remains outside CI.
+
 - Alert in Sentry on webhook backlog and stalled delivery progress, internal signer/egress
   failures, stale RPO heartbeats, overdue treasury/refund work, and ingress certificate expiry.
   Add staging synthetic alert commands and a production DSN preflight check. Business probes
@@ -97,6 +105,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 ### JS SDK (`@phala/pay`)
 
 #### Added
+
+- Opt-in `upgradeTolerance` for GET and idempotent POST retries across maintenance, connection
+  failures, and gateway 502/503/504 for up to five minutes. Explicit deadlines and cancellation
+  remain effective; keys and bodies stay fixed. Checkout and deposit address polling preserve
+  their last view through outages and show neutral reconnecting state. Python's exact matching
+  rule is documented for the phase 2 handoff; its implementation is separate.
 
 - Merchant server client at `@phala/pay/server`: all OpenAPI resources, typed parameters/responses,
   verified quote/address results, two-variable `PhalaPay.fromEnv()`, frozen pins parse/encode,

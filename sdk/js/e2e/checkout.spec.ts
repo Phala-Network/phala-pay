@@ -174,6 +174,31 @@ async function installWallet(page: Page) {
   );
 }
 
+test("retains checkout through a three-minute gateway outage and reconnects", async ({ page }) => {
+  const { quote, secret } = newQuote();
+  let online = true;
+  await page.route(`${API_BASE}/v1/quotes/**`, (route) => route.fulfill({
+    status: online ? 200 : 502,
+    headers: { "access-control-allow-origin": "*" },
+    ...(online ? { json: quote } : { body: "Bad Gateway" }),
+  }));
+  await page.clock.install();
+  await page.goto(`/?client_secret=${secret}&expected_address=${quote.address}&api_base=${API_BASE}`);
+  await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
+  await page.getByRole("tab", { name: "Manual transfer" }).click();
+  const details = await page.locator(".pp-fields").textContent();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  online = false;
+  await page.clock.runFor(180000);
+  await expect(page.getByRole("status")).toContainText("reconnecting…");
+  await expect(page.locator(".pp-status")).toHaveAttribute("data-tone", "neutral");
+  await expect(page.locator(".pp-fields")).toHaveText(details ?? "");
+  await expect(page.getByTestId("events")).toBeEmpty();
+  online = true;
+  await page.clock.fastForward(30000);
+  await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
+});
+
 test("pays a quote from a browser wallet, end to end on Anvil", async ({ page }) => {
   const { quote, secret } = newQuote();
   const requests = await serveQuote(page, quote, secret);

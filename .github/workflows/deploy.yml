@@ -15,7 +15,7 @@ name: Deploy
 # and a new compose hash, in force only through `upgrade`.
 #
 # Controls, in the caller's repository: the job runs only from its `main`, in the GitHub
-# Environment `environment` (deployment branches: `main` only). The only secret it reads is the
+# Environment `environment` (deployment branches: `main` only). The secrets it reads are the maintenance-only signing key and the
 # declared, optional PHALA_CLOUD_API_KEY (docs/self-hosting.md, step 5). A caller in the
 # Phala-Network organisation passes `secrets: inherit`, and the key is the Environment's secret,
 # which GitHub uses over a passed secret of the same name; an Environment secret resolves empty
@@ -58,11 +58,18 @@ on:
         description: "provision: create the target's first CVM; upgrade: update the target's CVM"
         type: string
         required: true
+      bootstrap_maintenance:
+        description: "One-time rollout from a pre-feature service: allow missing pause API (404) only"
+        type: boolean
+        default: false
       environment_dir:
         description: "The target's environment directory in the caller's repository"
         type: string
         required: true
     secrets:
+      TOPUP_MAINTENANCE_PRIVATE_KEY_PEM:
+        description: "Ed25519 maintenance-only signing key PEM; required for topup upgrades, Environment protected"
+        required: false
       PHALA_CLOUD_API_KEY:
         description: "The Phala Cloud API key of vars.PHALA_WORKSPACE: inherited from the Environment (secrets: inherit), or passed from a repository secret by a caller in another organisation"
         required: false
@@ -94,6 +101,7 @@ jobs:
       TARGET: ${{ inputs.target }}
       MODE: ${{ inputs.mode }}
       ENVIRONMENT_DIR: ${{ inputs.environment_dir }}
+      TOPUP_MAINTENANCE_KEY_ID: ${{ vars.TOPUP_MAINTENANCE_KEY_ID }}
       # The owner-approved OS image (architecture §14); preflight refuses any other.
       DSTACK_OS_IMAGE: dstack-0.5.9
       # Deployment state and the workspace preflight checks; not settings of the CVM.
@@ -290,6 +298,29 @@ jobs:
         if: inputs.target == 'topup'
         run: '"$KIT/deploy/check-route-modes.sh" "$DEPLOY_ENVIRONMENT" "$COMPOSE"'
 
+      - name: Pause new mutations before upgrading
+        id: maintenance
+        if: inputs.mode == 'upgrade' && inputs.target == 'topup'
+        env:
+          TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
+          BOOTSTRAP_MAINTENANCE: ${{ inputs.bootstrap_maintenance }}
+        run: |
+          if [[ "$BOOTSTRAP_MAINTENANCE" == true ]]; then
+            # A pre-feature router returns 404; the new admin route requires a signature (401).
+            code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$PUBLIC_URL/v1/admin/instance/pause")
+            if [[ "$code" == 404 ]]; then
+              echo "enabled=false" >>"$GITHUB_OUTPUT"
+              echo "::warning::Explicit first-rollout bootstrap: the running release has no pause API. Upgrade tolerance is required for this rollout."
+              echo "First-rollout bootstrap: no maintenance signal available from the old release." >>"$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+          "$KIT/deploy/instance-pause.sh" pause "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance.json"
+          # The response proves the lease was committed before any Phala Cloud upgrade call.
+          jq -e '.paused_scopes == ["mutations"]' "$WORK/maintenance.json"
+          echo "enabled=true" >>"$GITHUB_OUTPUT"
+          echo "Mutation admission paused for at most 900 seconds; reads and in-flight work continue." >>"$GITHUB_STEP_SUMMARY"
+
       # The CLI output (JSON, no secrets: the key is only in the environment and env values are
       # encrypted client-side) goes to the log as well, so a failure shows its reason.
       - name: Deploy (${{ inputs.mode }}) and wait for the CVM
@@ -297,6 +328,18 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
+          monitor_pid=""
+          stop_monitor() {
+            if [[ -n "$monitor_pid" ]]; then
+              touch "$WORK/upgrade-monitor.stop"
+              wait "$monitor_pid"
+            fi
+          }
+          trap stop_monitor EXIT
+          if [[ "$MODE" == upgrade ]]; then
+            python3 "$KIT/deploy/upgrade-monitor.py" "$PUBLIC_URL" "$WORK/unavailability.json" "$WORK/upgrade-monitor.stop" &
+            monitor_pid=$!
+          fi
           if [[ "$MODE" == provision ]]; then
             "$KIT/deploy/phala-cvm.sh" deploy "$WORK/deploy.json" \
               --name "$CVM_NAME" \
@@ -358,6 +401,8 @@ jobs:
             "$KIT/deploy/phala-cvm.sh" wait --unsealed "$cvm_id" >"$WORK/cvm.json"
           else
             "$KIT/deploy/phala-cvm.sh" wait "$cvm_id" >"$WORK/cvm.json"
+            # Keep sampling through boot and service readiness, before stopping the child process.
+            "$KIT/deploy/phala-cvm.sh" healthz "$PUBLIC_URL"
           fi
 
       # A new CVM lands on a node chosen by Phala Cloud. Its gateway (the domain's CNAME target, which
@@ -440,6 +485,21 @@ jobs:
         if: inputs.mode == 'upgrade'
         run: '"$KIT/deploy/phala-cvm.sh" healthz "$PUBLIC_URL"'
 
+      - name: Resume mutations after health checks
+        if: steps.maintenance.outputs.enabled == 'true'
+        env:
+          TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
+        run: |
+          code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$PUBLIC_URL/v1/admin/instance/pause")
+          if [[ "$code" == 404 ]]; then
+            # A rollback to a pre-feature image has no process lease to inherit or resume.
+            jq -n '{maintenance_supported: false, cleared_by: "process_exit"}' >"$WORK/maintenance-cleared.json"
+            echo "Target has no maintenance API; process exit cleared the drain lease." >>"$GITHUB_STEP_SUMMARY"
+          else
+            "$KIT/deploy/instance-pause.sh" resume "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance-cleared.json"
+            jq -e '.paused_scopes == []' "$WORK/maintenance-cleared.json"
+          fi
+
       # Right after a DNS change the domain can still reach the previous instance, from a resolver's
       # cache, or the new one can still be obtaining its certificate: retried every 30 seconds for
       # at most 10 minutes in all (each check bounds its own requests and TLS handshake).
@@ -513,6 +573,24 @@ jobs:
             echo "certificate evidence; until it passes, nothing about this CVM is verified."
           } >>"$GITHUB_STEP_SUMMARY"
 
+      - name: Clear maintenance after a failed upgrade
+        if: failure() && steps.maintenance.outputs.enabled == 'true'
+        env:
+          TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
+        run: |
+          if ! "$KIT/deploy/instance-pause.sh" resume "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance-cleared.json"; then
+            echo "::warning::Maintenance clear could not reach the service; the 900-second lease expires automatically. See deploy/runbooks/instance-maintenance.md."
+          fi
+
+      - name: Report observed unavailability
+        if: always() && inputs.mode == 'upgrade'
+        run: |
+          if [[ -f "$WORK/unavailability.json" ]]; then
+            python3 "$KIT/deploy/upgrade-monitor.py" summary "$WORK/unavailability.json" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "Upgrade availability was not sampled: deployment did not start." >>"$GITHUB_STEP_SUMMARY"
+          fi
+
       # No secrets: the compose holds the public settings and references to the sealed secrets,
       # and the CLI outputs hold ids, hashes, and the attested app-compose.
       - name: Upload the deployment record
@@ -532,6 +610,9 @@ jobs:
             ${{ runner.temp }}/deploy/info.json
             ${{ runner.temp }}/deploy/verification.txt
             ${{ runner.temp }}/deploy/ingress-evidence.txt
+            ${{ runner.temp }}/deploy/unavailability.json
+            ${{ runner.temp }}/deploy/maintenance.json
+            ${{ runner.temp }}/deploy/maintenance-cleared.json
 
       - name: Delete the env file, the kit, and CLI state
         timeout-minutes: 10

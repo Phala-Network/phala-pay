@@ -123,6 +123,7 @@ impl Harness {
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
             ),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 ADMIN_KID.to_owned(),
                 &public_key_base64(&admin_key),

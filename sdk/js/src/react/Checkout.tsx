@@ -86,7 +86,7 @@ export function Checkout({
   buttonText = "Pay with crypto",
   walletClient,
 }: CheckoutProps) {
-  const { status, quote, error, refresh } = useCheckout({
+  const { status, quote, error, reconnecting, refresh } = useCheckout({
     clientSecret,
     expectedAddress,
     apiBase,
@@ -143,7 +143,7 @@ export function Checkout({
           </p>
         </>
       )}
-      <StatusLine status={status} quote={quote} now={now} error={error} />
+      <StatusLine status={status} quote={quote} now={now} error={error} reconnecting={reconnecting ?? false} />
       {txHash !== null && quote !== null && <Transaction hash={txHash} chainId={quote.chain_id} />}
       {status === "waiting" && quote !== null && (
         <PaymentOptions
@@ -166,11 +166,13 @@ function StatusLine({
   quote,
   now,
   error,
+  reconnecting,
 }: {
   status: CheckoutStatus;
   quote: ClientQuote | null;
   now: number;
   error: CheckoutState["error"];
+  reconnecting: boolean;
 }) {
   const tone =
     status === "credited"
@@ -182,7 +184,7 @@ function StatusLine({
     <div className="pp-status" data-tone={tone}>
       <span role="status" aria-live="polite">
         {statusMessage(status, quote, error?.code)}
-        {error !== null && status !== "error" ? " (reconnecting…)" : ""}
+        {(reconnecting || error !== null) && status !== "error" ? " (reconnecting…)" : ""}
       </span>
       {status === "waiting" && quote !== null && (
         <span className="pp-countdown" aria-label="Time left to pay">

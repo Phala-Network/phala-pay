@@ -119,7 +119,9 @@ pub(super) fn admin(openapi: &OpenApi) -> Value {
         openapi,
         "Phala Pay admin API",
         "The operator's API (design D8): accounts, recovery keys, pauses, and platform health. \
-         Every request is signed with the operator's RFC 9421 key; merchants never call it. The \
+         Requests use RFC 9421 signatures. Configured maintenance keys authorize only POST \
+         /v1/admin/instance/pause and /v1/admin/instance/resume; every other admin route requires \
+         the operator's full admin key. Scope denials are audited 403 permission_denied. The \
          merchant API is `openapi.json`.",
     );
     document["tags"] = tags(&[("admin", "The operator's actions and reports.")]);

@@ -201,3 +201,150 @@ pub(crate) async fn mutate_account_scopes_in(
     }
     Ok(Some(updated))
 }
+
+/// Request-admission pause owned by one running API process. A new process starts paused until
+/// its first successful health probe; explicit deployment pauses have a monotonic deadline.
+/// Process exit discards its lease, so a replacement or rollback never inherits maintenance.
+pub(crate) struct InstancePause {
+    lease: tokio::sync::Mutex<InstanceLease>,
+}
+
+struct InstanceLease {
+    owner: String,
+    deadline: tokio::time::Instant,
+    expires_at: i64,
+    booting: bool,
+}
+
+impl Default for InstancePause {
+    fn default() -> Self {
+        Self {
+            lease: tokio::sync::Mutex::new(InstanceLease {
+                owner: String::new(),
+                deadline: tokio::time::Instant::now(),
+                expires_at: chrono::Utc::now().timestamp(),
+                booting: false,
+            }),
+        }
+    }
+}
+
+impl InstancePause {
+    pub(crate) fn booting() -> Self {
+        Self {
+            lease: tokio::sync::Mutex::new(InstanceLease {
+                owner: "startup".to_owned(),
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(900),
+                expires_at: chrono::Utc::now().timestamp().saturating_add(900),
+                booting: true,
+            }),
+        }
+    }
+
+    pub(crate) async fn snapshot(&self) -> (Vec<String>, String, i64) {
+        let lease = self.lease.lock().await;
+        let scopes = if lease.deadline > tokio::time::Instant::now() {
+            vec!["mutations".to_owned()]
+        } else {
+            vec![]
+        };
+        (scopes, lease.owner.clone(), lease.expires_at)
+    }
+
+    pub(crate) async fn mutations_paused(&self) -> bool {
+        self.lease.lock().await.deadline > tokio::time::Instant::now()
+    }
+
+    /// Health lifts only the startup pause. Old-process health probes never lift a deployment's
+    /// explicit drain, and all already admitted requests finish independently of this lease.
+    pub(crate) async fn healthy_boot(&self) {
+        let mut lease = self.lease.lock().await;
+        if lease.booting {
+            lease.deadline = tokio::time::Instant::now();
+            lease.expires_at = chrono::Utc::now().timestamp();
+            lease.booting = false;
+        }
+    }
+
+    /// Zero duration resumes. Serialize ownership, audit commit and admission together: an audit
+    /// failure leaves the lease unchanged, and stale cleanup cannot lift a newer active owner.
+    pub(crate) async fn mutate(
+        &self,
+        pool: &PgPool,
+        owner: &str,
+        duration: i64,
+        actor: &Actor,
+        reason: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let mut lease = self.lease.lock().await;
+        if lease.deadline > tokio::time::Instant::now() && lease.owner != owner {
+            return Ok(false);
+        }
+        let seconds = u64::try_from(duration)
+            .map_err(|_| sqlx::Error::Protocol("invalid pause duration".to_owned()))?;
+        // Admission shares this lock with mutations. Bound audit persistence so a stalled
+        // database cannot prevent requests from observing lease expiry indefinitely.
+        let record = async {
+            let mut tx = pool.begin().await?;
+            audit::insert(
+                &mut *tx,
+                &audit::Entry {
+                    account_id: None,
+                    actor,
+                    action: if duration > 0 { "pause" } else { "resume" },
+                    subject: "instance",
+                    reason,
+                },
+            )
+            .await?;
+            tx.commit().await
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), record)
+            .await
+            .map_err(|_| sqlx::Error::PoolTimedOut)??;
+        *lease = InstanceLease {
+            owner: owner.to_owned(),
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(seconds),
+            expires_at: chrono::Utc::now().timestamp().saturating_add(duration),
+            booting: false,
+        };
+        Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_pause_expires_without_a_health_probe_or_worker() {
+        let pause = InstancePause::booting();
+        assert!(pause.mutations_paused().await);
+        tokio::time::advance(std::time::Duration::from_secs(901)).await;
+        assert!(!pause.mutations_paused().await);
+        assert!(pause.snapshot().await.0.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_audit_releases_admission_and_does_not_set_a_pause() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_secs(60))
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("test connection URL");
+        let pause = InstancePause::default();
+        let started = tokio::time::Instant::now();
+        let result = pause
+            .mutate(
+                &pool,
+                "deploy-1",
+                900,
+                &Actor::admin("admin/test"),
+                "test upgrade",
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(started.elapsed() <= std::time::Duration::from_secs(5));
+        assert!(!pause.mutations_paused().await);
+        pool.close().await;
+    }
+}

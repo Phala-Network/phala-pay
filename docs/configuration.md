@@ -76,6 +76,15 @@ routes:                                    # every enabled route version, as rou
   template's, whose deploy form holds them
   ([deploy/README.md](../deploy/README.md#the-phala-cloud-template-variant)). `topup run` refuses
   to start unless each has exactly one source. Every other deployment writes both, attested.
+- **`maintenance_keys`** is an optional list of up to eight `{id, public_key}` entries next to
+  `admin_key`, empty by default. Each public key is standard-base64 Ed25519; IDs (1–128 ASCII
+  letters, digits, `.`, `_`, `/`, `-`) and public keys must be distinct from one another and from
+  the admin key, including an admin key supplied at runtime. These keys authorize only
+  `POST /v1/admin/instance/pause` and `POST /v1/admin/instance/resume`. Other admin routes return
+  audited `403 permission_denied`; `GET /v1/admin/instance/pause` requires the full admin key.
+  The same RFC 9421 origin, freshness, digest and single-use replay protections apply. The
+  operator's admin key retains full access. For generation, CI configuration and overlapping
+  rotation, see [planned upgrades](../deploy/README.md#planned-upgrade-admission-and-downtime).
 - **`rpc_groups`** configures independent A/B groups. Each route explicitly names
   `chain.rpc_groups: { a: sepolia-a, b: sepolia-b }`; there is no implicit provider list.
   Members have unique ids, reviewed `company`, `url`, optional `sealed_key`, `account_budget`

@@ -36,6 +36,76 @@ use support::{
 
 const ADMIN_KID: &str = "admin/v1";
 
+/// Exercise every documented admin route, including new ones, against the same narrow key.
+#[tokio::test]
+async fn maintenance_keys_are_scoped_audited_and_replay_protected() -> Result<()> {
+    let Some(database) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let admin = SigningKey::from_bytes(&[9; 32]);
+        let maintenance = SigningKey::from_bytes(&[7; 32]);
+        let rotated = SigningKey::from_bytes(&[8; 32]);
+        let mut state = app_state(database.app_pool.clone(), &admin);
+        state.maintenance_keys = vec![
+            VerificationKey::from_base64("maintenance/v1".to_owned(), &public_key_base64(&maintenance)).map_err(anyhow::Error::msg)?,
+            VerificationKey::from_base64("maintenance/v2".to_owned(), &public_key_base64(&rotated)).map_err(anyhow::Error::msg)?,
+        ];
+        let (app, docs) = topup::api::router(state);
+        let now = Utc::now().timestamp();
+        let pause_body = serde_json::to_vec(&json!({"owner":"deploy-scoped", "reason":"upgrade", "duration_seconds":900}))?;
+        let pause = || signed_request(Method::POST, "/v1/admin/instance/pause", pause_body.clone(), "maintenance/v1", &maintenance, now);
+        ensure!(app.clone().oneshot(pause()).await?.status() == StatusCode::OK);
+        // Authentication replay protection is shared with the full admin key.
+        ensure!(app.clone().oneshot(pause()).await?.status() == StatusCode::UNAUTHORIZED);
+        // Renaming the maintenance key to the admin key id cannot elevate authority.
+        ensure!(app.clone().oneshot(signed_request(Method::GET, "/v1/admin/reports/daily", vec![],
+            ADMIN_KID, &maintenance, now)).await?.status() == StatusCode::UNAUTHORIZED);
+        let mut denied = 0;
+        for (template, methods) in docs.admin["paths"].as_object().context("admin paths")? {
+            let path = template.split('/').map(|segment| if segment.starts_with('{') { "test" } else { segment }).collect::<Vec<_>>().join("/");
+            for method in methods.as_object().context("path methods")?.keys() {
+                let Ok(method) = Method::from_bytes(method.to_uppercase().as_bytes()) else { continue; };
+                if method == Method::POST && matches!(template.as_str(), "/v1/admin/instance/pause" | "/v1/admin/instance/resume") { continue; }
+                let response = app.clone().oneshot(signed_request(method, &path, vec![], "maintenance/v1", &maintenance, now)).await?;
+                ensure!(response.status() == StatusCode::FORBIDDEN, "{template}: expected 403, got {}", response.status());
+                let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+                ensure!(body["error"]["code"] == "permission_denied");
+                denied += 1;
+                let count: i64 = sqlx::query_scalar("SELECT count(*) FROM audit WHERE actor_id = 'maintenance/v1' AND action = 'permission_denied'").fetch_one(&database.app_pool).await?;
+                ensure!(count == denied, "every refused route must be audited");
+            }
+        }
+        ensure!(denied >= 30, "must exercise the entire admin surface");
+        // A rotated maintenance key can clear the deployment's lease.
+        ensure!(app.clone().oneshot(signed_request(Method::POST, "/v1/admin/instance/resume",
+            serde_json::to_vec(&json!({"owner":"deploy-scoped", "reason":"healthy"}))?, "maintenance/v2", &rotated, now)).await?.status() == StatusCode::OK);
+        let actors: Vec<String> = sqlx::query_scalar("SELECT actor_id FROM audit WHERE subject = 'instance' ORDER BY created_at, id").fetch_all(&database.app_pool).await?;
+        ensure!(actors.contains(&"maintenance/v1".to_owned()) && actors.contains(&"maintenance/v2".to_owned()));
+        // Full operator authority remains valid, including inspection and mutations.
+        for path in ["/v1/admin/instance/pause", "/v1/admin/reports/daily"] {
+            ensure!(app.clone().oneshot(signed_request(Method::GET, path, vec![], ADMIN_KID, &admin, now)).await?.status() == StatusCode::OK);
+        }
+        for path in ["/v1/admin/instance/pause", "/v1/admin/instance/resume"] {
+            ensure!(app.clone().oneshot(signed_request(Method::POST, path, pause_body.clone(), ADMIN_KID, &admin, now)).await?.status() == StatusCode::OK);
+        }
+        // Tampering, stale signatures and foreign origins still fail authentication.
+        let mut tampered = signed_request(Method::POST, "/v1/admin/instance/pause", pause_body.clone(), "maintenance/v1", &maintenance, now);
+        *tampered.body_mut() = Body::from("{}");
+        ensure!(app.clone().oneshot(tampered).await?.status() == StatusCode::UNAUTHORIZED);
+        ensure!(app.clone().oneshot(signed_request(Method::POST, "/v1/admin/instance/pause", pause_body.clone(), "maintenance/v1", &maintenance, now - 301)).await?.status() == StatusCode::UNAUTHORIZED);
+        let foreign = signed_request_with_options(Method::POST, "/v1/admin/instance/pause", pause_body,
+            "maintenance/v1", &maintenance, now, &SignatureOptions {
+                origin: "https://foreign.example".to_owned(), origin_form: true,
+                ..SignatureOptions::default()
+            });
+        ensure!(app.oneshot(foreign).await?.status() == StatusCode::UNAUTHORIZED);
+        Ok(())
+    }.await;
+    database.cleanup().await?;
+    result
+}
+
 /// The admin API keeps RFC 9421 request signatures (design D7).
 #[tokio::test]
 async fn admin_signature_verification_vectors() -> Result<()> {
@@ -1321,6 +1391,7 @@ fn app_state_with_attestor(
     AppState {
         pool,
         routes: Arc::new(topup::routes::RouteSet::new(vec![route]).expect("route loads")),
+        maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(
             ADMIN_KID.to_owned(),
             &public_key_base64(admin_key),
@@ -1643,4 +1714,110 @@ async fn load_shed_responses_match_the_shared_unavailable_contract() -> Result<(
         })
     })
     .await
+}
+
+/// Admission leases drain writes, boot health reopens the new process, and expiry needs no worker.
+#[tokio::test]
+async fn instance_maintenance_admission_and_expiry() -> Result<()> {
+    let Some(database) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let key = SigningKey::from_bytes(&[91; 32]);
+        let app = test_router(&database.app_pool, &key);
+        let now = Utc::now().timestamp();
+        let account = seed::create_account(&database.app_pool, &NewAccount::named("maintenance-test")).await?;
+        let merchant_key = seed::create_api_key(&database.app_pool, account.id, false).await?;
+        seed::set_account_paused_scopes(&database.app_pool, account.id, &["quotes".to_owned()]).await?;
+        let pause = |owner: &str, duration: i64| -> Result<_> {
+            Ok(signed_request(
+                Method::POST, "/v1/admin/instance/pause",
+                serde_json::to_vec(&json!({"owner": owner, "duration_seconds": duration, "reason": "test upgrade"}))?,
+                ADMIN_KID, &key, now,
+            ))
+        };
+        let response = app.clone().oneshot(pause("deploy-1", 901)?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST);
+        let response = app.clone().oneshot(pause("deploy-1", 900)?).await?;
+        ensure!(response.status() == StatusCode::OK);
+        let response = app.clone().oneshot(pause("deploy-2", 900)?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "another owner cannot replace the lease");
+        for path in ["/v1/quotes", "/v1/deposit_addresses"] {
+            let request = axum::http::Request::post(path)
+                .header("Authorization", format!("Bearer {merchant_key}"))
+                .header("Idempotency-Key", "upgrade-test")
+                .body(Body::empty())?;
+            let response = app.clone().oneshot(request).await?;
+            ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
+            ensure!(response.headers()["retry-after"] == "5");
+            ensure!(!response.headers().contains_key("idempotent-replayed"));
+            let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
+            ensure!(body["error"]["code"] == "service_maintenance");
+        }
+        let claims: i64 = sqlx::query_scalar("SELECT count(*) FROM idempotency_keys WHERE key = 'upgrade-test'")
+            .fetch_one(&database.app_pool).await?;
+        ensure!(claims == 0, "maintenance never claims or saves the idempotency key");
+        let response = app.clone().oneshot(signed_request(Method::POST,
+            "/v1/admin/accounts", b"{}".to_vec(), ADMIN_KID, &key, now)).await?;
+        ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE, "admin business mutations are paused too");
+        let response = app.clone().oneshot(axum::http::Request::get("/v1/account")
+            .header("Authorization", format!("Bearer {merchant_key}"))
+            .body(Body::empty())?).await?;
+        ensure!(response.status() == StatusCode::OK, "merchant reads continue");
+        let response = app.clone().oneshot(signed_request(Method::GET,
+            "/v1/admin/reports/daily", vec![], ADMIN_KID, &key, now)).await?;
+        ensure!(response.status() == StatusCode::OK, "reads continue during maintenance");
+        let response = app.clone().oneshot(axum::http::Request::get("/healthz").body(Body::empty())?).await?;
+        ensure!(response.status() == StatusCode::OK, "health is independent of admission");
+        let response = app.clone().oneshot(signed_request(Method::POST,
+            "/v1/admin/instance/resume", serde_json::to_vec(&json!({"owner":"deploy-2", "reason":"stale cleanup"}))?,
+            ADMIN_KID, &key, now)).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "stale cleanup cannot lift the lease");
+        let response = app.clone().oneshot(signed_request(Method::POST,
+            "/v1/admin/instance/resume", serde_json::to_vec(&json!({"owner":"deploy-1", "reason":"healthy"}))?,
+            ADMIN_KID, &key, now)).await?;
+        ensure!(response.status() == StatusCode::OK);
+        let response = app.clone().oneshot(axum::http::Request::post("/v1/quotes")
+                .header("Authorization", format!("Bearer {merchant_key}"))
+                .header("Idempotency-Key", "upgrade-test")
+                .header("Content-Type", "application/json")
+                .body(Body::from("{}"))?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "normal admission resumes");
+        let response = app.clone().oneshot(pause("deploy-3", 1)?).await?;
+        ensure!(response.status() == StatusCode::OK);
+        // The process deadline expires without a deployment runner or expiry worker.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let response = app.clone().oneshot(axum::http::Request::post("/v1/quotes")
+                .header("Authorization", format!("Bearer {merchant_key}"))
+                .header("Idempotency-Key", "upgrade-test")
+                .header("Content-Type", "application/json")
+                .body(Body::from("{}"))?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "deadline auto-clears admission");
+        let response = app.clone().oneshot(signed_request(Method::GET,
+            "/v1/admin/instance/pause", vec![], ADMIN_KID, &key, now)).await?;
+        let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
+        ensure!(body["paused_scopes"] == json!([]));
+        // A replacement process gates writes until its own health passes. No schema migration
+        // or persisted maintenance lease can block an older rollback image's startup.
+        let (restarted, _) = topup::api::booting_router(app_state(database.app_pool.clone(), &key));
+        let write = || axum::http::Request::post("/v1/quotes")
+            .header("Authorization", format!("Bearer {merchant_key}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from("{}"));
+        let response = restarted.clone().oneshot(write()?).await?;
+        ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE, "boot waits for health");
+        let response = restarted.clone().oneshot(axum::http::Request::get("/healthz").body(Body::empty())?).await?;
+        ensure!(response.status() == StatusCode::OK);
+        let response = restarted.clone().oneshot(write()?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "healthy boot auto-clears maintenance");
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM audit WHERE subject = 'instance'")
+            .fetch_one(&database.owner_pool).await?;
+        ensure!(count == 3, "only accepted pause/resume mutations are audited");
+        let business_scopes: Vec<String> = sqlx::query_scalar("SELECT paused_scopes FROM accounts WHERE id = $1")
+            .bind(account.id).fetch_one(&database.app_pool).await?;
+        ensure!(business_scopes == vec!["quotes"], "upgrade never clears business incident pauses");
+        Ok(())
+    }.await;
+    database.cleanup().await?;
+    result
 }

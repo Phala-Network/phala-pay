@@ -724,6 +724,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
                 .context("failed to connect to database")?,
             routes: Arc::new(routes),
             admin_key,
+            maintenance_keys: config.maintenance_keys.clone(),
             public_origin,
             attestor: Arc::new(DstackAttestor::new()),
             rate_lock_quotes,
@@ -862,6 +863,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         pool: pool.clone(),
         routes: Arc::clone(&routes),
         admin_key,
+        maintenance_keys: config.maintenance_keys.clone(),
         public_origin,
         attestor: Arc::new(DstackAttestor::new()),
         rate_lock_quotes,
@@ -880,7 +882,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         ),
     };
     let monitored_origin = state.public_origin.to_string();
-    let (application, _) = topup::api::router(state);
+    let (application, _) = topup::api::booting_router(state);
     tasks.spawn("API server", |cancellation| {
         axum::serve(
             topup::api::DeadlineListener::new(listener).with_connect_info(),
