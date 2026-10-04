@@ -21,6 +21,8 @@ rpc_companies:
     domains: [flashbots.net]
   llama:
     domains: [llamarpc.com]
+  mevblocker:
+    domains: [mevblocker.io]
   ethereum-foundation:
     # ethPandaOps team: github.com/ethpandaops; public Sepolia RPC, no API key.
     domains:
@@ -72,7 +74,10 @@ rpc_budgets:
   price-mainnet-b-key:
     requests_per_second: 5
     burst: 2
-  price-mainnet-public-key:
+  price-mainnet-mevblocker-key:
+    requests_per_second: 5
+    burst: 2
+  price-mainnet-mevblocker-account:
     requests_per_second: 5
     burst: 2
   price-mainnet-flashbots-key:
@@ -85,9 +90,6 @@ rpc_budgets:
     requests_per_second: 5
     burst: 2
   price-base-mainnet-b-key:
-    requests_per_second: 5
-    burst: 2
-  price-base-mainnet-public-key:
     requests_per_second: 5
     burst: 2
   price-base-mainnet-sentio-key:
@@ -124,7 +126,7 @@ rpc_groups:
     - id: provider-b
       company: publicnode
       url: https://ethereum-sepolia-rpc.publicnode.com
-      account_budget: publicnode-account
+      account_budget: price-mainnet-mevblocker-account
       key_budget: provider-b-key
     - id: ethpandaops-sepolia-b
       company: ethereum-foundation
@@ -170,11 +172,11 @@ rpc_groups:
       url: https://mainnet.gateway.tenderly.co
       account_budget: tenderly-account
       key_budget: price-mainnet-a-key
-    - id: price-mainnet-a-public
-      company: publicnode
-      url: https://ethereum-rpc.publicnode.com
-      account_budget: publicnode-account
-      key_budget: price-mainnet-public-key
+    - id: price-mainnet-a-mevblocker
+      company: mevblocker
+      url: https://rpc.mevblocker.io
+      account_budget: price-mainnet-mevblocker-account
+      key_budget: price-mainnet-mevblocker-key
   mainnet-b:
     chain_id: 1
     policy: { head_regression_tolerance: 2 }
@@ -212,7 +214,7 @@ rpc_groups:
       url: https://base-rpc.publicnode.com
       account_budget: publicnode-account
       key_budget: price-base-mainnet-b-key
-    - id: price-base-mainnet-b-flashbots
+    - id: price-base-mainnet-b-llama
       company: llama
       url: https://base.llamarpc.com
       account_budget: price-base-mainnet-llama-account

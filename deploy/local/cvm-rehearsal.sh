@@ -444,6 +444,7 @@ write_config() {
             | .rpc_companies.flashbots.domains = ["price-mainnet-b.test", "flashbots.net"]
             | .rpc_companies.llama.domains = ["base-price-mainnet-b.test", "llamarpc.com"]
             | .rpc_companies.sentio.domains = ["base-price-mainnet-a.test", "sentio.xyz"]
+            | .rpc_companies.mevblocker.domains = ["price-mainnet-a.test", "mevblocker.io"]
             | .rpc_groups["provider-a"].members[0].url = "http://anvil.rehearsal-a.test:8545"
             | .rpc_groups["provider-b"].members[0].url = "http://anvil.rehearsal-b.test:8545/?key={key}"
             | .rpc_groups["provider-b"].members[0].sealed_key = "TOPUP_RPC_PROVIDER_B_KEY"
