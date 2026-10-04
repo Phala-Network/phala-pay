@@ -74,7 +74,7 @@ mode".
 | `confirming` | Payment at the route's confirmation (two blocks on Ethereum), being valued and screened |
 | `credited` | What was credited, typically `typical_credit_seconds` after paying; `onSuccess(quote)` is called once |
 | `rejected` | Will not be credited; the payer contacts support |
-| `reversed` | Credited, then its transaction left the chain before finality: the payment did not happen |
+| `reversed` | A reorganization proved the credited payment replaced before finality |
 | `expired`, `canceled` | The address is hidden; `onExpire` is called once |
 | `error` | Invalid client secret or address mismatch; nothing to pay |
 

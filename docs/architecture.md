@@ -1379,9 +1379,9 @@ from fetched state, never from webhook order.
 | Detected, N confirmations | none yet: the quote's `payment.status` `seen` (display only) | "Payment received: N confirmations. Crediting in about T." (T from `typical_credit_seconds`) When `matches_quote` is false, add: "This payment does not match the quote, so it will be credited at the rate when it is confirmed." |
 | Confirming | `detected` | "Confirmed on Ethereum. Checking the payment and fixing the rate." |
 | Crediting | `confirmed`, or `credited` before the merchant has applied the credit | "Crediting your balance." |
-| Completed | `credited`, `swept`, and the merchant's own credit recorded | "Credited $X at $rate." When a payment to a quote's address was valued at spot (late, wrong amount, second payment), add: "Credited at the rate when your payment became final because it did not match the quote." |
+| Completed | `credited`, `swept`, and the merchant's own credit recorded | "Credited $X at $rate." When a payment to a quote's address was valued at spot (late, wrong amount, second payment), add: "Credited at the rate when your payment was confirmed because it did not match the quote." |
 | Needs attention | `rejected` | By reason, below. The reason code itself is never shown. |
-| Reversed | `reversed` | "This payment was dropped from the Ethereum chain before it became final, so its credit was reversed. If you still want to top up, pay a new quote." |
+| Reversed | `reversed` | "A reorganization proved this payment replaced before finality, so its credit was reversed. If you still want to top up, pay a new quote." |
 
 | `reason` | "Needs attention" copy |
 |---|---|

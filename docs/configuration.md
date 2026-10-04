@@ -151,9 +151,9 @@ privileges but no `TRUNCATE`. Append-only tables (among them `transitions`, `aud
 the finalized chain facts `flushed` and `flush_failures`) permit only `SELECT` and `INSERT`. The
 [migrations README](../crates/topup/migrations/README.md#roles-and-privileges) lists every grant.
 
-`migrate` and `restore-check` must log in as the trusted database owner, with permission to create
-roles and schema objects. They check it when they connect and refuse any other login, the
-application role included, before touching the schema.
+`migrate`, `restore-check`, `rpc recover`, and `rpc resume` require the trusted database owner;
+`migrate` also needs permission to create roles and schema objects. These commands refuse the
+application role. Recovery and restore checks require stopped writers.
 
 ## Environment
 

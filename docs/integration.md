@@ -255,7 +255,7 @@ the token's price risk from the payment until you sell it.
 - `treasury` is the treasury the quote's address pays: your treasury of the chain when it was
   created (§1.6).
 - `amount` is an integer in US cents; `amount_atomic` is the exact token amount to pay, a decimal
-  string in base units, rounded up to four token decimals (the route's `quote.amount_decimals`) so
+  string in base units, rounded up to four token decimals (the route's `asset.quote_amount_decimals`) so
   the payer reads and types a short amount such as `100.5026 PHA`; show every digit of it. The
   rounding is the payer's, below 0.0001 token, and the credit stays exactly `amount`;
   `exchange_rate` is the locked price in USD per token with 8 decimal
@@ -312,8 +312,8 @@ origin, as Stripe.js reads a PaymentIntent: `{id, object, livemode, status, amou
 asset, decimals, chain_id, amount_atomic, address, payment_uri, expires_at, payment_status,
 confirmations, amount_credited, typical_credit_seconds}`, where `payment_status` is `none`,
 `seen`, `confirming` (at the route's confirmation, being valued and screened), `credited`,
-`rejected` (contact support), or `reversed` (the credited payment's transaction left the chain
-before finality: it did not happen). While `credited`, `amount_credited` is what the payment
+`rejected` (contact support), or `reversed` (a reorganization proved the credited payment replaced
+before finality). While `credited`, `amount_credited` is what the payment
 credited in cents, the deposit's `amount`: it differs from `amount` for a payment valued at spot
 (another amount, or paid late), so show it rather than the quote's. `typical_credit_seconds` is
 the typical time from paying to the credit at your account's confirmation for the chain, as
