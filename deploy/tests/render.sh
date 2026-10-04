@@ -152,6 +152,11 @@ policy() {
 }
 "$compose" -f "$tmp/restore-check.yml" config --no-interpolate --format json >"$tmp/restore-check.json"
 service=(service "$tmp/service.json")
+# TCP proxy deadlines must not silently revert to the ingress image's one-day defaults.
+for setting in TIMEOUT_CONNECT TIMEOUT_CLIENT TIMEOUT_SERVER; do
+    policy "ingress-$setting" "${service[@]}" ".services[\"dstack-ingress\"].environment.$setting = \"86400s\"" \
+        "dstack-ingress must serve the host of topup's public_origin"
+done
 policy readonly-config "${service[@]}" '.services.topup.read_only = true' \
     "inline config consumers must use a writable root filesystem for Compose injection"
 policy root-user "${service[@]}" '.services.topup.user = "0:0"' \

@@ -428,7 +428,7 @@ YAML
         case "$name" in
             DSTACK_APP_DOMAIN) continue ;;
             TOPUP_ADMIN_PUBLIC_KEY | WALG_S3_PREFIX | AWS_ENDPOINT | AWS_REGION) ;;
-            SENTRY_DSN | WALG_*) ask_secret "$name" "$name (optional)" "" ;;
+            SENTRY_DSN) ask_secret "$name" "Sentry DSN (optional)" "" ;;
             TOPUP_RPC_*_KEY) ask_secret "$name" "$name, its provider's API key (empty for a keyless URL)" "" ;;
             *) ask_secret "$name" "$name" ;;
         esac

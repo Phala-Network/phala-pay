@@ -21,7 +21,6 @@ stage_call() {
     fi
     # Keep calls in the caller's foreground group so Ctrl-C reaches the CLI and its exec wrapper.
     "$timeout_cli" --foreground --signal=TERM --kill-after=2 "$limit" "$@" || result=$?
-    [[ ${STAGE_DIAGNOSTICS:-1} == 1 ]] || return "$result"
     echo "stage=$stage_name elapsed=$((SECONDS - stage_started))s remaining=$((stage_deadline - SECONDS))s call_status=$result" >&2
     return "$result"
 }

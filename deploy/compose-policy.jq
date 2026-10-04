@@ -235,7 +235,8 @@ def service_violations:
               "the service runs exactly keys, postgres, migrate, topup, dstack-ingress, smokescreen, heartbeat, backup, and capacity"),
         check(only_published("dstack-ingress"; 443; "443");
               "only dstack-ingress may publish a port, 443"),
-        check($ingress.CHALLENGE_TYPE == "tls-alpn-01" and $ingress.TARGET_ENDPOINT == "topup:8080"
+        check($ingress.TIMEOUT_CONNECT == "5s" and $ingress.TIMEOUT_CLIENT == "30s"
+                and $ingress.TIMEOUT_SERVER == "30s" and $ingress.CHALLENGE_TYPE == "tls-alpn-01" and $ingress.TARGET_ENDPOINT == "topup:8080"
                 and ($ingress.GATEWAY_DOMAIN // "" | host_name) and ($ingress.DOMAIN // "" | host_name)
                 and $origin == "https://\($ingress.DOMAIN)";
               "dstack-ingress must serve the host of topup's public_origin with tls-alpn-01, forwarding to topup:8080, through a gateway host"),
@@ -289,7 +290,8 @@ def product_violations:
     | [ check((.services | keys) == ["dstack-ingress", "product"];
               "the product CVM runs exactly product and dstack-ingress"),
         check(only_published("dstack-ingress"; 443; "443"); "only dstack-ingress may publish a port, 443"),
-        check($ingress.CHALLENGE_TYPE == "tls-alpn-01" and $ingress.TARGET_ENDPOINT == "product:8089"
+        check($ingress.TIMEOUT_CONNECT == "5s" and $ingress.TIMEOUT_CLIENT == "30s"
+                and $ingress.TIMEOUT_SERVER == "30s" and $ingress.CHALLENGE_TYPE == "tls-alpn-01" and $ingress.TARGET_ENDPOINT == "product:8089"
                 and ($ingress.GATEWAY_DOMAIN // "" | host_name) and ($ingress.DOMAIN // "" | host_name)
                 and $config.public_url == "https://\($ingress.DOMAIN)";
               "dstack-ingress must serve the host of the product's public_url with tls-alpn-01, forwarding to product:8089"),

@@ -212,7 +212,7 @@ hash. The sealed names are:
 
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, the object store's token (declared in
   [compose.yaml](compose.yaml));
-- `SENTRY_DSN`, which may be empty or left out to turn Sentry off;
+- `SENTRY_DSN`, required for production; staging and templates may leave it empty to turn Sentry off;
 - a `TOPUP_RPC_<ID>_KEY` per keyed [RPC provider](#rpc-providers), declared in the environment's
   `compose.yaml` overlay. It is the API key topup puts in place of `{key}` in the provider's
   attested URL. Phala's staging has keyless providers and declares none.
@@ -336,8 +336,7 @@ finite and are passed to both `postgres` and `backup`; an environment may overri
 | `WALG_BIN` | `wal-g` |
 
 The heartbeat commits every 15 seconds so WAL upload latency does not consume the full 60-second
-recovery point budget. These names are compatible with the backup/restore scripts from batch 1;
-merge that batch before deploying the settings.
+recovery point budget. These names are the limits used by the committed WAL-G backup/restore helpers.
 
 The template's `topup.yaml` leaves out `public_origin` and `admin_key.public_key`; `topup run`
 refuses to start unless each comes from exactly one place, and the policy fixes topup's command,
@@ -820,6 +819,14 @@ its payment settings are held until it sends its complete configuration again wi
 
 Phala's own deployment (its staging routes, the staging reset, the reference product behind the
 demo, the website, and its onboarding policy) is in [Phala's instance](phala.md).
+
+Production preflight passes `--require-sentry` to `topup config check`, forwarding `SENTRY_DSN`
+from the preflight environment file; a missing or malformed DSN blocks rollout. Configure the
+production GitHub Environment secret `SENTRY_DSN` for this read-only validation; the CVM retains
+its separately owner-sealed DSN.
+
+Ingress uses the supported dstack-ingress TCP settings `TIMEOUT_CONNECT=5s`,
+`TIMEOUT_CLIENT=30s`, and `TIMEOUT_SERVER=30s`, allowing the API deadline response to complete.
 
 ## Rollback compatibility
 

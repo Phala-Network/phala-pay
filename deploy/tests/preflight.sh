@@ -201,3 +201,12 @@ grep -Fq 'tenderly: finalized head: RPC transport failure' "$tmp/rpc.err"
 jq -e '. == []' "$tmp/healthy.json" >/dev/null
 [[ ! -s "$tmp/rpc.out" ]]
 echo "preflight local checks and RPC diagnostics tests passed"
+
+# Production must validate the real CLI's DSN requirement, including the unsealed deploy path.
+expect_failure production-missing-sentry "topup config check refused" \
+    --env "$tmp/complete.env" --compose "$tmp/service.yml" --environment-dir "$staging" --require-sentry
+valid_dsn=https://0123456789abcdef0123456789abcdef@o123.ingest.sentry.io/456
+sed "s|^SENTRY_DSN=.*|SENTRY_DSN=$valid_dsn|" "$tmp/complete.env" >"$tmp/sentry.env"
+passes --env "$tmp/sentry.env" --compose "$tmp/service.yml" --environment-dir "$staging" --require-sentry --unsealed
+! grep -Fq "$valid_dsn" "$tmp/pass.out" "$tmp/pass.err"
+echo 'production Sentry requirement passed'

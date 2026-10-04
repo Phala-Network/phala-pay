@@ -268,9 +268,17 @@ jobs:
         timeout-minutes: 20
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
+          sentry_args=()
+          if [[ "$DEPLOY_ENVIRONMENT" == production && "$TARGET" == topup ]]; then
+            # This local preflight value is never sent to the CVM or printed.
+            sed -i '/^SENTRY_DSN=/d' "$ENV_FILE"
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >>"$ENV_FILE"
+            sentry_args=(--require-sentry)
+          fi
           "$PREFLIGHT" --env "$ENV_FILE" --compose "$COMPOSE" --environment-dir "$ENVIRONMENT_DIR" \
-            --workspace "$PHALA_WORKSPACE" --os-image "$DSTACK_OS_IMAGE" --unsealed
+            --workspace "$PHALA_WORKSPACE" --os-image "$DSTACK_OS_IMAGE" --unsealed "${sentry_args[@]}"
 
       # Every route's livemode must match its chain: production serves test mode on Sepolia beside
       # live mode on mainnet, staging test mode only. The check reads the routes as topup does, in

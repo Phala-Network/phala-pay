@@ -5,6 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use prometheus::{GaugeVec, IntGauge, Opts, core::Collector, proto::MetricFamily};
 use serde::Deserialize;
 
+use super::business::emit_alert;
+
 #[derive(Deserialize)]
 struct Sample {
     timestamp: u64,
@@ -63,10 +65,7 @@ pub(super) async fn observe() {
     }
     .await;
     if result.is_err() {
-        tracing::error!(
-            tags.alert = "TopupCapacityProbeFailed",
-            "capacity probe missing, stale or invalid; deploy/README.md#disk-pressure"
-        );
+        emit_alert("TopupCapacityProbeFailed", "capacity", "critical", 1, 0);
     }
 }
 
@@ -86,27 +85,32 @@ fn record(sample: Sample, now: u64) -> anyhow::Result<()> {
     ] {
         let ratio = used(total, available).ok_or_else(|| anyhow::anyhow!("invalid capacity"))?;
         metrics.used.with_label_values(&[volume]).set(ratio);
+        let observed = (ratio * 100.0).round() as i64;
         if ratio >= 0.90 {
-            tracing::error!(
-                tags.alert = "TopupDiskCritical",
-                tags.volume = volume,
-                "disk usage reached 90%; deploy/README.md#disk-pressure"
-            );
+            emit_alert("TopupDiskCritical", volume, "critical", observed, 90);
         } else if ratio >= 0.75 {
-            tracing::warn!(
-                tags.alert = "TopupDiskWarning",
-                tags.volume = volume,
-                "disk usage reached 75%; deploy/README.md#disk-pressure"
-            );
+            emit_alert("TopupDiskWarning", volume, "warning", observed, 75);
         }
     }
     metrics.wal_bytes.set(i64::try_from(sample.wal_bytes)?);
     metrics.wal_age.set(i64::try_from(sample.wal_age_seconds)?);
     metrics.timestamp.set(i64::try_from(sample.timestamp)?);
-    if sample.wal_bytes >= 1_073_741_824 || sample.wal_age_seconds >= 120 {
-        tracing::error!(
-            tags.alert = "TopupUnarchivedWalPressure",
-            "unarchived WAL >=1 GiB or age >=120s; deploy/README.md#disk-pressure"
+    if sample.wal_bytes >= 1_073_741_824 {
+        emit_alert(
+            "TopupUnarchivedWalPressure",
+            "wal-bytes",
+            "critical",
+            i64::try_from(sample.wal_bytes)?,
+            1_073_741_824,
+        );
+    }
+    if sample.wal_age_seconds >= 120 {
+        emit_alert(
+            "TopupUnarchivedWalPressure",
+            "wal-age",
+            "critical",
+            i64::try_from(sample.wal_age_seconds)?,
+            120,
         );
     }
     Ok(())
@@ -157,7 +161,7 @@ mod tests {
             Some("TopupDiskWarning")
         );
         assert_eq!(
-            events[0].tags.get("volume").map(String::as_str),
+            events[0].tags.get("component").map(String::as_str),
             Some("pgdata")
         );
         assert_eq!(

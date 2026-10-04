@@ -23,7 +23,7 @@ mapfile -t states <"$STUB_STATES"
 printf '%s\n' "${states[count - 1]}"
 STUB
 printf '#!/bin/sh\n/bin/sleep 0.05\n' >"$tmp/bin/sleep"
-export CVM_WAIT_SECONDS=1
+export CVM_WAIT_SECONDS=3
 chmod +x "$tmp/deploy/phala" "$tmp/bin/sleep"
 export PATH="$tmp/bin:$PATH" STUB_COUNT="$tmp/count" STUB_STATES="$tmp/states"
 

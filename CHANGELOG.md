@@ -36,6 +36,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   including upload latency; RTO includes unfreeze and a successful merchant API request.
 - Add owner-recorded migration compatibility floors and checksum checks for N-1 rollback, with
   a real previous-release image smoke and an explicit legacy protocol bootstrap boundary.
+- Set ingress TCP connect/client/server timeouts to 5s/30s/30s and enforce production Sentry
+  configuration during preflight; use the shared business alert emitter for capacity thresholds.
 - Bound deploy stages and network calls by elapsed-time deadlines, with timeout diagnostics.
 - Alert on pgdata/observability disk usage at 75%/90%, pending WAL size/age, and stale probes;
   retain seven years of data and document safe disk-pressure response.
