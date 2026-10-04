@@ -64,7 +64,7 @@ rounding using lossless decoding; requests and arithmetic reject unsafe integers
   body. Redact secrets in logs/reprs/ causes; handlers expose generic codes, never exception text.
   Wrapping raw httpx errors is breaking.
 
-### Upgrade tolerance amendment (JS implemented; Python phase 2 handoff)
+### Upgrade tolerance amendment (JS and Python implemented)
 
 Add boolean `upgradeTolerance` (JS) / `upgrade_tolerance` (Python) to client configuration and
 per-call controls; default **false**, with a per-call value overriding the client. Preserve the
@@ -91,8 +91,8 @@ connection failure, then HTML 502 for three minutes, followed by success; assert
 recovery beyond four attempts, five-minute exhaustion, explicit shorter deadline, cancellation,
 and no retries of DELETE or replayed execution failures.
 
-Python implementation is intentionally outside the graceful-upgrades PR; apply this amendment in
-`feat/sdk-python-ergonomics` before advertising Python upgrade tolerance as available.
+Python implements this amendment through the existing merchant transport path, with fake-clock
+acceptance tests in `sdk/python/tests/test_upgrade_tolerance.py`.
 
 ## Pins validation
 

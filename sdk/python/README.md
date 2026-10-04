@@ -175,8 +175,8 @@ checkout = pay.checkout_params(quote)
 event = pay.webhooks.construct_event(raw_body, request.headers)
 ```
 
-All network methods accept `request_deadline` in seconds; every POST also accepts
-`idempotency_key`. `list()` returns an iterator, except the existing `api_keys.list()` and
+Network resource methods accept `request_deadline` in seconds and `upgrade_tolerance`; every POST
+also accepts `idempotency_key`. `list()` returns an iterator, except the existing `api_keys.list()` and
 `treasuries.list()` which return lists. Every list resource has `list_page(limit=100,
 starting_after=None, request_deadline=None)` returning `{"data": [...], "has_more": bool}`.
 Empty continuing pages and repeated cursors raise `ResponseValidationError`.
@@ -188,6 +188,35 @@ failures are wrapped in `TransportError` with `network` or `timeout`; Python int
 Malformed success responses raise `ResponseValidationError` with status and request ID. Error and
 object diagnostics redact API keys and checkout client secrets. Context cleanup closes the client
 pool and leaves injected transports open.
+
+For backend work that can wait through a planned upgrade, opt in at construction or per call:
+
+```python
+pay = PhalaPay(api_key, pins=pins, upgrade_tolerance=True)
+quote = pay.quotes.create(
+    client_reference_id="order-42",
+    amount=2500,
+    chain_id=11155111,
+    asset="pha",
+    idempotency_key="order-42",
+)
+quote = pay.quotes.retrieve(quote.id, upgrade_tolerance=False)  # Interactive override
+```
+
+The default is `False`: 15 seconds per attempt, four attempts, and 60 seconds total. For GETs and
+replayable idempotent POSTs, `upgrade_tolerance=True` lets maintenance (`503 service_maintenance`),
+network failures/attempt timeouts, and gateway 502/503/504 retry beyond four attempts for at most
+300 seconds from the original request start, including attempts, body reads, and sleeps. Upgrade
+backoff uses half-to-full exponential jitter from 0.5 seconds with a 10-second cap; Retry-After
+seconds or HTTP-date is a minimum. HTML, empty, and malformed gateway errors become `TransportError`
+without exposing raw bodies. Other responses keep the ordinary attempt cap and validation.
+
+An explicit constructor or per-call `request_deadline` remains a hard limit, even an explicitly
+supplied 60 seconds; omission keeps the interactive 60-second default eligible for extension.
+Per-call `upgrade_tolerance=True` or `False` overrides the client. POST body and key stay fixed;
+DELETE, interrupts (`KeyboardInterrupt`), replayed errors, redirects, and permanent failures end
+retries. Keep the application's request budget long enough, or run this work asynchronously in a
+worker thread. On exhaustion, preserve the order's explicit key for a later retry.
 
 Pins require a canonical origin and valid API key checksum. A normalized override must match pins;
 HTTP is limited to test loopback. Legacy `PhalaPay(api_base, api_key, account=..., forwarder=...,

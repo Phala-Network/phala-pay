@@ -102,6 +102,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Validate ledger snapshots and merge cumulative refunds and reversals without floats or input
   mutation; ignore unknown webhook types while retaining their raw objects.
 
+#### Added
+
+- Opt-in Python `upgrade_tolerance` at client construction and per resource call for GET and
+  replayable idempotent POST retries through maintenance, network/attempt timeouts, and gateway
+  502/503/504 (including HTML) for at most five minutes. Explicit deadlines stay hard limits,
+  body/key stay fixed, and interrupts or replayed errors terminate retries. Interactive defaults
+  remain 15 seconds per attempt, four attempts, and 60 seconds total.
+
 ### JS SDK (`@phala/pay`)
 
 #### Added
@@ -109,8 +117,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Opt-in `upgradeTolerance` for GET and idempotent POST retries across maintenance, connection
   failures, and gateway 502/503/504 for up to five minutes. Explicit deadlines and cancellation
   remain effective; keys and bodies stay fixed. Checkout and deposit address polling preserve
-  their last view through outages and show neutral reconnecting state. Python's exact matching
-  rule is documented for the phase 2 handoff; its implementation is separate.
+  their last view through outages and show neutral reconnecting state.
 
 - Merchant server client at `@phala/pay/server`: all OpenAPI resources, typed parameters/responses,
   verified quote/address results, two-variable `PhalaPay.fromEnv()`, frozen pins parse/encode,
