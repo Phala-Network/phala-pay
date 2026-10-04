@@ -630,6 +630,8 @@ const DOCUMENTED_GRANTS: &[(&str, &[&str])] = &[
     ("deposit_addresses", OPERATIONAL),
     ("addresses", OPERATIONAL),
     ("cursors", OPERATIONAL),
+    ("scan_address_sweeps", OPERATIONAL),
+    ("reconciliation_work_cursors", OPERATIONAL),
     ("pending_transfers", OPERATIONAL),
     ("deposits", OPERATIONAL),
     ("refunds", OPERATIONAL),
@@ -1414,4 +1416,48 @@ async fn restore_check_counts_failure_time_and_does_not_grant_sampling_tolerance
         })
     })
     .await
+}
+
+/// Concurrent scale indexes can finish before SQLx records their versions. Migration retries
+/// validate and reuse those exact objects, and a down/up round trip leaves old-schema queries
+/// available throughout the additive cutover.
+#[tokio::test]
+async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
+    with_database(|context| Box::pin(async move {
+        let pool=&context.owner_pool;
+        db::MIGRATOR.undo(pool,20261028000002).await?;
+        for sql in [
+            include_str!("../migrations/20261029030001_address_pages.up.sql"),
+            include_str!("../migrations/20261029030002_credit_pages.up.sql"),
+            include_str!("../migrations/20261029030003_address_created.up.sql"),
+            include_str!("../migrations/20261029030004_custody_pages.up.sql"),
+            include_str!("../migrations/20261029030005_flush_pages.up.sql"),
+        ] {sqlx::query(sql).execute(pool).await?;}
+        let objects=|| async {
+            anyhow::Ok(sqlx::query_as::<_,(String,i64,bool)>("SELECT c.relname,c.oid::bigint,i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid=c.oid WHERE c.relname=ANY($1) ORDER BY c.relname")
+                .bind(vec!["addresses_chain_page_idx","deposits_credit_page_idx","addresses_chain_created_idx","deposits_custody_page_idx","deposits_flush_page_idx"]).fetch_all(pool).await?)
+        };
+        let before=objects().await?;
+        ensure!(before.len()==5 && before.iter().all(|(_,_,valid)|*valid));
+        db::migrate(pool).await?;
+        ensure!(objects().await?==before,"completed index was unnecessarily rebuilt");
+        let compatible: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM _sqlx_migrations m \
+             JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
+             WHERE m.version BETWEEN 20261029030000 AND 20261029030005 \
+               AND m.success AND c.compatibility_floor=20261028000002",
+        )
+        .fetch_one(pool)
+        .await?;
+        ensure!(compatible == 6, "scale migrations must retain the N-1 compatibility floor");
+        db::MIGRATOR.undo(pool,20261028000002).await?;
+        ensure!(objects().await?.is_empty());
+        // Queries shipped by the previous release still work with the old or new schema.
+        db::list_scan_addresses(&context.app_pool,1).await?;
+        db::list_chain_addresses(&context.app_pool,1).await?;
+        db::migrate(pool).await?;
+        db::list_scan_addresses(&context.app_pool,1).await?;
+        ensure!(objects().await?.len()==5);
+        Ok(())
+    })).await
 }

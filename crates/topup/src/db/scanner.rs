@@ -382,3 +382,124 @@ pub(crate) async fn commit_scan_in(
 
     Ok(commit)
 }
+
+/// Maximum addresses resident in a scanner/reconciler work page.
+pub const ADDRESS_PAGE_SIZE: usize = 1_000;
+
+/// Reads a keyset page of all issued addresses, including retired and superseded addresses.
+/// The lookahead row is removed; `more` means the durable sweep must continue next round.
+pub async fn scan_address_page(
+    pool: &PgPool,
+    chain_id: u64,
+    after: Option<Uuid>,
+) -> Result<(Vec<ScanAddress>, bool), sqlx::Error> {
+    let records = sqlx::query_as::<_, ScanAddressRecord>(
+        "SELECT id,address,created_block,backfilled,backfilled_through FROM addresses \
+         WHERE chain_id=$1 AND id >= $2 AND ($3::uuid IS NULL OR id <> $3) \
+         ORDER BY id LIMIT 1001",
+    )
+    .bind(to_i64(chain_id, "address page chain")?)
+    .bind(after.unwrap_or(Uuid::nil()))
+    .bind(after)
+    .fetch_all(pool)
+    .await?;
+    let more = records.len() > ADDRESS_PAGE_SIZE;
+    let addresses = records
+        .into_iter()
+        .take(ADDRESS_PAGE_SIZE)
+        .map(TryInto::try_into)
+        .collect::<Result<_, _>>()?;
+    Ok((addresses, more))
+}
+
+/// Pinned block range and address position of a partially completed sweep.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub(crate) struct AddressSweep {
+    pub(crate) epoch: i64,
+    pub(crate) anchor: i64,
+    pub(crate) from_block: i64,
+    pub(crate) through_block: i64,
+    pub(crate) block_time: Option<DateTime<Utc>>,
+    pub(crate) horizon: Option<i64>,
+    pub(crate) last_id: Uuid,
+}
+
+pub(crate) async fn address_sweep(
+    pool: &PgPool,
+    chain: u64,
+    lane: &str,
+    anchor: u64,
+) -> Result<Option<AddressSweep>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT epoch,anchor,from_block,through_block,block_time,horizon,last_id \
+         FROM scan_address_sweeps \
+         WHERE chain_id=$1 \
+         AND lane=$2 \
+         AND anchor=$3 \
+         AND epoch=COALESCE((SELECT epoch \
+         FROM rpc_chain_state \
+         WHERE chain_id=$1),0)",
+    )
+    .bind(to_i64(chain, "sweep chain")?)
+    .bind(lane)
+    .bind(to_i64(anchor, "sweep anchor")?)
+    .fetch_optional(pool)
+    .await
+}
+
+pub(crate) async fn save_address_sweep(
+    pool: &PgPool,
+    chain: u64,
+    lane: &str,
+    sweep: Option<&AddressSweep>,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    super::rpc::guard_in(&mut tx, chain).await?;
+    let chain = to_i64(chain, "sweep chain")?;
+    if let Some(sweep) = sweep {
+        let epoch: i64 = sqlx::query_scalar("SELECT epoch FROM rpc_chain_state WHERE chain_id=$1")
+            .bind(chain)
+            .fetch_one(&mut *tx)
+            .await?;
+        if epoch != sweep.epoch {
+            return Err(sqlx::Error::Protocol("sweep epoch changed".into()));
+        }
+        sqlx::query(
+            "INSERT INTO scan_address_sweeps( \
+                 chain_id,lane,epoch,anchor,from_block,through_block,block_time,horizon,last_id) \
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+             ON CONFLICT(chain_id,lane) DO UPDATE SET \
+                 epoch=EXCLUDED.epoch,anchor=EXCLUDED.anchor, \
+                 from_block=EXCLUDED.from_block,through_block=EXCLUDED.through_block, \
+                 block_time=EXCLUDED.block_time,horizon=EXCLUDED.horizon,last_id=EXCLUDED.last_id",
+        )
+        .bind(chain)
+        .bind(lane)
+        .bind(sweep.epoch)
+        .bind(sweep.anchor)
+        .bind(sweep.from_block)
+        .bind(sweep.through_block)
+        .bind(sweep.block_time)
+        .bind(sweep.horizon)
+        .bind(sweep.last_id)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        sqlx::query("DELETE FROM scan_address_sweeps WHERE chain_id=$1 AND lane=$2")
+            .bind(chain)
+            .bind(lane)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
+}
+
+pub(crate) async fn sweep_epoch(pool: &PgPool, chain: u64) -> Result<i64, sqlx::Error> {
+    Ok(
+        sqlx::query_scalar::<_, i64>("SELECT epoch FROM rpc_chain_state WHERE chain_id=$1")
+            .bind(to_i64(chain, "sweep chain")?)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or(0),
+    )
+}

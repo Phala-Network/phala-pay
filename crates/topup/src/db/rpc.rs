@@ -353,10 +353,35 @@ pub async fn commit_head_window(
     pending: &[super::NewPendingTransfer],
     proof: Option<&WindowProof>,
 ) -> Result<(ScanCommit, super::HeadCommit), sqlx::Error> {
+    commit_head_page(
+        pool, chain, range, deposits, horizon, pending, proof, None, true,
+    )
+    .await
+}
+
+/// Commits one address page; only the last page advances chain-wide confirmation/reorg progress.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn commit_head_page(
+    pool: &PgPool,
+    chain: u64,
+    range: (u64, u64),
+    deposits: &[NewDeposit],
+    horizon: Option<u64>,
+    pending: &[super::NewPendingTransfer],
+    proof: Option<&WindowProof>,
+    addresses: Option<&[Uuid]>,
+    complete: bool,
+) -> Result<(ScanCommit, super::HeadCommit), sqlx::Error> {
     let mut tx = pool.begin().await?;
     guard_in(&mut tx, chain).await?;
     let scan = if let Some(horizon) = horizon {
-        super::scanner::commit_confirmed_scan_in(&mut tx, chain, deposits, horizon).await?
+        super::scanner::commit_confirmed_scan_in(
+            &mut tx,
+            chain,
+            deposits,
+            if complete { horizon } else { 0 },
+        )
+        .await?
     } else {
         ScanCommit {
             inserted: 0,
@@ -365,12 +390,28 @@ pub async fn commit_head_window(
         }
     };
     let head =
-        super::pending::commit_head_scan_in(&mut tx, chain, range.0, range.1, pending).await?;
+        super::pending::commit_head_page_in(&mut tx, chain, range.0, range.1, pending, addresses)
+            .await?;
     if let Some(proof) = proof {
         coverage_in(&mut tx, chain, proof).await?;
     }
-    sqlx::query("UPDATE rpc_reorg_ranges SET replayed_through=LEAST(to_block,$2) WHERE chain_id=$1 AND epoch=COALESCE((SELECT epoch FROM rpc_chain_state WHERE chain_id=$1),0) AND COALESCE(replayed_through+1,from_block)>=$3 AND COALESCE(replayed_through+1,from_block)<=$2 AND COALESCE(replayed_through,from_block-1)<to_block")
-        .bind(to_i64(chain,"reorg chain")?).bind(to_i64(range.1,"reorg through")?).bind(to_i64(range.0,"reorg from")?).execute(&mut *tx).await?;
+    if complete {
+        sqlx::query(
+            "UPDATE rpc_reorg_ranges SET replayed_through=LEAST(to_block,$2) \
+             WHERE chain_id=$1 \
+             AND epoch=COALESCE((SELECT epoch \
+             FROM rpc_chain_state \
+             WHERE chain_id=$1),0) \
+             AND COALESCE(replayed_through+1,from_block)>=$3 \
+             AND COALESCE(replayed_through+1,from_block)<=$2 \
+             AND COALESCE(replayed_through,from_block-1)<to_block",
+        )
+        .bind(to_i64(chain, "reorg chain")?)
+        .bind(to_i64(range.1, "reorg through")?)
+        .bind(to_i64(range.0, "reorg from")?)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok((scan, head))
 }

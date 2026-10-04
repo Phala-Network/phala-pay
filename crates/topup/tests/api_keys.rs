@@ -1135,6 +1135,64 @@ async fn a_saved_result_commits_with_the_changes_it_reports() -> Result<()> {
     result.and(cleanup)
 }
 
+/// Cancellation while saving a response rolls back the business write with the result. A
+/// cancelled claim is recoverable after the existing takeover interval; a committed result
+/// remains replayable if the client disappears just after commit.
+#[tokio::test]
+async fn cancelled_idempotent_handler_rolls_back_and_can_be_retried() -> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool=&database.app_pool;
+        let harness=Harness::new(pool,RateLimits::default())?;
+        let (account,key)=seed_test_account(pool,"cancelled").await?;
+        let before:i64=sqlx::query_scalar("SELECT count(*) FROM api_keys WHERE account_id=$1").bind(account).fetch_one(pool).await?;
+        for statement in [
+            "CREATE FUNCTION pause_save() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(987654321); RETURN NEW; END $$",
+            "CREATE TRIGGER pause_save BEFORE UPDATE ON idempotency_keys FOR EACH ROW WHEN (NEW.response IS NOT NULL) EXECUTE FUNCTION pause_save()",
+        ] {sqlx::query(statement).execute(&database.owner_pool).await?;}
+        let mut gate=database.owner_pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(987654321)").execute(&mut *gate).await?;
+        let body=json!({"name":"cancelled"});
+        let mut request=merchant_request(Method::POST,"/v1/api_keys",serde_json::to_vec(&body)?,&key);
+        request.headers_mut().insert("idempotency-key","cancelled".parse()?);
+        let running=tokio::spawn(harness.app.clone().oneshot(request));
+        tokio::time::timeout(Duration::from_secs(10),async {
+            loop {
+                let blocked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND objid=987654321 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))").fetch_one(&database.owner_pool).await?;
+                if blocked {break;}
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            anyhow::Ok(())
+        }).await??;
+        running.abort();
+        ensure!(running.await.unwrap_err().is_cancelled());
+        gate.rollback().await?;
+        // Drain the cancelled connection's queued rollback before inspecting the result.
+        tokio::time::timeout(Duration::from_secs(10),async {
+            loop {
+                let locked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=987654321 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))").fetch_one(&database.owner_pool).await?;
+                if !locked {break;}
+                sqlx::query("SELECT 1").execute(pool).await?;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            anyhow::Ok(())
+        }).await??;
+        let after:i64=sqlx::query_scalar("SELECT count(*) FROM api_keys WHERE account_id=$1").bind(account).fetch_one(pool).await?;
+        ensure!(after==before,"cancelled business write committed");
+        let response:Option<Value>=sqlx::query_scalar("SELECT response FROM idempotency_keys WHERE account_id=$1 AND key='cancelled'").bind(account).fetch_one(pool).await?;
+        ensure!(response.is_none(),"cancelled response committed");
+        sqlx::query("DROP FUNCTION pause_save() CASCADE").execute(&database.owner_pool).await?;
+        sqlx::query("UPDATE idempotency_keys SET created_at=now()-interval '2 minutes' WHERE account_id=$1 AND key='cancelled'").bind(account).execute(pool).await?;
+        let retried=harness.merchant(Method::POST,"/v1/api_keys",Some(&body),&key,Some("cancelled")).await?;
+        ensure!(retried.status==StatusCode::OK,"{}",retried.body);
+        let replay=harness.merchant(Method::POST,"/v1/api_keys",Some(&body),&key,Some("cancelled")).await?;
+        ensure!(replay.headers["idempotent-replayed"]=="true");
+        ensure!(replay.body["id"]==retried.body["id"]);
+        let count:i64=sqlx::query_scalar("SELECT count(*) FROM api_keys WHERE account_id=$1").bind(account).fetch_one(pool).await?;
+        ensure!(count==before+1);
+        Ok(())
+    })).await
+}
+
 /// Authorization runs before the idempotency layer, as Stripe's: a restricted key cannot replay
 /// the response to a request it may not make, and its `403` does not take the key, so the same
 /// request by a secret key then runs.
@@ -1517,4 +1575,54 @@ async fn restricted_keys_hold_only_their_grants() -> Result<()> {
     .await;
     let cleanup = database.cleanup().await;
     result.and(cleanup)
+}
+
+#[tokio::test]
+async fn anonymous_slow_bodies_do_not_shed_database_health_checks() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            use std::future::Future as _;
+            use std::task::Poll;
+            let harness = Harness::new(&database.app_pool, RateLimits::default())?;
+            let stalled = || {
+                axum::http::Request::post("/v1/admin/accounts")
+                    .body(axum::body::Body::from_stream(
+                        futures_util::stream::pending::<Result<axum::body::Bytes, std::io::Error>>(
+                        ),
+                    ))
+                    .unwrap()
+            };
+            let mut requests = (0..256)
+                .map(|_| Box::pin(harness.app.clone().oneshot(stalled())))
+                .collect::<Vec<_>>();
+            std::future::poll_fn(|cx| {
+                for request in &mut requests {
+                    assert!(
+                        request.as_mut().poll(cx).is_pending(),
+                        "slow body unexpectedly completed before saturation"
+                    );
+                }
+                Poll::Ready(())
+            })
+            .await;
+            let busy = harness.app.clone().oneshot(stalled()).await?;
+            ensure!(busy.status() == StatusCode::SERVICE_UNAVAILABLE);
+            let started = std::time::Instant::now();
+            let health = harness
+                .app
+                .oneshot(axum::http::Request::get("/healthz").body(axum::body::Body::empty())?)
+                .await?;
+            ensure!(
+                health.status() == StatusCode::OK,
+                "health was shed by anonymous work"
+            );
+            println!(
+                "SLOW BODY admitted=256 health_status=200 health_elapsed={:?}",
+                started.elapsed()
+            );
+            drop(requests);
+            Ok(())
+        })
+    })
+    .await
 }

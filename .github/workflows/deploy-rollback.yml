@@ -39,6 +39,7 @@ jobs:
         run: |
           deploy/tests/stage-deadlines.sh
           deploy/tests/capacity.sh
+          deploy/tests/rollback-policy.sh
       - name: Build current migration binary
         run: cargo build --locked -p topup
       - name: Install the GitHub CLI 2.101.0
@@ -59,18 +60,28 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
             scripts/changelog-section.sh CHANGELOG.md "${GITHUB_REF_NAME#v}" >"$section"
           else
-            sed -n '/^## \[Unreleased\]/,/^## \[/p' CHANGELOG.md >"$section"
-          fi
-          if grep -Fqi "no rollback; restore required" "$section"; then
-            echo "NO_ROLLBACK=1" >>"$GITHUB_ENV"
+            awk '/^## / { if (active) exit; active = ($0 == "## [Unreleased]"); next } active' CHANGELOG.md >"$section"
           fi
           previous=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
             jq -r --arg current "$GITHUB_REF_NAME" '[.[] | select(.draft == false and .prerelease == false and .tag_name != $current)] | .[0].tag_name')
           [[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mode=$(deploy/rollback-policy.sh "$previous" "$section")
+          echo "ROLLBACK_MODE=$mode" >>"$GITHUB_ENV"
+          if [[ "$mode" == declared ]]; then
+            {
+              echo "### Declared restore-only release"
+              echo "N-1: $previous."
+              echo "Explicit Breaking declaration: no rollback to ${previous#v}; restore required."
+              echo "Restore from the pre-upgrade backup: [restore runbook](deploy/RESTORE.md)."
+              echo "The N-1 image smoke is skipped under the validated restore-only declaration."
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           deploy/verify-release.sh "$previous" "$RUNNER_TEMP/previous-release"
           echo "PREVIOUS_IMAGE=$(jq -r '.["phala-pay"]' "$RUNNER_TEMP/previous-release/images.json")" >>"$GITHUB_ENV"
           tar -xOf "$RUNNER_TEMP/previous-release/phala-pay-deploy-$previous.tar.gz" \
             "phala-pay-deploy-$previous/deploy/environments/example/topup/topup.yaml" >"$RUNNER_TEMP/previous-topup.yaml"
       - name: Current migration then previous release image startup
+        if: env.ROLLBACK_MODE == 'rollback'
         timeout-minutes: 10
         run: deploy/tests/rollback-smoke.sh "$PWD/target/debug/topup" "$PREVIOUS_IMAGE" "$RUNNER_TEMP/previous-topup.yaml"

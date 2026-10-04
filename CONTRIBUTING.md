@@ -305,17 +305,20 @@ Release rollback rules:
 - `COMPATIBILITY_FLOOR` in `crates/topup/src/db/migrations.rs` must equal the maximum migration
   known to N-1 for compatible new migrations. Review this value whenever adding migrations.
   Applied ledger entries are immutable across rollback. Breaking migrations set the floor to
-  the new schema's maximum and explicitly state **no rollback; restore required** in the release
-  CHANGELOG, with a tested pre-upgrade restore/reconciliation plan and owner acceptance.
-- This protocol's bootstrap adds no SQLx migration. Legacy N-1 images reject unknown migrations;
-  do not add migrations until N-1 includes this protocol unless declaring the restore exception.
+  the new schema's maximum and declare `no rollback to <N-1 version>; restore required` in
+  `### Breaking (operators)` under `## [Unreleased]` (the dated release section after tagging),
+  with a tested pre-upgrade restore/reconciliation plan and owner acceptance.
+- CI resolves N-1 as the latest stable release. 0.9.0 is the first compatibility-ledger protocol
+  release. For any N-1, the exact version-specific declaration selects `declared` mode: skip the
+  image smoke and print the declaration in the job summary. For protocol-era N-1, CI additionally
+  requires `COMPATIBILITY_FLOOR` to exceed the value in N-1's tag; an unchanged or lower floor
+  fails. Without a declaration, pre-protocol N-1 fails and protocol-era N-1 runs the real smoke.
 - The `Deploy rollback` workflow migrates with the current build, runs N-1's migration entrypoint,
   then starts its actual image and checks `/healthz` and OpenAPI. The smoke uses read-only API
   startup and a test-only KMS stub: it proves migration/API compatibility, not live-chain worker
   behavior. Schema changes must additionally verify N-1's affected write paths with fixtures.
-- For an explicitly declared restore-only release, the workflow checks migration and fail-closed
-  rejection instead of requiring legacy startup; its logs must state the exception. Never silently
-  ignore unknown migrations or known checksum mismatches to get a green release.
+- Restore-only releases follow [the restore runbook](deploy/RESTORE.md). Never silently ignore
+  unknown migrations or known checksum mismatches to get a green release.
 
 1. Open a release pull request, `chore(release): v<version>`, that runs
    `scripts/version.sh <version>`, regenerates the OpenAPI snapshots, whose `info.version` is the

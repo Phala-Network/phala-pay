@@ -906,6 +906,11 @@ async fn run_sharding_scenario(database: &TestDatabase) -> Result<()> {
     let routes = scanner_route(&route_fixture.path, Backstop::Addresses)?;
     let finalized_time = DateTime::from_timestamp(1_700_000_000, 0).context("finalized time")?;
     let reader = RecordingReader::new(4_001, finalized_time);
+    let first = scan_once(&database.app_pool, &reader, &routes).await?;
+    ensure!(
+        first.cursor == 0,
+        "cursor advanced before all address pages committed"
+    );
     let stats = scan_once(&database.app_pool, &reader, &routes).await?;
     ensure!(stats.cursor == 4_001);
     let scanned_block_time: Option<DateTime<Utc>> =
@@ -950,18 +955,19 @@ async fn run_sharding_scenario(database: &TestDatabase) -> Result<()> {
         shapes
             == vec![
                 (1_000, 1, 2_000),
-                (1, 1, 2_000),
                 (1_000, 2_001, 4_000),
-                (1, 2_001, 4_000),
                 (1_000, 4_001, 4_001),
+                (1, 1, 2_000),
+                (1, 2_001, 4_000),
                 (1, 4_001, 4_001),
             ],
         "unexpected request sharding: {shapes:?}"
     );
 
-    // Token mode reads each window once, token-wide, whatever the number of addresses.
+    // Token mode keeps each address page bounded and filters token-wide logs to that page.
     let token_routes = scanner_route(&route_fixture.path, Backstop::Token)?;
     let token_reader = RecordingReader::new(8_001, finalized_time);
+    scan_once(&database.app_pool, &token_reader, &token_routes).await?;
     scan_once(&database.app_pool, &token_reader, &token_routes).await?;
     let shapes = token_reader
         .requests()
@@ -975,7 +981,13 @@ async fn run_sharding_scenario(database: &TestDatabase) -> Result<()> {
         })
         .collect::<Vec<_>>();
     ensure!(
-        shapes == vec![(0, 4_002, 6_001), (0, 6_002, 8_001)],
+        shapes
+            == vec![
+                (0, 4_002, 6_001),
+                (0, 6_002, 8_001),
+                (0, 4_002, 6_001),
+                (0, 6_002, 8_001)
+            ],
         "unexpected token-mode requests: {shapes:?}"
     );
     Ok(())

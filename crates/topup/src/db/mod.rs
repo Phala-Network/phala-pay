@@ -15,7 +15,9 @@ use sqlx::PgPool;
 use sqlx::migrate::Migrator;
 
 pub use accounts::{Account, Customer, ensure_customer_in, get_account, get_customer};
+pub(crate) use addresses::chain_address_page;
 pub use addresses::{Address, get_address, list_chain_addresses};
+pub(crate) use deposits::deposits_by_ids;
 pub use deposits::{
     ApplyTransitionError, ApplyTransitionResult, CanonicalEvidence, ClaimedDeposit, Deposit,
     Evidence, LockConsumption, NewDeposit, OutboxEvent, StoredValuation, TransitionEffects,
@@ -31,10 +33,14 @@ pub use pending::{
     list_addresses_pending,
 };
 pub use scanner::{
-    ScanAddress, ScanCommit, commit_confirmed_scan, commit_scan, get_confirmed_cursor, get_cursor,
-    initialize_cursor, list_scan_addresses, record_backfill_progress,
+    ADDRESS_PAGE_SIZE, ScanAddress, ScanCommit, commit_confirmed_scan, commit_scan,
+    get_confirmed_cursor, get_cursor, initialize_cursor, list_scan_addresses,
+    record_backfill_progress, scan_address_page,
 };
-pub(crate) use scanner::{find_scan_address, insert_scanned_deposit_in};
+pub(crate) use scanner::{
+    AddressSweep, address_sweep, find_scan_address, insert_scanned_deposit_in, save_address_sweep,
+    sweep_epoch,
+};
 pub(crate) use sweeps::mark_swept;
 pub use sweeps::{FactoryCommit, commit_factory_logs};
 

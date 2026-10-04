@@ -91,8 +91,8 @@ impl Drop for Node {
     }
 }
 impl Node {
-    // Modes: 0 complete, 1 omission, 2 lag/null receipt, 3 last topic batch fails,
-    // 4 hanging topic batch, 5 alternate nonfinal hash.
+    // Modes: 0 complete, 1 omission, 2 lag/null receipt, 3 last batch/receipt fails,
+    // 4 hanging batch/receipt, 5 alternate nonfinal hash.
     async fn start(count: usize) -> Result<Self> {
         let mode = Arc::new(AtomicUsize::new(0));
         let sends = Arc::new(AtomicUsize::new(0));
@@ -132,6 +132,9 @@ impl Node {
                         if m==2 {Value::Null} else {
                             let hash=request["params"][0].as_str().unwrap();let original=transfer(0);
                             let index=if hash==original["transactionHash"].as_str().unwrap(){0}else{usize::from_str_radix(hash.trim_start_matches("0x"),16).unwrap()};
+                            if m==3 && index>0 {return Json(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"last receipt failed"}}));}
+                            if m==4 && index>0 {signal.notify_one();std::future::pending::<()>().await;}
+
                             let mut receipt=fixture("receipt");receipt["transactionHash"]=json!(hash);receipt["blockNumber"]=json!(format!("0x{HEIGHT:x}"));receipt["logs"]=json!([transfer(index)]);if [9,11].contains(&m){receipt["blockHash"]=json!(format!("0x{}","33".repeat(32)));receipt["logs"][0]["blockHash"]=receipt["blockHash"].clone();}receipt
                         }
                     },
@@ -389,10 +392,10 @@ async fn cancel_last_batch<F: std::future::Future>(node: &Node, operation: F) ->
     tokio::pin!(operation);
     tokio::select! {
         _ = node.hanging.notified() => {
-            ensure!(node.sends.load(Ordering::SeqCst)>=2,"must reach the last batch before cancellation");
+            ensure!(node.sends.load(Ordering::SeqCst)>=1,"must read transfers before cancelling the last receipt");
             Ok(())
         }
-        _ = &mut operation => anyhow::bail!("window completed before cancellation"),
+        _ = &mut operation => anyhow::bail!("window completed before receipt cancellation"),
         _ = tokio::time::sleep(Duration::from_secs(10)) => anyhow::bail!("window never reached the hanging last batch"),
     }
 }
@@ -407,7 +410,9 @@ async fn batch_scenario(switch: bool, cancel: bool) -> Result<()> {
         first
             .mode
             .store(if cancel { 4 } else { 3 }, Ordering::SeqCst);
-        seed(&database.app_pool, 1001).await?;
+        // One bounded address page still needs all transfer/receipt/factory evidence from
+        // one member before it can commit. The scale test separately covers page boundaries.
+        seed(&database.app_pool, 1000).await?;
         let urls = if switch {
             vec![first.url.as_str(), backup.url.as_str()]
         } else {
@@ -443,7 +448,7 @@ async fn batch_scenario(switch: bool, cancel: bool) -> Result<()> {
         );
         if switch {
             ensure!(
-                backup.sends.load(Ordering::SeqCst) >= 3,
+                backup.sends.load(Ordering::SeqCst) >= 2,
                 "backup must read the entire window"
             );
         }
@@ -461,7 +466,7 @@ async fn batch_scenario(switch: bool, cancel: bool) -> Result<()> {
         .execute(&database.app_pool)
         .await?;
         first.sends.store(0, Ordering::SeqCst);
-        // Fresh clients make the reconciler actually read the failing batches, rather than
+        // Fresh clients make the reconciler actually read the failing receipts, rather than
         // merely inheriting the scanner's cooldown and rejecting an empty pool.
         let a = group("a", &urls, 10000, policy)?;
         let b = group("b", &[&backup.url], 10000, GroupPolicy::default())?;
@@ -485,8 +490,8 @@ async fn batch_scenario(switch: bool, cancel: bool) -> Result<()> {
             );
         }
         ensure!(
-            first.sends.load(Ordering::SeqCst) >= 2,
-            "reconciler must reach the failing final batch"
+            first.sends.load(Ordering::SeqCst) >= 1,
+            "reconciler must read transfers before verifying the failing receipt"
         );
         let deposits_after: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits")
             .fetch_one(&database.app_pool)
@@ -512,11 +517,11 @@ async fn batch_scenario(switch: bool, cancel: bool) -> Result<()> {
     result
 }
 #[tokio::test]
-async fn scanner_and_reconciler_do_not_commit_a_failed_last_batch() -> Result<()> {
+async fn scanner_and_reconciler_do_not_commit_a_failed_last_receipt() -> Result<()> {
     batch_scenario(false, false).await
 }
 #[tokio::test]
-async fn scanner_and_reconciler_switch_by_retrying_every_batch() -> Result<()> {
+async fn scanner_and_reconciler_switch_by_retrying_the_whole_address_page() -> Result<()> {
     batch_scenario(true, false).await
 }
 #[tokio::test]

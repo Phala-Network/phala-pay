@@ -110,6 +110,8 @@ pub struct HeadScan {
     pub horizon: Option<u64>,
     /// Deposits newly recorded at the route's confirmation.
     pub inserted: u64,
+    /// More addresses remain in the pinned range.
+    pub work_remaining: bool,
     /// Pending-view rows written and removed.
     pub commit: HeadCommit,
 }
@@ -171,7 +173,7 @@ pub async fn scan_new_blocks<R: ChainReader>(
         .await?
         .unwrap_or(0)
         .max(finalized_cursor);
-    let from_block = if let Some(replay) = replay {
+    let mut from_block = if let Some(replay) = replay {
         let from = u64::try_from(replay)
             .map_err(|_| ScannerError::Configuration("invalid replay height".into()))?;
         latest = latest.min(from.saturating_add(MAX_SCAN_WINDOW.saturating_sub(1)));
@@ -185,10 +187,24 @@ pub async fn scan_new_blocks<R: ChainReader>(
         return Ok(None);
     }
     // Cap confirmation progress at the window actually read, including bounded replay.
-    let horizon = (confirmations != Confirmations::Finalized)
+    let mut horizon = (confirmations != Confirmations::Finalized)
         .then(|| confirmations.horizon(heads).min(latest));
     // Read after `latest`: an address issued from here on is paid only above `latest`.
-    let addresses = db::list_scan_addresses(pool, chain_id).await?;
+    let sweep = db::address_sweep(pool, chain_id, "head", scanned).await?;
+    let epoch = db::sweep_epoch(pool, chain_id).await?;
+    if let Some(sweep) = &sweep {
+        from_block = u64::try_from(sweep.from_block)
+            .map_err(|_| ScannerError::Configuration("invalid sweep start".into()))?;
+        latest = u64::try_from(sweep.through_block)
+            .map_err(|_| ScannerError::Configuration("invalid sweep height".into()))?;
+        horizon = sweep
+            .horizon
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| ScannerError::Configuration("invalid sweep horizon".into()))?;
+    }
+    let (addresses, more) =
+        db::scan_address_page(pool, chain_id, sweep.as_ref().map(|s| s.last_id)).await?;
     let request = super::window_request(routes, &addresses, from_block, latest, false);
     let window = reader.read_window(&request).await?;
     let logs = window.transfers;
@@ -226,7 +242,7 @@ pub async fn scan_new_blocks<R: ChainReader>(
             amount_atomic: log.amount,
         });
     }
-    let (committed, commit) = db::rpc::commit_head_window(
+    let (committed, commit) = db::rpc::commit_head_page(
         pool,
         chain_id,
         (from_block, latest),
@@ -234,15 +250,41 @@ pub async fn scan_new_blocks<R: ChainReader>(
         horizon.filter(|h| replay.is_some() || *h > scanned),
         &pending,
         window.proof.as_ref(),
+        Some(&addresses.iter().map(|a| a.id).collect::<Vec<_>>()),
+        !more,
     )
     .await?;
     record_committed(chain_id, &mut super::ScanStats::default(), &committed)?;
+    let progress = if more {
+        Some(db::AddressSweep {
+            epoch,
+            anchor: i64::try_from(scanned)
+                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
+            from_block: i64::try_from(from_block)
+                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
+            through_block: i64::try_from(latest)
+                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
+            block_time: None,
+            horizon: horizon
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
+            last_id: addresses
+                .last()
+                .ok_or_else(|| ScannerError::Configuration("empty address page".into()))?
+                .id,
+        })
+    } else {
+        None
+    };
+    db::save_address_sweep(pool, chain_id, "head", progress.as_ref()).await?;
     let inserted = committed.inserted;
     Ok(Some(HeadScan {
         from_block,
         latest,
         horizon,
         inserted,
+        work_remaining: more,
         commit,
     }))
 }
@@ -298,6 +340,7 @@ struct HeadState {
     pacing: Pacing,
     /// `latest` of the last successful scan; the same head is not scanned twice.
     scanned_latest: Option<u64>,
+    work_remaining: bool,
     finalized: Option<FinalizedHead>,
     finalized_read_at: Option<Instant>,
 }
@@ -346,7 +389,8 @@ async fn poll_once(
         finalized: state.finalized.map_or(0, |head| head.number),
     };
     let scan = scan_new_blocks(pool, reader, routes, heads).await?;
-    state.scanned_latest = Some(latest);
+    state.work_remaining = scan.as_ref().is_some_and(|scan| scan.work_remaining);
+    state.scanned_latest = (!state.work_remaining).then_some(latest);
     Ok(scan)
 }
 
@@ -400,16 +444,19 @@ pub(super) async fn run_head_loop(
                     }
                 }
             }
-            Err(error) => tracing::warn!(
-                chain_id,
-                error_category = error.category(),
-                %error,
-                "per-block scan failed; retrying"
-            ),
+            Err(error) => {
+                state.work_remaining = false;
+                tracing::warn!(chain_id,error_category=error.category(),%error,"per-block scan failed; retrying");
+            }
         }
+        let delay = if state.work_remaining {
+            Duration::from_millis(100)
+        } else {
+            next_poll_delay(interval, state.pacing)
+        };
         tokio::select! {
             () = cancellation.cancelled() => return,
-            () = tokio::time::sleep_until(polled_at + next_poll_delay(interval, state.pacing)) => {}
+            () = tokio::time::sleep_until(polled_at + delay) => {}
         }
     }
 }

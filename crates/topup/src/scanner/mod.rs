@@ -37,6 +37,8 @@ use crate::routes::RouteSet;
 
 /// Maximum inclusive block count scanned in one window.
 pub const MAX_SCAN_WINDOW: u64 = MAX_BLOCKS_PER_REQUEST;
+/// Maximum block windows per address page in one finalized pass.
+const MAX_WINDOWS_PER_SCAN: u64 = 64;
 
 /// Scanner timing (`topup run --head-poll-interval-s`, `--finalized-poll-interval-s`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,6 +167,8 @@ pub struct ScanStats {
     pub finalized: u64,
     /// Addresses whose one-time historical backfill completed.
     pub backfilled_addresses: u64,
+    /// More address pages or block windows remain; continue without waiting for a new head.
+    pub work_remaining: bool,
     /// Factory events recorded for known addresses.
     pub factory: db::FactoryCommit,
 }
@@ -371,10 +375,47 @@ pub async fn scan_once<R: ChainReader>(
     if finalized < cursor {
         return Err(ScannerError::FinalizedBehindCursor { cursor, finalized });
     }
-    let addresses = db::list_scan_addresses(pool, chain_id).await?;
+    let sweep = db::address_sweep(pool, chain_id, "finalized", cursor).await?;
+    let epoch = db::sweep_epoch(pool, chain_id).await?;
+    let target = match &sweep {
+        Some(sweep) => u64::try_from(sweep.through_block)
+            .map_err(|_| ScannerError::Configuration("invalid sweep height".into()))?,
+        None => finalized.min(cursor.saturating_add(MAX_SCAN_WINDOW * MAX_WINDOWS_PER_SCAN)),
+    };
+    if target > finalized {
+        return Err(ScannerError::FinalizedBehindCursor {
+            cursor: target,
+            finalized,
+        });
+    }
+    let target_time = sweep
+        .as_ref()
+        .map_or((target == finalized).then_some(head.time), |s| s.block_time);
+    let (addresses, more) =
+        db::scan_address_page(pool, chain_id, sweep.as_ref().map(|s| s.last_id)).await?;
+    let sweep_progress = if more {
+        Some(db::AddressSweep {
+            epoch,
+            anchor: i64::try_from(cursor)
+                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
+            from_block: i64::try_from(cursor.saturating_add(1))
+                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
+            through_block: i64::try_from(target)
+                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
+            block_time: target_time,
+            horizon: None,
+            last_id: addresses
+                .last()
+                .ok_or_else(|| ScannerError::Configuration("empty address page".into()))?
+                .id,
+        })
+    } else {
+        None
+    };
     let mut stats = ScanStats {
         cursor,
         finalized,
+        work_remaining: more || target < finalized,
         ..ScanStats::default()
     };
 
@@ -391,7 +432,9 @@ pub async fn scan_once<R: ChainReader>(
         };
         match reader.read_window(&request).await {
             Ok(window) => {
-                let index = address_index(&addresses);
+                let review_addresses =
+                    addresses_for_logs(pool, chain_id, &window.transfers).await?;
+                let index = address_index(&review_addresses);
                 let deposits = resolve_logs(window.transfers, &index, routes)?;
                 db::rpc::commit_window(
                     pool,
@@ -429,7 +472,10 @@ pub async fn scan_once<R: ChainReader>(
     {
         let through = cursor.min(finalized);
         let windows = if from <= through {
-            scan_windows(from, through)?
+            scan_windows(
+                from,
+                through.min(from.saturating_add(MAX_SCAN_WINDOW * MAX_WINDOWS_PER_SCAN - 1)),
+            )?
         } else {
             Vec::new()
         };
@@ -465,6 +511,11 @@ pub async fn scan_once<R: ChainReader>(
             .map(|address| address.id)
             .collect::<Vec<_>>();
 
+        if from <= through && through.saturating_sub(from) >= MAX_SCAN_WINDOW * MAX_WINDOWS_PER_SCAN
+        {
+            stats.work_remaining = true;
+            return Ok(stats);
+        }
         stats.record_backfilled(ids.len())?;
     }
 
@@ -479,18 +530,22 @@ pub async fn scan_once<R: ChainReader>(
     let Some(start) = cursor.checked_add(1) else {
         return Ok(stats);
     };
-    if start > finalized {
+    if start > target {
+        db::save_address_sweep(pool, chain_id, "finalized", sweep_progress.as_ref()).await?;
         return Ok(stats);
     }
 
-    for (from_block, to_block) in scan_windows(start, finalized)? {
+    for (from_block, to_block) in scan_windows(start, target)? {
         let backfilled = pending_backfill_marks
             .iter()
             .filter(|(_, created)| **created <= to_block)
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
         let progress = db::rpc::WindowProgress {
-            scanned: Some((to_block, (to_block == finalized).then_some(head.time))),
+            scanned: (!more).then_some((
+                to_block,
+                (to_block == target).then_some(target_time).flatten(),
+            )),
             backfilled: backfilled.clone(),
             ..Default::default()
         };
@@ -504,9 +559,31 @@ pub async fn scan_once<R: ChainReader>(
         for id in &backfilled {
             pending_backfill_marks.remove(id);
         }
-        stats.cursor = to_block;
+        if !more {
+            stats.cursor = to_block;
+        }
     }
+    db::save_address_sweep(pool, chain_id, "finalized", sweep_progress.as_ref()).await?;
     Ok(stats)
+}
+
+/// Historical reviews resolve only recipients actually returned by the bounded RPC window.
+async fn addresses_for_logs(
+    pool: &PgPool,
+    chain: u64,
+    logs: &[TransferLog],
+) -> Result<Vec<ScanAddress>, ScannerError> {
+    let recipients = logs
+        .iter()
+        .map(|log| log.to)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut addresses = Vec::new();
+    for recipient in recipients {
+        if let Some(address) = db::find_scan_address(pool, chain, recipient).await? {
+            addresses.push(address);
+        }
+    }
+    Ok(addresses)
 }
 
 /// Fixed selectors shared by finalized, head and historical review reads.
@@ -749,7 +826,11 @@ where
                     swept = stats.factory.swept,
                     "finalized chain scan committed"
                 );
-                BACKSTOP_FALLBACK_INTERVAL
+                if stats.work_remaining {
+                    Duration::from_millis(100)
+                } else {
+                    BACKSTOP_FALLBACK_INTERVAL
+                }
             }
             Err(error) if error.is_retryable() => {
                 healthy.store(false, Ordering::Relaxed);
@@ -918,6 +999,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unfinished_pages_continue_without_waiting_for_a_new_finalized_head() {
+        let mut results = VecDeque::from([
+            Ok(ScanStats {
+                work_remaining: true,
+                ..ScanStats::default()
+            }),
+            Err(ScannerError::UnknownRecipient(Address::ZERO)),
+        ]);
+        let delays = Mutex::new(Vec::new());
+        let result = run_scan_loop(
+            1,
+            &AtomicBool::new(true),
+            CancellationToken::new(),
+            || std::future::ready(results.pop_front().expect("one next page")),
+            |delay| {
+                delays.lock().unwrap().push(delay);
+                std::future::ready(())
+            },
+            || 0,
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(*delays.lock().unwrap(), vec![Duration::from_millis(100)]);
+    }
+
+    #[tokio::test]
     async fn scan_loop_retries_transient_failures_and_a_stale_finalized_head() {
         let results = Mutex::new(VecDeque::from([
             Err(ScannerError::Database(sqlx::Error::PoolTimedOut)),
@@ -936,6 +1043,7 @@ mod tests {
                 cursor: 2,
                 finalized: 2,
                 backfilled_addresses: 0,
+                work_remaining: false,
                 factory: db::FactoryCommit::default(),
             }),
             Err(ScannerError::UnknownRecipient(Address::ZERO)),

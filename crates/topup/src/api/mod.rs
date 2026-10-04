@@ -6,6 +6,7 @@ mod attestation;
 mod auth;
 mod cache;
 mod client_limit;
+mod deadlines;
 mod deposit_addresses;
 mod deposits;
 pub(crate) mod error;
@@ -57,6 +58,7 @@ pub use attestation::{
 };
 pub use auth::VerificationKey;
 pub use client_limit::ClientReadLimiter;
+pub use deadlines::DeadlineListener;
 pub use idempotency::IdempotencyKeyPruner;
 pub(crate) use keys::api_key_object;
 pub use rate_limit::{ApiRateLimiter, RateLimits};
@@ -504,7 +506,6 @@ fn router_inner(state: AppState) -> (Router, ApiDocs) {
     };
     let router = merchant_router
         .merge(admin_router)
-        .route("/healthz", get(healthz))
         // Bound unauthenticated work before API-key verification can touch PostgreSQL.
         .layer(
             ServiceBuilder::new()
@@ -512,15 +513,17 @@ fn router_inner(state: AppState) -> (Router, ApiDocs) {
                     error::ApiError::database_busy().into_response()
                 }))
                 .layer(LoadShedLayer::new())
-                .layer(GlobalConcurrencyLimitLayer::new(256)),
+                .layer(GlobalConcurrencyLimitLayer::new(256))
+                .layer(middleware::from_fn(deadlines::request_deadline)),
         )
-        .with_state(state)
+        .route("/healthz", get(healthz))
         .route("/openapi.json", get(serve_openapi))
         .route("/openapi.admin.json", get(serve_admin_openapi))
         // Stripe's error object for any other path or method too, never an empty body.
         .fallback(unrecognized_request)
         .method_not_allowed_fallback(unrecognized_request)
-        .layer(Extension(Arc::new(docs.clone())));
+        .layer(Extension(Arc::new(docs.clone())))
+        .with_state(state);
 
     (router, docs)
 }
@@ -599,12 +602,14 @@ async fn healthz(
     State(state): State<AppState>,
     read_only: Option<Extension<ReadOnly>>,
 ) -> Response {
-    let status = match sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(&state.pool)
-        .await
+    let status = match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&state.pool),
+    )
+    .await
     {
-        Ok(1) => StatusCode::OK,
-        Ok(_) | Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+        Ok(Ok(1)) => StatusCode::OK,
+        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     };
     let Some(Extension(read_only)) = read_only else {
         return status.into_response();
@@ -651,6 +656,56 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::{AppState, VerificationKey};
+
+    /// Occupying every unauthenticated permit cannot shed health checks, and trickled bodies
+    /// expire even though the sender never signals EOF.
+    #[tokio::test(start_paused = true)]
+    async fn slow_admin_bodies_expire_and_health_bypasses_capacity() {
+        use std::future::Future as _;
+        use std::task::Poll;
+        let app = super::router(offline_state()).0;
+        let stalled = || {
+            Request::post("/v1/admin/accounts")
+                .body(Body::from_stream(futures_util::stream::pending::<
+                    Result<axum::body::Bytes, std::io::Error>,
+                >()))
+                .unwrap()
+        };
+        let mut requests = (0..256)
+            .map(|_| Box::pin(app.clone().oneshot(stalled())))
+            .collect::<Vec<_>>();
+        std::future::poll_fn(|cx| {
+            for request in &mut requests {
+                assert!(request.as_mut().poll(cx).is_pending());
+            }
+            Poll::Ready(())
+        })
+        .await;
+        let shed = app.clone().oneshot(stalled()).await.unwrap();
+        assert_eq!(shed.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let health = app
+            .clone()
+            .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        // This offline pool fails health's SELECT 1; its empty body proves health ran rather
+        // than the concurrency layer's JSON database_busy response.
+        assert_eq!(health.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(to_bytes(health.into_body(), 1024).await.unwrap().is_empty());
+        tokio::time::advance(super::deadlines::BODY_READ_TIMEOUT).await;
+        for request in requests {
+            assert_eq!(request.await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        }
+        let after = app
+            .oneshot(
+                Request::post("/v1/admin/accounts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+    }
 
     /// Every merchant route declares the permission it requires, and every declaration is a
     /// route, so no route is left to a handler's own check.
@@ -844,12 +899,14 @@ mod tests {
                 super::router(state).0
             };
             let mut admitted = Vec::new();
-            // Poll requests into the real concurrency gate and pending database health check.
+            // Poll slow admin reads into the real concurrency gate before signature verification.
             // No reactor turn occurs before saturation, so failures cannot free permits.
             for _ in 0..256 {
                 let request = Request::builder()
-                    .uri("/healthz")
-                    .body(Body::empty())
+                    .uri("/v1/admin/reports/daily")
+                    .body(Body::from_stream(futures_util::stream::pending::<
+                        Result<axum::body::Bytes, std::io::Error>,
+                    >()))
                     .unwrap();
                 let mut response = Box::pin(router.clone().oneshot(request));
                 assert!(futures_util::poll!(&mut response).is_pending());

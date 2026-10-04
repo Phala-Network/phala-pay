@@ -6,7 +6,7 @@
 //!
 //! Chain reads stay proportional to what changed: the service's rounds run only after provider
 //! A's `finalized` advanced, reuse the head the scanner published, verify each stored
-//! `(address, salt, treasury)` against the factory once per process, and read balances only of
+//! `(address, salt, treasury)` against the factory with a bounded LRU cache, and read balances only of
 //! forwarders that hold unswept funds by the ledger.
 
 mod chain;
@@ -27,7 +27,7 @@ use topup_core::money::{PRICE_SCALE, ScaledPrice, credit};
 use topup_core::route::{RouteFile, UNIT_DECIMALS};
 use uuid::Uuid;
 
-use crate::db::{self, ApplyTransitionError, ScanAddress};
+use crate::db::{self, ApplyTransitionError};
 use crate::routes::RouteSet;
 use crate::scanner::{
     ChainRoutes, FinalizedHeads, MAX_SCAN_WINDOW, ScannerError, chain_routes,
@@ -115,6 +115,36 @@ type RoundHeads = BTreeMap<u64, u64>;
 /// A stored address the factory derived identically: `(chain, row, salt, treasury, address)`.
 type VerifiedDerivation = (u64, Uuid, alloy_primitives::B256, Address, Address);
 
+/// Bounded LRU cache. A changed row has a different key; eviction re-verifies old addresses.
+#[derive(Default)]
+struct VerifiedCache {
+    keys: BTreeMap<VerifiedDerivation, u128>,
+    recency: BTreeSet<(u128, VerifiedDerivation)>,
+    clock: u128,
+}
+impl VerifiedCache {
+    fn contains(&mut self, key: &VerifiedDerivation) -> bool {
+        if self.keys.contains_key(key) {
+            self.insert(*key);
+            true
+        } else {
+            false
+        }
+    }
+    fn insert(&mut self, key: VerifiedDerivation) {
+        self.clock = self.clock.saturating_add(1);
+        if let Some(old) = self.keys.insert(key, self.clock) {
+            self.recency.remove(&(old, key));
+        }
+        self.recency.insert((self.clock, key));
+        while self.keys.len() > db::ADDRESS_PAGE_SIZE * 4 {
+            if let Some((_, old)) = self.recency.pop_first() {
+                self.keys.remove(&old);
+            }
+        }
+    }
+}
+
 /// Runs every §13 check against configured routes and dependencies.
 pub struct Reconciler {
     pool: PgPool,
@@ -122,7 +152,7 @@ pub struct Reconciler {
     scanner_routes: BTreeMap<u64, ChainRoutes>,
     chains: BTreeMap<u64, Arc<dyn ReconciliationChain>>,
     /// Derivations already confirmed on chain; a changed row is a new key and is read again.
-    verified: Mutex<BTreeSet<VerifiedDerivation>>,
+    verified: Mutex<VerifiedCache>,
 }
 
 impl Reconciler {
@@ -189,7 +219,8 @@ impl Reconciler {
         result
     }
 
-    /// Runs one check without persisting its findings.
+    /// Runs one bounded check page without persisting its findings. Repeated calls resume
+    /// the durable cursor; completed row passes wrap so old rows are checked again.
     ///
     /// Safe repairs and freezes still apply: `missing_deposit` and `missing_flush_link` write the
     /// ledger, and `address_derivation` and `custody_balance` freeze a chain, exactly as a full
@@ -217,7 +248,19 @@ impl Reconciler {
         let mut report = ReconciliationReport::default();
         for check in REGULAR_CHECKS {
             let mut findings = Vec::new();
-            let mut result = self.run_check(check, &mut heads, &mut findings).await;
+            let mut result = async {
+                if post_restore {
+                    self.reset_check_cursor(check).await?;
+                }
+                loop {
+                    self.run_check(check, &mut heads, &mut findings).await?;
+                    if !post_restore || !self.check_pending(check).await? {
+                        break;
+                    }
+                }
+                Ok::<(), ReconciliationError>(())
+            }
+            .await;
             for finding in &findings {
                 match store::persist_finding(&self.pool, finding).await {
                     Ok(inserted) => log_finding(finding, inserted),
@@ -264,6 +307,83 @@ impl Reconciler {
         }
     }
 
+    fn work_names(&self, check: CheckName) -> Vec<String> {
+        match check {
+            CheckName::AddressDerivation => vec!["derivation".into()],
+            CheckName::CreditRecomputation => vec!["credit".into()],
+            CheckName::MissingFlushLink => vec!["flush".into()],
+            CheckName::CustodyBalance => self
+                .latest_asset_routes()
+                .iter()
+                .map(|r| format!("custody:{:#x}", r.asset.contract))
+                .collect(),
+            CheckName::MissingDeposit => Vec::new(),
+        }
+    }
+    async fn reset_check_cursor(&self, check: CheckName) -> Result<(), ReconciliationError> {
+        let mut chains = self.chain_keys()?;
+        chains.push(0);
+        sqlx::query(
+            "UPDATE reconciliation_work_cursors SET last_id=NULL \
+             WHERE check_name=ANY($1) AND chain_id=ANY($2)",
+        )
+        .bind(self.work_names(check))
+        .bind(chains)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+    async fn check_pending(&self, check: CheckName) -> Result<bool, ReconciliationError> {
+        if check == CheckName::MissingDeposit {
+            return Ok(sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 \
+                 FROM scan_address_sweeps s \
+                 WHERE lane='missing' \
+                 AND chain_id=ANY($1) \
+                 AND epoch=COALESCE((SELECT epoch \
+                 FROM rpc_chain_state \
+                 WHERE chain_id=s.chain_id),0) \
+                 AND anchor=COALESCE((SELECT next_block \
+                 FROM reconciliation_deposit_cursors \
+                 WHERE chain_id=s.chain_id),(SELECT min(created_block) \
+                 FROM addresses \
+                 WHERE chain_id=s.chain_id)))",
+            )
+            .bind(self.chain_keys()?)
+            .fetch_one(&self.pool)
+            .await?);
+        }
+        let mut chains = self.chain_keys()?;
+        chains.push(0);
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 \
+             FROM reconciliation_work_cursors \
+             WHERE check_name=ANY($1) \
+             AND chain_id=ANY($2) \
+             AND last_id IS NOT NULL)",
+        )
+        .bind(self.work_names(check))
+        .bind(chains)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+    fn chain_keys(&self) -> Result<Vec<i64>, ReconciliationError> {
+        self.chains
+            .keys()
+            .map(|id| {
+                i64::try_from(*id).map_err(|_| ReconciliationError::Invariant("chain overflow"))
+            })
+            .collect()
+    }
+    async fn work_pending(&self) -> Result<bool, ReconciliationError> {
+        for check in REGULAR_CHECKS {
+            if self.check_pending(check).await? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Runs a round every `every` in which provider A's `finalized`, as `heads` publishes it,
     /// advanced on some chain since the last complete round, until cancellation. A round without
     /// an advance would read the same finalized state, so it is skipped and reported healthy.
@@ -288,8 +408,16 @@ impl Reconciler {
                 .filter_map(|chain_id| Some((*chain_id, heads.get(*chain_id)?.number)))
                 .collect::<RoundHeads>();
             if !published.is_empty() && reconciled.as_ref() == Some(&published) {
-                monitor.check_in(true);
-                continue;
+                match self.work_pending().await {
+                    Ok(false) => {
+                        monitor.check_in(true);
+                        continue;
+                    }
+                    Ok(true) => {}
+                    Err(error) => {
+                        tracing::warn!(%error,"could not read reconciliation work cursors");
+                    }
+                }
             }
             tokio::select! {
                 () = cancellation.cancelled() => return,
@@ -347,9 +475,17 @@ impl Reconciler {
             )
         };
         let mut by_treasury = BTreeMap::<Address, Vec<db::Address>>::new();
-        let stored = db::list_chain_addresses(&self.pool, chain_id).await?;
+        let cursor = store::work_cursor(
+            &self.pool,
+            "derivation",
+            i64::try_from(chain_id)
+                .map_err(|_| ReconciliationError::Invariant("chain overflow"))?,
+        )
+        .await?;
+        let (stored, more) = db::chain_address_page(&self.pool, chain_id, cursor).await?;
+        let last = stored.last().map(|a| a.id);
         {
-            let verified = self.verified.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut verified = self.verified.lock().unwrap_or_else(PoisonError::into_inner);
             for address in stored {
                 if verified.contains(&key(&address)) {
                     continue;
@@ -401,6 +537,14 @@ impl Reconciler {
                 )?);
             }
         }
+        store::save_work_cursor(
+            &self.pool,
+            "derivation",
+            i64::try_from(chain_id)
+                .map_err(|_| ReconciliationError::Invariant("chain overflow"))?,
+            if more { last } else { None },
+        )
+        .await?;
         Ok(())
     }
 
@@ -428,8 +572,8 @@ impl Reconciler {
     /// Each window reads every issued address's transfers of any contract, one request per
     /// [`MAX_ADDRESSES_PER_REQUEST`] addresses, whatever the chain's backstop mode: in token mode
     /// this is the only read that finds transfers of unrouted tokens, which it records as
-    /// `rejected(unsupported_asset)`. The address list, every address ever issued on the chain,
-    /// is read once per round.
+    /// `rejected(unsupported_asset)`. A durable keyset sweep reads at most 1,000 addresses per round and pins its
+    /// block range until every page commits. Old and retired addresses remain in the sweep.
     ///
     /// The scan never passes the range the scanner has committed, so a transfer the scanner has
     /// not reached yet is not reported as missing, and a frozen chain's scan stops with its
@@ -452,19 +596,47 @@ impl Reconciler {
             );
             return Ok(());
         };
-        let addresses = db::list_scan_addresses(&self.pool, chain_id).await?;
-        let Some(through) = scanner_covered_through(finalized.min(scanned), &addresses) else {
-            tracing::warn!(
-                chain_id,
-                reason = "pending_backfill",
-                "missing-deposit check skipped: an address awaits its scanner backfill"
-            );
+        let first: Option<i64> =
+            sqlx::query_scalar("SELECT min(created_block) FROM addresses WHERE chain_id=$1")
+                .bind(
+                    i64::try_from(chain_id)
+                        .map_err(|_| ReconciliationError::Invariant("chain overflow"))?,
+                )
+                .fetch_one(&self.pool)
+                .await?;
+        let pending: Option<i64> = sqlx::query_scalar(
+            "SELECT min(created_block) FROM addresses WHERE chain_id=$1 AND NOT backfilled",
+        )
+        .bind(
+            i64::try_from(chain_id)
+                .map_err(|_| ReconciliationError::Invariant("chain overflow"))?,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let Some(through) = pending
+            .map(|p| u64::try_from(p).ok().and_then(|p| p.checked_sub(1)))
+            .unwrap_or(Some(finalized.min(scanned)))
+            .map(|p| p.min(finalized.min(scanned)))
+        else {
             return Ok(());
         };
         let mut cursor = store::deposit_cursor(&self.pool, chain_id).await?;
-        let Some(start) = cursor.or_else(|| first_created_block(&addresses)) else {
+        let Some(start) = cursor.or(first.and_then(|p| u64::try_from(p).ok())) else {
             return Ok(());
         };
+        if start > through {
+            return Ok(());
+        }
+        let sweep = db::address_sweep(&self.pool, chain_id, "missing", start).await?;
+        let epoch = db::sweep_epoch(&self.pool, chain_id).await?;
+        let through = match &sweep {
+            Some(sweep) => u64::try_from(sweep.through_block)
+                .map_err(|_| ReconciliationError::Invariant("invalid sweep height"))?,
+            None => through
+                .min(start.saturating_add(MAX_SCAN_WINDOW * MAX_WINDOWS_PER_ROUND as u64 - 1)),
+        };
+        let (addresses, more) =
+            db::scan_address_page(&self.pool, chain_id, sweep.as_ref().map(|s| s.last_id)).await?;
         let physical = addresses
             .iter()
             .map(|address| address.address)
@@ -489,7 +661,7 @@ impl Reconciler {
                 &[],
                 window.proof.as_ref(),
                 db::rpc::WindowProgress {
-                    reconciliation: Some((cursor, next_block)),
+                    reconciliation: (!more).then_some((cursor, next_block)),
                     ..Default::default()
                 },
             )
@@ -515,29 +687,87 @@ impl Reconciler {
                     false,
                 )?);
             }
-            cursor = Some(next_block);
+            if !more {
+                cursor = Some(next_block);
+            }
         }
+        let progress = if more {
+            Some(db::AddressSweep {
+                epoch,
+                anchor: i64::try_from(start)
+                    .map_err(|_| ReconciliationError::Invariant("cursor overflow"))?,
+                from_block: i64::try_from(start)
+                    .map_err(|_| ReconciliationError::Invariant("cursor overflow"))?,
+                through_block: i64::try_from(through)
+                    .map_err(|_| ReconciliationError::Invariant("cursor overflow"))?,
+                block_time: None,
+                horizon: None,
+                last_id: addresses
+                    .last()
+                    .ok_or(ReconciliationError::Invariant("empty page"))?
+                    .id,
+            })
+        } else {
+            None
+        };
+        db::save_address_sweep(&self.pool, chain_id, "missing", progress.as_ref()).await?;
         Ok(())
     }
 
-    /// Recomputes stored credit and reports every mismatching deposit.
+    /// Recomputes one durable page of stored credit; completed passes wrap to recheck old rows.
     async fn credit_recomputation(
         &self,
         findings: &mut Vec<Finding>,
     ) -> Result<(), ReconciliationError> {
-        let ids = sqlx::query_scalar::<_, Uuid>(
+        let cursor = store::work_cursor(&self.pool, "credit", 0).await?;
+        let mut ids = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT id FROM deposits
             WHERE credit_minor IS NOT NULL AND price_scaled IS NOT NULL
               AND route IS NOT NULL AND route_version IS NOT NULL
-            ORDER BY id
+              AND id >= $1 AND ($2::uuid IS NULL OR id <> $2)
+            ORDER BY id LIMIT 1001
             "#,
         )
+        .bind(cursor.unwrap_or(Uuid::nil()))
+        .bind(cursor)
         .fetch_all(&self.pool)
         .await?;
+        let more = ids.len() > db::ADDRESS_PAGE_SIZE;
+        ids.truncate(db::ADDRESS_PAGE_SIZE);
+        let last = ids.last().copied();
         let routes = self.route_index();
+        let mut deposits = db::deposits_by_ids(&self.pool, &ids)
+            .await?
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let address_ids = deposits
+            .values()
+            .filter_map(|d| {
+                d.as_ref()
+                    .ok()
+                    .filter(|d| d.price_source.as_deref() == Some("lock"))
+                    .map(|d| d.address_id)
+            })
+            .collect::<Vec<_>>();
+        let quote_credits = sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT a.id,q.credit_minor::text \
+             FROM addresses a \
+             JOIN quotes q ON q.id=a.quote_id \
+             WHERE a.id=ANY($1)",
+        )
+        .bind(address_ids)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
         for id in ids {
-            match self.recompute_credit(id, &routes).await {
+            let result = match deposits.remove(&id) {
+                Some(Ok(deposit)) => Self::recompute_credit(&deposit, &quote_credits, &routes),
+                Some(Err(error)) => Err(error.into()),
+                None => Err(ReconciliationError::Invariant("listed deposit disappeared")),
+            };
+            match result {
                 Ok(Some(finding)) => findings.push(finding),
                 Ok(None) => {}
                 Err(error) => {
@@ -553,17 +783,15 @@ impl Reconciler {
                 }
             }
         }
+        store::save_work_cursor(&self.pool, "credit", 0, if more { last } else { None }).await?;
         Ok(())
     }
 
-    async fn recompute_credit(
-        &self,
-        id: Uuid,
+    fn recompute_credit(
+        deposit: &db::Deposit,
+        quote_credits: &BTreeMap<Uuid, String>,
         routes: &BTreeMap<(String, u64), &RouteFile>,
     ) -> Result<Option<Finding>, ReconciliationError> {
-        let deposit = db::get_deposit(&self.pool, id)
-            .await?
-            .ok_or(ReconciliationError::Invariant("listed deposit disappeared"))?;
         let route_name = deposit
             .route
             .as_ref()
@@ -598,14 +826,8 @@ impl Reconciler {
             "listed deposit has no stored credit",
         ))?;
         let expected = if deposit.price_source.as_deref() == Some("lock") {
-            let value: Option<String> = sqlx::query_scalar(
-                "SELECT quote.credit_minor::text FROM quotes AS quote \
-                 JOIN addresses AS address ON address.quote_id = quote.id WHERE address.id = $1",
-            )
-            .bind(deposit.address_id)
-            .fetch_optional(&self.pool)
-            .await?;
-            value
+            quote_credits
+                .get(&deposit.address_id)
                 .ok_or(ReconciliationError::Invariant(
                     "lock-priced deposit has no rate lock",
                 ))?
@@ -647,8 +869,29 @@ impl Reconciler {
         &self,
         findings: &mut Vec<Finding>,
     ) -> Result<(), ReconciliationError> {
+        let cursor = store::work_cursor(&self.pool, "flush", 0).await?;
+        let mut ids = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id \
+             FROM deposits \
+             WHERE state='credited' \
+             AND final_at IS NOT NULL \
+             AND id >= $1 \
+             AND ($2::uuid IS NULL OR id <> $2) \
+             ORDER BY id \
+             LIMIT 1001",
+        )
+        .bind(cursor.unwrap_or(Uuid::nil()))
+        .bind(cursor)
+        .fetch_all(&self.pool)
+        .await?;
+        let more = ids.len() > db::ADDRESS_PAGE_SIZE;
+        ids.truncate(db::ADDRESS_PAGE_SIZE);
+        let last = ids.last().copied();
         let mut transaction = self.pool.begin().await?;
-        let swept = db::mark_swept(&mut transaction, None, &[]).await?;
+        let mut swept = Vec::new();
+        for id in ids {
+            swept.extend(db::mark_swept(&mut transaction, Some(id), &[]).await?);
+        }
         transaction.commit().await?;
         for deposit_id in swept {
             findings.push(Finding::new(
@@ -660,6 +903,7 @@ impl Reconciler {
                 false,
             )?);
         }
+        store::save_work_cursor(&self.pool, "flush", 0, if more { last } else { None }).await?;
         Ok(())
     }
 
@@ -707,8 +951,22 @@ impl Reconciler {
             return Ok(());
         };
         let block = finalized.min(scanned);
-        let ledgers = store::forwarder_ledgers(&self.pool, chain_id, token, block).await?;
+        let check = format!("custody:{token:#x}");
+        let chain_key = i64::try_from(chain_id)
+            .map_err(|_| ReconciliationError::Invariant("chain overflow"))?;
+        let cursor = store::work_cursor(&self.pool, &check, chain_key).await?;
+        let (page, more) = db::scan_address_page(&self.pool, chain_id, cursor).await?;
+        let last = page.last().map(|a| a.id);
+        let ids = page.iter().map(|a| a.id).collect::<Vec<_>>();
+        let ledgers = store::forwarder_ledgers(&self.pool, chain_id, token, block, &ids).await?;
         if ledgers.is_empty() {
+            store::save_work_cursor(
+                &self.pool,
+                &check,
+                chain_key,
+                if more { last } else { None },
+            )
+            .await?;
             return Ok(());
         }
         let physical = ledgers
@@ -749,6 +1007,13 @@ impl Reconciler {
                 false,
             )?);
         }
+        store::save_work_cursor(
+            &self.pool,
+            &check,
+            chain_key,
+            if more { last } else { None },
+        )
+        .await?;
         Ok(())
     }
 
@@ -829,23 +1094,6 @@ fn log_finding(finding: &Finding, inserted: bool) {
     }
 }
 
-fn first_created_block(addresses: &[ScanAddress]) -> Option<u64> {
-    addresses.iter().map(|address| address.created_block).min()
-}
-
-/// Returns the last block the scanner has covered for every address, if any.
-///
-/// The scanner cursor covers only backfilled addresses; one still awaiting its backfill is
-/// covered only below its creation block.
-fn scanner_covered_through(scanned: u64, addresses: &[ScanAddress]) -> Option<u64> {
-    addresses
-        .iter()
-        .filter(|address| !address.backfilled)
-        .try_fold(scanned, |through, address| {
-            Some(through.min(address.created_block.checked_sub(1)?))
-        })
-}
-
 /// Splits `[from, to]` into scan windows, capped at [`MAX_WINDOWS_PER_ROUND`].
 fn bounded_windows(from: u64, to: u64) -> Result<Vec<(u64, u64)>, ReconciliationError> {
     let mut windows = Vec::new();
@@ -874,4 +1122,36 @@ fn subjects<const N: usize>(pairs: [(&str, String); N]) -> BTreeMap<String, Stri
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value))
         .collect()
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn verified_derivations_use_bounded_lru_and_reverify_changed_rows() {
+        let mut cache = VerifiedCache::default();
+        let key = |id| {
+            (
+                1,
+                Uuid::from_u128(id),
+                alloy_primitives::B256::ZERO,
+                Address::ZERO,
+                Address::ZERO,
+            )
+        };
+        cache.insert(key(0));
+        for id in 1..200_000 {
+            // Keep one old entry hot; eviction must retain it while retiring cold entries.
+            assert!(cache.contains(&key(0)));
+            cache.insert(key(id));
+            assert!(cache.keys.len() <= 4_000);
+            assert!(cache.recency.len() <= 4_000);
+        }
+        assert!(cache.contains(&key(0)));
+        assert!(!cache.contains(&key(1)));
+        let mut changed = key(0);
+        changed.2 = alloy_primitives::B256::from([1; 32]);
+        assert!(!cache.contains(&changed));
+    }
 }
