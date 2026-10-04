@@ -441,7 +441,7 @@ impl Scenario {
             route.clone(),
             chain.clone(),
             chain.clone(),
-            price("coinmetrics", 10_000_000)?,
+            price("kraken", 10_000_000)?,
             Some(price("binance", 10_000_000)?),
             Some(price("kraken", 100_000_000)?),
         );

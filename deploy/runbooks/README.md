@@ -66,6 +66,7 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 | `TopupRpcGroupUnavailable`, `TopupRpcChainFrozen`, `TopupRpcMemberQuarantined`, `TopupRpcMemberCooldown`, `TopupRpcQuotaPressure`, `TopupRpcUnclassifiedError`, `TopupRpcAnchorUnavailable`, `TopupRpcRecoveryUnavailable`, `TopupRpcMetricsRefreshFailed` | [RPC health](rpc-health.md) |
 | `TopupReconciliationMismatch` (`check:address_derivation` or `check:custody_balance`), `400 chain_frozen` | [Chain frozen](chain-frozen.md) |
 | `TopupReconciliationMismatch` (other `check`), `topup-reconciler` | [Reconciliation mismatch](reconciliation-mismatch.md) |
+| `price-outage` (zero sources, disagreement, depeg, sequencer/grace, stuck valuation) | [Price outage](price-outage.md) |
 | `TopupDepositStateAgeExceeded` (`state:detected` or `state:confirmed`) | [Provider disagreement](provider-disagreement.md), then [Price outage](price-outage.md) |
 | `TopupLockExposureNearCap`, `400 exposure_cap_exceeded` | [Lock exposure near cap](lock-exposure-near-cap.md) |
 | `TopupLockExpiryFailing`, `topup-lock-expiry` | [Lock expiry worker failure](lock-expiry-worker-failure.md) |

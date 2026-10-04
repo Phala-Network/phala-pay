@@ -75,6 +75,14 @@ if ((failed)); then
     echo "the $environment compose's routes do not match their chains' modes" >&2
     exit 1
 fi
+# The actual Deploy target must never inherit a staging-only licensing opt-in, even if
+# a configuration carries a non-production reporting environment label.
+if [[ "$environment" == production ]] &&
+    jq -e 'any(.routes[]; .price.allow_unclear_sources == true)' "$tmp/config.json" >/dev/null; then
+    echo "production refuses staging-only price licensing opt-in" >&2
+    exit 1
+fi
+
 while read -r route livemode chain; do
     echo "$route: chain $chain, livemode $livemode"
 done <<<"$routes"

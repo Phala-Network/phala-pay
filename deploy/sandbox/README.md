@@ -45,7 +45,7 @@ reaches the product endpoints as `http://product:8089`; this works even where a 
 traffic from containers to the host. `restart_mid_flow` runs last in its own container, the
 only one given the Docker socket, which it uses to restart the local service
 (`scenarios/docker_restart.py`). Prices come from
-the live Coin Metrics, Binance, and Kraken endpoints, as in production. All containers, volumes,
+the live Chainlink, Binance, and Kraken endpoints, as in production. All containers, volumes,
 and temporary files are removed on exit.
 
 ## Scenarios

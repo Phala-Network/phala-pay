@@ -32,6 +32,6 @@ admin_key:
   public_key: $admin_public_key
 YAML
     sed -n '/^rpc_companies:/,/^routes:$/p' "$root/deploy/environments/phala-network/staging/topup/topup.yaml" |
-        sed '$d; s|domains:|domains:|; s|tenderly.co|127.0.0.1|g; s|publicnode.com|localhost|g; s|https://sepolia.gateway.127.0.0.1|http://127.0.0.1:1|; s|https://base-sepolia.gateway.127.0.0.1|http://127.0.0.1:3|; s|https://ethereum-sepolia-rpc.localhost|http://localhost:2|; s|https://base-sepolia-rpc.localhost|http://localhost:4|'
+        sed '$d; s|domains:|domains:|; s|tenderly.co|127.0.0.1|g; s|publicnode.com|localhost|g; s|https://sepolia.gateway.127.0.0.1|http://127.0.0.1:1|; s|https://base-sepolia.gateway.127.0.0.1|http://127.0.0.1:3|; s|https://ethereum-sepolia-rpc.localhost|http://localhost:2|; s|https://base-sepolia-rpc.localhost|http://localhost:4|; s|https://mainnet.gateway.127.0.0.1|http://127.0.0.1:5|; s|https://ethereum-rpc.localhost|http://localhost:6|; s|https://base.gateway.127.0.0.1|http://127.0.0.1:7|; s|https://base-rpc.localhost|http://localhost:8|'
     sed -n '/^routes:$/,$p' "$root/deploy/environments/phala-network/staging/topup/topup.yaml"
 } >"$out/topup.yaml"

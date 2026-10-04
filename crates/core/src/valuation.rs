@@ -413,9 +413,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::route::{
-        CheckPriceConfig, FxPriceConfig, PricingConfig, PricingMode, PrimaryPriceConfig,
-    };
+    use crate::route::{PricingConfig, PricingMode};
 
     fn price(value: u64) -> ScaledPrice {
         ScaledPrice::new(value, PRICE_SCALE).expect("test price is valid")
@@ -921,18 +919,13 @@ mod tests {
     fn valuation_policy_reuses_route_pricing_limits() {
         let pricing = PricingConfig {
             mode: PricingMode::Spot,
-            primary: PrimaryPriceConfig {
-                source: "coinmetrics".to_owned(),
-                asset: "pha".to_owned(),
-            },
-            check: Some(CheckPriceConfig {
-                source: "binance".to_owned(),
-                symbol: "PHAUSDT".to_owned(),
-                fx: FxPriceConfig {
-                    source: "kraken".to_owned(),
-                    pair: "USDT/USD".to_owned(),
-                },
-            }),
+            primary: vec![],
+            check: vec![],
+            fx: vec![],
+            sources: vec![],
+            sequencer_uptime: None,
+            allow_unclear_sources: true,
+            peg_band_bps: bps(100),
             max_age_s: 120,
             max_deviation_bps: bps(100),
             max_fx_deviation_bps: Some(bps(50)),

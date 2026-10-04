@@ -1143,6 +1143,23 @@ mod tests {
         let mut second = test_route_file(usdc);
         second.route = "phala-cloud-ethereum-usdc-usd".to_owned();
         second.asset.symbol = "usdc".to_owned();
+        second.pricing.mode = topup_core::route::PricingMode::Stablecoin;
+        second.pricing.primary.clear();
+        second.pricing.check.clear();
+        second.pricing.fx.clear();
+        second.pricing.sources = vec![
+            topup_core::price::Source::Chainlink {
+                feed: "USDC_USD".into(),
+                chain_id: 1,
+                rpc_group: "a".into(),
+                rpc_group_b: None,
+                observation_chain_id: None,
+            },
+            topup_core::price::Source::Kraken {
+                symbol: "USDCUSD".into(),
+                company: "kraken".into(),
+            },
+        ];
         let chains = chain_routes(
             &RouteSet::new(vec![test_route_file(pha), second]).expect("two assets on one chain"),
         );

@@ -24,7 +24,8 @@ staging="$root/deploy/environments/phala-network/staging/topup"
 route_json() {
     jq -c --arg name "$1" --argjson chain "$2" --argjson live "$3" \
         '.route = $name | .chain.chain_id = $chain | .livemode = $live
-        | .chain.rpc_groups = {a:"\($name)-a", b:"\($name)-b"}' "$tmp/route.json"
+        | .chain.rpc_groups = {a:"\($name)-a", b:"\($name)-b"}
+        | .price.fx = [{source:"kraken", symbol:"USDTUSD", company:"kraken"}]' "$tmp/route.json"
 }
 # environment NAME ROUTE_LINE...: staging's environment with each route appended as a list item,
 # and each route's two providers configured; rendered to $tmp/NAME.yml.
@@ -64,21 +65,21 @@ refuses() {
     }
 }
 
-# Staging's four test routes pass in both environments.
+# Staging opts into Unclear sources; the actual production target refuses this opt-in.
 environment staging
 accepts staging staging
-accepts production staging
+refuses production staging "production refuses staging-only price licensing opt-in"
 
 # A live mainnet route appended after them, in flow style or as JSON, is found: production
-# hosts it, staging refuses it.
+# detects it, staging refuses its live mode and production refuses its licensing opt-in.
 environment flow "$(flow "$(route_json mainnet-flow 1 true)")"
 grep -q '^  - {route: ' "$tmp/flow/topup.yaml"
 refuses staging flow "route mainnet-flow: staging serves test mode only"
-accepts production flow
+refuses production flow "production refuses staging-only price licensing opt-in"
 environment json "$(route_json mainnet-json 1 true)"
 grep -q '^  - {"' "$tmp/json/topup.yaml"
 refuses staging json "route mainnet-json: staging serves test mode only"
-accepts production json
+refuses production json "production refuses staging-only price licensing opt-in"
 
 # A chain on neither list, and a local development chain, are refused everywhere.
 environment unknown "$(flow "$(route_json polygon 137 true)")"

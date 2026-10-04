@@ -214,7 +214,7 @@ deploy() {
     cd "$tmp"
     exec env PATH="$bin:$PATH" TMPDIR="$tmp/tmp" XDG_RUNTIME_DIR="$tmp/runtime" STUB_BIN="$bin" STUB_ASSETS="$assets" \
         STUB_ROOT="$root" STUB_COMMIT="$commit" STUB_LOG="$tmp/log" STUB_STATE="$tmp/state" STUB_SDK="$sdk" \
-        STUB_GH_VERSION=2.101.0 STUB_REFUSE=never CVM_NAME="$name" \
+        STUB_GH_VERSION=2.101.0 STUB_REFUSE=never CVM_NAME="$name" DEPLOY_ENVIRONMENT=staging \
         WALG_S3_PREFIX=s3://operator-backups/"$name" AWS_ENDPOINT=https://objects.operator.test \
         AWS_ACCESS_KEY_ID="${secrets[0]}" AWS_SECRET_ACCESS_KEY="${secrets[1]}" "$@" \
         bash -s -- --non-interactive <"$assets/deploy.sh" >"$tmp/$name.out" 2>"$tmp/$name.err"
@@ -419,6 +419,8 @@ for answer in 'not JSON' '[]' '{"success": true}' "{$page}" "{$page, \"items\": 
     [[ ! -e "$tmp/unreadable-list.seed" ]] || fail "unreadable-list generated an admin key for $answer"
 done
 
+refused price-license "production refuses staging-only price licensing opt-in" DEPLOY_ENVIRONMENT=production \
+    TOPUP_ADMIN_PUBLIC_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=
 refused short-name "CVM_NAME must be 5 to 63 characters" CVM_NAME=abcd
 refused bad--name "CVM_NAME must be letters, digits, and -"
 refused 1st-name "CVM_NAME must be letters, digits, and -"

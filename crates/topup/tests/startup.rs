@@ -149,7 +149,7 @@ fn config_yaml(anvil: &Anvil, factory: Address, treasury: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "environment: test\npublic_origin: http://127.0.0.1:8080\nadmin_key:\n  id: admin/v1\n  \
+        "environment: staging\npublic_origin: http://127.0.0.1:8080\nadmin_key:\n  id: admin/v1\n  \
          public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n{rpc}\nroutes:\n  -\n{route}\n",
         rpc = include_str!("fixtures/rpc-groups.yaml")
             .replace("https://eth-mainnet.g.alchemy.com/v2/{key}", &primary)

@@ -13,6 +13,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Service
+
+#### Breaking
+
+- Replace route `pricing` with explicit `price` stablecoin sources or ordered volatile
+  primary/check/FX lists. The legacy parser is available for one migration window and emits
+  the new shape; mixed schemas and restricted legacy sources fail validation. Replace Coin
+  Metrics with reviewed Chainlink/exchange sources, configure mainnet A/B observation groups
+  and testnet markers, and add the Base sequencer gate. Stablecoin defaults use Allowed on-chain
+  Chainlink data only. Production rejects PermissionRequired/Prohibited sources; Kraken/Binance
+  PHA remains noncommercial staging-only pending an on-chain primary and written check permission. See [migration](docs/configuration.md#price-sources).
+  Ship in the next minor release; rollback uses the previous compatible image and config.
+
 ### Fixed
 
 - Alert in Sentry on webhook backlog and stalled delivery progress, internal signer/egress

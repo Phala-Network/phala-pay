@@ -69,6 +69,8 @@ jobs:
           [[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           deploy/verify-release.sh "$previous" "$RUNNER_TEMP/previous-release"
           echo "PREVIOUS_IMAGE=$(jq -r '.["phala-pay"]' "$RUNNER_TEMP/previous-release/images.json")" >>"$GITHUB_ENV"
+          tar -xOf "$RUNNER_TEMP/previous-release/phala-pay-deploy-$previous.tar.gz" \
+            "phala-pay-deploy-$previous/deploy/environments/example/topup/topup.yaml" >"$RUNNER_TEMP/previous-topup.yaml"
       - name: Current migration then previous release image startup
         timeout-minutes: 10
-        run: deploy/tests/rollback-smoke.sh "$PWD/target/debug/topup" "$PREVIOUS_IMAGE"
+        run: deploy/tests/rollback-smoke.sh "$PWD/target/debug/topup" "$PREVIOUS_IMAGE" "$RUNNER_TEMP/previous-topup.yaml"

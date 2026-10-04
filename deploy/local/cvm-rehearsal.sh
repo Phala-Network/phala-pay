@@ -336,8 +336,8 @@ write_config() {
                     "phala-cloud-base-sepolia-usdc-usd": [$base_usdc, $base_oracle],
                     "phala-cloud-base-sepolia-usdt-usd": [$base_usdt, $base_oracle]}')" '
             .admin_key = {id: $id, public_key: $key}
-            | .rpc_companies.tenderly.domains = ["rehearsal-a.test"]
-            | .rpc_companies.publicnode.domains = ["rehearsal-b.test"]
+            | .rpc_companies.tenderly.domains = ["rehearsal-a.test", "tenderly.co"]
+            | .rpc_companies.publicnode.domains = ["rehearsal-b.test", "publicnode.com"]
             | .rpc_groups["provider-a"].members[0].url = "http://anvil.rehearsal-a.test:8545"
             | .rpc_groups["provider-b"].members[0].url = "http://anvil.rehearsal-b.test:8545/?key={key}"
             | .rpc_groups["provider-b"].members[0].sealed_key = "TOPUP_RPC_PROVIDER_B_KEY"
@@ -711,7 +711,7 @@ PYTHON
 [[ "$(ledger_credits)" == "$credits_before" ]] || die "redelivery changed the receiver's credit"
 echo "ok: a signed deposit.credited redelivery was acknowledged without a second credit"
 
-# The route prices only from Coin Metrics, Binance, and Kraken over HTTPS, so a priced lock proves
+# The route prices only from Chainlink, Binance, and Kraken over HTTPS, so a priced lock proves
 # the distroless service image verified those servers with its system CA bundle.
 priced_locks=$(dc exec -T postgres psql -U postgres -d topup -XAtq -c \
     "SELECT count(*) FROM quotes WHERE route = 'phala-cloud-sepolia-pha-usd' AND price_scaled > 0")

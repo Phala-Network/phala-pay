@@ -85,6 +85,37 @@ async fn probe_inner(
         .head(index, "safe", deadline)
         .await
         .map_err(|e| format!("safe head: {e}"))?;
+    // Observation-only groups need typed feed calls, not payment receipt/log capabilities.
+    if routes.is_empty() {
+        let name = if group.chain == 8453 {
+            "BASE_SEQUENCER_UPTIME"
+        } else {
+            "USDT_USD"
+        };
+        let feed = topup_core::price::feed(name, group.chain)
+            .ok_or("unsupported observation-only feed chain")?;
+        let address = feed
+            .address
+            .parse()
+            .map_err(|_| "invalid pinned feed address")?;
+        // The price reader uses latest state. Historical state is not a required capability.
+        let decimals = client
+            .call(
+                "RPC price capability",
+                address,
+                alloy_primitives::Bytes::from_static(&[0x31, 0x3c, 0xe5, 0x67]),
+                Some(alloy::eips::BlockId::latest()),
+            )
+            .await
+            .map_err(|e| format!("price decimals capability: {e}"))?;
+        if decimals.len() != 32
+            || alloy_primitives::U256::from_be_slice(&decimals)
+                != alloy_primitives::U256::from(feed.decimals)
+        {
+            return Err("price decimals capability: RPC malformed response".into());
+        }
+        return Ok(genesis.hash);
+    }
     group.send(index,&json!({"jsonrpc":"2.0","id":1,"method":"eth_getTransactionReceipt","params":[format!("0x{}","00".repeat(32))]}),deadline).await.map_err(|e|format!("receipt capability: {e}"))?;
     if routes
         .iter()
@@ -200,6 +231,13 @@ fn groups(routes: &RouteSet) -> Result<Groups<'_>, String> {
                     .1
                     .push(route);
             }
+        }
+    }
+    for (id, client) in routes.groups() {
+        if let Some(group) = client.group() {
+            result
+                .entry(id.clone())
+                .or_insert_with(|| (group.clone(), Vec::new()));
         }
     }
     Ok(result)
@@ -944,6 +982,9 @@ mod probe_tests {
         throttle_oracle: bool,
         reject_wide_logs: bool,
         block_delay: Duration,
+        price_only: bool,
+        price_call_failure: bool,
+        receipt_reads: AtomicUsize,
     }
     impl MockProbe {
         fn new() -> Self {
@@ -965,6 +1006,9 @@ mod probe_tests {
                 throttle_oracle: false,
                 reject_wide_logs: false,
                 block_delay: Duration::ZERO,
+                price_only: false,
+                price_call_failure: false,
+                receipt_reads: AtomicUsize::new(0),
             }
         }
         fn response(&self, request: &serde_json::Value) -> axum::response::Response {
@@ -972,8 +1016,14 @@ mod probe_tests {
             let contracts = &first.chain.contracts;
             let params = &request["params"];
             let result = match request["method"].as_str().unwrap() {
-                "eth_chainId" => json!("0xaa36a7"),
-                "eth_getTransactionReceipt" => serde_json::Value::Null,
+                "eth_chainId" => json!(if self.price_only { "0x1" } else { "0xaa36a7" }),
+                "eth_getTransactionReceipt" => {
+                    self.receipt_reads.fetch_add(1, Ordering::SeqCst);
+                    if self.price_only {
+                        return StatusCode::FORBIDDEN.into_response();
+                    }
+                    serde_json::Value::Null
+                }
                 "eth_getBlockByNumber" => {
                     let tag = params[0].as_str().unwrap();
                     let number = match tag {
@@ -1047,7 +1097,25 @@ mod probe_tests {
                 }
                 "eth_call" => {
                     let to: Address = serde_json::from_value(params[0]["to"].clone()).unwrap();
-                    if to == MULTICALL3 {
+                    if self.price_only {
+                        if params[1] != "latest" {
+                            return StatusCode::FORBIDDEN.into_response();
+                        }
+                        assert_eq!(
+                            to.to_string().to_lowercase(),
+                            topup_core::price::feed("USDT_USD", 1)
+                                .unwrap()
+                                .address
+                                .to_lowercase()
+                        );
+                        if self.price_call_failure {
+                            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        }
+                        json!(format!(
+                            "0x{}",
+                            hex::encode(U256::from(8).to_be_bytes::<32>())
+                        ))
+                    } else if to == MULTICALL3 {
                         let input: Bytes = serde_json::from_value(
                             params[0].get("input").unwrap_or(&params[0]["data"]).clone(),
                         )
@@ -1124,6 +1192,15 @@ mod probe_tests {
         (url, task)
     }
     fn group(url: &str, id: &str, rps: u32, policy: GroupPolicy) -> Arc<RpcGroup> {
+        group_on_chain(url, id, rps, policy, 11155111)
+    }
+    fn group_on_chain(
+        url: &str,
+        id: &str,
+        rps: u32,
+        policy: GroupPolicy,
+        chain: u64,
+    ) -> Arc<RpcGroup> {
         let spec = BudgetSpec {
             requests_per_second: rps,
             burst: if rps == 2 { 2 } else { 100 },
@@ -1137,7 +1214,7 @@ mod probe_tests {
         );
         RpcGroup::new(
             id.into(),
-            11155111,
+            chain,
             policy,
             vec![Member {
                 id: "one".into(),
@@ -1153,6 +1230,23 @@ mod probe_tests {
         .unwrap()
     }
 
+    #[tokio::test]
+    async fn observation_groups_require_feed_calls_but_not_receipt_access() {
+        for price_call_failure in [false, true] {
+            let mock = Arc::new(MockProbe {
+                price_only: true,
+                price_call_failure,
+                ..MockProbe::new()
+            });
+            let (url, task) = server(mock.clone()).await;
+            let group = group_on_chain(&url, "mainnet-price", 100, GroupPolicy::default(), 1);
+            let result = probe(&group, 0, &[]).await;
+            task.abort();
+            assert_eq!(result.is_ok(), !price_call_failure, "{result:?}");
+            assert_eq!(mock.receipt_reads.load(Ordering::SeqCst), 0);
+            assert!(mock.logs.lock().unwrap().is_empty());
+        }
+    }
     #[tokio::test]
     async fn acceptance_uses_one_finalized_snapshot_for_numeric_capabilities() {
         let mock = Arc::new(MockProbe {

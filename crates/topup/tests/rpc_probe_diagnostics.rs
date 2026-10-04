@@ -23,7 +23,7 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
                     let count = count.clone();
                     async move {
                         count.fetch_add(1, Ordering::SeqCst);
-                        Json(json!({"jsonrpc":"2.0","id":request["id"],"result":"0x1"}))
+                        Json(json!({"jsonrpc":"2.0","id":request["id"],"result":"0x7a69"}))
                     }
                 }),
             ),
@@ -49,6 +49,17 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
             group["members"][0]["company"] = json!(if a { "local-a" } else { "local-b" });
             group["members"][0]["url"] = json!(format!("http://{host}:{port}/secret-key"));
         }
+        let expected_member_ids = config["rpc_groups"]
+            .as_object()
+            .context("groups")?
+            .values()
+            .map(|g| {
+                g["members"][0]["id"]
+                    .as_str()
+                    .context("member id")
+                    .map(str::to_owned)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let encoded = serde_json::to_vec(&config)?;
         let output = tokio::task::spawn_blocking(move || -> Result<_> {
             use std::io::Write;
@@ -65,12 +76,7 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
         ensure!(!output.status.success());
         ensure!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr)?;
-        for member in [
-            "base-sepolia-a",
-            "base-sepolia-b",
-            "provider-a",
-            "provider-b",
-        ] {
+        for member in &expected_member_ids {
             ensure!(
                 stderr.contains(&format!(
                     "{member}: chain id: RPC member identity invalid (mismatch)"
@@ -83,7 +89,7 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
             "{stderr}"
         );
         ensure!(
-            calls.load(Ordering::SeqCst) == 4,
+            calls.load(Ordering::SeqCst) == expected_member_ids.len(),
             "wrong chain must never retry"
         );
         Ok(())

@@ -96,7 +96,7 @@ impl ConfirmStep {
     pub fn from_routes(pool: PgPool, routes: &RouteSet) -> Result<Self, ConfirmConfigError> {
         let mut runtimes = BTreeMap::new();
         for route in routes.routes() {
-            let pricing = PricingRuntime::configured(route).map_err(ConfirmConfigError)?;
+            let pricing = PricingRuntime::configured(route, routes).map_err(ConfirmConfigError)?;
             runtimes.insert(
                 (route.route.clone(), route.version),
                 RouteRuntime {
@@ -2094,7 +2094,13 @@ mod tests {
             max: u64::MAX,
         };
         if mode == PricingMode::Stablecoin {
-            route.pricing.check = None;
+            route.pricing.check.clear();
+            route.pricing.primary.clear();
+            route.pricing.fx.clear();
+            route.pricing.sources = vec![topup_core::price::Source::Kraken {
+                symbol: "USDCUSD".into(),
+                company: "kraken".into(),
+            }];
         }
         route
     }

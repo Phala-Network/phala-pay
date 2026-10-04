@@ -691,7 +691,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let age_config =
         AgeAlertConfig::from_routes(routes.routes()).context("invalid age alert configuration")?;
     let rate_lock_quotes: Arc<dyn topup::locks::QuoteProvider> = Arc::new(
-        topup::locks::ConfiguredQuoteProvider::from_routes(routes.routes())
+        topup::locks::ConfiguredQuoteProvider::from_routes(&routes)
             .map_err(anyhow::Error::msg)
             .context("invalid rate-lock pricing configuration")?,
     );
@@ -1715,14 +1715,12 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
         eprintln!("production preflight requires a present, valid SENTRY_DSN");
         return ExitCode::FAILURE;
     }
-    let checked = topup::config::Config::load(file).and_then(|config| {
-        if secrets {
-            config.check_environment_secrets()?;
-        }
-        Ok(config)
-    });
-    match checked {
+    match topup::config::Config::load(file) {
         Ok(config) => {
+            if secrets && let Err(error) = config.check_environment_secrets() {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
             println!(
                 "configuration `{}` is valid: {} routes, {} RPC providers{}{}",
                 file.display(),
@@ -1739,6 +1737,57 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
                     ""
                 }
             );
+            for route in &config.routes {
+                println!(
+                    "route {} price {:?}; staging opt-in: {}",
+                    route.route, route.pricing.mode, route.pricing.allow_unclear_sources
+                );
+                if !route.livemode {
+                    println!(
+                        "  testnet valuation: mainnet feeds and exchange markets; test tokens have no market"
+                    );
+                }
+                for (role, sources) in route.pricing.roles() {
+                    for (order, source) in sources.iter().enumerate() {
+                        println!(
+                            "  {role}[{order}]: {}",
+                            serde_json::to_string(source)
+                                .unwrap_or_else(|_| "invalid source".into())
+                        );
+                        if let topup_core::price::Source::Chainlink {
+                            feed,
+                            chain_id,
+                            observation_chain_id,
+                            ..
+                        } = source
+                            && let Some(metadata) = topup_core::price::feed(feed, *chain_id)
+                        {
+                            println!(
+                                "    address={} decimals={} heartbeat_s={} margin_s={} deviation_bps={} observation_chain_id={:?}",
+                                metadata.address,
+                                metadata.decimals,
+                                metadata.heartbeat_s,
+                                metadata.margin_s,
+                                metadata.deviation_bps,
+                                observation_chain_id
+                            );
+                        }
+                        if let Some(provider) = topup_core::price::provider(source.company()) {
+                            println!(
+                                "    licensing={:?}; owner={}; rate_limit={}",
+                                provider.verdict, provider.legal_owner, provider.rate_limit
+                            );
+                        }
+                    }
+                }
+                if let Some(sequencer) = &route.pricing.sequencer_uptime {
+                    println!(
+                        "  sequencer: {:?}; {:?}",
+                        sequencer,
+                        topup_core::price::feed(&sequencer.feed, 8453)
+                    );
+                }
+            }
             ExitCode::SUCCESS
         }
         Err(error) => {

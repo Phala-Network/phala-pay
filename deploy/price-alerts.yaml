@@ -1,0 +1,20 @@
+# Prometheus rules on the existing admin-signed metrics endpoint. WARN events use Sentry's
+# existing tags.alert hook; Sentry alerts should mirror these conditions per route/asset.
+groups:
+- name: price
+  rules:
+  - alert: PriceNoHealthySource
+    expr: sum by (route, asset, role) (price_source_health) == 0
+    for: 1m
+    labels: { severity: page }
+  - alert: PriceDisagreement
+    expr: increase(price_disagreement_total[5m]) > 0
+    labels: { severity: page }
+  - alert: PriceDepeg
+    expr: increase(price_depeg_total[5m]) > 0
+    labels: { severity: page }
+  - alert: PriceRepeatedFailover
+    expr: increase(price_failover_total[5m]) >= 3
+    labels: { severity: page }
+# valuation_stuck_seconds pages through the Sentry hook against each route's
+# alerts.stuck_after_s.detected, rather than a global hard-coded threshold.

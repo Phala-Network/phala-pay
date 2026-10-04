@@ -150,12 +150,12 @@ pub struct ConfiguredQuoteProvider {
 
 impl ConfiguredQuoteProvider {
     /// Builds adapters for every route version.
-    pub fn from_routes(routes: &[RouteFile]) -> Result<Self, String> {
+    pub fn from_routes(routes: &crate::routes::RouteSet) -> Result<Self, String> {
         let mut runtimes = BTreeMap::new();
-        for route in routes {
+        for route in routes.routes() {
             let key = (route.route.clone(), route.version);
             if runtimes
-                .insert(key.clone(), PricingRuntime::configured(route)?)
+                .insert(key.clone(), PricingRuntime::configured(route, routes)?)
                 .is_some()
             {
                 return Err(format!(
