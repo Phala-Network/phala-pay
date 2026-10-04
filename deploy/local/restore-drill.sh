@@ -1235,8 +1235,6 @@ for seconds in "$archive_wait_seconds" "$upload_latency_seconds"; do
     }
 done
 
-expected_heartbeat_at=$(psql_value \
-    "SELECT to_char(max(recorded_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM heartbeat")
 if [ "$mode" = controlled ]; then
     expected_lsn=$switch_lsn
 else
@@ -1316,7 +1314,6 @@ test "$(app_login_works)" = topup_service
 
 # The boot-time report is unanchored; compare it with the source point recorded above, as the
 # operator compares it with theirs.
-restored_heartbeat_at=$(printf '%s\n' "$restore_report" | jq -er '.restored_heartbeat_at')
 # The marker is a committed transaction recovered from WAL. Heartbeat sampling does not
 # grant an extra minute; the failure instant includes segment close and upload latency.
 last_replayed_commit_at=$(psql_value 'SELECT extract(epoch FROM max(recorded_at)) FROM restore_drill_marker')

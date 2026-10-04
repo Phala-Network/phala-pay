@@ -28,11 +28,14 @@ timeline=$(psql -XAtq -c 'SELECT timeline_id FROM pg_control_checkpoint()') || {
 case "$timeline" in
     ''|*[!0-9]*) echo "the cluster's timeline is invalid" >&2; exit 1 ;;
 esac
-listing=$("$runner" run base backup-list --json) &&
-names=$(printf '%s\n' "$listing" | jq -er 'if type == "array" then map(.backup_name) | join("\n") else error end') || {
+if ! listing=$("$runner" run base backup-list --json); then
     echo "could not list base backups; the base backup will retry" >&2
     exit 1
-}
+fi
+if ! names=$(printf '%s\n' "$listing" | jq -er 'if type == "array" then map(.backup_name) | join("\n") else error end'); then
+    echo "the base backup listing is invalid; the base backup will retry" >&2
+    exit 1
+fi
 # WAL-G names a base backup after its first WAL segment, whose first 8 hex digits are the timeline.
 prefix=$(printf 'base_%08X' "$timeline")
 if printf '%s\n' "$names" | grep -q "^$prefix"; then
