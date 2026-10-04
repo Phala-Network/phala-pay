@@ -17,6 +17,7 @@
 # Usage: verify-release.sh VERSION DIR [CALLED_AT]
 set -euo pipefail
 
+# shellcheck source=deploy/deadline.sh
 source "$(dirname -- "$0")/deadline.sh"
 stage_start release-verification 600
 gh() { stage_call 60 gh "$@"; }

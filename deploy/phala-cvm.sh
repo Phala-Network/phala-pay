@@ -22,6 +22,7 @@
 #   deploy/phala-cvm.sh healthz URL                  until URL/healthz answers (10 minutes)
 set -euo pipefail
 
+# shellcheck source=deploy/deadline.sh
 source "$(dirname -- "$0")/deadline.sh"
 
 phala() {

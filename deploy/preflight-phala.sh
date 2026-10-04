@@ -3,6 +3,7 @@
 # Preflight checks shared by deploy/preflight.sh and deploy/product/preflight.sh; sourced.
 # The caller defines fail, ok, and tmp (a private directory), and sources contracts/common.sh.
 
+# shellcheck source=deploy/deadline.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/deadline.sh"
 
 # tool_error FILE: the last lines of a tool's stderr, on one line, for a failure message.

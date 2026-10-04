@@ -37,7 +37,7 @@ jobs:
           key: ${{ runner.os }}-cargo-rollback-${{ hashFiles('**/Cargo.lock') }}
       - name: Deadline and capacity probe tests
         run: |
-          deploy/tests/deadline.sh
+          deploy/tests/stage-deadlines.sh
           deploy/tests/capacity.sh
       - name: Build current migration binary
         run: cargo build --locked -p topup
