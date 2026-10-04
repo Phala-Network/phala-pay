@@ -115,10 +115,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
-- Opt-in `upgradeTolerance` in `@phala/pay-server` for GET and idempotent POST retries across maintenance, connection
-  failures, and gateway 502/503/504 for up to five minutes. Explicit deadlines and cancellation
-  remain effective; keys and bodies stay fixed. Browser core checkout and React deposit address
-  polling preserve their last view through outages and show neutral reconnecting state.
+- Opt-in `upgradeTolerance` in `@phala/pay-server` for GET and idempotent POST retries across
+  maintenance, connection failures, and gateway 502/503/504 for up to five minutes. Explicit
+  deadlines and cancellation remain effective; keys and bodies stay fixed. Browser core checkout
+  and React deposit address polling preserve their last view through outages and show neutral
+  reconnecting state.
 
 - Merchant server client at `@phala/pay-server`: all OpenAPI resources, typed parameters/responses,
   verified quote/address results, two-variable `PhalaPay.fromEnv()`, frozen pins parse/encode,

@@ -92,8 +92,8 @@ creates a restricted key.
 
 ### Transport and errors
 
-Per-call options are `{ idempotencyKey?, signal?, requestDeadlineMs?, upgradeTolerance? }`. Defaults are a 15-second
-attempt timeout (including body reads), four total attempts, and a 60-second overall deadline
+Per-call options are `{ idempotencyKey?, signal?, requestDeadlineMs?, upgradeTolerance? }`.
+Defaults are a 15-second attempt timeout (including body reads), four total attempts, and a 60-second overall deadline
 (including sleeps). POST requests freeze their body and one automatically generated UUID across
 retries; persist an explicit order key to survive process restarts. Keys have a 255-character limit.
 Retries cover network/timeouts, 429, 500/502/503/504, and only `409 idempotency_key_in_use`, with
