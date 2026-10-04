@@ -1,4 +1,4 @@
-import { requestSignal } from "./request.js";
+import { requestSignal, trimTrailingSlashes } from "./request.js";
 import { getAddress, isAddress, isAddressEqual } from "viem";
 import { parseClientQuote, quoteIdFromClientSecret, type ClientQuote } from "./quote.js";
 
@@ -152,7 +152,7 @@ export interface RetrieveQuoteOptions {
 export async function retrieveQuote(options: RetrieveQuoteOptions): Promise<ClientQuote> {
   const quoteId = quoteIdFromClientSecret(options.clientSecret);
   const expected = expectedAddress(options.expectedAddress);
-  const base = options.apiBase.replace(/\/+$/, "");
+  const base = trimTrailingSlashes(options.apiBase);
   const url = `${base}/v1/quotes/${quoteId}?client_secret=${encodeURIComponent(options.clientSecret)}`;
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   // A simple GET with no custom headers, so the browser sends no CORS preflight.

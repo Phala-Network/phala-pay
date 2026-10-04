@@ -1,4 +1,4 @@
-import { requestSignal } from "./request.js";
+import { requestSignal, trimTrailingSlashes } from "./request.js";
 import { CheckoutError, responseError } from "./checkout.js";
 
 /** A payment to a deposit address as the customer's page sees it. Display only. */
@@ -77,7 +77,7 @@ export async function retrieveDepositAddress(
   options: RetrieveDepositAddressOptions,
 ): Promise<ClientDepositAddress> {
   const id = depositAddressIdFromClientSecret(options.clientSecret);
-  const base = options.apiBase.replace(/\/+$/, "");
+  const base = trimTrailingSlashes(options.apiBase);
   const url = `${base}/v1/deposit_addresses/${id}?client_secret=${encodeURIComponent(options.clientSecret)}`;
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   // A simple GET with no custom headers, so the browser sends no CORS preflight.
