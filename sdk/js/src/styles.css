@@ -78,4 +78,3 @@
 
 .pp-icon-label { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; white-space: nowrap; }
 .pp-icon { display: inline-block; flex: none; vertical-align: middle; }
-.pp-testnet { font-size: 10px; font-weight: 600; line-height: 1; }

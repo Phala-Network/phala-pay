@@ -16,9 +16,9 @@ describe("icon mappings", () => {
     expect(networkIcon(8453)).toBe(ICON_SVG.base);
   });
 
-  it("uses mainnet artwork with accessible text for every registered testnet", () => {
-    expect(networkIcon(11155111)).toBe(`${networkIcon(1)}<span>Testnet</span>`);
-    expect(networkIcon(84532)).toBe(`${networkIcon(8453)}<span>Testnet</span>`);
+  it("uses mainnet artwork for every registered testnet", () => {
+    expect(networkIcon(11155111)).toBe(networkIcon(1));
+    expect(networkIcon(84532)).toBe(networkIcon(8453));
   });
 
   it("falls back to neutral monograms and escapes untrusted asset symbols", () => {
@@ -26,7 +26,6 @@ describe("icon mappings", () => {
     expect(assetIcon("")).toContain('>?</text>');
     expect(assetIcon("<script>")).toContain('>&lt;</text>');
     expect(networkIcon(999)).toContain('>C</text>');
-    expect(networkIcon(999)).not.toContain("Testnet");
   });
 
   it("contains no active content, references, or inline styles", () => {
@@ -45,10 +44,9 @@ describe("icon mappings", () => {
 });
 
 describe("React icons", () => {
-  it("keeps artwork decorative beside text, while exposing the testnet indicator", () => {
+  it("keeps artwork decorative beside text", () => {
     const { container } = render(<><NetworkIcon chainId={11155111} /> Sepolia <AssetIcon asset="pha" /> PHA</>);
     expect(screen.queryByRole("img")).toBeNull();
-    expect(screen.getByText("Testnet")).toBeDefined();
     expect(container.textContent).toContain("Sepolia");
     for (const svg of container.querySelectorAll("svg")) {
       expect(svg.getAttribute("aria-hidden")).toBe("true");
@@ -63,7 +61,7 @@ describe("React icons", () => {
       <AssetIcon asset="USDC" decorative={false} size={20} />
       <AssetIcon asset="xyz" decorative={false} />
       <AssetIcon asset="" decorative={false} /></>);
-    expect(screen.getByRole("img", { name: "Base Sepolia (Testnet)" }).querySelector("svg")?.getAttribute("width")).toBe("16");
+    expect(screen.getByRole("img", { name: "Base Sepolia" }).querySelector("svg")?.getAttribute("width")).toBe("16");
     expect(screen.getByRole("img", { name: "USDC" }).querySelector("svg")?.getAttribute("height")).toBe("20");
     expect(screen.getByRole("img", { name: "Chain 999" }).textContent).toBe("C");
     expect(screen.getByRole("img", { name: "XYZ" }).textContent).toBe("X");

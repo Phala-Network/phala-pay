@@ -78,7 +78,7 @@ describe("Checkout", () => {
   it("states the exact amount, the network, and the time left", async () => {
     await renderCheckout();
     expect(screen.getByText("100.502512562814070352 PHA")).toBeDefined();
-    expect(screen.getByText(/\$25\.00 top-up ·/).textContent).toContain("Testnet Sepolia");
+    expect(screen.getByText(/\$25\.00 top-up ·/).textContent).toContain("Sepolia");
     expect(screen.getByText(/Test mode/)).toBeDefined();
     expect(screen.getByText(/exactly 100.502512562814070352 PHA/)).toBeDefined();
     expect(screen.getByLabelText("Time left to pay").textContent).toBe("14:32");

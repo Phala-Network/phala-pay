@@ -5,10 +5,10 @@ test("deposit network and token radio groups work by keyboard and pass axe", asy
   await page.goto("/?deposit");
   const network = page.getByRole("group", { name: "Network" });
   const token = page.getByRole("group", { name: "Token" });
-  await network.getByRole("radio", { name: "Testnet Sepolia", exact: true }).focus();
+  await network.getByRole("radio", { name: "Sepolia", exact: true }).focus();
   await page.keyboard.press("ArrowRight");
-  await expect(network.getByRole("radio", { name: "Testnet Base Sepolia" })).toBeChecked();
-  await expect(network.getByRole("radio", { name: "Testnet Base Sepolia" })).toBeFocused();
+  await expect(network.getByRole("radio", { name: "Base Sepolia" })).toBeChecked();
+  await expect(network.getByRole("radio", { name: "Base Sepolia" })).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(token.getByRole("radio", { name: "PHA" })).toBeFocused();
   await page.keyboard.press("ArrowRight");

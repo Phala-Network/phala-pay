@@ -28,7 +28,6 @@ for (const width of [390, 1280]) {
           await page.goto(`/?${params}`);
           if (surface === "checkout") await expect(page.getByRole("status")).toContainText("Waiting for your payment");
           await expect(page.locator(".pp-icon").first()).toBeVisible();
-          await expect(page.locator(".pp-testnet").first()).toHaveText("Testnet");
           await expect(page.locator(".pp-root style, .pp-root [style], .pp-icon image, .pp-icon use")).toHaveCount(0);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
           const icon = page.locator(".pp-icon").first();

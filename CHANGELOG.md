@@ -17,7 +17,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
-- Branded chain and token icons in Checkout and DepositAddress, with text testnet indicators
+- Branded chain and token icons in Checkout and DepositAddress, with mainnet-family artwork on testnets
   and neutral monogram fallbacks. Export `NetworkIcon` / `AssetIcon` from `@phala/pay/react`
   and framework-free `networkIcon` / `assetIcon` markup accessors from `@phala/pay`.
   Six SVGs are vendored from MIT-licensed web3icons, without a runtime dependency or injected styles.

@@ -1,6 +1,6 @@
 "use client";
 
-import { knownChain, networkName, networkIconName } from "../chains.js";
+import { networkName, networkIconName } from "../chains.js";
 import { assetIconName, iconMonogram, type IconName } from "../icon-names.js";
 import { ICON_PATHS } from "./icon-paths.js";
 
@@ -13,15 +13,14 @@ export interface IconProps {
 export interface NetworkIconProps extends IconProps { chainId: number }
 export interface AssetIconProps extends IconProps { asset: string }
 
-function Icon({ name, label, size = 18, decorative = true, testnet = false }: IconProps & {
+function Icon({ name, label, size = 18, decorative = true }: IconProps & {
   name: IconName | undefined;
   label: string;
-  testnet?: boolean;
 }) {
   const pixels = Number.isFinite(size) && size > 0 ? size : 18;
   return (
     <span className="pp-icon-label" role={decorative ? undefined : "img"}
-      aria-label={decorative ? undefined : `${label || "Unknown asset"}${testnet ? " (Testnet)" : ""}`}>
+      aria-label={decorative ? undefined : label || "Unknown asset"}>
       <svg className="pp-icon" xmlns="http://www.w3.org/2000/svg" width={pixels} height={pixels}
         viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
         {name === undefined ? <>
@@ -29,15 +28,13 @@ function Icon({ name, label, size = 18, decorative = true, testnet = false }: Ic
           <text x="12" y="16" textAnchor="middle" fontFamily="sans-serif" fontSize="12" fill="currentColor">{iconMonogram(label)}</text>
         </> : ICON_PATHS[name]}
       </svg>
-      {testnet && <span className="pp-testnet">Testnet</span>}
     </span>
   );
 }
 
-/** Branded network icon with a text indicator for testnets in the chain registry. */
+/** Branded network icon; testnets reuse their mainnet family artwork. */
 export function NetworkIcon({ chainId, ...props }: NetworkIconProps) {
-  return <Icon {...props} name={networkIconName(chainId)} label={networkName(chainId)}
-    testnet={knownChain(chainId)?.testnet === true} />;
+  return <Icon {...props} name={networkIconName(chainId)} label={networkName(chainId)} />;
 }
 
 /** Branded token icon, or a neutral first-letter monogram for unknown symbols. */

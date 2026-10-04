@@ -301,7 +301,7 @@ recompute an address offline from a treasury you pass, as the Python SDK does.
 ## Chain and token icons
 
 `Checkout` and `DepositAddress` include compact inline icons for Ethereum, Base, USDC, USDT,
-PHA, and ETH. Testnets use their mainnet artwork with visible **Testnet** text. Unknown chains
+PHA, and ETH. Testnets reuse their mainnet family artwork. Unknown chains
 and assets show a neutral first-letter monogram. Symbols are case-insensitive.
 
 ```tsx
@@ -311,12 +311,12 @@ import { NetworkIcon, AssetIcon } from "@phala/pay/react";
 <AssetIcon asset="usdc" size={20} decorative={false} />; // accessible when used alone
 ```
 
-Import `@phala/pay/styles.css` for alignment and the compact testnet indicator. The default
+Import `@phala/pay/styles.css` for alignment. The default
 size is 18px. Icons use SVG width/height attributes and React elements, so they need no inline
 styles, data URI allowance, or extra CSP directives, including with `style-src 'self'`.
 
 Framework-free hosts can call `networkIcon(chainId)` or `assetIcon(symbol)` from `@phala/pay`
-for decorative SVG markup (network testnets also include a visible `Testnet` span). Keep the
+for decorative SVG markup. Keep the
 name visible alongside it; when used alone, supply an accessible label on the host wrapper.
 
 Only six branded SVGs from `@web3icons/core@4.0.57` are vendored, under the MIT license in

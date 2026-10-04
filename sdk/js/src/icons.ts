@@ -1,4 +1,4 @@
-import { knownChain, networkName, networkIconName } from "./chains.js";
+import { networkName, networkIconName } from "./chains.js";
 import { ICON_SVG } from "./icon-svg.js";
 
 import { assetIconName, iconMonogram } from "./icon-names.js";
@@ -16,11 +16,11 @@ function fallback(label: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor" opacity="0.12"/><text x="12" y="16" text-anchor="middle" font-family="sans-serif" font-size="12" fill="currentColor">${letter}</text></svg>`;
 }
 
-/** Decorative inline SVG markup. Testnets also include visible, accessible Testnet text. */
+/** Decorative inline SVG markup; testnets reuse their mainnet family artwork. */
 export function networkIcon(chainId: number): string {
   const name = networkIconName(chainId);
   const svg = name === undefined ? fallback(networkName(chainId)) : ICON_SVG[name];
-  return knownChain(chainId)?.testnet === true ? `${svg}<span>Testnet</span>` : svg;
+  return svg;
 }
 
 /** Decorative inline SVG markup; keep the asset name visible beside it. */
