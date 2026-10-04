@@ -519,9 +519,11 @@ where
             Err(error) => return Ok(request_failure(&error, self.config.proxy.is_some())),
         };
         let status = response.status();
-        // Smokescreen v0.1.0 marks its own responses with this header. A 500 is internal;
-        // its 407 policy denials and 502/504 upstream failures remain endpoint failures.
+        // Smokescreen v0.1.0 marks its own plain HTTP responses with this header and strips
+        // it upstream. HTTPS responses are inside a tunnel and belong to the merchant.
+        // Proxy 407 policy denials and 502/504 upstream failures remain endpoint failures.
         if self.config.proxy.is_some()
+            && event.url.starts_with("http://")
             && status == StatusCode::INTERNAL_SERVER_ERROR
             && response.headers().contains_key("x-smokescreen-error")
         {
