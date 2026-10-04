@@ -15,6 +15,7 @@ mod examples;
 mod extract;
 mod handlers;
 mod idempotency;
+mod instance_pause;
 mod keys;
 pub(crate) mod metadata;
 pub mod models;
@@ -406,6 +407,11 @@ fn client_secret_routes() -> OpenApiRouter<AppState> {
 /// The operator's routes, authenticated by RFC 9421 signatures.
 fn admin_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(
+            instance_pause::get_instance_pause,
+            instance_pause::pause_instance
+        ))
+        .routes(routes!(instance_pause::resume_instance))
         .routes(routes!(handlers::create_account))
         .routes(routes!(handlers::get_account, handlers::update_account))
         .routes(routes!(handlers::issue_api_key))
@@ -474,6 +480,10 @@ fn router_inner(state: AppState) -> (Router, ApiDocs) {
             state.clone(),
             idempotency::idempotent_post,
         ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            instance_pause::admit_request,
+        ))
         .route_layer(middleware::from_fn(auth::authorize))
         // Also the freeze gate: while frozen after a restore, a request with a key is refused
         // here, before authorization and the idempotency layer.
@@ -488,10 +498,15 @@ fn router_inner(state: AppState) -> (Router, ApiDocs) {
             state.clone(),
             auth::authenticate_merchant_or_client_secret,
         ));
-    let admin = admin_routes().route_layer(middleware::from_fn_with_state(
-        state.clone(),
-        auth::authenticate_admin,
-    ));
+    let admin = admin_routes()
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            instance_pause::admit_request,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::authenticate_admin,
+        ));
     let (merchant_router, merchant_doc) = merchant
         .merge(client_secret)
         .layer(middleware::from_fn_with_state(

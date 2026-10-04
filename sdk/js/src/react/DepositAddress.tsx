@@ -57,7 +57,7 @@ export function DepositAddress({
 }: DepositAddressProps) {
   const { networks } = depositAddress;
   const id = useId();
-  const view = useClientView(clientSecret, apiBase, pollInterval ?? 3000);
+  const { view, reconnecting } = useClientView(clientSecret, apiBase, pollInterval ?? 3000);
   const payments = view?.payments ?? [];
   const [selectedChain, setSelectedChain] = useState(chainId ?? networks[0]?.chain_id);
   const [selectedAsset, setSelectedAsset] = useState(asset);
@@ -125,6 +125,7 @@ export function DepositAddress({
         <Field label={`Token (${symbol}) contract`} value={contract} copy />
         <Field label="Deposit address" value={to} copy />
       </dl>
+      {reconnecting && <p className="pp-message" role="status">Reconnecting…</p>}
       {payments.length > 0 && (
         <ul className="pp-payments" aria-live="polite" aria-label="Payments">
           {payments.map((payment) => (
@@ -147,11 +148,12 @@ function useClientView(
   clientSecret: string | undefined,
   apiBase: string | undefined,
   interval: number,
-): ClientDepositAddress | null {
+): { view: ClientDepositAddress | null; reconnecting: boolean } {
   const key = clientSecret === undefined || apiBase === undefined ? "" : `${apiBase} ${clientSecret}`;
-  const [current, setCurrent] = useState<{ key: string; view: ClientDepositAddress | null }>({
+  const [current, setCurrent] = useState<{ key: string; view: ClientDepositAddress | null; reconnecting: boolean }>({
     key: "",
     view: null,
+    reconnecting: false,
   });
   useEffect(() => {
     if (clientSecret === undefined || apiBase === undefined) {
@@ -167,15 +169,21 @@ function useClientView(
         const view = await retrieveDepositAddress({ clientSecret, apiBase, signal: controller.signal });
         failures = 0;
         if (!stopped) {
-          setCurrent({ key, view });
+          setCurrent({ key, view, reconnecting: false });
         }
       } catch (error) {
         failures += 1;
         // A secret that is not valid will not become valid: stop, keep showing the address.
         if (error instanceof CheckoutError && error.code === "invalid_client_secret") {
+          if (!stopped) setCurrent((previous) => ({ ...previous, reconnecting: false }));
           return;
         }
         failure = error instanceof CheckoutError ? error : null;
+        if (!stopped && (failure === null || failure.code === "service_unavailable" || failure.code === "network_error")) {
+          setCurrent((previous) => ({
+            key, view: previous.key === key ? previous.view : null, reconnecting: true,
+          }));
+        }
       }
       if (!stopped) {
         timer = setTimeout(() => void load(), pollDelay(interval, failures, failure));
@@ -189,7 +197,7 @@ function useClientView(
     };
   }, [key, clientSecret, apiBase, interval]);
   // Another address starts without the previous one's view.
-  return current.key === key && key !== "" ? current.view : null;
+  return current.key === key && key !== "" ? current : { view: null, reconnecting: false };
 }
 
 /**

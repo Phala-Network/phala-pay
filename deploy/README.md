@@ -156,8 +156,8 @@ uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@<release commit or ta
 Its inputs are `version`, `environment` (the GitHub Environment), `target` (`topup`, or `product`
 for Phala's reference product), `mode` (`provision` or `upgrade`), and `environment_dir` (the
 target's directory in the caller's repository). The caller grants `contents: read` and
-`attestations: read`, and the only secret Deploy reads is its declared, optional
-`PHALA_CLOUD_API_KEY`. A caller in the Phala-Network organisation passes `secrets: inherit`, and the
+`attestations: read`, and Deploy reads `PHALA_CLOUD_API_KEY` plus
+`TOPUP_ADMIN_PRIVATE_KEY_PEM` for topup upgrade admission control. A caller in the Phala-Network organisation passes `secrets: inherit`, and the
 key is the Environment's secret (an Environment secret resolves empty in a called workflow without
 it, [actions/runner#4453](https://github.com/actions/runner/issues/4453)); a caller in another
 organisation, where `inherit` is not supported, passes it from a repository secret ([self-hosting,
@@ -167,6 +167,45 @@ the deploy with the kit's pre-launch script, and the verification of the atteste
 official dstack verifier; it uploads the rendered compose and the verification as the run's record.
 [Deploy Phala's instance](../.github/workflows/deploy-phala.yml) is Phala's caller, the same way;
 adopting a release is a pull request that changes its release.
+
+#### Planned upgrade admission and downtime
+
+Before a topup upgrade calls Phala Cloud, the workflow admin-signs
+`POST /v1/admin/instance/pause` with scope `mutations`, its run/attempt owner, and a 900-second
+lease. Configure the protected GitHub Environment's `TOPUP_ADMIN_PRIVATE_KEY_PEM` secret
+(Ed25519 PEM) and `TOPUP_ADMIN_KEY_ID` variable to match the running instance's attested admin
+verification key. External callers pass the declared signing secret alongside the Cloud key;
+organisation callers inherit both. This key grants existing admin authority: limit Environment
+access and deployment branches as for the Cloud key. Key material is temporary, never part of
+the uploaded deployment record, and is deleted after each signed request.
+
+New mutations return `503 service_maintenance`, `Retry-After: 5`, before idempotent execution;
+reads and already admitted requests continue. Scanners and outbox workers continue until the
+existing graceful shutdown drains them. After the new version's health checks pass, the workflow
+resumes admission with the same owner. Failed runs attempt to resume; if the CVM is unreachable,
+the database-clock deadline expires automatically without a runner or background worker. The
+pause does not change account, customer, treasury, or route incident pauses. See the
+[stuck-maintenance runbook](runbooks/instance-maintenance.md) for inspection and manual clear.
+
+Upgrade probes run from before the upgrade call through service readiness, sampling `/healthz`
+every 2 seconds with a 3-second timeout. `unavailability.json` records `first_failed_at`,
+`first_healthy_at`, and `unavailability_seconds`; the job summary shows the same window in PT
+and UTC. Maintenance admission and clear responses are separate artifacts. Failed/canceled runs
+keep an incomplete window if recovery was not observed; no observed failure is not a claim of
+zero downtime. Staging run 37215125136 took about 160 seconds (upgrade step to service readiness),
+which motivates the SDK's opt-in 300-second budget. This masks transient failures for clients;
+the CVM still restarts and raw HTTP callers must implement retries.
+
+**First rollout:** a running pre-feature release has no instance pause API, so it cannot emit a
+maintenance signal retroactively. Distribute the tolerant JS SDK first. The owner may explicitly
+pass `bootstrap_maintenance: true` to the new reusable workflow for that one upgrade: only an
+HTTP 404 from the old pause path allows bootstrap. A feature-capable service still requires the
+normal signed pause, and missing credentials or any other pause failure aborts before the upgrade
+call. Bootstrap is recorded in the job summary and disabled by default; remove it after rollout.
+When adopting the feature release in a caller workflow, expose this boolean only if the first
+upgrade needs it (the currently pinned Phala caller remains unchanged until release adoption).
+For rollback, choose a release supporting the pause API; expiry remains the fallback if the
+rollback target cannot serve resume. No compatibility bypass is automatic.
 
 1. Merge the change to the environment repository's `main`: a setting, or a new `version`.
 2. First deployment: Deploy with `mode: provision`, then set `TOPUP_CVM_ID` (or, for the product,

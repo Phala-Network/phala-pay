@@ -19,6 +19,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  CARGO_BUILD_JOBS: 4
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: true
 
@@ -505,6 +506,7 @@ jobs:
           deploy/tests/render-route.sh
           deploy/tests/verify-release.sh
           python3 .github/security/test-exceptions.py
+          PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_upgrade_monitor.py
           deploy/tests/phala-cvm-wait.sh
           deploy/tests/attested-compose.sh
           deploy/tests/verify-ingress-evidence.sh

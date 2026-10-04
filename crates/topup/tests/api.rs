@@ -1644,3 +1644,99 @@ async fn load_shed_responses_match_the_shared_unavailable_contract() -> Result<(
     })
     .await
 }
+
+/// The lease survives restart, gates writes before execution, and cannot outlive its deadline.
+#[tokio::test]
+async fn instance_maintenance_admission_and_expiry() -> Result<()> {
+    let Some(database) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let key = SigningKey::from_bytes(&[91; 32]);
+        let app = test_router(&database.app_pool, &key);
+        let now = Utc::now().timestamp();
+        let account = seed::create_account(&database.app_pool, &NewAccount::named("maintenance-test")).await?;
+        let merchant_key = seed::create_api_key(&database.app_pool, account.id, false).await?;
+        seed::set_account_paused_scopes(&database.app_pool, account.id, &["quotes".to_owned()]).await?;
+        let pause = |owner: &str, duration: i64| -> Result<_> {
+            Ok(signed_request(
+                Method::POST, "/v1/admin/instance/pause",
+                serde_json::to_vec(&json!({"owner": owner, "duration_seconds": duration, "reason": "test upgrade"}))?,
+                ADMIN_KID, &key, now,
+            ))
+        };
+        let response = app.clone().oneshot(pause("deploy-1", 901)?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST);
+        let response = app.clone().oneshot(pause("deploy-1", 900)?).await?;
+        ensure!(response.status() == StatusCode::OK);
+        let response = app.clone().oneshot(pause("deploy-2", 900)?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "another owner cannot replace the lease");
+        // Rebuild the router as a new version does: the database lease remains active.
+        let app = test_router(&database.app_pool, &key);
+        for path in ["/v1/quotes", "/v1/deposit_addresses"] {
+            let request = axum::http::Request::post(path)
+                .header("Authorization", format!("Bearer {merchant_key}"))
+                .header("Idempotency-Key", "upgrade-test")
+                .body(Body::empty())?;
+            let response = app.clone().oneshot(request).await?;
+            ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
+            ensure!(response.headers()["retry-after"] == "5");
+            ensure!(!response.headers().contains_key("idempotent-replayed"));
+            let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
+            ensure!(body["error"]["code"] == "service_maintenance");
+        }
+        let claims: i64 = sqlx::query_scalar("SELECT count(*) FROM idempotency_keys WHERE key = 'upgrade-test'")
+            .fetch_one(&database.app_pool).await?;
+        ensure!(claims == 0, "maintenance never claims or saves the idempotency key");
+        let response = app.clone().oneshot(signed_request(Method::POST,
+            "/v1/admin/accounts", b"{}".to_vec(), ADMIN_KID, &key, now)).await?;
+        ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE, "admin business mutations are paused too");
+        let response = app.clone().oneshot(axum::http::Request::get("/v1/account")
+            .header("Authorization", format!("Bearer {merchant_key}"))
+            .body(Body::empty())?).await?;
+        ensure!(response.status() == StatusCode::OK, "merchant reads continue");
+        let response = app.clone().oneshot(signed_request(Method::GET,
+            "/v1/admin/reports/daily", vec![], ADMIN_KID, &key, now)).await?;
+        ensure!(response.status() == StatusCode::OK, "reads continue during maintenance");
+        let response = app.clone().oneshot(axum::http::Request::get("/healthz").body(Body::empty())?).await?;
+        ensure!(response.status() == StatusCode::OK, "health is independent of admission");
+        let response = app.clone().oneshot(signed_request(Method::POST,
+            "/v1/admin/instance/resume", serde_json::to_vec(&json!({"owner":"deploy-2", "reason":"stale cleanup"}))?,
+            ADMIN_KID, &key, now)).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "stale cleanup cannot lift the lease");
+        let response = app.clone().oneshot(signed_request(Method::POST,
+            "/v1/admin/instance/resume", serde_json::to_vec(&json!({"owner":"deploy-1", "reason":"healthy"}))?,
+            ADMIN_KID, &key, now)).await?;
+        ensure!(response.status() == StatusCode::OK);
+        let response = app.clone().oneshot(axum::http::Request::post("/v1/quotes")
+                .header("Authorization", format!("Bearer {merchant_key}"))
+                .header("Idempotency-Key", "upgrade-test")
+                .header("Content-Type", "application/json")
+                .body(Body::from("{}"))?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "normal admission resumes");
+        let response = app.clone().oneshot(pause("deploy-3", 900)?).await?;
+        ensure!(response.status() == StatusCode::OK);
+        // Advance the persisted database deadline, without waiting 15 real minutes or running a worker.
+        sqlx::query("UPDATE instance_pause SET expires_at = clock_timestamp() - interval '1 second'")
+            .execute(&database.owner_pool).await?;
+        let response = app.clone().oneshot(axum::http::Request::post("/v1/quotes")
+                .header("Authorization", format!("Bearer {merchant_key}"))
+                .header("Idempotency-Key", "upgrade-test")
+                .header("Content-Type", "application/json")
+                .body(Body::from("{}"))?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "deadline auto-clears admission");
+        let response = app.clone().oneshot(signed_request(Method::GET,
+            "/v1/admin/instance/pause", vec![], ADMIN_KID, &key, now)).await?;
+        let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
+        ensure!(body["paused_scopes"] == json!([]));
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM audit WHERE subject = 'instance'")
+            .fetch_one(&database.owner_pool).await?;
+        ensure!(count == 3, "only accepted pause/resume mutations are audited");
+        let business_scopes: Vec<String> = sqlx::query_scalar("SELECT paused_scopes FROM accounts WHERE id = $1")
+            .bind(account.id).fetch_one(&database.app_pool).await?;
+        ensure!(business_scopes == vec!["quotes"], "upgrade never clears business incident pauses");
+        Ok(())
+    }.await;
+    database.cleanup().await?;
+    result
+}

@@ -35,6 +35,21 @@ async function renderCheckout(props: Partial<Parameters<typeof Checkout>[0]> = {
   return view;
 }
 
+it("shows neutral reconnecting while preserving checkout details for a three-minute outage", async () => {
+  let online = true;
+  vi.stubGlobal("fetch", () => online ? Promise.resolve(Response.json(served)) : Promise.resolve(new Response("Bad Gateway", { status: 502 })));
+  const { container } = await renderCheckout();
+  const address = container.querySelector(".pp-fields")?.textContent;
+  online = false;
+  await act(() => vi.advanceTimersByTimeAsync(180000));
+  expect(screen.getByRole("status").textContent).toContain("reconnecting…");
+  expect(container.querySelector(".pp-status")?.getAttribute("data-tone")).toBe("neutral");
+  expect(container.querySelector(".pp-fields")?.textContent).toBe(address);
+  online = true;
+  await act(() => vi.advanceTimersByTimeAsync(30000));
+  expect(screen.getByRole("status").textContent).not.toContain("reconnecting");
+});
+
 /** A browser wallet on the quote's chain whose account holds `balance` of the token; it records
  * the methods called. */
 function browserWallet(hash: string, balance = 10n ** 30n) {

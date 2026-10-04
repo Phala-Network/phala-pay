@@ -258,6 +258,11 @@ pub const ERROR_CODES: &[(&str, u16, &str)] = &[
         "A dependency (pricing, sanctions screening, attestation) is temporarily unavailable. Retry with backoff; the same `Idempotency-Key` runs the request again.",
     ),
     (
+        "service_maintenance",
+        503,
+        "A planned upgrade temporarily pauses new mutations. Reads continue while the process is up. Retry after Retry-After with the same Idempotency-Key; the request has not executed. The pause expires automatically if deployment fails.",
+    ),
+    (
         "service_restoring",
         503,
         "The service was restored from backup and is frozen until the operator has reconciled it with you: every request with an API key is refused, reads too, and nothing is credited or delivered meanwhile. Retry after `Retry-After` seconds; the operator contacts you for your records since the restore point.",
@@ -847,6 +852,17 @@ impl ApiError {
         Self::service_unavailable("the database is busy; retry").with_retry_after(1)
     }
 
+    /// A mutation refused before execution during a planned upgrade.
+    #[must_use]
+    pub fn service_maintenance() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "service_maintenance",
+            "the service is upgrading; retry after Retry-After seconds",
+        )
+        .with_retry_after(5)
+    }
+
     /// Returns a write refused while the service is frozen after a restore from backup
     /// (`crate::restore_mode`), retried after `retry_after` seconds.
     #[must_use]
@@ -1041,6 +1057,7 @@ mod tests {
             ApiError::chain_frozen(),
             ApiError::service_unavailable(""),
             ApiError::service_restoring(300),
+            ApiError::service_maintenance(),
             ApiError::restore_not_frozen(),
             ApiError::restore_rescan_incomplete(),
             ApiError::internal(),

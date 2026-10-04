@@ -88,7 +88,7 @@ describe("request cancellation", () => {
     });
     try {
       await session.refresh();
-      expect(session.getState().error?.code).toBe("network_error");
+      expect(session.getState()).toMatchObject({ error: null, reconnecting: true });
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(calls).toBeGreaterThan(1);
       expect(session.getState().status).toBe("waiting");

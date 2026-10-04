@@ -352,7 +352,7 @@ creates a restricted key.
 
 ### Transport and errors
 
-Per-call options are `{ idempotencyKey?, signal?, requestDeadlineMs? }`. Defaults are a 15-second
+Per-call options are `{ idempotencyKey?, signal?, requestDeadlineMs?, upgradeTolerance? }`. Defaults are a 15-second
 attempt timeout (including body reads), four total attempts, and a 60-second overall deadline
 (including sleeps). POST requests freeze their body and one automatically generated UUID across
 retries; persist an explicit order key to survive process restarts. Keys have a 255-character limit.
@@ -360,6 +360,14 @@ Retries cover network/timeouts, 429, 500/502/503/504, and only `409 idempotency_
 bounded exponential jitter and Retry-After as a minimum. A delay that exceeds the remaining budget
 returns the last error immediately. Replayed errors, DELETE, cancellation and redirects do not
 retry. Redirects are refused. `close()` aborts outstanding requests without closing injected fetch.
+
+Set `upgradeTolerance: true` on the client or per call for backend work that can wait through a
+CVM upgrade. A maintenance 503, gateway 502/503/504 (even a non-JSON body), or network/attempt
+timeout allows up to five minutes of retries from the original request start, with backoff capped
+at 10 seconds. This applies only to GET and replayable POST and preserves the same body/key.
+Explicit deadlines, cancellation, and replayed-error handling still take precedence. The option
+defaults to false so interactive requests keep the existing timeout/attempt budget. See
+[planned upgrades](../../docs/integration.md#planned-upgrades-and-reconnecting).
 
 Errors inherit `PhalaPayError`: `ApiError`, `TransportError`, `ConfigurationError`,
 `ResponseValidationError`, `AddressMismatchError`, `AttestationError`,

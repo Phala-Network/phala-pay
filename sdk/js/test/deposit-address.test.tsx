@@ -172,6 +172,29 @@ describe("DepositAddress payments", () => {
     };
   }
 
+  it("keeps payments and selections during a three-minute outage, then resumes", async () => {
+    vi.useFakeTimers();
+    let online = true;
+    vi.stubGlobal("fetch", () => online
+      ? Promise.resolve(Response.json(view([payment({ status: "seen" })], [clientNetwork(11155111)])))
+      : Promise.reject(new TypeError("offline")));
+    const { unmount } = render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    fireEvent.click(screen.getByRole("radio", { name: "Base Sepolia" }));
+    const payments = screen.getByRole("list", { name: "Payments" }).textContent;
+    online = false;
+    await act(() => vi.advanceTimersByTimeAsync(180000));
+    expect(screen.getByRole("status").textContent).toBe("Reconnecting…");
+    expect(screen.getByRole("radio", { name: "Base Sepolia" })).toHaveProperty("checked", true);
+    expect(screen.getByRole("list", { name: "Payments" }).textContent).toBe(payments);
+    online = true;
+    await act(() => vi.advanceTimersByTimeAsync(30000));
+    expect(screen.queryByRole("status")).toBeNull();
+    unmount();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
   /** A network of the public view. */
   function clientNetwork(chainId: number, seconds = 30) {
     return { chain_id: chainId, address: ADDRESS, assets: [asset(chainId, "usdc", USDC)], typical_credit_seconds: seconds };

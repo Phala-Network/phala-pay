@@ -11,6 +11,8 @@ export interface RequestOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
   requestDeadlineMs?: number;
+  /** Opt in to up to five minutes of retries during maintenance or a gateway/network outage. */
+  upgradeTolerance?: boolean;
 }
 export interface TransportOptions {
   apiBase: string;
@@ -18,6 +20,8 @@ export interface TransportOptions {
   timeoutMs?: number;
   maxAttempts?: number;
   requestDeadlineMs?: number;
+  /** Opt in to up to five minutes of retries during maintenance or a gateway/network outage. */
+  upgradeTolerance?: boolean;
   fetch?: typeof globalThis.fetch;
 }
 export function positive(value: unknown): number {
@@ -86,12 +90,18 @@ export class Transport {
   readonly #timeout: number;
   readonly #deadline: number;
   readonly #attempts: number;
+  readonly #upgradeTolerance: boolean;
+  readonly #upgradeDeadline: number;
   constructor(options: TransportOptions) {
     this.#options = options;
+    if (options.upgradeTolerance !== undefined && typeof options.upgradeTolerance !== "boolean")
+      throw new ConfigurationError("upgradeTolerance must be a boolean");
+    this.#upgradeTolerance = options.upgradeTolerance ?? false;
     this.#timeout = positive(options.timeoutMs === undefined ? 15000 : options.timeoutMs);
     this.#deadline = positive(
       options.requestDeadlineMs === undefined ? 60000 : options.requestDeadlineMs,
     );
+    this.#upgradeDeadline = options.requestDeadlineMs === undefined ? 300000 : this.#deadline;
     this.#attempts = options.maxAttempts === undefined ? 4 : options.maxAttempts;
     if (!Number.isInteger(this.#attempts) || this.#attempts < 1 || this.#attempts > 10)
       throw new ConfigurationError("maxAttempts must be an integer from 1 to 10");
@@ -111,9 +121,15 @@ export class Transport {
       throw new ConfigurationError("Invalid request controls or query parameters");
     if (options.signal !== undefined && !(options.signal instanceof AbortSignal))
       throw new ConfigurationError("Invalid cancellation signal");
-    const deadline = positive(
+    let deadline = positive(
       options.requestDeadlineMs === undefined ? this.#deadline : options.requestDeadlineMs,
     );
+    if (options.upgradeTolerance !== undefined && typeof options.upgradeTolerance !== "boolean")
+      throw new ConfigurationError("upgradeTolerance must be a boolean");
+    const upgradeTolerance = (options.upgradeTolerance ?? this.#upgradeTolerance)
+      && (method === "GET" || method === "POST");
+    // Explicit deadlines remain hard limits, including during an upgrade.
+    const upgradeDeadline = positive(options.requestDeadlineMs ?? this.#upgradeDeadline);
     const started = performance.now();
     const caller = AbortSignal.any([
       this.#shutdown.signal,
@@ -152,7 +168,7 @@ export class Transport {
       }
     }
     let last: PhalaPayError = new TransportError("timeout");
-    for (let attempt = 0; attempt < this.#attempts; attempt++) {
+    for (let attempt = 0; ; attempt++) {
       checkCancellation(caller);
       const remaining = deadline - (performance.now() - started);
       if (remaining <= 0) throw last;
@@ -162,6 +178,7 @@ export class Transport {
       let retry: boolean;
       let minimum = 0;
       let replayed = false;
+      let upgradeFailure: boolean;
       try {
         const response = await bounded(
           (this.#options.fetch ?? globalThis.fetch)(url, {
@@ -182,6 +199,7 @@ export class Transport {
         const requestId = rawId === null ? null : redacted(rawId, this.#options.apiKey);
         replayed = response.headers.get("idempotent-replayed")?.toLowerCase() === "true";
         minimum = (retryAfter(response.headers.get("retry-after")) ?? 0) * 1000;
+        upgradeFailure = upgradeTolerance && [502, 503, 504].includes(response.status) && !replayed;
         const invalid = () => new ResponseValidationError(undefined, response.status, requestId);
         if ((response.status >= 300 && response.status < 400) || response.redirected) {
           controller.abort();
@@ -192,9 +210,13 @@ export class Transport {
         try {
           data = parseJson(text);
         } catch {
+          if (upgradeFailure) throw new TransportError("network");
           throw invalid();
         }
-        if (!isRecord(data)) throw invalid();
+        if (!isRecord(data)) {
+          if (upgradeFailure) throw new TransportError("network");
+          throw invalid();
+        }
         if (response.ok) {
           if (responseSchema && !valid(data, responseSchema)) throw invalid();
           return data;
@@ -204,8 +226,10 @@ export class Transport {
           !isRecord(error) ||
           typeof error["code"] !== "string" ||
           typeof error["message"] !== "string"
-        )
+        ) {
+          if (upgradeFailure) throw new TransportError("network");
           throw invalid();
+        }
         const optional = (name: string): string | null => {
           const value = error[name];
           if (value === null || value === undefined) return null;
@@ -228,6 +252,7 @@ export class Transport {
           [429, 500, 502, 503, 504].includes(response.status) ||
           (response.status === 409 && error["code"] === "idempotency_key_in_use");
         if (replayed) retry = false;
+        upgradeFailure = upgradeFailure || (upgradeTolerance && error["code"] === "service_maintenance" && !replayed);
       } catch (error) {
         checkCancellation(caller);
         if (error instanceof ResponseValidationError || error instanceof ConfigurationError)
@@ -238,15 +263,16 @@ export class Transport {
             ? error
             : new TransportError("network");
         retry = !replayed;
+        upgradeFailure = upgradeTolerance && !replayed;
       } finally {
         clearTimeout(timer);
       }
-      if (!retry || method === "DELETE" || attempt + 1 >= this.#attempts) throw last;
-      const cap = Math.min(5000, 500 * 2 ** attempt);
+      if (upgradeFailure) deadline = Math.max(deadline, upgradeDeadline);
+      if (!retry || method === "DELETE" || (!upgradeFailure && attempt + 1 >= this.#attempts)) throw last;
+      const cap = Math.min(upgradeFailure ? 10000 : 5000, 500 * 2 ** Math.min(attempt, 10));
       const delay = Math.max(minimum, cap * (0.5 + Math.random() * 0.5));
       if (delay >= deadline - (performance.now() - started)) throw last;
       await sleep(delay, caller);
     }
-    throw last;
   }
 }

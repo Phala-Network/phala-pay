@@ -26,9 +26,10 @@ Phala Pay has two SDKs, both in this repository:
   `topup_sdk` (signing, verification, address recomputation, `topup-sdk send-test-event`) and
   `topup_client`, generated from the OpenAPI document.
 - [sdk/js](../sdk/js), `@phala/pay`: the browser checkout, `<Checkout>` and `<DepositAddress>`
-  for React and a framework-agnostic core, and `@phala/pay/server` (webhook `constructEvent`,
-  address recomputation, offline `flushTransaction` and `safeBatch`), which never takes a secret
-  key.
+  for React and a framework-agnostic core, and the `@phala/pay/server` merchant client
+  (`PhalaPay`, API resources, webhook `constructEvent`, address recomputation, offline sweep
+  builders). API keys belong only in server code; keyless offline builders also have a
+  `@phala/pay/server/helpers` entry point.
 
 Samples below use them; every step is plain HTTP and ed25519, so any backend language can do the
 same.
@@ -37,6 +38,39 @@ same.
 treasuries, sweeps) · [2. Webhooks and fulfillment](#2-webhooks-and-fulfillment) ·
 [3. Refunds](#3-refunds) · [4. Testing and go-live](#4-testing-and-go-live) ·
 [5. Reference](#5-reference)
+
+## Planned upgrades and reconnecting
+
+An upgrade restarts the attested CVM. While the old process drains, new mutations return
+`503 service_maintenance` with `Retry-After: 5`; no handler ran and the same Idempotency-Key can
+be retried. Reads continue until the restart. During the restart, the gateway can return
+connection failures or 502/503/504 without Retry-After (sometimes HTML). The observed staging
+upgrade was unavailable for about 160 seconds. Payments remain on-chain and are scanned after
+restart; webhook outbox delivery retries automatically.
+
+For merchant backend work that can wait, enable JS upgrade tolerance:
+
+```ts
+import { PhalaPay } from "@phala/pay/server";
+
+const pay = new PhalaPay({ apiKey, pins, upgradeTolerance: true });
+const created = await pay.quotes.create(params, { idempotencyKey: orderId });
+```
+
+It retries GETs and idempotent POSTs through those failures for up to five minutes, with bounded
+backoff, one body/key, and cancellation support. The opt-in keeps the normal interactive defaults
+(15 seconds per attempt, four attempts, 60 seconds total) intact. Explicit `requestDeadlineMs`
+settings remain hard limits. Enable it per call with `{ upgradeTolerance: true }`, or disable it
+per call on an enabled client. Keep your application's request budget long enough, or create the
+payment asynchronously and let the payer wait. On deadline exhaustion, preserve the order's key
+for a later retry; do not turn an uncertain network outcome into a new logical payment.
+
+`<Checkout>` and `<DepositAddress>` poll through temporary 5xx/network failures automatically,
+retain the last view and selection, show a neutral reconnecting message, and resume once reachable.
+They do not create a new checkout. Normal invalid-secret and address-mismatch handling remains.
+Python's matching `upgrade_tolerance` rule is specified in the
+[SDK contract amendment](design/sdk-ergonomics-reference.md#upgrade-tolerance-amendment-js-implemented-python-phase-2-handoff)
+for its phase 2 implementation; it is not yet a Python option in this release.
 
 ## Quickstart
 

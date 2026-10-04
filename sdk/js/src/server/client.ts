@@ -22,6 +22,8 @@ export interface PhalaPayOptions {
   timeoutMs?: number;
   maxAttempts?: number;
   requestDeadlineMs?: number;
+  /** Retry safe requests through a planned upgrade for up to five minutes; default false. */
+  upgradeTolerance?: boolean;
   fetch?: typeof globalThis.fetch;
 }
 export type Event = Omit<EventObjectResponse, "data" | "pending_webhooks"> & {

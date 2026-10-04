@@ -201,3 +201,72 @@ pub(crate) async fn mutate_account_scopes_in(
     }
     Ok(Some(updated))
 }
+
+/// Effective instance scopes: an expired lease is cleared on read, without a worker or runner.
+pub(crate) async fn instance_pause(
+    pool: &PgPool,
+) -> Result<(Vec<String>, String, i64), sqlx::Error> {
+    sqlx::query_as(
+        "SELECT CASE WHEN expires_at > clock_timestamp() THEN paused_scopes ELSE '{}'::text[] END, \
+         owner, extract(epoch FROM expires_at)::bigint FROM instance_pause WHERE singleton",
+    )
+    .fetch_one(pool)
+    .await
+}
+
+pub(crate) async fn mutations_paused(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM instance_pause WHERE singleton \
+         AND expires_at > clock_timestamp() AND 'mutations' = ANY(paused_scopes))",
+    )
+    .fetch_one(pool)
+    .await
+}
+
+/// Changes only the deployment-owned instance pause, never an account/customer/route pause.
+/// Zero duration resumes. Compare ownership under a row lock so stale cleanup cannot lift a
+/// newer deployment's pause. The audit and lease commit together.
+pub(crate) async fn mutate_instance_pause(
+    pool: &PgPool,
+    owner: &str,
+    duration: i64,
+    actor: &Actor,
+    reason: &str,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let (current_owner, active): (String, bool) = sqlx::query_as(
+        "SELECT owner, expires_at > clock_timestamp() AND cardinality(paused_scopes) > 0 \
+         FROM instance_pause WHERE singleton FOR UPDATE",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if active && current_owner != owner {
+        return Ok(false);
+    }
+    sqlx::query(
+        "UPDATE instance_pause SET paused_scopes = $1, owner = $2, \
+         expires_at = clock_timestamp() + $3::bigint * interval '1 second' WHERE singleton",
+    )
+    .bind(if duration > 0 {
+        vec!["mutations"]
+    } else {
+        vec![]
+    })
+    .bind(owner)
+    .bind(duration)
+    .execute(&mut *tx)
+    .await?;
+    audit::insert(
+        &mut *tx,
+        &audit::Entry {
+            account_id: None,
+            actor,
+            action: if duration > 0 { "pause" } else { "resume" },
+            subject: "instance",
+            reason,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(true)
+}

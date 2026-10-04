@@ -53,7 +53,7 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 | `restore_timeline` | `SELECT`, `UPDATE` |
 | `restore_delivered_events`, `restore_deposit_tombstones` | `SELECT`, `INSERT` |
 | `payment_settings_revisions` | `SELECT`, `INSERT` (append-only) |
-| `payment_settings_cutover` | `SELECT`, `UPDATE` |
+| `payment_settings_cutover`, `instance_pause` | `SELECT`, `UPDATE` |
 | `rpc_config_acceptances` | `SELECT`, `INSERT` (public digests) |
 | `rpc_member_validations` | `SELECT`, `INSERT`; `UPDATE` of `validated_at` only |
 | `rpc_chain_state` | `SELECT`, `INSERT`; `UPDATE` of `frozen`, `reason`, `awaiting_anchor` only |
@@ -301,3 +301,11 @@ window selectors with independent review markers, and owner-written recovery aud
 0.6 height-only cursors require A/B hash agreement before runtime progress. Recovery preserves
 old evidence and repairs derived address/backfill progress under the exclusive writer lock; see
 [the RPC runbook](../../../deploy/RPC.md).
+
+## Instance mutation pause
+
+`20261029000000_instance_pause` adds the instance-level `mutations` pause lease to the existing
+pause mechanism. Its singleton row survives restart. Admission ignores expired scopes according
+to the database clock, so expiry needs no background worker. Admin pause/resume commits the lease
+and the existing `audit` entry together. This scope is separate from business pause scopes and
+never stops scanning or webhook delivery. See [instance maintenance](../../../deploy/runbooks/instance-maintenance.md).
