@@ -209,7 +209,11 @@ main() {
     say "== prerequisites"
     # The kit's scripts need bash 4.4 (empty arrays under set -u); `bash` is the same one on PATH.
     ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 404)) || die "bash 4.4 or later is required (macOS: brew install bash)"
-    local tool
+    local tool timeout_cli=timeout
+    if ! command -v timeout >/dev/null; then
+        timeout_cli=gtimeout
+        command -v gtimeout >/dev/null || die "GNU timeout is required (macOS: brew install coreutils)"
+    fi
     for tool in curl tar jq node npm docker; do
         command -v "$tool" >/dev/null || die "$tool is required"
     done
@@ -285,8 +289,11 @@ main() {
     kit=$work/kit
     mkdir -p "$assets" "$kit" "$work/cli"
     if [[ "$provenance" == gh ]]; then
-        gh api -H 'Accept: application/vnd.github.raw' \
-            "repos/$repository/contents/deploy/verify-release.sh?ref=$release" >"$work/verify-release.sh"
+        for tool in verify-release.sh deadline.sh; do
+            "$timeout_cli" --foreground --kill-after=2 60 gh api -H 'Accept: application/vnd.github.raw' \
+                "repos/$repository/contents/deploy/$tool?ref=$release" >"$work/$tool" ||
+                die "could not download $release verification helper $tool"
+        done
         bash "$work/verify-release.sh" "$release" "$assets" >/dev/null </dev/null ||
             die "the release $release did not verify"
     else
@@ -421,7 +428,7 @@ YAML
         case "$name" in
             DSTACK_APP_DOMAIN) continue ;;
             TOPUP_ADMIN_PUBLIC_KEY | WALG_S3_PREFIX | AWS_ENDPOINT | AWS_REGION) ;;
-            SENTRY_DSN) ask_secret "$name" "Sentry DSN (optional)" "" ;;
+            SENTRY_DSN | WALG_*) ask_secret "$name" "$name (optional)" "" ;;
             TOPUP_RPC_*_KEY) ask_secret "$name" "$name, its provider's API key (empty for a keyless URL)" "" ;;
             *) ask_secret "$name" "$name" ;;
         esac
