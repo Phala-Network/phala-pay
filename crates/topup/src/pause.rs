@@ -282,19 +282,26 @@ impl InstancePause {
         }
         let seconds = u64::try_from(duration)
             .map_err(|_| sqlx::Error::Protocol("invalid pause duration".to_owned()))?;
-        let mut tx = pool.begin().await?;
-        audit::insert(
-            &mut *tx,
-            &audit::Entry {
-                account_id: None,
-                actor,
-                action: if duration > 0 { "pause" } else { "resume" },
-                subject: "instance",
-                reason,
-            },
-        )
-        .await?;
-        tx.commit().await?;
+        // Admission shares this lock with mutations. Bound audit persistence so a stalled
+        // database cannot prevent requests from observing lease expiry indefinitely.
+        let record = async {
+            let mut tx = pool.begin().await?;
+            audit::insert(
+                &mut *tx,
+                &audit::Entry {
+                    account_id: None,
+                    actor,
+                    action: if duration > 0 { "pause" } else { "resume" },
+                    subject: "instance",
+                    reason,
+                },
+            )
+            .await?;
+            tx.commit().await
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), record)
+            .await
+            .map_err(|_| sqlx::Error::PoolTimedOut)??;
         *lease = InstanceLease {
             owner: owner.to_owned(),
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(seconds),
@@ -302,5 +309,42 @@ impl InstancePause {
             booting: false,
         };
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_pause_expires_without_a_health_probe_or_worker() {
+        let pause = InstancePause::booting();
+        assert!(pause.mutations_paused().await);
+        tokio::time::advance(std::time::Duration::from_secs(901)).await;
+        assert!(!pause.mutations_paused().await);
+        assert!(pause.snapshot().await.0.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_audit_releases_admission_and_does_not_set_a_pause() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_secs(60))
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("test connection URL");
+        let pause = InstancePause::default();
+        let started = tokio::time::Instant::now();
+        let result = pause
+            .mutate(
+                &pool,
+                "deploy-1",
+                900,
+                &Actor::admin("admin/test"),
+                "test upgrade",
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(started.elapsed() <= std::time::Duration::from_secs(5));
+        assert!(!pause.mutations_paused().await);
+        pool.close().await;
     }
 }
