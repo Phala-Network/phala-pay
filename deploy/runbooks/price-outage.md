@@ -40,8 +40,15 @@ start, inconsistent round, or the first 3,600 seconds after recovery keeps valua
 - Any fresh stablecoin source outside the peg band: halt even if every other source is at one dollar.
   Escalate the depeg; stale observations cannot authorize or veto credit. No fresh sources also halts.
 - Disagreement or FX depeg: investigate market/feed integrity. Ordered failover must not hide it.
-- Licensing failure: obtain Legal approval and an attested registry/config change. Staging opt-in
-  never authorizes production.
+- Licensing failure: stablecoin defaults use only Allowed Chainlink on-chain data. Kraken is
+  PermissionRequired; Binance (including data-api.binance.vision), Coinbase and Coin Metrics are
+  Prohibited for commercial use. Keep PHA production disabled. Staging opt-in permits only
+  noncommercial rehearsal, never production or a licence grant.
+- PHA production plan: the [follow-up](../../docs/design/price-failover.md#pha-on-chain-follow-up)
+  adds Uniswap V2 TWAP × Chainlink ETH/USD primary and Kraken PHA/USD check after written
+  permission. The adapter/history migration is not shipped yet; CoinGecko is dropped. Do not
+  switch to spot or bypass the independent check while waiting. A sponsored Chainlink PHA feed
+  is a long-term option.
 
 ## Fix
 

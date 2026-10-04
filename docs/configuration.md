@@ -209,19 +209,26 @@ Ethereum B uses `https://eth.drpc.org` (company `drpc`): PublicNode Ethereum pru
 history and cannot pass group identity acceptance. Base B remains PublicNode. Both groups require
 latest feed state, not archive-state contract calls.
 
-All new provider verdicts are currently Unclear, pending Phala Legal. Production config checks
-refuse them. Only explicit non-production environments (`staging`, `testnet`, `local`, `sandbox`) and route
-`allow_unclear_sources: true` opt in for rehearsal;
-Restricted sources are always refused. Deploy's production target also refuses a staging opt-in
-regardless of the reporting environment label. The one-command `deploy.sh` defaults to production;
-set `DEPLOY_ENVIRONMENT=staging` explicitly for a testnet rehearsal. Mainnet examples intentionally cannot enable production
-before an attested Legal-approved registry change. `topup config check` prints ordered source
-lists, verdicts, pinned feed metadata and testnet markers; `config show` emits resolved `price`.
+Chainlink public on-chain consumption is Allowed; stablecoin defaults are Chainlink-only and
+production-eligible without `allow_unclear_sources`. Kraken public market data is
+PermissionRequired; Binance, Coinbase and Coin Metrics are Prohibited for commercial use under
+the reviewed terms. Production refuses every non-Allowed source. Explicit non-production
+`staging`, `testnet`, `local`, `sandbox` plus route `allow_unclear_sources: true` permits
+noncommercial rehearsal of the existing Kraken/Binance PHA route; this flag grants no permission.
+Coin Metrics remains disabled in every environment. Deploy's production target independently
+refuses a staging opt-in. `DEPLOY_ENVIRONMENT=staging` is required for a testnet rehearsal.
+
+PHA production is unavailable until two independent sources are implemented and Allowed. The
+follow-up after #331 will add Uniswap V2 PHA/WETH TWAP × Chainlink ETH/USD as primary and Kraken
+PHA/USD after written permission as check; CoinGecko is dropped. See the
+[on-chain plan](design/price-failover.md#pha-on-chain-follow-up). `topup config check` prints ordered
+sources, verdicts, pinned feed metadata and testnet markers; `config show` emits resolved `price`.
 
 For one migration window the parser accepts old `pricing.primary` and `pricing.check` shapes,
 maps each to a one-item role list and the FX leg to `fx`, and emits only `price`. Mixing old and
 new sections is rejected. Coin Metrics migrates as restricted evidence and fails validation:
-replace it explicitly with Kraken PHAUSD or the configured stablecoin mainnet/exchange sources.
+replace it explicitly with an eligible source set: Chainlink for stablecoins, or the documented
+PHA plan after implementation and permission. Kraken/Binance are staging-only meanwhile.
 Add an independent check and FX for volatile assets; do not reduce the source count. Existing
 route versions and RPC bindings are retained. Release this breaking schema in the next minor
 version; rollback requires the previous compatible image and its configuration.

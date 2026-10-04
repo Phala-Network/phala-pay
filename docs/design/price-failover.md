@@ -1,13 +1,14 @@
 # Price failover
 
-Status: Accepted (owner-delegated, 2026-10-04); production sources pending legal confirmation of
-commercial use (Chainlink, Kraken, Binance)
+Status: Accepted (owner-delegated, 2026-10-04); Chainlink on-chain consumption Allowed; PHA
+production remains gated on an independent Allowed check source. DEX TWAP is a follow-up after #331.
 
 ## Decision
 
-Remove Coin Metrics. Production valuation reads Chainlink Data Feeds on the route's RPC
-groups and public exchange market data. No paid data vendor is introduced. A price is accepted
-only when two fresh observations from independent companies agree; an outage or disagreement
+Remove Coin Metrics. Production stablecoin valuation reads Chainlink Data Feeds on the route's RPC
+groups. Public exchange adapters remain available for explicit noncommercial staging rehearsal,
+not production defaults. Volatile prices require two fresh observations from independent
+companies to agree; an outage or disagreement
 pauses the affected quote/credit path. This is the price counterpart to [RPC failover](rpc-failover.md).
 
 Coin Metrics Community is unsuitable: its [package terms](https://docs.coinmetrics.io/packages/coin-metrics-community-data)
@@ -16,36 +17,33 @@ say “**non-commercial use only**” and the [announcement](https://coinmetrics
 
 ## Licensing gate (reviewed 2026-10-04)
 
-The quoted text below was retrieved with `curl -L` on 2026-10-04 from the exact URL shown. Legal
-must re-check it before enabling a source. A quote that cannot be reproduced verbatim is **Unclear**;
-only **Allowed** may be a default. “Allowed” also requires rate-limit and jurisdiction compliance.
+The orchestrator reviewed the primary sources below on 2026-10-04. The attested registry records
+URL, date, quoted evidence, verdict, legal owner and rate limit. Production accepts **Allowed**
+only; **PermissionRequired**, **Prohibited** and **Unclear** are all refused. Explicit
+`allow_unclear_sources` is retained for noncommercial staging rehearsal only, including the
+existing PHA route; it is never commercial permission. Coin Metrics remains removed from runtime.
 
-Until Legal confirms, staging may run the new sources; production must not enable a source whose
-verdict is not **Allowed**.
-
-| Candidate | Evidence and quoted clause | Verdict / use |
+| Source | Evidence and quoted clause | Verdict / use |
 |---|---|---|
-| Chainlink Data Feeds | `curl -L https://docs.chain.link/data-feeds` (“**Data Feeds provide your smart contracts with access to real-world data**”). Consumer ToS is not exposed as stable text. | **Unclear** until Legal accepts consumer terms. |
-| Kraken | `curl -L https://docs.kraken.com/api/` (“**The Kraken API provides access to market data and trading functionality**”). Commercial grant is not stated. | **Unclear** until written commercial permission. |
-| Coinbase Exchange / Advanced Trade | [Market-data docs](https://docs.cdp.coinbase.com/exchange/docs/rest-api) say “**The Exchange API is free to use**”; [User Agreement](https://www.coinbase.com/legal/user_agreement) reserves “**all rights not expressly granted**”. | **Unclear** for a commercial derived-price service; obtain written permission before default. |
-| Binance REST / `data-api.binance.vision` | `curl -L https://data.binance.vision/` (“**public market data**”). | **Unclear** for commercial derived prices and regional use. |
-| OKX | [API terms](https://www.okx.com/terms-of-use): “**You may not use the Services for any illegal purpose**” and OKX may “**suspend or terminate**” access. | **Unclear**: commercial derived valuation and jurisdiction need written confirmation. |
-| Gate | [Terms](https://www.gate.io/legal/terms-of-service): “**services are not available to … restricted jurisdictions**”. | **Unclear**: jurisdiction and commercial API licence are not explicit. |
-| Bitstamp | [Terms](https://www.bitstamp.net/legal/terms-of-use/): “**Bitstamp grants you a limited, non-exclusive, non-transferable licence**”. | **Unclear**: licence scope does not expressly cover server-side price production. |
-| Coin Metrics Community | [Terms](https://docs.coinmetrics.io/packages/coin-metrics-community-data): “**non-commercial use only**”; [licence](https://coinmetrics.io/?p=16175): “**CC BY-NC 4.0**”. | **Restricted**; prohibited in production. |
-| Other PHA listings | No fetched commercial-use clause. | **Unclear** until reviewed. |
+| Chainlink on-chain feeds | Public on-chain feed state read via our own RPC, without an account/key. [ToS](https://chain.link/terms) is client-rendered; full text could not be retrieved. The basis is public on-chain consumption, not a fetched commercial API grant. | **Allowed** for this on-chain consumption. |
+| Kraken public market data | [API guide](https://docs-legacy.kraken.com/api/docs/guides/global-intro): “You must seek our prior permission for certain uses of the Kraken API's. This includes, but is not limited to, any non-personal commercial use of data from publicly accessible endpoints, such as market data … contacting marketdata@kraken.com”. | **PermissionRequired**; obtain written permission. |
+| Binance, including `data-api.binance.vision` | [Terms](https://data.binance.vision/terms-of-use.html) §3.1: **CC BY-NC-SA 4.0**; §3.4: “any commercial utilization requires a separate, written enterprise data license agreement executed with Binance”. | **Prohibited** for commercial use without an enterprise licence. |
+| Coinbase market data | [Terms](https://www.coinbase.com/legal/market_data): “exclusively for you or your entity's personal or research purposes and may not be used to build an application intended for use by end users…”; redistribution and derived works are also prohibited. | **Prohibited**. No adapter. |
+| Coin Metrics Community | [Package terms](https://docs.coinmetrics.io/packages/coin-metrics-community-data): “non-commercial use only”; [licence](https://coinmetrics.io/?p=16175): **CC BY-NC 4.0**. | **Prohibited**; removed from runtime and defaults. |
+| Uniswap V2 on-chain TWAP (follow-up) | [PHA/WETH pair contract](https://etherscan.io/address/0x8867f20c1c63baccec7617626254a060eeb0e61e): public contract state through our own RPC; no API account or terms. | **Allowed**; company `uniswap-v2-onchain`. Adapter not shipped in #331. |
 
-At implementation start, record URL, retrieval date, clause, legal owner and rate limits in the
-attested provider registry. If Legal does not mark an independent PHA source **Allowed**, production
-PHA quotes and spot credit remain paused; checks are never weakened to one source.
+Kraken/Binance remain in the explicit staging PHA configuration. Stablecoin defaults use only
+Chainlink and do not need a staging licensing opt-in. PHA production quotes/spot credit remain
+unavailable until both primary and check sources are implemented and Allowed. Source counts and
+company disjointness are never weakened to enable production.
 
 ## Valuation rules
 
 ### Stablecoins
 
 USDC and USDT are the only RedPill assets. The source set is Chainlink USDC/USD and USDT/USD on the route chain when a feed exists
-(Ethereum and Base), plus Ethereum-mainnet Chainlink as a configured fallback, and exchange
-USDC/USD and USDT/USD tickers. Sepolia and Base Sepolia deliberately use mainnet feeds through a
+(Ethereum and Base), plus Ethereum-mainnet Chainlink as a configured fallback. Defaults contain Chainlink only;
+exchange USDC/USD and USDT/USD adapters require explicit noncommercial staging opt-in. Sepolia and Base Sepolia deliberately use mainnet feeds through a
 configured mainnet RPC group and/or exchange tickers: test tokens have no market, and config marks
 this cross-network observation explicitly. A Base route must also read the [sequencer uptime feed](https://docs.chain.link/data-feeds/l2-sequencer-feeds):
 when `answer == 1`, or the grace period after recovery has not elapsed, halt.
@@ -76,15 +74,49 @@ provider outage. Every accepted valuation needs at least two fresh, agreeing sou
 and `check` company sets are disjoint, as in `rpc_companies` in [RPC failover](rpc-failover.md).
 FX is independently checked and is required for USDT-quoted markets.
 
-| Role | Ordered sources (example) | Rule |
+| Role | Ordered sources (noncommercial staging) | Rule |
 |---|---|---|
-| primary | **Kraken PHA/USD (`PHAUSD`)**, then Chainlink PHA/USD if it exists | use first healthy source; Kraken AssetPairs confirms PHAUSD |
+| primary | **Kraken PHA/USD (`PHAUSD`)** | use first healthy source; Kraken AssetPairs confirms PHAUSD |
 | check | **Binance PHAUSDT** | normalize with USDT/USD; Binance differs from Kraken |
-| fx | Chainlink USDT/USD, then an **Allowed** exchange USDT/USD | fresh and within FX band |
+| fx | Chainlink USDT/USD, plus explicitly opted-in Kraken USDT/USD | fresh and within FX band |
 
-If Binance is unavailable, pause PHA quotes and spot credit; in production, also pause until Legal
-marks both Kraken and Binance **Allowed**. No other Allowed PHA listing is currently verified; do not substitute a
-second endpoint of the same company or weaken the two-source rule.
+If Binance is unavailable, pause staging PHA quotes and spot credit. Production rejects the
+current Kraken/Binance route: Kraken requires written permission and Binance requires an enterprise
+licence. The on-chain production plan below replaces Binance rather than treating it as Allowed.
+Never substitute one company or an unreviewed endpoint.
+
+## PHA on-chain follow-up
+
+The orchestrator found no Chainlink PHA feed in the Ethereum, Base, BSC, Polygon or Arbitrum
+feed directories (over 1,800 feeds checked), and no Pyth PHA feed. DIA's free API is CC BY-NC-SA;
+CoinGecko paid is dropped. Do not add these as defaults or implement a CoinGecko adapter.
+
+Implement the DEX TWAP as a separate follow-up PR **after #331 merges**, because it adds persistent
+observation history and a migration beyond the current reader/config change. Production primary
+will be Uniswap V2 PHA/WETH TWAP multiplied by Chainlink ETH/USD; check will be Kraken PHA/USD
+**after written permission** and an attested Allowed verdict. Until then PHA is production-ineligible.
+A Phala-sponsored Chainlink PHA/USD feed is a long-term option for two on-chain sources.
+
+The implementation must read the pair's `price0CumulativeLast`/`price1CumulativeLast` and reserves
+through independent Ethereum A/B RPC groups, verify token ordering and require agreement; use
+counterfactual cumulative accumulation as defined by Uniswap V2. Pair:
+`0x8867f20c1c63baccec7617626254a060eeb0e61e`; PHA:
+`0x6c5bA91642F10282b576d91922Ae6448C9d52f4E`. Persist service-recorded cumulative snapshots in
+DB and require a **minimum 30-minute window**. Restart must retain history and fail closed if it
+is insufficient. ETH/USD is a pinned Chainlink feed with the same A/B, round and freshness checks.
+
+Guard rails include a configurable WETH-side USD reserve floor (for example **$100,000**), maximum
+TWAP/spot divergence, observation freshness and minimum window. The reviewed pool estimate is
+$312k TVL/$218k 24h volume (GeckoTerminal; indicative, not runtime evidence). Sustained manipulation
+must move pool inventory over the observation window; this raises cost relative to spot, but is
+not a guaranteed security bound. Keep exposure bounded by `max_unfinalized_credit` (default
+**$1,000**), enforce the reserve floor and independent Allowed check, and halt on divergence or
+insufficient history. Reassess caps against actual reserves before enabling production.
+
+Tests must cover arithmetic against recorded cumulative values (including wrapping counters),
+liquidity floor, restart with persisted history, divergence, token ordering/A/B disagreement,
+and manipulation-shaped price spikes and sustained skew. Do not accept one company during
+bootstrap or an outage.
 
 ## Route schema and migration
 
@@ -100,7 +132,6 @@ price:
     - { source: chainlink, feed: USDC_USD, chain_id: 8453, rpc_group: a }
     - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a,
         observation_chain_id: 11155111 }
-    - { source: kraken, symbol: USDCUSD, company: kraken }
   primary: [{ source: kraken, symbol: PHAUSD, company: kraken }] # volatile only
   check: [{ source: binance, symbol: PHAUSDT, company: binance }] # volatile only
   fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-b }]
@@ -112,9 +143,9 @@ sources, missing FX for USDT markets, unsupported chain/feed pairs, non-positive
 empty list. Stablecoin mode requires `sources` and forbids `primary`, `check` and `fx`; it must
 cover both symbols or an explicit Ethereum-mainnet fallback. `observation_chain_id` is required
 for Sepolia/Base Sepolia mainnet observations. `topup config check` resolves and prints ordered lists, feed heartbeat and testnet
-behaviour (without secrets), and fails on any restricted/unclear default or migration ambiguity.
-The old `primary` maps to a one-item primary list and old `check` to check/fx; spot routes fail
-validation until a second allowed source is configured.
+behaviour (without secrets), and fails on any non-Allowed production source or migration ambiguity.
+The old `primary` maps to a one-item primary list and old `check` to check/fx; volatile routes fail
+validation until an independent second source is configured; production also requires Allowed verdicts.
 
 ## Operations, metrics and runbooks
 

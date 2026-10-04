@@ -11,8 +11,10 @@ pub enum Verdict {
     Allowed,
     /// Permission not confirmed.
     Unclear,
-    /// Commercial use prohibited.
-    Restricted,
+    /// Prior written permission is required for commercial use.
+    PermissionRequired,
+    /// Commercial use prohibited under the currently available terms.
+    Prohibited,
 }
 /// Reviewed licensing evidence compiled into the attested image.
 #[derive(Debug, Serialize)]
@@ -36,28 +38,40 @@ pub struct Provider {
 pub fn provider(source: &str) -> Option<Provider> {
     let (url, clause, rate_limit, verdict) = match source {
         "chainlink" => (
-            "https://docs.chain.link/data-feeds",
-            "Data Feeds provide your smart contracts with access to real-world data",
+            "https://chain.link/terms",
+            "Allowed basis: public on-chain feed data consumed through our own RPC, without an account or key. The Chainlink ToS page is client-rendered; full text could not be retrieved. This verdict covers public on-chain consumption only.",
             "shared RPC account/key budgets",
-            Verdict::Unclear,
+            Verdict::Allowed,
         ),
         "kraken" => (
-            "https://docs.kraken.com/api/",
-            "The Kraken API provides access to market data and trading functionality",
+            "https://docs-legacy.kraken.com/api/docs/guides/global-intro",
+            "You must seek our prior permission for certain uses of the Kraken API's. This includes, but is not limited to, any non-personal commercial use of data from publicly accessible endpoints, such as market data … contacting marketdata@kraken.com",
             "1 request/second per process",
-            Verdict::Unclear,
+            Verdict::PermissionRequired,
         ),
         "binance" => (
-            "https://data.binance.vision/",
-            "public market data",
+            "https://data.binance.vision/terms-of-use.html",
+            "§3.1: CC BY-NC-SA 4.0; §3.4: any commercial utilization requires a separate, written enterprise data license agreement executed with Binance. Includes data-api.binance.vision.",
             "1 request/second per process",
-            Verdict::Unclear,
+            Verdict::Prohibited,
+        ),
+        "coinbase" => (
+            "https://www.coinbase.com/legal/market_data",
+            "exclusively for you or your entity's personal or research purposes and may not be used to build an application intended for use by end users…; redistribution and derived works are prohibited.",
+            "disabled; registry evidence only",
+            Verdict::Prohibited,
+        ),
+        "uniswap-v2-onchain" => (
+            "https://etherscan.io/address/0x8867f20c1c63baccec7617626254a060eeb0e61e",
+            "Allowed basis: public on-chain contract state consumed through our own RPC, without an API account or terms. TWAP adapter and persisted history are deferred to the follow-up after #331.",
+            "disabled until TWAP follow-up; shared RPC budgets",
+            Verdict::Allowed,
         ),
         "coinmetrics" => (
             "https://docs.coinmetrics.io/packages/coin-metrics-community-data",
-            "non-commercial use only",
+            "CC BY-NC 4.0; non-commercial use only",
             "disabled",
-            Verdict::Restricted,
+            Verdict::Prohibited,
         ),
         _ => return None,
     };
@@ -66,6 +80,8 @@ pub fn provider(source: &str) -> Option<Provider> {
             "chainlink" => "chainlink",
             "kraken" => "kraken",
             "binance" => "binance",
+            "coinbase" => "coinbase",
+            "uniswap-v2-onchain" => "uniswap-v2-onchain",
             _ => "coinmetrics",
         },
         url,
@@ -225,7 +241,7 @@ pub struct PriceConfig {
     /// USDT FX peg band.
     #[serde(default = "fx_band")]
     pub max_fx_deviation_bps: Option<Bps>,
-    /// Explicit staging-only opt-in; never legal approval.
+    /// Explicit noncommercial staging/rehearsal opt-in to non-Allowed sources; never legal approval.
     #[serde(default)]
     pub allow_unclear_sources: bool,
     /// Stablecoin source set; every fresh observation of the route asset is inspected for depeg.
@@ -268,7 +284,7 @@ impl PriceConfig {
         for (_, sources) in self.roles() {
             for source in sources {
                 let verdict = provider(source.company()).map(|p| p.verdict);
-                if verdict == Some(Verdict::Restricted)
+                if matches!(source, Source::Coinmetrics { .. })
                     || (verdict != Some(Verdict::Allowed)
                         && !(staging && self.allow_unclear_sources))
                 {
@@ -350,7 +366,7 @@ impl PriceConfig {
                 let verdict = provider(company)
                     .ok_or_else(|| fail("unknown source"))?
                     .verdict;
-                if verdict == Verdict::Restricted
+                if matches!(source, Source::Coinmetrics { .. })
                     || (verdict != Verdict::Allowed && !self.allow_unclear_sources)
                 {
                     return Err(fail(
@@ -457,10 +473,45 @@ mod tests {
         let mut p = p;
         p.allow_unclear_sources = false;
         assert!(p.validate_licensing(true).is_err());
-        assert_eq!(
-            provider("coinmetrics").unwrap().verdict,
-            Verdict::Restricted
-        );
+        for (source, verdict) in [
+            ("chainlink", Verdict::Allowed),
+            ("uniswap-v2-onchain", Verdict::Allowed),
+            ("kraken", Verdict::PermissionRequired),
+            ("binance", Verdict::Prohibited),
+            ("coinbase", Verdict::Prohibited),
+            ("coinmetrics", Verdict::Prohibited),
+        ] {
+            assert_eq!(provider(source).unwrap().verdict, verdict);
+        }
+        for source in [volatile().primary[0].clone(), volatile().check[0].clone()] {
+            let mut p = volatile();
+            p.sources = vec![source];
+            p.primary.clear();
+            p.check.clear();
+            p.fx.clear();
+            assert!(p.validate_licensing(false).is_err());
+        }
+        let mut p = volatile();
+        p.sources = vec![Source::Coinmetrics {
+            asset: "pha".into(),
+        }];
+        p.primary.clear();
+        p.check.clear();
+        p.fx.clear();
+        assert!(p.validate_licensing(true).is_err());
+    }
+    #[test]
+    fn chainlink_only_stablecoins_are_production_eligible_without_opt_in() {
+        for (asset, name) in [("usdc", "USDC_USD"), ("usdt", "USDT_USD")] {
+            let p: PriceConfig = serde_json::from_value(serde_json::json!({
+                "mode": "stablecoin",
+                "sources": [{"source":"chainlink", "feed":name, "chain_id":1, "rpc_group":"a"}]
+            }))
+            .unwrap();
+            assert!(!p.allow_unclear_sources);
+            assert!(p.validate(1, asset, true).is_ok());
+            assert!(p.validate_licensing(false).is_ok());
+        }
     }
     #[test]
     fn testnet_feed_absence_and_cross_network_marker() {

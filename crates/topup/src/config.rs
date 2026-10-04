@@ -471,6 +471,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn committed_stablecoin_defaults_are_production_eligible() {
+        for yaml in [
+            include_str!("../../../deploy/environments/phala-network/staging/topup/topup.yaml"),
+            include_str!("../../../deploy/environments/phala-cloud-template/topup/topup.yaml"),
+        ] {
+            let config = Config::parse(yaml).unwrap();
+            let mut resolved: serde_json::Value =
+                serde_json::from_str(&config.resolved_json().unwrap()).unwrap();
+            resolved["environment"] = serde_json::json!("production");
+            let routes = resolved["routes"].as_array_mut().unwrap();
+            routes.retain(|r| r["price"]["mode"] == "stablecoin");
+            assert_eq!(routes.len(), 4);
+            let production = Config::parse(&serde_json::to_string(&resolved).unwrap()).unwrap();
+            for route in production.routes {
+                assert!(!route.pricing.allow_unclear_sources);
+                assert!(
+                    route.pricing.sources.iter().all(|source| matches!(
+                        source,
+                        topup_core::price::Source::Chainlink { .. }
+                    ))
+                );
+            }
+        }
+    }
+
     /// The Phala Cloud template leaves the origin and the admin key to `topup run`'s environment
     /// (deploy/compose.template.yaml): each must then come from exactly one place and be well
     /// formed, or topup refuses to start.

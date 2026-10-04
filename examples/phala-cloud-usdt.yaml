@@ -29,10 +29,8 @@ asset:
 
 price:
   mode: stablecoin
-  allow_unclear_sources: true # staging only; production refuses Unclear sources
   sources:
     - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: a }
-    - { source: kraken, symbol: USDTUSD, company: kraken }
   peg_band_bps: 100
 
 merchant:

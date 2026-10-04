@@ -149,7 +149,7 @@ routes:
     price:
       mode: volatile
       sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
-      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
       primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
       check: [{ source: binance, symbol: PHAUSDT, company: binance }]
       fx:
@@ -194,10 +194,8 @@ routes:
     price:
       mode: stablecoin
       sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
-      allow_unclear_sources: true # staging only; production refuses Unclear sources
       sources:
         - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
-        - { source: kraken, symbol: USDCUSD, company: kraken }
       peg_band_bps: 100
 
     merchant:
@@ -239,10 +237,8 @@ routes:
     price:
       mode: stablecoin
       sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
-      allow_unclear_sources: true # staging only; production refuses Unclear sources
       sources:
         - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
-        - { source: kraken, symbol: USDTUSD, company: kraken }
       peg_band_bps: 100
 
     merchant:
@@ -274,7 +270,7 @@ routes:
 
     price:
       mode: volatile
-      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
       primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
       check: [{ source: binance, symbol: PHAUSDT, company: binance }]
       fx:
@@ -314,10 +310,8 @@ routes:
 
     price:
       mode: stablecoin
-      allow_unclear_sources: true # staging only; production refuses Unclear sources
       sources:
         - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
-        - { source: kraken, symbol: USDCUSD, company: kraken }
       peg_band_bps: 100
 
     merchant:
@@ -353,10 +347,8 @@ routes:
 
     price:
       mode: stablecoin
-      allow_unclear_sources: true # staging only; production refuses Unclear sources
       sources:
         - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
-        - { source: kraken, symbol: USDTUSD, company: kraken }
       peg_band_bps: 100
 
     merchant:

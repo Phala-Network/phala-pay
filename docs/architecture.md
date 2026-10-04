@@ -666,7 +666,11 @@ Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, comple
 rounds and independent RPC A/B agreement. Base additionally gates on the sequencer uptime
 feed with recovery grace. Test tokens explicitly observe configured mainnet groups. Licensing
 verdicts are compiled into the attested provider registry: only Allowed can run in production;
-`environment: staging` plus an explicit route opt-in permits Unclear sources for rehearsal.
+Chainlink on-chain consumption is Allowed and is the stablecoin default. Kraken is
+PermissionRequired; Binance/Coinbase/Coin Metrics are Prohibited for commercial use.
+`environment: staging` plus explicit route opt-in permits noncommercial Kraken/Binance PHA
+rehearsal. PHA production awaits the [DEX TWAP follow-up](design/price-failover.md#pha-on-chain-follow-up)
+and written Kraken permission; Coin Metrics remains disabled.
 See [price failover](design/price-failover.md) and [configuration](configuration.md#price-sources).
 
 **Screening** is direct sanctions-list screening plus per-deposit bounds. KYC, KYT, and the Travel

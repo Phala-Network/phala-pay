@@ -50,7 +50,12 @@ deposit at once.
 Open provider incidents with the exact block and log evidence. Replacing a provider is a route
 config change and Deploy `upgrade`. Price-source replacement also needs a Legal **Allowed**
 verdict in the attested registry and disjoint primary/check companies. Never override a price
-or substitute another endpoint of the same company. After repair, observe two policy windows.
+or substitute another endpoint of the same company. Stablecoin defaults are Chainlink-only;
+Kraken requires written commercial permission and Binance/Coinbase/Coin Metrics are not
+commercially eligible. PHA production awaits the
+[Uniswap V2 TWAP plan](../../docs/design/price-failover.md#pha-on-chain-follow-up) and an Allowed Kraken
+check. The future reader must halt on TWAP/spot divergence, insufficient persisted history or
+liquidity below its floor. After repair, observe two policy windows.
 
 ## Done when
 

@@ -63,7 +63,7 @@ routes:
       backstop: token
     price:
       mode: volatile
-      allow_unclear_sources: true # staging only; production refuses Unclear sources
+      allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
       primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
       check: [{ source: binance, symbol: PHAUSDT, company: binance }]
       fx: [{ source: kraken, symbol: USDTUSD, company: kraken }]
