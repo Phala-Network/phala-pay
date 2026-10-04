@@ -1,6 +1,7 @@
 export {
   CheckoutError,
   checkoutStatus,
+  pollDelay,
   createCheckout,
   retrieveQuote,
   type CheckoutErrorCode,
@@ -21,8 +22,8 @@ export {
   type DepositAddressPayment,
   type RetrieveDepositAddressOptions,
 } from "./deposit-address.js";
-export { knownChain, networkName, transactionUrl } from "./chains.js";
-export { formatAmount, formatCountdown, formatTokenAmount, tokenAmount } from "./format.js";
+export { knownChain, networkName, transactionUrl, networkIconName } from "./chains.js";
+export { formatAmount, formatCountdown, formatMinorAmount, formatTokenAmount, formatWait, tokenAmount } from "./format.js";
 export {
   depositAddressTransfer,
   parseTransferUri,
@@ -34,6 +35,7 @@ export {
   type TransferRequest,
 } from "./payment.js";
 export { parseClientQuote, quoteIdFromClientSecret, type ClientQuote } from "./quote.js";
+export { assetIconName, iconMonogram, type IconName } from "./icon-names.js";
 export {
   INJECTED_WALLET_UUID,
   WalletError,
@@ -45,4 +47,4 @@ export {
   type WalletInfo,
 } from "./wallet.js";
 export { networkIcon, assetIcon } from "./icons.js";
-export type { CheckoutParams } from "./checkout-params.js";
+export type { CheckoutParams } from "./shared/checkout-params.js";

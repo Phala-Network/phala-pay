@@ -151,8 +151,12 @@ jobs:
             exit 1
           fi
       - uses: ./.github/actions/sdk-js
-      - name: Typecheck, lint, unit tests, and build
-        run: pnpm run check
+      - name: Check the framework-free browser package
+        run: pnpm --filter @phala/pay run check
+      - name: Check the React package
+        run: pnpm --filter @phala/pay-react run check
+      - name: Check the server package
+        run: pnpm --filter @phala/pay-server run check
       # The API reference published from main (.github/workflows/api-reference.yml) builds.
       - name: Build the API reference
         working-directory: docs/reference
@@ -190,19 +194,22 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const path = 'package.json';
-          const packageJson = JSON.parse(fs.readFileSync(path, 'utf8'));
-          Object.assign(packageJson.devDependencies, {
-            react: '18.2.0',
-            'react-dom': '18.2.0',
-            '@types/react': '18.3.31',
-            '@types/react-dom': '18.3.7',
-          });
-          fs.writeFileSync(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+          for (const path of ['package.json', '../js-react/package.json']) {
+            const packageJson = JSON.parse(fs.readFileSync(path, 'utf8'));
+            Object.assign(packageJson.devDependencies, {
+              react: '18.2.0',
+              'react-dom': '18.2.0',
+              '@types/react': '18.3.31',
+              '@types/react-dom': '18.3.7',
+            });
+            fs.writeFileSync(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+          }
           NODE
           pnpm install --no-frozen-lockfile
-      - name: Typecheck, unit tests, and build on React 18
-        run: pnpm run check
+      - name: Typecheck, unit tests, and build the browser package on React 18
+        run: pnpm --filter @phala/pay run check
+      - name: Typecheck, unit tests, and build the React package on React 18
+        run: pnpm --filter @phala/pay-react run check
       - name: Browser tests on React 18
         run: pnpm run e2e:docker
       - name: Keep the React 18 Playwright report of a failed run
@@ -231,9 +238,9 @@ jobs:
           version: "0.12.18"
       - name: Install the locked Python environment
         run: make -C sdk/python sync
-      - name: Build the SDK the page depends on
+      - name: Build the SDK packages the page depends on
         working-directory: sdk/js
-        run: pnpm run build
+        run: pnpm --filter @phala/pay build && pnpm --filter @phala/pay-react build
       - name: Install the page's locked dependencies
         working-directory: deploy/product/web
         run: pnpm install --frozen-lockfile
@@ -266,7 +273,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       matrix:
-        directory: [sdk/js, deploy/product/web, sdk/python, docs/reference, deploy/tools]
+        directory: [sdk/js, sdk/js-react, sdk/js-server, deploy/product/web, sdk/python, docs/reference, deploy/tools]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/security

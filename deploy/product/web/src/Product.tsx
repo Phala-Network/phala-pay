@@ -1,5 +1,5 @@
 import type { CheckoutStatus } from "@phala/pay";
-import type { Appearance } from "@phala/pay/react";
+import type { Appearance } from "@phala/pay-react";
 import { Check, CircleAlert, Cloud, CircleCheck, Copy, FlaskConical, Gift, Lock } from "lucide-react";
 import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";

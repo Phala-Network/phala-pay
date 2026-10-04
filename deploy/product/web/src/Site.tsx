@@ -12,7 +12,7 @@ const LINKS = {
   // The guide's one-command deploy to your own Phala Cloud workspace, beside its other two paths.
   deploy: `${REPO}/blob/main/docs/self-hosting.md#one-command-deploy`,
   reference: "https://phala-network.github.io/phala-pay/",
-  npm: "https://www.npmjs.com/package/@phala/pay",
+  npm: "https://www.npmjs.com/package/@phala/pay-react",
   license: `${REPO}/blob/main/LICENSE`,
   security: `${REPO}/blob/main/SECURITY.md`,
 };
@@ -214,7 +214,7 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
     links: [
       { href: LINKS.docs, label: "Integration guide" },
       { href: LINKS.reference, label: "API reference" },
-      { href: LINKS.npm, label: "npm @phala/pay" },
+      { href: LINKS.npm, label: "npm @phala/pay-react" },
     ],
   },
   {

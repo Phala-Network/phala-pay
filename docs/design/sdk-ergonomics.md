@@ -17,7 +17,7 @@ setup. Avoid global clients, shared-secret signatures, legacy pairing and secret
 ## 2. Server clients
 
 JS: `new PhalaPay({apiKey, pins, apiBase?, timeoutMs?, maxAttempts?, requestDeadlineMs?, fetch?})`
-from `@phala/pay/server`. Python: `PhalaPay(api_key, *, pins, api_base=None, timeout=15.0,
+from `@phala/pay-server`. Python: `PhalaPay(api_key, *, pins, api_base=None, timeout=15.0,
 max_attempts=4, request_deadline=60.0, transport=None)`. Pins accept string or frozen Pins value. JS
 defaults are 15000 ms / four attempts / 60000 ms. No global mutable client or trust discovery.
 
@@ -27,9 +27,7 @@ snake_case. Wire fields stay snake_case. [Normative reference](sdk-ergonomics-re
 specifies all methods, signatures, pages, error fields, retries and boundary validation; both agents
 must use it.
 
-Generate OpenAPI types with openapi-typescript==7.13.0 / openapi-python-client==0.29.1. `@phala/pay`
-stays keyless; `/server` rejects browser/non-Node use before reading keys. Non-browser helpers move
-to `/server/helpers`; Python stays synchronous with context cleanup.
+Generate OpenAPI types with openapi-typescript==7.13.0 / openapi-python-client==0.29.1. `@phala/pay` stays keyless and `@phala/pay-react` contains only React UI; `@phala/pay-server` rejects browser/non-Node use before reading keys. Non-browser helpers live in `@phala/pay-server/helpers`; Python stays synchronous with context cleanup.
 
 ## 3. Two-variable configuration
 
@@ -68,7 +66,7 @@ rotation.
 
 ## 4. One setup command
 
-`npx @phala/pay@X.Y.Z setup` requires **Node >=20.3 and Docker** for the digest-pinned dstack
+`npx @phala/pay-server@X.Y.Z setup` requires **Node >=20.3 and Docker** for the digest-pinned dstack
 verifier. A Python-only shop runs it on a trusted admin workstation, transfers two env vars through
 its secret manager, and keeps the admin key offline. Python servers need neither Node nor Docker.
 One maintained CLI avoids duplicated sensitive onboarding; defer a Python alias. Missing tools stop
@@ -104,8 +102,8 @@ Shared browser entry (HTML contains #checkout; backend is same-origin):
 
 ```tsx
 import { createRoot } from "react-dom/client";
-import { Checkout } from "@phala/pay/react";
-import "@phala/pay/styles.css";
+import { Checkout } from "@phala/pay-react";
+import "@phala/pay-react/styles.css";
 
 const container = document.getElementById("checkout");
 if (!container) throw new Error("Missing checkout container");
@@ -151,7 +149,7 @@ baseline.
 | Configuration | Six Python env values; Node repeats pins/mode and HTTP setup. | Two env values. |
 | Setup | Eight manual API operations plus verifier/signature. | One command plus human signature; Node/Docker prerequisite. |
 
-Install exact-version @phala/pay + viem/React/Express/better-sqlite3, or phala-pay +
+Install exact-version @phala/pay + @phala/pay-react + @phala/pay-server + viem/React/Express/better-sqlite3, or phala-pay +
 FastAPI/uvicorn; run §4, load generated env via process manager, copy recipe beside merchant file.
 These local test apps fix team/amount/order/asset; authenticate/rate-limit and persist order ids in
 production. Run node merchant.mjs or uvicorn merchant:app --port 3000 behind the reachable test
@@ -162,7 +160,7 @@ Node merchant.mjs (raw webhook route must precede JSON middleware):
 
 ```javascript
 import express from "express";
-import { PhalaPay, SignatureVerificationError } from "@phala/pay/server";
+import { PhalaPay, SignatureVerificationError } from "@phala/pay-server";
 import { createLedger } from "./ledger.mjs";
 
 const pay = PhalaPay.fromEnv();

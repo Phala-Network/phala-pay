@@ -21,7 +21,7 @@ decisions are the [design](design/multi-tenant.md) (§16 is its PR plan), and th
   product behind the demo on [pay.phala.com](https://pay.phala.com/). The staging paths passed on
   Sepolia and Base Sepolia: quote, underpayment, late payment, persistent deposit address,
   unsupported token, refund success and failure, sweep, and each test token.
-- **SDKs**: [`@phala/pay`](https://www.npmjs.com/package/@phala/pay) on npm and
+- **SDKs**: [`@phala/pay`](https://www.npmjs.com/package/@phala/pay), [`@phala/pay-react`](https://www.npmjs.com/package/@phala/pay-react), and [`@phala/pay-server`](https://www.npmjs.com/package/@phala/pay-server) on npm, and
   [`phala-pay`](https://pypi.org/project/phala-pay/) on PyPI, published with trusted publishing.
 
 ## Remaining work

@@ -185,7 +185,7 @@ Connection/validation/merge/commit failure rolls back: 5xx.
 
 ```javascript
 import Database from "better-sqlite3";
-import { balanceDelta } from "@phala/pay/server";
+import { balanceDelta } from "@phala/pay-server";
 
 const depositEvents = new Set([
   "deposit.credited",

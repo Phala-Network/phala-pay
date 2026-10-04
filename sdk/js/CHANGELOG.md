@@ -79,7 +79,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 ### Added
 
 - `verifyQuoteAddress(pins, quote)` and `verifyDepositAddress(pins, address)` in
-  `@phala/pay/server` recompute an address from `AddressPins` you configure (`account`, `factory`,
+  `@phala/pay-server` recompute an address from `AddressPins` you configure (`account`, `factory`,
   `implementation`, `treasuries` per chain), never from the response's treasury, and throw
   `AddressMismatchError`; in live mode a chain without a pinned treasury fails closed, and test mode
   falls back to the response's treasury with a console warning.
@@ -94,14 +94,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   each within about a block of arriving ("1.5 PHA received on Sepolia, 1 confirmation"), then
   credited, rejected, or reversed; `retrieveDepositAddress`, `parseClientDepositAddress`, and
   `depositAddressIdFromClientSecret` read the same public view.
-- `@phala/pay/server`, which takes no secret key: `constructEvent(payload, headers, publicKeys,
+- `@phala/pay-server`, which takes no secret key: `constructEvent(payload, headers, publicKeys,
   { expectedAccount, expectedLivemode })` verifies Standard Webhooks `v1a` deliveries with
   WebCrypto (Node 20+, Deno, Bun, edge runtimes), failing closed for another account or mode;
   `forwarderAddress`, `quoteSalt`, `depositAddressSalt`, `quoteAddress`, and `depositAddress`
   recompute addresses; `flushTransaction`, `flushTransactions`, `safeBatch`, and `batchChecksum`
   build sweeps offline, with the Transaction Builder's `BatchFile` type.
 
-- `<DepositAddress depositAddress chainId? asset?>` (`@phala/pay/react`): a customer's persistent
+- `<DepositAddress depositAddress chainId? asset?>` (`@phala/pay-react`): a customer's persistent
   deposit address, one address for all supported tokens and networks. The payer picks a network
   and a token; it shows a QR code of that token's EIP-681 request, the token contract and address
   to copy (each network's own address where they differ), and "send only supported tokens; any
@@ -177,7 +177,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   payer-facing status (also `createCheckout` and `retrieveQuote`).
 - `watchWallets` (EIP-6963, `window.ethereum` fallback) and `payWithWallet`: pay a quote's EIP-681
   ERC-20 transfer from a browser wallet, switching or adding the chain.
-- `@phala/pay/react`: `<Checkout>` with wallet ("Pay with crypto", `buttonText`), QR code, and
+- `@phala/pay-react`: `<Checkout>` with wallet ("Pay with crypto", `buttonText`), QR code, and
   manual payment, live status, and Stripe-style `appearance`; `useCheckout`.
 - `formatTokenAmount(quote, locale?)` shows the exact token amount grouped for the locale and
   without trailing zeros (`1,273.9185`); `tokenAmount(quote)` is the plain decimal a wallet

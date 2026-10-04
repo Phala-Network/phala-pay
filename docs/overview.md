@@ -54,7 +54,7 @@ Phala's first live route will be Ethereum Mainnet PHA for Phala Cloud's account
 flowchart LR
     payer(["Payer"])
     subgraph merchant["Merchant (e.g. Phala Cloud)"]
-        ui["Web app<br/>&lt;Checkout&gt; from @phala/pay"]
+        ui["Web app<br/>&lt;Checkout&gt; from @phala/pay-react"]
         backend["Backend<br/>phala-pay SDK, pinned addresses"]
         wallet["Merchant wallet or Safe"]
     end

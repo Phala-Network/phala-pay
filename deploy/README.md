@@ -124,7 +124,7 @@ After comparison, Trivy scans each final digest and generates
 an SPDX SBOM; `actions/attest-sbom` signs it and attaches it to the digest in GHCR, alongside build
 provenance. [verify-release.sh](verify-release.sh) requires both attestations with the release
 workflow identity, source commit, and GitHub-hosted runner constraints. A stable release then publishes the SDKs at its version,
-`@phala/pay` to npm and `phala-pay` to PyPI, with trusted publishing. The GitHub release's assets,
+`@phala/pay`, `@phala/pay-react`, and `@phala/pay-server` to npm, plus `phala-pay` to PyPI, with trusted publishing. The GitHub release's assets,
 each attested, are:
 
 - `images.json`, each image's `repository@sha256` by name ([render.sh](render.sh)'s `--images`);

@@ -22,7 +22,7 @@ export function wallet() {
 
 /** The SDK's components, loaded when a payment starts: they carry the chain and wallet libraries. */
 export function loadSdk() {
-  return import("@phala/pay/react");
+  return import("@phala/pay-react");
 }
 
 /**

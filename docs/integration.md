@@ -19,17 +19,18 @@ this guide and the code disagree, the code wins. The contract is defined by:
   webhook), §12 (API, events, customer UI), §14 (attestation, restore), and §15 (refunds and
   policies).
 
-Phala Pay has two SDKs, both in this repository:
+Phala Pay has the Python SDK and three lockstep JavaScript packages, all in this repository:
 
 - [sdk/python](../sdk/python), `phala-pay` (import `phala_pay`): the backend client,
   `PhalaPay(...).quotes.create(...)` and `.webhooks.construct_event(...)` in Stripe's shape, over
   `topup_sdk` (signing, verification, address recomputation, `topup-sdk send-test-event`) and
   `topup_client`, generated from the OpenAPI document.
-- [sdk/js](../sdk/js), `@phala/pay`: the browser checkout, `<Checkout>` and `<DepositAddress>`
-  for React and a framework-agnostic core, and the `@phala/pay/server` merchant client
-  (`PhalaPay`, API resources, webhook `constructEvent`, address recomputation, offline sweep
-  builders). API keys belong only in server code; keyless offline builders also have a
-  `@phala/pay/server/helpers` entry point.
+- [sdk/js](../sdk/js), `@phala/pay`: the framework-free browser checkout core, retrieval and wallet
+  helpers, payment URIs, icons, formatting, and public types;
+- [sdk/js-react](../sdk/js-react), `@phala/pay-react`: `<Checkout>`, `<DepositAddress>`, hooks,
+  icons, and styles for React;
+- [sdk/js-server](../sdk/js-server), `@phala/pay-server`: the merchant client, webhook verification,
+  address recomputation, ledger helpers, and offline `flushTransaction` / `safeBatch` builders.
 
 Samples below use them; every step is plain HTTP and ed25519, so any backend language can do the
 same.
@@ -51,7 +52,7 @@ restart; webhook outbox delivery retries automatically.
 For merchant backend work that can wait, enable SDK upgrade tolerance:
 
 ```ts
-import { PhalaPay } from "@phala/pay/server";
+import { PhalaPay } from "@phala/pay-server";
 
 const pay = new PhalaPay({ apiKey, pins, upgradeTolerance: true });
 const created = await pay.quotes.create(params, { idempotencyKey: orderId });
@@ -77,7 +78,7 @@ long enough, or create the payment asynchronously and let the payer wait. On dea
 preserve the order's key for a later retry; do not turn an uncertain network outcome into a new
 logical payment.
 
-`<Checkout>` and `<DepositAddress>` poll through temporary 5xx/network failures automatically,
+`<Checkout>` and `<DepositAddress>` from `@phala/pay-react` poll through temporary 5xx/network failures automatically,
 retain the last view and selection, show a neutral reconnecting message, and resume once reachable.
 They do not create a new checkout. Normal invalid-secret and address-mismatch handling remains.
 Both SDKs follow the
@@ -88,11 +89,12 @@ Both SDKs follow the
 The whole integration is three pieces, as with Stripe's Payment Element: the backend creates a
 quote, the browser renders the checkout with the quote's client secret, and the webhook fulfils.
 
-**Install** `@phala/pay` from npm and `phala-pay` from PyPI at your operator's service version,
+**Install** `@phala/pay`, `@phala/pay-react` (for React), `@phala/pay-server`, and `phala-pay`
+from npm/PyPI at your operator's service version,
 and pin it ([§5.9, "Compatibility"](#compatibility); `X.Y.Z` below):
 
 ```sh
-npm install --save-exact "@phala/pay@X.Y.Z" viem
+npm install --save-exact "@phala/pay@X.Y.Z" "@phala/pay-react@X.Y.Z" "@phala/pay-server@X.Y.Z" viem react react-dom
 uv add "phala-pay==X.Y.Z"   # or: pip install "phala-pay==X.Y.Z"
 ```
 
@@ -145,8 +147,8 @@ manual payment, with live status until the payment is credited.
 
 ```tsx
 "use client";
-import { Checkout } from "@phala/pay/react";
-import "@phala/pay/styles.css";
+import { Checkout } from "@phala/pay-react";
+import "@phala/pay-react/styles.css";
 
 <Checkout
   clientSecret={clientSecret}
@@ -187,7 +189,7 @@ async def webhook(request: Request) -> Response:
 ```
 
 A Node backend verifies the same way with `constructEvent(rawBody, headers, WEBHOOK_KEYS,
-{ expectedAccount: ACCOUNT, expectedLivemode: false })` from `@phala/pay/server`.
+{ expectedAccount: ACCOUNT, expectedLivemode: false })` from `@phala/pay-server`.
 [sdk/examples/fastapi_app.py](../sdk/examples/fastapi_app.py) is this backend in full, with an
 idempotent, snapshot-driven SQLite ledger (`apply_deposit`) and tests of partial refunds,
 reversals, and out-of-order delivery; Phala's staging reference product runs the Phala Pay demo, a
@@ -345,7 +347,7 @@ pinned treasury** of the quote's chain and that salt. `PhalaPay(account=…, for
 implementation), treasuries={chain_id: treasury})` recomputes every quote from those pins and
 raises `AddressMismatchError` when the quote names another treasury or shows another address, so
 a user never pays an address you did not derive; in live mode it raises without every pin. A Node
-backend does the same with `verifyQuoteAddress(pins, quote)` from `@phala/pay/server`, which
+backend does the same with `verifyQuoteAddress(pins, quote)` from `@phala/pay-server`, which
 returns the address. Pass the recomputed address to the page as `<Checkout expectedAddress>`,
 which fails closed on any other. You need no address records of your own to credit:
 `deposit.credited` carries the deposit, which names the customer (`client_reference_id`) and the
@@ -385,12 +387,12 @@ under a `safe` policy, 15 minutes at `finalized`), that they can close the page,
 automatically. `onSuccess(quote)` is called once credited; `quote.amount_credited` is what was
 credited.
 
-**Theme it.** Import `"@phala/pay/styles.css"` once in your application entry point.
+**Theme it.** Import `"@phala/pay-react/styles.css"` once in your application entry point.
 Map your application's light/dark tokens to `--pp-*` properties on `.pp-root` in a stylesheet
 loaded after the SDK's CSS, and omit `appearance` (`pay-theme.css` below):
 
 ```tsx
-import "@phala/pay/styles.css";
+import "@phala/pay-react/styles.css";
 import "./pay-theme.css";
 
 <Checkout
@@ -562,7 +564,7 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   network's address is the factory's `CREATE2` for that network's `treasury` and the salt.
   `PhalaPay(account=…, forwarder=(factory, implementation), treasuries=…)` checks every network
   of an active address over your pinned treasury of its chain and raises `AddressMismatchError`
-  (`verifyDepositAddress(pins, address)` in `@phala/pay/server`);
+  (`verifyDepositAddress(pins, address)` in `@phala/pay-server`);
   `topup_sdk.deposit_address(...)` recomputes any version offline.
 - A network pays the treasury it was issued for, forever. When your treasury on one network
   changes, that network's address changes (the others do not); payments to the old address on
@@ -582,7 +584,7 @@ at the market rate when it arrives, usually in about 30 seconds on Sepolia and a
 Base Sepolia. You can reuse this address." Each network's time is its `typical_credit_seconds` in
 the address's public view (above), at the confirmation your account's payments on that chain wait
 for, as `GET /v1/config` reports it; until the view is loaded the page names no time.
-`<DepositAddress depositAddress={…} clientSecret={…} apiBase={…}>` from `@phala/pay/react`
+`<DepositAddress depositAddress={…} clientSecret={…} apiBase={…}>` from `@phala/pay-react`
 renders exactly that from `address` and `networks` (pass only those and the `client_secret` to the
 browser) and, with the secret, shows each payment as it arrives: "1.5 PHA received on Sepolia, 1
 confirmation", then "credited".
@@ -722,7 +724,7 @@ with the app's own `meta.checksum`, so it imports without a "modified" warning. 
 Safe{Wallet} > Apps > Transaction Builder, drags the file in, and creates the batch; the owners
 sign and execute it as any Safe transaction
 ([Safe help](https://help.safe.global/en/articles/40841-transaction-builder)).
-`@phala/pay/server` has the same `flushTransactions` and `safeBatch` for a Node backend.
+`@phala/pay-server` has the same `flushTransactions` and `safeBatch` for a Node backend.
 `pay.export_account(directory)` writes every list, `forwarders.json` included, to JSON files.
 
 ### 1.8 Confirmations and pausing
@@ -1531,7 +1533,7 @@ During a restore, all requests with a merchant API key, reads included, return
 
 ### 5.9 Versioning and deprecation
 
-The service and both SDKs share one version and are released together. They are pre-1.0 (0.x),
+The service, all three JavaScript packages, and the Python SDK share one version and are released together. They are pre-1.0 (0.x),
 versioned by SemVer's rules for 0.x: a minor release may break what came before it, and a patch
 release only fixes or adds.
 
@@ -1548,7 +1550,7 @@ release only fixes or adds.
 
 #### SDK
 
-- `phala-pay` and `@phala/pay` are released with the service, at its version, changed or not: a
+- `phala-pay`, `@phala/pay`, `@phala/pay-react`, and `@phala/pay-server` are released with the service, at its version, changed or not: a
   minor release may break the public API (`phala_pay` and `topup_sdk` exports, generated
   `topup_client` names, the JavaScript exports and component props); pin the version you tested.
 - Each release's `topup_client` is generated from that release's `openapi.json`.
@@ -1558,7 +1560,7 @@ release only fixes or adds.
 #### Compatibility
 
 Use the SDK version equal to your operator's service version, `info.version` of its
-`GET /openapi.json`: against service v0.8.2, `@phala/pay` 0.8.2 and `phala-pay` 0.8.2. No other
+`GET /openapi.json`: against service v0.8.2, `@phala/pay`, `@phala/pay-react`, `@phala/pay-server`, and `phala-pay` 0.8.2. No other
 pairing is supported, so upgrade the SDKs when your operator upgrades the service.
 [CHANGELOG.md](../CHANGELOG.md) records each release's SDK changes under "JS SDK" and "Python SDK".
 

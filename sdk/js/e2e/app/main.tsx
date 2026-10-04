@@ -1,7 +1,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createWalletClient, custom, isAddress } from "viem";
-import { Checkout, DepositAddress } from "../../dist/react/index.js";
+import { Checkout, DepositAddress } from "../../../js-react/dist/index.js";
 import type { EthereumProvider } from "../../dist/index.js";
 
 const params = new URLSearchParams(window.location.search);
