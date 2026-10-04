@@ -45,7 +45,7 @@ try {
     jsx.push(`  ${name}: <>${body.replaceAll("fill-rule", "fillRule").replaceAll("clip-rule", "clipRule")}</>,`);
   }
   writeFileSync(new URL("src/icon-svg.ts", root), header + `\nexport const ICON_SVG: Record<${Object.keys(icons).map((key) => JSON.stringify(key)).join(" | ")}, string> = {\n${markup.join("\n")}\n};\n`);
-  writeFileSync(new URL("src/react/icon-paths.tsx", root), header + `\nexport const ICON_PATHS = {\n${jsx.join("\n")}\n};\n`);
+  writeFileSync(new URL("../js-react/src/icon-paths.tsx", root), header + `\nexport const ICON_PATHS = {\n${jsx.join("\n")}\n};\n`);
 } finally {
   rmSync(work, { recursive: true, force: true });
 }
