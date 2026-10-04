@@ -1446,46 +1446,11 @@ response marked `Idempotent-Replayed` is the request's saved outcome and is rais
 
 ### 5.7 Endpoints
 
-Every path is a top-level resource; your key names your account and its mode, and another
-account's or the other mode's objects answer `404`, as a missing one does. `client_reference_id`
-is your customer's id (1 to 200 characters). `PhalaPay` has one resource per row, in Stripe's
-shape (`pay.quotes.create`, `pay.events.list`, …); the column names the lower-level `TopupClient`
-method.
-
-| Method and path | Purpose | `TopupClient` |
-|---|---|---|
-| `GET /v1/account` | Your account: `id` (`acct_…`), `name`, `charges_enabled` (live mode), `paused_scopes` (the operator's and yours), the key's `livemode`, and the mode's `webhook_keys` versions. | `get_account` |
-| `GET /v1/payment_settings`, `POST /v1/payment_settings` `{chains?, quote_creations_per_customer_per_minute?}` | What you accept in the mode and on what terms, with the operator's catalog and bounds in `available` (§1.9). | `get_payment_settings`, `update_payment_settings` |
-| `POST /v1/account/pause`, `POST /v1/account/resume` `{scopes: ["quotes"]}` | Pause or resume issuing quotes and deposit addresses (§1.8). | `pause_quotes`, `resume_quotes` |
-| `GET /v1/config` | Your effective payment config: the assets you accept on chains with a treasury (chain, asset code, contract, decimals), with your terms (minimum and maximum amounts, quote window, spread, tolerance, confirmations) and typical credit and finality times: what your UI shows instead of hardcoding. | `get_config` |
-| `POST /v1/quotes` `{client_reference_id, amount, currency: "usd", chain_id, asset, metadata?}` | Quote `amount` cents: a locked price, the exact token amount, and a single-use address. The customer is created by its first quote. The response alone carries the quote's `client_secret`; a repeat with the same `Idempotency-Key` replays it. | `create_quote` |
-| `GET /v1/quotes` | Your quotes, newest first; filters `client_reference_id`, `status`; `limit`, `starting_after`, `ending_before` (`qt_…`). | `list_quotes` |
-| `GET /v1/quotes/{id}` | Resume a checkout: `status`, `expires_at`, and the seen `payment`. Without an API key, with `?client_secret=`, the payer's page reads the public `ClientQuote` (`payment_status`: `none`, `seen`, `confirming`, `credited`, `rejected`, `reversed`); any origin, rate-limited. Give the secret only to the paying customer's page and do not log it. | `get_quote` |
-| `POST /v1/quotes/{id}` `{metadata}` | Update the quote's metadata (§1.4). | `update_quote` |
-| `POST /v1/quotes/{id}/cancel` | Cancel an unpaid quote; later payments to its address credit at spot. | `cancel_quote` |
-| `POST /v1/deposit_addresses` `{client_reference_id, metadata?}`, `POST /v1/deposit_addresses/{id}/rotate` | The customer's active deposit address, with a new `client_secret` (§1.5). | `create_deposit_address`, `rotate_deposit_address` |
-| `GET /v1/deposit_addresses`, `GET\|POST /v1/deposit_addresses/{id}` | Read and update deposit addresses, with their `payments`; with `?client_secret=` and no API key, the customer's `ClientDepositAddress`. | `list_deposit_addresses`, `get_deposit_address`, `update_deposit_address` |
-| `GET /v1/deposits` | Deposits at the route's confirmation, newest first, as a Stripe list `{object: "list", url, has_more, data}`: filters `client_reference_id`, `quote`, `deposit_address`, `status` (`pending`, `credited`, `rejected`, `reversed`), `tx_hash`, `created[gt]`, `created[gte]`, `created[lt]`, `created[lte]` (Unix seconds); `limit` (1 to 100, default 10) with `starting_after` or `ending_before` (a `dep_` id); `expand[]=data.quote`. | `list_deposits` (follows every page) |
-| `GET /v1/deposits/{id}` | One deposit (`dep_…`); `expand[]=quote`. | `get_deposit` |
-| `POST /v1/deposits/{id}` `{metadata}` | Update the deposit's metadata (§1.4); the quote's is unchanged. | `update_deposit` |
-| `POST /v1/refunds` `{deposit, destination_address, amount_atomic?, metadata?}` | A `pending` refund of a final deposit (§3), paid by you from its `treasury`; `amount_atomic` defaults to the unrefunded remainder; `Idempotency-Key` as for quotes. | `create_refund` |
-| `POST /v1/refunds/{id}/mark_paid` `{transaction_hash, receipt_log_index?}` | Attach the transaction that pays the refund; verified at finality (§3). From then on it cannot be canceled. | `mark_refund_paid` |
-| `POST /v1/refunds/{id}/cancel` | Cancel a pending refund not yet marked paid and release its reservation. | `cancel_refund` |
-| `GET /v1/refunds` | Your refunds, newest first; filters `deposit`, `status`. | `list_refunds` |
-| `GET /v1/refunds/{id}` | One refund (`re_…`): `pending` until its transaction is final, then `succeeded` or `failed`, or `canceled`; `expand[]=deposit`. | `get_refund` |
-| `POST /v1/refunds/{id}` `{metadata}` | Update the refund's metadata (§1.4). | `update_refund` |
-| `GET /v1/balance` | What your forwarders hold per chain and token (§1.7). | `get_balance` |
-| `GET /v1/sweeps` | Finalized sweeps of your forwarders, newest first; filters `chain_id`, `forwarder`, `token` (§1.7). | `list_sweeps` |
-| `GET /v1/forwarders` | Every forwarder with its `(factory, salt, treasury)`; `sweepable=<token>` for the ones to sweep (§1.7). | `list_forwarders` |
-| `GET\|POST /v1/api_keys`, `GET\|DELETE /v1/api_keys/{id}`, `POST /v1/api_keys/{id}/roll` | Your keys (§5.4); the list takes `limit`, `starting_after`, `ending_before`. | `list_api_keys`, `create_api_key`, `get_api_key`, `revoke_api_key`, `roll_api_key` |
-| `POST /v1/treasuries/challenge` `{chain_id, address}` | The EIP-4361 message proving `address` as your treasury on `chain_id` (§1.6). | `create_treasury_challenge` |
-| `POST /v1/treasuries` `{chain_id, message, signature}` | Set the chain's treasury with the signed message: `active`, or `pending` for 48 hours for a later live change (§1.6). | `create_treasury` |
-| `GET /v1/treasuries`, `GET /v1/treasuries/{id}` | Your treasuries in the key's mode, newest first; filters `chain_id`, `status`; `limit`, `starting_after`, `ending_before`. | `list_treasuries`, `get_treasury` |
-| `POST /v1/treasuries/{id}/cancel` | Cancel a pending change. | `cancel_treasury` |
-| `GET /v1/attestation?nonce=` | Your account's webhook keys in the key's mode, with evidence (§5.3). | `attestation` |
-| `POST /v1/account/webhook_keys/roll` `{expires_in?}` | Roll the mode's webhook key (§5.3). | `roll_webhook_key` |
-| `GET\|POST /v1/webhook_endpoints`, `GET\|POST\|DELETE /v1/webhook_endpoints/{id}`, `POST /v1/webhook_endpoints/{id}/test` | Your webhook endpoints (§5.11). | `*_webhook_endpoint(s)` |
-| `GET /v1/events`, `GET /v1/events/{id}`, `POST /v1/events/{id}/resend` | Your events and audit log, filters `type`, `types[]`, `delivery_success`, `created[gt\|gte\|lt\|lte]`; resend one to an endpoint (§5.11). | `list_events`, `get_event`, `resend_event` |
+The [generated API reference](https://phala-network.github.io/phala-pay/) lists every operation,
+parameter, response schema, and required permission from
+[`openapi.json`](../crates/topup/openapi.json). Your key selects the account and mode; foreign
+objects answer `404`, as missing ones do. For Python calls, see the
+[SDK resource reference](../sdk/python/README.md#reference).
 
 ### 5.8 Errors
 
@@ -1499,34 +1464,12 @@ cannot succeed as sent or in the objects' current state (a business rule, not a 
 requests), and `409` is only an `Idempotency-Key` still in use. Every response names its request in
 `Request-Id` (§5.5), and every `429` says when to retry in `Retry-After` (seconds).
 
-| Status | `code` | Meaning |
-|---|---|---|
-| 400 | `parameter_missing`, `parameter_unknown`, `parameter_invalid` | Malformed input, with `param`. Do not retry unchanged. |
-| 400 | `amount_too_small`, `amount_too_large` | Below the minimum credit or deposit, or above the maximum deposit (`param: "amount"`), or above a refund's remainder (`param: "amount_atomic"`). |
-| 400 | `exposure_cap_exceeded` | A cap on your open quotes in the mode (their number, their credit, or one customer's credit); the message states what is left. |
-| 400 | `paused`, `chain_frozen` | Scope paused, or chain frozen pending reconciliation; show "temporarily unavailable". Not retried. |
-| 400 | `treasury_not_set` | No treasury on the chain yet (§1.6). |
-| 400 | `asset_not_accepted` | Your payment settings do not accept the asset on the chain in this mode, or accept nothing yet (§1.9). |
-| 400 | `payment_settings_unconfirmed` | After a service restore, your payment settings await your reconfirmation (§5.12). |
-| 400 | `quote_payment_received`, `quote_window_closed`, `quote_unexpected_state` | Quote cancel refused: its address already received a payment, its window closed, or it is complete or expired. |
-| 400 | `deposit_address_cap_exceeded`, `deposit_address_retired` | The mode's cap of active deposit addresses; a rotation of a retired address (§1.5). |
-| 400 | `deposit_not_refundable`, `deposit_not_final` | The deposit is not eligible for a refund, or could still be reversed: request the refund once it is final (§3). |
-| 400 | `destination_sanctioned` | A sanctions list names the refund's `destination_address` (§3). |
-| 400 | `refund_unexpected_state`, `transfer_already_used` | `mark_paid` or cancel refused: the refund is not pending, already carries another transaction, or is marked paid (no cancel), or the named transfer log pays another refund (§3). |
-| 400 | `treasury_proof_invalid`, `treasury_challenge_expired`, `treasury_challenge_used`, `treasury_not_deployed`, `treasury_sanctioned`, `treasury_change_pending`, `treasury_unchanged`, `treasury_unexpected_state` | A treasury proof or change refused (§1.6). |
-| 400 | `api_key_inactive`, `last_api_key` | Roll of a revoked or already rolled key; revoke of the mode's last active key (§5.4). |
-| 400 | `webhook_endpoint_cap_exceeded`, `webhook_endpoint_disabled` | The mode's 16 endpoints; a resend to a disabled endpoint (§5.11). |
-| 400 | `idempotency_key_reused` (`type: idempotency_error`) | The same `Idempotency-Key` with another request. |
-| 401 | `api_key_missing`, `api_key_invalid`, `api_key_expired` | No Bearer key; a malformed, unknown, or revoked key; a rolled key past its expiry (§5.5). |
-| 403 | `testmode_charges_only` | A live key of an account the operator has not enabled for live mode. |
-| 403 | `permission_denied` | The key's kind does not hold the permission. |
-| 404 | `resource_missing` | Unknown or foreign resource. |
-| 409 | `idempotency_key_in_use` (`type: idempotency_error`) | A request with this key still runs; retry with the same key. |
-| 429 | `rate_limit` | Requests per account and mode (§5.5), or reads of one quote's or deposit address's public view by its `client_secret`; retry after `Retry-After`. |
-| 429 | `customer_rate_limit` | The customer's quotes per minute (your `quote_creations_per_customer_per_minute`) or deposit address rotations per hour (10); retry after `Retry-After`, or tell the customer to wait. |
-| 503 | `unavailable` | Temporarily unavailable (for example no fresh price); retry. |
-| 503 | `service_restoring` | Every request with an API key, reads included, while the service is frozen after a restore from backup. Retry after `Retry-After` (§5.12). |
-| 500 | `internal_error` | Retry with the same `Idempotency-Key`: it replays this failure, so the request never runs twice (§5.6). |
+The [error reference](https://phala-network.github.io/phala-pay/#section/Errors) lists every code
+and its remedy. Handle `400` business-state errors explicitly; an unchanged retry will not help.
+Retry transport errors, `429`, `503`, and `409 idempotency_key_in_use` with backoff and the same
+`Idempotency-Key`. A saved `500` replays rather than executing again (§5.6).
+During a restore, all requests with a merchant API key, reads included, return
+`503 service_restoring` (§5.12).
 
 ### 5.9 Versioning and deprecation
 

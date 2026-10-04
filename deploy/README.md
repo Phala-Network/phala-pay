@@ -369,7 +369,7 @@ A member must support the complete numeric log range and recipient-only filters 
 An empty eligible group waits; no fallback crosses A/B or bypasses the agreement gate.
 
 See [configuration](../docs/configuration.md#the-configuration-file),
-[the design](../docs/design/rpc-failover.md) and [the runbook](RPC.md) for the policy table,
+[`GroupPolicy`](../crates/adapters/src/chain/evm/group/mod.rs) and [the runbook](RPC.md) for policy fields,
 staging singleton migration, historical review, alerts and owner-only recovery. Adding a chain
 requires explicit A/B groups and its normal reviewed route/contracts deployment; route versions
 are not changed just to migrate RPC configuration.
@@ -744,82 +744,27 @@ The [integration guide](../docs/integration.md) is the full reference.
 
 ### Treasury setup
 
-Each account proves a treasury per chain and mode with a signed EIP-4361 challenge (design D10,
-docs/integration.md §1.6); quotes and deposit addresses answer `400 treasury_not_set` before. A
-chain's first treasury and every test-mode change apply at once; a later live change is `pending`
-for 48 hours and cancellable, and is announced as `treasury.created` to every enabled endpoint.
-
-- **EOA (Sign-In with Ethereum).** `POST /v1/treasuries/challenge {chain_id, address}`, sign the
-  returned `message` with EIP-191 `personal_sign`, and `POST /v1/treasuries {chain_id, message,
-  signature}` within 10 minutes: `pay.treasuries.set_eoa(chain_id=…, address=…, private_key=…)`
-  (Python, `phala-pay[eoa]`) or [sandbox/set-treasury.sh](sandbox/set-treasury.sh) with `cast` do
-  both.
-- **Safe (EIP-1271, via Safe{Core}).** The Safe must be deployed on the chain, and its fallback
-  handler must be the `CompatibilityFallbackHandler`, which answers `isValidSignature` (v1.4.1:
-  `0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99`, [safe-deployments](https://github.com/safe-global/safe-deployments/blob/main/src/assets/v1.4.1/compatibility_fallback_handler.json)).
-  Request the challenge for the Safe's address; the owners sign `message` as a **Safe message**
-  (Protocol Kit `createMessage` and `signMessage`, or API Kit `addMessage` and
-  `addMessageSignature` when owners sign apart), or approve it on chain with `SignMessageLib` and
-  submit `"signature": "0x"` once that transaction is final; submit within 24 hours. The exact code
-  is in docs/integration.md §1.6. The service checks `isValidSignature` at `finalized` on both
-  providers.
-- Update the treasury pinned in the merchant's server (the SDKs' `treasuries` pin) when a change
-  applies (`treasury.updated`); addresses issued before keep paying the old treasury.
+Follow [Treasuries](../docs/integration.md#16-treasuries) to prove a treasury per chain and mode,
+using an EOA or Safe. Update the merchant's pinned treasury when a change takes effect;
+previously issued addresses keep paying the old treasury.
 
 ### Payment settings
 
-A new account accepts nothing in either mode: quotes and deposit addresses answer
-`400 asset_not_accepted`, and a payment to an existing address is rejected, until the merchant
-lists the chains and assets it takes, with its secret key (docs/integration.md §1.9,
-docs/design/payment-settings.md). For example, every staging route:
-
-```sh
-curl -fsS "https://$DOMAIN/v1/payment_settings" -H "Authorization: Bearer $SECRET_KEY" \
-  -H 'content-type: application/json' -d '{"chains": [
-    {"chain_id": 11155111, "assets": [{"asset": "pha"}, {"asset": "usdc"}, {"asset": "usdt"}]},
-    {"chain_id": 84532, "assets": [{"asset": "pha"}, {"asset": "usdc"}, {"asset": "usdt"}]}]}'
-```
-
-The answer's `available` lists every chain and asset of the mode with the operator's defaults and
-bounds, and each chain's `status` (`active` once it also has a treasury). `GET /v1/config` then
-lists exactly what is offered. After a service restore, the merchant sends its complete
-configuration again to lift the hold ([After a restore](#after-a-restore-the-merchant-notice)).
+New accounts accept nothing. Configure the chains, assets, and terms with the merchant's secret
+key as described in [Payment settings](../docs/integration.md#19-payment-settings). `GET /v1/config`
+then lists the effective assets on chains with an active treasury.
 
 ### Webhook endpoint
 
-With a secret key, `POST /v1/webhook_endpoints {"url": "https://…/webhooks", "enabled_events":
-["*"]}` (at most 16 per account and mode; `https` on 443 in live mode), then
-`POST /v1/webhook_endpoints/{id}/test`. Account events (keys, endpoints, treasuries,
-`account.updated`) reach every enabled endpoint whatever it subscribes to. Deliveries are signed
-with the account's own key of the mode (Standard Webhooks `v1a`): the merchant fetches
-`GET /v1/attestation?nonce=…` with its key, verifies it ([Attestation](#attestation-ingress-and-egress);
-docs/integration.md §5.3), and pins the public keys; the SDKs' `construct_event` then refuses any
-event not signed by them for its account and mode. Retries never stop; the endpoint's
-`pending_deliveries`, `oldest_pending_at`, and `last_attempt` show its health, and
-`POST /v1/events/{id}/resend` resends.
+[Pin the account's webhook keys](../docs/integration.md#53-pin-your-accounts-webhook-keys), then
+[register its endpoint](../docs/integration.md#511-webhook-endpoints-and-events). Credit from
+verified events using [the balance rule](../docs/integration.md#the-balance-rule-and-event-ordering).
 
 ### Sweeping
 
-The service sends no transactions and holds no key that can move funds (design D4). Payments wait in
-forwarders, each able to pay only the treasury its address commits to, until the merchant sweeps
-them with one `factory.flush(treasury, salts, token)` per token and treasury, from its own wallet or
-Safe, paying the gas. The SDKs build the call offline from the forwarder export:
-
-```python
-from topup_sdk import flush_transactions, safe_batch, write_safe_batch
-
-forwarders = list(pay.forwarders.list(chain_id=11155111, sweepable=TOKEN))  # final, never sanctioned
-calls = flush_transactions(forwarders, TOKEN)   # {to, data, value}, one per treasury, 200 salts each
-# EOA treasury or any wallet: send each call as an ordinary transaction.
-# Safe treasury: a Safe{Wallet} Transaction Builder batch for the owners to import, sign, execute.
-write_safe_batch("sweep.json", safe_batch(11155111, SAFE, calls, name="Phala Pay sweep"))
-```
-
-`GET /v1/balance` reports what forwarders hold per chain and token (and the final part), and
-`GET /v1/sweeps` every finalized `Flushed` event, whoever sent it; deposits are marked `swept` about
-15 minutes after the sweep, at finality. A target whose transfer failed (`FlushFailed`, a token or
-treasury refusing it) stays unswept for the merchant to resolve. A token that needs more than the
-factory's 200 000 gas per transfer cannot be swept and is never enabled in a route.
+The merchant sweeps with its own wallet or Safe, paying gas. The SDKs build calls offline from the
+forwarder export; see [Balance, sweeps, and the forwarder export](../docs/integration.md#17-balance-sweeps-and-the-forwarder-export).
+Failed `FlushFailed` targets remain the merchant's to resolve.
 
 ## After a restore: the merchant notice
 

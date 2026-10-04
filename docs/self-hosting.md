@@ -12,8 +12,7 @@ only shared piece is the forwarder factory, a permissionless contract at one add
 chain.
 
 This guide is the order of the steps, from nothing to a credited test deposit and on to
-operations. The linked documents hold the detail and are the reference; where they and this guide
-differ, they win. Steps marked **HUMAN-ONLY** change a registry, Phala Cloud, a CVM, a contract,
+operations. The linked documents hold the detailed procedures and reference. Steps marked **HUMAN-ONLY** change a registry, Phala Cloud, a CVM, a contract,
 DNS, or a secret, and are run by a person from their own machine, never by CI or an agent.
 
 | Role | Who | Reads |

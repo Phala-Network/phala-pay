@@ -1493,7 +1493,7 @@ defaulted addresses from it. The defaults and why:
 | `chain.confirmations` | per chain family (§8): 2 on Ethereum L1, 3 on OP-stack, `finalized` elsewhere; a route may require more (for example `finalized`), and a family accepts only its values |
 | `chain.implementation` | the factory's first `CREATE` (nonce 1), which its constructor deploys; startup verifies `implementation()` on chain (§4) |
 | `chain.sanctions_oracle` | the Chainalysis oracle published for the chain (Ethereum and most EVM chains `0x40C5…aC8fb`, Base `0x3A91…D739B`); required on any other chain, such as Sepolia |
-| `chain.rpc_groups` | required explicit `{ a: group-a, b: group-b }`; the attested `rpc_groups` registries contain reviewed company-disjoint member pools, URL/key references and bounded selection policies ([RPC design](design/rpc-failover.md), [runbook](../deploy/RPC.md)) |
+| `chain.rpc_groups` | required explicit `{ a: group-a, b: group-b }`; the attested `rpc_groups` registries contain reviewed company-disjoint member pools, URL/key references and bounded selection policies ([RPC configuration](configuration.md#the-configuration-file), [runbook](../deploy/RPC.md)) |
 | `asset.backstop` | `token`: every transfer of the token is requested and kept locally, one request per block range whatever the address count; `addresses` for a token with many transfers per block, such as USDC (§8) |
 | `pricing.mode`, `pricing.check.fx` | `spot`; Kraken `USDT/USD` for a USDT-quoted market, required otherwise |
 | `pricing.max_age_s`, `max_deviation_bps`, `max_fx_deviation_bps` | 120 (two Coin Metrics intervals), 100, 50 |
