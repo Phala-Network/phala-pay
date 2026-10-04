@@ -2361,6 +2361,7 @@ fn test_router_on(
     let state = AppState {
         pool: pool.clone(),
         routes: Arc::new(topup::routes::RouteSet::new(routes).expect("routes load")),
+        maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(
             ADMIN_KID.to_owned(),
             &public_key_base64(admin_key),

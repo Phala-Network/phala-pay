@@ -1527,6 +1527,7 @@ fn app(
     Ok(topup::api::router(AppState {
         pool: pool.clone(),
         routes: Arc::new(RouteSet::new(routes).map_err(anyhow::Error::msg)?),
+        maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(
             "admin/v1".to_owned(),
             &public_key_base64(&admin_key),

@@ -4395,7 +4395,7 @@
     }
   },
   "info": {
-    "description": "The operator's API (design D8): accounts, recovery keys, pauses, and platform health. Every request is signed with the operator's RFC 9421 key; merchants never call it. The merchant API is `openapi.json`.",
+    "description": "The operator's API (design D8): accounts, recovery keys, pauses, and platform health. Requests use RFC 9421 signatures. Configured maintenance keys authorize only POST /v1/admin/instance/pause and /v1/admin/instance/resume; every other admin route requires the operator's full admin key. Scope denials are audited 403 permission_denied. The merchant API is `openapi.json`.",
     "license": {
       "identifier": "Apache-2.0",
       "name": "Apache-2.0"

@@ -6,7 +6,7 @@ use super::error::ApiError;
 use super::repository;
 use axum::body::{Body, to_bytes};
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
-use axum::http::{HeaderMap, HeaderValue, header};
+use axum::http::{HeaderMap, HeaderValue, Method, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
@@ -55,6 +55,10 @@ pub struct VerificationKey {
 }
 
 impl VerificationKey {
+    pub(crate) fn same_public_key(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+
     /// Parses a standard-base64 raw ed25519 public key.
     pub fn from_base64(kid: String, encoded: &str) -> Result<Self, &'static str> {
         let decoded = STANDARD
@@ -215,38 +219,72 @@ fn unauthorized(error: ApiError) -> Response {
     response
 }
 
-/// Authenticates an administrative request with the separately configured key.
+/// Shares RFC 9421 origin, body, time and replay checks across operator and maintenance keys.
+/// Maintenance authority is an exact method/path allowlist, enforced before admission/handlers.
 pub async fn authenticate_admin(
     State(state): State<AppState>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let verified = match verify_request(&mut request, &state.public_origin, &state.admin_key).await
-    {
+    let keys = std::iter::once(&state.admin_key).chain(&state.maintenance_keys);
+    let verified = match verify_request(&mut request, &state.public_origin, keys).await {
         Ok(verified) => verified,
         Err(()) => return ApiError::unauthorized().into_response(),
     };
     if let Err(error) = repository::record_signature(&state.pool, &verified).await {
         return error.into_response();
     }
+    let actor = Actor::admin(verified.kid.clone())
+        .with_request(request.extensions().get::<RequestRef>().cloned());
+    let path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str);
+    if verified.kid != state.admin_key.kid
+        && !(request.method() == Method::POST
+            && matches!(
+                path,
+                Some("/v1/admin/instance/pause" | "/v1/admin/instance/resume")
+            ))
+    {
+        if let Err(error) = crate::audit::insert(
+            &state.pool,
+            &crate::audit::Entry {
+                account_id: None,
+                actor: &actor,
+                action: "permission_denied",
+                // Matched templates omit query strings and user-controlled identifiers.
+                subject: path.unwrap_or("admin"),
+                reason: "maintenance key is restricted to POST instance pause/resume",
+            },
+        )
+        .await
+        {
+            return ApiError::from(error).into_response();
+        }
+        return ApiError::permission_denied().into_response();
+    }
+    request.extensions_mut().insert(actor);
     next.run(request).await
 }
 
-/// The operator acting through an admin request: the admin key, with the request recorded on the
-/// events it causes.
+/// The authenticated administrative signer (operator or maintenance key), with the request
+/// recorded on the events it causes.
 pub(crate) struct AdminActor(pub(crate) Actor);
 
 impl axum::extract::FromRequestParts<AppState> for AdminActor {
-    type Rejection = std::convert::Infallible;
+    type Rejection = ApiError;
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
-        state: &AppState,
+        _state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        Ok(Self(
-            Actor::admin(state.admin_key.kid.clone())
-                .with_request(parts.extensions.get::<RequestRef>().cloned()),
-        ))
+        parts
+            .extensions
+            .get::<Actor>()
+            .cloned()
+            .map(Self)
+            .ok_or_else(ApiError::unauthorized)
     }
 }
 
@@ -257,10 +295,10 @@ pub(crate) struct VerifiedSignature {
     pub(crate) created: DateTime<Utc>,
 }
 
-async fn verify_request(
+async fn verify_request<'a>(
     request: &mut Request,
     public_origin: &PublicOrigin,
-    key: &VerificationKey,
+    keys: impl IntoIterator<Item = &'a VerificationKey>,
 ) -> Result<VerifiedSignature, ()> {
     let body = std::mem::replace(request.body_mut(), Body::empty());
     let bytes = tokio::time::timeout(
@@ -284,26 +322,26 @@ async fn verify_request(
         .get(IDEMPOTENCY_HEADER)
         .map(|value| value.to_str().map_err(|_| ()))
         .transpose()?;
-    let verified = http_signature::verify(
-        &SignedMessage {
-            method: request.method().as_str(),
-            target_uri: &target_uri,
-            content_digest: header_value(headers, "content-digest")?,
-            idempotency_key,
-            signature_input: header_value(headers, "signature-input")?,
-            signature: header_value(headers, "signature")?,
-            body: &bytes,
-        },
-        &key.kid,
-        &key.key,
-        Utc::now().timestamp(),
-    )
-    .map_err(|_| ())?;
-    Ok(VerifiedSignature {
-        kid: verified.keyid,
-        signature_hash: verified.signature_hash,
-        created: DateTime::from_timestamp(verified.created, 0).ok_or(())?,
-    })
+    let message = SignedMessage {
+        method: request.method().as_str(),
+        target_uri: &target_uri,
+        content_digest: header_value(headers, "content-digest")?,
+        idempotency_key,
+        signature_input: header_value(headers, "signature-input")?,
+        signature: header_value(headers, "signature")?,
+        body: &bytes,
+    };
+    let now = Utc::now().timestamp();
+    for key in keys {
+        if let Ok(verified) = http_signature::verify(&message, &key.kid, &key.key, now) {
+            return Ok(VerifiedSignature {
+                kid: verified.keyid,
+                signature_hash: verified.signature_hash,
+                created: DateTime::from_timestamp(verified.created, 0).ok_or(())?,
+            });
+        }
+    }
+    Err(())
 }
 
 fn header_value<'a>(headers: &'a HeaderMap, name: &'static str) -> Result<&'a str, ()> {

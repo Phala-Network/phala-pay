@@ -79,6 +79,7 @@ async fn a_failure_before_the_response_is_saved_creates_no_quote_and_is_replayed
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
             routes: Arc::new(test_routes()),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 ADMIN_KID.to_owned(),
                 &public_key_base64(&admin_key),
@@ -176,6 +177,7 @@ impl SlowQuote {
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
             routes: Arc::new(test_routes()),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 ADMIN_KID.to_owned(),
                 &public_key_base64(&admin_key),
@@ -505,6 +507,7 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
             ),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 ADMIN_KID.to_owned(),
                 &public_key_base64(&admin_key),
@@ -981,6 +984,7 @@ async fn client_secret_reads_are_limited_per_object_and_forgeries_cost_nothing()
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![test_route()]).map_err(anyhow::Error::msg)?,
             ),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 ADMIN_KID.to_owned(),
                 &public_key_base64(&admin_key),
@@ -1153,6 +1157,7 @@ async fn quoted_amount_rounds_up_to_the_routes_amount_decimals() -> Result<()> {
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
             ),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 ADMIN_KID.to_owned(),
                 &public_key_base64(&admin_key),
@@ -1612,6 +1617,7 @@ async fn the_client_view_reports_the_credit_of_a_spot_valued_underpayment() -> R
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
             ),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 ADMIN_KID.to_owned(),
                 &public_key_base64(&admin_key),
@@ -2517,6 +2523,7 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
         let admin_key = SigningKey::from_bytes(&[48;32]);
         let app = topup::api::router(AppState {
             pool: pool.clone(), routes: Arc::new(test_routes()),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(ADMIN_KID.to_owned(), &public_key_base64(&admin_key)).map_err(anyhow::Error::msg)?,
             public_origin: PublicOrigin::parse(TEST_ORIGIN)?, attestor: Arc::new(DstackAttestor::new()),
             rate_lock_quotes: quotes, client_reads: Arc::default(), rate_limits: Arc::default(),

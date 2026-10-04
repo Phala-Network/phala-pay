@@ -24,8 +24,8 @@ use crate::rpc_groups::{Company, GroupSpec};
 use crate::rpc_provider::{ProviderUrl, key_environment};
 use topup_adapters::chain::evm::group::budget::BudgetSpec;
 
-/// The file as written. Every field but the two that `topup run` may take from its environment is
-/// required; an unknown field is an error.
+/// The file as written. Maintenance keys default to empty; the two runtime-resolved public
+/// settings may be omitted. Other fields are required and unknown fields are errors.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigSpec {
@@ -33,6 +33,8 @@ struct ConfigSpec {
     #[serde(default)]
     public_origin: Option<String>,
     admin_key: AdminKeySpec,
+    #[serde(default)]
+    maintenance_keys: Vec<MaintenanceKeySpec>,
     rpc_groups: BTreeMap<String, GroupSpec>,
     rpc_companies: BTreeMap<String, Company>,
     rpc_budgets: BTreeMap<String, BudgetSpec>,
@@ -45,6 +47,13 @@ struct AdminKeySpec {
     id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     public_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct MaintenanceKeySpec {
+    id: String,
+    public_key: String,
 }
 
 /// A validated service configuration.
@@ -61,6 +70,8 @@ pub struct Config {
     /// The operator's admin verification key. `None` when `topup run` takes it from its
     /// environment.
     pub admin_key: Option<VerificationKey>,
+    /// Optional, distinct signing keys authorized only to start/clear instance maintenance.
+    pub maintenance_keys: Vec<VerificationKey>,
     /// Each provider id's URL; a keyed one keeps `{key}` here.
     pub rpc_providers: BTreeMap<String, ProviderUrl>,
     /// Independent typed groups.
@@ -72,6 +83,7 @@ pub struct Config {
     /// Every enabled route version.
     pub routes: Vec<RouteFile>,
     admin_key_spec: AdminKeySpec,
+    maintenance_key_specs: Vec<MaintenanceKeySpec>,
 }
 
 impl std::fmt::Debug for AdminKeySpec {
@@ -90,6 +102,8 @@ struct ResolvedConfig<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     public_origin: Option<String>,
     admin_key: &'a AdminKeySpec,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    maintenance_keys: &'a Vec<MaintenanceKeySpec>,
     rpc_groups: &'a BTreeMap<String, GroupSpec>,
     rpc_companies: &'a BTreeMap<String, Company>,
     rpc_budgets: &'a BTreeMap<String, BudgetSpec>,
@@ -132,6 +146,37 @@ impl Config {
         if spec.admin_key.id.is_empty() || spec.admin_key.id.chars().any(char::is_whitespace) {
             return Err("admin_key.id must be a non-empty key id without spaces".to_owned());
         }
+        if spec.maintenance_keys.len() > 8 {
+            return Err("maintenance_keys must contain at most 8 keys".to_owned());
+        }
+        let mut maintenance_keys: Vec<VerificationKey> = Vec::new();
+        for entry in &spec.maintenance_keys {
+            if entry.id.is_empty()
+                || entry.id.len() > 128
+                || !entry
+                    .id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b))
+            {
+                return Err(
+                    "maintenance_keys.id must be 1-128 ASCII letters, digits, . _ / or -"
+                        .to_owned(),
+                );
+            }
+            let key = VerificationKey::from_base64(entry.id.clone(), &entry.public_key)
+                .map_err(|error| format!("maintenance_keys.public_key: {error}"))?;
+            if key.kid == spec.admin_key.id
+                || admin_key
+                    .as_ref()
+                    .is_some_and(|admin| admin.same_public_key(&key))
+                || maintenance_keys
+                    .iter()
+                    .any(|other| other.kid == key.kid || other.same_public_key(&key))
+            {
+                return Err("maintenance_keys must have distinct ids and public keys, separate from admin_key".to_owned());
+            }
+            maintenance_keys.push(key);
+        }
         crate::rpc_groups::validate(
             &spec.routes,
             &spec.rpc_groups,
@@ -166,12 +211,14 @@ impl Config {
             public_origin,
             admin_key_id: spec.admin_key.id.clone(),
             admin_key,
+            maintenance_keys,
             rpc_providers,
             rpc_groups: spec.rpc_groups,
             rpc_companies: spec.rpc_companies,
             rpc_budgets: spec.rpc_budgets,
             routes: spec.routes,
             admin_key_spec: spec.admin_key,
+            maintenance_key_specs: spec.maintenance_keys,
         })
     }
 
@@ -210,7 +257,7 @@ impl Config {
         key_variable: Option<&str>,
         env: impl Fn(&str) -> Option<String>,
     ) -> Result<VerificationKey, String> {
-        match (&self.admin_key, key_variable) {
+        let key = match (&self.admin_key, key_variable) {
             (Some(key), None) => Ok(key.clone()),
             (None, Some(name)) => VerificationKey::from_base64(
                 self.admin_key_id.clone(),
@@ -222,7 +269,15 @@ impl Config {
                  one place"
             )),
             (None, None) => Err("admin_key.public_key is not set in the configuration".to_owned()),
+        }?;
+        if self
+            .maintenance_keys
+            .iter()
+            .any(|other| other.same_public_key(&key))
+        {
+            return Err("maintenance_keys must use public keys separate from admin_key".to_owned());
         }
+        Ok(key)
     }
 
     /// The routes with each provider's client, its key read from `TOPUP_RPC_<ID>_KEY`.
@@ -287,6 +342,7 @@ impl Config {
             environment: &self.environment,
             public_origin: self.public_origin.as_ref().map(ToString::to_string),
             admin_key: &self.admin_key_spec,
+            maintenance_keys: &self.maintenance_key_specs,
             rpc_groups: &self.rpc_groups,
             rpc_companies: &self.rpc_companies,
             rpc_budgets: &self.rpc_budgets,
@@ -342,6 +398,67 @@ mod tests {
         format!(
             "environment: staging\npublic_origin: {origin}\nadmin_key:\n  id: admin/staging-v1\n  public_key: {KEY}\n{providers}\nroutes:\n  -\n{route}\n"
         )
+    }
+
+    #[test]
+    fn maintenance_keys_validate_and_round_trip_with_rotation() {
+        use base64::Engine as _;
+        let encode = |seed| {
+            base64::engine::general_purpose::STANDARD.encode(
+                ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+                    .verifying_key()
+                    .as_bytes(),
+            )
+        };
+        let base = config(PROVIDERS, "https://pay.example");
+        let yaml = format!(
+            "{base}maintenance_keys:\n  - id: maintenance/v1\n    public_key: {}\n  - id: maintenance/v2\n    public_key: {}\n",
+            encode(7),
+            encode(8)
+        );
+        let parsed = Config::parse(&yaml).expect("two independent rotation keys");
+        let shown = parsed.resolved_json().expect("show");
+        assert_eq!(
+            Config::parse(&shown)
+                .expect("round trip")
+                .maintenance_keys
+                .len(),
+            2
+        );
+        for invalid in [
+            yaml.replace("maintenance/v2", "maintenance/v1"),
+            yaml.replace("maintenance/v2", "admin/staging-v1"),
+            yaml.replace(&encode(8), &encode(7)),
+            yaml.replace(&encode(7), KEY),
+            yaml.replace("maintenance/v1", "maintenance bad"),
+            yaml.replace(&encode(7), "invalid"),
+            yaml.replace(&format!("public_key: {}", encode(7)), "unexpected: value"),
+        ] {
+            assert!(Config::parse(&invalid).is_err());
+        }
+        let entries = (1..=9)
+            .map(|i| format!("  - id: maintenance/v{i}\n    public_key: {}\n", encode(i)))
+            .collect::<String>();
+        assert!(Config::parse(&format!("{base}maintenance_keys:\n{entries}")).is_err());
+        // An admin key supplied by the deployment template must also remain independent.
+        let template = Config::parse(&yaml.replace(&format!("  public_key: {KEY}\n"), ""))
+            .expect("runtime admin");
+        assert!(
+            template
+                .runtime_admin_key(Some("ADMIN"), |_| Some(encode(7)))
+                .is_err()
+        );
+        assert!(
+            template
+                .runtime_admin_key(Some("ADMIN"), |_| Some(encode(9)))
+                .is_ok()
+        );
+        assert!(
+            Config::parse(&base)
+                .expect("existing config")
+                .maintenance_keys
+                .is_empty()
+        );
     }
 
     #[test]

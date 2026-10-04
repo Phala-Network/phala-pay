@@ -75,6 +75,8 @@ pub struct AppState {
     pub routes: Arc<RouteSet>,
     /// Separately configured administrative verification key.
     pub admin_key: VerificationKey,
+    /// Least-privilege signing keys for POST instance pause/resume only.
+    pub maintenance_keys: Vec<VerificationKey>,
     /// Public origin used to rebuild the signed `@target-uri` of every admin request.
     pub public_origin: PublicOrigin,
     /// Current attestation provider.
@@ -775,6 +777,7 @@ mod tests {
         AppState {
             pool,
             routes: Arc::default(),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 "admin/v1".to_owned(),
                 &STANDARD.encode(admin_key.verifying_key().as_bytes()),

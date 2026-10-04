@@ -157,7 +157,7 @@ Its inputs are `version`, `environment` (the GitHub Environment), `target` (`top
 for Phala's reference product), `mode` (`provision` or `upgrade`), and `environment_dir` (the
 target's directory in the caller's repository). The caller grants `contents: read` and
 `attestations: read`, and Deploy reads `PHALA_CLOUD_API_KEY` plus
-`TOPUP_ADMIN_PRIVATE_KEY_PEM` for topup upgrade admission control. A caller in the Phala-Network organisation passes `secrets: inherit`, and the
+`TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` for topup upgrade admission control. A caller in the Phala-Network organisation passes `secrets: inherit`, and the
 key is the Environment's secret (an Environment secret resolves empty in a called workflow without
 it, [actions/runner#4453](https://github.com/actions/runner/issues/4453)); a caller in another
 organisation, where `inherit` is not supported, passes it from a repository secret ([self-hosting,
@@ -172,12 +172,50 @@ adopting a release is a pull request that changes its release.
 
 Before a topup upgrade calls Phala Cloud, the workflow admin-signs
 `POST /v1/admin/instance/pause` with scope `mutations`, its run/attempt owner, and a 900-second
-lease. Configure the protected GitHub Environment's `TOPUP_ADMIN_PRIVATE_KEY_PEM` secret
-(Ed25519 PEM) and `TOPUP_ADMIN_KEY_ID` variable to match the running instance's attested admin
-verification key. External callers pass the declared signing secret alongside the Cloud key;
-organisation callers inherit both. This key grants existing admin authority: limit Environment
-access and deployment branches as for the Cloud key. Key material is temporary, never part of
+lease. Configure the protected GitHub Environment's `TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` secret
+(Ed25519 PEM) and `TOPUP_MAINTENANCE_KEY_ID` variable to match an entry in the running instance's
+attested `maintenance_keys`. External callers pass the declared signing secret alongside the
+Cloud key; organisation callers inherit both. This separate key authorizes only
+`POST /v1/admin/instance/pause` and `POST /v1/admin/instance/resume`; all other admin routes,
+including maintenance inspection, return audited `403 permission_denied`. The operator's full
+admin key still works, but stays with the operator and is never a deployment secret. Restrict
+Environment access and deployment branches as for the Cloud key. Key material is temporary, never part of
 the uploaded deployment record, and is deleted after each signed request.
+
+Generate an independent key per Environment on the owner's machine using the installed Python
+SDK CLI. Convert its seed to the PEM the workflow helper accepts:
+
+```sh
+topup-sdk keygen --keyid maintenance/production-v1 --seed-out maintenance.seed &&
+(umask 077 && { printf '302e020100300506032b657004220420'; tr -d '\n' < maintenance.seed; } \
+  | xxd -r -p | openssl pkey -inform DER -out maintenance.pem)
+```
+
+The CLI prints `keyid` and standard-base64 `public_key`. Commit only those public values in the
+Environment's `topup/topup.yaml`, next to `admin_key`, before adopting this workflow:
+
+```yaml
+maintenance_keys:
+  - id: maintenance/production-v1
+    public_key: <public_key printed by topup-sdk keygen>
+```
+
+The list is optional (empty by default), at most eight keys. IDs and public keys must be unique
+and distinct from the admin key; missing/invalid public keys refuse configuration. Configure
+`TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` from the complete `maintenance.pem` through the owner's
+secret-management flow, and `TOPUP_MAINTENANCE_KEY_ID=maintenance/production-v1`. Never upload the
+admin seed or PEM. Maintenance signatures use the same origin, digest, five-minute freshness,
+and single-use replay checks as admin signatures; successful changes record the actual key id.
+
+**Rotation:** generate v2 independently, retain v1 and add v2's public entry in a reviewed config
+upgrade, using v1 to drain that upgrade. After health and resume pass, switch the Environment's
+maintenance PEM/key id to v2, verify a signed maintenance operation, then remove v1's public
+entry in another reviewed upgrade using v2. Keep the old credential until the first upgrade's
+cleanup completes. Do not rotate credentials during a running deployment. For first adoption,
+install the public key in the feature rollout allowed by `bootstrap_maintenance` below; a
+pre-feature service cannot recognize the key. A rollback to a release predating
+`maintenance_keys` must use that release's compatible config without this field, because its
+strict config parser rejects unknown fields.
 
 New authenticated mutations return `503 service_maintenance`, `Retry-After: 5`, before idempotent
 execution; reads and already admitted requests continue. Scanners and outbox workers continue until the

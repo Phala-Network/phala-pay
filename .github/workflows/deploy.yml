@@ -15,7 +15,7 @@ name: Deploy
 # and a new compose hash, in force only through `upgrade`.
 #
 # Controls, in the caller's repository: the job runs only from its `main`, in the GitHub
-# Environment `environment` (deployment branches: `main` only). The secrets it reads are the admin signing key for maintenance and the
+# Environment `environment` (deployment branches: `main` only). The secrets it reads are the maintenance-only signing key and the
 # declared, optional PHALA_CLOUD_API_KEY (docs/self-hosting.md, step 5). A caller in the
 # Phala-Network organisation passes `secrets: inherit`, and the key is the Environment's secret,
 # which GitHub uses over a passed secret of the same name; an Environment secret resolves empty
@@ -67,8 +67,8 @@ on:
         type: string
         required: true
     secrets:
-      TOPUP_ADMIN_PRIVATE_KEY_PEM:
-        description: "Ed25519 admin signing key PEM; required for topup upgrades, Environment protected"
+      TOPUP_MAINTENANCE_PRIVATE_KEY_PEM:
+        description: "Ed25519 maintenance-only signing key PEM; required for topup upgrades, Environment protected"
         required: false
       PHALA_CLOUD_API_KEY:
         description: "The Phala Cloud API key of vars.PHALA_WORKSPACE: inherited from the Environment (secrets: inherit), or passed from a repository secret by a caller in another organisation"
@@ -101,7 +101,7 @@ jobs:
       TARGET: ${{ inputs.target }}
       MODE: ${{ inputs.mode }}
       ENVIRONMENT_DIR: ${{ inputs.environment_dir }}
-      TOPUP_ADMIN_KEY_ID: ${{ vars.TOPUP_ADMIN_KEY_ID }}
+      TOPUP_MAINTENANCE_KEY_ID: ${{ vars.TOPUP_MAINTENANCE_KEY_ID }}
       # The owner-approved OS image (architecture §14); preflight refuses any other.
       DSTACK_OS_IMAGE: dstack-0.5.9
       # Deployment state and the workspace preflight checks; not settings of the CVM.
@@ -302,7 +302,7 @@ jobs:
         id: maintenance
         if: inputs.mode == 'upgrade' && inputs.target == 'topup'
         env:
-          TOPUP_ADMIN_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_ADMIN_PRIVATE_KEY_PEM }}
+          TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
           BOOTSTRAP_MAINTENANCE: ${{ inputs.bootstrap_maintenance }}
         run: |
           if [[ "$BOOTSTRAP_MAINTENANCE" == true ]]; then
@@ -488,7 +488,7 @@ jobs:
       - name: Resume mutations after health checks
         if: steps.maintenance.outputs.enabled == 'true'
         env:
-          TOPUP_ADMIN_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_ADMIN_PRIVATE_KEY_PEM }}
+          TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
           code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$PUBLIC_URL/v1/admin/instance/pause")
           if [[ "$code" == 404 ]]; then
@@ -576,7 +576,7 @@ jobs:
       - name: Clear maintenance after a failed upgrade
         if: failure() && steps.maintenance.outputs.enabled == 'true'
         env:
-          TOPUP_ADMIN_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_ADMIN_PRIVATE_KEY_PEM }}
+          TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
           if ! "$KIT/deploy/instance-pause.sh" resume "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance-cleared.json"; then
             echo "::warning::Maintenance clear could not reach the service; the 900-second lease expires automatically. See deploy/runbooks/instance-maintenance.md."

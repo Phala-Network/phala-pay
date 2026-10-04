@@ -8,7 +8,9 @@ only the instance `mutations` pause, never business incident pauses.
 ## Inspect
 
 Use the [runbook environment and admin helper](README.md#environment), with the running
-instance's public origin and verification key id:
+instance's public origin and verification key id. Inspection uses the operator's `admin_key`,
+held outside GitHub Actions. A maintenance-only key cannot inspect this or any other admin read
+route: it receives audited `403 permission_denied`:
 
 ```sh
 admin GET /v1/admin/instance/pause | jq
@@ -34,6 +36,16 @@ admin POST /v1/admin/instance/resume \
   '{"owner":"<owner from inspection>","reason":"<ticket>: deployment failed; serving version verified healthy"}'
 admin GET /v1/admin/instance/pause | jq
 ```
+
+The full admin key still starts/clears maintenance. To clear with a separate maintenance key,
+use the same `admin` helper with `ADMIN_KEY_FILE=maintenance.pem` and
+`ADMIN_KEY_ID=maintenance/<Environment>-v1` for the **POST resume only**, then restore the admin
+credential for inspection. Take the owner from the operator's inspection or the deployment's
+`maintenance.json`. The workflow uses `TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` and
+`TOPUP_MAINTENANCE_KEY_ID`; its public key must appear in the running config's `maintenance_keys`.
+A missing/rotated key produces `401`; a valid maintenance key on any other admin route produces
+audited `403`. Check key id/public key and [rotation ordering](../README.md#planned-upgrade-admission-and-downtime),
+and use the offline operator key for recovery. Never substitute the full admin key in CI.
 
 The resume is audited and returns empty `paused_scopes`. A mismatched owner cannot lift an active
 lease. A canceled runner or failed clear cannot freeze the service permanently: expiry restores normal

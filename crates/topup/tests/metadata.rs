@@ -466,6 +466,7 @@ fn router(pool: &sqlx::PgPool, route: &RouteFile) -> Result<axum::Router> {
         routes: Arc::new(
             topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
         ),
+        maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(
             "admin/v1".to_owned(),
             &public_key_base64(&admin_key),

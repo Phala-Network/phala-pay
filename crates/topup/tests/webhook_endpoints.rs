@@ -32,6 +32,7 @@ impl Harness {
         let state = AppState {
             pool: pool.clone(),
             routes: Arc::new(topup::routes::RouteSet::new(Vec::new()).map_err(anyhow::Error::msg)?),
+            maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
                 "admin/v1".to_owned(),
                 "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
