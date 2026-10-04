@@ -323,21 +323,49 @@ impl Reconciler {
     async fn reset_check_cursor(&self, check: CheckName) -> Result<(), ReconciliationError> {
         let mut chains = self.chain_keys()?;
         chains.push(0);
-        sqlx::query("UPDATE reconciliation_work_cursors SET last_id=NULL WHERE check_name=ANY($1) AND chain_id=ANY($2)")
-            .bind(self.work_names(check)).bind(chains)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE reconciliation_work_cursors SET last_id=NULL \
+             WHERE check_name=ANY($1) AND chain_id=ANY($2)",
+        )
+        .bind(self.work_names(check))
+        .bind(chains)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
     async fn check_pending(&self, check: CheckName) -> Result<bool, ReconciliationError> {
         if check == CheckName::MissingDeposit {
-            return Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM scan_address_sweeps s WHERE lane='missing' AND chain_id=ANY($1) AND epoch=COALESCE((SELECT epoch FROM rpc_chain_state WHERE chain_id=s.chain_id),0) AND anchor=COALESCE((SELECT next_block FROM reconciliation_deposit_cursors WHERE chain_id=s.chain_id),(SELECT min(created_block) FROM addresses WHERE chain_id=s.chain_id)))")
-                .bind(self.chain_keys()?).fetch_one(&self.pool).await?);
+            return Ok(sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 \
+                 FROM scan_address_sweeps s \
+                 WHERE lane='missing' \
+                 AND chain_id=ANY($1) \
+                 AND epoch=COALESCE((SELECT epoch \
+                 FROM rpc_chain_state \
+                 WHERE chain_id=s.chain_id),0) \
+                 AND anchor=COALESCE((SELECT next_block \
+                 FROM reconciliation_deposit_cursors \
+                 WHERE chain_id=s.chain_id),(SELECT min(created_block) \
+                 FROM addresses \
+                 WHERE chain_id=s.chain_id)))",
+            )
+            .bind(self.chain_keys()?)
+            .fetch_one(&self.pool)
+            .await?);
         }
         let mut chains = self.chain_keys()?;
         chains.push(0);
-        Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM reconciliation_work_cursors WHERE check_name=ANY($1) AND chain_id=ANY($2) AND last_id IS NOT NULL)")
-            .bind(self.work_names(check)).bind(chains).fetch_one(&self.pool).await?)
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 \
+             FROM reconciliation_work_cursors \
+             WHERE check_name=ANY($1) \
+             AND chain_id=ANY($2) \
+             AND last_id IS NOT NULL)",
+        )
+        .bind(self.work_names(check))
+        .bind(chains)
+        .fetch_one(&self.pool)
+        .await?)
     }
     fn chain_keys(&self) -> Result<Vec<i64>, ReconciliationError> {
         self.chains
@@ -722,8 +750,17 @@ impl Reconciler {
                     .map(|d| d.address_id)
             })
             .collect::<Vec<_>>();
-        let quote_credits=sqlx::query_as::<_,(Uuid,String)>("SELECT a.id,q.credit_minor::text FROM addresses a JOIN quotes q ON q.id=a.quote_id WHERE a.id=ANY($1)")
-            .bind(address_ids).fetch_all(&self.pool).await?.into_iter().collect::<BTreeMap<_,_>>();
+        let quote_credits = sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT a.id,q.credit_minor::text \
+             FROM addresses a \
+             JOIN quotes q ON q.id=a.quote_id \
+             WHERE a.id=ANY($1)",
+        )
+        .bind(address_ids)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
         for id in ids {
             let result = match deposits.remove(&id) {
                 Some(Ok(deposit)) => Self::recompute_credit(&deposit, &quote_credits, &routes),
@@ -833,8 +870,20 @@ impl Reconciler {
         findings: &mut Vec<Finding>,
     ) -> Result<(), ReconciliationError> {
         let cursor = store::work_cursor(&self.pool, "flush", 0).await?;
-        let mut ids=sqlx::query_scalar::<_,Uuid>("SELECT id FROM deposits WHERE state='credited' AND final_at IS NOT NULL AND id >= $1 AND ($2::uuid IS NULL OR id <> $2) ORDER BY id LIMIT 1001")
-            .bind(cursor.unwrap_or(Uuid::nil())).bind(cursor).fetch_all(&self.pool).await?;
+        let mut ids = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id \
+             FROM deposits \
+             WHERE state='credited' \
+             AND final_at IS NOT NULL \
+             AND id >= $1 \
+             AND ($2::uuid IS NULL OR id <> $2) \
+             ORDER BY id \
+             LIMIT 1001",
+        )
+        .bind(cursor.unwrap_or(Uuid::nil()))
+        .bind(cursor)
+        .fetch_all(&self.pool)
+        .await?;
         let more = ids.len() > db::ADDRESS_PAGE_SIZE;
         ids.truncate(db::ADDRESS_PAGE_SIZE);
         let last = ids.last().copied();

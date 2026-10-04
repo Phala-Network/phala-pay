@@ -356,6 +356,16 @@ pub(crate) async fn save_work_cursor(
     chain: i64,
     last: Option<Uuid>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO reconciliation_work_cursors(check_name,chain_id,last_id) VALUES($1,$2,$3) ON CONFLICT(check_name,chain_id) DO UPDATE SET last_id=EXCLUDED.last_id").bind(check).bind(chain).bind(last).execute(pool).await?;
+    sqlx::query(
+        "INSERT INTO reconciliation_work_cursors(check_name,chain_id,last_id) \
+         VALUES($1,$2,$3) \
+         ON CONFLICT(check_name,chain_id) \
+         DO UPDATE SET last_id=EXCLUDED.last_id",
+    )
+    .bind(check)
+    .bind(chain)
+    .bind(last)
+    .execute(pool)
+    .await?;
     Ok(())
 }

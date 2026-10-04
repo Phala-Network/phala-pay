@@ -430,8 +430,21 @@ pub(crate) async fn address_sweep(
     lane: &str,
     anchor: u64,
 ) -> Result<Option<AddressSweep>, sqlx::Error> {
-    sqlx::query_as("SELECT epoch,anchor,from_block,through_block,block_time,horizon,last_id FROM scan_address_sweeps WHERE chain_id=$1 AND lane=$2 AND anchor=$3 AND epoch=COALESCE((SELECT epoch FROM rpc_chain_state WHERE chain_id=$1),0)")
-        .bind(to_i64(chain,"sweep chain")?).bind(lane).bind(to_i64(anchor,"sweep anchor")?).fetch_optional(pool).await
+    sqlx::query_as(
+        "SELECT epoch,anchor,from_block,through_block,block_time,horizon,last_id \
+         FROM scan_address_sweeps \
+         WHERE chain_id=$1 \
+         AND lane=$2 \
+         AND anchor=$3 \
+         AND epoch=COALESCE((SELECT epoch \
+         FROM rpc_chain_state \
+         WHERE chain_id=$1),0)",
+    )
+    .bind(to_i64(chain, "sweep chain")?)
+    .bind(lane)
+    .bind(to_i64(anchor, "sweep anchor")?)
+    .fetch_optional(pool)
+    .await
 }
 
 pub(crate) async fn save_address_sweep(
@@ -451,8 +464,26 @@ pub(crate) async fn save_address_sweep(
         if epoch != sweep.epoch {
             return Err(sqlx::Error::Protocol("sweep epoch changed".into()));
         }
-        sqlx::query("INSERT INTO scan_address_sweeps(chain_id,lane,epoch,anchor,from_block,through_block,block_time,horizon,last_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(chain_id,lane) DO UPDATE SET epoch=EXCLUDED.epoch,anchor=EXCLUDED.anchor,from_block=EXCLUDED.from_block,through_block=EXCLUDED.through_block,block_time=EXCLUDED.block_time,horizon=EXCLUDED.horizon,last_id=EXCLUDED.last_id")
-            .bind(chain).bind(lane).bind(sweep.epoch).bind(sweep.anchor).bind(sweep.from_block).bind(sweep.through_block).bind(sweep.block_time).bind(sweep.horizon).bind(sweep.last_id).execute(&mut *tx).await?;
+        sqlx::query(
+            "INSERT INTO scan_address_sweeps( \
+                 chain_id,lane,epoch,anchor,from_block,through_block,block_time,horizon,last_id) \
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+             ON CONFLICT(chain_id,lane) DO UPDATE SET \
+                 epoch=EXCLUDED.epoch,anchor=EXCLUDED.anchor, \
+                 from_block=EXCLUDED.from_block,through_block=EXCLUDED.through_block, \
+                 block_time=EXCLUDED.block_time,horizon=EXCLUDED.horizon,last_id=EXCLUDED.last_id",
+        )
+        .bind(chain)
+        .bind(lane)
+        .bind(sweep.epoch)
+        .bind(sweep.anchor)
+        .bind(sweep.from_block)
+        .bind(sweep.through_block)
+        .bind(sweep.block_time)
+        .bind(sweep.horizon)
+        .bind(sweep.last_id)
+        .execute(&mut *tx)
+        .await?;
     } else {
         sqlx::query("DELETE FROM scan_address_sweeps WHERE chain_id=$1 AND lane=$2")
             .bind(chain)

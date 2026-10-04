@@ -102,8 +102,20 @@ pub(crate) async fn chain_address_page(
     chain: u64,
     after: Option<Uuid>,
 ) -> Result<(Vec<Address>, bool), sqlx::Error> {
-    let records=sqlx::query_as::<_,AddressRecord>("SELECT id,account_id,livemode,chain_id,quote_id,deposit_address_id,salt,treasury,address FROM addresses WHERE chain_id=$1 AND id >= $2 AND ($3::uuid IS NULL OR id <> $3) ORDER BY id LIMIT 1001")
-        .bind(to_i64(chain,"address page chain")?).bind(after.unwrap_or(Uuid::nil())).bind(after).fetch_all(pool).await?;
+    let records = sqlx::query_as::<_, AddressRecord>(
+        "SELECT id,account_id,livemode,chain_id,quote_id,deposit_address_id,salt,treasury,address \
+         FROM addresses \
+         WHERE chain_id=$1 \
+         AND id >= $2 \
+         AND ($3::uuid IS NULL OR id <> $3) \
+         ORDER BY id \
+         LIMIT 1001",
+    )
+    .bind(to_i64(chain, "address page chain")?)
+    .bind(after.unwrap_or(Uuid::nil()))
+    .bind(after)
+    .fetch_all(pool)
+    .await?;
     let more = records.len() > super::scanner::ADDRESS_PAGE_SIZE;
     Ok((
         records
