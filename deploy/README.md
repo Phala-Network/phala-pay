@@ -838,16 +838,18 @@ and it must have succeeded. Missing metadata, a higher floor or mismatched check
 SQLx continues checking all known migration checksums and dirty state. The application role cannot
 write the ledger. A rollback never lowers existing floors or edits migration history.
 
-This release introduces the protocol without adding SQLx migrations. Published v0.8.2 and earlier
-cannot understand unknown migrations: rollback to them works only while the migration inventory
-is unchanged, as tested against the actual release image. The first release adding a migration
-must target a protocol-aware N-1 image, or explicitly declare **no rollback; restore required**
-in its CHANGELOG. This boundary cannot be fixed inside an already published immutable image.
+0.9.0 is the first compatibility-ledger protocol release. It declares **no rollback to 0.8.3;
+restore required**, and no rollback to any 0.8.x release: follow [RESTORE.md](RESTORE.md) using the
+pre-upgrade backup. Earlier immutable images cannot understand newer migrations; route configuration
+and SDK changes also prevent rollback. CI resolves the latest stable release as N-1 automatically.
+When N-1 predates the protocol, CI requires an exact version-specific declaration in the changelog's
+**Breaking (operators)** section and records the bootstrap in its job summary; otherwise it fails.
+From 0.10.0 onward, N-1 implements the protocol and the real image rollback smoke runs normally.
 
 Before upgrade, preserve the verified N-1 deploy kit, image digests and configuration and a tested
 pre-upgrade recovery point. To roll back, verify N-1's release again, render its compose/config,
 and use Deploy `mode: upgrade`; require migration completion, service health, attestation and TLS
-checks. If N's changelog says `no rollback; restore required`, stop writes and follow the restore
+checks. If N's changelog declares no rollback, stop writes and follow the restore
 runbook and reconciliation using the pre-upgrade backup instead. Account for external effects
 already executed after that backup; restoring blindly can repeat them. Never bypass checksum or
 compatibility errors. Use a forward repair release if there is no safe recovery point.

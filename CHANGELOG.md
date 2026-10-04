@@ -26,6 +26,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   PHA remains noncommercial staging-only pending an on-chain primary and written check permission. See [migration](docs/configuration.md#price-sources).
   Ship in the next minor release; rollback uses the previous compatible image and config.
 
+### Breaking (operators)
+
+
+- 0.9.0: **no rollback to 0.8.3; restore required**. No rollback to any 0.8.x release:
+  use the pre-upgrade backup and [restore runbook](deploy/RESTORE.md). Route configuration and
+  SDK changes also prevent rollback. 0.9.0 is the first compatibility-ledger protocol release;
+  from 0.10.0 onward, real N-1 rollback is enforced against the latest stable release.
+
+
 ### Fixed
 
 - Alert in Sentry on webhook backlog and stalled delivery progress, internal signer/egress
@@ -66,7 +75,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   still traverse the complete ledger.
 - Scale migrations `20261029030000`–`20261029030005` are expand-only: two new cursor tables
   and five indexes leave existing rows and constraints unchanged. Their owner-written compatibility
-  ledger retains floor `20261028000002`, allowing N-1 rollback without undoing these migrations.
+  ledger retains floor `20261028000002`, allowing protocol-aware N-1 rollback without undoing these migrations.
 
 ### Added
 
