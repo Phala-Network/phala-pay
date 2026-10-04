@@ -207,6 +207,16 @@ describe("merchant transport", () => {
       requestId: "req_42",
       retryAfter: 3,
     });
+    const minimal = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(jsonResponse({ error: { code: "bad", message: "Payment unavailable" } }, 400));
+    await expect(transport(minimal).request("GET", "/v1/test", undefined)).rejects.toMatchObject({
+      errorType: null,
+      param: null,
+      docUrl: null,
+      requestId: null,
+      retryAfter: null,
+    });
     const network = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new Error(apiKey));
     await expect(
       transport(network, { maxAttempts: 1 }).request("GET", "/v1/test", undefined),
