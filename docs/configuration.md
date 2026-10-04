@@ -198,7 +198,8 @@ USDC_USD and USDT_USD on Ethereum (1) and Base (8453). See the
 Base and Base Sepolia require `sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600,
 rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }`. Observation-only groups use existing
 shared RPC budgets, counted transports, independent company validation, and recovery probes;
-they do not scan payment contracts. Staging includes `mainnet-a`/`mainnet-b` (chain 1) for price
+they do not scan payment contracts. Their capability probes read pinned feed decimals instead of
+payment receipts or logs. Staging includes `mainnet-a`/`mainnet-b` (chain 1) for price
 feeds and `base-mainnet-a`/`base-mainnet-b` (8453) for uptime. Feed addresses and heartbeat values
 are pinned in the image; operators configure group references, not arbitrary feed addresses.
 
