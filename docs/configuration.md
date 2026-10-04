@@ -229,15 +229,16 @@ Coin Metrics remains disabled in every environment. Deploy's production target i
 refuses a staging opt-in. `DEPLOY_ENVIRONMENT=staging` is required for a testnet rehearsal.
 
 PHA production is unavailable until two independent sources are implemented and Allowed. The
-follow-up to #331 implements Uniswap V2 PHA/WETH TWAP × Chainlink ETH/USD as primary and Kraken
-PHA/USD after written permission as check; CoinGecko is dropped. See the
+follow-up to #331 values PHA at min(Uniswap V2 PHA/WETH TWAP, current spot) × Chainlink ETH/USD.
+Agreement compares current Uniswap spot × ETH/USD against current Kraken PHA/USD after written
+permission; CoinGecko is dropped. See the
 [on-chain plan](design/price-failover.md#pha-on-chain-follow-up). `topup config check` prints ordered
 sources, verdicts, pinned feed metadata and testnet markers; `config show` emits resolved `price`.
 
 For PHA, configure `source: uniswap_v2_twap`, `rpc_group`, `rpc_group_b` (independent Ethereum
 mainnet groups) and `observation_chain_id` for cross-network routes. The fixed pair and tokens
 are pinned in the image. Optional `twap` settings default to `window_s: 1800`,
-`max_sample_age_s: 180`, `min_weth_reserve_usd: 100000`, `max_spot_deviation_bps: 1000`,
+`max_sample_age_s: 180`, `min_weth_reserve_usd: 100000`, `max_spot_deviation_bps: 300`,
 and `max_sample_jump_bps: 500`. Windows below thirty minutes are rejected. The service samples
 once/minute into PostgreSQL even without quote traffic; startup and gaps require a continuous
 window before prices become available. `config show` includes the resolved guard rails.

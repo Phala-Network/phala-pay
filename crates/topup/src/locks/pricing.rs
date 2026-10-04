@@ -7,8 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 use topup_adapters::pricing::{
-    Observation, PriceError, PriceSource, binance::Binance, chainlink::Chainlink, kraken::Kraken,
-    uniswap_v2::UniswapV2,
+    Observation, PriceError, PriceQuote, PriceSource, binance::Binance, chainlink::Chainlink,
+    kraken::Kraken, uniswap_v2::UniswapV2,
 };
 use topup_core::{
     money::ScaledPrice,
@@ -240,8 +240,11 @@ impl PricingRuntime {
                     .as_ref()
                     .is_none_or(|asset| asset == &route.asset.symbol)
             }) {
-                if let Some(o) = observe(entry, route, "sources", &mut audit).await? {
-                    observed.push((o, entry.max_age_s.unwrap_or(route.pricing.max_age_s)));
+                if let Some(quote) = observe(entry, route, "sources", &mut audit).await? {
+                    observed.push((
+                        quote.valuation,
+                        entry.max_age_s.unwrap_or(route.pricing.max_age_s),
+                    ));
                 }
             }
             let now = validation_time()?;
@@ -298,7 +301,20 @@ impl PricingRuntime {
             let check = check?;
             let fx = fx?;
             match (primary, check, fx) {
-                (Some(p), Some(c), Some(f)) if p.source != c.source && f.source != c.source => {
+                (Some(p), Some(c), Some(f))
+                    if p.valuation.source != c.valuation.source
+                        && f.valuation.source != c.valuation.source =>
+                {
+                    // Compare current markets, then retain the primary's conservative valuation.
+                    let p_agreement = Observation {
+                        price: p.agreement_price,
+                        ..p.valuation.clone()
+                    };
+                    let c_agreement = Observation {
+                        price: c.agreement_price,
+                        ..c.valuation.clone()
+                    };
+                    let (p, c, f) = (p.valuation, c.valuation, f.valuation);
                     let now = validation_time()?;
                     for (o, entries) in [(&p, &self.primary), (&c, &self.check), (&f, &self.fx)] {
                         let bound = entries
@@ -327,8 +343,8 @@ impl PricingRuntime {
                         .map_err(|_| "fx_depeg")
                         .and_then(|dollar| {
                             validate_spot(
-                                &p,
-                                &c,
+                                &p_agreement,
+                                &c_agreement,
                                 Some(&FxObservation {
                                     source: f.source,
                                     rate: if usdt_quoted { f.price } else { dollar },
@@ -337,6 +353,7 @@ impl PricingRuntime {
                                 now,
                                 policy,
                             )
+                            .map(|_| p.price)
                             .map_err(|e| valuation_error_code(&e))
                         })
                 }
@@ -374,7 +391,7 @@ async fn first(
     route: &RouteFile,
     role: &str,
     audit: &mut Value,
-) -> Result<Option<Observation>, Value> {
+) -> Result<Option<PriceQuote>, Value> {
     for (index, entry) in entries.iter().enumerate() {
         if let Some(observation) = observe(entry, route, role, audit).await? {
             if index > 0 {
@@ -390,14 +407,15 @@ async fn observe(
     route: &RouteFile,
     role: &str,
     audit: &mut Value,
-) -> Result<Option<Observation>, Value> {
-    let result = tokio::time::timeout(Duration::from_secs(30), entry.source.evidence()).await;
+) -> Result<Option<PriceQuote>, Value> {
+    let result = tokio::time::timeout(Duration::from_secs(30), entry.source.quote()).await;
     let result = match result {
         Ok(r) => r,
         Err(_) => Err(PriceError::Timeout),
     };
     let now = validation_time()?;
-    let result = result.and_then(|(o, evidence)| {
+    let result = result.and_then(|quote| {
+        let o = &quote.valuation;
         if now
             .value()
             .checked_sub(o.observed_at.value())
@@ -405,14 +423,17 @@ async fn observe(
         {
             Err(PriceError::Stale)
         } else {
-            Ok((o, evidence))
+            Ok(quote)
         }
     });
     let (evidence, observation) = match result {
-        Ok((o, data)) => (
-            json!({"role":role, "company":entry.company, "source":o.source.as_str(), "descriptor":entry.descriptor, "price_scaled":o.price.value().to_string(), "observed_at":o.observed_at.value(), "age_s":now.value().saturating_sub(o.observed_at.value()), "data":data}),
-            Some(o),
-        ),
+        Ok(quote) => {
+            let o = &quote.valuation;
+            (
+                json!({"role":role, "company":entry.company, "source":o.source.as_str(), "descriptor":entry.descriptor, "price_scaled":o.price.value().to_string(), "agreement_price_scaled":quote.agreement_price.value().to_string(), "observed_at":o.observed_at.value(), "age_s":now.value().saturating_sub(o.observed_at.value()), "data":quote.evidence}),
+                Some(quote),
+            )
+        }
         Err(error) => {
             let code = error_code(&error);
             if let Some(list) = audit["observations"].as_array_mut() {
@@ -531,6 +552,107 @@ mod tests {
     }
     fn route() -> RouteFile {
         serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml")).unwrap()
+    }
+    struct TwapFixture {
+        spot_units: u64,
+    }
+    #[async_trait]
+    impl PriceSource for TwapFixture {
+        async fn observe(&self) -> Result<Observation, PriceError> {
+            self.quote().await.map(|q| q.valuation)
+        }
+        async fn quote(&self) -> Result<PriceQuote, PriceError> {
+            use alloy_primitives::{B256, U256};
+            use topup_adapters::pricing::uniswap_v2::{
+                Sample, average, usd_price, valuation_price,
+            };
+            let now = validation_time().unwrap().value();
+            let twap = U256::from(10_000) << 112_usize;
+            let spot = U256::from(self.spot_units) << 112_usize;
+            let mut history: Vec<_> = (0..=30_u64)
+                .map(|i| Sample {
+                    block: i,
+                    hash: B256::ZERO,
+                    timestamp: now - 1800 + i * 60,
+                    cumulative: twap * U256::from(i * 60),
+                    spot: twap,
+                })
+                .collect();
+            history.last_mut().unwrap().spot = spot;
+            let current = history.last().unwrap();
+            let ratio = average(
+                &history,
+                current,
+                now,
+                &topup_core::price::TwapConfig::default(),
+            )?
+            .0;
+            let eth = ScaledPrice::new(100_000_000, 8).unwrap();
+            Ok(PriceQuote {
+                valuation: Observation {
+                    source: SourceId::new("uniswap_v2_twap"),
+                    price: valuation_price(ratio, spot, eth)?,
+                    observed_at: UnixSeconds::new(now),
+                },
+                agreement_price: usd_price(spot, eth)?,
+                evidence: json!({"twap_usd_scaled":usd_price(ratio, eth)?.value().to_string()}),
+            })
+        }
+    }
+    #[tokio::test]
+    async fn conservative_twap_valuation_checks_current_markets_and_pauses_fast_moves() {
+        let mut route = route();
+        route.pricing.max_deviation_bps = topup_core::money::Bps::new(100).unwrap();
+        // Units are hundredths of the baseline: TWAP=10000, spot=9800 means a 2% drop.
+        for (scenario, spot, kraken, expected, refusal) in [
+            ("drop", 9800, 9800, 9800, None),
+            ("pump", 10200, 10000, 10000, Some("divergent")),
+            ("normal_rise", 10200, 10200, 10000, None),
+            ("normal_drop", 9800, 9850, 9800, None),
+            ("drop_boundary", 9700, 9700, 9700, None),
+            ("rise_boundary", 10300, 10300, 10000, None),
+            ("fast_drop", 9699, 9699, 9699, Some("twap_spot_divergence")),
+            (
+                "fast_rise",
+                10301,
+                10301,
+                10000,
+                Some("twap_spot_divergence"),
+            ),
+        ] {
+            let source = Arc::new(TwapFixture { spot_units: spot });
+            if scenario == "pump" {
+                assert_eq!(
+                    source.quote().await.unwrap().valuation.price.value(),
+                    expected * 100_000_000
+                );
+            }
+            let mut r = runtime();
+            r.primary[0] = Entry {
+                source,
+                company: "uniswap-v2-onchain",
+                ..entry("uniswap_v2_twap", 0, 0, None)
+            };
+            r.check = vec![entry("kraken", kraken * 100_000_000, 0, None)];
+            r.check[0].usdt_quoted = false;
+            let result = r.fetch(&route).await;
+            if let Some(code) = refusal {
+                assert_eq!(result.err().unwrap()["error"], code, "{scenario}");
+            } else {
+                let quote = result.ok().unwrap();
+                assert_eq!(quote.price.value(), expected * 100_000_000, "{scenario}");
+                let primary = quote.evidence["observations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|o| o["role"] == "primary")
+                    .unwrap();
+                assert_eq!(
+                    primary["agreement_price_scaled"],
+                    (spot * 100_000_000).to_string()
+                );
+            }
+        }
     }
     #[tokio::test]
     async fn twap_uses_sample_age_and_safety_refusals_cannot_fail_over() {

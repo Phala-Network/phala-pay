@@ -77,8 +77,8 @@ FX is independently checked and is required for USDT-quoted markets.
 
 | Role | Ordered sources | Rule |
 |---|---|---|
-| primary | **Uniswap V2 PHA/WETH TWAP × Chainlink ETH/USD** | public on-chain state, Allowed |
-| check | **Kraken PHA/USD (`PHAUSD`)** | PermissionRequired; staging opt-in only until written permission |
+| primary | **min(Uniswap V2 PHA/WETH TWAP, current spot) × Chainlink ETH/USD** | public on-chain state, Allowed; agreement uses current spot × ETH/USD |
+| check | **Kraken current PHA/USD (`PHAUSD`)** | compare against Uniswap current spot; PermissionRequired, staging opt-in only until written permission |
 | fx | Chainlink USDT/USD | independently peg-checked by the existing volatile policy; the USD check is not multiplied by USDT |
 
 Production rejects the route until Kraken has written permission and an attested Allowed verdict.
@@ -91,8 +91,8 @@ The orchestrator found no Chainlink PHA feed in the Ethereum, Base, BSC, Polygon
 feed directories (over 1,800 feeds checked), and no Pyth PHA feed. DIA's free API is CC BY-NC-SA;
 CoinGecko paid is dropped. Do not add these as defaults or implement a CoinGecko adapter.
 
-The follow-up to #331 implements persisted Uniswap V2 PHA/WETH TWAP multiplied by Chainlink
-ETH/USD as primary; check is Kraken PHA/USD
+The follow-up to #331 implements persisted Uniswap V2 PHA/WETH TWAP and current spot, multiplied by
+Chainlink ETH/USD, as primary; check is Kraken current PHA/USD
 **after written permission** and an attested Allowed verdict. Until then PHA is production-ineligible.
 A Phala-sponsored Chainlink PHA/USD feed is a long-term option for two on-chain sources.
 
@@ -104,6 +104,22 @@ using counterfactual cumulative accumulation as defined by Uniswap V2. Pair:
 DB with a **minimum 30-minute window**. Restart retains history and fails closed if it
 is insufficient. On-chain token getters confirm PHA is token0 and WETH is token1; the reader
 validates both tokens and handles either ordering. ETH/USD is a pinned Chainlink feed with the same A/B, round and freshness checks.
+
+Merchant valuation is **min(TWAP, current Uniswap spot) × Chainlink ETH/USD**, using the same
+pinned block for the spot, TWAP endpoint and ETH/USD round. This follows lending-protocol style
+conservative pricing: falling markets immediately lower collateral/payment value instead of
+letting a payer receive credit at a lagging, higher average. Pumping spot above TWAP cannot raise
+valuation above TWAP; depressing spot reduces the credit the payer receives. This limits the
+spot-only manipulation incentive, but does not replace the independent market check or exposure
+caps. Quote and deposit-credit workers use the same rule.
+
+Independent agreement compares **current Uniswap spot × ETH/USD against Kraken current PHA/USD**
+at the route's `max_deviation_bps` (default 100, or 1%). It does not compare the thirty-minute
+average or the conservative valuation against a live ticker. A normal 2% move can therefore pass
+when the current arbitraged markets agree, while an isolated 2% Uniswap pump fails the Kraken
+check even though valuation remains capped at TWAP. The TWAP is the manipulation guard: a
+spot/TWAP difference **above 3%** pauses valuation by default in either direction, so fast markets
+fail closed. Accepted audit evidence records TWAP, spot, agreement and the chosen valuation.
 
 Every pair getter, reserve and Chainlink round/decimals call uses one numeric block: two blocks
 behind the slower A/B head. Both groups must agree on its number, hash and timestamp before and
@@ -118,14 +134,15 @@ Default guard rails (under source `twap`) are:
 | `window_s` | 1800 s, configurable 1800–86400 s | prevents using a spot-sized window; at least thirty minutes |
 | `max_sample_age_s` | 180 s, configurable 60–600 s | tolerates two missed one-minute samples; also bounds every gap and anchor slack |
 | `min_weth_reserve_usd` | $100,000 | about 100× the default $1,000 unfinalized exposure cap, on the WETH side alone |
-| `max_spot_deviation_bps` | 1000 (10%) | rejects short spikes and ramps that are inconsistent with the averaging window |
+| `max_spot_deviation_bps` | 300 (3%) | pauses fast markets and rejects spikes/ramps inconsistent with the averaging window |
 | `max_sample_jump_bps` | 500 (5%) | rejects abrupt sample-to-sample reserve-ratio changes before insertion |
 
 The service sampler runs every **60 s** even without quote traffic. Quote/credit workers share
 PostgreSQL history and an atomic per-policy lock, append no more than once a minute, and refuse
 storage failure. Between persisted samples, the quote's counterfactual endpoint still uses the same
 current pinned block as ETH/USD without writing an extra database row. Each policy has its own history so changing limits cannot reuse samples accepted
-under weaker settings. A restart with a gap exceeding the age limit needs a new continuous window;
+under weaker settings. Tightening the default deviation from 10% to 3% likewise starts a new
+policy window. A restart with a gap exceeding the age limit needs a new continuous window;
 it cannot reuse a thirty-minute-old endpoint across an unobserved outage. Jump refusals do not
 advance the previous accepted sample. A persistent jump or a stored reorg requires investigation;
 there is no automatic price override or history reset. The expand-only migration

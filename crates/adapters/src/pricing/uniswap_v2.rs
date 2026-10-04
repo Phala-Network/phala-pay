@@ -1,6 +1,6 @@
 //! Pinned PHA/WETH Uniswap V2 cumulative oracle, with durable service observations.
 use super::{
-    Observation, PriceError, PriceSource,
+    Observation, PriceError, PriceQuote, PriceSource,
     chainlink::{Chainlink, PriceBlock, agreed_block, confirm_block, validate_round},
     unix_now,
 };
@@ -129,6 +129,14 @@ pub fn usd_price(ratio: U256, eth_usd: ScaledPrice) -> Result<ScaledPrice, Price
         .wrapping_shr(112); // Deliberately truncate fractional USD units; fixed shift < 512.
     let value: u64 = value.try_into().map_err(|_| PriceError::InvalidPrice)?;
     ScaledPrice::new(value, 8).map_err(|_| PriceError::InvalidPrice)
+}
+/// Lending-style conservative valuation: falls follow spot immediately; rises wait for TWAP.
+pub fn valuation_price(
+    twap: U256,
+    spot: U256,
+    eth_usd: ScaledPrice,
+) -> Result<ScaledPrice, PriceError> {
+    usd_price(twap.min(spot), eth_usd)
 }
 fn exceeds(value: U256, reference: U256, bps: u16) -> bool {
     let diff = value.abs_diff(reference);
@@ -337,7 +345,7 @@ impl UniswapV2 {
             timestamp_last: reserves.blockTimestampLast,
         })
     }
-    async fn fetch(&self) -> Result<(Observation, Value), PriceError> {
+    async fn fetch(&self) -> Result<PriceQuote, PriceError> {
         let block = agreed_block(&self.a, &self.b).await?;
         let now = unix_now()?.value();
         if now
@@ -395,24 +403,34 @@ impl UniswapV2 {
                 ));
             }
         }
-        let price = usd_price(ratio, eth.price)?;
-        let evidence = json!({"pair":PAIR,"token0":a.token0,"token1":a.token1,"block":block.number,"block_hash":block.hash,"window_start_block":start.block,"window_end_block":end.block,"window_s":end.timestamp.saturating_sub(start.timestamp),"cumulative_start":start.cumulative,"cumulative_end":end.cumulative,"twap_q112":ratio,"spot_q112":sample.spot,"weth_reserve":weth,"eth_usd_scaled":eth.price.value().to_string(),"eth_round":round.id.to_string(),"eth_updated_at":round.updated_at,"policy":self.policy});
-        Ok((
-            Observation {
+        let price = valuation_price(ratio, sample.spot, eth.price)?;
+        let agreement_price = usd_price(sample.spot, eth.price)?;
+        let twap_price = usd_price(ratio, eth.price)?;
+        let mut evidence = json!({"pair":PAIR,"token0":a.token0,"token1":a.token1,"block":block.number,"block_hash":block.hash,"window_start_block":start.block,"window_end_block":end.block,"window_s":end.timestamp.saturating_sub(start.timestamp),"cumulative_start":start.cumulative,"cumulative_end":end.cumulative,"twap_q112":ratio,"spot_q112":sample.spot,"weth_reserve":weth,"eth_usd_scaled":eth.price.value().to_string(),"eth_round":round.id.to_string(),"eth_updated_at":round.updated_at,"policy":self.policy});
+        evidence["valuation_rule"] = json!("min(twap,spot)");
+        evidence["twap_usd_scaled"] = json!(twap_price.value().to_string());
+        evidence["spot_usd_scaled"] = json!(agreement_price.value().to_string());
+        evidence["valuation_usd_scaled"] = json!(price.value().to_string());
+        Ok(PriceQuote {
+            valuation: Observation {
                 source: SourceId::new("uniswap_v2_twap"),
                 price,
                 observed_at: UnixSeconds::new(end.timestamp),
             },
+            agreement_price,
             evidence,
-        ))
+        })
     }
 }
 #[async_trait]
 impl PriceSource for UniswapV2 {
     async fn observe(&self) -> Result<Observation, PriceError> {
-        self.fetch().await.map(|(o, _)| o)
+        self.fetch().await.map(|q| q.valuation)
     }
     async fn evidence(&self) -> Result<(Observation, Value), PriceError> {
+        self.fetch().await.map(|q| (q.valuation, q.evidence))
+    }
+    async fn quote(&self) -> Result<PriceQuote, PriceError> {
         self.fetch().await
     }
 }
@@ -824,57 +842,72 @@ mod tests {
         .unwrap()
         .0
         .spot;
-        let state = PairState {
-            cumulative0: ratio * U256::from(1800),
-            ..state
-        };
-        let mut h: Vec<Sample> = (0..30_u64)
-            .map(|i| Sample {
-                block: 67 + i,
+        for percent in [98_u64, 100, 102] {
+            let state = PairState {
+                reserve1: state.reserve1 * U256::from(percent) / U256::from(100),
+                cumulative0: ratio * U256::from(1800),
+                ..state.clone()
+            };
+            let spot = counterfactual(
+                &state,
+                PriceBlock {
+                    number: 98,
+                    hash,
+                    timestamp: now,
+                },
+            )
+            .unwrap()
+            .0
+            .spot;
+            let mut h: Vec<Sample> = (0..30_u64)
+                .map(|i| Sample {
+                    block: 67 + i,
+                    hash,
+                    timestamp: now - 1800 + i * 60,
+                    spot: ratio,
+                    cumulative: ratio * U256::from(i * 60),
+                })
+                .collect();
+            h.push(Sample {
+                block: 97,
                 hash,
-                timestamp: now - 1800 + i * 60,
+                timestamp: now - 30,
                 spot: ratio,
-                cumulative: ratio * U256::from(i * 60),
-            })
-            .collect();
-        h.push(Sample {
-            block: 97,
-            hash,
-            timestamp: now - 30,
-            spot: ratio,
-            cumulative: ratio * U256::from(1770),
-        });
-        let store = Arc::new(Memory(tokio::sync::Mutex::new(h)));
-        let a = rpc(
-            "twap-success-a",
-            100,
-            hash,
-            state.clone(),
-            200_000_000_000,
-            now,
-        )
-        .await;
-        let b = rpc("twap-success-b", 102, hash, state, 200_000_000_000, now).await;
-        let reader = UniswapV2::new(
-            a.client.clone(),
-            b.client.clone(),
-            TwapConfig::default(),
-            store.clone(),
-        )
-        .unwrap();
-        let (o, evidence) = reader.evidence().await.unwrap();
-        assert_eq!(o.source.as_str(), "uniswap_v2_twap");
-        assert_eq!(o.observed_at.value(), now);
-        assert_eq!(
-            o.price,
-            usd_price(ratio, ScaledPrice::new(200_000_000_000, 8).unwrap()).unwrap()
-        );
-        assert_eq!(evidence["window_end_block"], 98);
-        assert_eq!(
-            store.0.lock().await.len(),
-            31,
-            "no extra persisted quote sample"
-        );
+                cumulative: ratio * U256::from(1770),
+            });
+            let store = Arc::new(Memory(tokio::sync::Mutex::new(h)));
+            let a = rpc(
+                "twap-success-a",
+                100,
+                hash,
+                state.clone(),
+                200_000_000_000,
+                now,
+            )
+            .await;
+            let b = rpc("twap-success-b", 102, hash, state, 200_000_000_000, now).await;
+            let reader = UniswapV2::new(
+                a.client.clone(),
+                b.client.clone(),
+                TwapConfig::default(),
+                store.clone(),
+            )
+            .unwrap();
+            let quote = reader.quote().await.unwrap();
+            let o = quote.valuation;
+            let evidence = quote.evidence;
+            let eth = ScaledPrice::new(200_000_000_000, 8).unwrap();
+            assert_eq!(quote.agreement_price, usd_price(spot, eth).unwrap());
+            assert_eq!(o.source.as_str(), "uniswap_v2_twap");
+            assert_eq!(o.observed_at.value(), now);
+            assert_eq!(o.price, valuation_price(ratio, spot, eth).unwrap());
+            assert_eq!(evidence["window_end_block"], 98);
+            assert_eq!(
+                store.0.lock().await.len(),
+                31,
+                "no extra persisted quote sample"
+            );
+        }
     }
     #[tokio::test]
     async fn pinned_ab_pair_header_and_eth_disagreement_fail_closed() {

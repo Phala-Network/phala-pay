@@ -92,6 +92,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   A/B-agreed Ethereum block. Persist one-minute samples across restarts; require a continuous
   window of at least thirty minutes with liquidity, spot divergence, freshness and sample jump
   guard rails and distinct price refusal alerts. PHA primary/check defaults become TWAP/Kraken;
+  value at min(TWAP, current spot) × ETH/USD and compare current Uniswap spot × ETH/USD against
+  current Kraken PHA/USD. Default spot/TWAP divergence is 3%, pausing faster moves; the stricter
+  policy starts a new thirty-minute observation window.
   production still refuses Kraken pending written permission and an attested Allowed verdict.
 - Expand-only migration `20261029000000_uniswap_twap` adds immutable observation history without
   changing existing payment tables or permissions. Compatibility floor remains `20261028000002`;

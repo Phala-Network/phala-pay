@@ -666,7 +666,10 @@ source is outside it. All source observations and the decision are audited.
 Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, complete positive
 rounds and independent RPC A/B agreement at one pinned numeric block. PHA samples public pair
 cumulatives once/minute into PostgreSQL, requires a continuous thirty-minute window, and enforces
-liquidity, spot divergence, sample freshness and jump limits. Base additionally gates on the sequencer uptime
+liquidity, spot divergence (default 3%), sample freshness and jump limits. PHA valuation uses
+min(TWAP, current spot) × ETH/USD; independent Kraken agreement checks current spot × ETH/USD,
+so average lag cannot overvalue a falling market or reject ordinary agreeing spot moves.
+Base additionally gates on the sequencer uptime
 feed with recovery grace. Test tokens explicitly observe configured mainnet groups. Licensing
 verdicts are compiled into the attested provider registry: only Allowed can run in production;
 Chainlink on-chain consumption is Allowed and is the stablecoin default. Kraken is
@@ -1510,7 +1513,7 @@ defaulted addresses from it. The defaults and why:
 | `asset.backstop` | `token`: every transfer of the token is requested and kept locally, one request per block range whatever the address count; `addresses` for a token with many transfers per block, such as USDC (§8) |
 | `price.mode`, role lists | explicit `volatile` or `stablecoin`; no implicit providers |
 | `price.max_age_s`, `peg_band_bps`, `max_deviation_bps`, `max_fx_deviation_bps` | 90, 100, 100, 100; Chainlink uses its pinned heartbeat + 600 s |
-| `price.primary[].twap` | 1800 s window, 180 s sample age/gap, $100,000 WETH reserve, 1000 bps spot divergence, 500 bps sample jump; samples every 60 s |
+| `price.primary[].twap` | 1800 s window, 180 s sample age/gap, $100,000 WETH reserve, 300 bps spot divergence, 500 bps sample jump; samples every 60 s |
 | `merchant.min_amount`, `max_deposit_atomic`, `min_refund_atomic` | the default is required; an account may raise the minimum credit and lower the maximum deposit, and keeps the refund floor unless the operator sets `min` and `max` |
 | `merchant.min_deposit_atomic` | 0, which an account may raise: `min_amount` rejects dust *(policy: finance confirms before production)* |
 | `merchant.quote_ttl_seconds`, `quote_spread_bps`, `quote_tolerance_bps` | defaults 900, 50, 100; bounds 30 to 3 600 seconds and 0 to 500 basis points. The code refuses an operator bound above 86 400 seconds, a spread above 5 000, or a tolerance above 1 000 basis points |

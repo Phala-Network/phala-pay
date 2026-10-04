@@ -163,7 +163,7 @@ impl Default for TwapConfig {
             window_s: 1800,
             max_sample_age_s: 180,
             min_weth_reserve_usd: 100_000,
-            max_spot_deviation_bps: Bps::new(1000).unwrap_or_default(),
+            max_spot_deviation_bps: Bps::new(300).unwrap_or_default(),
             max_sample_jump_bps: Bps::new(500).unwrap_or_default(),
         }
     }
@@ -211,7 +211,7 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observation_chain_id: Option<u64>,
     },
-    /// Pinned mainnet PHA/WETH TWAP multiplied by Chainlink ETH/USD.
+    /// Pinned mainnet min(PHA/WETH TWAP, spot) × ETH/USD; independent agreement uses spot.
     #[serde(rename = "uniswap_v2_twap")]
     UniswapV2Twap {
         /// Ethereum mainnet A group (or route role a on Ethereum).

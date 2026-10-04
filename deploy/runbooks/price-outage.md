@@ -58,8 +58,9 @@ must advance once/minute even without quote traffic. Do not call `sync()` or mut
 - `twap_storage`, `twap_sample_order`, `twap_token_order` or `twap_reorg`: inspect DB availability,
   concurrent reads, pinned token identities and canonical block hashes. Preserve evidence and
   escalate persistent failures. Do not delete history or override a price.
-- PHA uses [TWAP × Chainlink ETH/USD primary](../../docs/design/price-failover.md#pha-on-chain-follow-up)
-  and Kraken PHA/USD check. Production remains disabled until written Kraken permission and an
+- PHA uses [min(TWAP, spot) × ETH/USD valuation](../../docs/design/price-failover.md#pha-on-chain-follow-up)
+  and current Uniswap spot × ETH/USD versus Kraken PHA/USD agreement. The default spot/TWAP
+  divergence limit is 3%. Production remains disabled until written Kraken permission and an
   attested Allowed verdict. A sponsored Chainlink PHA feed is a long-term option.
 
 ## Fix
