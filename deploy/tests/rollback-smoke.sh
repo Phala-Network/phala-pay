@@ -4,6 +4,8 @@ set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
 current=${1:?current topup binary required}
 previous=${2:?previous release image digest required}
+previous_config=${3:?previous release config from its verified deploy kit required}
+[[ -s "$previous_config" ]] || { echo 'previous release config is missing' >&2; exit 64; }
 [[ "$previous" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'previous image must be immutable' >&2; exit 64; }
 pg=postgres:18.6-trixie@sha256:86c951e05bf56c93d95d397747fb8820ac76cc3bedb78f43abd83eedbe3666ae
 python=python:3.14-slim-trixie@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2
@@ -39,9 +41,13 @@ until docker exec "$name-db" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1
     stage_sleep 1
 done
 port=$(docker port "$name-db" 5432/tcp | cut -d: -f2)
+# The current route schema/licensing needs an explicit noncommercial rehearsal environment.
+# N-1 keeps its own verified config: current route syntax need not be backwards compatible.
+sed 's/^environment: production.*/environment: local/' \
+    "$root/deploy/environments/example/topup/topup.yaml" >"$tmp/current.yaml"
 stage_start current-migrate 180
 DATABASE_URL="postgres://postgres:smoke@127.0.0.1:$port/topup" \
-    stage_call 180 "$current" migrate --config "$root/deploy/environments/example/topup/topup.yaml"
+    stage_call 180 "$current" migrate --config "$tmp/current.yaml"
 # Reject an unmarked future migration, then allow the same exact checksum at this binary's floor.
 psql_owner() { docker exec "$name-db" psql -U postgres -d topup -X -v ON_ERROR_STOP=1 "$@"; }
 stage_start compatibility-checks 180
@@ -76,7 +82,7 @@ psql_owner -c "UPDATE _sqlx_migrations SET checksum=decode('$checksum','hex') WH
 # This fixture is removed before the real N-1 smoke; it must not mask a real new migration.
 if [[ ${NO_ROLLBACK:-0} == 1 ]]; then
     if stage_call 60 docker run --rm --network "$name" -e DATABASE_URL=postgres://postgres:smoke@db:5432/topup \
-        -v "$root/deploy/environments/example/topup/topup.yaml:/etc/topup.yaml:ro" \
+        -v "$previous_config:/etc/topup.yaml:ro" \
         "$previous" topup migrate --config /etc/topup.yaml; then
         echo 'restore-only release did not reject N-1 migration startup' >&2; exit 1
     fi
@@ -84,7 +90,7 @@ if [[ ${NO_ROLLBACK:-0} == 1 ]]; then
     exit 0
 fi
 stage_call 60 docker run --rm --network "$name" -e DATABASE_URL=postgres://postgres:smoke@db:5432/topup \
-    -v "$root/deploy/environments/example/topup/topup.yaml:/etc/topup.yaml:ro" \
+    -v "$previous_config:/etc/topup.yaml:ro" \
     "$previous" topup migrate --config /etc/topup.yaml
 # Test-only KMS boundary: the official SDK GetKey contract, with a fixed non-production key.
 cat >"$tmp/kms.py" <<'PY'
@@ -119,7 +125,7 @@ docker run -d --name "$name-api" --network "$name" -p 127.0.0.1::8080 \
     -e DATABASE_URL=postgres://postgres:smoke@db:5432/topup \
     -e TOPUP_RPC_ALCHEMY_SEPOLIA_KEY=smoke-placeholder \
     -e DSTACK_SIMULATOR_ENDPOINT=http://kms:8080 \
-    -v "$root/deploy/environments/example/topup/topup.yaml:/etc/topup.yaml:ro" \
+    -v "$previous_config:/etc/topup.yaml:ro" \
     "$previous" topup run --config /etc/topup.yaml --read-only >/dev/null
 port=$(docker port "$name-api" 8080/tcp | cut -d: -f2)
 stage_start previous-api 60
