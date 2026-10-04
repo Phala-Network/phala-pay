@@ -1603,12 +1603,16 @@ async fn load_shed_responses_match_the_shared_unavailable_contract() -> Result<(
             let (app, docs) = topup::api::router(app_state(pool.clone(), &admin_key));
             let mut pending = Vec::with_capacity(256);
             for _ in 0..256 {
-                let request = axum::http::Request::get("/healthz").body(Body::empty())?;
+                let request =
+                    axum::http::Request::get("/v1/admin/reports/daily")
+                        .body(Body::from_stream(futures_util::stream::pending::<
+                            Result<axum::body::Bytes, std::io::Error>,
+                        >()))?;
                 let mut future = Box::pin(app.clone().oneshot(request));
                 poll_fn(|context| match future.as_mut().poll(context) {
                     Poll::Pending => Poll::Ready(Ok(())),
                     Poll::Ready(_) => Poll::Ready(Err(anyhow::anyhow!(
-                        "admitted health request did not wait for the held connection"
+                        "admitted admin request did not wait for its incomplete body"
                     ))),
                 })
                 .await?;
