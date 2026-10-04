@@ -171,7 +171,7 @@ from topup_client.models import (
 from topup_client.types import UNSET, Response, Unset
 
 from ._origin import normalize_origin
-from ._secrets import Secret, protect
+from ._secrets import Secret, protect, redact
 from ._transport import REQUEST_STATE, BorrowedTransport, HTTPClient, RequestState
 from .addresses import deposit_address, quote_address, same_address
 from .attestation import verify_attestation_binding
@@ -1754,7 +1754,9 @@ class TopupClient:
                         self._verify_identity(parsed)
                     except ResponseValidationError as validation:
                         validation.status_code = response.status_code
-                        validation.request_id = response.headers.get("request-id")
+                        validation.request_id = (
+                            redact(response.headers.get("request-id", "")) or None
+                        )
                         raise
                     return protect(parsed)
                 if 300 <= response.status_code < 400:

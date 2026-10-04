@@ -844,3 +844,25 @@ def test_retrieval_never_invents_a_client_secret() -> None:
         assert "client_secret" not in quote.to_dict()
         with pytest.raises(ResponseValidationError):
             client.checkout_params(quote)
+
+
+@pytest.mark.parametrize("diagnostic", [KEY, SECRET])
+def test_response_identity_validation_redacts_request_id_in_fields_and_logs(
+    diagnostic: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with (
+        pay(
+            lambda _: httpx.Response(
+                200, json=_quote(livemode=True), headers={"Request-Id": diagnostic}
+            )
+        ) as client,
+        pytest.raises(ResponseValidationError) as raised,
+    ):
+        client.quotes.retrieve(QUOTE_ID)
+    assert raised.value.status_code == 200
+    assert raised.value.request_id == "[REDACTED]"
+    with caplog.at_level(logging.ERROR):
+        logging.getLogger("sdk_diagnostics").error("%r %r", raised.value, vars(raised.value))
+    assert diagnostic not in repr(vars(raised.value))
+    assert diagnostic not in caplog.text
