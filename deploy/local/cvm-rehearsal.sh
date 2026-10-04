@@ -12,6 +12,8 @@
 # 3. Writes a staging-shaped environment directory: Phala's staging topup.yaml with the committed
 #    routes on those addresses and on the Anvils' providers (`topup config show` and jq), and the
 #    staging overlay with local object storage. It renders it as Deploy provisions.
+#    PHA uses the previous staging Kraken/Binance sources to exercise live HTTPS pricing:
+#    a throwaway database cannot have a persisted thirty-minute TWAP window at startup.
 #    dstack-ingress does not run (cvm-rehearsal.compose.yml).
 # 4. Writes the unsealed `.env` as Deploy does (the rendered compose's sealed names, all empty),
 #    and runs `docker compose up` on the rendered file plus cvm-rehearsal.compose.yml (simulator,
@@ -321,6 +323,8 @@ openssl genpkey -algorithm ed25519 -out "$tmp/admin.pem"
 admin_public_key=$(openssl pkey -in "$tmp/admin.pem" -pubout -outform DER | tail -c 32 | base64)
 # write_config ADMIN_KEY_ID: the rehearsal's topup.yaml (resolved JSON, which is YAML).
 write_config() {
+    # Test-mode exchange sources retain the rehearsal's live TLS coverage without weakening
+    # the committed TWAP policy or pre-populating observations the service did not record.
     docker run --rm -i --network none "$TOPUP_IMAGE" topup config show /dev/stdin \
         <"$root/deploy/environments/phala-network/staging/topup/topup.yaml" |
         jq --arg id "$1" --arg key "$admin_public_key" --arg factory "$factory" \
@@ -345,7 +349,14 @@ write_config() {
             | .rpc_groups["base-sepolia-b"].members[0].url = "http://base.rehearsal-b.test:8545"
             | .routes |= map(($assets[.route] // error("no rehearsal token for \(.route)")) as $asset
                 | .chain.forwarder_factory = $factory | .chain.implementation = $implementation
-                | .asset.contract = $asset[0] | .chain.sanctions_oracle = $asset[1])' \
+                | .asset.contract = $asset[0] | .chain.sanctions_oracle = $asset[1]
+                | if .asset.symbol == "pha" then
+                    if .livemode then error("exchange rehearsal requires test mode") else
+                        .price.primary = [{source: "kraken", symbol: "PHAUSD", company: "kraken"}]
+                        | .price.check = [{source: "binance", symbol: "PHAUSDT", company: "binance"}]
+                        | .price.allow_unclear_sources = true
+                    end
+                  else . end)' \
         >"$environment/topup.yaml"
     docker run --rm -i --network none "$TOPUP_IMAGE" topup config check /dev/stdin \
         <"$environment/topup.yaml" >/dev/null || die "the rehearsal configuration is invalid"
