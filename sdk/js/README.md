@@ -200,6 +200,12 @@ Set these CSS custom properties in your own stylesheet, after the SDK stylesheet
 selector such as `.pp-root[data-theme]`. For a light primary color, set a dark
 `--pp-accessible-color-on-color-primary` so the button label stays readable.
 
+For a frameless host dialog, set `--pp-root-border: 0`, `--pp-root-padding: 0`,
+`--pp-root-max-width: none`, and `--pp-root-background: transparent` on the component or its
+ancestor. Defaults remain `1px solid var(--pp-color-border)`, `20px`, `440px`, and
+`var(--pp-color-background)`. Checkout opens QR code when no browser wallet is discovered;
+the Wallet tab remains available.
+
 ```css
 .pp-root[data-theme] {
   --pp-color-primary: #cdfa50;

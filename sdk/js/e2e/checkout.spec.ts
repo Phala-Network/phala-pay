@@ -250,12 +250,12 @@ test("lists the manual payment details with working copy buttons", async ({ page
   const { quote, secret } = newQuote();
   await serveQuote(page, quote, secret);
   await page.goto(`/?client_secret=${secret}&expected_address=${quote.address}&api_base=${API_BASE}`);
-  await page.getByRole("tab", { name: "Send manually" }).click();
+  await page.getByRole("tab", { name: "Manual transfer" }).click();
 
   const panel = page.getByRole("tabpanel");
   await expect(panel.getByText("Sepolia (chain ID 11155111)")).toBeVisible();
   await expect(panel.getByText(quote.address)).toBeVisible();
-  await expect(panel.getByText(/^\d+:\d{2}$/)).toBeVisible();
+  await expect(page.getByLabel("Time left to pay")).toHaveText(/^\d+:\d{2}$/);
 
   await panel.getByRole("button", { name: "Copy Send to address" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(quote.address);

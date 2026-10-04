@@ -72,7 +72,6 @@ export function DepositAddress({
   const { token: contract, to } = depositAddressTransfer(network, token);
   const symbol = token.asset.toUpperCase();
   const name = networkName(network.chain_id);
-  const tokens = [...new Set(networks.flatMap((each) => each.assets.map((a) => a.asset.toUpperCase())))];
   return (
     <div
       className={className === undefined ? "pp-root" : `pp-root ${className}`}
@@ -80,8 +79,8 @@ export function DepositAddress({
     >
       <p className="pp-subtitle">
         {depositAddress.address === null
-          ? "Your deposit address for every supported token; it differs on some networks"
-          : "One address for all supported tokens and networks"}
+          ? "Reusable deposit address; varies by network"
+          : "One reusable address for supported tokens and networks"}
       </p>
       {networks.length > 1 && (
         <fieldset className="pp-choices">
@@ -133,9 +132,8 @@ export function DepositAddress({
         </ul>
       )}
       <p className="pp-message">
-        Send only {tokens.join(", ")} on {networks.map((each) => networkName(each.chain_id)).join(", ")}
-        . {creditMessage(networks.map((each) => each.chain_id), view)} Other tokens and networks are not
-        credited. You can reuse this address.
+        Send {symbol} on {name}. Unsupported tokens or networks are not credited.{" "}
+        {creditMessage(networks.map((each) => each.chain_id), view)}
       </p>
     </div>
   );
@@ -205,7 +203,7 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
     }
   }
   if (names.size === 0) {
-    return "Any amount is credited at the market rate once it is confirmed on its network.";
+    return "Any amount is credited at the market rate after confirmation.";
   }
   const list = new Intl.ListFormat("en", { type: "conjunction" });
   const [only, ...others] = names.keys();
@@ -213,7 +211,7 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
     only !== undefined && others.length === 0
       ? formatWait(only)
       : list.format([...names].map(([seconds, on]) => `${formatWait(seconds)} on ${list.format(on)}`));
-  return `Any amount is credited at the market rate when it arrives, usually in ${usually}.`;
+  return `Any amount is credited at the market rate on arrival, usually in ${usually}.`;
 }
 
 function paymentMessage(payment: DepositAddressPayment): string {
@@ -234,6 +232,6 @@ function paymentMessage(payment: DepositAddressPayment): string {
     case "rejected":
       return `${amount} ${on} cannot be credited. Contact support with your transaction.`;
     case "reversed":
-      return `${amount} ${on} was reversed: its transaction is no longer on the blockchain.`;
+      return `${amount} ${on} was reversed: a chain reorganization replaced it and its credit was removed.`;
   }
 }

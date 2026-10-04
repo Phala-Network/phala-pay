@@ -65,9 +65,9 @@ export interface CheckoutProps {
 type Method = "wallet" | "qr" | "manual";
 
 const METHODS: { id: Method; label: string }[] = [
-  { id: "wallet", label: "Browser wallet" },
+  { id: "wallet", label: "Wallet" },
   { id: "qr", label: "QR code" },
-  { id: "manual", label: "Send manually" },
+  { id: "manual", label: "Manual" },
 ];
 
 /** A checkout for one quote: pay from a browser wallet, by QR code, or manually, with live status. */
@@ -147,7 +147,6 @@ export function Checkout({
           quote={quote}
           buttonText={buttonText}
           walletClient={walletClient}
-          now={now}
           onSent={(hash) => {
             setTxHash(hash);
             refresh();
@@ -204,17 +203,17 @@ function statusMessage(
     case "seen":
       return seenMessage(quote);
     case "confirming":
-      return "Payment confirmed on chain, crediting…";
+      return "Confirmed on chain, crediting…";
     case "credited":
       return creditedMessage(quote);
     case "rejected":
       return "This payment cannot be credited. Contact support with your transaction.";
     case "reversed":
-      return "This payment was reversed: its transaction is no longer on the blockchain, so it did not happen and its credit was taken back. Check your wallet, then start a new top-up.";
+      return "Payment reversed: a chain reorganization replaced it and its credit was removed. Check your wallet, then start a new top-up.";
     case "expired":
-      return "This quote has expired. Do not send funds to this address; start a new top-up.";
+      return "Quote expired. Do not send funds; start a new top-up.";
     case "canceled":
-      return "This quote was canceled. Do not send funds to this address.";
+      return "Quote canceled. Do not send funds.";
     case "error":
       return code === "address_mismatch"
         ? "This payment address could not be verified. Do not send funds; contact support."
@@ -224,12 +223,12 @@ function statusMessage(
 
 function seenMessage(quote: ClientQuote | null): string {
   if (quote === null) {
-    return "Payment received, crediting once it is confirmed";
+    return "Received, crediting after confirmation";
   }
   const wait = formatWait(quote.typical_credit_seconds);
   return quote.confirmations === null
-    ? `Payment received, crediting in ${wait}`
-    : `Payment received, ${quote.confirmations} confirmation${quote.confirmations === 1 ? "" : "s"}. Crediting in ${wait}`;
+    ? `Received, crediting in ${wait}`
+    : `Received, ${quote.confirmations} confirmation${quote.confirmations === 1 ? "" : "s"}. Crediting in ${wait}`;
 }
 
 /** What was credited and, when the payment was valued at the market price, the quote it missed. */
@@ -242,7 +241,7 @@ function creditedMessage(quote: ClientQuote | null): string {
     return `Payment credited: ${credited} of ${formatAmount(quote)}`;
   }
   if (quote.amount_credited > quote.amount) {
-    return `Payment credited: ${credited}, more than the ${formatAmount(quote)} quoted`;
+    return `Payment credited: ${credited} (${formatAmount(quote)} quoted)`;
   }
   return `Payment credited: ${credited}`;
 }
@@ -265,20 +264,24 @@ function Transaction({ hash, chainId }: { hash: Hash; chainId: number }) {
 
 function PaymentOptions({
   quote,
-  now,
   buttonText,
   walletClient,
   onSent,
   onWalletError,
 }: {
   quote: ClientQuote;
-  now: number;
   buttonText: string;
   walletClient: WalletClient | undefined;
   onSent: (hash: Hash) => void;
   onWalletError: CheckoutProps["onWalletError"];
 }) {
-  const [method, setMethod] = useState<Method>("wallet");
+  const [selectedMethod, setMethod] = useState<Method | null>(null);
+  const [discovered, setDiscovered] = useState<Wallet[]>([]);
+  useEffect(
+    () => (walletClient === undefined ? watchWallets(setDiscovered) : undefined),
+    [walletClient],
+  );
+  const method = selectedMethod ?? (walletClient !== undefined || discovered.length > 0 ? "wallet" : "qr");
   const id = useId();
   const tabs = useRef<(HTMLButtonElement | null)[]>([]);
   const amount = `${formatTokenAmount(quote)} ${quote.asset.toUpperCase()}`;
@@ -307,9 +310,7 @@ function PaymentOptions({
     <>
       <p className="pp-notice">
         Send <strong>exactly {amount}</strong> on {networkName(quote.chain_id)} in one transfer
-        before the timer ends. A different amount, or a payment after expiry, is credited at the
-        market price instead of this quote. Exchanges may deduct a withdrawal fee, so the amount
-        that arrives must be exact.
+        before the timer ends. Otherwise it’s credited at the market rate.
       </p>
       <div className="pp-tabs" role="tablist" aria-label="Payment method" onKeyDown={onKeyDown}>
         {METHODS.map((m, index) => (
@@ -322,6 +323,7 @@ function PaymentOptions({
             role="tab"
             className="pp-tab"
             id={`${id}-tab-${m.id}`}
+            aria-label={m.id === "wallet" ? "Browser wallet" : m.id === "manual" ? "Manual transfer" : m.label}
             aria-selected={method === m.id}
             aria-controls={`${id}-panel-${m.id}`}
             tabIndex={method === m.id ? 0 : -1}
@@ -342,6 +344,7 @@ function PaymentOptions({
             quote={quote}
             buttonText={buttonText}
             walletClient={walletClient}
+            discovered={discovered}
             onSent={onSent}
             onWalletError={onWalletError}
           />
@@ -350,12 +353,11 @@ function PaymentOptions({
           <div className="pp-qr-panel">
             <QrCode value={quote.payment_uri} label={`Payment request for ${amount}`} />
             <p className="pp-message">
-              Scan with a wallet app that reads payment links, and check that it shows {amount} on{" "}
-              {networkName(quote.chain_id)} before you confirm.
+              Scan with your wallet app and check it shows {amount} on {networkName(quote.chain_id)}.
             </p>
           </div>
         )}
-        {method === "manual" && <ManualPanel quote={quote} now={now} />}
+        {method === "manual" && <ManualPanel quote={quote} />}
       </div>
     </>
   );
@@ -370,21 +372,18 @@ function WalletPanel({
   quote,
   buttonText,
   walletClient,
+  discovered,
   onSent,
   onWalletError,
 }: {
   quote: ClientQuote;
+  discovered: Wallet[];
   buttonText: string;
   walletClient: WalletClient | undefined;
   onSent: (hash: Hash) => void;
   onWalletError: CheckoutProps["onWalletError"];
 }) {
-  const [discovered, setDiscovered] = useState<Wallet[]>([]);
   const [step, setStep] = useState<WalletStep>({ kind: "idle" });
-  useEffect(
-    () => (walletClient === undefined ? watchWallets(setDiscovered) : undefined),
-    [walletClient],
-  );
   const wallets: { id: string; name: string; icon: string; wallet: WalletClient | EthereumProvider }[] =
     walletClient === undefined
       ? discovered.map(({ info: { uuid, name, icon }, provider }) => ({ id: uuid, name, icon, wallet: provider }))
@@ -409,8 +408,7 @@ function WalletPanel({
   if (wallets.length === 0) {
     return (
       <p className="pp-message">
-        No browser wallet found. Scan the QR code with a mobile wallet, or send the payment
-        manually.
+        Install a browser wallet to pay here.
       </p>
     );
   }
@@ -442,16 +440,21 @@ function WalletPanel({
   );
 }
 
-function ManualPanel({ quote, now }: { quote: ClientQuote; now: number }) {
+function ManualPanel({ quote }: { quote: ClientQuote }) {
   const token = quoteTransfer(quote).token;
   return (
-    <dl className="pp-fields">
-      <Field label="Network" value={`${networkName(quote.chain_id)} (chain ID ${quote.chain_id})`} />
-      <Field label={`Token (${quote.asset.toUpperCase()}) contract`} value={token} copy />
-      <Field label="Send to address" value={quote.address} copy />
-      <Field label="Exact amount" value={formatTokenAmount(quote)} copy={tokenAmount(quote)} />
-      <Field label="Time left" value={formatCountdown(quote.expires_at, now)} />
-    </dl>
+    <>
+      <dl className="pp-fields">
+        <Field label="Network" value={`${networkName(quote.chain_id)} (chain ID ${quote.chain_id})`} />
+        <Field label={`Token (${quote.asset.toUpperCase()}) contract`} value={token} copy />
+        <Field label="Send to address" value={quote.address} copy />
+        <Field label="Exact amount" value={formatTokenAmount(quote)} copy={tokenAmount(quote)} />
+      </dl>
+      <p className="pp-message">
+        Only {quote.asset.toUpperCase()} on {networkName(quote.chain_id)} is credited. Exchange
+        withdrawal fees must not reduce the amount received.
+      </p>
+    </>
   );
 }
 
