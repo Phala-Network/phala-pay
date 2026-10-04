@@ -28,10 +28,10 @@ test("retains deposit selections and payments through a three-minute network out
   await expect(page.getByRole("radio", { name: "Base Sepolia" })).toBeChecked();
   await expect(page.getByRole("list", { name: "Payments" })).toHaveText(payments ?? "");
   online = true;
-  await expect.poll(async () => {
-    await page.clock.runFor(30000);
-    return page.getByRole("status").count();
-  }).toBe(0);
+  // Fire the pending poll once, then let its real network response settle without
+  // advancing the request timeout while Chromium is still processing the response.
+  await page.clock.fastForward(30000);
+  await expect(page.getByRole("status")).toHaveCount(0);
 });
 
 test("deposit network and token radio groups work by keyboard and pass axe", async ({ page }) => {

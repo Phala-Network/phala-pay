@@ -195,10 +195,8 @@ test("retains checkout through a three-minute gateway outage and reconnects", as
   await expect(page.locator(".pp-fields")).toHaveText(details ?? "");
   await expect(page.getByTestId("events")).toBeEmpty();
   online = true;
-  await expect.poll(async () => {
-    await page.clock.runFor(30000);
-    return page.getByRole("status").textContent();
-  }).toBe("Waiting for your payment");
+  await page.clock.fastForward(30000);
+  await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
 });
 
 test("pays a quote from a browser wallet, end to end on Anvil", async ({ page }) => {
