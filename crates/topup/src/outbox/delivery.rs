@@ -143,7 +143,8 @@ enum Outcome {
 }
 
 impl Outcome {
-    const fn internal(error: &'static str) -> Self {
+    fn internal(error: &'static str) -> Self {
+        crate::observability::emit_alert("TopupOutboxInternalFailure", error, "critical", 1, 0);
         Self::Failed {
             status: None,
             body: None,
@@ -236,7 +237,6 @@ where
             }
             let free = self.config.max_in_flight.saturating_sub(in_flight.len());
             if claiming.is_terminated() && free > 0 && Instant::now() >= next_claim {
-                monitor.check_in(true);
                 let now = Instant::now();
                 let cooling = cooldowns
                     .iter()
@@ -273,17 +273,21 @@ where
                     }
                     next_claim = Instant::now();
                 }
-                claimed = &mut claiming, if !claiming.is_terminated() => match claimed {
-                    Ok(claimed) if !claimed.is_empty() => {
-                        for event in claimed {
-                            *busy.entry(event.endpoint_id).or_default() += 1;
-                            in_flight.push(self.attempt(event));
+                claimed = &mut claiming, if !claiming.is_terminated() => {
+                    // Poll success proves liveness, not merchant fulfilment.
+                    monitor.check_in(claimed.is_ok());
+                    match claimed {
+                        Ok(claimed) if !claimed.is_empty() => {
+                            for event in claimed {
+                                *busy.entry(event.endpoint_id).or_default() += 1;
+                                in_flight.push(self.attempt(event));
+                            }
                         }
-                    }
-                    Ok(_) => next_claim = Instant::now() + self.config.poll_interval,
-                    Err(error) => {
-                        tracing::error!(%error, "outbox delivery claim failed");
-                        next_claim = Instant::now() + self.config.poll_interval;
+                        Ok(_) => next_claim = Instant::now() + self.config.poll_interval,
+                        Err(error) => {
+                            tracing::error!(%error, "outbox delivery claim failed");
+                            next_claim = Instant::now() + self.config.poll_interval;
+                        }
                     }
                 },
                 () = sleep_until(next_claim), if idle => {}
@@ -511,16 +515,28 @@ where
         let response = match response {
             Ok(response) => response,
             Err(error) => {
-                return Ok(Outcome::Failed {
-                    status: None,
-                    body: None,
-                    error: request_error_code(&error),
-                    endpoint_fault: true,
-                    retry_after: None,
-                });
+                return Ok(request_failure(
+                    &error,
+                    self.config.proxy.as_ref(),
+                    self.config
+                        .claim_lease
+                        .saturating_sub(self.config.request_timeout)
+                        .min(Duration::from_secs(1)),
+                )
+                .await);
             }
         };
         let status = response.status();
+        // Smokescreen v0.1.0 marks its own plain HTTP responses with this header and strips
+        // it upstream. HTTPS responses are inside a tunnel and belong to the merchant.
+        // Proxy 407 policy denials and 502/504 upstream failures remain endpoint failures.
+        if self.config.proxy.is_some()
+            && event.url.starts_with("http://")
+            && status == StatusCode::INTERNAL_SERVER_ERROR
+            && response.headers().contains_key("x-smokescreen-error")
+        {
+            return Ok(Outcome::internal("proxy_internal_failed"));
+        }
         let retry_after = retry_after(status, response.headers(), Utc::now());
         let (body, body_error) =
             read_response_body(response, self.config.response_body_limit).await;
@@ -792,6 +808,43 @@ async fn read_response_body(
     (Some(String::from_utf8_lossy(&retained).into_owned()), None)
 }
 
+async fn request_failure(
+    error: &reqwest::Error,
+    proxy: Option<&Url>,
+    probe_timeout: Duration,
+) -> Outcome {
+    // is_connect also covers merchant TLS failures and rejected HTTPS CONNECT tunnels.
+    // Only attribute it to our proxy when a bounded connection to the proxy itself fails.
+    if error.is_connect()
+        && let Some(proxy) = proxy
+    {
+        let reachable = match (proxy.host_str(), proxy.port_or_known_default()) {
+            (Some(host), Some(port)) => matches!(
+                tokio::time::timeout(
+                    probe_timeout,
+                    tokio::net::TcpStream::connect((
+                        host.trim_start_matches('[').trim_end_matches(']'),
+                        port
+                    ))
+                )
+                .await,
+                Ok(Ok(_))
+            ),
+            _ => false,
+        };
+        if !reachable {
+            return Outcome::internal("proxy_connect_failed");
+        }
+    }
+    Outcome::Failed {
+        status: None,
+        body: None,
+        error: request_error_code(error),
+        endpoint_fault: true,
+        retry_after: None,
+    }
+}
+
 fn request_error_code(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
         "request_timeout"
@@ -860,6 +913,102 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn unreachable_proxy_alerts_without_penalizing_endpoint() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let events = sentry::test::with_captured_events(|| {
+            tracing::subscriber::with_default(
+                crate::observability::log_subscriber(std::io::sink),
+                || {
+                    runtime.block_on(async {
+                        let proxy = Url::parse(&format!("http://{address}")).unwrap();
+                        let client = Client::builder()
+                            .proxy(Proxy::all(proxy.clone()).unwrap())
+                            .timeout(Duration::from_secs(2))
+                            .build()
+                            .unwrap();
+                        let error = client
+                            .post("https://merchant.invalid/webhook")
+                            .send()
+                            .await
+                            .unwrap_err();
+                        assert!(matches!(
+                            request_failure(&error, Some(&proxy), Duration::from_secs(1)).await,
+                            Outcome::Failed {
+                                endpoint_fault: false,
+                                ..
+                            }
+                        ));
+                        assert!(matches!(
+                            request_failure(&error, None, Duration::from_secs(1)).await,
+                            Outcome::Failed {
+                                endpoint_fault: true,
+                                ..
+                            }
+                        ));
+                    });
+                },
+            );
+        });
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tags["alert"], "TopupOutboxInternalFailure");
+        assert_eq!(events[0].tags["component"], "proxy_connect_failed");
+    }
+
+    #[test]
+    fn merchant_connect_timeout_from_reachable_proxy_does_not_alert() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let events = sentry::test::with_captured_events(|| {
+            tracing::subscriber::with_default(
+                crate::observability::log_subscriber(std::io::sink),
+                || {
+                    runtime.block_on(async {
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let proxy = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+                    let server = tokio::spawn(async move {
+                        let (mut connection, _) = listener.accept().await.unwrap();
+                        let mut request = Vec::new();
+                        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                            let mut chunk = [0; 1024];
+                            let read = connection.read(&mut chunk).await.unwrap();
+                            assert!(read > 0 && request.len() < 8192);
+                            request.extend_from_slice(&chunk[..read]);
+                        }
+                        connection.write_all(b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                        drop(connection);
+                        // Accept the proxy reachability probe after rejecting the merchant tunnel.
+                        let _ = listener.accept().await.unwrap();
+                    });
+                    let scenario = async {
+                        let client = Client::builder().proxy(Proxy::all(proxy.clone()).unwrap())
+                            .timeout(Duration::from_secs(2)).build().unwrap();
+                        let error = client.post("https://merchant.invalid/webhook").send().await.unwrap_err();
+                        assert!(error.is_connect(), "CONNECT rejection is surfaced as a connect error");
+                        assert!(matches!(request_failure(&error, Some(&proxy), Duration::from_secs(1)).await,
+                            Outcome::Failed { endpoint_fault: true, .. }));
+                        server.await.unwrap();
+                    };
+                    tokio::time::timeout(Duration::from_secs(5), scenario).await.unwrap();
+                });
+                },
+            );
+        });
+        assert!(
+            events.is_empty(),
+            "merchant timeout must not emit an internal failure: {events:?}"
+        );
+    }
 
     struct SequenceEntropy {
         values: Mutex<VecDeque<u64>>,

@@ -53,6 +53,13 @@ struct MigrateArgs {
 
 #[derive(Subcommand)]
 enum TopupCommand {
+    /// Send one synthetic business alert to staging Sentry; requires SENTRY_DSN.
+    AlertTest {
+        #[arg(long, value_enum)]
+        alert: SyntheticAlert,
+        #[arg(long, default_value = "warning", value_parser = ["warning", "critical"])]
+        severity: String,
+    },
     Run(RunArgs),
     /// Apply the database migrations as the database owner; with `--config`, also run the 0.6.0
     /// payment settings cutover backfill an instance with issued addresses needs once
@@ -123,6 +130,29 @@ enum RpcCommand {
     },
 }
 
+#[derive(Clone, clap::ValueEnum)]
+#[value(rename_all = "verbatim")]
+enum SyntheticAlert {
+    #[value(name = "TopupOutboxBacklog")]
+    OutboxBacklog,
+    #[value(name = "TopupOutboxStalled")]
+    OutboxStalled,
+    #[value(name = "TopupOutboxInternalFailure")]
+    OutboxInternalFailure,
+    #[value(name = "TopupHeartbeatStale")]
+    HeartbeatStale,
+    #[value(name = "TopupTreasuryProgressAge")]
+    TreasuryProgressAge,
+    #[value(name = "TopupRefundProgressAge")]
+    RefundProgressAge,
+    #[value(name = "TopupCertificateExpiry")]
+    CertificateExpiry,
+    #[value(name = "TopupCertificateProbeFailed")]
+    CertificateProbeFailed,
+    #[value(name = "TopupBusinessProbeFailed")]
+    BusinessProbeFailed,
+}
+
 #[derive(Subcommand)]
 enum ConfigCommand {
     /// Validate the file without any secret; with --secrets, also check each provider's sealed
@@ -130,6 +160,9 @@ enum ConfigCommand {
     Check {
         #[arg(long)]
         secrets: bool,
+        /// Require a present, valid SENTRY_DSN for production preflight.
+        #[arg(long)]
+        require_sentry: bool,
         file: PathBuf,
     },
     /// Print the resolved configuration as JSON (also a valid configuration file): every route
@@ -299,6 +332,7 @@ async fn main() -> ExitCode {
         TopupCommand::Run(args) => topup::config::Config::load(&args.config)
             .ok()
             .map(|config| (config.environment, args.read_only)),
+        TopupCommand::AlertTest { .. } => Some(("staging".to_owned(), false)),
         _ => None,
     };
     // Before the subscriber, which adds the Sentry layer only when reporting is enabled. The
@@ -331,6 +365,15 @@ async fn main() -> ExitCode {
     }
 
     let result = match cli.command {
+        TopupCommand::AlertTest { alert, severity } => {
+            if reporting.is_none() {
+                eprintln!("alert-test requires the staging SENTRY_DSN");
+                return ExitCode::FAILURE;
+            }
+            let name = clap::ValueEnum::to_possible_value(&alert).expect("alert has a CLI value");
+            topup::observability::emit_alert(name.get_name(), "synthetic", &severity, 1, 0);
+            Ok(ExitCode::SUCCESS)
+        }
         TopupCommand::Run(args) => {
             // Only `run` reports the configured reporting mode at startup.
             tracing::info!(
@@ -340,8 +383,13 @@ async fn main() -> ExitCode {
             run(&args).await
         }
         TopupCommand::Config {
-            command: ConfigCommand::Check { secrets, file },
-        } => return check_config(&file, secrets),
+            command:
+                ConfigCommand::Check {
+                    secrets,
+                    require_sentry,
+                    file,
+                },
+        } => return check_config(&file, secrets, require_sentry),
         TopupCommand::Config {
             command: ConfigCommand::Show { file },
         } => return show_config(&file),
@@ -831,6 +879,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
                 .context("failed to configure treasury proof checks")?,
         ),
     };
+    let monitored_origin = state.public_origin.to_string();
     let (application, _) = topup::api::router(state);
     tasks.spawn("API server", |cancellation| {
         axum::serve(
@@ -922,6 +971,21 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         })
     });
     tasks.spawn("backup monitor", topup::observability::monitor_backup);
+    let business_pool = pool.clone();
+    tasks.spawn("business health monitor", |cancellation| {
+        after_unfreeze(
+            business_pool.clone(),
+            cancellation,
+            |cancellation| async move {
+                topup::observability::monitor_business(
+                    business_pool,
+                    monitored_origin,
+                    cancellation,
+                )
+                .await;
+            },
+        )
+    });
     // The freeze keeps the restored state as it is; pruning waits, and a claim replaces an
     // expired key itself meanwhile.
     let idempotency_pruner =
@@ -1643,7 +1707,14 @@ fn show_route(file: &Path, template: bool) -> ExitCode {
     }
 }
 
-fn check_config(file: &Path, secrets: bool) -> ExitCode {
+fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
+    if require_sentry
+        && topup::observability::require_sentry_dsn(std::env::var("SENTRY_DSN").ok().as_deref())
+            .is_err()
+    {
+        eprintln!("production preflight requires a present, valid SENTRY_DSN");
+        return ExitCode::FAILURE;
+    }
     let checked = topup::config::Config::load(file).and_then(|config| {
         if secrets {
             config.check_environment_secrets()?;
@@ -1724,6 +1795,36 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::{ServiceTasks, parse_nonce};
+
+    #[test]
+    fn synthetic_alert_cli_accepts_every_business_alert_and_rejects_unknown_names() {
+        use clap::Parser;
+        for alert in <super::SyntheticAlert as clap::ValueEnum>::value_variants() {
+            let value = clap::ValueEnum::to_possible_value(alert).unwrap();
+            assert!(
+                super::Cli::try_parse_from([
+                    "topup",
+                    "alert-test",
+                    "--alert",
+                    value.get_name(),
+                    "--severity",
+                    "critical"
+                ])
+                .is_ok()
+            );
+        }
+        assert!(super::Cli::try_parse_from(["topup", "alert-test", "--alert", "unknown"]).is_err());
+        assert!(
+            super::Cli::try_parse_from([
+                "topup",
+                "config",
+                "check",
+                "--require-sentry",
+                "topup.yaml"
+            ])
+            .is_ok()
+        );
+    }
 
     #[tokio::test]
     async fn read_only_shutdown_bounds_a_stalled_request_and_closes_the_pool() {

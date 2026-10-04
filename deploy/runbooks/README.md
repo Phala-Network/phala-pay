@@ -70,8 +70,9 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 | `TopupLockExposureNearCap`, `400 exposure_cap_exceeded` | [Lock exposure near cap](lock-exposure-near-cap.md) |
 | `TopupLockExpiryFailing`, `topup-lock-expiry` | [Lock expiry worker failure](lock-expiry-worker-failure.md) |
 | `topup-scanner-<chain_id>` | [Scanner lag](scanner-lag.md) |
+| `TopupHeartbeatStale`, `TopupTreasuryProgressAge`, `TopupRefundProgressAge`, `TopupCertificateExpiry`, `TopupCertificateProbeFailed`, `TopupBusinessProbeFailed` | [Business health](business-health.md) |
 | `topup-backup` | [Backup age](backup-age.md) |
-| `topup-outbox-test`, `topup-outbox-live`, `outbox delivery claim failed` or `outbox delivery failed`, daily report `credited_undelivered` or `failing_webhook_endpoints`, a merchant reports missing webhooks or credits | [Outbox backlog](outbox-backlog.md) |
+| `TopupOutboxBacklog`, `TopupOutboxStalled`, `TopupOutboxInternalFailure`, `topup-outbox-test`, `topup-outbox-live`, `outbox delivery claim failed` or `outbox delivery failed`, daily report `credited_undelivered` or `failing_webhook_endpoints`, a merchant reports missing webhooks or credits | [Outbox backlog](outbox-backlog.md) |
 | `TopupUnsupportedInflows`, rejected funds at the treasury | [Rejected funds at treasury](rejected-funds-at-treasury.md) |
 | `TopupTreasurySanctioned`, a treasury on a sanctions list | [Treasury change, "Sanctioned treasury"](treasury-change.md#sanctioned-treasury) |
 | `TopupDeliveredCreditSanctioned`, a credit delivered before a restore whose sender is now listed | [Reconciliation after a restore, "Sanctioned delivered credit"](restore.md#sanctioned-delivered-credit) |
@@ -98,3 +99,50 @@ require human exercises.
 Phala's historical exercise results and limitations are in the evidence for
 [the local runbooks](https://github.com/Phala-Network/phala-pay/pull/59) and
 [the full CVM restore drill](https://github.com/Phala-Network/phala-pay/pull/248).
+
+## Synthetic alert validation
+
+Sentry is the only channel. Before rollout, use the **staging** DSN loaded from the operator's
+secret store and run each command below from the candidate image. These commands only emit
+synthetic events (`environment:staging`, `component:synthetic`); they do not change business data.
+They use the same tracing layer, event throttle, sanitization, fingerprints and runbook mapping
+as runtime alerts. Exit success means the SDK queued/flushed the event, **not** that Sentry
+accepted or notified it. Record each resulting Sentry issue URL and notification receipt in the
+staging deployment evidence; do not mark an exercise passed without both. No staging exercise
+was performed by the implementation PR.
+
+| Runtime alert | Synthetic staging command | Detector verification |
+|---|---|---|
+| `TopupOutboxBacklog` | `topup alert-test --alert TopupOutboxBacklog` | test `stalled_means_overdue_work_and_backlog_requires_multiple_endpoints`: count ≥ 1,000 or oldest ≥ 24 h across ≥2 eligible endpoints |
+| `TopupOutboxStalled` | `topup alert-test --alert TopupOutboxStalled --severity critical` | same fake-clock test: due work ≥15 min overdue; leases/backoff and known merchant failures excluded; SQL test `merchant_http_failures_timeouts_and_cooldown_siblings_are_excluded` |
+| `TopupOutboxInternalFailure` | `topup alert-test --alert TopupOutboxInternalFailure --severity critical` | unavailable signer test `signer_failure_reaches_sentry_without_key_or_payload`; proxy connection test `unreachable_proxy_alerts_without_penalizing_endpoint` |
+| `TopupHeartbeatStale` | `topup alert-test --alert TopupHeartbeatStale --severity critical` | test `business_thresholds_emit_sentry_events_at_boundaries`: missing heartbeat or age ≥ 180 s, independent of WAL activity |
+| `TopupTreasuryProgressAge` | `topup alert-test --alert TopupTreasuryProgressAge` | same age boundary test: unapplied effective treasury age ≥ 1 h |
+| `TopupRefundProgressAge` | `topup alert-test --alert TopupRefundProgressAge` | same age boundary test: pending attached refund age ≥ 1 h since `paid_at` |
+| `TopupCertificateExpiry` warning | `topup alert-test --alert TopupCertificateExpiry` | parsed DER with a fake clock at 14 days; test `certificate_expiry_probe_emits_warning_and_critical_events` |
+| `TopupCertificateExpiry` critical | `topup alert-test --alert TopupCertificateExpiry --severity critical` | same probe test at three days; no event at 15 days |
+| `TopupCertificateProbeFailed` | `topup alert-test --alert TopupCertificateProbeFailed --severity critical` | invalid DER rejected; TLS/network failures raise this alert |
+| `TopupBusinessProbeFailed` | `topup alert-test --alert TopupBusinessProbeFailed --severity critical` | failed/timed-out database scan |
+
+The business monitor's state tests `hourly_reminders_recovery_and_reentry_use_the_supplied_clock`,
+`components_and_severity_transitions_are_independent`, and
+`recovery_is_logged_once_without_an_alert_tag` prove the hourly reminder bound, immediate
+transitions, per-component isolation, and recovery without an event. Synthetic commands bypass
+probe state so operators can explicitly exercise every alert; the existing SDK issue throttle
+still applies. Direct signer/proxy error hooks use an hourly SDK throttle, verified by
+`direct_internal_failures_are_limited_to_hourly_per_component`.
+
+Production preflight integration (batch 2 owns deployment scripts): add the following command
+with the deployment's `SENTRY_DSN` already present in its environment. Missing/empty/malformed
+DSNs fail without printing their value; runtime still fails fast on malformed DSNs.
+
+```sh
+topup config check --require-sentry topup.yaml
+```
+
+If the existing preflight command uses `--secrets`, add `--require-sentry` to that invocation.
+For batch 2's Rust disk probes, call
+`topup::observability::emit_alert("TopupDiskPressure", "database", "critical", used_bytes, limit_bytes)`
+with numeric `i64` observations. This emits an alert-tagged WARN through the normal Sentry path.
+Keep names and component/severity dimensions stable, never include credentials, URLs or user
+input. Add the disk alert's synthetic exercise to this table when that probe is implemented.
