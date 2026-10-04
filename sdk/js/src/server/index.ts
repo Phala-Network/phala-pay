@@ -1,19 +1,16 @@
-/**
- * Server-side helpers of `@phala/pay`. Nothing here needs or takes an API key: webhook
- * verification uses your account's public webhook key, and the address and sweep helpers run
- * offline. Call the API itself from your backend with a restricted key (the Python SDK, or any
- * HTTP client with `Authorization: Bearer ppay_rk_…`); never ship a key to a browser. Recompute
- * every address with `verifyQuoteAddress` or `verifyDepositAddress` from the pins you configure
- * yourself before you show it.
- */
+import { requireServer } from "./runtime.js";
+// Evaluate before a merchant client can read credentials, including fromEnv defaults.
+requireServer();
+export { PhalaPay, type PhalaPayOptions, type Event } from "./client.js";
+export * from "./types.js";
+export * from "./errors.js";
+export { parsePins, encodePins, type Pins } from "./pins.js";
+export { balanceDelta, depositNetAmount, type LedgerSnapshot } from "./ledger.js";
+export type { RequestOptions } from "./transport.js";
+export type { CheckoutParams } from "../checkout-params.js";
+// Legacy offline exports remain available to server callers.
+export { constructEvent, type ConstructEventOptions, type WebhookEvent } from "./webhook.js";
 export {
-  WebhookSignatureError,
-  constructEvent,
-  type ConstructEventOptions,
-  type WebhookEvent,
-} from "./webhook.js";
-export {
-  AddressMismatchError,
   depositAddress,
   depositAddressSalt,
   forwarderAddress,
@@ -24,15 +21,5 @@ export {
   type AddressPins,
   type Forwarder,
 } from "./addresses.js";
-export {
-  batchChecksum,
-  flushTransaction,
-  flushTransactions,
-  safeBatch,
-  type BatchFile,
-  type BatchFileMeta,
-  type BatchTransaction,
-  type Call,
-  type ForwarderObject,
-  type SafeBatchOptions,
-} from "./sweeps.js";
+export * from "./sweeps.js";
+export type { Forwarder as ForwarderResponse } from "./types.js";

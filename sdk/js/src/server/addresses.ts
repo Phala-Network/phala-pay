@@ -106,9 +106,8 @@ export function depositAddress(
 }
 
 /** An address the service returned is not the one your pins derive: show nothing to pay. */
-export class AddressMismatchError extends Error {
-  override readonly name = "AddressMismatchError";
-}
+export { AddressMismatchError } from "./errors.js";
+import { AddressMismatchError } from "./errors.js";
 
 /**
  * What every address is recomputed from, configured on your server and never read from the

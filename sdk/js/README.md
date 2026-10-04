@@ -3,7 +3,7 @@
 Browser checkout for Phala Pay: a framework-agnostic client for a quote's public
 view, and a React component that lets the payer pay from a browser wallet, by QR code, or manually,
 with live status. It is the browser half of the flow; your backend creates the quote with the
-Python SDK (`phala-pay`) and fulfils from the signed `deposit.credited` webhook.
+Node or Python merchant SDK and fulfils from the signed `deposit.credited` webhook.
 
 ## Install
 
@@ -267,13 +267,132 @@ quote's `payment_uri`, after checking that it pays exactly `amount_atomic` to `a
 holding less of the token than that sends nothing: `WalletError` with `code`
 `insufficient_balance`.
 
-## Server helpers
+## Merchant server client
 
-`@phala/pay/server` is for your backend and takes no API key (call the API itself with a
-restricted key, `ppay_rk_…`, from the backend only, never the browser):
+Import `PhalaPay` from `@phala/pay/server` on Node.js >=20.3, Bun or Deno. Server runtimes
+must provide `fetch`, `AbortSignal.any` and WebCrypto (including `randomUUID`). The root
+`@phala/pay` entry remains keyless and browser-safe. The merchant entry rejects browser-like
+environments before reading credentials; its `browser` export resolves to a throwing module
+without merchant exports, so browser bundlers reject merchant imports.
 
 ```ts
-import { constructEvent, flushTransactions, safeBatch, verifyQuoteAddress } from "@phala/pay/server";
+import { PhalaPay, ApiError, SignatureVerificationError } from "@phala/pay/server";
+import type { CheckoutParams } from "@phala/pay";
+
+// Reads exactly PHALA_PAY_API_KEY and PHALA_PAY_PINS from process.env.
+const pay = PhalaPay.fromEnv();
+// Or: new PhalaPay({ apiKey, pins, timeoutMs: 15000, maxAttempts: 4,
+//                   requestDeadlineMs: 60000, fetch });
+
+try {
+  const quote = await pay.quotes.create(
+    { client_reference_id: "team-42", amount: 2500, currency: "usd", chain_id: 11155111, asset: "pha" },
+    { idempotencyKey: "persisted-order-42" },
+  );
+  const checkout: CheckoutParams = pay.checkoutParams(quote);
+  // Return checkout only to this order's authenticated browser; spread it into <Checkout>.
+  // Fulfill from the verified webhook, never from browser success.
+  const event = await pay.webhooks.constructEvent(originalBodyBytes, requestHeaders);
+  // Atomically commit your ledger snapshot and balance delta before acknowledging delivery.
+  await applyVerifiedEvent(event);
+} catch (error) {
+  if (error instanceof SignatureVerificationError) {
+    // Return 400 for an invalid webhook, without exposing exception text.
+  } else if (error instanceof ApiError) {
+    // Use statusCode/code/requestId internally; return a generic payment error to the caller.
+  } else {
+    // Return 5xx for failures before the ledger transaction commits.
+  }
+} finally {
+  await pay.close();
+}
+```
+
+`pins` accepts the versioned `ppay_pins_v1.…` string or a `Pins` value returned by
+`parsePins`. `encodePins` produces its canonical encoding. Pins are recursively frozen and bind
+the normalized API origin, account, mode, forwarder contracts, chain treasuries and public webhook
+keys. Both test and live clients require pins. An explicit `apiBase` must match that origin;
+HTTP is permitted only for explicitly configured test loopback origins. No trust discovery occurs.
+`fromEnv(env, { apiBase })` reads no other variables and loads no files or dotenv configuration.
+
+Every open quote and active deposit-address network is checked against the pinned treasury and
+recomputed address, including list pages, actions and expanded objects. Historical objects cannot
+be handed to checkout. `checkoutParams` requires a create/replay quote from this client with its
+original `client_secret`; retrieval cannot manufacture a checkout secret. It rechecks pins and
+payability and returns `{ clientSecret, expectedAddress, apiBase }`.
+
+### Resources and types
+
+Wire fields remain snake_case. Params and responses, including `QuoteCreateParams`, `Quote` and
+`Deposit`, are aliases of the generated OpenAPI definitions. Response fields and future enums are
+retained; unsafe JSON integers are rejected before rounding.
+
+| Resource | Methods |
+| --- | --- |
+| `quotes` | `create`, `retrieve`, `listPage`, `list`, `update`, `cancel` |
+| `depositAddresses` | `create`, `retrieve`, `listPage`, `list`, `update`, `rotate` |
+| `deposits` | `retrieve`, `listPage`, `list`, `update` |
+| `refunds` | `create`, `retrieve`, `listPage`, `list`, `update`, `cancel`, `markPaid` |
+| `paymentSettings` | `retrieve`, `update` |
+| `config`, `balance` | `retrieve` |
+| `account` | `retrieve`, `pauseQuotes`, `resumeQuotes`, `rollWebhookKey` |
+| `treasuries` | `challenge`, `create`, `retrieve`, `listPage`, `list`, `cancel`, `pause`, `resume` |
+| `apiKeys` | `create`, `retrieve`, `listPage`, `list`, `roll`, `revoke` |
+| `webhookEndpoints` | `create`, `retrieve`, `listPage`, `list`, `update`, `delete`, `test` |
+| `events` | `retrieve`, `listPage`, `list`, `resend` |
+| `sweeps`, `forwarders` | `listPage`, `list` |
+
+Create/singleton-update/challenge use `(params, options?)`; resource updates and actions with
+bodies use `(id, params, options?)`. Actions without bodies use `(id, options?)`. Retrieve uses
+`(id, params?, options?)` (pass `undefined` for endpoints without query params); singleton retrieve
+uses `(options?)`. Lists accept `(params?, options?)`. `listPage` returns `{ data, has_more, … }`;
+`list` is an `AsyncIterable` that validates every page and rejects empty continuing pages or
+repeated cursors. Omitting `apiKeys.create` permissions creates a secret key; supplying a list
+creates a restricted key.
+
+### Transport and errors
+
+Per-call options are `{ idempotencyKey?, signal?, requestDeadlineMs? }`. Defaults are a 15-second
+attempt timeout (including body reads), four total attempts, and a 60-second overall deadline
+(including sleeps). POST requests freeze their body and one automatically generated UUID across
+retries; persist an explicit order key to survive process restarts. Keys have a 255-character limit.
+Retries cover network/timeouts, 429, 500/502/503/504, and only `409 idempotency_key_in_use`, with
+bounded exponential jitter and Retry-After as a minimum. A delay that exceeds the remaining budget
+returns the last error immediately. Replayed errors, DELETE, cancellation and redirects do not
+retry. Redirects are refused. `close()` aborts outstanding requests without closing injected fetch.
+
+Errors inherit `PhalaPayError`: `ApiError`, `TransportError`, `ConfigurationError`,
+`ResponseValidationError`, `AddressMismatchError`, `AttestationError`,
+`SignatureVerificationError` (also exported as `WebhookSignatureError`) and `LedgerSnapshotError`.
+`ApiError` exposes `statusCode`, `code`, `message`, `errorType`, `param`, `docUrl`, `requestId` and
+`retryAfter` in seconds; absent optional fields are null. `TransportError.code` is `network`,
+`timeout` or `cancelled`. Malformed responses expose status/request ID without raw bodies or causes.
+
+### Bound webhooks and pure ledger helpers
+
+`pay.webhooks.constructEvent(body, headers, { tolerance: 300 })` uses only this client's pinned
+public keys, account and mode. Pass original bytes or exact UTF-8, before JSON middleware. Headers
+are case-insensitive; duplicate signing headers fail. Ed25519 v1a verification, the envelope and ID
+must pass. The inclusive time window is bilateral; tolerance zero requires an exact timestamp.
+Known deposit events expose the typed `event.deposit`; unknown event types retain their raw object
+and should be ignored before accessing it. Change overlapping webhook pins manually after
+attestation; security notices never modify trust.
+
+`depositNetAmount(deposit)` returns integer minor units. `balanceDelta(previousSnapshot, deposit)`
+returns `{ snapshot, contribution, delta }` without IO or mutation. Commit the returned snapshot
+and delta together in your own transaction before acknowledging a webhook. Duplicate and reordered
+snapshots converge through monotone statuses and cumulative deductions. Refund events retain
+`status: "credited"`; unknown statuses, identity/valuation conflicts and impossible deductions
+raise `LedgerSnapshotError`. These helpers provide no SQL adapter or authorization policy.
+
+## Server helpers
+
+Keyless pins, ledger, address, signature and sweep builders live at `@phala/pay/server/helpers`, including for
+WebCrypto-capable non-Node runtimes. Existing exports from `/server` remain available on supported server runtimes;
+browser callers must move to `/server/helpers`:
+
+```ts
+import { constructEvent, flushTransactions, safeBatch, verifyQuoteAddress } from "@phala/pay/server/helpers";
 
 // Your pins, configured on your server and never read from the service. The address is derived
 // from your treasury, not the quote's: a mismatch throws AddressMismatchError, and in live mode a

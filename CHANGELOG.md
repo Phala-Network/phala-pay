@@ -39,6 +39,33 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
+- Merchant server client at `@phala/pay/server`: all OpenAPI resources, typed parameters/responses,
+  verified quote/address results, two-variable `PhalaPay.fromEnv()`, frozen pins parse/encode,
+  bound Ed25519 webhooks and `checkoutParams` with browser-exported `CheckoutParams`.
+- Deadline-bounded transport with attempt timeouts, jitter, Retry-After, frozen POST idempotency,
+  redirect refusal, lossless integer validation, cancellation and typed redacted errors.
+- Pure `depositNetAmount` / `balanceDelta` helpers with monotone ledger convergence and strict
+  validation; JS implements all five shared fixture groups.
+- `@phala/pay/server/helpers` for keyless address, webhook and offline sweep builders. Existing
+  server helper exports remain available; `ForwarderResponse` names the generated API forwarder
+  while `Forwarder` retains its legacy contract-pins type.
+
+#### Changed (breaking)
+
+- `@phala/pay/server` rejects browser-like environments before reading credentials; its
+  `browser` export refuses merchant imports. Move browser offline helper imports to
+  `@phala/pay/server/helpers`. Node.js >=20.3, Bun and Deno server runtimes are supported when
+  fetch, AbortSignal.any and WebCrypto are available. The browser root entry and existing
+  checkout props remain keyless.
+- Duplicate webhook signing headers and non-exact UTF-8 bodies are rejected. The legacy
+  `WebhookSignatureError` export is an alias of `SignatureVerificationError`.
+
+## [0.8.3] - 2026-10-04
+
+### JS SDK (`@phala/pay`)
+
+#### Added
+
 - Branded chain and token icons in Checkout and DepositAddress, with mainnet-family artwork on testnets
   and neutral monogram fallbacks. Export `NetworkIcon` / `AssetIcon` from `@phala/pay/react`
   and framework-free `networkIcon` / `assetIcon` markup accessors from `@phala/pay`.

@@ -45,3 +45,4 @@ export {
   type WalletInfo,
 } from "./wallet.js";
 export { networkIcon, assetIcon } from "./icons.js";
+export type { CheckoutParams } from "./checkout-params.js";
