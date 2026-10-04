@@ -22,8 +22,11 @@
 #   deploy/phala-cvm.sh healthz URL                  until URL/healthz answers (10 minutes)
 set -euo pipefail
 
+# shellcheck source=deploy/deadline.sh
+source "$(dirname -- "$0")/deadline.sh"
+
 phala() {
-    "$(dirname -- "$0")/phala" "$@"
+    stage_call 30 "$(dirname -- "$0")/phala" "$@"
 }
 
 # The compose hash of a `cvms get` or attestation document: lowercase hex without 0x.
@@ -33,6 +36,7 @@ command=${1:-}
 shift || true
 case "$command" in
     get)
+        stage_start get 60
         phala cvms get "$1" --json
         ;;
     url)
@@ -42,10 +46,15 @@ case "$command" in
         jq -er '"gateway.\(.gateway.base_domain)"' "$1"
         ;;
     deploy)
+        stage_start deploy 300
         output=$1
         shift
         # `deploy --json` writes `Provisioning CVM ...` before the JSON object on a new CVM.
-        phala deploy --json "$@" 2>&1 | tee "$output.raw" >&2
+        # Keep the CLI's machine-readable stdout separate from stage diagnostics on stderr.  The
+        # deadline wrapper reports elapsed time on stderr; merging both streams makes jq parse the
+        # diagnostic line as if it were part of the JSON response.
+        stage_call 300 "$(dirname -- "$0")/phala" deploy --json "$@" >"$output.raw"
+        cat "$output.raw" >&2
         sed -n '/^{/,$p' "$output.raw" >"$output"
         jq -e '.success == true' "$output" >/dev/null
         ;;
@@ -64,7 +73,8 @@ case "$command" in
         else
             accepted='.status == "running" and '$accepted outcome="run a new compose"
         fi
-        for _ in $(seq 60); do
+        stage_start cvm-wait "${CVM_WAIT_SECONDS:-900}"
+        while stage_remaining; do
             if cvm=$(phala cvms get "$1" --json); then
                 jq -r '"status=\(.status) in_progress=\(.in_progress) compose_hash=\(.compose_hash)"' \
                     <<<"$cvm" >&2 || true
@@ -73,14 +83,16 @@ case "$command" in
                     exit 0
                 fi
             fi
-            sleep 15
+            stage_sleep 15
         done
-        echo "::error::CVM $1 did not $outcome within 15 minutes" >&2
+        stage_expired
+        echo "::error::CVM $1 did not $outcome" >&2
         exit 1
         ;;
     attestation)
         attested=""
-        for _ in $(seq 40); do
+        stage_start attestation "${ATTESTATION_WAIT_SECONDS:-600}"
+        while stage_remaining; do
             if attestation=$(phala cvms attestation "$1" --json) &&
                 attested=$(jq -r '[.tcb_info.event_log[]? | select(.event == "compose-hash")
                     | .event_payload][0] // "" | '"$normal_hash" <<<"$attestation") &&
@@ -88,8 +100,9 @@ case "$command" in
                 printf '%s\n' "$attestation"
                 exit 0
             fi
-            sleep 15
+            stage_sleep 15
         done
+        stage_expired
         echo "::error::the attestation reports compose hash '${attested:-none}', not the deployed $2" >&2
         exit 1
         ;;
@@ -99,10 +112,12 @@ case "$command" in
             { echo "::error::the attestation's event log names no single instance id" >&2; exit 1; }
         ;;
     healthz)
-        for _ in $(seq 60); do
-            curl -fsS --max-time 10 "$1/healthz" >/dev/null && exit 0
-            sleep 10
+        stage_start healthz "${HEALTH_WAIT_SECONDS:-600}"
+        while stage_remaining; do
+            stage_call 10 curl -fsS --connect-timeout 5 --max-time 10 "$1/healthz" >/dev/null && exit 0
+            stage_sleep 10
         done
+        stage_expired
         echo "::error::$1/healthz did not answer" >&2
         exit 1
         ;;

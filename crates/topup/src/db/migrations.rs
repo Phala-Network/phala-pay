@@ -29,6 +29,9 @@ const QUEUE_INDEXES: [QueueIndex; 2] = [
 pub(crate) fn unlocked_migrator() -> Migrator {
     let mut migrator = Migrator::with_migrations(super::MIGRATOR.iter().cloned().collect());
     migrator.set_locking(false);
+    // Only used after locked_connection validates the compatibility ledger. SQLx still
+    // validates every known checksum and rejects dirty migrations.
+    migrator.set_ignore_missing(true);
     migrator
 }
 
@@ -57,6 +60,7 @@ pub(crate) async fn locked_connection(
     })
     .await
     .map_err(|_| sqlx::Error::PoolTimedOut)??;
+    validate_compatibility(&mut connection).await?;
     Ok(connection)
 }
 
@@ -78,7 +82,8 @@ pub(crate) async fn finish(mut connection: PoolConnection<Postgres>) -> Result<(
 pub(crate) async fn run_in(connection: &mut PgConnection) -> Result<(), MigrateError> {
     recover_queue_indexes(connection).await?;
     // The outer lock covers inspection, cleanup, and the unmodified SQLx migrations.
-    unlocked_migrator().run(connection).await
+    unlocked_migrator().run(&mut *connection).await?;
+    record_compatibility(connection).await
 }
 
 pub(super) async fn run(pool: &PgPool) -> Result<(), MigrateError> {
@@ -155,6 +160,74 @@ async fn recover_queue_indexes(connection: &mut PgConnection) -> Result<(), Migr
             "removing invalid index from interrupted queue migration"
         );
         connection.execute(index.drop_sql).await?;
+    }
+    Ok(())
+}
+
+// Schema capability of the first release implementing this protocol. Future expand-only releases
+// keep the immediately previous release's maximum migration here. A breaking release raises it
+// to its own maximum and declares "no rollback; restore required" in CHANGELOG.
+const COMPATIBILITY_FLOOR: i64 = 20261028000002;
+
+async fn validate_compatibility(connection: &mut PgConnection) -> Result<(), MigrateError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(&mut *connection)
+            .await?;
+    if !exists {
+        return Ok(());
+    }
+    let known = super::MIGRATOR
+        .iter()
+        .map(|m| m.version)
+        .collect::<Vec<_>>();
+    let maximum = known.iter().max().copied().unwrap_or_default();
+    let unknown: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
+        "SELECT version, checksum, success FROM public._sqlx_migrations WHERE NOT (version = ANY($1))")
+        .bind(&known).fetch_all(&mut *connection).await?;
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let ledger: bool = sqlx::query_scalar(
+        "SELECT to_regclass('public.topup_migration_compatibility') IS NOT NULL",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    for (version, checksum, success) in unknown {
+        let compatible = version > maximum
+            && ledger
+            && success
+            && sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM public.topup_migration_compatibility \
+             WHERE version=$1 AND checksum=$2 AND compatibility_floor <= $3)",
+            )
+            .bind(version)
+            .bind(checksum)
+            .bind(maximum)
+            .fetch_one(&mut *connection)
+            .await?;
+        if !compatible {
+            return Err(MigrateError::VersionMissing(version));
+        }
+    }
+    Ok(())
+}
+
+async fn record_compatibility(connection: &mut PgConnection) -> Result<(), MigrateError> {
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS public.topup_migration_compatibility \
+         (version bigint PRIMARY KEY, checksum bytea NOT NULL, compatibility_floor bigint NOT NULL)")
+        .await?;
+    // Default privileges may grant the app writes on owner-created tables: revoke explicitly.
+    connection
+        .execute("REVOKE ALL ON public.topup_migration_compatibility FROM PUBLIC, topup_app")
+        .await?;
+    for migration in super::MIGRATOR.iter() {
+        sqlx::query(
+            "INSERT INTO public.topup_migration_compatibility (version, checksum, compatibility_floor) \
+             SELECT version, checksum, $2 FROM public._sqlx_migrations WHERE version=$1 AND success \
+             ON CONFLICT (version) DO NOTHING")
+            .bind(migration.version).bind(COMPATIBILITY_FLOOR).execute(&mut *connection).await?;
     }
     Ok(())
 }

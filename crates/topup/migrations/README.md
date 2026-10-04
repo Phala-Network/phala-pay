@@ -29,6 +29,7 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 
 | Tables | `topup_app` |
 |---|---|
+| `topup_migration_compatibility` (owner-written rollback ledger) | None |
 | `transitions`, `audit`, `reconciliation_findings`, `heartbeat`, `events` | `SELECT`, `INSERT` (append-only) |
 | `flushed`, `flush_failures` | `SELECT`, `INSERT` (finalized chain facts) |
 | `reconciliation_blocks`, `deposit_address_client_secrets` | `SELECT`, `INSERT`, `DELETE` |

@@ -17,6 +17,11 @@
 # Usage: verify-release.sh VERSION DIR [CALLED_AT]
 set -euo pipefail
 
+# shellcheck source=deploy/deadline.sh
+source "$(dirname -- "$0")/deadline.sh"
+stage_start release-verification 600
+gh() { stage_call 60 gh "$@"; }
+
 repository=Phala-Network/phala-pay
 version=${1:-} dir=${2:-} called_at=${3:-}
 [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ && -n "$dir" &&

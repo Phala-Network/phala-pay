@@ -1,0 +1,74 @@
+name: Deploy rollback
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rollback-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: 4
+      SQLX_OFFLINE: true
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/rust
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-rollback-${{ hashFiles('**/Cargo.lock') }}
+      - name: Deadline and capacity probe tests
+        run: |
+          deploy/tests/stage-deadlines.sh
+          deploy/tests/capacity.sh
+      - name: Build current migration binary
+        run: cargo build --locked -p topup
+      - name: Install the GitHub CLI 2.101.0
+        timeout-minutes: 10
+        run: |
+          version=2.101.0
+          archive="$RUNNER_TEMP/gh.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/cli/cli/releases/download/v$version/gh_${version}_linux_amd64.tar.gz"
+          echo "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gh_${version}_linux_amd64/bin" >>"$GITHUB_PATH"
+
+      - name: Resolve and verify the previous stable release
+        timeout-minutes: 10
+        run: |
+          section="$RUNNER_TEMP/rollback-release-notes"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            scripts/changelog-section.sh CHANGELOG.md "${GITHUB_REF_NAME#v}" >"$section"
+          else
+            sed -n '/^## \[Unreleased\]/,/^## \[/p' CHANGELOG.md >"$section"
+          fi
+          if grep -Fqi "no rollback; restore required" "$section"; then
+            echo "NO_ROLLBACK=1" >>"$GITHUB_ENV"
+          fi
+          previous=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -r --arg current "$GITHUB_REF_NAME" '[.[] | select(.draft == false and .prerelease == false and .tag_name != $current)] | .[0].tag_name')
+          [[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          deploy/verify-release.sh "$previous" "$RUNNER_TEMP/previous-release"
+          echo "PREVIOUS_IMAGE=$(jq -r '.["phala-pay"]' "$RUNNER_TEMP/previous-release/images.json")" >>"$GITHUB_ENV"
+      - name: Current migration then previous release image startup
+        timeout-minutes: 10
+        run: deploy/tests/rollback-smoke.sh "$PWD/target/debug/topup" "$PREVIOUS_IMAGE"

@@ -3,7 +3,7 @@
 # read-only against remote systems: it never pushes, deploys, updates, or sends a transaction.
 #
 # Usage: deploy/preflight.sh --env FILE --compose FILE --environment-dir DIR
-#          [--restore-check | --template] (--workspace NAME --os-image NAME | --offline) [--unsealed]
+#          [--restore-check | --template] (--workspace NAME --os-image NAME | --offline) [--unsealed] [--require-sentry]
 #
 # --compose is the rendered compose (deploy/render.sh), --environment-dir the environment it was
 # rendered from, --restore-check expects the restore-check variant (deploy/RESTORE.md), and
@@ -39,10 +39,10 @@ approved_os_image=dstack-0.5.9
 
 usage() {
     echo "usage: $0 --env FILE --compose FILE --environment-dir DIR [--restore-check | --template]" \
-        "(--workspace NAME --os-image NAME | --offline) [--unsealed]" >&2
+        "(--workspace NAME --os-image NAME | --offline) [--unsealed] [--require-sentry]" >&2
     exit 64
 }
-env_file="" compose="" env_dir="" workspace="" os_image="" offline=0 unsealed=0 variant=service
+env_file="" compose="" env_dir="" workspace="" os_image="" offline=0 unsealed=0 require_sentry=0 variant=service
 while (($#)); do
     case "$1" in
         --env) env_file="${2:-}"; shift 2 ;;
@@ -54,6 +54,7 @@ while (($#)); do
         --template) variant=template; shift ;;
         --offline) offline=1; shift ;;
         --unsealed) unsealed=1; shift ;;
+        --require-sentry) require_sentry=1; shift ;;
         *) usage ;;
     esac
 done
@@ -104,13 +105,13 @@ topup_image=$(jq -r '.services.topup.image' "$tmp/compose.json")
 jq -j --arg target /etc/topup/topup.yaml \
     '. as $root | [.services.topup.configs[] | select(.target == $target) | .source][0] as $name
     | $root.configs[$name].content' "$tmp/compose.json" | sed 's/[$][$]/$/g' >"$tmp/topup.yaml"
-# topup ARGS...: the pinned image's topup, offline, with topup.yaml on stdin. Only the RPC keys
+# topup ARGS...: the pinned image's topup, offline, with topup.yaml on stdin. Only the DSN and RPC keys
 # reach it, by name; nothing secret is printed.
 topup() {
     local name keys=() values=() rpc_network_args=(--network none)
     [[ "$1" == rpc ]] && rpc_network_args=()
     for name in "${!env[@]}"; do
-        [[ "$name" == TOPUP_RPC_*_KEY ]] || continue
+        [[ "$name" == SENTRY_DSN || "$name" == TOPUP_RPC_*_KEY ]] || continue
         keys+=(-e "$name")
         values+=("$name=${env[$name]}")
     done
@@ -123,9 +124,11 @@ topup() {
 }
 secrets=()
 ((unsealed)) || secrets=(--secrets)
+sentry_args=()
+((require_sentry)) && sentry_args=(--require-sentry)
 if [[ -z "${TOPUP:-}" ]] && ! docker image inspect "$topup_image" >/dev/null 2>&1; then
     fail "the pinned image is not present locally; docker pull $topup_image, then run preflight again"
-elif topup config check "${secrets[@]}" >"$tmp/check.out" 2>&1 &&
+elif topup config check "${sentry_args[@]}" "${secrets[@]}" >"$tmp/check.out" 2>&1 &&
     topup config show >"$tmp/config.json" 2>"$tmp/show.err"; then
     ok "$(tail -n 1 "$tmp/check.out")"
 else

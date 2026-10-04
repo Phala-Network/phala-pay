@@ -269,7 +269,7 @@ twice and checks that the digests match, as the Release workflow does before it 
 3. Every external effect writes its intent before the call and is idempotent on retry.
 4. Tests exist for the change and fail if the behavior is removed.
 5. No secret, key, or credential can reach a log, error, or response.
-6. Migrations are additive and reversible; append-only tables have no update or delete path.
+6. Migrations are expand-only and compatible with N-1; append-only tables have no update or delete path.
 7. The pull request names the verification commands actually run and their results.
 
 ## Releasing
@@ -296,6 +296,26 @@ change goes under ``### JS SDK (`@phala/pay`)`` or ``### Python SDK (`phala-pay`
 service's entries, in the same kinds one level down (`#### Added`). The SDKs' releases before
 v0.5.0, versioned on their own, stay in their frozen `sdk/js/CHANGELOG.md` and
 `sdk/python/CHANGELOG.md`.
+
+Release rollback rules:
+
+- Support the immediately previous stable release (N-1). Preserve its reads and writes through
+  expand-only migrations; do not edit checksums of applied migrations. Keep old columns/defaults
+  and semantics for N-1. Test compatibility against its published immutable image, not a rebuild.
+- `COMPATIBILITY_FLOOR` in `crates/topup/src/db/migrations.rs` must equal the maximum migration
+  known to N-1 for compatible new migrations. Review this value whenever adding migrations.
+  Applied ledger entries are immutable across rollback. Breaking migrations set the floor to
+  the new schema's maximum and explicitly state **no rollback; restore required** in the release
+  CHANGELOG, with a tested pre-upgrade restore/reconciliation plan and owner acceptance.
+- This protocol's bootstrap adds no SQLx migration. Legacy N-1 images reject unknown migrations;
+  do not add migrations until N-1 includes this protocol unless declaring the restore exception.
+- The `Deploy rollback` workflow migrates with the current build, runs N-1's migration entrypoint,
+  then starts its actual image and checks `/healthz` and OpenAPI. The smoke uses read-only API
+  startup and a test-only KMS stub: it proves migration/API compatibility, not live-chain worker
+  behavior. Schema changes must additionally verify N-1's affected write paths with fixtures.
+- For an explicitly declared restore-only release, the workflow checks migration and fail-closed
+  rejection instead of requiring legacy startup; its logs must state the exception. Never silently
+  ignore unknown migrations or known checksum mismatches to get a green release.
 
 1. Open a release pull request, `chore(release): v<version>`, that runs
    `scripts/version.sh <version>`, regenerates the OpenAPI snapshots, whose `info.version` is the

@@ -102,6 +102,7 @@ pub fn render() -> Result<String, prometheus::Error> {
     families.extend(topup_adapters::chain::evm::group::metrics::collect()?);
     families.extend(topup_adapters::chain::evm::group::metrics::events()?);
     families.extend(crate::db::rpc::metrics());
+    families.extend(super::capacity::collect()?);
     families.extend(http.requests.collect());
     families.extend(http.latency.collect());
     // Like Registry::gather, omit families with no observed series rather than inventing zeros.

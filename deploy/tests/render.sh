@@ -44,7 +44,7 @@ render "${gateway[@]}" "$staging" | cmp -s - "$tmp/service.yml" ||
 grep -F "image: $topup" "$tmp/service.yml" >/dev/null
 "$compose" -f "$tmp/service.yml" config --no-interpolate --format json >"$tmp/service.json"
 # Every config is inline content named after its digest, and the services mount it by that name.
-jq -e '(.configs | keys | all(test("^(postgres_init|topup)_[0-9a-f]{12}$")))
+jq -e '(.configs | keys | all(test("^(capacity_probe|postgres_init|topup)_[0-9a-f]{12}$")))
     and ([.services[].configs[]?.source] | unique) == (.configs | keys)' "$tmp/service.json" >/dev/null
 # Its content is the committed script with every `$` escaped for Compose, as Compose prints it.
 jq -j '.configs | to_entries[] | select(.key | startswith("postgres_init_")) | .value.content' \
@@ -67,7 +67,7 @@ refused bare-tag "--images must map image names" --images "$tmp/bare.json" "${ga
 images "ghcr.io/phala-network/phala-pay@sha256:$(printf '0%.0s' {1..64})" >"$tmp/zero.json"
 refused zero-digest "--images must map image names" --images "$tmp/zero.json" "${gateway[@]}" "$staging"
 jq 'del(.["postgres-walg"])' "$tmp/images.json" >"$tmp/missing.json"
-refused unpinned "not a release or kit-pinned image: backup postgres" \
+refused unpinned "not a release or kit-pinned image: backup capacity postgres" \
     --images "$tmp/missing.json" "${gateway[@]}" "$staging"
 refused no-gateway "needs --gateway-domain HOST" --images "$tmp/images.json" "$staging"
 refused bad-gateway "needs --gateway-domain HOST" --images "$tmp/images.json" \
@@ -152,6 +152,11 @@ policy() {
 }
 "$compose" -f "$tmp/restore-check.yml" config --no-interpolate --format json >"$tmp/restore-check.json"
 service=(service "$tmp/service.json")
+# TCP proxy deadlines must not silently revert to the ingress image's one-day defaults.
+for setting in TIMEOUT_CONNECT TIMEOUT_CLIENT TIMEOUT_SERVER; do
+    policy "ingress-$setting" "${service[@]}" ".services[\"dstack-ingress\"].environment.$setting = \"86400s\"" \
+        "dstack-ingress must serve the host of topup's public_origin"
+done
 policy readonly-config "${service[@]}" '.services.topup.read_only = true' \
     "inline config consumers must use a writable root filesystem for Compose injection"
 policy root-user "${service[@]}" '.services.topup.user = "0:0"' \

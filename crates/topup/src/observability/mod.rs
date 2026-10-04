@@ -2,6 +2,7 @@
 
 mod backup;
 mod business;
+mod capacity;
 mod logging;
 pub mod metrics;
 mod redaction;

@@ -118,7 +118,10 @@ merge "$tmp/merged.json" -f "$env_dir/compose.yaml"
 unsettable=$(jq -r --slurpfile base "$tmp/base.json" '
     def settable: length == 4 and .[0] == "services" and .[2] == "environment" and (
         ((.[1] == "postgres" or .[1] == "backup")
-            and (.[3] | IN("WALG_S3_PREFIX", "AWS_ENDPOINT", "AWS_REGION", "AWS_S3_FORCE_PATH_STYLE")))
+            and (.[3] | IN("WALG_S3_PREFIX", "AWS_ENDPOINT", "AWS_REGION", "AWS_S3_FORCE_PATH_STYLE",
+                "WALG_WAL_TIMEOUT_SECONDS", "WALG_WAL_ATTEMPTS", "WALG_BASE_TIMEOUT_SECONDS",
+                "WALG_BASE_ATTEMPTS", "WALG_RESTORE_TIMEOUT_SECONDS", "WALG_RESTORE_ATTEMPTS",
+                "WALG_OBSERVABILITY_DIR", "WALG_BIN")))
         or (.[1] == "dstack-ingress" and .[3] == "DOMAIN")
         or ((.[1] == "topup" or .[1] == "restore-check") and (.[3] | test("^TOPUP_RPC_[A-Z0-9_]+_KEY$"))));
     [tostream | select(length == 2)] as $with | [$base[0] | tostream | select(length == 2)] as $without

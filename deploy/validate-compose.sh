@@ -53,7 +53,8 @@ render template "$root/deploy/environments/phala-cloud-template/topup" --templat
 # The restore-check variant is the service with the service-only services removed, topup read-only
 # on 8081, and PostgreSQL restoring with the restore instance's own credentials: nothing else.
 jq -e --slurpfile service "$tmp/service.json" '
-    def normal: del(.services["dstack-ingress", "smokescreen", "heartbeat", "backup", "restore-check"])
+    def normal: del(.services["dstack-ingress", "smokescreen", "heartbeat", "backup", "capacity", "restore-check"])
+        | .configs |= with_entries(select(.key | startswith("capacity_probe_") | not))
         | del(.services.topup.command, .services.topup.ports)
         | del(.services.postgres.environment.TOPUP_RESTORE_FROM_BACKUP,
             .services.postgres.environment.AWS_ACCESS_KEY_ID,

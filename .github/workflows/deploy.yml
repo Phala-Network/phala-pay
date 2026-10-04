@@ -86,7 +86,7 @@ jobs:
     concurrency:
       group: deploy-${{ inputs.environment }}-${{ inputs.target }}
       cancel-in-progress: false
-    timeout-minutes: 90
+    timeout-minutes: 75
     env:
       RELEASE_REPOSITORY: Phala-Network/phala-pay
       VERSION: ${{ inputs.version }}
@@ -103,6 +103,7 @@ jobs:
     steps:
       # Fixes the target's kit scripts and CVM for the later steps.
       - name: Check inputs and Environment settings
+        timeout-minutes: 10
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
@@ -160,6 +161,7 @@ jobs:
           exit "$status"
 
       - name: Prepare private working files
+        timeout-minutes: 10
         run: |
           work="$RUNNER_TEMP/deploy"
           mkdir -p "$work/release" "$KIT" "$RUNNER_TEMP/phala-cloud"
@@ -173,6 +175,7 @@ jobs:
 
       # The GitHub CLI Deploy verifies with, pinned by its release checksum.
       - name: Install the GitHub CLI 2.101.0
+        timeout-minutes: 10
         run: |
           version=2.101.0
           archive="$RUNNER_TEMP/gh.tar.gz"
@@ -187,6 +190,7 @@ jobs:
       # workflow SHA is the commit for a caller that pins it, and the tag object for a caller at an
       # annotated tag; verify-release.sh peels the tag and accepts either.
       - name: Verify the release
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
@@ -208,9 +212,11 @@ jobs:
         with:
           node-version: "24"
       - name: Install the kit's locked Phala Cloud CLI
+        timeout-minutes: 10
         run: npm ci --prefix "$KIT/deploy/tools" --ignore-scripts --no-audit --no-fund
       # cast, for preflight's chain checks.
       - name: Install Foundry
+        timeout-minutes: 10
         uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
           version: v1.8.3
@@ -219,6 +225,7 @@ jobs:
       # the existing CVM on an upgrade; a new CVM is rendered with a provisional value until its
       # node is known (step "Set the values known only after provisioning").
       - name: Resolve the gateway
+        timeout-minutes: 10
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
@@ -235,6 +242,7 @@ jobs:
           echo "GATEWAY=$gateway" | tee -a "$GITHUB_ENV"
 
       - name: Render the environment with the release's kit and images
+        timeout-minutes: 10
         run: |
           "$KIT/deploy/render.sh" --images "$WORK/release/images.json" --gateway-domain "$GATEWAY" \
             "$ENVIRONMENT_DIR" >"$COMPOSE"
@@ -247,6 +255,7 @@ jobs:
       # credentials are not inputs: the CVM derives them from dstack KMS. `upgrade` writes the file
       # for preflight only and never sends it.
       - name: Write the unsealed env file
+        timeout-minutes: 10
         run: |
           "$("$KIT/deploy/pinned-compose.sh")" -f "$COMPOSE" config --variables |
             awk 'NR > 1 && NF > 0 { print $1 "=" }' | sort >"$ENV_FILE"
@@ -256,11 +265,20 @@ jobs:
       # pulls. product: each chain's RPC reports its chain and the chain's treasury is a contract,
       # topup's attestation, anonymous pull. Both: the Phala Cloud workspace and OS image.
       - name: Preflight (read-only)
+        timeout-minutes: 20
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
+          sentry_args=()
+          if [[ "$DEPLOY_ENVIRONMENT" == production && "$TARGET" == topup ]]; then
+            # This local preflight value is never sent to the CVM or printed.
+            sed -i '/^SENTRY_DSN=/d' "$ENV_FILE"
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >>"$ENV_FILE"
+            sentry_args=(--require-sentry)
+          fi
           "$PREFLIGHT" --env "$ENV_FILE" --compose "$COMPOSE" --environment-dir "$ENVIRONMENT_DIR" \
-            --workspace "$PHALA_WORKSPACE" --os-image "$DSTACK_OS_IMAGE" --unsealed
+            --workspace "$PHALA_WORKSPACE" --os-image "$DSTACK_OS_IMAGE" --unsealed "${sentry_args[@]}"
 
       # Every route's livemode must match its chain: production serves test mode on Sepolia beside
       # live mode on mainnet, staging test mode only. The check reads the routes as topup does, in
@@ -268,12 +286,14 @@ jobs:
       # name (deploy/check-route-modes.sh). Only topup's compose carries routes; the product
       # target is staging-only.
       - name: Check the routes' modes against the Environment
+        timeout-minutes: 10
         if: inputs.target == 'topup'
         run: '"$KIT/deploy/check-route-modes.sh" "$DEPLOY_ENVIRONMENT" "$COMPOSE"'
 
       # The CLI output (JSON, no secrets: the key is only in the environment and env values are
       # encrypted client-side) goes to the log as well, so a failure shows its reason.
       - name: Deploy (${{ inputs.mode }}) and wait for the CVM
+        timeout-minutes: 25
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
@@ -345,6 +365,7 @@ jobs:
       # to the compose rendered with it (no -e: the env stays). Still unsealed, it does not run, so
       # no --wait (the CLI's waits for `running`): it waits as the provision did.
       - name: Set the values known only after provisioning
+        timeout-minutes: 25
         if: inputs.mode == 'provision'
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -366,6 +387,7 @@ jobs:
 
       # After an upgrade the attestation can still describe the previous compose for a while.
       - name: Read back and verify the attested compose
+        timeout-minutes: 20
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
@@ -391,6 +413,7 @@ jobs:
       # domain to this CVM alone; dstack-ingress requests the certificate only once both records
       # resolve. An upgrade keeps the instance id; a new instance (a restore) needs a new TXT value.
       - name: Print the owner's DNS records
+        timeout-minutes: 10
         run: |
           instance_id=$("$KIT/deploy/phala-cvm.sh" instance-id "$WORK/attestation.json")
           {
@@ -413,6 +436,7 @@ jobs:
       # issued (curl verifies it), and a new topup CVM's PostgreSQL cannot list the backup prefix
       # until the owner seals the storage credentials, so the first check is the upgrade's.
       - name: Wait for the service
+        timeout-minutes: 20
         if: inputs.mode == 'upgrade'
         run: '"$KIT/deploy/phala-cvm.sh" healthz "$PUBLIC_URL"'
 
@@ -420,6 +444,7 @@ jobs:
       # cache, or the new one can still be obtaining its certificate: retried every 30 seconds for
       # at most 10 minutes in all (each check bounds its own requests and TLS handshake).
       - name: Verify the certificate evidence
+        timeout-minutes: 10
         if: inputs.mode == 'upgrade'
         run: |
           # shellcheck disable=SC2016  # expanded by the inner bash
@@ -433,6 +458,7 @@ jobs:
           { echo '```text'; cat "$WORK/ingress-evidence.txt"; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Print the owner's sealing step
+        timeout-minutes: 10
         if: inputs.mode == 'provision'
         run: |
           compose_json=$("$("$KIT/deploy/pinned-compose.sh")" -f "$COMPOSE" config --no-interpolate --format json)
@@ -490,6 +516,7 @@ jobs:
       # No secrets: the compose holds the public settings and references to the sealed secrets,
       # and the CLI outputs hold ids, hashes, and the attested app-compose.
       - name: Upload the deployment record
+        timeout-minutes: 10
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -507,6 +534,7 @@ jobs:
             ${{ runner.temp }}/deploy/ingress-evidence.txt
 
       - name: Delete the env file, the kit, and CLI state
+        timeout-minutes: 10
         if: always()
         run: |
           [[ -z "${ENV_FILE:-}" ]] || rm -f "$ENV_FILE" "$ENV_FILE.new"

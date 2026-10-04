@@ -26,6 +26,9 @@ services:
   dstack-ingress:
     image: ghcr.io/dstack-tee/dstack-ingress:2.6@sha256:c212abb7bedec4d7b54a82bcf9972e58e39a4757cc811faeb6017eee6c0673b0
     environment:
+      TIMEOUT_CONNECT: 5s
+      TIMEOUT_CLIENT: 30s
+      TIMEOUT_SERVER: 30s
       CHALLENGE_TYPE: tls-alpn-01
       TARGET_ENDPOINT: product:8089
     ports:

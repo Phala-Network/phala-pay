@@ -178,8 +178,9 @@ adopting a release is a pull request that changes its release.
    the certificate evidence. If a provision run fails after the summary shows a CVM id, set the
    variable, seal the secrets, and run that upgrade; never provision twice.
 3. Every later change: Deploy with `mode: upgrade`. An upgrade sends only the compose, so the
-   sealed env stays. Rollback is an upgrade to an earlier release; never roll a schema back, use a
-   forward repair migration.
+   sealed env stays. Rollback supports the immediately previous release (N-1) only, after the release
+   rollback smoke passes. Keep the upgraded schema; never run down migrations. See
+   [Rollback compatibility](#rollback-compatibility) before changing the version.
 
 **Production** with live routes additionally needs the factory at its deterministic address on each
 of their chains ([CONTRACTS.md](CONTRACTS.md#mainnet), HUMAN-ONLY, only where it is missing) and a
@@ -211,7 +212,7 @@ hash. The sealed names are:
 
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, the object store's token (declared in
   [compose.yaml](compose.yaml));
-- `SENTRY_DSN`, which may be empty or left out to turn Sentry off;
+- `SENTRY_DSN`, required for production; staging and templates may leave it empty to turn Sentry off;
 - a `TOPUP_RPC_<ID>_KEY` per keyed [RPC provider](#rpc-providers), declared in the environment's
   `compose.yaml` overlay. It is the API key topup puts in place of `{key}` in the provider's
   attested URL. Phala's staging has keyless providers and declares none.
@@ -322,6 +323,20 @@ the whole value of exactly these environment keys, and nowhere else:
 | `DSTACK_APP_DOMAIN` | `topup`, read by `topup run --public-origin-host-env DSTACK_APP_DOMAIN` | the reviewed Phala Cloud pre-launch script (below), from the app id and the gateway domain the host provides | topup: a lowercase DNS name, served as `https://<host>` |
 | `TOPUP_ADMIN_PUBLIC_KEY` | `topup`, read by `topup run --admin-public-key-env TOPUP_ADMIN_PUBLIC_KEY` | the deploy form | topup: a standard base64 ed25519 public key |
 | `WALG_S3_PREFIX`, `AWS_ENDPOINT`, `AWS_REGION` | `postgres` and `backup` | the deploy form | the postgres-walg entrypoint: `s3://BUCKET[/PATH]`, an `https://` origin, a region name |
+
+The backup and restore helpers also accept these operational limits (the defaults are deliberately
+finite and are passed to both `postgres` and `backup`; an environment may override them):
+
+| Variable | Default |
+|---|---:|
+| `WALG_WAL_TIMEOUT_SECONDS` / `WALG_WAL_ATTEMPTS` | `10` / `1` |
+| `WALG_BASE_TIMEOUT_SECONDS` / `WALG_BASE_ATTEMPTS` | `1800` / `2` |
+| `WALG_RESTORE_TIMEOUT_SECONDS` / `WALG_RESTORE_ATTEMPTS` | `120` / `3` |
+| `WALG_OBSERVABILITY_DIR` | `/run/topup-observability` |
+| `WALG_BIN` | `wal-g` |
+
+The heartbeat commits every 15 seconds so WAL upload latency does not consume the full 60-second
+recovery point budget. These names are the limits used by the committed WAL-G backup/restore helpers.
 
 The template's `topup.yaml` leaves out `public_origin` and `admin_key.public_key`; `topup run`
 refuses to start unless each comes from exactly one place, and the policy fixes topup's command,
@@ -804,3 +819,89 @@ its payment settings are held until it sends its complete configuration again wi
 
 Phala's own deployment (its staging routes, the staging reset, the reference product behind the
 demo, the website, and its onboarding policy) is in [Phala's instance](phala.md).
+
+Production preflight passes `--require-sentry` to `topup config check`, forwarding `SENTRY_DSN`
+from the preflight environment file; a missing or malformed DSN blocks rollout. Configure the
+production GitHub Environment secret `SENTRY_DSN` for this read-only validation; the CVM retains
+its separately owner-sealed DSN.
+
+Ingress uses the supported dstack-ingress TCP settings `TIMEOUT_CONNECT=5s`,
+`TIMEOUT_CLIENT=30s`, and `TIMEOUT_SERVER=30s`, allowing the API deadline response to complete.
+
+## Rollback compatibility
+
+Migrations must be expand-only and preserve N-1 reads, writes, defaults and constraints. Under the
+migration advisory lock, protocol-aware binaries validate every newer applied migration against
+`public.topup_migration_compatibility`: the applied checksum must match its owner-written ledger
+entry, its compatibility floor must be no greater than the binary's maximum known migration,
+and it must have succeeded. Missing metadata, a higher floor or mismatched checksums fail closed.
+SQLx continues checking all known migration checksums and dirty state. The application role cannot
+write the ledger. A rollback never lowers existing floors or edits migration history.
+
+This release introduces the protocol without adding SQLx migrations. Published v0.8.2 and earlier
+cannot understand unknown migrations: rollback to them works only while the migration inventory
+is unchanged, as tested against the actual release image. The first release adding a migration
+must target a protocol-aware N-1 image, or explicitly declare **no rollback; restore required**
+in its CHANGELOG. This boundary cannot be fixed inside an already published immutable image.
+
+Before upgrade, preserve the verified N-1 deploy kit, image digests and configuration and a tested
+pre-upgrade recovery point. To roll back, verify N-1's release again, render its compose/config,
+and use Deploy `mode: upgrade`; require migration completion, service health, attestation and TLS
+checks. If N's changelog says `no rollback; restore required`, stop writes and follow the restore
+runbook and reconciliation using the pre-upgrade backup instead. Account for external effects
+already executed after that backup; restoring blindly can repeat them. Never bypass checksum or
+compatibility errors. Use a forward repair release if there is no safe recovery point.
+
+## Disk pressure
+
+Retain all application data for seven years, including append-only tables and undelivered events.
+Fund storage growth; no age-based deletion job is introduced. Seven retained full backups is a
+recovery rotation, not a seven-year data purge policy.
+
+The read-only `capacity` probe samples the filesystems containing `pgdata` and `observability`
+every 30 seconds. `/metrics` exposes `topup_disk_used_ratio{volume="pgdata|observability"}`,
+`topup_unarchived_wal_bytes`, `topup_unarchived_wal_age_seconds`, and
+`topup_capacity_sample_timestamp_seconds`. Ratios include reserved space; when volumes share a
+filesystem they deliberately report the same pressure. Completed WAL segments with `.ready`
+markers count as unarchived; `.done` segments do not.
+
+The backup monitor sends Sentry-compatible alerts: `TopupDiskWarning` at >=75%,
+`TopupDiskCritical` at >=90%, and `TopupUnarchivedWalPressure` at >=1 GiB pending WAL or oldest age
+>=120 seconds. Missing/invalid samples or age >120 seconds emit `TopupCapacityProbeFailed`.
+Configure `SENTRY_DSN` and route these issues to operations; with no DSN they remain local logs.
+These alerts are sampled from the running service; external uptime/Crons monitoring is necessary
+when the service or host itself is down.
+
+1. At warning, inspect growth rates, filesystem free space, largest relations/indexes and
+   observability files. Expand the CVM disk/filesystem before headroom is exhausted; estimate
+   time to full using WAL growth as well as table growth. Verify actual expansion and new samples.
+2. At critical, escalate immediately. If expansion cannot complete safely, use the established
+   maintenance/recording hold and stop API writes and workers in a controlled incident procedure.
+   Preserve DB and backup continuity. Inspect PostgreSQL archiver errors, credentials, object-store
+   availability and backup lag; restore archiving before resuming writes.
+3. Never delete undelivered events, financial/audit records, `pg_wal` files, `.ready` markers or
+   unarchived WAL. Never disable archiving to hide pressure, truncate tables or run `VACUUM FULL`
+   on a nearly full disk. Only remove independently verified disposable logs/cache under their
+   approved retention policy; preserve incident evidence. Expand storage or restore on a larger
+   fenced instance if necessary.
+4. Verify WAL draining, newest archive, fresh samples, both volumes below 75%, service/worker
+   progress and pending deliveries before resolving the incident.
+
+Recovery across independent domains remains a proposal in
+[recovery-domains.md](../docs/design/recovery-domains.md), pending the owner's cost decision.
+
+## Deployment time budgets
+
+Operator-side scripts require GNU `timeout`, or `gtimeout` from coreutils on macOS, alongside
+Bash 4.4 or newer. The quick-start bootstrap downloads the verifier and its deadline helper from
+the same release tag; release checksums and provenance verification still run before kit scripts.
+
+Deploy stages have workflow step deadlines (10 minutes, 20 for preflight/attestation/health,
+and 25 for deployment plus CVM convergence), in addition
+to the 75-minute job ceiling. Shell stages use absolute elapsed-time deadlines: anonymous pulls
+share 600 seconds (each pull <=180 seconds, three attempts); Phala preflight shares 120 seconds
+(each call <=30 seconds); deployment submission <=300 seconds; CVM convergence <=900 seconds;
+attestation and health convergence <=600 seconds each. Each call is capped by remaining stage
+time, with TERM and a two-second KILL grace. Poll sleeps cannot extend the stage. Diagnostics
+name the stage, elapsed/remaining seconds and exit status without credentials. Contract and
+release verification remain mandatory and are also bounded by workflow step deadlines.

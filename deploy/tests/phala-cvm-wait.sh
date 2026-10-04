@@ -2,8 +2,8 @@
 # deploy/phala-cvm.sh wait against a stub Phala Cloud CLI that answers `cvms get` with a sequence of
 # CVM states, each with instance_id null as Phala Cloud reports it: an upgrade waits for the CVM to
 # run a new compose; a provision (--unsealed) for it to settle with a new compose, in any status.
-# Neither accepts a CVM still in progress or with the previous compose, and both time out after 60
-# polls. And deploy/phala-cvm.sh instance-id reads the instance id from an attestation's event log,
+# Neither accepts a CVM still in progress or with the previous compose, and both stop at their absolute
+# deadline. And deploy/phala-cvm.sh instance-id reads the instance id from an attestation's event log,
 # which must name exactly one.
 set -euo pipefail
 
@@ -11,7 +11,7 @@ root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 mkdir -p "$tmp/deploy" "$tmp/bin"
-cp "$root/deploy/phala-cvm.sh" "$tmp/deploy/"
+cp "$root/deploy/deadline.sh" "$root/deploy/phala-cvm.sh" "$tmp/deploy/"
 # The stub answers the Nth `cvms get` with line N of STUB_STATES, then repeats the last line.
 cat >"$tmp/deploy/phala" <<'STUB'
 #!/usr/bin/env bash
@@ -22,7 +22,8 @@ mapfile -t states <"$STUB_STATES"
 ((count <= ${#states[@]})) || count=${#states[@]}
 printf '%s\n' "${states[count - 1]}"
 STUB
-printf '#!/bin/sh\n' >"$tmp/bin/sleep"
+printf '#!/bin/sh\n/bin/sleep 0.05\n' >"$tmp/bin/sleep"
+export CVM_WAIT_SECONDS=3
 chmod +x "$tmp/deploy/phala" "$tmp/bin/sleep"
 export PATH="$tmp/bin:$PATH" STUB_COUNT="$tmp/count" STUB_STATES="$tmp/states"
 
@@ -49,10 +50,12 @@ accepted() {
     [[ "$(jq -c . <<<"$2")" == "$3" && "$(cat "$STUB_COUNT")" == "$4" ]] ||
         fail "$1: accepted '$2' at poll $(cat "$STUB_COUNT"), not '$3' at poll $4"
 }
-# timed_out CASE OUTCOME: the wait failed only by timing out, after 60 polls, waiting for OUTCOME.
+# timed_out CASE OUTCOME: the wait failed only by timing out, at the stage deadline, waiting for OUTCOME.
 timed_out() {
-    grep -qx "::error::CVM cvm-1 did not $2 within 15 minutes" "$tmp/err" &&
-        [[ "$(cat "$STUB_COUNT")" == 60 ]] || fail "$1: did not time out waiting to $2 ($(tail -1 "$tmp/err"))"
+    if ! grep -q "deadline expired" "$tmp/err" ||
+        ! grep -qx "::error::CVM cvm-1 did not $2" "$tmp/err"; then
+        fail "$1: did not time out waiting to $2 ($(tail -1 "$tmp/err"))"
+    fi
 }
 new=0xAB12 old=0xcd34
 
