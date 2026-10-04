@@ -7,6 +7,7 @@ import os
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
+from weakref import ref
 
 import httpx
 
@@ -181,12 +182,15 @@ class PhalaPay:
         return self._client.livemode
 
     def checkout_params(self, quote: Quote) -> dict[str, str]:
+        issued = self._client._issued_quotes.get(id(quote))
         if (
             not isinstance(quote, Quote)
             or quote.status != "open"
             or not isinstance(quote.client_secret, str)
             or not quote.client_secret
-            or self._client._issued_quotes.get(id(quote)) is not quote
+            or issued is None
+            or issued[0]() is not quote
+            or issued[1] != quote.client_secret
             or self._pins is None
         ):
             raise ResponseValidationError(
@@ -358,7 +362,12 @@ class Quotes:
             metadata=metadata,
             request_deadline=request_deadline,
         )
-        self._client._issued_quotes[id(quote)] = quote
+        issued_quotes = self._client._issued_quotes
+        quote_key = id(quote)
+        issued_quotes[quote_key] = (
+            ref(quote, lambda _: issued_quotes.pop(quote_key, None)),
+            quote.client_secret if isinstance(quote.client_secret, str) else None,
+        )
         return quote
 
     def retrieve(
