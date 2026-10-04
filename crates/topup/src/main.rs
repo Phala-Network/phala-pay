@@ -1715,14 +1715,12 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
         eprintln!("production preflight requires a present, valid SENTRY_DSN");
         return ExitCode::FAILURE;
     }
-    let checked = topup::config::Config::load(file).and_then(|config| {
-        if secrets {
-            config.check_environment_secrets()?;
-        }
-        Ok(config)
-    });
-    match checked {
+    match topup::config::Config::load(file) {
         Ok(config) => {
+            if secrets && let Err(error) = config.check_environment_secrets() {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
             println!(
                 "configuration `{}` is valid: {} routes, {} RPC providers{}{}",
                 file.display(),
