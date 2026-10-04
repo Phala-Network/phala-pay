@@ -22,7 +22,9 @@ printf '#!/bin/sh\nexec /bin/sleep 20\n' >"$tmp/bin/docker"
 chmod +x "$tmp/bin/docker"
 printf '%s\n' example-image >"$tmp/images"
 export PATH="$tmp/bin:$PATH" DOCKER_HOST=unix:///stub PULL_STAGE_SECONDS=1
+# shellcheck disable=SC2329 # Called by the sourced preflight helpers.
 fail() { echo "FAIL: $*"; }
+# shellcheck disable=SC2329 # Called by the sourced preflight helpers.
 ok() { echo "ok: $*"; }
 source "$root/deploy/preflight-phala.sh"
 if check_anonymous_pulls "$tmp/images" >"$tmp/out" 2>"$tmp/err"; then exit 1; fi
