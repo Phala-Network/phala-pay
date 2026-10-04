@@ -107,7 +107,7 @@ CI also runs ShellCheck on every shell script and the tests in [deploy/tests](de
 ```sh
 make sdk-check                                  # Python: ruff, mypy --strict, pytest, and the codegen no-op check
 make sdk-generate                               # Python client and JS OpenAPI types after an openapi.json change
-(cd sdk/js && pnpm install && pnpm run check)   # TypeScript: typecheck, lint, unit tests, and build
+(cd sdk/js && pnpm install && pnpm --filter @phala/pay check && pnpm --filter @phala/pay-react check && pnpm --filter @phala/pay-server check) # JavaScript packages
 (cd sdk/js && pnpm run e2e:docker)              # TypeScript: the browser end-to-end tests on Anvil
 scripts/version.sh                              # Both: the SDKs name the Cargo workspace version
 ```
@@ -274,16 +274,18 @@ twice and checks that the digests match, as the Release workflow does before it 
 
 ## Releasing
 
-The service, its images, and its deployment files, and both SDKs, `@phala/pay` (sdk/js) and
+The service, its images, and its deployment files, and the three JavaScript packages `@phala/pay`
+(sdk/js), `@phala/pay-react` (sdk/js-react), `@phala/pay-server` (sdk/js-server), plus
 `phala-pay` (sdk/python), share one version and are released together as `v<version>`, under
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html): while the major version is 0, a
-breaking change bumps the minor version. Every release publishes both SDKs at its version, changed
+breaking change bumps the minor version. Every release publishes all SDK packages at its version, changed
 or not, so an integrator uses the SDK version equal to the operator's service version
 ([integration guide, §5.9](docs/integration.md#59-versioning-and-deprecation)). Operators deploy
 releases, never a commit ([deploy/README.md, "Releases"](deploy/README.md#releases)).
 
 The version's one source is the Cargo workspace version (`version` under `[workspace.package]` in
 `Cargo.toml`). `scripts/version.sh` prints it and fails unless `sdk/js/package.json`,
+`sdk/js-react/package.json`, `sdk/js-server/package.json`,
 `sdk/python/pyproject.toml`, `sdk/python/uv.lock`, and the Python SDK `deploy/deploy.sh` generates
 the admin key with name it too, as CI checks; `scripts/version.sh <version>` sets it in all of them
 and in `Cargo.lock`.
@@ -292,7 +294,7 @@ The top-level [CHANGELOG.md](CHANGELOG.md) follows
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). A pull request that changes what
 integrators or operators see adds its entry under `## [Unreleased]`, in `Added`, `Changed`,
 `Deprecated`, `Removed`, `Fixed`, or `Security`, and marks breaking changes **Breaking**; an SDK
-change goes under ``### JS SDK (`@phala/pay`)`` or ``### Python SDK (`phala-pay`)``, below the
+change goes under ``### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)`` or ``### Python SDK (`phala-pay`)``, below the
 service's entries, in the same kinds one level down (`#### Added`). The SDKs' releases before
 v0.5.0, versioned on their own, stay in their frozen `sdk/js/CHANGELOG.md` and
 `sdk/python/CHANGELOG.md`.

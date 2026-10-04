@@ -1,8 +1,8 @@
 name: Release
 
-# A versioned release of the service and both SDKs (deploy/README.md, "Releases"), from a
+# A versioned release of the service and all SDK packages (deploy/README.md, "Releases"), from a
 # `v<version>` tag on a commit of main whose Cargo workspace version is <version>, the version that
-# sdk/js and sdk/python share (scripts/version.sh; CONTRIBUTING.md, "Releasing"). A stable version
+# sdk/js, sdk/js-react, sdk/js-server, and sdk/python share (scripts/version.sh; CONTRIBUTING.md, "Releasing"). A stable version
 # needs its dated CHANGELOG.md section, the release notes, with the SDKs' changes under it; a
 # version with a pre-release suffix (`-rc.1`) is published as a GitHub pre-release of the service
 # alone, without the SDKs. Only admins create `v*` tags (a tag ruleset), and a published release is
@@ -21,7 +21,7 @@ name: Release
 # Cloud template's compose, rendered from the kit with these images); deploy.sh (deploy/deploy.sh,
 # the one-command deploy, set to deploy this release, whose Python SDK it generates the admin key
 # with); and SHA256SUMS. Only then does a stable version publish the
-# SDKs: sdk/js to npm as @phala/pay, and sdk/python to PyPI as phala-pay (its `project.name`).
+# SDKs: sdk/js, sdk/js-react, and sdk/js-server to npm, and sdk/python to PyPI as phala-pay (its `project.name`).
 # Publishing uses trusted publishing (OIDC) only: no token or secret is stored anywhere. The owner
 # registers this repository, this workflow file (release.yml), and the job's environment as the
 # trusted publisher: `npm` on npmjs.com and `pypi` on pypi.org. Each environment accepts only `v*`
@@ -286,9 +286,6 @@ jobs:
       id-token: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
-    defaults:
-      run:
-        working-directory: sdk/js
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -297,26 +294,50 @@ jobs:
         with:
           e2e: "false"
       - name: npm supports trusted publishing (11.5.1 or later)
+        working-directory: sdk/js
         run: |
           npm --version
           node -e 'const [a, b, c] = process.argv[1].split(".").map(Number); process.exit(a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1))) ? 0 : 1)' "$(npm --version)"
-      # `prepare` builds dist from the checked-out tag. A re-run finds the version published by an
-      # earlier run of this commit (npm records the commit as `gitHead`) and is done; a version
-      # published from any other commit, or a registry it cannot read, fails.
-      - name: Publish to npm with provenance
+      - name: Build all JavaScript packages
+        working-directory: sdk/js
+        run: pnpm --filter @phala/pay build && pnpm --filter @phala/pay-react build && pnpm --filter @phala/pay-server build
+      - name: Publish all JavaScript packages to npm with provenance
+        working-directory: sdk/js
         run: |
-          if view=$(npm view "@phala/pay@$VERSION" gitHead --json 2>/dev/null); then
-            [[ "$(jq -r . <<<"$view")" == "$GITHUB_SHA" ]] ||
-              { echo "::error::@phala/pay $VERSION is already published, not from $GITHUB_SHA: $view"; exit 1; }
-            echo "@phala/pay $VERSION is already published from $GITHUB_SHA"
-          elif [[ "$(jq -r '.error.code? // empty' <<<"$view" 2>/dev/null)" == E404 ]]; then
-            npm publish --provenance --access public
-          else
-            echo "::error::cannot read @phala/pay $VERSION from npm: $view"
-            exit 1
-          fi
+          # Check every name before publishing anything: npm cannot configure a trusted publisher
+          # until the package exists. New scoped names need an owner bootstrap first.
+          for package in @phala/pay @phala/pay-react @phala/pay-server; do
+            if ! view=$(npm view "$package" name --json 2>/dev/null); then
+              if [[ "$(jq -r '.error.code? // empty' <<<"$view" 2>/dev/null)" == E404 ]]; then
+                echo "::error::${package} does not exist on npm. An @phala owner with publish rights and 2FA must first publish a public 0.0.0 placeholder, deprecate it as 'placeholder', then configure its GitHub Actions trusted publisher: Phala-Network/phala-pay, .github/workflows/release.yml, environment npm. Confirm this setup before retrying."
+              else
+                echo "::error::cannot check ${package} on npm: ${view}"
+              fi
+              exit 1
+            fi
+          done
+          publish() {
+            package=$1
+            directory=$2
+            if view=$(npm view "${package}@${VERSION}" gitHead --json 2>/dev/null); then
+              [[ "$(jq -r . <<<"$view")" == "$GITHUB_SHA" ]] || {
+                echo "::error::${package} ${VERSION} is already published, not from ${GITHUB_SHA}: ${view}"; exit 1;
+              }
+              echo "${package} ${VERSION} is already published from ${GITHUB_SHA}"
+            elif [[ "$(jq -r '.error.code? // empty' <<<"$view" 2>/dev/null)" == E404 ]]; then
+              if ! (cd "$directory" && npm publish --provenance --access public); then
+                echo "::error::Publishing ${package} ${VERSION} failed. If npm reports E404 or an authentication error, confirm the package's GitHub Actions trusted publisher is configured for Phala-Network/phala-pay, .github/workflows/release.yml, environment npm. New packages require an owner-published public 0.0.0 placeholder (deprecated as 'placeholder') before trusted publishing can be configured. See the npm error above for other failures."
+                exit 1
+              fi
+            else
+              echo "::error::cannot read ${package} ${VERSION} from npm: ${view}"; exit 1
+            fi
+          }
+          publish @phala/pay .
+          publish @phala/pay-react ../js-react
+          publish @phala/pay-server ../js-server
 
-  # After the SDKs, which a pre-release skips: the release's notes link both packages, and its
+  # After the SDKs, which a pre-release skips: the release's notes link all three JS packages, and its
   # deploy.sh generates the admin key with its Python SDK.
   release:
     needs: [version, assets, py-publish, js-publish]
@@ -353,7 +374,7 @@ jobs:
               echo
               echo "## SDKs"
               echo
-              echo "[\`@phala/pay\` $VERSION](https://www.npmjs.com/package/@phala/pay/v/$VERSION) on npm and"
+              echo "[\`@phala/pay\` $VERSION](https://www.npmjs.com/package/@phala/pay/v/$VERSION), [\`@phala/pay-react\` $VERSION](https://www.npmjs.com/package/@phala/pay-react/v/$VERSION), and [\`@phala/pay-server\` $VERSION](https://www.npmjs.com/package/@phala/pay-server/v/$VERSION) on npm;"
               echo "[\`phala-pay\` $VERSION](https://pypi.org/project/phala-pay/$VERSION/) on PyPI."
             } >>"$notes"
           fi

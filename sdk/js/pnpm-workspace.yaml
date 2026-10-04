@@ -1,0 +1,5 @@
+packages:
+  - "."
+  - "../js-react"
+  - "../js-server"
+linkWorkspacePackages: true

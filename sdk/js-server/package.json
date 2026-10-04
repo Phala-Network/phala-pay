@@ -1,0 +1,59 @@
+{
+  "name": "@phala/pay-server",
+  "version": "0.8.3",
+  "description": "Phala Pay merchant server SDK",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/Phala-Network/phala-pay/tree/main/sdk/js-server#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Phala-Network/phala-pay.git",
+    "directory": "sdk/js-server"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/js-server/src/index.d.ts",
+      "default": "./dist/js-server/src/index.js"
+    },
+    "./helpers": {
+      "types": "./dist/js-server/src/helpers.d.ts",
+      "default": "./dist/js-server/src/helpers.js"
+    }
+  },
+  "files": [
+    "dist",
+    "THIRD_PARTY_NOTICES"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=20.3"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build && pnpm run check-generated",
+    "generate:types": "openapi-typescript ../../crates/topup/openapi.json -o src/generated/openapi.ts --immutable && node scripts/generate-server.mjs",
+    "check-generated": "bash ../scripts/check-generated-js.sh server",
+    "generate:server": "node scripts/generate-server.mjs"
+  },
+  "dependencies": {
+    "viem": "^2.56.9"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.3",
+    "eslint": "^10.11.0",
+    "openapi-typescript": "7.13.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2",
+    "vite": "^8.3.1",
+    "jsdom": "^30.1.1"
+  }
+}

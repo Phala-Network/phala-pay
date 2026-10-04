@@ -11,7 +11,9 @@ For a merchant's backend team, connecting an account to an operator's instance.
 |---|---|
 | [Integration guide](integration.md) | The quickstart, quotes, deposit addresses, treasuries, sweeps, webhooks and fulfillment, refunds, testing, go-live, and the API reference by topic. |
 | [API reference](https://phala-network.github.io/phala-pay/) | Every endpoint and schema, built from [crates/topup/openapi.json](../crates/topup/openapi.json) ([how it is built](reference/README.md)). |
-| [`@phala/pay`](../sdk/js/README.md) | The browser checkout and the Node server helpers. |
+| [`@phala/pay`](../sdk/js/README.md) | The framework-free browser checkout core. |
+| [`@phala/pay-react`](../sdk/js-react/README.md) | React components, hooks, icons, and styles. |
+| [`@phala/pay-server`](../sdk/js-server/README.md) | The merchant server client and offline helpers. |
 | [`phala-pay`](../sdk/python/README.md) | The Python client. |
 | [Integrator sandbox](../deploy/sandbox/README.md) | Scripted payment scenarios, locally or against an operator's test mode. |
 

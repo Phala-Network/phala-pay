@@ -6,4 +6,6 @@ allowBuilds:
 
 # miniflare's 7.29.0 has published advisories; keep its transitive Undici on a fixed release.
 overrides:
+  # React's exact npm dependency must use the same local core as the demo's direct dependency.
+  '@phala/pay': file:../../../sdk/js
   undici@7.29.0: 7.30.0

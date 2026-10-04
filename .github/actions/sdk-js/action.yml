@@ -1,7 +1,7 @@
 name: JavaScript SDK toolchain
 description: >-
-  Installs Node.js 24, the pnpm version named by sdk/js/package.json, and the locked dependencies of
-  sdk/js; with `e2e`, also Foundry (anvil, forge) for the end-to-end tests, whose browser runs in
+  Installs Node.js 24, the pnpm version named by sdk/js/package.json, and the locked workspace dependencies of
+  sdk/js, sdk/js-react, and sdk/js-server; with `e2e`, also Foundry (anvil, forge) for the end-to-end tests, whose browser runs in
   Playwright's image (sdk/js/e2e/docker.sh).
 inputs:
   e2e:

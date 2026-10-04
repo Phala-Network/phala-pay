@@ -14,7 +14,7 @@ from .test_phala_pay import _quote
 
 
 def test_checkout_params_matches_js_checkout_params_contract() -> None:
-    source = (Path(__file__).resolve().parents[2] / "js/src/checkout-params.ts").read_text()
+    source = (Path(__file__).resolve().parents[2] / "js/src/shared/checkout-params.ts").read_text()
     interface = re.search(r"export interface CheckoutParams \{([^}]+)\}", source)
     assert interface is not None
     fields = {}

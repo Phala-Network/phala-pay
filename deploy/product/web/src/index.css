@@ -162,7 +162,7 @@
   }
 }
 
-/* The SDK's components (@phala/pay/react) bring their own unlayered stylesheet, which Tailwind's
+/* The SDK's components (@phala/pay-react) bring their own unlayered stylesheet, which Tailwind's
    layered utilities cannot override: inside the product they drop their own frame, and their
    focus ring takes the page's. */
 .product-app .pp-root {

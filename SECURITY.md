@@ -3,7 +3,7 @@
 ## Supported versions
 
 Phala Pay is pre-1.0. Fixes are made on `main` and ship in a new release, which carries the
-service and both SDKs at one version.
+service and all SDK packages at one version.
 
 | Component | Supported |
 |---|---|

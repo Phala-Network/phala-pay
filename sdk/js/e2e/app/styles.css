@@ -1,4 +1,4 @@
-@import "../../src/styles.css";
+@import "../../../js-react/src/styles.css";
 body { margin: 0; padding: 16px; background: #f5f5f5; }
 body:has([data-theme="dark"]) { background: #101010; }
 .host-frameless { --pp-root-border: 0; --pp-root-padding: 0; --pp-root-max-width: none; --pp-root-background: transparent; }

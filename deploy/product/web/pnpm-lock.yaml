@@ -163,6 +163,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  '@phala/pay': file:../../../sdk/js
   undici@7.29.0: 7.30.0
 
 importers:
@@ -174,7 +175,10 @@ importers:
         version: 5.3.0
       '@phala/pay':
         specifier: file:../../../sdk/js
-        version: file:../../../sdk/js(react@18.3.1)(typescript@6.0.3)(viem@2.56.9(typescript@6.0.3)(zod@3.25.76))
+        version: file:../../../sdk/js(typescript@6.0.3)(viem@2.56.9(typescript@6.0.3)(zod@3.25.76))
+      '@phala/pay-react':
+        specifier: file:../../../sdk/js-react
+        version: file:../../../sdk/js-react(react@18.3.1)(typescript@6.0.3)(viem@2.56.9(typescript@6.0.3)(zod@3.25.76))
       '@tanstack/react-query':
         specifier: 5.104.0
         version: 5.104.0(react@18.3.1)
@@ -930,15 +934,18 @@ packages:
   '@oxc-project/types@0.151.0':
     resolution: {integrity: sha512-J1yXrIlNDZVzE3ada310xeAw7nH8yCAyLPuUIsjKatFPmfn5bS1oW+cM+QsGOtVWd5nhSpbwZWx/rue+r5Z+PA==}
 
-  '@phala/pay@file:../../../sdk/js':
-    resolution: {directory: ../../../sdk/js, type: directory}
+  '@phala/pay-react@file:../../../sdk/js-react':
+    resolution: {directory: ../../../sdk/js-react, type: directory}
     engines: {node: '>=20.3'}
     peerDependencies:
       react: ^18.2.0 || ^19.0.0
       viem: ^2.21.0
-    peerDependenciesMeta:
-      react:
-        optional: true
+
+  '@phala/pay@file:../../../sdk/js':
+    resolution: {directory: ../../../sdk/js, type: directory}
+    engines: {node: '>=20.3'}
+    peerDependencies:
+      viem: ^2.21.0
 
   '@playwright/test@1.63.0':
     resolution: {integrity: sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ==}
@@ -4340,13 +4347,19 @@ snapshots:
 
   '@oxc-project/types@0.151.0': {}
 
-  '@phala/pay@file:../../../sdk/js(react@18.3.1)(typescript@6.0.3)(viem@2.56.9(typescript@6.0.3)(zod@3.25.76))':
+  '@phala/pay-react@file:../../../sdk/js-react(react@18.3.1)(typescript@6.0.3)(viem@2.56.9(typescript@6.0.3)(zod@3.25.76))':
     dependencies:
-      mipd: 0.0.7(typescript@6.0.3)
+      '@phala/pay': file:../../../sdk/js(typescript@6.0.3)(viem@2.56.9(typescript@6.0.3)(zod@3.25.76))
+      react: 18.3.1
       uqr: 0.1.3
       viem: 2.56.9(typescript@6.0.3)(zod@3.25.76)
-    optionalDependencies:
-      react: 18.3.1
+    transitivePeerDependencies:
+      - typescript
+
+  '@phala/pay@file:../../../sdk/js(typescript@6.0.3)(viem@2.56.9(typescript@6.0.3)(zod@3.25.76))':
+    dependencies:
+      mipd: 0.0.7(typescript@6.0.3)
+      viem: 2.56.9(typescript@6.0.3)(zod@3.25.76)
     transitivePeerDependencies:
       - typescript
 

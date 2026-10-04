@@ -1,4 +1,4 @@
-import type { Appearance } from "@phala/pay/react";
+import type { Appearance } from "@phala/pay-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";

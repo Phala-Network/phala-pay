@@ -1,6 +1,7 @@
 # Changelog
 
-Phala Pay's releases. The service, the JS SDK `@phala/pay` (`sdk/js`), and the Python SDK
+Phala Pay's releases. The service, the JS SDK packages `@phala/pay` (`sdk/js`),
+`@phala/pay-react` (`sdk/js-react`), and `@phala/pay-server` (`sdk/js-server`), and the Python SDK
 `phala-pay` (`sdk/python`) share one version and are released together (CONTRIBUTING.md,
 "Releasing"). Each version records the changes to the HTTP API and webhook payloads that
 integrators see and to the deployment operators run, then the SDKs' changes under "JS SDK" and
@@ -110,33 +111,47 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   body/key stay fixed, and interrupts or replayed errors terminate retries. Interactive defaults
   remain 15 seconds per attempt, four attempts, and 60 seconds total.
 
-### JS SDK (`@phala/pay`)
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Added
 
-- Opt-in `upgradeTolerance` for GET and idempotent POST retries across maintenance, connection
-  failures, and gateway 502/503/504 for up to five minutes. Explicit deadlines and cancellation
-  remain effective; keys and bodies stay fixed. Checkout and deposit address polling preserve
-  their last view through outages and show neutral reconnecting state.
+- Opt-in `upgradeTolerance` in `@phala/pay-server` for GET and idempotent POST retries across
+  maintenance, connection failures, and gateway 502/503/504 for up to five minutes. Explicit
+  deadlines and cancellation remain effective; keys and bodies stay fixed. Browser core checkout
+  and React deposit address polling preserve their last view through outages and show neutral
+  reconnecting state.
 
-- Merchant server client at `@phala/pay/server`: all OpenAPI resources, typed parameters/responses,
+- Merchant server client at `@phala/pay-server`: all OpenAPI resources, typed parameters/responses,
   verified quote/address results, two-variable `PhalaPay.fromEnv()`, frozen pins parse/encode,
   bound Ed25519 webhooks and `checkoutParams` with browser-exported `CheckoutParams`.
 - Deadline-bounded transport with attempt timeouts, jitter, Retry-After, frozen POST idempotency,
   redirect refusal, lossless integer validation, cancellation and typed redacted errors.
 - Pure `depositNetAmount` / `balanceDelta` helpers with monotone ledger convergence and strict
   validation; JS implements all five shared fixture groups.
-- `@phala/pay/server/helpers` for keyless address, webhook and offline sweep builders. Existing
+- `@phala/pay-server/helpers` for keyless address, webhook and offline sweep builders. Existing
   server helper exports remain available; `ForwarderResponse` names the generated API forwarder
   while `Forwarder` retains its legacy contract-pins type.
 
 #### Changed (breaking)
 
-- `@phala/pay/server` rejects browser-like environments before reading credentials; its
-  `browser` export refuses merchant imports. Move browser offline helper imports to
-  `@phala/pay/server/helpers`. Node.js >=20.3, Bun and Deno server runtimes are supported when
-  fetch, AbortSignal.any and WebCrypto are available. The browser root entry and existing
-  checkout props remain keyless.
+- The JavaScript SDK is now three packages. `@phala/pay` is framework-free browser code,
+  `@phala/pay-react` contains the React components and `styles.css`, and `@phala/pay-server`
+  contains the merchant client and server helpers. The old entry points migrate as follows:
+
+  | Old import | New import |
+  | --- | --- |
+  | `@phala/pay/react` | `@phala/pay-react` |
+  | `@phala/pay/styles.css` | `@phala/pay-react/styles.css` |
+  | `@phala/pay/server` | `@phala/pay-server` |
+  | `@phala/pay/server/helpers` | `@phala/pay-server/helpers` |
+
+  Install the new package explicitly at the same version. The removed paths are a breaking change
+  in 0.9.0; `@phala/pay` has no React peer dependency or server/key-handling code.
+
+- `@phala/pay-server` rejects browser-like environments before reading credentials. Move browser
+  offline helper imports to `@phala/pay-server/helpers`. Node.js >=20.3, Bun and Deno server
+  runtimes are supported when fetch, AbortSignal.any and WebCrypto are available. The browser core
+  entry and existing checkout props remain keyless.
 - Duplicate webhook signing headers and non-exact UTF-8 bodies are rejected. The legacy
   `WebhookSignatureError` export is an alias of `SignatureVerificationError`.
 

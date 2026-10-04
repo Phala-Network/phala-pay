@@ -1,4 +1,4 @@
-import type { Appearance } from "@phala/pay/react";
+import type { Appearance } from "@phala/pay-react";
 import { useMutation } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
