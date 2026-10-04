@@ -183,6 +183,23 @@ describe("merchant client resources and checkout", () => {
       ).rejects.toBeInstanceOf(AddressMismatchError);
     }
   });
+  it("verifies expanded quote results and preserves null/absent and decimal wire values", async () => {
+    const deposit = example("Deposit");
+    const expanded = { ...deposit, quote: { ...quoteResponse(), address: pins.factory } };
+    await expect(
+      makeClient(expanded).deposits.retrieve(String(deposit["id"]), { "expand[]": ["quote"] }),
+    ).rejects.toBeInstanceOf(AddressMismatchError);
+    const response = quoteResponse({ deposit: null, payment: null });
+    Reflect.deleteProperty(response, "client_secret");
+    const result = await makeClient(response).quotes.retrieve(response.id);
+    expect(Object.hasOwn(result, "client_secret")).toBe(false);
+    expect(result).toMatchObject({
+      deposit: null,
+      payment: null,
+      amount_atomic: response.amount_atomic,
+    });
+    expect("exchange_rate" in result ? result.exchange_rate : null).toBe(response.exchange_rate);
+  });
   it("paginates automatically, encodes cursors and rejects empty/repeated continuing pages", async () => {
     const first = quoteResponse();
     const second = quoteResponse({ id: "qt_22222222222222222222222222222222" });
@@ -398,6 +415,43 @@ describe("bound webhooks", () => {
         "webhook-signature": `v1a,${signature}`,
       }),
     ).rejects.toBeInstanceOf(SignatureVerificationError);
+  });
+  it("verifies overlapping and retiring keys without discovery or trust mutation", async () => {
+    const replacement = generateKeyPairSync("ed25519");
+    const replacementKey = `whpk_${replacement.publicKey.export({ type: "spki", format: "der" }).subarray(-32).toString("base64")}`;
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const overlapPins = {
+      ...pins,
+      webhook_keys: [
+        { version: 1, public_key: publicKey },
+        { version: 2, public_key: replacementKey },
+      ],
+    };
+    const overlap = new PhalaPay({ apiKey, pins: overlapPins, fetch });
+    const originalPins = overlap.pins;
+    const retiring = signed(envelope("account.webhook_key_rolled"));
+    await expect(
+      overlap.webhooks.constructEvent(retiring.body, retiring.headers),
+    ).resolves.toHaveProperty("id");
+    const newer = {
+      ...retiring.headers,
+      "Webhook-Signature": `v1a,${sign(null, Buffer.concat([Buffer.from(`${retiring.headers["WebHook-ID"]}.${retiring.headers["Webhook-Timestamp"]}.`), retiring.body]), replacement.privateKey).toString("base64")}`,
+    };
+    await expect(overlap.webhooks.constructEvent(retiring.body, newer)).resolves.toHaveProperty(
+      "id",
+    );
+    expect(overlap.pins).toBe(originalPins);
+    expect(fetch).not.toHaveBeenCalled();
+    const replaced = new PhalaPay({
+      apiKey,
+      pins: { ...pins, webhook_keys: [{ version: 2, public_key: replacementKey }] },
+    });
+    await expect(
+      replaced.webhooks.constructEvent(retiring.body, retiring.headers),
+    ).rejects.toBeInstanceOf(SignatureVerificationError);
+    await expect(replaced.webhooks.constructEvent(retiring.body, newer)).resolves.toHaveProperty(
+      "id",
+    );
   });
   it("verifies all shared webhook vectors using the pinned client identity", async () => {
     const vectors = fixture<{

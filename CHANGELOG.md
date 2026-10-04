@@ -50,6 +50,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   Node helper exports remain available; `ForwarderResponse` names the generated API forwarder
   while `Forwarder` retains its legacy contract-pins type.
 
+#### Changed (breaking)
+
+- `@phala/pay/server` now requires Node.js and rejects browser, Deno, Bun and edge use before
+  reading credentials. Move existing non-Node offline helper imports to
+  `@phala/pay/server/helpers`. The browser root entry and existing checkout props remain keyless.
+- Duplicate webhook signing headers and non-exact UTF-8 bodies are rejected. The legacy
+  `WebhookSignatureError` export is an alias of `SignatureVerificationError`.
+
+## [0.8.3] - 2026-10-04
+
+### JS SDK (`@phala/pay`)
+
+#### Added
 
 - Branded chain and token icons in Checkout and DepositAddress, with mainnet-family artwork on testnets
   and neutral monogram fallbacks. Export `NetworkIcon` / `AssetIcon` from `@phala/pay/react`
@@ -63,14 +76,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   tabs use single-line labels. Spacing is tighter with 44px touch targets.
 - The React frame supports `--pp-root-border`, `--pp-root-padding`, `--pp-root-max-width`, and
   `--pp-root-background` overrides for embedding in host dialogs; frame defaults are unchanged.
-
-#### Changed (breaking)
-
-- `@phala/pay/server` now requires Node.js and rejects browser, Deno, Bun and edge use before
-  reading credentials. Move existing non-Node offline helper imports to
-  `@phala/pay/server/helpers`. The browser root entry and existing checkout props remain keyless.
-- Duplicate webhook signing headers and non-exact UTF-8 bodies are rejected. The legacy
-  `WebhookSignatureError` export is an alias of `SignatureVerificationError`.
 
 #### Fixed
 

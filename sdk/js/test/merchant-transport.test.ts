@@ -125,11 +125,13 @@ describe("merchant transport", () => {
     expect(performance.now()).toBe(1750);
     vi.mocked(Math.random).mockReturnValue(1);
     calls.length = 0;
-    const second = transport(fetch, { maxAttempts: 3 }).request("GET", "/v1/test", undefined);
+    const second = transport(fetch, { maxAttempts: 10 }).request("GET", "/v1/test", undefined);
     const secondAssertion = expect(second).rejects.toBeInstanceOf(ApiError);
     await vi.runAllTimersAsync();
     await secondAssertion;
-    expect(calls.map((t) => t - (calls[0] ?? 0))).toEqual([0, 500, 1500]);
+    expect(calls.map((t) => t - (calls[0] ?? 0))).toEqual([
+      0, 500, 1500, 3500, 7500, 12500, 17500, 22500, 27500, 32500,
+    ]);
   });
   it.each(["2", "date"])("honors Retry-After minimum (%s)", async (value) => {
     vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
@@ -251,6 +253,8 @@ describe("merchant transport", () => {
       .fn<typeof globalThis.fetch>()
       .mockImplementation(() => new Promise<Response>(() => {}));
     const controller = new AbortController();
+    const injectedClose = vi.fn();
+    Object.assign(fetch, { close: injectedClose });
     const client = transport(fetch);
     const cancelled = expect(
       client.request("GET", "/v1/test", undefined, { signal: controller.signal }),
@@ -263,6 +267,7 @@ describe("merchant transport", () => {
     });
     await client.close();
     await closed;
+    expect(injectedClose).not.toHaveBeenCalled();
     await expect(client.request("GET", "/v1/test", undefined)).rejects.toBeInstanceOf(
       TransportError,
     );
@@ -299,6 +304,10 @@ describe("merchant transport", () => {
       { maxAttempts: 11 },
       { maxAttempts: 1.5 },
       { timeoutMs: 0 },
+      { timeoutMs: -1 },
+      { timeoutMs: NaN },
+      { maxAttempts: Infinity },
+      { requestDeadlineMs: 0 },
       { requestDeadlineMs: Infinity },
     ])
       expect(() => transport(fetch, options)).toThrow(ConfigurationError);

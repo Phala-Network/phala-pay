@@ -71,7 +71,8 @@
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build && pnpm run check-generated",
     "generate:types": "openapi-typescript ../../crates/topup/openapi.json -o src/generated/openapi.d.ts --immutable && node scripts/generate-server.mjs",
     "check-generated": "bash ../scripts/check-generated-js.sh",
-    "generate:server": "node scripts/generate-server.mjs"
+    "generate:server": "node scripts/generate-server.mjs",
+    "test:fixtures": "vitest run test/shared-fixtures.test.ts test/merchant-pins-ledger.test.ts test/merchant-transport.test.ts"
   },
   "dependencies": {
     "mipd": "^0.0.7",

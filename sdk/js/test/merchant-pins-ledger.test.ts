@@ -27,7 +27,7 @@ describe("shared pins fixtures", () => {
         wrap(
           JSON.stringify({
             ...pins,
-            api_base: "https://API.PHALA-PAY.EXAMPLE:443/",
+            api_base: "HTTPS://API.PHALA-PAY.EXAMPLE:443/",
             factory: pins.factory.toUpperCase().replace("0X", "0x"),
           }),
         ),
@@ -117,6 +117,17 @@ describe("shared pins fixtures", () => {
       }),
     ).toThrow(ConfigurationError);
   });
+  it("rejects missing pins in either mode and exposes readonly pins/mode", () => {
+    for (const key of [apiKey, "ppay_rk_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA3hNyVt"])
+      expect(() => new PhalaPay({ apiKey: key, pins: "" })).toThrow(ConfigurationError);
+    const pay = new PhalaPay({ apiKey, pins });
+    expect(Reflect.set(pay, "pins", {})).toBe(false);
+    expect(Reflect.set(pay, "livemode", true)).toBe(false);
+    expect(pay.pins).toEqual(pins);
+    expect(() =>
+      parsePins(wrap(JSON.stringify({ ...pins, livemode: true, api_base: "http://127.0.0.1" }))),
+    ).toThrow(ConfigurationError);
+  });
   it("reads exactly two env values and rejects bad keys, mode and alternate origins", () => {
     const reads: string[] = [];
     const env = new Proxy(
@@ -186,6 +197,12 @@ describe("shared ledger fixtures", () => {
   it("values an unvalued reversal when an older valuation arrives", () => {
     const pending = { ...valued, amount: null, status: "pending" };
     const reversed = { ...pending, status: "reversed" };
+    const credited = balanceDelta(pending, valued);
+    expect(credited).toMatchObject({ contribution: 2500, delta: 2500 });
+    expect(balanceDelta(credited.snapshot, pending)).toMatchObject({
+      contribution: 2500,
+      delta: 0,
+    });
     const first = balanceDelta(null, reversed);
     expect(balanceDelta(first.snapshot, valued)).toMatchObject({
       contribution: 0,
@@ -201,6 +218,11 @@ describe("shared ledger fixtures", () => {
       { status: "refunded" },
       { amount: 1.5 },
       { amount: -1 },
+      { amount: NaN },
+      { amount: Infinity },
+      { amount_refunded: -1 },
+      { amount_refunded: 0.5 },
+      { amount_reversed: Number.MAX_SAFE_INTEGER + 1 },
       { amount: Number.MAX_SAFE_INTEGER + 1 },
       { amount: null },
       { amount_refunded: 2501 },
