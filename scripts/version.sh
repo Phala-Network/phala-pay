@@ -36,7 +36,7 @@ if (($# == 1)); then
     cargo update --workspace --quiet
     for package in sdk/js/package.json sdk/js-react/package.json sdk/js-server/package.json; do
         if [[ "$package" == sdk/js-react/package.json ]]; then
-            jq --arg version "$1" '.version = $version | .dependencies["@phala/pay"] = $version | .peerDependencies["@phala/pay"] = $version' "$package" >"$package.tmp"
+            jq --arg version "$1" '.version = $version | .dependencies["@phala/pay"] = $version' "$package" >"$package.tmp"
         else
             jq --arg version "$1" '.version = $version' "$package" >"$package.tmp"
         fi
@@ -60,6 +60,8 @@ for package in sdk/js/package.json sdk/js-react/package.json sdk/js-server/packa
     [[ "$(jq -r .version "$package")" == "$version" ]] ||
         mismatch "$package" "$(jq -r .version "$package")"
 done
+[[ "$(jq -r '.dependencies["@phala/pay"]' sdk/js-react/package.json)" == "$version" ]] ||
+    mismatch 'sdk/js-react/package.json dependencies.@phala/pay' "$(jq -r '.dependencies["@phala/pay"]' sdk/js-react/package.json)"
 [[ "$(python_version)" == "$python" ]] || mismatch sdk/python/pyproject.toml "$(python_version)"
 [[ "$(python_lock_version)" == "$python" ]] || mismatch sdk/python/uv.lock "$(python_lock_version)"
 [[ "$(deploy_sdk_version)" == "$python" ]] || mismatch deploy/deploy.sh "$(deploy_sdk_version)"

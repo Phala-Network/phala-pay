@@ -304,6 +304,18 @@ jobs:
       - name: Publish all JavaScript packages to npm with provenance
         working-directory: sdk/js
         run: |
+          # Check every name before publishing anything: npm cannot configure a trusted publisher
+          # until the package exists. New scoped names need an owner bootstrap first.
+          for package in @phala/pay @phala/pay-react @phala/pay-server; do
+            if ! view=$(npm view "$package" name --json 2>/dev/null); then
+              if [[ "$(jq -r '.error.code? // empty' <<<"$view" 2>/dev/null)" == E404 ]]; then
+                echo "::error::${package} does not exist on npm. An @phala owner with publish rights and 2FA must first publish a public 0.0.0 placeholder, deprecate it as 'placeholder', then configure its GitHub Actions trusted publisher: Phala-Network/phala-pay, .github/workflows/release.yml, environment npm. Confirm this setup before retrying."
+              else
+                echo "::error::cannot check ${package} on npm: ${view}"
+              fi
+              exit 1
+            fi
+          done
           publish() {
             package=$1
             directory=$2
@@ -313,7 +325,10 @@ jobs:
               }
               echo "${package} ${VERSION} is already published from ${GITHUB_SHA}"
             elif [[ "$(jq -r '.error.code? // empty' <<<"$view" 2>/dev/null)" == E404 ]]; then
-              (cd "$directory" && npm publish --provenance --access public)
+              if ! (cd "$directory" && npm publish --provenance --access public); then
+                echo "::error::Publishing ${package} ${VERSION} failed. If npm reports E404 or an authentication error, confirm the package's GitHub Actions trusted publisher is configured for Phala-Network/phala-pay, .github/workflows/release.yml, environment npm. New packages require an owner-published public 0.0.0 placeholder (deprecated as 'placeholder') before trusted publishing can be configured. See the npm error above for other failures."
+                exit 1
+              fi
             else
               echo "::error::cannot read ${package} ${VERSION} from npm: ${view}"; exit 1
             fi

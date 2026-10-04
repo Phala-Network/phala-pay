@@ -463,8 +463,9 @@ deploy command `npm run deploy`; for the Previews Base the build command
 Preview copies the Previews Base when it is created, so changing the Base leaves existing Previews
 on their old settings until each is edited too.
 
-- **Build.** `build:cloudflare` builds `sdk/js` (the page depends on it through `file:`) and then
-  the page, each from its own lockfile with `npx -y pnpm@12.6.0`, on the Node of
+- **Build.** `build:cloudflare` builds `@phala/pay-react` and its workspace dependencies
+  (`@phala/pay`) in dependency order, then the page, each from its own lockfile with
+  `npx -y pnpm@12.6.0`, on the Node of
   `product/web/.node-version` (24, as CI). The Cloudflare Vite plugin writes the page as cf's
   Build Output, in `product/web/.cloudflare/output`. The page's API origin is fixed at build time:
   `VITE_DEMO_API_ORIGIN` in `product/web/.env.production`, `https://pay-demo-api.phala.com`.

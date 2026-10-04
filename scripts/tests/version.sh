@@ -6,6 +6,7 @@
 # - a pre-release passes as X.Y.Z-rc.N in Cargo and npm and X.Y.ZrcN in Python, and fails as
 #   another release candidate in Python;
 # - setting a version that is not X.Y.Z or X.Y.Z-rc.N is refused before any file changes.
+# - setting a version updates all npm versions and React's exact core dependency, without adding a peer.
 set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
@@ -29,7 +30,13 @@ fixture() {
 set_version() {
     case "$1" in
         Cargo.toml) sed -i "/^\[workspace.package\]\$/,/^\[/s/^version = \".*\"\$/version = \"$2\"/" "$tmp/repo/$1" ;;
-        *package.json) sed -i "0,/\"version\": \".*\"/s//\"version\": \"$2\"/" "$tmp/repo/$1" ;;
+        *package.json)
+            jq --arg version "$2" '.version = $version' "$tmp/repo/$1" >"$tmp/package.json"
+            mv "$tmp/package.json" "$tmp/repo/$1"
+            if [[ "$1" == sdk/js-react/package.json ]]; then
+                jq --arg version "$2" '.dependencies["@phala/pay"] = $version' "$tmp/repo/$1" >"$tmp/package.json"
+                mv "$tmp/package.json" "$tmp/repo/$1"
+            fi ;;
         *pyproject.toml) sed -i "/^\[project\]\$/,/^\[/s/^version = \".*\"\$/version = \"$2\"/" "$tmp/repo/$1" ;;
         *uv.lock) sed -i "/^name = \"phala-pay\"\$/{n;s/^version = \".*\"\$/version = \"$2\"/}" "$tmp/repo/$1" ;;
         *deploy.sh) sed -i "s/^sdk=phala-pay==.*\$/sdk=phala-pay==$2/" "$tmp/repo/$1" ;;
@@ -46,6 +53,13 @@ for file in "${files[@]:1}"; do
     if "$tmp/repo/scripts/version.sh" >/dev/null 2>"$tmp/err"; then fail "a drifted $file passed"; fi
     grep -q "^version.sh: $file names 9.9.9," "$tmp/err" || fail "a drifted $file was not named: $(cat "$tmp/err")"
 done
+
+fixture
+jq '.dependencies["@phala/pay"] = "^9.9.9"' "$tmp/repo/sdk/js-react/package.json" >"$tmp/package.json"
+mv "$tmp/package.json" "$tmp/repo/sdk/js-react/package.json"
+if "$tmp/repo/scripts/version.sh" >/dev/null 2>"$tmp/err"; then fail "a drifted React core dependency passed"; fi
+grep -q '^version.sh: sdk/js-react/package.json dependencies.@phala/pay names \^9.9.9,' "$tmp/err" ||
+    fail "a drifted React core dependency was not named: $(cat "$tmp/err")"
 
 fixture
 set_version Cargo.toml 0.5.0-rc.1
@@ -65,6 +79,28 @@ status=0
 ((status == 64)) || fail "setting 0.5 exited $status, not 64"
 for file in "${files[@]}"; do
     cmp -s "$root/$file" "$tmp/repo/$file" || fail "setting 0.5 changed $file"
+done
+
+# Stub the unrelated Cargo/Python lock refreshes; exercise the real npm version setter on fixtures.
+cargo() { [[ "$*" == 'update --workspace --quiet' ]]; }
+uv() {
+    [[ "$*" == "version --quiet --project sdk/python --no-sync ${!#}" ]] || return 1
+    local version=${!#}
+    version=${version/-rc./rc}
+    sed -i "/^\[project\]\$/,/^\[/s/^version = \".*\"\$/version = \"$version\"/" sdk/python/pyproject.toml
+    sed -i "/^name = \"phala-pay\"\$/{n;s/^version = \".*\"\$/version = \"$version\"/}" sdk/python/uv.lock
+}
+export -f cargo uv
+for version in 0.9.0 0.9.0-rc.1; do
+    fixture
+    [[ "$("$tmp/repo/scripts/version.sh" "$version")" == "$version" ]] || fail "setting $version failed"
+    for package in sdk/js/package.json sdk/js-react/package.json sdk/js-server/package.json; do
+        [[ "$(jq -r .version "$tmp/repo/$package")" == "$version" ]] || fail "setting $version missed $package"
+    done
+    [[ "$(jq -r '.dependencies["@phala/pay"]' "$tmp/repo/sdk/js-react/package.json")" == "$version" ]] ||
+        fail "setting $version missed React's exact core dependency"
+    jq -e '.peerDependencies | has("@phala/pay") | not' "$tmp/repo/sdk/js-react/package.json" >/dev/null ||
+        fail "setting $version added a core peer dependency"
 done
 
 echo "version test passed"
