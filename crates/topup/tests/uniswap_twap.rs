@@ -108,6 +108,12 @@ async fn postgres_window_survives_restart_and_refused_samples_are_not_inserted()
             ))
             .execute(&database.owner_pool)
             .await?;
+            // Re-upgrade after the retaining down reuses the table and its history.
+            sqlx::raw_sql(include_str!(
+                "../migrations/20261029000000_uniswap_twap.up.sql"
+            ))
+            .execute(&database.owner_pool)
+            .await?;
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM price_twap_observations")
                 .fetch_one(&database.app_pool)
                 .await?;
