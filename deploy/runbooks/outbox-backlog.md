@@ -54,7 +54,6 @@ whose endpoint keeps failing.
 `topup-outbox-<mode>` checks in again and the merchant receives new events; receivers deduplicate
 by webhook id.
 
-
 ## Proactive delivery alerts
 
 `topup-outbox-live` and `topup-outbox-test` prove successful database polling, not merchant
