@@ -5,7 +5,7 @@
     "pins": {
       "status": "pending",
       "js": true,
-      "python": false
+      "python": true
     },
     "addresses": {
       "status": "implemented",
@@ -20,12 +20,12 @@
     "ledger": {
       "status": "pending",
       "js": true,
-      "python": false
+      "python": true
     },
     "transport": {
       "status": "pending",
       "js": true,
-      "python": false
+      "python": true
     }
   }
 }

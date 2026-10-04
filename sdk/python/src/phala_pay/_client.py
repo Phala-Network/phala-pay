@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
+from topup_client.api.quotes import list_quotes
 from topup_client.models import (
     AccountObject,
     ApiKeyObject,
@@ -20,6 +22,7 @@ from topup_client.models import (
     Forwarder,
     PaymentSettingsObject,
     Quote,
+    QuoteList,
     Refund,
     Sweep,
     Treasury,
@@ -30,6 +33,8 @@ from topup_client.types import UNSET, Unset
 from topup_sdk import TopupClient, export_account, sign_treasury_challenge
 from topup_sdk.client import Metadata
 
+from ._errors import ConfigurationError
+from ._pins import Pins, PinsError, parse_pins
 from ._types import (
     DepositAddressStatus,
     DepositStatus,
@@ -74,26 +79,61 @@ class PhalaPay:
 
     def __init__(
         self,
-        api_base: str,
         api_key: str,
-        *,
-        forwarder: tuple[str, str],
-        treasuries: Mapping[int, str] | None = None,
-        account: str | None = None,
+        *legacy: object,
+        pins: Pins | str | None = None,
+        api_base: str | None = None,
         timeout: float = 15.0,
         max_attempts: int = 4,
+        request_deadline: float = 60.0,
         transport: httpx.BaseTransport | None = None,
+        **legacy_kwargs: object,
     ) -> None:
+        if legacy or legacy_kwargs:
+            if pins is not None:
+                raise ConfigurationError(
+                    "pins cannot be combined with legacy constructor arguments"
+                )
+            if not legacy or not isinstance(legacy[0], str):
+                raise ConfigurationError("legacy constructor requires api_base and api_key")
+            base, key = api_key, legacy[0]
+            api_key, api_base = key, base
+            forwarder = legacy_kwargs.pop("forwarder", None)
+            treasuries = legacy_kwargs.pop("treasuries", None)
+            account = legacy_kwargs.pop("account", None)
+            if legacy_kwargs:
+                raise ConfigurationError("unknown constructor argument")
+            self._pins = None
+        else:
+            if pins is None:
+                raise ConfigurationError("pins is required")
+            try:
+                self._pins = parse_pins(pins) if isinstance(pins, str) else pins
+            except (PinsError, ValueError) as error:
+                raise ConfigurationError("invalid pins") from error
+            if not isinstance(self._pins, Pins):
+                raise ConfigurationError("invalid pins")
+            if self._pins.livemode != ("_live_" in api_key):
+                raise ConfigurationError("API key mode does not match pins")
+            if api_base is None:
+                api_base = self._pins.api_base
+            elif api_base.rstrip("/").lower() != self._pins.api_base:
+                raise ConfigurationError("api_base does not match pins")
+            forwarder = (self._pins.factory, self._pins.implementation)
+            treasuries = self._pins.treasuries
+            account = self._pins.account
         self._client = TopupClient(
             api_base,
             api_key,
-            account=account,
-            forwarder=forwarder,
-            treasuries=treasuries,
+            account=cast(str | None, account),
+            forwarder=cast(tuple[str, str] | None, forwarder),
+            treasuries=cast(Mapping[int, str] | None, treasuries),
             timeout=timeout,
             max_attempts=max_attempts,
+            request_deadline=request_deadline,
             transport=transport,
         )
+        self._client._issued_quote_ids = set()
         self.account = AccountResource(self._client)
         self.payment_settings = PaymentSettingsResource(self._client)
         self.config = ConfigResource(self._client)
@@ -108,7 +148,46 @@ class PhalaPay:
         self.api_keys = ApiKeys(self._client)
         self.webhook_endpoints = WebhookEndpoints(self._client)
         self.events = Events(self._client)
-        self.webhooks = Webhook
+        self.webhooks: Any = _BoundWebhook(self._pins) if self._pins else Webhook
+
+    @classmethod
+    def from_env(
+        cls, env: Mapping[str, str] | None = None, *, api_base: str | None = None
+    ) -> PhalaPay:
+        values = os.environ if env is None else env
+        try:
+            key, encoded = values["PHALA_PAY_API_KEY"], values["PHALA_PAY_PINS"]
+        except KeyError as exc:
+            raise ConfigurationError(f"missing {exc.args[0]}") from None
+        try:
+            parsed = parse_pins(encoded)
+        except (PinsError, ValueError) as error:
+            raise ConfigurationError("invalid pins") from error
+        return cls(key, pins=parsed, api_base=api_base)
+
+    @property
+    def pins(self) -> Pins:
+        if self._pins is None:
+            raise ConfigurationError("pins unavailable on legacy client")
+        return self._pins
+
+    @property
+    def livemode(self) -> bool:
+        return self._client.livemode
+
+    def checkout_params(self, quote: Quote) -> dict[str, str]:
+        if (
+            not isinstance(quote, Quote)
+            or quote.status != "open"
+            or not quote.client_secret
+            or quote.id not in self._client._issued_quote_ids
+        ):
+            raise ValueError("quote must be an open quote created by this client")
+        return {
+            "clientSecret": quote.client_secret,
+            "expectedAddress": quote.address,
+            "apiBase": str(self._client._client.get_httpx_client().base_url).rstrip("/"),
+        }
 
     def export_account(self, directory: str | Path) -> dict[str, int]:
         """Writes every object of the key's account and mode to `directory`, one JSON file per
@@ -209,7 +288,7 @@ class Quotes:
         `metadata` is Stripe's: up to 50 string pairs for your own use, such as your order id,
         copied to the deposit that pays the quote. Do not store sensitive information in it.
         """
-        return self._client.create_quote(
+        quote = self._client.create_quote(
             client_reference_id,
             amount,
             chain_id=chain_id,
@@ -218,6 +297,31 @@ class Quotes:
             idempotency_key=idempotency_key,
             metadata=metadata,
         )
+        self._client._issued_quote_ids.add(quote.id)
+        return quote
+
+    def list_page(
+        self,
+        *,
+        client_reference_id: str | None = None,
+        status: QuoteStatus | None = None,
+        limit: int = 100,
+        starting_after: str | None = None,
+    ) -> dict[str, object]:
+        page = self._client._call(
+            lambda: list_quotes.sync_detailed(
+                client=self._client._client,
+                client_reference_id=client_reference_id or UNSET,
+                status=status or UNSET,
+                limit=limit,
+                starting_after=starting_after or UNSET,
+            ),
+            QuoteList,
+        )
+        return {
+            "data": [self._client._checked(item) for item in page.data],
+            "has_more": page.has_more,
+        }
 
     def retrieve(self, quote_id: str) -> Quote:
         return self._client.get_quote(quote_id)
@@ -601,4 +705,21 @@ class Events:
             created_gte=created_gte,
             created_lt=created_lt,
             created_lte=created_lte,
+        )
+
+
+class _BoundWebhook:
+    def __init__(self, pins: Pins) -> None:
+        self._pins = pins
+
+    def construct_event(
+        self, payload: bytes | str, headers: Mapping[str, str], *, tolerance: int | float = 300
+    ) -> Any:
+        return Webhook.construct_event(
+            payload,
+            headers,
+            [key for _, key in self._pins.webhook_keys],
+            self._pins.account,
+            expected_livemode=self._pins.livemode,
+            tolerance=tolerance,
         )

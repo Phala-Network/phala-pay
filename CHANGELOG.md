@@ -47,6 +47,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Proposed recovery-domain design for a fenced warm standby, key/storage dependencies,
   promotion and DNS switch, estimated cost and achievable recovery targets; no HA implementation.
 
+### Python SDK (`phala-pay`)
+
+- **Breaking:** add pins-based `PhalaPay` configuration and `from_env()`, bound webhook verification,
+  checkout parameters, pure ledger helpers, typed transport errors, and paginated address validation.
+
 ### JS SDK (`@phala/pay`)
 
 #### Added

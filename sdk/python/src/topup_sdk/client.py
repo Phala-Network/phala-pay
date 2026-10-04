@@ -47,12 +47,15 @@ reverses it (`deposit.reversed`).
 
 from __future__ import annotations
 
+import random
 import time
 import uuid
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from email.utils import parsedate_to_datetime
 from functools import partial
 from typing import Any, Literal, TypeVar
+from urllib.parse import urlparse
 
 import httpx
 
@@ -168,7 +171,13 @@ from topup_client.types import UNSET, Response, Unset
 
 from .addresses import deposit_address, quote_address, same_address
 from .attestation import verify_attestation_binding
-from .errors import AddressMismatchError, ApiError, UnpinnedTreasuryWarning
+from .errors import (
+    AddressMismatchError,
+    ApiError,
+    ResponseValidationError,
+    TransportError,
+    UnpinnedTreasuryWarning,
+)
 from .signing import sf_string
 
 T = TypeVar("T")
@@ -206,9 +215,11 @@ class TopupClient:
         treasuries: Mapping[int, str] | None = None,
         timeout: float = 15.0,
         max_attempts: int = 4,
+        request_deadline: float = 60.0,
         initial_backoff: float = 0.5,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        rng: Callable[[], float] = random.random,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
@@ -221,13 +232,34 @@ class TopupClient:
             raise ValueError("pinning treasuries needs the forwarder to recompute addresses")
         self.livemode = api_key.startswith(LIVE_KEY_PREFIXES)
         """Whether the key is a live key, which requires every address pin."""
+        self._issued_quote_ids: set[str] = set()
         self._account = account
         self._account_pinned = account is not None
         self.forwarder = forwarder
         self.treasuries = None if treasuries is None else dict(treasuries)
+        if request_deadline <= 0:
+            raise ValueError("request_deadline must be positive")
+        self._request_deadline = request_deadline
         self._max_attempts = max_attempts
         self._initial_backoff = initial_backoff
         self._sleep = sleep
+        self._rng = rng
+        parsed_url = urlparse(base_url)
+        if (
+            parsed_url.username
+            or parsed_url.password
+            or parsed_url.query
+            or parsed_url.fragment
+            or parsed_url.path not in ("", "/")
+        ):
+            raise ValueError(
+                "api_base must be an origin without credentials, query, fragment or path"
+            )
+        if parsed_url.scheme != "https" and not (
+            transport is not None
+            or (not self.livemode and parsed_url.hostname in {"127.0.0.1", "localhost", "::1"})
+        ):
+            raise ValueError("api_base must use HTTPS (test mode permits loopback HTTP)")
         http = httpx.Client(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -409,7 +441,8 @@ class TopupClient:
 
     def cancel_quote(self, quote_id: str) -> Quote:
         """Cancels an open, unpaid quote; later payments to its address are credited at spot."""
-        return self._call(lambda: cancel_quote.sync_detailed(quote_id, client=self._client), Quote)
+        quote = self._call(lambda: cancel_quote.sync_detailed(quote_id, client=self._client), Quote)
+        return self._checked(quote)
 
     def list_deposits(
         self,
@@ -799,6 +832,7 @@ class TopupClient:
         return self._call(
             lambda: delete_webhook_endpoint.sync_detailed(endpoint_id, client=self._client),
             DeletedWebhookEndpoint,
+            retryable=False,
         )
 
     def test_webhook_endpoint(self, endpoint_id: str) -> EventObjectResponse:
@@ -1006,7 +1040,13 @@ class TopupClient:
         starting_after: str | None = None
         while True:
             listed = self._call(page(starting_after), kind)
-            yield from listed.data
+            for item in listed.data:
+                if isinstance(item, Quote):
+                    yield self._checked(item)
+                elif isinstance(item, DepositAddress):
+                    yield self._checked_deposit_address(item)
+                else:
+                    yield item
             if not listed.has_more or not listed.data:
                 return
             starting_after = listed.data[-1].id
@@ -1093,33 +1133,49 @@ class TopupClient:
             raise AddressMismatchError(f"{where} pays a treasury that is not the pinned one")
         return pinned
 
-    def _call(self, operation: Callable[[], Response[Any]], expected: type[T]) -> T:
+    def _call(  # noqa: PLR0912
+        self, operation: Callable[[], Response[Any]], expected: type[T], *, retryable: bool = True
+    ) -> T:
         attempt = 1
+        deadline = time.monotonic() + self._request_deadline
         while True:
             try:
                 response = operation()
-            except httpx.TransportError:
+            except httpx.TimeoutException as error:
                 if attempt >= self._max_attempts:
-                    raise
+                    raise TransportError("timeout") from error
+            except httpx.TransportError as error:
+                if attempt >= self._max_attempts:
+                    raise TransportError("network") from error
             except _ErrorResponseError as failed:
-                error = _api_error(failed.response)
-                retryable = error.status_code in RETRYABLE_STATUSES or (
-                    error.code == "idempotency_key_in_use"
+                api_error = _api_error(failed.response)
+                should_retry = retryable and (
+                    api_error.status_code in RETRYABLE_STATUSES
+                    or (api_error.code == "idempotency_key_in_use")
                 )
                 # A saved response is the request's outcome; asking again replays it.
                 replayed = failed.response.headers.get("idempotent-replayed") == "true"
-                if not retryable or replayed or attempt >= self._max_attempts:
-                    raise error from None
-                if error.retry_after is not None:
-                    self._sleep(max(error.retry_after, self._initial_backoff))
+                if not should_retry or replayed or attempt >= self._max_attempts:
+                    raise api_error from None
+                if api_error.retry_after is not None:
+                    delay = max(api_error.retry_after, self._initial_backoff)
+                    if time.monotonic() + delay >= deadline:
+                        raise api_error from None
+                    self._sleep(delay)
                     attempt += 1
                     continue
             else:
-                parsed = response.parsed
+                try:
+                    parsed = response.parsed
+                except (AttributeError, TypeError, ValueError, KeyError) as error:
+                    raise ResponseValidationError("malformed response") from error
                 if response.status_code == 200 and isinstance(parsed, expected):
                     return parsed
                 raise _unexpected(response.status_code, response.headers)
-            self._sleep(self._initial_backoff * 2 ** (attempt - 1))
+            delay = min(5.0, self._initial_backoff * 2 ** (attempt - 1) * (0.5 + 0.5 * self._rng()))
+            if time.monotonic() + delay >= deadline:
+                raise TransportError("timeout")
+            self._sleep(delay)
             attempt += 1
 
 
@@ -1144,7 +1200,10 @@ def _raise_error_response(response: httpx.Response) -> None:
 def _idempotency_key(key: str | None) -> str:
     """One `Idempotency-Key` for every attempt of a request, generated unless given."""
     # The IETF Idempotency-Key header is an RFC 8941 string; the key is its content.
-    return sf_string(key or str(uuid.uuid4()))
+    value = key or str(uuid.uuid4())
+    if len(value) > 255:
+        raise ValueError("idempotency_key must be at most 255 characters")
+    return sf_string(value)
 
 
 def _unset[V](value: V | None) -> V | Unset:
@@ -1200,6 +1259,11 @@ def _unexpected(status_code: int, headers: Mapping[str, str]) -> ApiError:
 
 def _seconds(value: str | None) -> float | None:
     """A `Retry-After` of delay seconds; `None` when absent or not a number of seconds."""
-    if value is None or not value.isdigit():
+    if value is None:
         return None
-    return float(value)
+    if value.isdigit():
+        return float(value)
+    try:
+        return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
+    except (TypeError, ValueError, OverflowError):
+        return None

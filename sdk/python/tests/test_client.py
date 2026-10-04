@@ -207,8 +207,8 @@ def test_only_secret_and_restricted_keys_are_accepted() -> None:
     for key in ["sk_test_123", "rk_live_" + "A" * 49, "ppay_pk_test_" + "A" * 49, "acme/v1"]:
         with pytest.raises(ValueError, match="restricted key"):
             TopupClient("http://service.test", key)
-    assert TopupClient("http://service.test", LIVE_KEY).livemode
-    assert not TopupClient("http://service.test", API_KEY).livemode
+    assert TopupClient("https://service.test", LIVE_KEY).livemode
+    assert not TopupClient("https://service.test", API_KEY).livemode
 
 
 def _live_quote(treasury: str = TREASURY) -> dict[str, object]:

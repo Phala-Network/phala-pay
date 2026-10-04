@@ -171,3 +171,16 @@ PyPI (environment `pypi`) with trusted publishing
 [CHANGELOG.md](https://github.com/Phala-Network/phala-pay/blob/main/CHANGELOG.md), under "Python
 SDK"; [its releases before v0.5.0](https://github.com/Phala-Network/phala-pay/blob/main/sdk/python/CHANGELOG.md),
 versioned on their own, stay in `sdk/python`.
+
+### Pins-based client
+
+```python
+from phala_pay import PhalaPay
+
+pay = PhalaPay.from_env()  # PHALA_PAY_API_KEY and PHALA_PAY_PINS
+quote = pay.quotes.create(
+    client_reference_id="order-1", amount=2500, chain_id=11155111, asset="pha"
+)
+checkout = pay.checkout_params(quote)
+event = pay.webhooks.construct_event(raw_body, request.headers)
+```
