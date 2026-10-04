@@ -33,7 +33,15 @@ impl SignedWebhook {
         }
         let mut entries = Vec::with_capacity(keys.len());
         for key in keys {
-            let signature = signer.sign_webhook(key, &content).await?;
+            let signature = signer.sign_webhook(key, &content).await.inspect_err(|_| {
+                crate::observability::emit_alert(
+                    "TopupOutboxInternalFailure",
+                    "signing_failed",
+                    "critical",
+                    1,
+                    0,
+                );
+            })?;
             entries.push(format!("v1a,{}", STANDARD.encode(signature.0)));
         }
 
@@ -117,6 +125,51 @@ mod tests {
         ) -> Result<Ed25519PublicKey, SignerError> {
             Ok(Ed25519PublicKey(Self::key(key).verifying_key().to_bytes()))
         }
+    }
+
+    struct UnavailableSigner;
+
+    impl Signer for UnavailableSigner {
+        async fn sign_webhook(
+            &self,
+            _: &WebhookKeyId,
+            _: &[u8],
+        ) -> Result<Ed25519Signature, SignerError> {
+            Err(SignerError::KeyUnavailable)
+        }
+        async fn webhook_public_key(
+            &self,
+            _: &WebhookKeyId,
+        ) -> Result<Ed25519PublicKey, SignerError> {
+            Err(SignerError::KeyUnavailable)
+        }
+    }
+
+    #[test]
+    fn signer_failure_reaches_sentry_without_key_or_payload() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let events = sentry::test::with_captured_events(|| {
+            tracing::subscriber::with_default(
+                crate::observability::log_subscriber(std::io::sink),
+                || {
+                    let result = runtime.block_on(SignedWebhook::new(
+                        &UnavailableSigner,
+                        &[key(1)],
+                        "evt_private",
+                        1,
+                        b"private payload",
+                    ));
+                    assert_eq!(result, Err(SignerError::KeyUnavailable));
+                },
+            );
+        });
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tags["alert"], "TopupOutboxInternalFailure");
+        let rendered = format!("{events:?}");
+        assert!(!rendered.contains("private"));
+        assert!(!rendered.contains("acct_a"));
     }
 
     fn key(version: u32) -> WebhookKeyId {

@@ -143,7 +143,8 @@ enum Outcome {
 }
 
 impl Outcome {
-    const fn internal(error: &'static str) -> Self {
+    fn internal(error: &'static str) -> Self {
+        crate::observability::emit_alert("TopupOutboxInternalFailure", error, "critical", 1, 0);
         Self::Failed {
             status: None,
             body: None,
@@ -236,7 +237,6 @@ where
             }
             let free = self.config.max_in_flight.saturating_sub(in_flight.len());
             if claiming.is_terminated() && free > 0 && Instant::now() >= next_claim {
-                monitor.check_in(true);
                 let now = Instant::now();
                 let cooling = cooldowns
                     .iter()
@@ -273,17 +273,21 @@ where
                     }
                     next_claim = Instant::now();
                 }
-                claimed = &mut claiming, if !claiming.is_terminated() => match claimed {
-                    Ok(claimed) if !claimed.is_empty() => {
-                        for event in claimed {
-                            *busy.entry(event.endpoint_id).or_default() += 1;
-                            in_flight.push(self.attempt(event));
+                claimed = &mut claiming, if !claiming.is_terminated() => {
+                    // Poll success proves liveness, not merchant fulfilment.
+                    monitor.check_in(claimed.is_ok());
+                    match claimed {
+                        Ok(claimed) if !claimed.is_empty() => {
+                            for event in claimed {
+                                *busy.entry(event.endpoint_id).or_default() += 1;
+                                in_flight.push(self.attempt(event));
+                            }
                         }
-                    }
-                    Ok(_) => next_claim = Instant::now() + self.config.poll_interval,
-                    Err(error) => {
-                        tracing::error!(%error, "outbox delivery claim failed");
-                        next_claim = Instant::now() + self.config.poll_interval;
+                        Ok(_) => next_claim = Instant::now() + self.config.poll_interval,
+                        Err(error) => {
+                            tracing::error!(%error, "outbox delivery claim failed");
+                            next_claim = Instant::now() + self.config.poll_interval;
+                        }
                     }
                 },
                 () = sleep_until(next_claim), if idle => {}
@@ -460,6 +464,8 @@ where
         let age = Utc::now().signed_duration_since(event.created_at);
         if age > threshold {
             tracing::warn!(
+                tags.alert = "TopupOutboxBacklog",
+                tags.component = if self.livemode { "live" } else { "test" },
                 event_id = %crate::ids::format(crate::ids::EVENT, event.id),
                 event_type = event.event_type,
                 age_seconds = age.num_seconds(),
@@ -510,17 +516,17 @@ where
             .await;
         let response = match response {
             Ok(response) => response,
-            Err(error) => {
-                return Ok(Outcome::Failed {
-                    status: None,
-                    body: None,
-                    error: request_error_code(&error),
-                    endpoint_fault: true,
-                    retry_after: None,
-                });
-            }
+            Err(error) => return Ok(request_failure(&error, self.config.proxy.is_some())),
         };
         let status = response.status();
+        // Smokescreen v0.1.0 marks its own responses with this header. A 500 is internal;
+        // its 407 policy denials and 502/504 upstream failures remain endpoint failures.
+        if self.config.proxy.is_some()
+            && status == StatusCode::INTERNAL_SERVER_ERROR
+            && response.headers().contains_key("x-smokescreen-error")
+        {
+            return Ok(Outcome::internal("proxy_internal_failed"));
+        }
         let retry_after = retry_after(status, response.headers(), Utc::now());
         let (body, body_error) =
             read_response_body(response, self.config.response_body_limit).await;
@@ -792,6 +798,19 @@ async fn read_response_body(
     (Some(String::from_utf8_lossy(&retained).into_owned()), None)
 }
 
+fn request_failure(error: &reqwest::Error, proxy: bool) -> Outcome {
+    if proxy && error.is_connect() {
+        return Outcome::internal("proxy_connect_failed");
+    }
+    Outcome::Failed {
+        status: None,
+        body: None,
+        error: request_error_code(error),
+        endpoint_fault: true,
+        retry_after: None,
+    }
+}
+
 fn request_error_code(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
         "request_timeout"
@@ -860,6 +879,53 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn unreachable_proxy_alerts_without_penalizing_endpoint() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let events = sentry::test::with_captured_events(|| {
+            tracing::subscriber::with_default(
+                crate::observability::log_subscriber(std::io::sink),
+                || {
+                    runtime.block_on(async {
+                        let client = Client::builder()
+                            .proxy(Proxy::all(format!("http://{address}")).unwrap())
+                            .timeout(Duration::from_secs(2))
+                            .build()
+                            .unwrap();
+                        let error = client
+                            .post("https://merchant.invalid/webhook")
+                            .send()
+                            .await
+                            .unwrap_err();
+                        assert!(matches!(
+                            request_failure(&error, true),
+                            Outcome::Failed {
+                                endpoint_fault: false,
+                                ..
+                            }
+                        ));
+                        assert!(matches!(
+                            request_failure(&error, false),
+                            Outcome::Failed {
+                                endpoint_fault: true,
+                                ..
+                            }
+                        ));
+                    });
+                },
+            );
+        });
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tags["alert"], "TopupOutboxInternalFailure");
+        assert_eq!(events[0].tags["component"], "proxy_connect_failed");
+    }
 
     struct SequenceEntropy {
         values: Mutex<VecDeque<u64>>,

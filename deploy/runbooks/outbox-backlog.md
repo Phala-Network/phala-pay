@@ -53,3 +53,23 @@ whose endpoint keeps failing.
 
 `topup-outbox-<mode>` checks in again and the merchant receives new events; receivers deduplicate
 by webhook id.
+
+
+## Proactive delivery alerts
+
+`topup-outbox-live` and `topup-outbox-test` prove successful database polling, not merchant
+fulfilment. The independent business monitor checks each mode once per minute, even when the
+worker is retrying, cooling down endpoints, or cannot claim anything:
+
+- `TopupOutboxBacklog`: at least 1,000 eligible pending endpoint deliveries, or the oldest at
+  least 24 hours old. Disabled/deleted endpoints are excluded except their pending notices.
+- `TopupOutboxStalled`: pending backlog with no persisted successful delivery for 15 minutes.
+  A new backlog and a process restart get a full 15-minute grace period. Success in one mode
+  cannot mask a stall in the other. Age/count alerts remain active across restarts.
+- `TopupOutboxInternalFailure`: signing/rendering/key failures, or failure to connect through
+  the configured egress proxy. `component` identifies the safe failure code. These are retried
+  without penalizing the merchant endpoint. Check dstack signing and smokescreen availability.
+
+A healthy endpoint can mask a different endpoint's failure in the mode-wide success signal;
+the oldest-pending alert still catches that partial stall. Check the daily report's failing
+endpoints. See [Synthetic alert validation](README.md#synthetic-alert-validation) before rollout.

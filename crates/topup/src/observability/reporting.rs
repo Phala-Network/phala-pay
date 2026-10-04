@@ -74,6 +74,15 @@ fn deployment_environment(environment: &str, read_only: bool) -> String {
     }
 }
 
+/// Production preflight: require a nonempty DSN without exposing its value.
+pub fn require_sentry_dsn(dsn: Option<&str>) -> Result<(), ReportingError> {
+    let dsn = dsn
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(ReportingError)?;
+    dsn.parse::<Dsn>().map(|_| ()).map_err(|_| ReportingError)
+}
+
 /// Builds the client options, or `None` when `dsn` is unset or empty.
 fn client_options(
     dsn: Option<&str>,
@@ -163,6 +172,15 @@ fn scrub_breadcrumb(mut breadcrumb: Breadcrumb) -> Breadcrumb {
 fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
     let tag = |name: &str| tags.get(name).map(String::as_str);
     match alert {
+        "TopupOutboxBacklog" | "TopupOutboxStalled" | "TopupOutboxInternalFailure" => {
+            "outbox-backlog.md"
+        }
+        "TopupHeartbeatStale"
+        | "TopupTreasuryProgressAge"
+        | "TopupRefundProgressAge"
+        | "TopupCertificateExpiry"
+        | "TopupCertificateProbeFailed"
+        | "TopupBusinessProbeFailed" => "business-health.md",
         "TopupRpcChainFrozen" => "chain-frozen.md",
         "TopupRpcMetricsRefreshFailed" => "rpc-health.md#metrics-refresh-failure",
         "TopupRpcGroupUnavailable"
@@ -381,6 +399,50 @@ mod tests {
         assert!(super::tracing_layer::<tracing_subscriber::Registry>().is_none());
         // Without a client this returns before building a check-in.
         CronMonitor::lock_expiry().check_in(true);
+    }
+
+    #[test]
+    fn synthetic_business_alerts_use_production_fingerprints_and_runbooks() {
+        let alerts = [
+            "TopupOutboxBacklog",
+            "TopupOutboxStalled",
+            "TopupOutboxInternalFailure",
+            "TopupHeartbeatStale",
+            "TopupTreasuryProgressAge",
+            "TopupRefundProgressAge",
+            "TopupCertificateExpiry",
+            "TopupCertificateProbeFailed",
+            "TopupBusinessProbeFailed",
+        ];
+        let events = with_captured_events_options(
+            || {
+                tracing::subscriber::with_default(log_subscriber(std::io::sink), || {
+                    for alert in alerts {
+                        crate::observability::emit_alert(alert, "synthetic", "critical", 1, 0);
+                    }
+                });
+            },
+            options(),
+        );
+        assert_eq!(events.len(), alerts.len());
+        for (event, alert) in events.iter().zip(alerts) {
+            assert_eq!(event.tags["alert"], alert);
+            assert_eq!(event.fingerprint[0], "topup-alert");
+            let expected = if alert.starts_with("TopupOutbox") {
+                "outbox-backlog.md"
+            } else {
+                "business-health.md"
+            };
+            assert!(event.tags["runbook"].ends_with(expected));
+        }
+    }
+
+    #[test]
+    fn production_preflight_requires_a_present_valid_dsn() {
+        for dsn in [None, Some(""), Some("  "), Some("not a dsn")] {
+            assert!(super::require_sentry_dsn(dsn).is_err());
+        }
+        assert!(super::require_sentry_dsn(Some(TEST_DSN)).is_ok());
     }
 
     #[test]
