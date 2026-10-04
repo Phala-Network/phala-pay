@@ -406,11 +406,11 @@ impl UniswapV2 {
         let price = valuation_price(ratio, sample.spot, eth.price)?;
         let agreement_price = usd_price(sample.spot, eth.price)?;
         let twap_price = usd_price(ratio, eth.price)?;
-        let mut evidence = json!({"pair":PAIR,"token0":a.token0,"token1":a.token1,"block":block.number,"block_hash":block.hash,"window_start_block":start.block,"window_end_block":end.block,"window_s":end.timestamp.saturating_sub(start.timestamp),"cumulative_start":start.cumulative,"cumulative_end":end.cumulative,"twap_q112":ratio,"spot_q112":sample.spot,"weth_reserve":weth,"eth_usd_scaled":eth.price.value().to_string(),"eth_round":round.id.to_string(),"eth_updated_at":round.updated_at,"policy":self.policy});
-        evidence["valuation_rule"] = json!("min(twap,spot)");
-        evidence["twap_usd_scaled"] = json!(twap_price.value().to_string());
-        evidence["spot_usd_scaled"] = json!(agreement_price.value().to_string());
-        evidence["valuation_usd_scaled"] = json!(price.value().to_string());
+        let evidence = json!({"pair":PAIR,"token0":a.token0,"token1":a.token1,"block":block.number,"block_hash":block.hash,"window_start_block":start.block,"window_end_block":end.block,"window_s":end.timestamp.saturating_sub(start.timestamp),"cumulative_start":start.cumulative,"cumulative_end":end.cumulative,"twap_q112":ratio,"spot_q112":sample.spot,"weth_reserve":weth,"eth_usd_scaled":eth.price.value().to_string(),"eth_round":round.id.to_string(),"eth_updated_at":round.updated_at,"policy":self.policy,
+            "valuation_rule":"min(twap,spot)",
+            "twap_usd_scaled":twap_price.value().to_string(),
+            "spot_usd_scaled":agreement_price.value().to_string(),
+            "valuation_usd_scaled":price.value().to_string()});
         Ok(PriceQuote {
             valuation: Observation {
                 source: SourceId::new("uniswap_v2_twap"),
