@@ -7,3 +7,5 @@ post_hooks:
   - "ruff format . --quiet"
 # Enums (the single-value `object` of each object, the error `type`) are `Literal` types.
 literal_enums: true
+# Pinned by pyproject.toml: openapi-python-client==0.29.1.
+# Regeneration: make generate; CI: make check-generated.

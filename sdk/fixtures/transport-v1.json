@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "group": "transport",
+  "scenarios": [
+    {
+      "name": "post_retries_reuse_idempotency_key",
+      "method": "POST",
+      "responses": [
+        503,
+        503,
+        201
+      ],
+      "expected_attempts": 3
+    },
+    {
+      "name": "retry_after_deadline",
+      "method": "POST",
+      "responses": [
+        503,
+        503
+      ],
+      "retry_after_seconds": 60,
+      "deadline_seconds": 1,
+      "expected_attempts": 1
+    },
+    {
+      "name": "delete_is_not_retried",
+      "method": "DELETE",
+      "responses": [
+        503
+      ],
+      "expected_attempts": 1
+    }
+  ]
+}
