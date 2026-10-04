@@ -464,8 +464,6 @@ where
         let age = Utc::now().signed_duration_since(event.created_at);
         if age > threshold {
             tracing::warn!(
-                tags.alert = "TopupOutboxBacklog",
-                tags.component = if self.livemode { "live" } else { "test" },
                 event_id = %crate::ids::format(crate::ids::EVENT, event.id),
                 event_type = event.event_type,
                 age_seconds = age.num_seconds(),
@@ -516,7 +514,17 @@ where
             .await;
         let response = match response {
             Ok(response) => response,
-            Err(error) => return Ok(request_failure(&error, self.config.proxy.is_some())),
+            Err(error) => {
+                return Ok(request_failure(
+                    &error,
+                    self.config.proxy.as_ref(),
+                    self.config
+                        .claim_lease
+                        .saturating_sub(self.config.request_timeout)
+                        .min(Duration::from_secs(1)),
+                )
+                .await);
+            }
         };
         let status = response.status();
         // Smokescreen v0.1.0 marks its own plain HTTP responses with this header and strips
@@ -800,9 +808,33 @@ async fn read_response_body(
     (Some(String::from_utf8_lossy(&retained).into_owned()), None)
 }
 
-fn request_failure(error: &reqwest::Error, proxy: bool) -> Outcome {
-    if proxy && error.is_connect() {
-        return Outcome::internal("proxy_connect_failed");
+async fn request_failure(
+    error: &reqwest::Error,
+    proxy: Option<&Url>,
+    probe_timeout: Duration,
+) -> Outcome {
+    // is_connect also covers merchant TLS failures and rejected HTTPS CONNECT tunnels.
+    // Only attribute it to our proxy when a bounded connection to the proxy itself fails.
+    if error.is_connect()
+        && let Some(proxy) = proxy
+    {
+        let reachable = match (proxy.host_str(), proxy.port_or_known_default()) {
+            (Some(host), Some(port)) => matches!(
+                tokio::time::timeout(
+                    probe_timeout,
+                    tokio::net::TcpStream::connect((
+                        host.trim_start_matches('[').trim_end_matches(']'),
+                        port
+                    ))
+                )
+                .await,
+                Ok(Ok(_))
+            ),
+            _ => false,
+        };
+        if !reachable {
+            return Outcome::internal("proxy_connect_failed");
+        }
     }
     Outcome::Failed {
         status: None,
@@ -896,8 +928,9 @@ mod tests {
                 crate::observability::log_subscriber(std::io::sink),
                 || {
                     runtime.block_on(async {
+                        let proxy = Url::parse(&format!("http://{address}")).unwrap();
                         let client = Client::builder()
-                            .proxy(Proxy::all(format!("http://{address}")).unwrap())
+                            .proxy(Proxy::all(proxy.clone()).unwrap())
                             .timeout(Duration::from_secs(2))
                             .build()
                             .unwrap();
@@ -907,14 +940,14 @@ mod tests {
                             .await
                             .unwrap_err();
                         assert!(matches!(
-                            request_failure(&error, true),
+                            request_failure(&error, Some(&proxy), Duration::from_secs(1)).await,
                             Outcome::Failed {
                                 endpoint_fault: false,
                                 ..
                             }
                         ));
                         assert!(matches!(
-                            request_failure(&error, false),
+                            request_failure(&error, None, Duration::from_secs(1)).await,
                             Outcome::Failed {
                                 endpoint_fault: true,
                                 ..
@@ -927,6 +960,54 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].tags["alert"], "TopupOutboxInternalFailure");
         assert_eq!(events[0].tags["component"], "proxy_connect_failed");
+    }
+
+    #[test]
+    fn merchant_connect_timeout_from_reachable_proxy_does_not_alert() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let events = sentry::test::with_captured_events(|| {
+            tracing::subscriber::with_default(
+                crate::observability::log_subscriber(std::io::sink),
+                || {
+                    runtime.block_on(async {
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let proxy = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+                    let server = tokio::spawn(async move {
+                        let (mut connection, _) = listener.accept().await.unwrap();
+                        let mut request = Vec::new();
+                        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                            let mut chunk = [0; 1024];
+                            let read = connection.read(&mut chunk).await.unwrap();
+                            assert!(read > 0 && request.len() < 8192);
+                            request.extend_from_slice(&chunk[..read]);
+                        }
+                        connection.write_all(b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                        drop(connection);
+                        // Accept the proxy reachability probe after rejecting the merchant tunnel.
+                        let _ = listener.accept().await.unwrap();
+                    });
+                    let scenario = async {
+                        let client = Client::builder().proxy(Proxy::all(proxy.clone()).unwrap())
+                            .timeout(Duration::from_secs(2)).build().unwrap();
+                        let error = client.post("https://merchant.invalid/webhook").send().await.unwrap_err();
+                        assert!(error.is_connect(), "CONNECT rejection is surfaced as a connect error");
+                        assert!(matches!(request_failure(&error, Some(&proxy), Duration::from_secs(1)).await,
+                            Outcome::Failed { endpoint_fault: true, .. }));
+                        server.await.unwrap();
+                    };
+                    tokio::time::timeout(Duration::from_secs(5), scenario).await.unwrap();
+                });
+                },
+            );
+        });
+        assert!(
+            events.is_empty(),
+            "merchant timeout must not emit an internal failure: {events:?}"
+        );
     }
 
     struct SequenceEntropy {

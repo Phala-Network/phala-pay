@@ -60,15 +60,31 @@ by webhook id.
 fulfilment. The independent business monitor checks each mode once per minute, even when the
 worker is retrying, cooling down endpoints, or cannot claim anything:
 
-- `TopupOutboxBacklog`: at least 1,000 eligible pending endpoint deliveries, or the oldest at
-  least 24 hours old. Disabled/deleted endpoints are excluded except their pending notices.
-- `TopupOutboxStalled`: pending backlog with no persisted successful delivery for 15 minutes.
-  A new backlog and a process restart get a full 15-minute grace period. Success in one mode
-  cannot mask a stall in the other. Age/count alerts remain active across restarts.
+- `TopupOutboxBacklog` is a per-mode warning: at least 1,000 eligible pending deliveries,
+  or the oldest at least 24 hours old, **across at least two eligible endpoints**.
+- `TopupOutboxStalled` is a pipeline alert: an eligible undelivered delivery has
+  `next_attempt_at` at least 15 minutes in the past and has still not been claimed/retried.
+  A claim advances that timestamp by its five-minute lease, and a recorded attempt advances
+  it by its retry delay. Future leases and retries do not count as a stall. Recent successful
+  deliveries elsewhere cannot mask overdue work. There is no startup grace beyond the persisted
+  due-time grace: an already overdue queue remains observable after a restart.
+- Both probes exclude an endpoint whose last recorded network attempt failed: a non-2xx
+  status, or no status (timeout/connection failure). **All** of that endpoint's queued deliveries
+  are excluded, including untouched siblings waiting in its normal cooldown. Exclusion lasts
+  until a successful 2xx probe updates its last attempt. This intentionally treats even multiple
+  failing merchant receivers as merchant delivery health, rather than a platform outage.
+  Disabled/deleted endpoints are also excluded except their pending notices.
 - `TopupOutboxInternalFailure`: signing/rendering/key failures, or failure to connect through
-  the configured egress proxy. `component` identifies the safe failure code. These are retried
-  without penalizing the merchant endpoint. Check dstack signing and smokescreen availability.
+  the configured egress proxy itself (a bounded TCP reachability check confirms it). A reachable
+  proxy rejecting an HTTPS CONNECT tunnel, or a merchant TLS failure, is treated as merchant
+  delivery health. Internal failures do not update the endpoint's network-attempt
+  status, and still raise their own alert even if the endpoint is excluded from the queue probes.
+  `component` identifies the safe failure code; repeated direct errors are limited by the SDK
+  to one event per component per hour. Check dstack signing and smokescreen availability.
 
-A healthy endpoint can mask a different endpoint's failure in the mode-wide success signal;
-the oldest-pending alert still catches that partial stall. Check the daily report's failing
-endpoints. See [Synthetic alert validation](README.md#synthetic-alert-validation) before rollout.
+The queue probes emit on entry/severity change and at most once an hour per alert/mode while
+active. Recovery writes a single INFO `business health alert resolved` log, not an event.
+State is process-local; a restart can emit a new initial observation. Individual old-event WARNs
+are breadcrumbs only. A merchant's failing endpoint remains visible in the daily report and
+merchant endpoint API; it does not page the platform through these queue alerts.
+See [Synthetic alert validation](README.md#synthetic-alert-validation) before rollout.

@@ -2,7 +2,11 @@
 
 The independent business health monitor runs once per minute after restore unfreeze. Reads are
 bounded to 20 seconds; failures raise `TopupBusinessProbeFailed` rather than implying health.
-Read-only restore servers do not run this monitor.
+Read-only restore servers do not run this monitor. One small process-local state map tracks each
+alert/component: entry and severity changes emit immediately, then reminders are at most hourly.
+Recovery logs INFO `business health alert resolved` once, without an alert tag or Sentry event.
+An empty treasury/refund queue resolves its age alert. Failed probes leave earlier measurements
+unknown, rather than resolving them. A restart can emit a new initial observation.
 
 | Alert | Trigger | Response |
 |---|---|---|

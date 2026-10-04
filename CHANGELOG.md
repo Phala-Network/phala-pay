@@ -17,7 +17,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - Alert in Sentry on webhook backlog and stalled delivery progress, internal signer/egress
   failures, stale RPO heartbeats, overdue treasury/refund work, and ingress certificate expiry.
-  Add staging synthetic alert commands and a production DSN preflight check.
+  Add staging synthetic alert commands and a production DSN preflight check. Business probes
+  emit on state transitions with hourly reminders and log recovery without an event. Outbox
+  queue alerts detect overdue processing and exclude known failing merchant endpoints; backlog
+  warnings require at least two eligible endpoints.
 - CI retries image builds once without caches only for recognized Actions cache transport
   failures; cache export failures no longer fail builds, with diagnostics retained.
 

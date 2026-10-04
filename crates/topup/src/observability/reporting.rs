@@ -35,6 +35,8 @@ const TRACING_FIELDS_CONTEXT: &str = "Rust Tracing Fields";
 const RUNBOOKS: &str = "https://github.com/Phala-Network/phala-pay/blob/main/deploy/runbooks/";
 /// Minimum interval between two events of the same issue; loops retry every few seconds.
 const EVENT_REPEAT_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// Direct signer/proxy retries share the business probes' hourly reminder ceiling.
+const INTERNAL_FAILURE_REPEAT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// Minimum interval between two check-ins of one monitor, below the Crons limit of six a minute.
 const CHECK_IN_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -210,7 +212,8 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
     }
 }
 
-/// Sends at most one event per issue every [`EVENT_REPEAT_INTERVAL`].
+/// Sends at most one event per issue every [`EVENT_REPEAT_INTERVAL`], or hourly for direct
+/// internal webhook failures. Business probes additionally manage their own transition state.
 ///
 /// A failing loop logs the same error every few seconds; the first event opens or reopens the
 /// issue, and the repeats would only spend the project's quota.
@@ -220,6 +223,16 @@ struct EventThrottle(Mutex<BTreeMap<String, Instant>>);
 
 impl EventThrottle {
     fn admit(&self, event: Event<'static>) -> Option<Event<'static>> {
+        self.admit_at(event, Instant::now())
+    }
+
+    fn admit_at(&self, event: Event<'static>, now: Instant) -> Option<Event<'static>> {
+        let interval =
+            if event.tags.get("alert").map(String::as_str) == Some("TopupOutboxInternalFailure") {
+                INTERNAL_FAILURE_REPEAT_INTERVAL
+            } else {
+                EVENT_REPEAT_INTERVAL
+            };
         let key = if event
             .fingerprint
             .first()
@@ -233,12 +246,14 @@ impl EventThrottle {
                 event.message.as_deref().unwrap_or_default()
             )
         };
-        let now = Instant::now();
         let Ok(mut sent) = self.0.lock() else {
             return Some(event);
         };
-        sent.retain(|_, at| now.duration_since(*at) < EVENT_REPEAT_INTERVAL);
-        if sent.contains_key(&key) {
+        sent.retain(|_, at| now.saturating_duration_since(*at) < INTERNAL_FAILURE_REPEAT_INTERVAL);
+        if sent
+            .get(&key)
+            .is_some_and(|at| now.saturating_duration_since(*at) < interval)
+        {
             return None;
         }
         sent.insert(key, now);
@@ -435,6 +450,64 @@ mod tests {
             };
             assert!(event.tags["runbook"].ends_with(expected));
         }
+    }
+
+    #[test]
+    fn direct_internal_failures_are_limited_to_hourly_per_component() {
+        let throttle = super::EventThrottle::default();
+        let start = std::time::Instant::now();
+        let alert = |component: &str| {
+            super::prepare_event(sentry::protocol::Event {
+                tags: std::collections::BTreeMap::from([
+                    ("alert".to_owned(), "TopupOutboxInternalFailure".to_owned()),
+                    ("component".to_owned(), component.to_owned()),
+                ]),
+                ..Default::default()
+            })
+        };
+        assert!(throttle.admit_at(alert("signing_failed"), start).is_some());
+        assert!(
+            throttle
+                .admit_at(
+                    alert("signing_failed"),
+                    start + std::time::Duration::from_secs(600)
+                )
+                .is_none()
+        );
+        assert!(
+            throttle
+                .admit_at(
+                    alert("signing_failed"),
+                    start + std::time::Duration::from_secs(3599)
+                )
+                .is_none()
+        );
+        assert!(
+            throttle
+                .admit_at(
+                    alert("proxy_connect_failed"),
+                    start + std::time::Duration::from_secs(3599)
+                )
+                .is_some()
+        );
+        assert!(
+            throttle
+                .admit_at(
+                    alert("signing_failed"),
+                    start + std::time::Duration::from_secs(3600)
+                )
+                .is_some()
+        );
+        let other = || sentry::protocol::Event {
+            message: Some("database operation failed".to_owned()),
+            ..Default::default()
+        };
+        assert!(throttle.admit_at(other(), start).is_some());
+        assert!(
+            throttle
+                .admit_at(other(), start + std::time::Duration::from_secs(600))
+                .is_some()
+        );
     }
 
     #[test]

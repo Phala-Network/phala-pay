@@ -113,16 +113,24 @@ was performed by the implementation PR.
 
 | Runtime alert | Synthetic staging command | Detector verification |
 |---|---|---|
-| `TopupOutboxBacklog` | `topup alert-test --alert TopupOutboxBacklog` | test `business_thresholds_emit_sentry_events_at_boundaries`: count ≥ 1,000 or oldest ≥ 24 h, even when unclaimed |
-| `TopupOutboxStalled` | `topup alert-test --alert TopupOutboxStalled --severity critical` | fake-clock test `retries_do_not_hide_stalls_and_success_or_idle_resets_clock`: backlog with no success for 15 min; success and idle reset; startup gets 15 min grace |
+| `TopupOutboxBacklog` | `topup alert-test --alert TopupOutboxBacklog` | test `stalled_means_overdue_work_and_backlog_requires_multiple_endpoints`: count ≥ 1,000 or oldest ≥ 24 h across ≥2 eligible endpoints |
+| `TopupOutboxStalled` | `topup alert-test --alert TopupOutboxStalled --severity critical` | same fake-clock test: due work ≥15 min overdue; leases/backoff and known merchant failures excluded; SQL test `merchant_http_failures_timeouts_and_cooldown_siblings_are_excluded` |
 | `TopupOutboxInternalFailure` | `topup alert-test --alert TopupOutboxInternalFailure --severity critical` | unavailable signer test `signer_failure_reaches_sentry_without_key_or_payload`; proxy connection test `unreachable_proxy_alerts_without_penalizing_endpoint` |
-| `TopupHeartbeatStale` | `topup alert-test --alert TopupHeartbeatStale --severity critical` | same boundary test: missing heartbeat or age ≥ 180 s, independent of WAL activity |
-| `TopupTreasuryProgressAge` | `topup alert-test --alert TopupTreasuryProgressAge` | same boundary test: unapplied effective treasury age ≥ 1 h |
-| `TopupRefundProgressAge` | `topup alert-test --alert TopupRefundProgressAge` | same boundary test: pending attached refund age ≥ 1 h since `paid_at` |
+| `TopupHeartbeatStale` | `topup alert-test --alert TopupHeartbeatStale --severity critical` | test `business_thresholds_emit_sentry_events_at_boundaries`: missing heartbeat or age ≥ 180 s, independent of WAL activity |
+| `TopupTreasuryProgressAge` | `topup alert-test --alert TopupTreasuryProgressAge` | same age boundary test: unapplied effective treasury age ≥ 1 h |
+| `TopupRefundProgressAge` | `topup alert-test --alert TopupRefundProgressAge` | same age boundary test: pending attached refund age ≥ 1 h since `paid_at` |
 | `TopupCertificateExpiry` warning | `topup alert-test --alert TopupCertificateExpiry` | parsed DER with a fake clock at 14 days; test `certificate_expiry_probe_emits_warning_and_critical_events` |
 | `TopupCertificateExpiry` critical | `topup alert-test --alert TopupCertificateExpiry --severity critical` | same probe test at three days; no event at 15 days |
 | `TopupCertificateProbeFailed` | `topup alert-test --alert TopupCertificateProbeFailed --severity critical` | invalid DER rejected; TLS/network failures raise this alert |
 | `TopupBusinessProbeFailed` | `topup alert-test --alert TopupBusinessProbeFailed --severity critical` | failed/timed-out database scan |
+
+The business monitor's state tests `hourly_reminders_recovery_and_reentry_use_the_supplied_clock`,
+`components_and_severity_transitions_are_independent`, and
+`recovery_is_logged_once_without_an_alert_tag` prove the hourly reminder bound, immediate
+transitions, per-component isolation, and recovery without an event. Synthetic commands bypass
+probe state so operators can explicitly exercise every alert; the existing SDK issue throttle
+still applies. Direct signer/proxy error hooks use an hourly SDK throttle, verified by
+`direct_internal_failures_are_limited_to_hourly_per_component`.
 
 Production preflight integration (batch 2 owns deployment scripts): add the following command
 with the deployment's `SENTRY_DSN` already present in its environment. Missing/empty/malformed
