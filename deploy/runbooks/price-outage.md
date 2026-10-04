@@ -1,7 +1,7 @@
 # Price outage
 
 **Trigger:** `price-outage` Sentry events, zero healthy price sources, repeated failover,
-`valuation_stuck_seconds` beyond the route's `alerts.stuck_after_s.confirmed`, or sequencer down/grace.
+`valuation_stuck_seconds` beyond the route's `alerts.stuck_after_s.detected`, or sequencer down/grace.
 
 **Impact:** affected quotes and spot credit halt. Funds remain on chain. Never credit by hand.
 

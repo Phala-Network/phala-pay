@@ -139,7 +139,7 @@ pub fn stuck(route: &RouteFile, seconds: u64) {
             .set(i64::try_from(seconds).unwrap_or(i64::MAX)),
         Err(_) => tracing::error!("price metrics initialization failed"),
     }
-    if seconds > route.alerts.stuck_after_s.confirmed {
+    if seconds > route.alerts.stuck_after_s.detected {
         alert(route, "valuation_stuck");
     }
 }
@@ -187,7 +187,7 @@ mod tests {
             serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml"))
                 .unwrap();
         route.route = "price-metrics-fixture".into();
-        route.alerts.stuck_after_s.confirmed = 5;
+        route.alerts.stuck_after_s.detected = 5;
         let envelopes = with_captured_envelopes_options(
             || {
                 tracing::subscriber::with_default(
@@ -231,7 +231,9 @@ mod tests {
                 "missing Sentry metric {name}"
             );
         }
-        assert!(envelopes.iter().any(|e| e.event().is_some()));
+        assert!(envelopes.iter().filter_map(|e| e.event()).any(|event| {
+            event.tags.get("check").map(String::as_str) == Some("valuation_stuck")
+        }));
         let text = prometheus::TextEncoder::new()
             .encode_to_string(&collect().unwrap())
             .unwrap();
