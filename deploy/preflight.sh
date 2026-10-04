@@ -110,7 +110,7 @@ topup() {
     local name keys=() values=() rpc_network_args=(--network none)
     [[ "$1" == rpc ]] && rpc_network_args=()
     for name in "${!env[@]}"; do
-        [[ "$name" == TOPUP_RPC_*_KEY ]] || continue
+        [[ "$name" == SENTRY_DSN || "$name" == TOPUP_RPC_*_KEY ]] || continue
         keys+=(-e "$name")
         values+=("$name=${env[$name]}")
     done
@@ -123,9 +123,15 @@ topup() {
 }
 secrets=()
 ((unsealed)) || secrets=(--secrets)
+require_sentry=()
+# Production service environments must keep error reporting configured.  The batch-4 CLI owns
+# this flag; retaining it here makes a missing or malformed SENTRY_DSN fail before rollout.
+if [[ "$variant" == service && "/$env_dir/" == */production/* ]]; then
+    require_sentry=(--require-sentry)
+fi
 if [[ -z "${TOPUP:-}" ]] && ! docker image inspect "$topup_image" >/dev/null 2>&1; then
     fail "the pinned image is not present locally; docker pull $topup_image, then run preflight again"
-elif topup config check "${secrets[@]}" >"$tmp/check.out" 2>&1 &&
+elif topup config check "${require_sentry[@]}" "${secrets[@]}" >"$tmp/check.out" 2>&1 &&
     topup config show >"$tmp/config.json" 2>"$tmp/show.err"; then
     ok "$(tail -n 1 "$tmp/check.out")"
 else

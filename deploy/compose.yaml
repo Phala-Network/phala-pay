@@ -32,6 +32,14 @@ services:
       WALG_LIBSODIUM_KEY_TRANSFORM: hex
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      WALG_WAL_TIMEOUT_SECONDS: ${WALG_WAL_TIMEOUT_SECONDS:-10}
+      WALG_WAL_ATTEMPTS: ${WALG_WAL_ATTEMPTS:-1}
+      WALG_BASE_TIMEOUT_SECONDS: ${WALG_BASE_TIMEOUT_SECONDS:-1800}
+      WALG_BASE_ATTEMPTS: ${WALG_BASE_ATTEMPTS:-2}
+      WALG_RESTORE_TIMEOUT_SECONDS: ${WALG_RESTORE_TIMEOUT_SECONDS:-120}
+      WALG_RESTORE_ATTEMPTS: ${WALG_RESTORE_ATTEMPTS:-3}
+      WALG_OBSERVABILITY_DIR: ${WALG_OBSERVABILITY_DIR:-/run/topup-observability}
+      WALG_BIN: ${WALG_BIN:-wal-g}
       POSTGRES_DB: topup
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/db-owner/postgres.password
@@ -154,7 +162,7 @@ services:
       - --deny-range=240.0.0.0/4
     restart: unless-stopped
 
-  # The RPO heartbeat: one commit a minute (deploy/RESTORE.md).
+  # The RPO heartbeat: a commit every 15 seconds (deploy/RESTORE.md).
   heartbeat:
     image: phala-pay
     user: "999:999"
@@ -165,7 +173,7 @@ services:
     security_opt: [no-new-privileges:true]
     mem_limit: 256m
     pids_limit: 64
-    command: [topup, heartbeat]
+    command: [topup, heartbeat, --interval-s, "15"]
     environment:
       DATABASE_URL: postgres://topup_service@postgres:5432/topup
       PGPASSFILE: /run/db-app/topup_service.pgpass
@@ -185,6 +193,14 @@ services:
       WALG_LIBSODIUM_KEY_TRANSFORM: hex
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      WALG_WAL_TIMEOUT_SECONDS: ${WALG_WAL_TIMEOUT_SECONDS:-10}
+      WALG_WAL_ATTEMPTS: ${WALG_WAL_ATTEMPTS:-1}
+      WALG_BASE_TIMEOUT_SECONDS: ${WALG_BASE_TIMEOUT_SECONDS:-1800}
+      WALG_BASE_ATTEMPTS: ${WALG_BASE_ATTEMPTS:-2}
+      WALG_RESTORE_TIMEOUT_SECONDS: ${WALG_RESTORE_TIMEOUT_SECONDS:-120}
+      WALG_RESTORE_ATTEMPTS: ${WALG_RESTORE_ATTEMPTS:-3}
+      WALG_OBSERVABILITY_DIR: ${WALG_OBSERVABILITY_DIR:-/run/topup-observability}
+      WALG_BIN: ${WALG_BIN:-wal-g}
       PGDATA: /var/lib/postgresql/data
       PGHOST: postgres
       PGDATABASE: topup

@@ -50,8 +50,13 @@ case "$command" in
         output=$1
         shift
         # `deploy --json` writes `Provisioning CVM ...` before the JSON object on a new CVM.
-        stage_call 300 "$(dirname -- "$0")/phala" deploy --json "$@" 2>&1 | tee "$output.raw" >&2
-        sed -n '/^{/,$p' "$output.raw" >"$output"
+        # Keep the CLI's machine-readable stdout separate from stage diagnostics on stderr.  The
+        # deadline wrapper reports elapsed time on stderr; merging both streams makes jq parse the
+        # diagnostic line as if it were part of the JSON response.
+        STAGE_DIAGNOSTICS=0 phala deploy --json "$@" >"$output.raw" 2> >(tee "$output.stderr" >&2)
+        # shellcheck disable=SC2002
+        echo "stage=deploy elapsed=$((SECONDS - stage_started))s remaining=$((stage_deadline - SECONDS))s call_status=0" >&2
+        sed -n '/^{/,$p' "$output.raw" | grep -v '^stage=' >"$output"
         jq -e '.success == true' "$output" >/dev/null
         ;;
     wait)

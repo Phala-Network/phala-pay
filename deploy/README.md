@@ -324,6 +324,21 @@ the whole value of exactly these environment keys, and nowhere else:
 | `TOPUP_ADMIN_PUBLIC_KEY` | `topup`, read by `topup run --admin-public-key-env TOPUP_ADMIN_PUBLIC_KEY` | the deploy form | topup: a standard base64 ed25519 public key |
 | `WALG_S3_PREFIX`, `AWS_ENDPOINT`, `AWS_REGION` | `postgres` and `backup` | the deploy form | the postgres-walg entrypoint: `s3://BUCKET[/PATH]`, an `https://` origin, a region name |
 
+The backup and restore helpers also accept these operational limits (the defaults are deliberately
+finite and are passed to both `postgres` and `backup`; an environment may override them):
+
+| Variable | Default |
+|---|---:|
+| `WALG_WAL_TIMEOUT_SECONDS` / `WALG_WAL_ATTEMPTS` | `10` / `1` |
+| `WALG_BASE_TIMEOUT_SECONDS` / `WALG_BASE_ATTEMPTS` | `1800` / `2` |
+| `WALG_RESTORE_TIMEOUT_SECONDS` / `WALG_RESTORE_ATTEMPTS` | `120` / `3` |
+| `WALG_OBSERVABILITY_DIR` | `/run/topup-observability` |
+| `WALG_BIN` | `wal-g` |
+
+The heartbeat commits every 15 seconds so WAL upload latency does not consume the full 60-second
+recovery point budget. These names are compatible with the backup/restore scripts from batch 1;
+merge that batch before deploying the settings.
+
 The template's `topup.yaml` leaves out `public_origin` and `admin_key.public_key`; `topup run`
 refuses to start unless each comes from exactly one place, and the policy fixes topup's command,
 so a service compose can never take either from its env. These values are not attested: whoever
@@ -869,6 +884,10 @@ Recovery across independent domains remains a proposal in
 [recovery-domains.md](../docs/design/recovery-domains.md), pending the owner's cost decision.
 
 ## Deployment time budgets
+
+Operator-side scripts require GNU `timeout`, or `gtimeout` from coreutils on macOS, alongside
+Bash 4.4 or newer. The quick-start bootstrap downloads the verifier and its deadline helper from
+the same release tag; release checksums and provenance verification still run before kit scripts.
 
 Deploy stages have workflow step deadlines (10 minutes, 20 for preflight/attestation/health,
 and 25 for deployment plus CVM convergence), in addition
