@@ -34,6 +34,16 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   RPC endpoints and contract fixtures, and measure recovery through a successful merchant request.
 - Restore drills enforce the 60-second RPO from failure to the last replayed committed marker,
   including upload latency; RTO includes unfreeze and a successful merchant API request.
+- Add owner-recorded migration compatibility floors and checksum checks for N-1 rollback, with
+  a real previous-release image smoke and an explicit legacy protocol bootstrap boundary.
+- Bound deploy stages and network calls by elapsed-time deadlines, with timeout diagnostics.
+- Alert on pgdata/observability disk usage at 75%/90%, pending WAL size/age, and stale probes;
+  retain seven years of data and document safe disk-pressure response.
+
+### Added
+
+- Proposed recovery-domain design for a fenced warm standby, key/storage dependencies,
+  promotion and DNS switch, estimated cost and achievable recovery targets; no HA implementation.
 
 ### JS SDK (`@phala/pay`)
 

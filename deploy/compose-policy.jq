@@ -213,12 +213,26 @@ def live_violations($command):
                 == ["off", "off"]; "the service must archive: TOPUP_RESTORE_FROM_BACKUP must not be on")
       ] + topup_violations + credential_violations("service");
 
+# Capacity collector reads database storage and writes only its observability sample.
+def capacity_violations:
+    [check(.services.capacity.image == .services.postgres.image
+        and .services.capacity.user == "999:999"
+        and .services.capacity.entrypoint == ["bash", "/etc/topup/capacity.sh"];
+        "capacity must use the PostgreSQL image and read-only probe entrypoint"),
+     check((volume_sources("capacity") | sort) == ["observability", "pgdata"]
+        and ([.services.capacity.volumes[] | select(.source == "pgdata") | .read_only] == [true]);
+        "capacity may mount only read-only pgdata and observability"),
+     check(.services.capacity.cap_drop == ["ALL"]
+        and .services.capacity.security_opt == ["no-new-privileges:true"]
+        and (.services.capacity.mem_limit != null) and (.services.capacity.pids_limit > 0);
+        "capacity must have finite resource limits and no privileges")];
+
 def service_violations:
     (.services["dstack-ingress"].environment | env_map) as $ingress
     | (mounted_config("topup"; "/etc/topup/topup.yaml") | config_origin) as $origin
-    | [ check((.services | keys) == ["backup", "dstack-ingress", "heartbeat", "keys", "migrate",
+    | [ check((.services | keys) == ["backup", "capacity", "dstack-ingress", "heartbeat", "keys", "migrate",
                 "postgres", "smokescreen", "topup"];
-              "the service runs exactly keys, postgres, migrate, topup, dstack-ingress, smokescreen, heartbeat, and backup"),
+              "the service runs exactly keys, postgres, migrate, topup, dstack-ingress, smokescreen, heartbeat, backup, and capacity"),
         check(only_published("dstack-ingress"; 443; "443");
               "only dstack-ingress may publish a port, 443"),
         check($ingress.CHALLENGE_TYPE == "tls-alpn-01" and $ingress.TARGET_ENDPOINT == "topup:8080"
@@ -228,20 +242,20 @@ def service_violations:
         check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
                 | unique == ["dstack-ingress", "keys", "topup"];
               "only keys, topup, and dstack-ingress may mount the dstack socket")
-      ] + live_violations(serve_command);
+      ] + live_violations(serve_command) + capacity_violations;
 
 # The template: the service without dstack-ingress, topup published on 80 for the Phala Cloud
 # gateway, which serves it as https://<app-id>.<gateway-domain>, the origin DSTACK_APP_DOMAIN names.
 def template_violations:
-    [ check((.services | keys) == ["backup", "heartbeat", "keys", "migrate", "postgres", "smokescreen",
+    [ check((.services | keys) == ["backup", "capacity", "heartbeat", "keys", "migrate", "postgres", "smokescreen",
                 "topup"];
-              "the template runs exactly keys, postgres, migrate, topup, smokescreen, heartbeat, and backup"),
+              "the template runs exactly keys, postgres, migrate, topup, smokescreen, heartbeat, backup, and capacity"),
         check(only_published("topup"; 8080; "80"); "only topup may publish a port, 80"),
         check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
                 | unique == ["keys", "topup"];
               "only keys and topup may mount the dstack socket")
       ] + live_violations(serve_command + ["--public-origin-host-env", "DSTACK_APP_DOMAIN",
-            "--admin-public-key-env", "TOPUP_ADMIN_PUBLIC_KEY"]);
+            "--admin-public-key-env", "TOPUP_ADMIN_PUBLIC_KEY"]) + capacity_violations;
 
 def restore_check_violations:
     (.services.postgres.environment | env_map) as $postgres

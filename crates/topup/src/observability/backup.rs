@@ -19,6 +19,7 @@ pub async fn monitor_backup(cancellation: CancellationToken) {
     let directory = Path::new(BACKUP_MARKER_DIRECTORY);
     let monitor = CronMonitor::backup();
     loop {
+        super::capacity::observe().await;
         monitor.check_in(backup_healthy(directory, unix_now()));
         tokio::select! {
             () = cancellation.cancelled() => return,

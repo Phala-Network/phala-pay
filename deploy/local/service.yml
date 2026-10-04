@@ -9,6 +9,8 @@ services:
     image: ${TOPUP_LOCAL_SERVICE_IMAGE:-phala-pay:local}
   heartbeat:
     image: ${TOPUP_LOCAL_SERVICE_IMAGE:-phala-pay:local}
+  capacity:
+    image: ${TOPUP_LOCAL_POSTGRES_IMAGE:-phala-pay-postgres-walg:local}
   backup:
     image: ${TOPUP_LOCAL_POSTGRES_IMAGE:-phala-pay-postgres-walg:local}
     environment:

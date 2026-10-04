@@ -51,6 +51,9 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
+  rollback:
+    uses: ./.github/workflows/deploy-rollback.yml
+
   codeql:
     uses: ./.github/workflows/codeql.yml
     permissions:
@@ -90,7 +93,7 @@ jobs:
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
   image:
-    needs: [ci, codeql, version]
+    needs: [ci, rollback, codeql, version]
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:
@@ -236,7 +239,7 @@ jobs:
   # The SDKs' checks and end-to-end tests ran in `ci`; this builds the sdist and wheel that
   # py-publish uploads, outside the job that can mint the publishing token.
   py-build:
-    needs: [ci, codeql, version]
+    needs: [ci, rollback, codeql, version]
     if: ${{ !contains(needs.version.outputs.version, '-') }}
     runs-on: ubuntu-latest
     steps:

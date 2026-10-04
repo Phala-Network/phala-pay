@@ -8,6 +8,7 @@ services:
   smokescreen: !reset null
   heartbeat: !reset null
   backup: !reset null
+  capacity: !reset null
 
   # A base backup is required and archiving is off. The storage credentials are the read-only ones
   # sealed for this instance under their own names, so an instance created without its env file

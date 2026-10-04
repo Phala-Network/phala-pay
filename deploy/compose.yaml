@@ -203,6 +203,26 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Capacity probe shares the PostgreSQL image and reads data without DB credentials.
+  capacity:
+    image: postgres-walg
+    user: "999:999"
+    entrypoint: [bash, /etc/topup/capacity.sh]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    pids_limit: 32
+    volumes:
+      - pgdata:/var/lib/postgresql:ro
+      - observability:/run/topup-observability
+    configs:
+      - source: capacity_probe
+        target: /etc/topup/capacity.sh
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   # The post-restore gate (deploy/RESTORE.md); the restore-check variant only.
   restore-check:
     image: phala-pay
@@ -251,6 +271,8 @@ volumes:
 # render.sh inlines both as content. `topup` stands for the environment's topup.yaml: render.sh and
 # the local overlays point it there.
 configs:
+  capacity_probe:
+    file: ./capacity.sh
   postgres_init:
     file: ./postgres-init/10-topup-role.sh
   topup:
