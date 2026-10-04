@@ -1,6 +1,7 @@
 //! Chainlink AggregatorV3 reader over the existing bounded A/B RPC clients.
 use super::{PriceError, PriceSource, unix_now};
 use crate::chain::evm::EvmClient;
+use alloy_eips::BlockId;
 use alloy_primitives::{Address, Bytes};
 use alloy_sol_types::{SolCall, sol};
 use async_trait::async_trait;
@@ -51,13 +52,13 @@ impl Chainlink {
                 "price round",
                 address,
                 Bytes::from(latestRoundDataCall {}.abi_encode()),
-                None
+                Some(BlockId::latest())
             ),
             client.call(
                 "price decimals",
                 address,
                 Bytes::from(decimalsCall {}.abi_encode()),
-                None
+                Some(BlockId::latest())
             )
         )
         .map_err(|_| PriceError::RpcUnavailable)?;
@@ -286,6 +287,7 @@ mod tests {
                     head["parentHash"] = json!(format!("0x{}", "22".repeat(32)));
                     return Json(json!({"jsonrpc":"2.0","id":request["id"],"result":head}));
                 }
+                assert_eq!(request["params"][1], "latest");
                 let data = request["params"][0]["input"]
                     .as_str()
                     .or_else(|| request["params"][0]["data"].as_str())

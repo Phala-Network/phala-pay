@@ -98,12 +98,13 @@ async fn probe_inner(
             .address
             .parse()
             .map_err(|_| "invalid pinned feed address")?;
+        // The price reader uses latest state. Historical state is not a required capability.
         let decimals = client
             .call(
                 "RPC price capability",
                 address,
                 alloy_primitives::Bytes::from_static(&[0x31, 0x3c, 0xe5, 0x67]),
-                Some(head.number.into()),
+                Some(alloy::eips::BlockId::latest()),
             )
             .await
             .map_err(|e| format!("price decimals capability: {e}"))?;
@@ -1097,6 +1098,9 @@ mod probe_tests {
                 "eth_call" => {
                     let to: Address = serde_json::from_value(params[0]["to"].clone()).unwrap();
                     if self.price_only {
+                        if params[1] != "latest" {
+                            return StatusCode::FORBIDDEN.into_response();
+                        }
                         assert_eq!(
                             to.to_string().to_lowercase(),
                             topup_core::price::feed("USDT_USD", 1)
