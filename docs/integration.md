@@ -255,11 +255,11 @@ the token's price risk from the payment until you sell it.
 - `treasury` is the treasury the quote's address pays: your treasury of the chain when it was
   created (§1.6).
 - `amount` is an integer in US cents; `amount_atomic` is the exact token amount to pay, a decimal
-  string in base units, rounded up to four token decimals (the route's `asset.quote_amount_decimals`) so
-  the payer reads and types a short amount such as `100.5026 PHA`; show every digit of it. The
-  rounding is the payer's, below 0.0001 token, and the credit stays exactly `amount`;
-  `exchange_rate` is the locked price in USD per token with 8 decimal
-  places; times are Unix seconds.
+  string in base units, rounded up to four token decimals (the route's
+  `asset.quote_amount_decimals`) so the payer reads and types a short amount such as `100.5026 PHA`;
+  show every digit of it. The rounding is the payer's, below 0.0001 token, and the credit stays
+  exactly `amount`; `exchange_rate` is the locked price in USD per token with 8 decimal places;
+  times are Unix seconds.
 - `status` is `open`, `complete` (a matching payment consumed it), `expired`, or `canceled`. A
   quote stays `open` past `expires_at` until the finalized chain passes it, so a payment mined in
   time is never reported as expired: hide the address once `expires_at` has passed and offer a
@@ -312,8 +312,8 @@ origin, as Stripe.js reads a PaymentIntent: `{id, object, livemode, status, amou
 asset, decimals, chain_id, amount_atomic, address, payment_uri, expires_at, payment_status,
 confirmations, amount_credited, typical_credit_seconds}`, where `payment_status` is `none`,
 `seen`, `confirming` (at the route's confirmation, being valued and screened), `credited`,
-`rejected` (contact support), or `reversed` (a reorganization proved the credited payment replaced
-before finality). While `credited`, `amount_credited` is what the payment
+`rejected` (contact support), or `reversed` (a reorganization before finality replaced the credited
+payment). While `credited`, `amount_credited` is what the payment
 credited in cents, the deposit's `amount`: it differs from `amount` for a payment valued at spot
 (another amount, or paid late), so show it rather than the quote's. `typical_credit_seconds` is
 the typical time from paying to the credit at your account's confirmation for the chain, as
@@ -341,21 +341,34 @@ automatically. `onSuccess(quote)` is called once credited; `quote.amount_credite
 credited.
 
 **Theme it.** Import `"@phala/pay/styles.css"` once in your application entry point.
-`appearance` only selects `theme` (`light` or `dark`); customize the `--pp-*` CSS properties on
-`.pp-root` in your stylesheet. See [Appearance](../sdk/js/README.md#appearance) for the tokens
-and how to map your application's light/dark theme without selector conflicts.
+Map your application's light/dark tokens to `--pp-*` properties on `.pp-root` in a stylesheet
+loaded after the SDK's CSS, and omit `appearance` (`pay-theme.css` below):
 
 ```tsx
+import "@phala/pay/styles.css";
+import "./pay-theme.css";
+
 <Checkout
   clientSecret={clientSecret}
   expectedAddress={expectedAddress}
   apiBase={PHALA_PAY_API_BASE}
-  appearance={{ theme: "dark" }}
   onChange={({ status }) => setPaymentInFlight(status === "seen" || status === "confirming")}
   onSuccess={() => { forgetClientSecret(account.id); router.refresh(); }}
   onExpire={() => forgetClientSecret(account.id)}
 />
 ```
+
+```css
+.pp-root {
+  --pp-color-primary: var(--app-color-primary);
+  --pp-accessible-color-on-color-primary: var(--app-color-on-primary);
+  --pp-color-background: var(--app-color-background);
+  --pp-color-text: var(--app-color-text);
+}
+```
+
+When you do not map your own tokens, `appearance.theme: "dark"` selects the built-in dark palette.
+See [Appearance](../sdk/js/README.md#appearance) for every token and selector precedence.
 
 ### 1.3 Payment outcomes
 
