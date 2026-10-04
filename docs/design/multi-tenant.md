@@ -1,6 +1,8 @@
 # Design: standard multi-tenant Phala Pay
 
-Status: accepted (the owner delegated every decision; owner rulings of 2026-09-27, 2026-09-28,
+Status: implemented by v0.5.0; later amendments are recorded below and in the linked designs.
+
+Accepted (the owner delegated every decision; owner rulings of 2026-09-27, 2026-09-28,
 2026-09-29, and 2026-10-01 are applied). Scope: turn Phala Pay from Phala Cloud's internal cashier
 into a Stripe-shaped, API-only crypto payments **software service** for any merchant the operator
 onboards. Phala Cloud becomes an ordinary account. This document records decisions; the

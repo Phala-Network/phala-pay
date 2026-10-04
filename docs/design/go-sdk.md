@@ -1,7 +1,9 @@
 # Go SDK plan
 
-Status: proposed; documentation only. Implement after the v0.8.2 release and staging
-verification are complete. This plan does not add a supported SDK or change payment behavior.
+Status: proposed; not implemented.
+
+Implement after the v0.8.2 release and staging verification are complete. This plan does not add
+a supported SDK or change payment behavior.
 
 ## Purpose and priority
 

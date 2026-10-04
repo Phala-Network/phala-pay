@@ -1,4 +1,4 @@
-# RPC groups runbook (0.7.0)
+# RPC groups runbook
 
 The attested topup image contains the group clients; the inline `topup.yaml` contains every
 member, reviewed company identity, quota scope and bounded policy. Keys exist only in the sealed
