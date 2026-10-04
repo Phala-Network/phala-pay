@@ -194,5 +194,3 @@ HTTP is limited to test loopback. Legacy `PhalaPay(api_base, api_key, account=..
 treasuries=...)` remains available with its existing test-mode warnings; it cannot be mixed with
 `pins` and cannot create a trusted checkout handoff. The pins-based API never discovers trust from
 the service or legacy environment variables.
-
-See the [phase 2 rule audit](ERGONOMICS_AUDIT.md) for implementation and executable test references.
