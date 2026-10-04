@@ -94,7 +94,7 @@ describe("DepositAddress", () => {
 
   it("shows one address for every network and token, with a QR code per network and token", () => {
     render(<DepositAddress depositAddress={details()} />);
-    expect(screen.getByText("One address for all supported tokens and networks")).toBeDefined();
+    expect(screen.getByText("One reusable address for supported tokens and networks")).toBeDefined();
     const qr = () => screen.getByRole("img");
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for PHA on Sepolia");
     expect(qr().querySelector("path")?.getAttribute("d")).toMatch(/^M\d+ \d+h1v1h-1z/);
@@ -102,9 +102,9 @@ describe("DepositAddress", () => {
     expect(screen.getByText(ADDRESS)).toBeDefined();
     expect(screen.getByText(TOKEN)).toBeDefined();
     expect(screen.getByRole("button", { name: "Copy Deposit address" })).toBeDefined();
-    expect(screen.getByText(/Send only PHA, USDC on Sepolia, Base Sepolia/)).toBeDefined();
+    expect(screen.getByText(/Send PHA on Sepolia/)).toBeDefined();
     // Without the address's public view it knows no network's credit time, and names none.
-    expect(screen.getByText(/credited at the market rate once it is confirmed on its network\./)).toBeDefined();
+    expect(screen.getByText(/credited at the market rate after confirmation\./)).toBeDefined();
     expect(screen.queryByText(/seconds|minutes/)).toBeNull();
 
     fireEvent.click(screen.getByRole("radio", { name: "USDC" }));
@@ -131,7 +131,7 @@ describe("DepositAddress", () => {
         })}
       />,
     );
-    expect(screen.getByText(/it differs on some networks/)).toBeDefined();
+    expect(screen.getByText(/varies by network/)).toBeDefined();
     expect(screen.getByText(OTHER)).toBeDefined();
   });
 
@@ -236,13 +236,13 @@ describe("DepositAddress payments", () => {
 
   it("states each network's credit time from the public view", async () => {
     expect(await messageWith([clientNetwork(11155111, 30), clientNetwork(84532, 300)])).toContain(
-      "credited at the market rate when it arrives, usually in about 30 seconds on Sepolia and about 5 minutes on Base Sepolia.",
+      "credited at the market rate on arrival, usually in about 30 seconds on Sepolia and about 5 minutes on Base Sepolia.",
     );
   });
 
   it("states one time when every network shares it, as under a finalized policy", async () => {
     expect(await messageWith([clientNetwork(11155111, 900), clientNetwork(84532, 900)])).toContain(
-      "credited at the market rate when it arrives, usually in about 15 minutes.",
+      "credited at the market rate on arrival, usually in about 15 minutes.",
     );
   });
 

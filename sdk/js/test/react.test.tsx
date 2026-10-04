@@ -89,8 +89,9 @@ describe("Checkout", () => {
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     await renderCheckout();
     const tabs = screen.getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["Browser wallet", "QR code", "Send manually"]);
-    expect(screen.getByRole("tabpanel").textContent).toMatch(/No browser wallet found/);
+    expect(tabs.map((t) => t.textContent)).toEqual(["Wallet", "QR code", "Manual"]);
+    await user.click(screen.getByRole("tab", { name: "Browser wallet" }));
+    expect(screen.getByRole("tabpanel").textContent).toMatch(/Install a browser wallet/);
 
     tabs[0]?.focus();
     await user.keyboard("{ArrowRight}");
@@ -106,12 +107,30 @@ describe("Checkout", () => {
     expect(within(manual).getByText("Sepolia (chain ID 11155111)")).toBeDefined();
   });
 
+  it("defaults to QR without a browser wallet and keeps the wallet tab available", async () => {
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    await renderCheckout();
+    expect(screen.getByRole("tab", { name: "QR code" }).getAttribute("aria-selected")).toBe("true");
+    expect(within(screen.getByRole("tabpanel")).getByRole("img")).toBeDefined();
+    await user.click(screen.getByRole("tab", { name: "Browser wallet" }));
+    expect(screen.getByRole("tabpanel").textContent).toBe("Install a browser wallet to pay here.");
+    // Discovery stays active across tabs, without overriding the payer's choice.
+    const { provider } = browserWallet(`0x${"ab".repeat(32)}`);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("eip6963:announceProvider", {
+        detail: { info: { uuid: "late", name: "Late wallet", icon: "", rdns: "wallet.test" }, provider },
+      }));
+    });
+    expect(screen.getByRole("tab", { name: "Browser wallet" }).getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByRole("button", { name: "Pay with crypto (Late wallet)" })).toBeDefined();
+  });
+
   it("copies the address and the exact amount", async () => {
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     await renderCheckout();
-    await user.click(screen.getByRole("tab", { name: "Send manually" }));
+    await user.click(screen.getByRole("tab", { name: "Manual transfer" }));
     await user.click(screen.getByRole("button", { name: "Copy Send to address" }));
     await user.click(screen.getByRole("button", { name: "Copy Exact amount" }));
     expect(writeText.mock.calls).toEqual([[ADDRESS], ["100.502512562814070352"]]);
@@ -125,7 +144,7 @@ describe("Checkout", () => {
     served = quote({ payment_status: "seen", confirmations: 2 });
     await poll();
     expect(screen.getByRole("status").textContent).toBe(
-      "Payment received, 2 confirmations. Crediting in about 30 seconds",
+      "Received, 2 confirmations. Crediting in about 30 seconds",
     );
     expect(screen.queryByRole("tablist")).toBeNull();
 
@@ -138,8 +157,8 @@ describe("Checkout", () => {
   });
 
   it.each([
-    [300, "Payment received, 1 confirmation. Crediting in about 5 minutes"],
-    [900, "Payment received, 1 confirmation. Crediting in about 15 minutes"],
+    [300, "Received, 1 confirmation. Crediting in about 5 minutes"],
+    [900, "Received, 1 confirmation. Crediting in about 15 minutes"],
   ])("tells the payer the typical wait of the quote's confirmation (%i s)", async (seconds, message) => {
     served = quote({ typical_credit_seconds: seconds });
     await renderCheckout();
@@ -150,7 +169,7 @@ describe("Checkout", () => {
 
   it.each([
     [1000, "Payment credited: $10.00 of $25.00"],
-    [3000, "Payment credited: $30.00, more than the $25.00 quoted"],
+    [3000, "Payment credited: $30.00 ($25.00 quoted)"],
   ])("states what a market-priced payment credited and passes it to onSuccess (%i)", async (credited, message) => {
     const onSuccess = vi.fn<(quote: ClientQuote) => void>();
     await renderCheckout({ onSuccess });

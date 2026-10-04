@@ -15,6 +15,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### JS SDK (`@phala/pay`)
 
+#### Changed
+
+- Checkout and deposit-address copy is shorter, with exchange withdrawal-fee guidance in the
+  manual-transfer panel. Checkout defaults to QR when no browser wallet is discovered; payment
+  tabs use single-line labels. Spacing is tighter with 44px touch targets.
+- The React frame supports `--pp-root-border`, `--pp-root-padding`, `--pp-root-max-width`, and
+  `--pp-root-background` overrides for embedding in host dialogs; frame defaults are unchanged.
+
 #### Fixed
 
 - `retrieveQuote` and `retrieveDepositAddress` trim `apiBase`'s trailing slashes in linear time;

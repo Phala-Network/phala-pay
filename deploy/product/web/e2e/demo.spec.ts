@@ -531,8 +531,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await page.setViewportSize({ width: 1360, height: 1000 });
   const followed = scenes.locator('[title^="qt_"]');
   for (const [end, message] of [
-    ["expire", "This quote has expired"],
-    ["cancel", "This quote was canceled"],
+    ["expire", "Quote expired"],
+    ["cancel", "Quote canceled"],
   ] as const) {
     const before = await followed.getAttribute("title");
     await product.getByRole("button", { name: "Add more credits" }).click();
@@ -581,7 +581,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   // The SDK's <DepositAddress> shows the customer the same address to copy, and the networks'
   // typical credit time from the address's public view.
   await expect(product.getByText(address).first()).toBeVisible();
-  await expect(product.getByText(/when it arrives, usually in about 30 seconds\./)).toBeVisible();
+  await expect(product.getByText(/on arrival, usually in about 30 seconds\./)).toBeVisible();
 
   // Any amount, sent from a wallet as from an exchange.
   const testTokens = page.getByRole("note", { name: "Test tokens" });
