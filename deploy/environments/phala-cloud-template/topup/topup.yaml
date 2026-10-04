@@ -8,6 +8,8 @@ admin_key:
   id: admin/v1
 # Two keyless providers per chain, as on Phala's staging (deploy/phala.md, "RPC providers").
 rpc_companies:
+  drpc:
+    domains: [drpc.org]
   tenderly:
     domains:
     - tenderly.co
@@ -15,6 +17,9 @@ rpc_companies:
     domains:
     - publicnode.com
 rpc_budgets:
+  drpc-account:
+    requests_per_second: 5
+    burst: 5
   tenderly-account:
     requests_per_second: 10
     burst: 10
@@ -91,9 +96,9 @@ rpc_groups:
     chain_id: 1
     members:
     - id: price-mainnet-b
-      company: publicnode
-      url: https://ethereum-rpc.publicnode.com
-      account_budget: publicnode-account
+      company: drpc
+      url: https://eth.drpc.org
+      account_budget: drpc-account
       key_budget: price-mainnet-b-key
   base-mainnet-a:
     chain_id: 8453

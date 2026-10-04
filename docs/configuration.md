@@ -202,6 +202,9 @@ they do not scan payment contracts. Their capability probes read pinned feed dec
 payment receipts or logs. Staging includes `mainnet-a`/`mainnet-b` (chain 1) for price
 feeds and `base-mainnet-a`/`base-mainnet-b` (8453) for uptime. Feed addresses and heartbeat values
 are pinned in the image; operators configure group references, not arbitrary feed addresses.
+Ethereum B uses `https://eth.drpc.org` (company `drpc`): PublicNode Ethereum prunes genesis
+history and cannot pass group identity acceptance. Base B remains PublicNode. Both groups require
+latest feed state, not archive-state contract calls.
 
 All new provider verdicts are currently Unclear, pending Phala Legal. Production config checks
 refuse them. Only explicit non-production environments (`staging`, `testnet`, `local`, `sandbox`) and route
