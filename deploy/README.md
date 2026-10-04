@@ -842,9 +842,13 @@ write the ledger. A rollback never lowers existing floors or edits migration his
 restore required**, and no rollback to any 0.8.x release: follow [RESTORE.md](RESTORE.md) using the
 pre-upgrade backup. Earlier immutable images cannot understand newer migrations; route configuration
 and SDK changes also prevent rollback. CI resolves the latest stable release as N-1 automatically.
-When N-1 predates the protocol, CI requires an exact version-specific declaration in the changelog's
-**Breaking (operators)** section and records the bootstrap in its job summary; otherwise it fails.
-From 0.10.0 onward, N-1 implements the protocol and the real image rollback smoke runs normally.
+For any N-1, an exact **no rollback to <N-1 version>; restore required** declaration in
+`### Breaking (operators)` under `## [Unreleased]` (the dated release section after tagging)
+selects `declared` mode: CI skips the image smoke and prints the declaration in its job summary.
+For protocol-era N-1, `COMPATIBILITY_FLOOR` must also exceed the value in N-1's tag; CI fails
+if the floor is unchanged or lower. Without a declaration, pre-protocol N-1 fails and protocol-era
+N-1 runs the real image rollback smoke. Breaking migrations raise the floor to the new schema's
+maximum; retain a tested pre-upgrade restore/reconciliation plan and obtain owner acceptance.
 
 Before upgrade, preserve the verified N-1 deploy kit, image digests and configuration and a tested
 pre-upgrade recovery point. To roll back, verify N-1's release again, render its compose/config,
