@@ -1,3 +1,4 @@
+import { parseJson } from "./json.js";
 /**
  * Standard Webhooks `v1a` verification of Phala Pay deliveries (design D11): an ed25519 signature
  * over `{webhook-id}.{webhook-timestamp}.{body}` by your account's webhook key in the endpoint's
@@ -6,9 +7,8 @@
  */
 
 /** A delivery that did not verify: answer `400` and do nothing. */
-export class WebhookSignatureError extends Error {
-  override readonly name = "WebhookSignatureError";
-}
+export { SignatureVerificationError as WebhookSignatureError } from "./errors.js";
+import { SignatureVerificationError as WebhookSignatureError } from "./errors.js";
 
 /** A verified event. `data.object` is the object the event is about, such as a deposit. */
 export interface WebhookEvent {
@@ -70,6 +70,11 @@ export async function constructEvent(
     throw new TypeError("webhook now must be finite and tolerance finite and non-negative");
   }
   const body = typeof payload === "string" ? new TextEncoder().encode(payload) : payload;
+  if (
+    typeof payload === "string" &&
+    new TextDecoder("utf-8", { fatal: true }).decode(body) !== payload
+  )
+    throw new WebhookSignatureError("webhook body is not exact UTF-8");
   const id = header(headers, "webhook-id");
   const timestamp = header(headers, "webhook-timestamp");
   const signatures = header(headers, "webhook-signature");
@@ -91,6 +96,8 @@ export async function constructEvent(
   }
   let verified = false;
   for (const entry of signatures.split(" ")) {
+    if (entry.split(",").length !== 2)
+      throw new WebhookSignatureError("duplicate or malformed webhook signature");
     const [version, encoded] = entry.split(",", 2);
     const signature = version === "v1a" && encoded !== undefined ? base64(encoded) : undefined;
     if (signature === undefined) {
@@ -107,7 +114,7 @@ export async function constructEvent(
   }
   let event: unknown;
   try {
-    event = JSON.parse(new TextDecoder().decode(body));
+    event = parseJson(new TextDecoder("utf-8", { fatal: true }).decode(body));
   } catch {
     throw new TypeError("webhook body is not an event");
   }
@@ -143,6 +150,7 @@ export async function constructEvent(
   }
   const previous = isRecord(data) ? data["previous_attributes"] : undefined;
   return {
+    ...e,
     id: eventId,
     object: "event",
     account,
@@ -152,6 +160,9 @@ export async function constructEvent(
     actor,
     request,
     data: {
+      ...(isRecord(data)
+        ? Object.fromEntries(Object.entries(data).filter(([key]) => key !== "previous_attributes"))
+        : {}),
       object,
       ...(isRecord(previous) ? { previous_attributes: previous } : {}),
     },
@@ -165,12 +176,11 @@ function header(
   if (headers instanceof Headers) {
     return headers.get(name)?.trim() ?? undefined;
   }
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === name) {
-      return (Array.isArray(value) ? value.join(" ") : value)?.trim();
-    }
-  }
-  return undefined;
+  const matches = Object.entries(headers).filter(([key]) => key.toLowerCase() === name);
+  if (matches.length > 1) throw new WebhookSignatureError("duplicate webhook header");
+  const value = matches[0]?.[1];
+  if (Array.isArray(value)) throw new WebhookSignatureError("duplicate webhook header");
+  return value?.trim();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

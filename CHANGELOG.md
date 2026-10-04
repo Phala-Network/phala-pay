@@ -39,6 +39,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
+- Node merchant client at `@phala/pay/server`: all OpenAPI resources, typed parameters/responses,
+  verified quote/address results, two-variable `PhalaPay.fromEnv()`, frozen pins parse/encode,
+  bound Ed25519 webhooks and `checkoutParams` with browser-exported `CheckoutParams`.
+- Deadline-bounded transport with attempt timeouts, jitter, Retry-After, frozen POST idempotency,
+  redirect refusal, lossless integer validation, cancellation and typed redacted errors.
+- Pure `depositNetAmount` / `balanceDelta` helpers with monotone ledger convergence and strict
+  validation; JS implements all five shared fixture groups.
+- `@phala/pay/server/helpers` for keyless address, webhook and offline sweep builders. Existing
+  Node helper exports remain available; `ForwarderResponse` names the generated API forwarder
+  while `Forwarder` retains its legacy contract-pins type.
+
+
 - Branded chain and token icons in Checkout and DepositAddress, with mainnet-family artwork on testnets
   and neutral monogram fallbacks. Export `NetworkIcon` / `AssetIcon` from `@phala/pay/react`
   and framework-free `networkIcon` / `assetIcon` markup accessors from `@phala/pay`.
@@ -51,6 +63,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   tabs use single-line labels. Spacing is tighter with 44px touch targets.
 - The React frame supports `--pp-root-border`, `--pp-root-padding`, `--pp-root-max-width`, and
   `--pp-root-background` overrides for embedding in host dialogs; frame defaults are unchanged.
+
+#### Changed (breaking)
+
+- `@phala/pay/server` now requires Node.js and rejects browser, Deno, Bun and edge use before
+  reading credentials. Move existing non-Node offline helper imports to
+  `@phala/pay/server/helpers`. The browser root entry and existing checkout props remain keyless.
+- Duplicate webhook signing headers and non-exact UTF-8 bodies are rejected. The legacy
+  `WebhookSignatureError` export is an alias of `SignatureVerificationError`.
 
 #### Fixed
 

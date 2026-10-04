@@ -4,7 +4,7 @@
   "groups": {
     "pins": {
       "status": "pending",
-      "js": false,
+      "js": true,
       "python": false
     },
     "addresses": {
@@ -19,12 +19,12 @@
     },
     "ledger": {
       "status": "pending",
-      "js": false,
+      "js": true,
       "python": false
     },
     "transport": {
       "status": "pending",
-      "js": false,
+      "js": true,
       "python": false
     }
   }
