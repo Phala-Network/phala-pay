@@ -39,7 +39,12 @@ export function valid(value: unknown, schema: Schema): boolean {
     if (!known) return false;
     const extra = schema.additionalProperties;
     // Ignore unknown response fields; typed dictionaries still validate their values.
-    return typeof extra !== "object" || Object.entries(value).every(([key, item]) => Object.hasOwn(schema.properties ?? {}, key) || valid(item, extra));
+    return (
+      typeof extra !== "object" ||
+      Object.entries(value).every(
+        ([key, item]) => Object.hasOwn(schema.properties ?? {}, key) || valid(item, extra),
+      )
+    );
   }
   if (types.includes("array"))
     return (

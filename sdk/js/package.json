@@ -24,7 +24,9 @@
   },
   "type": "module",
   "sideEffects": [
-    "**/*.css"
+    "**/*.css",
+    "./dist/server/index.js",
+    "./src/server/index.ts"
   ],
   "exports": {
     ".": {
