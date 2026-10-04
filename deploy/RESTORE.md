@@ -357,8 +357,10 @@ Never upgrade a drill instance to the service compose or seal read-write credent
 ## Local and CI drills
 
 `make restore-drill` ([local/restore-drill.sh](local/restore-drill.sh)) runs two modes against
-local object storage: `controlled` forces a WAL switch and requires the last marker and LSN;
-`crash` kills PostgreSQL after a natural upload and reports the observed loss. Both require that a
+local object storage: `controlled` forces a WAL switch and requires the last marker and LSN,
+then pauses the archiver on the disposable source so its later business changes are
+definitely lost; `crash` retains the natural 30-second archive timer, kills PostgreSQL after an
+upload and reports the observed loss. Both require that a
 wrong key fails the restore command (`126`). Then they boot the whole restore-check variant on an
 empty volume, with its read-only `RESTORE_AWS_*` credentials while the live read-write names stay in
 its environment. They require:
@@ -455,8 +457,12 @@ must also budget their latency. A boot-time unanchored report does not prove RPO
 newest restored commit with the externally recorded failure instant, never merely with the last
 source heartbeat. `--expected-heartbeat-at` retains its legacy name but takes that failure instant.
 
-The local drill requires working chain RPC endpoints for acceptance and rescan. Its current local
-environment uses unreachable RPC placeholders; failed checks now stop the drill instead of
-producing a false success. Supply a real local chain fixture through the owning deployment batch.
+The local drill starts disposable Anvil chains for every configured route, with Sepolia and Base
+Sepolia chain IDs, canonical factories and Multicall3, and local token/oracle fixtures. A/B groups
+use distinct domains and ports over each chain's shared state; all staging RPC members are replaced.
+Its own invocation sets a 15-second heartbeat cadence. On Linux, missing Foundry tools are
+extracted from the pinned Anvil image into the drill's temporary directory; other platforms
+require Foundry installed locally. Cleanup removes the chains and their
+project volumes together with the rest of the drill.
 The local drill may switch its isolated replacement to service mode; the staging isolation drill
 above remains read-only and cannot attest full merchant-service RTO.
