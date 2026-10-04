@@ -13,6 +13,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`)
+
+#### Fixed
+
+- `retrieveQuote` and `retrieveDepositAddress` trim `apiBase`'s trailing slashes in linear time;
+  the previous `/\/+$/` pattern was quadratic on a long run of slashes
+  (CodeQL `js/polynomial-redos`).
+
 ## [0.8.2] - 2026-10-03
 
 ### Added
