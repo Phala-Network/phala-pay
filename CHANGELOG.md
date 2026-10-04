@@ -28,13 +28,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Breaking (operators)
 
-
 - 0.9.0: **no rollback to 0.8.3; restore required**. No rollback to any 0.8.x release:
   use the pre-upgrade backup and [restore runbook](deploy/RESTORE.md). Route configuration and
   SDK changes also prevent rollback. 0.9.0 is the first compatibility-ledger protocol release;
   from 0.10.0 onward, real N-1 rollback is enforced unless an operator declaration and a raised
   compatibility floor require restoration. N-1 is always the latest stable release.
-
 
 ### Fixed
 
