@@ -206,7 +206,8 @@ All new provider verdicts are currently Unclear, pending Phala Legal. Production
 refuse them. Only explicit non-production environments (`staging`, `testnet`, `local`, `sandbox`) and route
 `allow_unclear_sources: true` opt in for rehearsal;
 Restricted sources are always refused. Deploy's production target also refuses a staging opt-in
-regardless of the reporting environment label. Mainnet examples intentionally cannot enable production
+regardless of the reporting environment label. The one-command `deploy.sh` defaults to production;
+set `DEPLOY_ENVIRONMENT=staging` explicitly for a testnet rehearsal. Mainnet examples intentionally cannot enable production
 before an attested Legal-approved registry change. `topup config check` prints ordered source
 lists, verdicts, pinned feed metadata and testnet markers; `config show` emits resolved `price`.
 

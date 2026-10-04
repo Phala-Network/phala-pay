@@ -23,7 +23,7 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
                     let count = count.clone();
                     async move {
                         count.fetch_add(1, Ordering::SeqCst);
-                        Json(json!({"jsonrpc":"2.0","id":request["id"],"result":"0x1"}))
+                        Json(json!({"jsonrpc":"2.0","id":request["id"],"result":"0x7a69"}))
                     }
                 }),
             ),

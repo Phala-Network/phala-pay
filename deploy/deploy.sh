@@ -57,6 +57,7 @@
 #                             ./CVM_NAME-admin.seed)
 #   WALG_S3_PREFIX AWS_ENDPOINT AWS_REGION (default auto)      the backup location
 #   AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY                    its read-write token
+#   DEPLOY_ENVIRONMENT        production (default) or staging; staging opts into Unclear prices
 #   SENTRY_DSN                optional
 #   TOPUP_RPC_<ID>_KEY        the key of each keyed RPC provider an existing directory declares
 #
@@ -205,6 +206,9 @@ main() {
     done
     ((non_interactive)) || { : </dev/tty; } 2>/dev/null ||
         die "no terminal to prompt on: run with --non-interactive and the inputs in the environment"
+
+    local deployment_environment=${DEPLOY_ENVIRONMENT:-production}
+    check deployment_environment '^(production|staging)$' "production or staging"
 
     say "== prerequisites"
     # The kit's scripts need bash 4.4 (empty arrays under set -u); `bash` is the same one on PATH.
@@ -441,7 +445,7 @@ YAML
     [[ "$variant" == service ]] || preflight+=(--template)
     docker pull --quiet "$(jq -er '."phala-pay"' "$images")" </dev/null >/dev/null
     "${preflight[@]}" </dev/null >&2
-    "$kit/deploy/check-route-modes.sh" production "$compose" </dev/null >&2
+    "$kit/deploy/check-route-modes.sh" "$deployment_environment" "$compose" </dev/null >&2
 
     say "== deploy"
     local update=(--compose "$compose" --pre-launch-script "$kit/deploy/phala-cloud-pre-launch.sh"
