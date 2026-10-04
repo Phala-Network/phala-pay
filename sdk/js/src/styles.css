@@ -70,8 +70,11 @@
 .pp-tx a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .pp-tx .pp-value { overflow-wrap: anywhere; }
 
-.pp-choices { display: flex; gap: 12px; border: 0; padding: 0; margin: 0 0 12px; }
+.pp-choices { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0 0 12px; }
 .pp-choices legend { padding: 0; margin-bottom: 6px; font-weight: 600; }
 .pp-choices label { display: flex; align-items: center; gap: 4px; min-height: 44px; cursor: pointer; }
-.pp-choices input { accent-color: var(--pp-color-primary); }
+.pp-choices input { margin: 0; accent-color: var(--pp-color-primary); }
 .pp-choices input:focus-visible { outline: 2px solid var(--pp-color-primary); outline-offset: 2px; }
+
+.pp-icon-label { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; white-space: nowrap; }
+.pp-icon { display: inline-block; flex: none; vertical-align: middle; }
