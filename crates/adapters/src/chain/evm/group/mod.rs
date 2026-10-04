@@ -74,6 +74,9 @@ pub struct GroupPolicy {
     pub cooldown_ms: u64,
     /// Successful recovery probes before readmission.
     pub recovery_successes: u32,
+    /// Small latest-head regressions tolerated for read-only pinned price probes.
+    /// A zero value preserves strict watermark behavior for chain progress.
+    pub head_regression_tolerance: u64,
     /// Reviewed bounded provider-specific error mappings.
     pub rpc_error_rules: Vec<rules::ErrorRule>,
 }
@@ -89,6 +92,7 @@ impl Default for GroupPolicy {
             failures: 3,
             cooldown_ms: 30_000,
             recovery_successes: 2,
+            head_regression_tolerance: 0,
             rpc_error_rules: Vec::new(),
         }
     }
@@ -108,6 +112,7 @@ impl GroupPolicy {
             || self.failures == 0
             || self.cooldown_ms == 0
             || self.recovery_successes == 0
+            || self.head_regression_tolerance > 64
             || self.retry_delay_ms >= self.total_deadline_ms
         {
             return Err("invalid RPC policy bounds");
@@ -1086,6 +1091,14 @@ impl RpcGroup {
         }
         if let Some(previous) = heads.get(tag) {
             if head.number < previous.number {
+                let regression = previous.number.saturating_sub(head.number);
+                if regression <= self.policy.head_regression_tolerance {
+                    tracing::debug!(group=%self.id, member=%self.members.get(index).map(|m|m.id.as_str()).unwrap_or("unknown"), probe=tag, previous_height=previous.number, height=head.number, regression, tolerance=self.policy.head_regression_tolerance, "tolerating small RPC head regression for pinned read");
+                    // Keep the accepted watermark as the member's reported head. Price readers
+                    // pin below the A/B minimum and re-read that explicit block, so a short
+                    // load-balanced backend lag cannot quarantine this read-only member.
+                    return Ok((previous.clone(), value));
+                }
                 tracing::warn!(group=%self.id, member=%self.members.get(index).map(|m|m.id.as_str()).unwrap_or("unknown"), probe=tag, previous_height=previous.number, height=head.number, class="stale", "RPC head regressed");
                 return Err(Failure::Stale);
             }

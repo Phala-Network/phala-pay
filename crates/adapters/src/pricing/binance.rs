@@ -27,7 +27,11 @@ impl Binance {
         }
         Ok(Self {
             client: http_client()?,
-            endpoint: Redacted::parse(ENDPOINT).map_err(|_| PriceError::InvalidUrl)?,
+            endpoint: Redacted::parse(
+                &std::env::var("TOPUP_TEST_BINANCE_ENDPOINT")
+                    .unwrap_or_else(|_| ENDPOINT.to_owned()),
+            )
+            .map_err(|_| PriceError::InvalidUrl)?,
             symbol,
         })
     }

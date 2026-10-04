@@ -57,6 +57,56 @@ services:
     ports: !override
       - "127.0.0.1:${REHEARSAL_BASE_SEPOLIA_ANVIL_PORT:-18546}:8545"
 
+  # Hermetic price observation chains. They use production chain ids and fixture bytecode at the
+  # reviewed feed/pair addresses, so CI never reaches Ethereum or Base public RPCs.
+  anvil-mainnet-price:
+    networks: !override
+      default: { aliases: [price-mainnet-a.test, price-mainnet-b.test] }
+    extends: { file: ../sandbox/docker-compose.local.yml, service: anvil }
+    command: !override
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8545"
+      - --chain-id
+      - "1"
+      - --timestamp
+      - "${REHEARSAL_PRICE_ANVIL_TIMESTAMP:-1}"
+      - --block-time
+      - "1"
+    ports: !override
+      - "127.0.0.1:${REHEARSAL_MAINNET_PRICE_ANVIL_PORT:-18547}:8545"
+
+  anvil-base-mainnet-price:
+    networks: !override
+      default: { aliases: [base-price-mainnet-a.test, base-price-mainnet-b.test] }
+    extends: { file: ../sandbox/docker-compose.local.yml, service: anvil }
+    command: !override
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8545"
+      - --chain-id
+      - "8453"
+      - --timestamp
+      - "${REHEARSAL_PRICE_ANVIL_TIMESTAMP:-1}"
+      - --block-time
+      - "1"
+    ports: !override
+      - "127.0.0.1:${REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT:-18548}:8545"
+
+  # Local responses for the staging-only PHA check. The service aliases match the reviewed
+  # exchange hostnames; test-only endpoint overrides keep CI off the public Internet.
+  price-stub:
+    image: ${TOPUP_TEST_TLS_IMAGE:-ghcr.io/astral-sh/uv:0.12.18-python3.14-trixie-slim@sha256:00facf17b58b02b725155862c5cd637f688f906bf7eb5b5194647886d8805cf3}
+    command: [python, /etc/price-stub/server.py, "8080"]
+    networks:
+      default:
+        aliases: [api.kraken.com, data-api.binance.vision]
+    configs:
+      - source: price_stub_server
+        target: /etc/price-stub/server.py
+
   keys:
     volumes: !override
       - dstack_socket:/var/run
@@ -88,6 +138,9 @@ services:
       - dstack_socket:/var/run
       - db_app:/run/db-app:ro
       - observability:/run/topup-observability:ro
+    environment:
+      TOPUP_TEST_KRAKEN_ENDPOINT: http://price-stub:8080/0/public/Ticker
+      TOPUP_TEST_BINANCE_ENDPOINT: http://price-stub:8080/api/v3/ticker/price
     depends_on:
       dstack-simulator:
         condition: service_healthy
@@ -95,6 +148,12 @@ services:
         condition: service_healthy
       anvil-base-sepolia:
         condition: service_healthy
+      anvil-mainnet-price:
+        condition: service_healthy
+      anvil-base-mainnet-price:
+        condition: service_healthy
+      price-stub:
+        condition: service_started
 
   # A profile the rehearsal never enables (see the header).
   dstack-ingress:
@@ -102,3 +161,7 @@ services:
 
 volumes:
   dstack_socket:
+
+configs:
+  price_stub_server:
+    content: ${TOPUP_PRICE_STUB_SERVER:-# rehearsal supplies the hermetic price stub}

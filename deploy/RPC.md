@@ -17,6 +17,14 @@ Give keyless endpoints explicit synthetic key budgets, shared across their metho
 account scopes across chains/credentials belonging to the same paid account. Never run two
 active replicas with the same budgets: admission is process-local, under the existing lease model.
 
+Every production price group should have at least two members, preferably from separate
+companies, so a transient public-RPC backend lag can fail over within the group. Price probes are
+read-only and pin all calls below the A/B-agreed head. A member may report a latest head up to two
+blocks below its accepted watermark (`head_regression_tolerance: 2`) without quarantine; larger
+regressions remain fail-closed and alertable. The staging price groups use Tenderly plus PublicNode,
+DRPC plus Flashbots, and PublicNode plus Llama for the Ethereum/Base mainnet probes; these are
+reviewed public endpoints with their own synthetic key budgets.
+
 Run the pinned image's `topup config check --secrets FILE`, then `topup rpc check --config FILE`
 with the sealed environment. The latter uses each member's actual key and returns only validated
 member ids as a JSON array on stdout. Logs and failure summaries go to stderr and name each

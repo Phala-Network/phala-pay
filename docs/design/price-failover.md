@@ -1,7 +1,8 @@
 # Price failover
 
-Status: Accepted (owner-delegated, 2026-10-04); Chainlink on-chain consumption Allowed; PHA
-production remains gated on written Kraken permission and an attested Allowed check verdict.
+Status: Accepted (owner-delegated, 2026-10-04); Chainlink and Uniswap on-chain consumption are
+Allowed. PHA production quotes and spot credit remain disabled because no second Allowed source
+is available.
 Uniswap V2 TWAP is implemented with persisted service observations.
 
 ## Decision
@@ -27,7 +28,7 @@ existing PHA route; it is never commercial permission. Coin Metrics remains remo
 | Source | Evidence and quoted clause | Verdict / use |
 |---|---|---|
 | Chainlink on-chain feeds | Public on-chain feed state read via our own RPC, without an account/key. [ToS](https://chain.link/terms) is client-rendered; full text could not be retrieved. The basis is public on-chain consumption, not a fetched commercial API grant. | **Allowed** for this on-chain consumption. |
-| Kraken public market data | [API guide](https://docs-legacy.kraken.com/api/docs/guides/global-intro): “You must seek our prior permission for certain uses of the Kraken API's. This includes, but is not limited to, any non-personal commercial use of data from publicly accessible endpoints, such as market data … contacting `marketdata@kraken.com`”. | **PermissionRequired**; obtain written permission. |
+| Kraken public market data | [API guide](https://docs-legacy.kraken.com/api/docs/guides/global-intro): “You must seek our prior permission for certain uses of the Kraken API's. This includes, but is not limited to, any non-personal commercial use of data from publicly accessible endpoints, such as market data … contacting `marketdata@kraken.com`”. | **PermissionRequired**; staging-only. |
 | Binance, including `data-api.binance.vision` | [Terms](https://data.binance.vision/terms-of-use.html) §3.1: **CC BY-NC-SA 4.0**; §3.4: “any commercial utilization requires a separate, written enterprise data license agreement executed with Binance”. | **Prohibited** for commercial use without an enterprise licence. |
 | Coinbase market data | [Terms](https://www.coinbase.com/legal/market_data): “exclusively for you or your entity's personal or research purposes and may not be used to build an application intended for use by end users…”; redistribution and derived works are also prohibited. | **Prohibited**. No adapter. |
 | Coin Metrics Community | [Package terms](https://docs.coinmetrics.io/packages/coin-metrics-community-data): “non-commercial use only”; [licence](https://coinmetrics.io/?p=16175): **CC BY-NC 4.0**. | **Prohibited**; removed from runtime and defaults. |
@@ -78,11 +79,12 @@ FX is independently checked and is required for USDT-quoted markets.
 | Role | Ordered sources | Rule |
 |---|---|---|
 | primary | **min(Uniswap V2 PHA/WETH TWAP, current spot) × Chainlink ETH/USD** | public on-chain state, Allowed; agreement uses current spot × ETH/USD |
-| check | **Kraken current PHA/USD (`PHAUSD`)** | compare against Uniswap current spot; PermissionRequired, staging opt-in only until written permission |
+| check | **Kraken current PHA/USD (`PHAUSD`)** | compare against Uniswap current spot; PermissionRequired and staging-only |
 | fx | Chainlink USDT/USD | independently peg-checked by the existing volatile policy; the USD check is not multiplied by USDT |
 
-Production rejects the route until Kraken has written permission and an attested Allowed verdict.
-The two companies remain disjoint. Do not substitute one company or an unreviewed endpoint.
+Production rejects the route because Kraken is PermissionRequired and no second Allowed source is
+available. The two companies remain disjoint. Do not substitute one company or an unreviewed
+endpoint.
 Legacy exchange adapters remain available for explicit noncommercial rehearsal.
 
 ## PHA on-chain follow-up
@@ -92,9 +94,9 @@ feed directories (over 1,800 feeds checked), and no Pyth PHA feed. DIA's free AP
 CoinGecko paid is dropped. Do not add these as defaults or implement a CoinGecko adapter.
 
 The follow-up to #331 implements persisted Uniswap V2 PHA/WETH TWAP and current spot, multiplied by
-Chainlink ETH/USD, as primary; check is Kraken current PHA/USD
-**after written permission** and an attested Allowed verdict. Until then PHA is production-ineligible.
-A Phala-sponsored Chainlink PHA/USD feed is a long-term option for two on-chain sources.
+Chainlink ETH/USD, as the staging primary; the Kraken current PHA/USD check remains an explicit
+staging-only test source. Kraken permission and a sponsored Chainlink PHA/USD feed are out of
+scope, so PHA is production-ineligible until a separately reviewed Allowed source exists.
 
 The implementation reads the pair's `price0CumulativeLast`/`price1CumulativeLast` and reserves
 through independent Ethereum A/B RPC groups, verifies token ordering and requires agreement,
@@ -162,8 +164,9 @@ trade against it. This requires moving inventory, paying fees and repeatedly def
 an isolated transaction cannot dominate the average. These costs depend on actual reserves,
 arbitrage participation and external prices, so they are not a guaranteed dollar security bound.
 A flat sustained skew can pass TWAP's internal guard rails: the independent agreeing Kraken check
-remains mandatory, and `max_unfinalized_credit` (default **$1,000**) bounds our outstanding exposure.
-Reassess all merchant/deposit/exposure caps against live reserves before production activation.
+is available only in staging, and `max_unfinalized_credit` (default **$1,000**) bounds our
+outstanding exposure. Production remains disabled for PHA until a second Allowed source exists.
+The route remains disabled in production; staging-only operation is bounded by the existing caps.
 
 Tests cover arithmetic against recorded Ethereum blocks **26,120,450** and **26,120,610**
 ([raw fixture](../../crates/adapters/tests/fixtures/uniswap-v2-pha-mainnet.json)), including wrapping counters,

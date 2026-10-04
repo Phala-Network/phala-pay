@@ -51,13 +51,15 @@ decisions are the [design](design/multi-tenant.md) (§16 is its PR plan), and th
 | Sentry quota for production | Ops | open |
 | DNS for Phala's production domain, `pay-api.phala.com` (CNAME and `_dstack-app-address` TXT) | Ops | open |
 | Route defaults in architecture §14 (minimum deposit 0, minimum credit $1, 4 quote decimals, deposit bounds, open exposure caps) and Phala Cloud's `max_unfinalized_credit` (default $1 000) | Finance | to confirm |
+| Phala Cloud PHA production pricing | Engineering | disabled: the on-chain Uniswap TWAP has no second Allowed independent source; the Kraken check is staging-only |
 
 ### Before mainnet
 
 - [ ] Deploy the factory on mainnet at the same deterministic address (HUMAN-ONLY).
-- [ ] Production deploy (`provision`) with the first live route,
-      [examples/phala-cloud-pha.yaml](../examples/phala-cloud-pha.yaml), then a small mainnet
-      deposit, sweep, and refund end to end on Phala Cloud's account.
+- [ ] Production deploy (`provision`) with an enabled stablecoin route. The
+      [PHA example](../examples/phala-cloud-pha.yaml) remains a staging/test configuration;
+      PHA quotes and spot credit are disabled in production because no second Allowed source
+      exists.
 - [ ] Restore drill against production backups, including the freeze and reconciliation.
 
 ### Later

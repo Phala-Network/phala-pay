@@ -282,6 +282,63 @@ async fn stale_head_is_not_published() {
 }
 
 #[tokio::test]
+async fn small_head_regression_is_tolerated_for_pinned_read_probes() {
+    let number = Arc::new(AtomicUsize::new(100));
+    let source = number.clone();
+    let server_source = source.clone();
+    let (url, task) = server(Router::new().route(
+        "/",
+        post(move |Json(request): Json<Value>| {
+            let source = server_source.clone();
+            async move {
+                Json(json!({
+                    "jsonrpc":"2.0",
+                    "id":request["id"],
+                    "result":header(format!("0x{:x}", source.load(Ordering::SeqCst)))
+                }))
+            }
+        }),
+    ))
+    .await;
+    let mut policy = GroupPolicy::default();
+    policy.head_regression_tolerance = 2;
+    let group = RpcGroup::new(
+        "tolerant-head".into(),
+        1,
+        policy,
+        vec![Member {
+            id: "tolerant".into(),
+            company: "company".into(),
+            endpoint: Redacted::parse(&url).unwrap(),
+            account: "account".into(),
+            key: "key".into(),
+            priority: 0,
+            weight: 1,
+        }],
+        budgets(),
+    )
+    .unwrap();
+    group.verified(0, true);
+    let deadline = || Instant::now() + Duration::from_secs(2);
+    assert_eq!(
+        group.head(0, "latest", deadline()).await.unwrap().number,
+        100
+    );
+    source.store(98, Ordering::SeqCst);
+    assert_eq!(
+        group.head(0, "latest", deadline()).await.unwrap().number,
+        100
+    );
+    assert_eq!(group.eligible(), 1);
+    source.store(97, Ordering::SeqCst);
+    assert_eq!(
+        group.head(0, "latest", deadline()).await,
+        Err(Failure::Stale)
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn http_413_splits_topics_without_changing_the_numeric_window() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let requests = seen.clone();

@@ -12,9 +12,9 @@
 # 3. Writes a staging-shaped environment directory: Phala's staging topup.yaml with the committed
 #    routes on those addresses and on the Anvils' providers (`topup config show` and jq), and the
 #    staging overlay with local object storage. It renders it as Deploy provisions.
-#    PHA uses the previous staging Kraken/Binance sources to exercise live HTTPS pricing:
-#    a throwaway database cannot have a persisted thirty-minute TWAP window at startup.
-#    dstack-ingress does not run (cvm-rehearsal.compose.yml).
+#    PHA uses local Chainlink and Uniswap V2-compatible fixtures on the production-chain-id
+#    Anvils; no live mainnet or public RPC is contacted. dstack-ingress does not run
+#    (cvm-rehearsal.compose.yml).
 # 4. Writes the unsealed `.env` as Deploy does (the rendered compose's sealed names, all empty),
 #    and runs `docker compose up` on the rendered file plus cvm-rehearsal.compose.yml (simulator,
 #    S3, Anvil), as dstack's app-compose runner does. Without storage credentials PostgreSQL must
@@ -37,7 +37,7 @@
 #
 # Nothing is bind-mounted and the workload publishes no host port (see cvm-rehearsal.compose.yml).
 # Requires docker (Compose 2.24.4+), Foundry v1.8.3 with contracts/lib checked out, jq, python3,
-# OpenSSL 3, and internet access for the live price sources, as in production.
+# and OpenSSL 3. Internet is used only to pull the pinned images.
 set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -62,11 +62,19 @@ product_project="$project-product"
 owner="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 export TOPUP_LOCAL_DSTACK_IMAGE="phala-pay-dstack-simulator:$project"
 export SANDBOX_ANVIL_PORT REHEARSAL_BASE_SEPOLIA_ANVIL_PORT
+export REHEARSAL_MAINNET_PRICE_ANVIL_PORT REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT
+export REHEARSAL_PRICE_ANVIL_TIMESTAMP
 SANDBOX_ANVIL_PORT=$(free_port)
 REHEARSAL_BASE_SEPOLIA_ANVIL_PORT=$(free_port)
+REHEARSAL_MAINNET_PRICE_ANVIL_PORT=$(free_port)
+REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT=$(free_port)
+# Keep the fixture chain's final sample just behind wall-clock time so freshness checks remain real.
+REHEARSAL_PRICE_ANVIL_TIMESTAMP=$(($(date +%s) - 1950))
 registry_port=$(free_port)
 rpc_url="http://127.0.0.1:$SANDBOX_ANVIL_PORT"
 base_rpc_url="http://127.0.0.1:$REHEARSAL_BASE_SEPOLIA_ANVIL_PORT"
+mainnet_price_rpc_url="http://127.0.0.1:$REHEARSAL_MAINNET_PRICE_ANVIL_PORT"
+base_mainnet_price_rpc_url="http://127.0.0.1:$REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT"
 # The sealed names of the rendered compose (filled in after the first render).
 env_names=()
 local_images=()
@@ -160,7 +168,8 @@ trap 'exit 143' TERM
 # Trust only this run's certificate; HTTPS checks stay enabled in the SDK and HTTPX.
 mkdir "$TOPUP_TEST_TLS_DIR"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=topup-tls \
-    -addext subjectAltName=DNS:topup-tls -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
+    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub \
+    -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
     -out "$TOPUP_TEST_TLS_DIR/cert.pem" >/dev/null 2>&1
 python3 - "$TOPUP_TEST_TLS_DIR/cert.pem" "$TOPUP_TEST_TLS_DIR/ca.pem" <<'PYTHON'
 import ssl, sys
@@ -169,9 +178,11 @@ roots = "".join(ssl.DER_cert_to_PEM_cert(c) for c in ssl.create_default_context(
 Path(sys.argv[2]).write_text(roots + Path(sys.argv[1]).read_text())
 PYTHON
 export TOPUP_TEST_TLS_PROXY TOPUP_TEST_TLS_CERTIFICATE TOPUP_TEST_TLS_KEY
+export TOPUP_PRICE_STUB_SERVER
 TOPUP_TEST_TLS_PROXY="$(<"$root/deploy/local/tls_proxy.py")"
 TOPUP_TEST_TLS_CERTIFICATE="$(<"$TOPUP_TEST_TLS_DIR/cert.pem")"
 TOPUP_TEST_TLS_KEY="$(<"$TOPUP_TEST_TLS_DIR/key.pem")"
+TOPUP_PRICE_STUB_SERVER="$(<"$root/deploy/local/price_stub.py")"
 
 wait_for() {
     local description=$1 attempts=$2
@@ -239,11 +250,13 @@ compose_file="$cvm/docker-compose.yaml"
 mapfile -t env_names < <(docker compose -f "$compose_file" config --variables |
     awk 'NR > 1 && NF > 0 { print $1 }' | sort)
 
-echo "== starting Anvil (chain ids 11155111 and 84532) and the client container"
-dc up -d --wait anvil anvil-base-sepolia >/dev/null
+echo "== starting Anvil (asset and hermetic price chains) and the client container"
+dc up -d --wait anvil anvil-base-sepolia anvil-mainnet-price anvil-base-mainnet-price >/dev/null
 # Both chains carry the canonical Multicall3 that topup's balance and addressOf reads go through.
 install_anvil_multicall3 "$rpc_url"
 install_anvil_multicall3 "$base_rpc_url"
+install_anvil_multicall3 "$mainnet_price_rpc_url"
+install_anvil_multicall3 "$base_mainnet_price_rpc_url"
 docker run -d --name "$client" --network "${project}_default" "$client_image" sleep infinity \
     >/dev/null
 # `docker cp` streams through the API, so this works where the daemon cannot see the checkout.
@@ -310,6 +323,90 @@ base_third_token=$(rehearsal_token UsdtLikeToken "$base_rpc_url")
 printf 'base-sepolia: token=%s second_token=%s third_token=%s sanctions_oracle=%s\n' \
     "$base_token" "$base_second_token" "$base_third_token" "$base_oracle"
 
+echo "== installing hermetic mainnet price fixtures"
+fixture_aggregator_code=$(cd "$CONTRACTS_DIR" && forge inspect test/mocks/PriceFixtures.sol:MockPriceAggregator deployedBytecode)
+fixture_pair_code=$(cd "$CONTRACTS_DIR" && forge inspect test/mocks/PriceFixtures.sol:MockUniswapV2Pair deployedBytecode)
+set_code() {
+    local rpc=$1 address=$2 code=$3
+    cast rpc --rpc-url "$rpc" anvil_setCode "$address" "$code" >/dev/null
+}
+set_storage() {
+    local rpc=$1 address=$2 slot=$3 value=$4
+    cast rpc --rpc-url "$rpc" anvil_setStorageAt "$address" \
+        "$(python3 - "$slot" <<'PY'
+import sys
+print(f"0x{int(sys.argv[1], 0):064x}")
+PY
+)" "$(python3 - "$value" <<'PY'
+import sys
+print(f"0x{int(sys.argv[1], 0):064x}")
+PY
+)" >/dev/null
+}
+eth_feed=0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419
+usdc_feed=0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6
+usdt_feed=0x3E7d1eAB13ad0104d2750B8863b489D65364e32D
+sequencer_feed=0xBCF85224fc0756B9Fa45aA7892530B47e10b6433
+pair=0x8867f20c1c63baccec7617626254a060eeb0e61e
+for feed_address in "$eth_feed" "$usdc_feed" "$usdt_feed"; do
+    set_code "$mainnet_price_rpc_url" "$feed_address" "$fixture_aggregator_code"
+done
+set_code "$mainnet_price_rpc_url" "$pair" "$fixture_pair_code"
+set_code "$base_mainnet_price_rpc_url" "$sequencer_feed" "$fixture_aggregator_code"
+# MockPriceAggregator slots: decimals, answer, roundId, startedAt, updatedAt, answeredInRound.
+set_storage "$mainnet_price_rpc_url" "$eth_feed" 0 8
+set_storage "$mainnet_price_rpc_url" "$eth_feed" 1 200000000000
+set_storage "$mainnet_price_rpc_url" "$eth_feed" 2 1
+price_timestamp=$(cast block latest --field timestamp --rpc-url "$mainnet_price_rpc_url")
+price_timestamp=$(python3 - "$price_timestamp" <<'PY'
+import sys
+print(int(sys.argv[1], 0))
+PY
+)
+set_storage "$mainnet_price_rpc_url" "$eth_feed" 3 "$price_timestamp"
+set_storage "$mainnet_price_rpc_url" "$eth_feed" 4 "$price_timestamp"
+set_storage "$mainnet_price_rpc_url" "$eth_feed" 5 1
+for feed_address in "$usdc_feed" "$usdt_feed"; do
+    set_storage "$mainnet_price_rpc_url" "$feed_address" 0 8
+    set_storage "$mainnet_price_rpc_url" "$feed_address" 1 100000000
+    set_storage "$mainnet_price_rpc_url" "$feed_address" 2 1
+    set_storage "$mainnet_price_rpc_url" "$feed_address" 3 "$price_timestamp"
+    set_storage "$mainnet_price_rpc_url" "$feed_address" 4 "$price_timestamp"
+    set_storage "$mainnet_price_rpc_url" "$feed_address" 5 1
+done
+set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 0 0
+set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 1 0
+set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 2 1
+base_price_timestamp=$(cast block latest --field timestamp --rpc-url "$base_mainnet_price_rpc_url")
+base_price_timestamp=$(python3 - "$base_price_timestamp" <<'PY'
+import sys
+print(int(sys.argv[1], 0))
+PY
+)
+set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 3 "$base_price_timestamp"
+set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 4 "$base_price_timestamp"
+set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 5 1
+# MockUniswapV2Pair slots: token0, token1, packed reserves/timestamp, cumulative0, cumulative1.
+set_storage "$mainnet_price_rpc_url" "$pair" 0 0x6c5ba91642f10282b576d91922ae6448c9d52f4e
+set_storage "$mainnet_price_rpc_url" "$pair" 1 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
+pair_timestamp=$(cast block latest --field timestamp --rpc-url "$mainnet_price_rpc_url")
+pair_timestamp=$(python3 - "$pair_timestamp" <<'PY'
+import sys
+print(int(sys.argv[1], 0))
+PY
+)
+pair_packed=$(python3 - "$pair_timestamp" <<'PY'
+import sys
+timestamp = int(sys.argv[1]) - 1800
+reserve0 = 100_000 * 10**18
+reserve1 = 100 * 10**18
+print((reserve0 | (reserve1 << 112) | ((timestamp & 0xffffffff) << 224)))
+PY
+)
+set_storage "$mainnet_price_rpc_url" "$pair" 2 "$pair_packed"
+set_storage "$mainnet_price_rpc_url" "$pair" 3 0
+set_storage "$mainnet_price_rpc_url" "$pair" 4 0
+
 echo "== writing the configuration and rendering the staging compose"
 # Phala's staging configuration with this network's addresses: on each chain the test token stands
 # in for PHA, the reference product's asset, a six-decimal mock token for USDC, and a USDT-like one
@@ -323,8 +420,9 @@ openssl genpkey -algorithm ed25519 -out "$tmp/admin.pem"
 admin_public_key=$(openssl pkey -in "$tmp/admin.pem" -pubout -outform DER | tail -c 32 | base64)
 # write_config ADMIN_KEY_ID: the rehearsal's topup.yaml (resolved JSON, which is YAML).
 write_config() {
-    # Test-mode exchange sources retain the rehearsal's live TLS coverage without weakening
-    # the committed TWAP policy or pre-populating observations the service did not record.
+    # Every route is kept on its committed on-chain pricing path. The local production-chain-id
+    # Anvils below provide Chainlink, Uniswap and sequencer fixture state; exchange calls, when
+    # required by the staging-only PHA check, resolve only to the local stub.
     docker run --rm -i --network none "$TOPUP_IMAGE" topup config show /dev/stdin \
         <"$root/deploy/environments/phala-network/staging/topup/topup.yaml" |
         jq --arg id "$1" --arg key "$admin_public_key" --arg factory "$factory" \
@@ -340,21 +438,27 @@ write_config() {
                     "phala-cloud-base-sepolia-usdc-usd": [$base_usdc, $base_oracle],
                     "phala-cloud-base-sepolia-usdt-usd": [$base_usdt, $base_oracle]}')" '
             .admin_key = {id: $id, public_key: $key}
-            | .rpc_companies.tenderly.domains = ["rehearsal-a.test", "tenderly.co"]
-            | .rpc_companies.publicnode.domains = ["rehearsal-b.test", "publicnode.com"]
+            | .rpc_companies.tenderly.domains = ["rehearsal-a.test", "price-mainnet-a.test", "base-price-mainnet-a.test", "tenderly.co"]
+            | .rpc_companies.drpc.domains = ["price-mainnet-b.test", "drpc.org"]
+            | .rpc_companies.publicnode.domains = ["rehearsal-b.test", "price-mainnet-b.test", "base-price-mainnet-b.test", "publicnode.com"]
+            | .rpc_companies.flashbots.domains = ["price-mainnet-b.test", "flashbots.net"]
+            | .rpc_companies.llama.domains = ["base-price-mainnet-b.test", "llamarpc.com"]
+            | .rpc_companies.sentio.domains = ["base-price-mainnet-a.test", "sentio.xyz"]
             | .rpc_groups["provider-a"].members[0].url = "http://anvil.rehearsal-a.test:8545"
             | .rpc_groups["provider-b"].members[0].url = "http://anvil.rehearsal-b.test:8545/?key={key}"
             | .rpc_groups["provider-b"].members[0].sealed_key = "TOPUP_RPC_PROVIDER_B_KEY"
             | .rpc_groups["base-sepolia-a"].members[0].url = "http://base.rehearsal-a.test:8545"
             | .rpc_groups["base-sepolia-b"].members[0].url = "http://base.rehearsal-b.test:8545"
+            | .rpc_groups["mainnet-a"].members |= map(del(.sealed_key) | .url = "http://price-mainnet-a.test:8545")
+            | .rpc_groups["mainnet-b"].members |= map(del(.sealed_key) | .url = "http://price-mainnet-b.test:8545")
+            | .rpc_groups["base-mainnet-a"].members |= map(del(.sealed_key) | .url = "http://base-price-mainnet-a.test:8545")
+            | .rpc_groups["base-mainnet-b"].members |= map(del(.sealed_key) | .url = "http://base-price-mainnet-b.test:8545")
             | .routes |= map(($assets[.route] // error("no rehearsal token for \(.route)")) as $asset
                 | .chain.forwarder_factory = $factory | .chain.implementation = $implementation
                 | .asset.contract = $asset[0] | .chain.sanctions_oracle = $asset[1]
                 | if .asset.symbol == "pha" then
-                    if .livemode then error("exchange rehearsal requires test mode") else
-                        .price.primary = [{source: "kraken", symbol: "PHAUSD", company: "kraken"}]
-                        | .price.check = [{source: "binance", symbol: "PHAUSDT", company: "binance"}]
-                        | .price.allow_unclear_sources = true
+                    if .livemode then error("price rehearsal requires test mode") else
+                        .price.allow_unclear_sources = true
                     end
                   else . end)' \
         >"$environment/topup.yaml"
@@ -433,6 +537,49 @@ wait_for "migrate" 90 migrate_exited
 migrate_exit=$(dc ps -a --format json migrate | jq -rs 'flatten | .[0].ExitCode')
 [[ "$migrate_exit" == 0 ]] || { dc logs migrate >&2; die "migrate exited with $migrate_exit"; }
 echo "ok: migrate exited 0"
+
+echo "== seeding the hermetic thirty-minute TWAP window"
+# The production sampler persists one sample per minute. Rehearsal time is compressed by mining
+# those timestamps on the local production-chain-id Anvil; every row still carries a real local
+# block hash, so the reader's restart/reorg checks remain exercised.
+twap_policy='{"window_s":1800,"max_sample_age_s":180,"min_weth_reserve_usd":100000,"max_spot_deviation_bps":300,"max_sample_jump_bps":500}'
+twap_sql="$tmp/twap.sql"
+: >"$twap_sql"
+pair_timestamp_last=$((price_timestamp - 1800))
+twap_spot=$(python3 - <<'PY'
+print((100 * 10**18 << 112) // (100_000 * 10**18))
+PY
+)
+for i in $(seq 1 31); do
+    sample_timestamp=$((price_timestamp + i * 60))
+    cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setNextBlockTimestamp "$sample_timestamp" >/dev/null
+    cast rpc --rpc-url "$mainnet_price_rpc_url" evm_mine >/dev/null
+    sample_block=$(cast block latest --field number --rpc-url "$mainnet_price_rpc_url")
+    sample_block=$(python3 - "$sample_block" <<'PY'
+import sys
+print(int(sys.argv[1], 0))
+PY
+)
+    sample_hash=$(cast block latest --field hash --rpc-url "$mainnet_price_rpc_url")
+    sample_cumulative=$(python3 - "$sample_timestamp" "$pair_timestamp_last" "$twap_spot" <<'PY'
+import sys
+timestamp, previous, spot = map(int, sys.argv[1:])
+print(f"0x{(spot * ((timestamp - previous) & 0xffffffff)) % (1 << 256):064x}")
+PY
+)
+    sample_json=$(jq -cn --arg block "$sample_block" --arg hash "$sample_hash" \
+        --arg timestamp "$sample_timestamp" --arg cumulative "$sample_cumulative" \
+        --arg spot "$(python3 - "$twap_spot" <<'PY'
+import sys
+print(f"0x{int(sys.argv[1]):064x}")
+PY
+)" \
+        '{block:($block|tonumber),hash:$hash,timestamp:($timestamp|tonumber),cumulative:$cumulative,spot:$spot}')
+    printf "INSERT INTO price_twap_observations (policy, block_number, block_timestamp, sample) VALUES ('%s', %s, %s, '%s');\n" \
+        "$twap_policy" "$sample_block" "$sample_timestamp" "$sample_json" >>"$twap_sql"
+done
+dc exec -T postgres psql -U postgres -d topup -X -v ON_ERROR_STOP=1 <"$twap_sql" >/dev/null
+echo "ok: persisted 31 local samples covering the minimum TWAP window"
 
 http_status() {
     product_python -c 'import sys, httpx; print(httpx.get(sys.argv[1], timeout=5).status_code)' "$1"
@@ -722,12 +869,12 @@ PYTHON
 [[ "$(ledger_credits)" == "$credits_before" ]] || die "redelivery changed the receiver's credit"
 echo "ok: a signed deposit.credited redelivery was acknowledged without a second credit"
 
-# The route prices only from Chainlink, Binance, and Kraken over HTTPS, so a priced lock proves
-# the distroless service image verified those servers with its system CA bundle.
+# The route prices from local Chainlink and Uniswap fixtures, so a priced lock proves the
+# hermetic pinned-read path without contacting a live exchange or public RPC.
 priced_locks=$(dc exec -T postgres psql -U postgres -d topup -XAtq -c \
     "SELECT count(*) FROM quotes WHERE route = 'phala-cloud-sepolia-pha-usd' AND price_scaled > 0")
-((priced_locks >= 1)) || die "no rate lock was priced from the live HTTPS sources"
-echo "ok: topup priced a lock from live HTTPS price sources (TLS with system roots)"
+((priced_locks >= 1)) || die "no rate lock was priced from the local on-chain fixtures"
+echo "ok: topup priced a lock from hermetic Chainlink/Uniswap fixtures"
 
 echo "== workload memory (tdx.medium has 4 GiB)"
 dc ps -q keys postgres topup heartbeat backup |
