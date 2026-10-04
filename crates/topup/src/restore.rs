@@ -11,13 +11,13 @@ use crate::heartbeat::RPO_SECONDS;
 use crate::reconciler::{CheckName, Finding, Reconciler};
 
 const HEARTBEAT_SAMPLING_SECONDS: i32 = 60;
-/// A committed heartbeat can be up to one sampling interval older than the failure point.
-const ALLOWED_RPO_SECONDS: i32 = RPO_SECONDS + HEARTBEAT_SAMPLING_SECONDS;
+/// Sampling and upload latency consume the RPO budget; they do not enlarge the target.
+const ALLOWED_RPO_SECONDS: i32 = RPO_SECONDS;
 
 /// Source-side failure point recorded outside the PostgreSQL volume being restored.
 #[derive(Clone, Debug)]
 pub struct RestoreExpectations {
-    /// Last heartbeat known committed on the source immediately before destruction. `None` when
+    /// Externally recorded failure instant (legacy field name). `None` when
     /// the check runs at boot without one: the report then leaves the RPO comparison against the
     /// operator's external anchor to the operator (`rpo_basis` `unanchored`).
     pub expected_heartbeat_at: Option<DateTime<Utc>>,
@@ -55,11 +55,11 @@ pub struct RestoreReport {
     pub expected_heartbeat_at: Option<DateTime<Utc>>,
     /// Newest heartbeat present after restore.
     pub restored_heartbeat_at: DateTime<Utc>,
-    /// Data loss measured between source and restored heartbeat samples, when anchored.
+    /// Age of the newest restored committed heartbeat at the recorded failure instant.
     pub measured_rpo_seconds: Option<i64>,
-    /// Maximum accepted loss between committed heartbeat samples.
+    /// Maximum accepted recovery-point age, including sampling and upload latency.
     pub allowed_rpo_seconds: i32,
-    /// RPO target before sampling tolerance.
+    /// RPO target; no sampling tolerance enlarges it.
     pub rpo_seconds: i32,
     /// Heartbeat sampling interval used when interpreting RPO.
     pub heartbeat_sampling_seconds: i32,
@@ -92,10 +92,11 @@ pub async fn check(
     expectations: &RestoreExpectations,
     reconciler: &Reconciler,
 ) -> Result<RestoreReport, String> {
-    let latest_migration = check_migrations(pool).await?;
     let restore = crate::restore_mode::freeze_after_restore(pool)
         .await
         .map_err(|_| "failed to record the restore and freeze the service".to_owned())?;
+
+    let latest_migration = check_migrations(pool).await?;
 
     let wal = sqlx::query(
         "SELECT pg_is_in_recovery() AS in_recovery, \
@@ -140,10 +141,13 @@ pub async fn check(
         .try_get("recorded_at")
         .map_err(|_| "restore heartbeat timestamp is invalid".to_owned())?;
     let measured_rpo_seconds = expectations.expected_heartbeat_at.map(|expected| {
-        expected
+        // Round upward so a loss of 60.1 seconds cannot pass a 60-second target.
+        (expected
             .signed_duration_since(restored_heartbeat_at)
-            .num_seconds()
+            .num_milliseconds()
             .max(0)
+            + 999)
+            / 1000
     });
 
     let round = reconciler
@@ -151,7 +155,7 @@ pub async fn check(
         .await
         .map_err(|error| format!("post-restore reconciliation failed: {}", error.code()))?;
     let post_restore_reconciliation = PostRestoreReconciliation {
-        status: if round.incomplete {
+        status: if round.incomplete || !round.failed_checks.is_empty() {
             "incomplete"
         } else {
             "complete"
@@ -171,6 +175,12 @@ pub async fn check(
     }
     failures.extend(
         post_restore_reconciliation
+            .failed_checks
+            .iter()
+            .map(|check| format!("critical post-restore check failed: {}", check.code())),
+    );
+    failures.extend(
+        post_restore_reconciliation
             .findings
             .iter()
             .filter(|finding| finding.incomplete)
@@ -187,6 +197,10 @@ pub async fn check(
     } else {
         "incomplete"
     };
+
+    crate::restore_mode::record_validation(pool, &restore, status, &failures)
+        .await
+        .map_err(|_| "failed to persist restore acceptance checks".to_owned())?;
 
     Ok(RestoreReport {
         status,

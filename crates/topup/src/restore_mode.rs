@@ -139,6 +139,19 @@ pub async fn freeze_after_restore(pool: &PgPool) -> Result<Restore, sqlx::Error>
     let mut transaction = pool.begin().await?;
     let (_, current) = lock_timeline(&mut transaction).await?;
     let restore = freeze_in(&mut transaction, Detection::RestoreCheck, current).await?;
+    // Invalidate prior acceptance under the same restore lock, before any validation starts.
+    // A concurrent unfreeze must see either the old completed check or this pending check.
+    audit::insert(
+        &mut *transaction,
+        &audit::Entry {
+            account_id: None,
+            actor: &Actor::system("restore-check"),
+            action: "restore.validation",
+            subject: &format!("restore:{}", restore.id),
+            reason: r#"{"status":"incomplete","failures":["validation running or interrupted"]}"#,
+        },
+    )
+    .await?;
     acknowledge(&mut transaction, current).await?;
     transaction.commit().await?;
     Ok(restore)
@@ -347,15 +360,48 @@ pub enum UnfreezeError {
     /// No restore freeze is active.
     #[error("the service is not frozen")]
     NotFrozen,
-    /// A chain is not rescanned yet.
-    #[error("the rescan since the restore is incomplete")]
+    /// A chain is not rescanned yet, or restore acceptance checks have not passed.
+    #[error("the rescan or acceptance checks since the restore are incomplete")]
     RescanIncomplete(Vec<ChainRescan>),
     /// PostgreSQL rejected or failed the operation.
     #[error("{0}")]
     Database(#[from] sqlx::Error),
 }
 
-/// Lifts the active freeze once every chain is rescanned, recording who and why in the restore
+/// Persists acceptance evidence in the existing append-only audit history.
+pub async fn record_validation(
+    pool: &PgPool,
+    restore: &Restore,
+    status: &str,
+    failures: &[String],
+) -> Result<(), sqlx::Error> {
+    audit::insert(
+        pool,
+        &audit::Entry {
+            account_id: None,
+            actor: &Actor::system("restore-check"),
+            action: "restore.validation",
+            subject: &format!("restore:{}", restore.id),
+            reason: &serde_json::json!({"status": status, "failures": failures}).to_string(),
+        },
+    )
+    .await
+}
+
+// Explicit admin-only escape hatch through the existing reason field. Ordinary reasons cannot
+// accidentally override failed checks. The API appends its checklist after the supplied reason.
+fn override_reason<'a>(actor: &Actor, reason: &'a str) -> Option<&'a str> {
+    if actor.actor_type != audit::ActorType::Admin {
+        return None;
+    }
+    let supplied = reason.split("; checklist:").next()?.trim();
+    supplied
+        .strip_prefix("override-critical-checks:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// Lifts the active freeze after rescan and acceptance (or explicit admin override), recording who and why in the restore
 /// and in `audit` in one transaction.
 pub async fn unfreeze(
     pool: &PgPool,
@@ -370,6 +416,31 @@ pub async fn unfreeze(
     let chains = rescan_progress(pool, &restore, routes).await?;
     if chains.iter().any(|chain| !chain.complete) {
         return Err(UnfreezeError::RescanIncomplete(chains));
+    }
+    let accepted: bool = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT reason::jsonb ->> 'status' = 'ok' FROM audit \
+         WHERE action = 'restore.validation' AND subject = $1 \
+         ORDER BY created_at DESC, id DESC LIMIT 1), false)",
+    )
+    .bind(format!("restore:{}", restore.id))
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !accepted {
+        let Some(reason) = override_reason(actor, reason) else {
+            // The existing API incomplete-recovery contract also gates acceptance checks.
+            return Err(UnfreezeError::RescanIncomplete(Vec::new()));
+        };
+        audit::insert(
+            &mut *transaction,
+            &audit::Entry {
+                account_id: None,
+                actor,
+                action: "restore.critical_checks_override",
+                subject: &format!("restore:{}", restore.id),
+                reason,
+            },
+        )
+        .await?;
     }
     let unfrozen: Restore = sqlx::query_as::<_, RestoreRow>(sqlx::AssertSqlSafe(format!(
         "UPDATE restores SET unfrozen_at = now(), unfrozen_by = $2, unfreeze_reason = $3 \
@@ -1250,4 +1321,40 @@ pub async fn delivered_event_findings(
         })
         .collect();
     Ok((imported, findings))
+}
+
+#[cfg(test)]
+mod acceptance_tests {
+    use super::*;
+
+    #[test]
+    fn only_explicit_admin_override_with_a_reason_is_accepted() {
+        let admin = Actor::admin("operator");
+        assert_eq!(override_reason(&admin, "reconciled"), None);
+        assert_eq!(
+            override_reason(&admin, "override-critical-checks: ; checklist: done"),
+            None
+        );
+        assert_eq!(
+            override_reason(
+                &Actor::system("worker"),
+                "override-critical-checks: evidence"
+            ),
+            None
+        );
+        assert_eq!(
+            override_reason(
+                &Actor::api_key("merchant"),
+                "override-critical-checks: evidence"
+            ),
+            None
+        );
+        assert_eq!(
+            override_reason(
+                &admin,
+                "override-critical-checks: INC-42 independent evidence; checklist: done"
+            ),
+            Some("INC-42 independent evidence")
+        );
+    }
 }

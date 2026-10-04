@@ -222,7 +222,10 @@ impl Harness {
 
     /// Records a restore as `restore-check` does after a restore on boot.
     async fn restore(&self) -> Result<restore_mode::Restore> {
-        Ok(restore_mode::freeze_after_restore(&self.owner).await?)
+        let restore = restore_mode::freeze_after_restore(&self.owner).await?;
+        // These business-reconciliation fixtures start after acceptance checks succeeded.
+        restore_mode::record_validation(&self.owner, &restore, "ok", &[]).await?;
+        Ok(restore)
     }
 
     /// Sets the chain's cursor as the finalized scanner commits it.
@@ -4882,6 +4885,60 @@ async fn a_delivered_rejection_the_chain_contradicts_holds_the_deposit() -> Resu
                 ),
                 "{findings:?}"
             );
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn failed_critical_checks_block_unfreeze_and_override_is_explicit_and_audited() -> Result<()>
+{
+    support::with_database(|database| {
+        Box::pin(async move {
+            let harness = Harness::new(database).await?;
+            let restore = harness.restore().await?;
+            harness
+                .scan_to(1000, restore.detected_at + TimeDelta::seconds(1))
+                .await?;
+            sqlx::query("UPDATE addresses SET backfilled = true")
+                .execute(&harness.pool)
+                .await?;
+            restore_mode::record_validation(
+                &harness.owner,
+                &restore,
+                "incomplete",
+                &["custody_balance RPC failed".to_owned()],
+            )
+            .await?;
+            for reason in ["reconciled", "override-critical-checks:"] {
+                let answer = harness
+                    .admin(
+                        Method::POST,
+                        "/v1/admin/restore/unfreeze",
+                        &checklist(reason),
+                    )
+                    .await?;
+                ensure!(answer.status == StatusCode::BAD_REQUEST);
+                ensure!(restore_mode::is_frozen(&harness.pool).await?);
+            }
+            let answer = harness
+                .admin(
+                    Method::POST,
+                    "/v1/admin/restore/unfreeze",
+                    &checklist(
+                        "override-critical-checks: INC-42 independent custody evidence accepted",
+                    ),
+                )
+                .await?;
+            ensure!(answer.status == StatusCode::OK, "{}", answer.body);
+            let reason: String = sqlx::query_scalar(
+                "SELECT reason FROM audit WHERE action = 'restore.critical_checks_override'",
+            )
+            .fetch_one(&harness.owner)
+            .await?;
+            ensure!(reason == "INC-42 independent custody evidence accepted");
+            ensure!(!restore_mode::is_frozen(&harness.pool).await?);
             Ok(())
         })
     })

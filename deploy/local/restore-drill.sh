@@ -135,7 +135,7 @@ wal_object_uploaded_epoch() {
 }
 
 seconds_between() {
-    awk -v start="$1" -v end="$2" 'BEGIN { printf "%.3f", end - start }'
+    awk -v start="$1" -v end="$2" 'BEGIN { printf "%.6f", end - start }'
 }
 
 recovery_promoted() {
@@ -158,7 +158,9 @@ marker_epoch() {
 }
 
 seed_reconciliation_fixture() {
-    dc exec -T postgres psql -U postgres -d topup -v ON_ERROR_STOP=1 <<'SQL'
+    # A merchant credential committed before backup must authenticate after service recovery.
+    resume_merchant_key=$(new_api_key)
+    dc exec -T postgres psql -U postgres -d topup -v ON_ERROR_STOP=1 -v merchant_key="$resume_merchant_key" <<'SQL'
 CREATE TABLE restore_drill_marker (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     mode text NOT NULL,
@@ -167,6 +169,9 @@ CREATE TABLE restore_drill_marker (
 
 INSERT INTO accounts (id, name)
 VALUES ('11111111-1111-1111-1111-111111111111', 'restore-drill');
+INSERT INTO api_keys (id, account_id, livemode, kind, prefix, last4, key_hash, created_by)
+VALUES (gen_random_uuid(), '11111111-1111-1111-1111-111111111111', false, 'secret',
+        'ppay_sk_test_', right(:'merchant_key', 4), sha256(convert_to(:'merchant_key', 'UTF8')), 'admin');
 INSERT INTO customers (id, account_id, livemode, client_reference_id)
 VALUES (
     '22222222-2222-2222-2222-222222222222',
@@ -1149,7 +1154,7 @@ dc --profile tools config --format json |
     exit 1
 }
 
-dc build postgres dstack-simulator topup
+dc build --build-arg BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" postgres dstack-simulator topup
 if [ "$mode" = controlled ]; then
     dc build product
 fi
@@ -1247,8 +1252,8 @@ storage_probe_writes
 if [ "$mode" = controlled ]; then
     lose_consistency_changes
 fi
-rto_started=$(date +%s)
 dc stop backup >/dev/null
+failure_at=$(date +%s.%N)
 # The controlled source is killed too, once its consistency writes are made: a clean shutdown
 # switches and archives the last segment (PostgreSQL's ShutdownXLOG with archiving on), which would
 # keep them.
@@ -1312,10 +1317,10 @@ test "$(app_login_works)" = topup_service
 # The boot-time report is unanchored; compare it with the source point recorded above, as the
 # operator compares it with theirs.
 restored_heartbeat_at=$(printf '%s\n' "$restore_report" | jq -er '.restored_heartbeat_at')
-measured_rpo=$(( $(date -u -d "$expected_heartbeat_at" +%s) - $(date -u -d "$restored_heartbeat_at" +%s) ))
-if [ "$measured_rpo" -lt 0 ]; then
-    measured_rpo=0
-fi
+# The marker is a committed transaction recovered from WAL. Heartbeat sampling does not
+# grant an extra minute; the failure instant includes segment close and upload latency.
+last_replayed_commit_at=$(psql_value 'SELECT extract(epoch FROM max(recorded_at)) FROM restore_drill_marker')
+measured_rpo=$(seconds_between "$last_replayed_commit_at" "$failure_at")
 allowed_rpo=$(printf '%s\n' "$restore_report" | jq -er '.allowed_rpo_seconds')
 latest_applied_lsn=$(printf '%s\n' "$restore_report" | jq -er '.latest_applied_lsn')
 wal_bytes_behind=$(psql_value \
@@ -1325,13 +1330,12 @@ reconciliation=$(printf '%s\n' "$restore_report" | jq -er '.post_restore_reconci
 restored_marker=$(psql_value 'SELECT max(id) FROM restore_drill_marker')
 restored_pricing=$(psql_value \
     "SELECT state || '|' || credit_minor::text || '|' || price_scaled::text FROM deposits WHERE id = '44444444-4444-4444-4444-444444444444'")
-rto_elapsed=$(( $(date +%s) - rto_started ))
 
 test "$reconciliation" = complete
 # The service's own record is authoritative: the restore asks the product nothing and keeps it.
 test "$restored_pricing" = 'credited|250|25000000'
-test "$measured_rpo" -le "$allowed_rpo"
-test "$rto_elapsed" -le 3600
+test "$allowed_rpo" -eq 60
+awk -v measured="$measured_rpo" 'BEGIN { exit !(measured >= 0 && measured <= 60) }'
 if [ "$mode" = controlled ]; then
     test "$restored_marker" -eq "$expected_marker"
     test "$wal_bytes_behind" -eq 0
@@ -1348,15 +1352,41 @@ test "$(storage_listing)" = "$storage_before" || {
     exit 1
 }
 
+# RTO ends only when the service variant has rescanned, an administrator lifts the freeze,
+# and a real merchant credential successfully reads the API. No synthetic cursor updates.
+variant=()
+export TOPUP_DRILL_S3_ACCESS_KEY_ID=topup-s3
+export TOPUP_DRILL_S3_SECRET_ACCESS_KEY=topup-s3-secret-key
+dc up --remove-orphans -d
+service_admin_ready() {
+    answer=$(admin_call GET /v1/admin/restore)
+    [ "$(call_status "$answer")" = 200 ]
+}
+wait_for "service admin API" service_admin_ready
+service_rescanned() {
+    answer=$(admin_call GET /v1/admin/restore)
+    [ "$(call_status "$answer")" = 200 ] &&
+        call_body "$answer" | jq -e '.rescan | all(.complete)' >/dev/null
+}
+wait_for "service rescan" service_rescanned
+answer=$(admin_call POST /v1/admin/restore/unfreeze '{"reason":"restore drill: checks and merchant reconciliation complete",
+    "security_changes_reapplied":true,"deposit_addresses_reissued":true,"quotes_reissued":true,
+    "delivered_events_imported":true}')
+expect_call 200 "$answer"
+answer=$(merchant_call GET /v1/account "$resume_merchant_key" </dev/null)
+expect_call 200 "$answer"
+rto_elapsed=$(seconds_between "$failure_at" "$(date +%s.%N)")
+awk -v elapsed="$rto_elapsed" 'BEGIN { exit !(elapsed >= 0 && elapsed <= 3600) }'
+
 printf 'mode=%s\n' "$mode"
 printf 'restore-check: %s\n' "$restore_report"
 printf 'base_backup=%s\n' "$backup_name"
 printf 'source_marker_range=%s..%s expected_last=%s restored_last=%s\n' \
     "$first_marker" "$last_marker" "$expected_marker" "$restored_marker"
 printf 'measured_rpo_seconds=%s\n' "$measured_rpo"
-printf 'allowed_rpo_with_sampling_seconds=%s\n' "$allowed_rpo"
+printf 'allowed_rpo_seconds=%s\n' "$allowed_rpo"
 printf 'wal_bytes_behind=%s\n' "$wal_bytes_behind"
-printf 'archive_window_seconds=60\n'
+printf 'archive_window_seconds=30\n'
 printf 'archive_wait_seconds=%s\n' "$archive_wait_seconds"
 printf 'upload_latency_seconds=%s\n' "$upload_latency_seconds"
 printf 'restored_timeline=%s storage_unchanged_by_restore_check=true\n' "$restored_timeline"

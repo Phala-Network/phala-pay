@@ -353,11 +353,36 @@ admin POST /v1/admin/restore/unfreeze \
   '{"reason":"INC-…: reconciled, signed off by …","security_changes_reapplied":true,"deposit_addresses_reissued":true,"quotes_reissued":true,"delivered_events_imported":true}'
 ```
 
-`400 restore_rescan_incomplete` means a chain is not rescanned yet. The reason and checklist are
+`400 restore_rescan_incomplete` means rescan or acceptance checks are incomplete. The reason and checklist are
 recorded in the restore and in `audit`; crediting, settlement, quote expiry, treasury changes,
 refund verification, and event delivery resume, and merchants' API keys work again, reads and
 writes. Each checklist item is a step: `security_changes_reapplied` step 3,
 `deposit_addresses_reissued` and `quotes_reissued` step 4, `delivered_events_imported` step 5.
+
+Before unfreeze, the latest `restore.validation` audit entry for this restore must say `ok`.
+A failed RPC or database check, an interrupted check, or absent validation evidence blocks it,
+even when all rescans are complete. The existing API returns `400 restore_rescan_incomplete`
+for either incomplete rescan or failed acceptance checks; inspect the restore report and audit
+history to distinguish them. Rerun `restore-check` with service workers stopped after correcting
+the fault. Every failed critical check makes both reconciliation and restore status `incomplete`.
+
+An administrator may explicitly accept the critical-check risk only with an incident reason:
+
+```sh
+admin POST /v1/admin/restore/unfreeze \
+  '{"reason":"override-critical-checks: INC-42: independent evidence reviewed by NAME; custody RPC unavailable","security_changes_reapplied":true,"deposit_addresses_reissued":true,"quotes_reissued":true,"delivered_events_imported":true}'
+```
+
+The exact `override-critical-checks:` prefix and a nonempty reason are required. This does not
+bypass the rescan or checklist. It records `restore.critical_checks_override` with the admin actor,
+restore id and supplied explanation, atomically with `restore.unfreeze`. Merchant and system
+actors cannot override. Record the failed checks and independent evidence in the incident.
+A drill must pass the normal checks; an override does not prove successful recovery.
+
+RPO is the interval from the externally recorded failure instant to the newest replayed committed
+transaction, at most 60 seconds including sampling and archive upload latency. RTO ends only
+after unfreeze and a successful request using a merchant credential, at most 3600 seconds.
+The read-only report is an intermediate checkpoint, not the end of downtime.
 
 ## 8. After the unfreeze
 

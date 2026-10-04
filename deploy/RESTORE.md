@@ -59,9 +59,10 @@ A non-empty data directory is started as is; an interrupted fetch starts over an
 recovery resumes. A new app needs a prefix of its own: its key cannot decrypt another app's
 backups. [tests/walg-archive-switch.sh](tests/walg-archive-switch.sh) covers these paths in CI.
 
-`archive_timeout=60` and the `heartbeat` service (one commit a minute) archive a segment every
-minute even when idle; after each successful upload `walg-cron` refreshes the marker that the
-`topup-backup` Crons monitor watches ([README](README.md#sentry)).
+`archive_timeout=30` bounds segment switching when WAL is written. The heartbeat must commit
+every 15 seconds or faster to leave room for upload latency within the one-minute RPO. After
+a successful upload, `walg-cron` records the segment data age; separate base-backup and WAL
+progress evidence gates the `topup-backup` monitor ([README](README.md#sentry)).
 
 ## The restore-check variant
 
@@ -105,7 +106,9 @@ on `/healthz`:
 
 `restore_check` is `null` until the check finishes. A finding left unverified makes the status
 `incomplete` and is listed in `failures`; a check that could not run reports `failed`. Other
-reconciliation findings and `failed_checks` are reported but do not gate resume.
+reconciliation findings are reported; every failed critical check makes the report `incomplete`
+and blocks acceptance and unfreeze. See the explicit, audited administrator override in
+[the restore runbook](runbooks/restore.md#7-unfreeze).
 
 **Changes inside the RPO window.** A deposit credited in the last minute before the loss is
 rebuilt from the chain by the rescan and credited again after the unfreeze, with the same deposit
@@ -243,8 +246,8 @@ live_isolated() {
 
 3. **Wait for the report** (at most the RTO) and require `.restore_check.status == "ok"`,
    `post_restore_reconciliation.status == "complete"`, the expected `latest_migration`, plausible
-   `row_counts`, and `restored_heartbeat_at` at most 120 seconds older than the source point
-   recorded outside the lost database (the failure time, or for a drill the creation time):
+   `row_counts`, and `restored_heartbeat_at` at most 60 seconds older than the recorded failure instant
+   recorded outside the lost database. Sampling and upload latency consume this budget:
 
    ```sh
    export RESTORE_URL="https://${APP_ID#0x}-8081.$(jq -er '.gateway.base_domain' restore-cvm.json)"
@@ -365,7 +368,8 @@ its environment. They require:
 - no heartbeat, backup, egress, or ingress running;
 - an `ok` report with a complete reconciliation;
 - `503` on writes;
-- the RPO, and an RTO of at most 3600 seconds;
+- RPO ≤ 60 seconds from the recorded failure instant to the newest replayed committed marker;
+- RTO ≤ 3600 seconds through service boot, real rescan, unfreeze, and a successful merchant API read;
 - an unchanged object listing. `controlled` also runs the business-consistency scenario, with the
 reference product ([Staging reference product](phala.md#staging-reference-product)) as the
 account's merchant. Before the backup, the account's treasury is in force and a change to a second
@@ -415,3 +419,44 @@ bootstrap tests on pull requests and pushes to `main`.
 - **`live_isolated` fails during a drill:** delete the drill instance by its `vm_uuid`, confirm
   `live_isolated` passes again, and do not rerun until the rendered compose is confirmed to publish
   only 8081 and the gateway's routing is understood.
+
+## Bounded backup and recovery operations
+
+All production WAL-G uploads, listings, retention and fetches run through `walg-cron run`.
+Each attempt has a hard deadline, followed by at most five seconds to kill a stuck process group.
+Retries wait one second. Configure the PostgreSQL and backup container environments together:
+
+| Operation | Deadline per attempt | Total attempts |
+| --- | --- | --- |
+| WAL push | `WALG_WAL_TIMEOUT_SECONDS=10` | `WALG_WAL_ATTEMPTS=1` (PostgreSQL retries the segment) |
+| Base backup/list/retention | `WALG_BASE_TIMEOUT_SECONDS=1800` | `WALG_BASE_ATTEMPTS=2` |
+| Restore list/base-fetch/WAL-fetch | `WALG_RESTORE_TIMEOUT_SECONDS=120` | `WALG_RESTORE_ATTEMPTS=3` |
+
+Values must be decimal positive integers without leading zeros, deadlines ≤86400 seconds and
+attempts ≤10. A deadline returns `124` (forced kill may return `137`);
+`restore_command` maps both, and every storage/decryption/configuration failure, to `126` to abort
+recovery. Only WAL-G's genuine archive-not-found `74` maps to `1`. Never treat timeout as an
+absent segment. Bootstrap refuses to initialize after a listing timeout.
+
+The first base backup on the current timeline retries indefinitely with backoff from five seconds
+to five minutes. A daily backup failure preserves its old age and does not terminate the scheduler.
+Backup health requires an existing current-timeline base backup no older than 48 hours, segment
+data age and oldest pending archive age at most 60 seconds, a WAL LSN gap at most 16 MiB, and a
+progress observation no older than 45 seconds. Successful upload of old WAL keeps the old data age.
+The base timestamp is cleared on scheduler startup until a current-timeline backup is verified;
+existence is revalidated every five minutes, and a failed revalidation clears the timestamp.
+
+To guarantee the one-minute target on an otherwise idle database, run the heartbeat with
+`topup heartbeat --interval-s 15` or faster: 15 seconds sampling + 30 seconds segment switching +
+10 seconds upload leaves five seconds of margin. The current compose heartbeat defaults to 60
+seconds and requires the batch 2 owner to set this argument. The monitor will correctly report
+RPO degradation until that cadence is corrected. Overrides that increase upload retry budgets
+must also budget their latency. A boot-time unanchored report does not prove RPO; compare its
+newest restored commit with the externally recorded failure instant, never merely with the last
+source heartbeat. `--expected-heartbeat-at` retains its legacy name but takes that failure instant.
+
+The local drill requires working chain RPC endpoints for acceptance and rescan. Its current local
+environment uses unreachable RPC placeholders; failed checks now stop the drill instead of
+producing a false success. Supply a real local chain fixture through the owning deployment batch.
+The local drill may switch its isolated replacement to service mode; the staging isolation drill
+above remains read-only and cannot attest full merchant-service RTO.

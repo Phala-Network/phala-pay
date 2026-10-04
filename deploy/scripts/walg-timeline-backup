@@ -3,35 +3,48 @@ set -eu
 
 # Takes a base backup when no base backup in the prefix is on the cluster's current timeline.
 # Exits 0 after a new backup, 3 when one already covers the timeline, and 1 when the check or the
-# backup failed; the caller keeps its schedule either way.
+# backup failed; the caller retries before entering its daily schedule.
 if [ "$#" -ne 1 ]; then
     echo "usage: walg-timeline-backup PGDATA" >&2
     exit 64
 fi
 
-walg=${WALG_BIN:-wal-g}
+runner=$(dirname "$0")/walg-cron
+marker_dir=${WALG_OBSERVABILITY_DIR:-/run/topup-observability}
+record_base() {
+    mkdir -p "$marker_dir"
+    printf '%s\n' "$1" > "$marker_dir/last-base-backup-unix-seconds.tmp.$$"
+    chmod 0644 "$marker_dir/last-base-backup-unix-seconds.tmp.$$"
+    mv "$marker_dir/last-base-backup-unix-seconds.tmp.$$" "$marker_dir/last-base-backup-unix-seconds"
+}
 if [ -z "${AWS_ACCESS_KEY_ID:-}" ]; then
     echo "base backup check waits for sealed object-storage credentials" >&2
     exit 1
 fi
 timeline=$(psql -XAtq -c 'SELECT timeline_id FROM pg_control_checkpoint()') || {
-    echo "could not read the cluster's timeline; the base backup waits for its schedule" >&2
+    echo "could not read the cluster's timeline; the base backup will retry" >&2
     exit 1
 }
 case "$timeline" in
     ''|*[!0-9]*) echo "the cluster's timeline is invalid" >&2; exit 1 ;;
 esac
-names=$("$walg" backup-list --json | jq -r '.[].backup_name') || {
-    echo "could not list base backups; the base backup waits for its schedule" >&2
+listing=$("$runner" run base backup-list --json) &&
+names=$(printf '%s\n' "$listing" | jq -er 'if type == "array" then map(.backup_name) | join("\n") else error end') || {
+    echo "could not list base backups; the base backup will retry" >&2
     exit 1
 }
 # WAL-G names a base backup after its first WAL segment, whose first 8 hex digits are the timeline.
 prefix=$(printf 'base_%08X' "$timeline")
 if printf '%s\n' "$names" | grep -q "^$prefix"; then
+    timestamp=$(printf '%s\n' "$listing" | jq -er --arg prefix "$prefix" '
+        [.[] | select(.backup_name | startswith($prefix)) | .time
+          | sub("[.][0-9]+"; "") | fromdateiso8601] | max') || exit 1
+    record_base "$timestamp"
     exit 3
 fi
 echo "no base backup covers timeline $timeline; taking one now"
-"$walg" backup-push "$1" || {
-    echo "base backup for timeline $timeline failed; retrying at the schedule" >&2
+"$runner" run base backup-push "$1" || {
+    echo "base backup for timeline $timeline failed; retrying with backoff" >&2
     exit 1
 }
+record_base "$(date -u +%s)"

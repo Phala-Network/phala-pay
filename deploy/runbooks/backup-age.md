@@ -1,7 +1,8 @@
 # Backup age
 
 **Trigger:** the `topup-backup` monitor: three `error` check-ins in a row (the WAL-G success marker
-is older than 120 seconds) or missed check-ins.
+is older than 60 seconds), missing/stale base backup, excessive archive backlog or LSN gap, or
+missed check-ins.
 
 **Impact:** the service continues, but the recoverable point falls behind the one-minute RPO; a
 database failure now would lose more data, on every route.
@@ -19,6 +20,21 @@ database failure now would lose more data, on every route.
 
 3. Check object storage health and the sealed credentials' permissions (R2 dashboard).
 
+Inspect these shared-volume markers separately:
+
+- `last-base-backup-unix-seconds`: a verified current-timeline base backup, at most 48 hours old.
+  Missing means no restorable base backup has been verified. First-backup failures keep retrying
+  with capped backoff; WAL uploads alone cannot make health green.
+- `last-backup-unix-seconds`: the uploaded segment's data mtime, not upload completion time.
+  Old backlog uploads retain their old age.
+- `wal-progress`: observation Unix time, oldest `.ready` backlog age in seconds, and bytes from
+  the last archived segment end to the current insert LSN. Health requires observation ≤45 seconds,
+  backlog ≤60 seconds, and gap ≤16 MiB. Missing, malformed or future timestamps fail closed.
+
+Check `wal-g backup-list --json` through `walg-cron run base`, compare names with the current
+PostgreSQL timeline, and inspect `pg_stat_archiver` and `pg_wal/archive_status`. Object arrival
+time alone cannot prove recovery freshness. See [operation deadlines](../RESTORE.md#bounded-backup-and-recovery-operations).
+
 ## Decide
 
 - New segments keep arriving but the monitor is stale: the marker is not refreshed, or `topup`
@@ -31,6 +47,6 @@ database failure now would lose more data, on every route.
 
 ## Done when
 
-A segment younger than two minutes is listed, `topup-backup` checks in `ok`, and a later
+A current-timeline base backup and WAL data younger than one minute are verified, `topup-backup` checks in `ok`, and a later
 [restore drill](../RESTORE.md#staging-restore-drill) passes within RPO and RTO. Never take an
 unencrypted backup as a substitute.

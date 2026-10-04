@@ -106,7 +106,7 @@ as_postgres() {
 # that holds anything is never touched.
 bootstrap() {
     # shellcheck disable=SC2015  # either failure refuses
-    backups=$(as_postgres "${WALG_BIN:-wal-g}" backup-list --json) &&
+    backups=$(as_postgres "$(dirname "$0")/walg-cron" run restore backup-list --json) &&
         count=$(printf '%s\n' "$backups" | jq -er 'if type == "array" then length else error end') || {
         echo "the backup prefix could not be listed; refusing to initialize an empty data directory" >&2
         exit 1
@@ -127,7 +127,7 @@ bootstrap() {
     echo "restoring base backup $backup_name" >&2
     staging="$(dirname "$PGDATA")/restore-from-backup.partial"
     rm -rf "$staging"
-    as_postgres "${WALG_BIN:-wal-g}" backup-fetch "$staging" "$backup_name"
+    as_postgres "$(dirname "$0")/walg-cron" run restore backup-fetch "$staging" "$backup_name"
     as_postgres test -s "$staging/PG_VERSION"
     as_postgres touch "$staging/recovery.signal"
     as_postgres chmod 0700 "$staging"
@@ -148,7 +148,7 @@ set -- "$@" -c "restore_command=walg-restore-command %f %p"
 if [ "$restore" = off ]; then
     set -- "$@" \
         -c archive_mode=on \
-        -c archive_timeout=60 \
+        -c archive_timeout=30 \
         -c "archive_command=walg-cron wal-push %p"
 else
     echo "WAL archiving is disabled while TOPUP_RESTORE_FROM_BACKUP=on" >&2

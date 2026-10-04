@@ -15,6 +15,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+<<<<<<< ours
 - Alert in Sentry on webhook backlog and stalled delivery progress, internal signer/egress
   failures, stale RPO heartbeats, overdue treasury/refund work, and ingress certificate expiry.
   Add staging synthetic alert commands and a production DSN preflight check. Business probes
@@ -25,6 +26,17 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   failures; cache export failures no longer fail builds, with diagnostics retained.
 
 ## [0.8.3] - 2026-10-04
+=======
+- Backup health requires a current-timeline base backup and fresh WAL data, backlog and LSN
+  progress; old backlog uploads cannot refresh recovery age. First base backups retry with
+  capped backoff until successful.
+- WAL-G uploads, backup listings and restores have separate configurable deadlines and retry
+  budgets. Timed-out recovery fetches abort recovery instead of promoting a partial restore.
+- Failed critical restore checks block acceptance and unfreeze. An explicit administrator
+  override requires a reason and is recorded atomically in audit history.
+- Restore drills enforce the 60-second RPO from failure to the last replayed committed marker,
+  including upload latency; RTO includes unfreeze and a successful merchant API request.
+>>>>>>> theirs
 
 ### JS SDK (`@phala/pay`)
 
