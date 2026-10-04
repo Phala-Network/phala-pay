@@ -52,6 +52,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - **Breaking:** add pins-based `PhalaPay` configuration and `from_env()`, bound webhook verification,
   checkout parameters, pure ledger helpers, typed transport errors, and paginated address validation.
 
+- Enforce immutable canonical pins, API key checksums, origin and response identity checks, and
+  checkout handoffs from the originating verified quote with address revalidation.
+- Use one transport path for POST replay, explicit per-call controls, deadline and body timeouts,
+  bounded jitter and Retry-After; reject redirects and invalid pagination, preserve borrowed
+  transport ownership, and redact API keys and client secrets from diagnostics.
+- Validate ledger snapshots and merge cumulative refunds and reversals without floats or input
+  mutation; ignore unknown webhook types while retaining their raw objects.
+
 ### JS SDK (`@phala/pay`)
 
 #### Added

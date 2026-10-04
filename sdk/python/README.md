@@ -26,15 +26,7 @@ import os
 
 from phala_pay import PhalaPay
 
-pay = PhalaPay(
-    api_base="https://pay.example.com",
-    api_key=os.environ["PHALA_PAY_API_KEY"],  # a restricted key, ppay_rk_…
-    # Your pins, configured here and never read from the service: every quote and deposit address
-    # is recomputed from them, failing closed (AddressMismatchError); a live key requires all.
-    account="acct_…",
-    forwarder=(FACTORY, IMPLEMENTATION),  # pinned from the attested deployment
-    treasuries={11155111: TREASURY},  # your own treasury per chain, as you proved it
-)
+pay = PhalaPay.from_env()  # PHALA_PAY_API_KEY and PHALA_PAY_PINS
 
 quote = pay.quotes.create(
     client_reference_id="team-42",  # your id for the customer; credits are addressed to it
@@ -44,7 +36,7 @@ quote = pay.quotes.create(
     idempotency_key=order_id,  # for 24 hours the same key replays this quote and client secret
 )
 # The page renders <Checkout clientSecret expectedAddress apiBase /> (@phala/pay).
-return {"client_secret": quote.client_secret, "expected_address": quote.address}
+return {"checkout": pay.checkout_params(quote)}
 ```
 
 Fulfil from the webhook, once per deposit, and answer `2xx` after the credit is committed:
@@ -53,13 +45,11 @@ Fulfil from the webhook, once per deposit, and answer `2xx` after the credit is 
 from phala_pay import SignatureVerificationError
 
 try:
-    event = pay.webhooks.construct_event(
-        raw_body, request.headers, WEBHOOK_PUBLIC_KEY, "acct_…", expected_livemode=False
-    )
-except (SignatureVerificationError, ValueError):
+    event = pay.webhooks.construct_event(raw_body, request.headers)
+except SignatureVerificationError:
     return Response(status_code=400)
 
-if event.type.startswith("deposit."):
+if event.type in {"deposit.credited", "deposit.refunded", "deposit.reversed", "deposit.rejected"}:
     # Credit, refund, and reversal alike: per deposit, serially, merge the snapshot and move the
     # balance to `amount - amount_refunded - amount_reversed` (0 unless credited or reversed).
     apply_deposit(event.deposit)
@@ -184,3 +174,26 @@ quote = pay.quotes.create(
 checkout = pay.checkout_params(quote)
 event = pay.webhooks.construct_event(raw_body, request.headers)
 ```
+
+
+All network methods accept `request_deadline` in seconds; every POST also accepts
+`idempotency_key`. `list()` returns an iterator, except the existing `api_keys.list()` and
+`treasuries.list()` which return lists. Every list resource has `list_page(limit=100,
+starting_after=None, request_deadline=None)` returning `{"data": [...], "has_more": bool}`.
+Empty continuing pages and repeated cursors raise `ResponseValidationError`.
+
+Timeouts include response bodies; the logical deadline includes attempts and sleeps. Retries use
+one frozen POST body/key, half-to-full exponential jitter (0.5, 1, 2 seconds, capped at 5), and
+Retry-After as a minimum. Redirects and DELETE requests are never retried or followed. Raw httpx
+failures are wrapped in `TransportError` with `network` or `timeout`; Python interrupts propagate.
+Malformed success responses raise `ResponseValidationError` with status and request ID. Error and
+object diagnostics redact API keys and checkout client secrets. Context cleanup closes the client
+pool and leaves injected transports open.
+
+Pins require a canonical origin and valid API key checksum. A normalized override must match pins;
+HTTP is limited to test loopback. Legacy `PhalaPay(api_base, api_key, account=..., forwarder=...,
+treasuries=...)` remains available with its existing test-mode warnings; it cannot be mixed with
+`pins` and cannot create a trusted checkout handoff. The pins-based API never discovers trust from
+the service or legacy environment variables.
+
+See the [phase 2 rule audit](ERGONOMICS_AUDIT.md) for implementation and executable test references.

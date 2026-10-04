@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import re
+from ._secrets import redact
 
 
 class TopupError(Exception):
     """Base class for SDK failures."""
+
+    def __init__(self, message: str = "SDK failure") -> None:
+        super().__init__(redact(message))
 
 
 class SignatureError(TopupError):
@@ -47,20 +50,17 @@ class ApiError(TopupError):
         request_id: str | None = None,
         retry_after: float | None = None,
     ) -> None:
-        safe_message = re.sub(
-            r"(?:ppay_(?:sk|rk)_[A-Za-z0-9_+-]+|client_secret[_=: ]+[A-Za-z0-9_.-]+)",
-            "[REDACTED]",
-            message,
-            flags=re.IGNORECASE,
-        )
+        safe_message = redact(message)
+        code = redact(code)
+        request_id = None if request_id is None else redact(request_id)
         suffix = f" (request {request_id})" if request_id else ""
         super().__init__(f"{status_code} {code}: {safe_message}{suffix}")
         self.status_code = status_code
         self.code = code
         self.message = safe_message
-        self.error_type = error_type
-        self.param = param
-        self.doc_url = doc_url
+        self.error_type = None if error_type is None else redact(error_type)
+        self.param = None if param is None else redact(param)
+        self.doc_url = None if doc_url is None else redact(doc_url)
         self.request_id = request_id
         self.retry_after = retry_after
 
@@ -72,8 +72,17 @@ class TransportError(TopupError):
 
 
 class ResponseValidationError(TopupError):
-    pass
+    def __init__(
+        self,
+        message: str = "malformed response",
+        *,
+        status_code: int | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.request_id = None if request_id is None else redact(request_id)
 
 
-class ConfigurationError(TopupError):
+class ConfigurationError(TopupError, ValueError):
     pass

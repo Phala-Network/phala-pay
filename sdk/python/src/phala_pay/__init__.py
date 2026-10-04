@@ -4,18 +4,12 @@
 
     from phala_pay import PhalaPay
 
-    pay = PhalaPay(
-        api_base="https://pay.example.com",
-        api_key=os.environ["PHALA_PAY_KEY"],
-        forwarder=(FACTORY, IMPLEMENTATION),
-    )
+    pay = PhalaPay.from_env()  # PHALA_PAY_API_KEY and PHALA_PAY_PINS
     quote = pay.quotes.create(
         client_reference_id="team-42", amount=2500, chain_id=11155111, asset="pha"
     )
 
-    event = pay.webhooks.construct_event(
-        raw_body, request.headers, WEBHOOK_PUBLIC_KEY, "acct_…", expected_livemode=False
-    )
+    event = pay.webhooks.construct_event(raw_body, request.headers)
     if event.type == "deposit.credited":
         credit_once(event.deposit.id, event.deposit.client_reference_id, event.deposit.amount)
 
@@ -39,6 +33,7 @@ from topup_client.models import (
 from topup_sdk import (
     AddressMismatchError,
     ApiError,
+    AttestationError,
     TopupError,
     flush_transaction,
     flush_transactions,
@@ -66,6 +61,7 @@ __all__ = [
     "AddressMismatchError",
     "ApiError",
     "ApiKeyStatus",
+    "AttestationError",
     "Balance",
     "BalanceDelta",
     "ClientQuote",
@@ -74,6 +70,7 @@ __all__ = [
     "Deposit",
     "DepositAddress",
     "DepositAddressStatus",
+    "DepositSnapshot",
     "DepositStatus",
     "Event",
     "EventData",
@@ -117,5 +114,5 @@ from ._errors import (
     ResponseValidationError,
     TransportError,
 )
-from ._ledger import BalanceDelta, balance_delta, deposit_net_amount
+from ._ledger import BalanceDelta, DepositSnapshot, balance_delta, deposit_net_amount
 from ._pins import Pins, encode_pins, parse_pins

@@ -58,7 +58,7 @@ def app(tmp_path: Path) -> tuple[TestClient, list[httpx.Request], Path]:
         return httpx.Response(200, json=quote_object(client_secret=SECRET))
 
     client = PhalaPay(
-        "http://service.test",
+        "https://service.test",
         API_KEY,
         account=ACCOUNT,
         forwarder=(FACTORY, IMPLEMENTATION),

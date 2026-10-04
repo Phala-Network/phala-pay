@@ -1,15 +1,25 @@
+"""Canonical, immutable deployment trust pins."""
+
 from __future__ import annotations
 
 import base64
 import binascii
 import json
 import re
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
+from topup_sdk._origin import normalize_origin
+from topup_sdk.errors import ConfigurationError
 
-class PinsError(ValueError):
+MAX_CHAIN = 2**53 - 1
+MAX_BYTES = 16 * 1024
+
+
+class PinsError(ConfigurationError):
     pass
 
 
@@ -24,46 +34,70 @@ class Pins:
     webhook_keys: tuple[tuple[int, str], ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "treasuries", dict(self.treasuries))
+        if not isinstance(self.account, str) or not re.fullmatch(
+            r"acct_[0-9a-f]{32}", self.account
+        ):
+            raise PinsError("invalid account")
+        if type(self.livemode) is not bool:
+            raise PinsError("livemode must be boolean")
+        object.__setattr__(
+            self, "api_base", normalize_origin(self.api_base, test=not self.livemode)
+        )
+        object.__setattr__(self, "factory", _address(self.factory))
+        object.__setattr__(self, "implementation", _address(self.implementation))
+        if not isinstance(self.treasuries, Mapping) or not self.treasuries:
+            raise PinsError("treasuries must be nonempty")
+        treasuries: dict[int, str] = {}
+        for chain, address in self.treasuries.items():
+            if type(chain) is not int or not 1 <= chain <= MAX_CHAIN:
+                raise PinsError("invalid treasury chain id")
+            treasuries[chain] = _address(address)
+        object.__setattr__(self, "treasuries", MappingProxyType(treasuries))
+        if not self.webhook_keys:
+            raise PinsError("webhook_keys must be nonempty")
+        versions: set[int] = set()
+        public_keys: set[str] = set()
+        for version, key in self.webhook_keys:
+            if type(version) is not int or not 1 <= version <= 2**32 - 1 or version in versions:
+                raise PinsError("invalid webhook key version")
+            if not isinstance(key, str) or not key.startswith("whpk_"):
+                raise PinsError("invalid webhook public key")
+            try:
+                raw = base64.b64decode(key[5:], validate=True)
+            except (ValueError, binascii.Error):
+                raise PinsError("invalid webhook public key") from None
+            if len(raw) != 32 or base64.b64encode(raw).decode() != key[5:] or key in public_keys:
+                raise PinsError("invalid or duplicate webhook public key")
+            versions.add(version)
+            public_keys.add(key)
+        object.__setattr__(self, "webhook_keys", tuple(sorted(self.webhook_keys)))
 
 
-def _address(value: Any, name: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"0x[0-9a-fA-F]{40}", value):
-        raise PinsError(f"{name} must be a 20-byte hex address")
+def _address(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not re.fullmatch(r"0x[0-9a-fA-F]{40}", value)
+        or int(value, 16) == 0
+    ):
+        raise PinsError("contract and treasury addresses must be nonzero 20-byte hex")
     return value.lower()
 
 
-def parse_pins(value: str) -> Pins:  # noqa: PLR0912, PLR0915
+def parse_pins(value: str) -> Pins:
     if not isinstance(value, str) or not value.startswith("ppay_pins_v1."):
         raise PinsError("pins must use ppay_pins_v1 encoding")
     encoded = value.split(".", 1)[1]
-    if not encoded or "=" in encoded or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded):
-        raise PinsError("pins payload must be unpadded base64url")
-    if len(encoded) % 4 == 1:
-        raise PinsError("invalid pins encoding")
+    if len(encoded) > (MAX_BYTES * 4 + 2) // 3:
+        raise PinsError("pins payload exceeds 16 KiB")
+    if not encoded or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded) or len(encoded) % 4 == 1:
+        raise PinsError("pins payload must be canonical unpadded base64url")
     try:
         raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != encoded:
-            raise PinsError("non-canonical pins encoding")
-    except (ValueError, binascii.Error) as exc:
-        raise PinsError("invalid pins encoding") from exc
-    if len(raw) > 16 * 1024:
-        raise PinsError("pins payload exceeds 16 KiB")
-    try:
-
-        def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
-            result: dict[str, Any] = {}
-            for key, item in items:
-                if key in result:
-                    raise PinsError("duplicate pins field")
-                result[key] = item
-            return result
-
-        obj = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise PinsError("pins payload is not UTF-8 JSON") from exc
-    if not isinstance(obj, dict):
-        raise PinsError("pins payload must be an object")
+        if len(raw) > MAX_BYTES or base64.urlsafe_b64encode(raw).decode().rstrip("=") != encoded:
+            raise PinsError("non-canonical or oversized pins encoding")
+        obj = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs)
+    except (UnicodeDecodeError, ValueError, binascii.Error):
+        raise PinsError("invalid pins encoding or JSON") from None
     required = {
         "api_base",
         "account",
@@ -73,55 +107,34 @@ def parse_pins(value: str) -> Pins:  # noqa: PLR0912, PLR0915
         "treasuries",
         "webhook_keys",
     }
-    if set(obj) != required:
+    if not isinstance(obj, dict) or set(obj) != required:
         raise PinsError("pins fields are missing or unknown")
-    account = obj["account"]
-    if not isinstance(account, str) or not re.fullmatch(r"acct_[0-9a-f]{32}", account):
-        raise PinsError("invalid account")
-    if not isinstance(obj["livemode"], bool):
-        raise PinsError("livemode must be boolean")
-    api_base = obj["api_base"]
-    if not isinstance(api_base, str) or not re.fullmatch(r"https://[^/?#]+", api_base):
-        raise PinsError("api_base must be an HTTPS origin")
-    api_base = api_base.rstrip("/").lower()
-    treasuries_obj = obj["treasuries"]
-    if not isinstance(treasuries_obj, dict) or not treasuries_obj:
-        raise PinsError("treasuries must be nonempty")
-    treasuries: dict[int, str] = {}
-    for chain, address in treasuries_obj.items():
-        if not isinstance(chain, str) or not re.fullmatch(r"[1-9][0-9]*", chain):
-            raise PinsError("invalid treasury chain id")
-        treasuries[int(chain)] = _address(address, "treasury")
-    keys_obj = obj["webhook_keys"]
-    if not isinstance(keys_obj, list) or not keys_obj:
-        raise PinsError("webhook_keys must be nonempty")
-    keys: list[tuple[int, str]] = []
-    versions: set[int] = set()
-    for item in keys_obj:
-        if not isinstance(item, dict) or set(item) != {"version", "public_key"}:
-            raise PinsError("invalid webhook key")
-        version, key = item["version"], item["public_key"]
-        if type(version) is not int or version <= 0 or version > 2**32 - 1 or version in versions:
-            raise PinsError("invalid webhook key version")
-        if not isinstance(key, str) or not key.startswith("whpk_"):
-            raise PinsError("invalid webhook public key")
-        try:
-            decoded = base64.b64decode(key[5:], validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise PinsError("invalid webhook public key") from exc
-        if len(decoded) != 32:
-            raise PinsError("invalid webhook public key")
-        versions.add(version)
-        keys.append((version, key))
+    chains = obj["treasuries"]
+    if not isinstance(chains, dict) or any(not re.fullmatch(r"[1-9][0-9]*", c) for c in chains):
+        raise PinsError("invalid treasury chain id")
+    keys = obj["webhook_keys"]
+    if not isinstance(keys, list) or any(
+        not isinstance(k, dict) or set(k) != {"version", "public_key"} for k in keys
+    ):
+        raise PinsError("invalid webhook keys")
     return Pins(
-        api_base,
-        account,
+        obj["api_base"],
+        obj["account"],
         obj["livemode"],
-        _address(obj["factory"], "factory"),
-        _address(obj["implementation"], "implementation"),
-        treasuries,
-        tuple(sorted(keys)),
+        obj["factory"],
+        obj["implementation"],
+        {int(c): a for c, a in chains.items()},
+        tuple((k["version"], k["public_key"]) for k in keys),
     )
+
+
+def _pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, item in items:
+        if key in result:
+            raise PinsError("duplicate pins field")
+        result[key] = item
+    return result
 
 
 def encode_pins(pins: Pins) -> str:
@@ -133,8 +146,28 @@ def encode_pins(pins: Pins) -> str:
         "factory": pins.factory,
         "implementation": pins.implementation,
         "livemode": pins.livemode,
-        "treasuries": {str(k): v.lower() for k, v in sorted(pins.treasuries.items())},
+        "treasuries": {str(k): v for k, v in pins.treasuries.items()},
         "webhook_keys": [{"public_key": k, "version": v} for v, k in pins.webhook_keys],
     }
     raw = json.dumps(obj, separators=(",", ":"), sort_keys=True).encode()
+    if len(raw) > MAX_BYTES:
+        raise PinsError("pins payload exceeds 16 KiB")
     return "ppay_pins_v1." + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def key_livemode(key: str) -> bool:
+    """Match the service's base62 CRC32 contract (crates/topup/src/api_keys.rs)."""
+    if not isinstance(key, str) or not re.fullmatch(
+        r"ppay_(?:sk|rk)_(?:test|live)_[A-Za-z0-9]{49}", key
+    ):
+        raise ConfigurationError("invalid API key format")
+    body, checksum = key[:-6], key[-6:]
+    value = zlib.crc32(body.encode())
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    digits = ""
+    for _ in range(6):
+        value, digit = divmod(value, 62)
+        digits = alphabet[digit] + digits
+    if checksum != digits:
+        raise ConfigurationError("invalid API key checksum")
+    return "_live_" in body

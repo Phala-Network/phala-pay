@@ -102,7 +102,7 @@ def _service(request: httpx.Request) -> httpx.Response:
 
 
 def test_every_resource_is_written_and_paged_through(tmp_path: Path) -> None:
-    client = TopupClient("http://service.test", API_KEY, transport=httpx.MockTransport(_service))
+    client = TopupClient("https://service.test", API_KEY, transport=httpx.MockTransport(_service))
     counts = export_account(client, tmp_path / "export")
     assert (counts["deposits"], counts["forwarders"], counts["account"]) == (2, 1, 1)
     assert counts["payment_settings"] == 1

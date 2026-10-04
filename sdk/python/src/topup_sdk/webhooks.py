@@ -146,7 +146,13 @@ def verify_webhook_signature(
     keys = [public_keys] if isinstance(public_keys, Ed25519PublicKey) else list(public_keys)
     if not keys:
         raise SignatureError("no webhook public key pinned")
-    lowered = {name.lower(): value.strip() for name, value in headers.items()}
+    entries = headers.multi_items() if hasattr(headers, "multi_items") else headers.items()
+    lowered: dict[str, str] = {}
+    for name, value in entries:
+        key = name.lower()
+        if key in {"webhook-id", "webhook-timestamp", "webhook-signature"} and key in lowered:
+            raise SignatureError("duplicate webhook signing header")
+        lowered[key] = value.strip()
     try:
         webhook_id = lowered["webhook-id"]
         timestamp = lowered["webhook-timestamp"]

@@ -42,7 +42,7 @@ BASE_USDT = "0x" + "66" * 20
 BASE_FAUCET = "0x" + "99" * 20
 TREASURY = "0x" + "cc" * 20
 CONFIG = ProductConfig(
-    service_url="http://service.test",
+    service_url="https://service.test",
     account=ACCOUNT,
     # Two chains with the same treasury; the service serves only Sepolia at first.
     chains=(
