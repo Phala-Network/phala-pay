@@ -179,12 +179,16 @@ organisation callers inherit both. This key grants existing admin authority: lim
 access and deployment branches as for the Cloud key. Key material is temporary, never part of
 the uploaded deployment record, and is deleted after each signed request.
 
-New mutations return `503 service_maintenance`, `Retry-After: 5`, before idempotent execution;
-reads and already admitted requests continue. Scanners and outbox workers continue until the
-existing graceful shutdown drains them. After the new version's health checks pass, the workflow
-resumes admission with the same owner. Failed runs attempt to resume; if the CVM is unreachable,
-the database-clock deadline expires automatically without a runner or background worker. The
-pause does not change account, customer, treasury, or route incident pauses. See the
+New authenticated mutations return `503 service_maintenance`, `Retry-After: 5`, before idempotent
+execution; reads and already admitted requests continue. Scanners and outbox workers continue until the
+existing graceful shutdown drains them. A replacement process starts with a `startup` mutation pause, lifted only by its first successful
+`/healthz` database check; the old process's health probes never lift its explicit deployment
+drain. The workflow then confirms resume with the deployment owner after health checks. Failed
+runs attempt to resume the serving process. Each process lease expires after at most 900 seconds
+according to its monotonic clock, even without a runner or expiry worker. Process exit discards
+its lease; startup health protects the replacement, so a failed deploy cannot persist maintenance.
+Pause/resume are audited using the existing audit table; no database migration is needed and
+N-1 startup remains compatible. Account, customer, treasury, and route incident pauses remain. See the
 [stuck-maintenance runbook](runbooks/instance-maintenance.md) for inspection and manual clear.
 
 Upgrade probes run from before the upgrade call through service readiness, sampling `/healthz`
@@ -204,8 +208,10 @@ normal signed pause, and missing credentials or any other pause failure aborts b
 call. Bootstrap is recorded in the job summary and disabled by default; remove it after rollout.
 When adopting the feature release in a caller workflow, expose this boolean only if the first
 upgrade needs it (the currently pinned Phala caller remains unchanged until release adoption).
-For rollback, choose a release supporting the pause API; expiry remains the fallback if the
-rollback target cannot serve resume. No compatibility bypass is automatic.
+For rollback to a pre-feature release, the new process has no inherited maintenance lease; a
+resume response may be 404, but normal admission is already open. There is no new SQL migration
+to prevent the old image starting. Deadline expiry remains the fallback if the original process
+is still serving after a failed upgrade. No compatibility bypass is automatic.
 
 1. Merge the change to the environment repository's `main`: a setting, or a new `version`.
 2. First deployment: Deploy with `mode: provision`, then set `TOPUP_CVM_ID` (or, for the product,

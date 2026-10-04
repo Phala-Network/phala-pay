@@ -14,11 +14,14 @@ instance's public origin and verification key id:
 admin GET /v1/admin/instance/pause | jq
 ```
 
-The response names `owner` (workflow run id and attempt), `paused_scopes`, and Unix `expires_at`.
-Compare it with the run's `maintenance.json` and `unavailability.json`. An expired lease reports
-empty effective scopes even if its audit row remains. Leases cannot exceed 900 seconds; their
-expiry uses the database clock and needs no deploy runner or expiry worker. If the API is
-unreachable, wait for CVM recovery; the lease still expires. Do not repeatedly renew it.
+The response names `owner` (workflow run id and attempt, or `startup` before the first healthy
+probe), `paused_scopes`, and display deadline Unix `expires_at`. Compare it with the run's
+`maintenance.json` and `unavailability.json`. An expired lease reports empty effective scopes.
+Leases cannot exceed 900 seconds; expiry uses the process's monotonic clock and needs no runner
+or expiry worker. Audit records persist, while the maintenance lease does not survive process
+exit. The replacement starts paused and automatically opens admission at its first successful
+`/healthz` check. That check never clears an explicit deployment pause on the old process. If the
+API is unreachable, wait for CVM recovery. Do not repeatedly renew the lease.
 
 ## Manual clear
 
@@ -33,8 +36,8 @@ admin GET /v1/admin/instance/pause | jq
 ```
 
 The resume is audited and returns empty `paused_scopes`. A mismatched owner cannot lift an active
-lease. A canceled runner or a failed clear cannot freeze the service permanently: expiry restores
-normal admission. Persistent 503 after the deadline with a different error code needs that error's
+lease. A canceled runner or failed clear cannot freeze the service permanently: expiry restores normal
+admission, and process exit discards its lease. Persistent 503 after the deadline with a different error code needs that error's
 runbook (for example [restore reconciliation](restore.md) for `service_restoring`).
 
 ## Done when

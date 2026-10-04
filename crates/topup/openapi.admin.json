@@ -2174,7 +2174,7 @@
         },
         "properties": {
           "expires_at": {
-            "description": "Unix seconds, according to the database clock.",
+            "description": "Display deadline in Unix seconds; expiry is enforced with the monotonic process clock.",
             "format": "int64",
             "type": "integer"
           },

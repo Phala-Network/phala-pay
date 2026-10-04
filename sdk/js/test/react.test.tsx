@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { createWalletClient, custom, encodeFunctionResult, erc20Abi } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,7 +39,9 @@ it("shows neutral reconnecting while preserving checkout details for a three-min
   let online = true;
   vi.stubGlobal("fetch", () => online ? Promise.resolve(Response.json(served)) : Promise.resolve(new Response("Bad Gateway", { status: 502 })));
   const { container } = await renderCheckout();
+  fireEvent.click(screen.getByRole("tab", { name: "Manual transfer" }));
   const address = container.querySelector(".pp-fields")?.textContent;
+  expect(address).toContain(ADDRESS);
   online = false;
   await act(() => vi.advanceTimersByTimeAsync(180000));
   expect(screen.getByRole("status").textContent).toContain("reconnecting…");

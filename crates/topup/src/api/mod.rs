@@ -463,7 +463,20 @@ pub struct ApiDocs {
 
 /// Builds the Axum router, serving both OpenAPI documents, and the documents.
 pub fn router(state: AppState) -> (Router, ApiDocs) {
-    let (router, docs) = router_inner(state);
+    router_with_pause(state, Arc::new(crate::pause::InstancePause::default()))
+}
+
+/// Starts the production API with mutations paused until the first healthy probe. This boot
+/// gate replaces a terminated process's lease without persisting maintenance across rollback.
+pub fn booting_router(state: AppState) -> (Router, ApiDocs) {
+    router_with_pause(state, Arc::new(crate::pause::InstancePause::booting()))
+}
+
+fn router_with_pause(
+    state: AppState,
+    pause: Arc<crate::pause::InstancePause>,
+) -> (Router, ApiDocs) {
+    let (router, docs) = router_inner(state, pause);
     (
         router
             .layer(middleware::from_fn(cache::no_store))
@@ -472,7 +485,7 @@ pub fn router(state: AppState) -> (Router, ApiDocs) {
     )
 }
 
-fn router_inner(state: AppState) -> (Router, ApiDocs) {
+fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Router, ApiDocs) {
     // Every merchant POST is idempotent by `Idempotency-Key`; authentication and then
     // authorization run first, so a replay needs the route's permission too.
     let merchant = merchant_routes()
@@ -480,10 +493,7 @@ fn router_inner(state: AppState) -> (Router, ApiDocs) {
             state.clone(),
             idempotency::idempotent_post,
         ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            instance_pause::admit_request,
-        ))
+        .route_layer(middleware::from_fn(instance_pause::admit_request))
         .route_layer(middleware::from_fn(auth::authorize))
         // Also the freeze gate: while frozen after a restore, a request with a key is refused
         // here, before authorization and the idempotency layer.
@@ -499,10 +509,7 @@ fn router_inner(state: AppState) -> (Router, ApiDocs) {
             auth::authenticate_merchant_or_client_secret,
         ));
     let admin = admin_routes()
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            instance_pause::admit_request,
-        ))
+        .route_layer(middleware::from_fn(instance_pause::admit_request))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::authenticate_admin,
@@ -538,6 +545,7 @@ fn router_inner(state: AppState) -> (Router, ApiDocs) {
         .fallback(unrecognized_request)
         .method_not_allowed_fallback(unrecognized_request)
         .layer(Extension(Arc::new(docs.clone())))
+        .layer(Extension(pause))
         .with_state(state);
 
     (router, docs)
@@ -563,7 +571,7 @@ fn restoring() -> Response {
 /// and may fail before it does. `/healthz` reports the boot-time `restore-check` result read from
 /// `restore_report`.
 pub fn read_only_router(state: AppState, restore_report: Option<PathBuf>) -> Router {
-    let (router, _) = router_inner(state);
+    let (router, _) = router_inner(state, Arc::new(crate::pause::InstancePause::default()));
     router
         .layer(middleware::from_fn(reject_writes))
         .layer(middleware::from_fn(cache::no_store))
@@ -615,6 +623,7 @@ async fn serve_admin_openapi(Extension(docs): Extension<Arc<ApiDocs>>) -> Json<s
 
 async fn healthz(
     State(state): State<AppState>,
+    Extension(pause): Extension<Arc<crate::pause::InstancePause>>,
     read_only: Option<Extension<ReadOnly>>,
 ) -> Response {
     let status = match tokio::time::timeout(
@@ -626,6 +635,9 @@ async fn healthz(
         Ok(Ok(1)) => StatusCode::OK,
         Ok(Ok(_)) | Ok(Err(_)) | Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     };
+    if status == StatusCode::OK {
+        pause.healthy_boot().await;
+    }
     let Some(Extension(read_only)) = read_only else {
         return status.into_response();
     };

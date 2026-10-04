@@ -880,7 +880,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         ),
     };
     let monitored_origin = state.public_origin.to_string();
-    let (application, _) = topup::api::router(state);
+    let (application, _) = topup::api::booting_router(state);
     tasks.spawn("API server", |cancellation| {
         axum::serve(
             topup::api::DeadlineListener::new(listener).with_connect_info(),

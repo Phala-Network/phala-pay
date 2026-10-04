@@ -490,8 +490,15 @@ jobs:
         env:
           TOPUP_ADMIN_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_ADMIN_PRIVATE_KEY_PEM }}
         run: |
-          "$KIT/deploy/instance-pause.sh" resume "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance-cleared.json"
-          jq -e '.paused_scopes == []' "$WORK/maintenance-cleared.json"
+          code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$PUBLIC_URL/v1/admin/instance/pause")
+          if [[ "$code" == 404 ]]; then
+            # A rollback to a pre-feature image has no process lease to inherit or resume.
+            jq -n '{maintenance_supported: false, cleared_by: "process_exit"}' >"$WORK/maintenance-cleared.json"
+            echo "Target has no maintenance API; process exit cleared the drain lease." >>"$GITHUB_STEP_SUMMARY"
+          else
+            "$KIT/deploy/instance-pause.sh" resume "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance-cleared.json"
+            jq -e '.paused_scopes == []' "$WORK/maintenance-cleared.json"
+          fi
 
       # Right after a DNS change the domain can still reach the previous instance, from a resolver's
       # cache, or the new one can still be obtaining its certificate: retried every 30 seconds for

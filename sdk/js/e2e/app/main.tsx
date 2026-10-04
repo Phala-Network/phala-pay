@@ -34,7 +34,11 @@ function App() {
   return (
     <main>
       {params.has("deposit") ? (
-        <DepositAddress depositAddress={{ address, networks }} appearance={appearance} className={className} />
+        <DepositAddress
+          depositAddress={{ address, networks }} appearance={appearance} className={className}
+          {...(params.has("client_secret") ? { clientSecret: params.get("client_secret") ?? "" } : {})}
+          {...(params.has("api_base") ? { apiBase: params.get("api_base") ?? "" } : {})}
+        />
       ) : (
         <Checkout
           clientSecret={params.get("client_secret") ?? ""}

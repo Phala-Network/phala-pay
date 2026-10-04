@@ -1,10 +1,12 @@
 //! Planned upgrades pause request admission, without changing business pause scopes.
+use crate::pause::InstancePause;
 use axum::Json;
-use axum::extract::{Request, State};
+use axum::extract::{Extension, Request, State};
 use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use utoipa::ToSchema;
 
 use super::AppState;
@@ -28,7 +30,7 @@ pub(crate) struct InstancePauseResponse {
     /// `mutations` during the lease; empty once resumed or expired.
     paused_scopes: Vec<String>,
     owner: String,
-    /// Unix seconds, according to the database clock.
+    /// Display deadline in Unix seconds; expiry is enforced with the monotonic process clock.
     expires_at: i64,
 }
 
@@ -36,9 +38,9 @@ pub(crate) struct InstancePauseResponse {
     responses((status = 200, description = "Current instance pause", body = InstancePauseResponse)),
     security(("http_message_signature" = [])))]
 pub(crate) async fn get_instance_pause(
-    State(state): State<AppState>,
+    Extension(pause): Extension<Arc<InstancePause>>,
 ) -> Result<Json<InstancePauseResponse>, ApiError> {
-    let (scopes, owner, expires_at) = crate::pause::instance_pause(&state.pool).await?;
+    let (scopes, owner, expires_at) = pause.snapshot().await;
     Ok(Json(InstancePauseResponse {
         paused_scopes: scopes,
         owner,
@@ -54,9 +56,10 @@ pub(crate) async fn get_instance_pause(
 pub(crate) async fn pause_instance(
     State(state): State<AppState>,
     AdminActor(actor): AdminActor,
+    Extension(pause): Extension<Arc<InstancePause>>,
     ApiJson(request): ApiJson<InstancePauseRequest>,
 ) -> Result<Json<InstancePauseResponse>, ApiError> {
-    change(&state, &actor, request, true).await
+    change(&state, &pause, &actor, request, true).await
 }
 
 #[utoipa::path(post, path = "/v1/admin/instance/resume", tag = "admin",
@@ -67,13 +70,15 @@ pub(crate) async fn pause_instance(
 pub(crate) async fn resume_instance(
     State(state): State<AppState>,
     AdminActor(actor): AdminActor,
+    Extension(pause): Extension<Arc<InstancePause>>,
     ApiJson(request): ApiJson<InstancePauseRequest>,
 ) -> Result<Json<InstancePauseResponse>, ApiError> {
-    change(&state, &actor, request, false).await
+    change(&state, &pause, &actor, request, false).await
 }
 
 async fn change(
     state: &AppState,
+    pause: &Arc<InstancePause>,
     actor: &crate::audit::Actor,
     request: InstancePauseRequest,
     paused: bool,
@@ -103,24 +108,25 @@ async fn change(
     } else {
         0
     };
-    if !crate::pause::mutate_instance_pause(
-        &state.pool,
-        &request.owner,
-        duration,
-        actor,
-        &request.reason,
-    )
-    .await?
+    if !pause
+        .mutate(
+            &state.pool,
+            &request.owner,
+            duration,
+            actor,
+            &request.reason,
+        )
+        .await?
     {
         return Err(
             ApiError::bad_request("another deployment owns the active pause").with_param("owner"),
         );
     }
-    get_instance_pause(State(state.clone())).await
+    get_instance_pause(Extension(Arc::clone(pause))).await
 }
 
 pub(crate) async fn admit_request(
-    State(state): State<AppState>,
+    Extension(pause): Extension<Arc<InstancePause>>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -133,9 +139,9 @@ pub(crate) async fn admit_request(
     ) {
         return next.run(request).await;
     }
-    match crate::pause::mutations_paused(&state.pool).await {
-        Ok(true) => ApiError::service_maintenance().into_response(),
-        Ok(false) => next.run(request).await,
-        Err(error) => ApiError::from(error).into_response(),
+    if pause.mutations_paused().await {
+        ApiError::service_maintenance().into_response()
+    } else {
+        next.run(request).await
     }
 }

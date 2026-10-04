@@ -1645,7 +1645,7 @@ async fn load_shed_responses_match_the_shared_unavailable_contract() -> Result<(
     .await
 }
 
-/// The lease survives restart, gates writes before execution, and cannot outlive its deadline.
+/// Admission leases drain writes, boot health reopens the new process, and expiry needs no worker.
 #[tokio::test]
 async fn instance_maintenance_admission_and_expiry() -> Result<()> {
     let Some(database) = TestDatabase::create().await? else {
@@ -1671,8 +1671,6 @@ async fn instance_maintenance_admission_and_expiry() -> Result<()> {
         ensure!(response.status() == StatusCode::OK);
         let response = app.clone().oneshot(pause("deploy-2", 900)?).await?;
         ensure!(response.status() == StatusCode::BAD_REQUEST, "another owner cannot replace the lease");
-        // Rebuild the router as a new version does: the database lease remains active.
-        let app = test_router(&database.app_pool, &key);
         for path in ["/v1/quotes", "/v1/deposit_addresses"] {
             let request = axum::http::Request::post(path)
                 .header("Authorization", format!("Bearer {merchant_key}"))
@@ -1714,11 +1712,10 @@ async fn instance_maintenance_admission_and_expiry() -> Result<()> {
                 .header("Content-Type", "application/json")
                 .body(Body::from("{}"))?).await?;
         ensure!(response.status() == StatusCode::BAD_REQUEST, "normal admission resumes");
-        let response = app.clone().oneshot(pause("deploy-3", 900)?).await?;
+        let response = app.clone().oneshot(pause("deploy-3", 1)?).await?;
         ensure!(response.status() == StatusCode::OK);
-        // Advance the persisted database deadline, without waiting 15 real minutes or running a worker.
-        sqlx::query("UPDATE instance_pause SET expires_at = clock_timestamp() - interval '1 second'")
-            .execute(&database.owner_pool).await?;
+        // The process deadline expires without a deployment runner or expiry worker.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         let response = app.clone().oneshot(axum::http::Request::post("/v1/quotes")
                 .header("Authorization", format!("Bearer {merchant_key}"))
                 .header("Idempotency-Key", "upgrade-test")
@@ -1729,6 +1726,19 @@ async fn instance_maintenance_admission_and_expiry() -> Result<()> {
             "/v1/admin/instance/pause", vec![], ADMIN_KID, &key, now)).await?;
         let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
         ensure!(body["paused_scopes"] == json!([]));
+        // A replacement process gates writes until its own health passes. No schema migration
+        // or persisted maintenance lease can block an older rollback image's startup.
+        let (restarted, _) = topup::api::booting_router(app_state(database.app_pool.clone(), &key));
+        let write = || axum::http::Request::post("/v1/quotes")
+            .header("Authorization", format!("Bearer {merchant_key}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from("{}"));
+        let response = restarted.clone().oneshot(write()?).await?;
+        ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE, "boot waits for health");
+        let response = restarted.clone().oneshot(axum::http::Request::get("/healthz").body(Body::empty())?).await?;
+        ensure!(response.status() == StatusCode::OK);
+        let response = restarted.clone().oneshot(write()?).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST, "healthy boot auto-clears maintenance");
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM audit WHERE subject = 'instance'")
             .fetch_one(&database.owner_pool).await?;
         ensure!(count == 3, "only accepted pause/resume mutations are audited");
