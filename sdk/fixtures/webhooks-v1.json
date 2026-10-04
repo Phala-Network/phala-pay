@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "group": "webhooks",
+  "public_key": "whpk_6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+  "cases": [
+    {
+      "name": "valid",
+      "headers": {
+        "webhook-id": "evt_26262626262626262626262626262626",
+        "webhook-timestamp": "1790410000",
+        "webhook-signature": "v1a,3yTDxPlBzzAq+qxXyKpkO8rMrgf18VnXt1r7tDxc4hiYFQjKtC9+YhqH0xaMPHgbOOUDZqGe1fUYb1DQNRdWDA=="
+      },
+      "body": "{\"id\":\"evt_26262626262626262626262626262626\",\"object\":\"event\",\"account\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"livemode\":true,\"type\":\"account.updated\",\"created\":1790410321,\"actor\":\"system\",\"request\":null,\"data\":{\"object\":{\"id\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"object\":\"account\"}}}",
+      "expected_account": "acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "expected_livemode": true,
+      "now": 1790410000,
+      "outcome": "accept"
+    },
+    {
+      "name": "wrong_account",
+      "headers": {
+        "webhook-id": "evt_26262626262626262626262626262626",
+        "webhook-timestamp": "1790410000",
+        "webhook-signature": "v1a,3yTDxPlBzzAq+qxXyKpkO8rMrgf18VnXt1r7tDxc4hiYFQjKtC9+YhqH0xaMPHgbOOUDZqGe1fUYb1DQNRdWDA=="
+      },
+      "body": "{\"id\":\"evt_26262626262626262626262626262626\",\"object\":\"event\",\"account\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"livemode\":true,\"type\":\"account.updated\",\"created\":1790410321,\"actor\":\"system\",\"request\":null,\"data\":{\"object\":{\"id\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"object\":\"account\"}}}",
+      "expected_account": "acct_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "expected_livemode": true,
+      "now": 1790410000,
+      "outcome": "reject"
+    },
+    {
+      "name": "wrong_mode",
+      "headers": {
+        "webhook-id": "evt_26262626262626262626262626262626",
+        "webhook-timestamp": "1790410000",
+        "webhook-signature": "v1a,3yTDxPlBzzAq+qxXyKpkO8rMrgf18VnXt1r7tDxc4hiYFQjKtC9+YhqH0xaMPHgbOOUDZqGe1fUYb1DQNRdWDA=="
+      },
+      "body": "{\"id\":\"evt_26262626262626262626262626262626\",\"object\":\"event\",\"account\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"livemode\":true,\"type\":\"account.updated\",\"created\":1790410321,\"actor\":\"system\",\"request\":null,\"data\":{\"object\":{\"id\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"object\":\"account\"}}}",
+      "expected_account": "acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "expected_livemode": false,
+      "now": 1790410000,
+      "outcome": "reject"
+    },
+    {
+      "name": "bad_signature",
+      "headers": {
+        "webhook-id": "evt_26262626262626262626262626262626",
+        "webhook-timestamp": "1790410000",
+        "webhook-signature": "v1a,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "body": "{\"id\":\"evt_26262626262626262626262626262626\",\"object\":\"event\",\"account\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"livemode\":true,\"type\":\"account.updated\",\"created\":1790410321,\"actor\":\"system\",\"request\":null,\"data\":{\"object\":{\"id\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"object\":\"account\"}}}",
+      "expected_account": "acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "expected_livemode": true,
+      "now": 1790410000,
+      "outcome": "reject"
+    },
+    {
+      "name": "header_body_id_mismatch",
+      "headers": {
+        "webhook-id": "evt_00000000000000000000000000000000",
+        "webhook-timestamp": "1790410000",
+        "webhook-signature": "v1a,3yTDxPlBzzAq+qxXyKpkO8rMrgf18VnXt1r7tDxc4hiYFQjKtC9+YhqH0xaMPHgbOOUDZqGe1fUYb1DQNRdWDA=="
+      },
+      "body": "{\"id\":\"evt_26262626262626262626262626262626\",\"object\":\"event\",\"account\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"livemode\":true,\"type\":\"account.updated\",\"created\":1790410321,\"actor\":\"system\",\"request\":null,\"data\":{\"object\":{\"id\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"object\":\"account\"}}}",
+      "expected_account": "acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "expected_livemode": true,
+      "now": 1790410000,
+      "outcome": "reject"
+    },
+    {
+      "name": "tolerance_exact",
+      "headers": {
+        "webhook-id": "evt_26262626262626262626262626262626",
+        "webhook-timestamp": "1790410000",
+        "webhook-signature": "v1a,3yTDxPlBzzAq+qxXyKpkO8rMrgf18VnXt1r7tDxc4hiYFQjKtC9+YhqH0xaMPHgbOOUDZqGe1fUYb1DQNRdWDA=="
+      },
+      "body": "{\"id\":\"evt_26262626262626262626262626262626\",\"object\":\"event\",\"account\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"livemode\":true,\"type\":\"account.updated\",\"created\":1790410321,\"actor\":\"system\",\"request\":null,\"data\":{\"object\":{\"id\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"object\":\"account\"}}}",
+      "expected_account": "acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "expected_livemode": true,
+      "now": 1790410300,
+      "tolerance": 300,
+      "outcome": "accept"
+    },
+    {
+      "name": "tolerance_outside",
+      "headers": {
+        "webhook-id": "evt_26262626262626262626262626262626",
+        "webhook-timestamp": "1790410000",
+        "webhook-signature": "v1a,3yTDxPlBzzAq+qxXyKpkO8rMrgf18VnXt1r7tDxc4hiYFQjKtC9+YhqH0xaMPHgbOOUDZqGe1fUYb1DQNRdWDA=="
+      },
+      "body": "{\"id\":\"evt_26262626262626262626262626262626\",\"object\":\"event\",\"account\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"livemode\":true,\"type\":\"account.updated\",\"created\":1790410321,\"actor\":\"system\",\"request\":null,\"data\":{\"object\":{\"id\":\"acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"object\":\"account\"}}}",
+      "expected_account": "acct_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "expected_livemode": true,
+      "now": 1790410301,
+      "tolerance": 300,
+      "outcome": "reject"
+    }
+  ]
+}

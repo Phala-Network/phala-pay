@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "group": "addresses",
+  "description": "Address derivation vectors shared by SDKs; copied from contracts/test-vectors/create2.json.",
+  "factory": "0xe8A9Ab1AbC7651A5b7C2ED5B662F2f80BF5C446d",
+  "implementation": "0xfeb1871c9897251C74b39DFC74e577888290faE6",
+  "quote": [
+    {
+      "account": "acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10",
+      "client_reference_id": "team-42",
+      "predicted_address": "0xaDd9dD19e5E17C2a010f27fc09D7706986f65AcB",
+      "quote_id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
+      "salt": "0x4e9767dd0c2ab5b953a305c3f10dc1e0d1f7c9d3cbab8463509d2edb06ca4b52",
+      "treasury": "0x0000000000000000000000000000000000007EA5"
+    },
+    {
+      "account": "acct_9a8b7c6d5e4f40312a1b2c3d4e5f6071",
+      "client_reference_id": "invoice-2026-0001",
+      "predicted_address": "0x6516eEa4893bAc4748ECd31F70EB10229758d325",
+      "quote_id": "qt_0f1e2d3c4b5a49687766554433221100",
+      "salt": "0xdfd860d8422a91d1283c87287c818a088de30cc2c71a40d027d010b7d952661f",
+      "treasury": "0x936c1991f8dA9a919fa11b557a3514719f5A4504"
+    },
+    {
+      "account": "acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10",
+      "client_reference_id": "customer-0000000000000000000000000000000000000000000000000000000000000000-1111111111111111111111111111111111111111111111111111111111111111-2222222222222222222222222222222222222222222222222222222222222222-3333333333333333333333333333333333333333333333333333333333333333",
+      "predicted_address": "0xe70CBb6F22A3bBfab140BeBEa941Ef4692D1f152",
+      "quote_id": "qt_ffffffffffffffffffffffffffffffff",
+      "salt": "0xc76b91a823980273b4fa68dd330b0a818dbbdf9c5b66a5c1abaeeaf6a88dd742",
+      "treasury": "0x0000000000000000000000000000000000007EA5"
+    }
+  ],
+  "deposit_address": [
+    {
+      "account": "acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10",
+      "client_reference_id": "team-42",
+      "livemode": true,
+      "predicted_address": "0xe776781480f49E29F5a4e8673cdBc8555f4cDae7",
+      "salt": "0x5c4762c214ce0602f967c942b79c9c1b146bb98f1885fea2d81dd9ffac308c4d",
+      "treasury": "0x0000000000000000000000000000000000007EA5",
+      "version": 1
+    },
+    {
+      "account": "acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10",
+      "client_reference_id": "team-42",
+      "livemode": true,
+      "predicted_address": "0xAf75CF4Ec4C52e438A9E06e7BC534BC055104690",
+      "salt": "0x5c4762c214ce0602f967c942b79c9c1b146bb98f1885fea2d81dd9ffac308c4d",
+      "treasury": "0x936c1991f8dA9a919fa11b557a3514719f5A4504",
+      "version": 1
+    },
+    {
+      "account": "acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10",
+      "client_reference_id": "team-42",
+      "livemode": false,
+      "predicted_address": "0xb44e275Cd052A22aAce0843e14831B18Cd7bF443",
+      "salt": "0x51d600580389906db68b4184ee3b072b8f8fb3c192059e0556368549ce57d2aa",
+      "treasury": "0x0000000000000000000000000000000000007EA5",
+      "version": 2
+    },
+    {
+      "account": "acct_ffffffffffffffffffffffffffffffff",
+      "client_reference_id": "\u5ba2\u6237 42 with a long reference that spans more than one 32-byte ABI word",
+      "livemode": true,
+      "predicted_address": "0xEcbDe8cBBCE316E2959cc9bCD83e32c485f4C63F",
+      "salt": "0x66fd332452d6c8dd84241546976599683042b53e4a5c70a797df4d7c4c9703a5",
+      "treasury": "0x0000000000000000000000000000000000007EA5",
+      "version": 7
+    }
+  ],
+  "forwarders": [
+    {
+      "predicted_address": "0xf3b71cAb85B33f8Ffea80700f01BCd4C26EF5440",
+      "salt": "0x49ca4d3e9742aabea0012fd487b01b3e193c6dc51e241cee16d05e81e52d795f",
+      "treasury": "0x0000000000000000000000000000000000007EA5"
+    },
+    {
+      "predicted_address": "0x879A7C506053D2719f2b8c7e6FF1C2EC99EE3a3B",
+      "salt": "0x92facbbe5883cf2b43c3f602d276cf18f734f4c88f758f9dea9a6b76cf7ed8f7",
+      "treasury": "0x0000000000000000000000000000000000007EA5"
+    },
+    {
+      "predicted_address": "0x2ca343BF62a6cb1265D8B6BF9595cC4c8A8b8008",
+      "salt": "0x65a91bfe657fb221f7625609c8a99f832ab500e5df744ef0ad50d3453e1d183c",
+      "treasury": "0x0000000000000000000000000000000000007EA5"
+    },
+    {
+      "predicted_address": "0xE9bE1f233b6D545c59265fb70D591061c86e5F7a",
+      "salt": "0x600a851d7f8efef3e23088892d68eb8e999c6e191ccd22664ac1f2bc00497294",
+      "treasury": "0x0000000000000000000000000000000000007EA5"
+    },
+    {
+      "predicted_address": "0xF8fC767E790a1d3a016336dEc4B07eA437708B08",
+      "salt": "0x58fcd60812b825a4fa1422f1227e36e3eb921de903ca6c253b3e79e8371d2745",
+      "treasury": "0x0000000000000000000000000000000000007EA5"
+    },
+    {
+      "predicted_address": "0x9296ae542577F8FF8D0B6206ABf410928A2322D3",
+      "salt": "0x49ca4d3e9742aabea0012fd487b01b3e193c6dc51e241cee16d05e81e52d795f",
+      "treasury": "0x936c1991f8dA9a919fa11b557a3514719f5A4504"
+    },
+    {
+      "predicted_address": "0x99308C6C12BEF9e1815D558d66Af40AB3637D802",
+      "salt": "0x92facbbe5883cf2b43c3f602d276cf18f734f4c88f758f9dea9a6b76cf7ed8f7",
+      "treasury": "0x936c1991f8dA9a919fa11b557a3514719f5A4504"
+    },
+    {
+      "predicted_address": "0x731f08C9272d0F96540944557a00847F560f4119",
+      "salt": "0x65a91bfe657fb221f7625609c8a99f832ab500e5df744ef0ad50d3453e1d183c",
+      "treasury": "0x936c1991f8dA9a919fa11b557a3514719f5A4504"
+    },
+    {
+      "predicted_address": "0x421a75BB6F1330F624385CcAd3b5aA03fD0A5871",
+      "salt": "0x600a851d7f8efef3e23088892d68eb8e999c6e191ccd22664ac1f2bc00497294",
+      "treasury": "0x936c1991f8dA9a919fa11b557a3514719f5A4504"
+    },
+    {
+      "predicted_address": "0x2F3E91325B2288BcE392711f85F5359661062A91",
+      "salt": "0x58fcd60812b825a4fa1422f1227e36e3eb921de903ca6c253b3e79e8371d2745",
+      "treasury": "0x936c1991f8dA9a919fa11b557a3514719f5A4504"
+    }
+  ]
+}

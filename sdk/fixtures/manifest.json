@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "fixture_directory": "sdk/fixtures",
+  "groups": {
+    "pins": {
+      "status": "pending",
+      "js": false,
+      "python": false
+    },
+    "addresses": {
+      "status": "implemented",
+      "js": true,
+      "python": true
+    },
+    "webhooks": {
+      "status": "implemented",
+      "js": true,
+      "python": true
+    },
+    "ledger": {
+      "status": "pending",
+      "js": false,
+      "python": false
+    },
+    "transport": {
+      "status": "pending",
+      "js": false,
+      "python": false
+    }
+  }
+}

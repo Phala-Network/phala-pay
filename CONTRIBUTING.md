@@ -106,7 +106,7 @@ CI also runs ShellCheck on every shell script and the tests in [deploy/tests](de
 
 ```sh
 make sdk-check                                  # Python: ruff, mypy --strict, pytest, and the codegen no-op check
-make sdk-generate                               # Python: regenerate the client after an openapi.json change
+make sdk-generate                               # Python client and JS OpenAPI types after an openapi.json change
 (cd sdk/js && pnpm install && pnpm run check)   # TypeScript: typecheck, lint, unit tests, and build
 (cd sdk/js && pnpm run e2e:docker)              # TypeScript: the browser end-to-end tests on Anvil
 scripts/version.sh                              # Both: the SDKs name the Cargo workspace version
@@ -117,8 +117,8 @@ advertised React 18 floor (React and React DOM 18.2.0 with React types 18.3.31 a
 18.3.7). Keep the default local check on the committed React 19 toolchain; use the pinned floor
 versions above when reproducing that compatibility job locally.
 
-A pull request that changes `crates/topup/openapi.json` regenerates the Python client in the same
-pull request; CI fails if regeneration is not a no-op.
+A pull request that changes `crates/topup/openapi.json` regenerates both the Python client and the
+JavaScript OpenAPI types in the same pull request; CI fails if either regeneration is not a no-op.
 
 The Python SDK's RFC 9421 signer serves only the operator's admin API. Regenerate its vectors only
 after an intentional change to the signing profile, then rerun the Rust test:

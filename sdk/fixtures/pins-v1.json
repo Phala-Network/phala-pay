@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "group": "pins",
+  "canonical_encoding": "ppay_pins_v1.eyJhY2NvdW50IjoiYWNjdF8wYzZlMWQwYTliM2Y0YzJlOGQ3YTZiNWM0ZDNlMmYxMCIsImFwaV9iYXNlIjoiaHR0cHM6Ly9hcGkucGhhbGEtcGF5LmV4YW1wbGUiLCJmYWN0b3J5IjoiMHgxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExIiwiaW1wbGVtZW50YXRpb24iOiIweDIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIiLCJsaXZlbW9kZSI6ZmFsc2UsInRyZWFzdXJpZXMiOnsiMTExNTUxMTEiOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMifSwid2ViaG9va19rZXlzIjpbeyJwdWJsaWNfa2V5Ijoid2hwa19BQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWEdCa2FHeHdkSGg4PSIsInZlcnNpb24iOjF9XX0",
+  "canonical_json": "{\"account\":\"acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10\",\"api_base\":\"https://api.phala-pay.example\",\"factory\":\"0x1111111111111111111111111111111111111111\",\"implementation\":\"0x2222222222222222222222222222222222222222\",\"livemode\":false,\"treasuries\":{\"11155111\":\"0x3333333333333333333333333333333333333333\"},\"webhook_keys\":[{\"public_key\":\"whpk_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"version\":1}]}",
+  "valid": [
+    {
+      "api_base": "https://api.phala-pay.example",
+      "account": "acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10",
+      "livemode": false,
+      "factory": "0x1111111111111111111111111111111111111111",
+      "implementation": "0x2222222222222222222222222222222222222222",
+      "treasuries": {
+        "11155111": "0x3333333333333333333333333333333333333333"
+      },
+      "webhook_keys": [
+        {
+          "version": 1,
+          "public_key": "whpk_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+        }
+      ]
+    }
+  ],
+  "rejections": [
+    {
+      "name": "duplicate_field",
+      "reason": "duplicate JSON field",
+      "input": "{\"account\":\"acct_0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c\",\"account\":\"acct_0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d\"}"
+    },
+    {
+      "name": "unknown_field",
+      "reason": "unknown field",
+      "input": "{\"account\":\"acct_0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c\",\"extra\":true}"
+    },
+    {
+      "name": "missing_field",
+      "reason": "missing required field",
+      "input": "{\"api_base\":\"https://api.phala-pay.example\"}"
+    },
+    {
+      "name": "bad_base64",
+      "reason": "non-canonical base64url",
+      "input": "ppay_pins_v1.!"
+    },
+    {
+      "name": "bad_utf8",
+      "reason": "decoded payload is not UTF-8",
+      "input": "ppay_pins_v1._w"
+    },
+    {
+      "name": "oversize",
+      "reason": "decoded payload exceeds 16 KiB",
+      "input": "<17KiB>"
+    },
+    {
+      "name": "account_format",
+      "reason": "account is not acct_ plus 32 lowercase hex",
+      "input": "acct_BAD"
+    },
+    {
+      "name": "address_format",
+      "reason": "contract address is zero or malformed",
+      "input": "0x1234"
+    },
+    {
+      "name": "chain_format",
+      "reason": "chain key is not a positive canonical decimal",
+      "input": "01"
+    },
+    {
+      "name": "webhook_key_format",
+      "reason": "webhook key is not whpk_ plus 32 bytes",
+      "input": "whpk_bad"
+    },
+    {
+      "name": "mode_mismatch",
+      "reason": "key prefix mode does not match livemode",
+      "input": "ppay_sk_test_with_live_mode"
+    }
+  ]
+}
