@@ -54,7 +54,6 @@ decisions are the [design](design/multi-tenant.md) (§16 is its PR plan), and th
 
 ### Before mainnet
 
-- [ ] Independent security review of the contracts and the service (the repository is public).
 - [ ] Deploy the factory on mainnet at the same deterministic address (HUMAN-ONLY).
 - [ ] Production deploy (`provision`) with the first live route,
       [examples/phala-cloud-pha.yaml](../examples/phala-cloud-pha.yaml), then a small mainnet

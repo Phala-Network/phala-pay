@@ -1793,8 +1793,7 @@ The plan and its status are [docs/plan.md](plan.md); the design's PR plan is
    endpoints, merchant sweeps and refunds, deposit addresses, restricted keys, launch hardening,
    ledger correctness, and restore mode; then the deployment, these documents, and the staging
    reset (PR 11).
-2. **Before mainnet**: the independent security review of the contracts and the service, and the
-   HUMAN-ONLY factory deployment on each chain (`deploy/CONTRACTS.md`).
+2. **Before mainnet**: the HUMAN-ONLY factory deployment on each chain (`deploy/CONTRACTS.md`).
 3. **Phala Cloud** is onboarded as the first live account and integrates like any merchant
    (design §16, "Phala Cloud"). Acceptance on mainnet: an address recomputed by the merchant from
    its pins; a quote paid exactly and credited at the amount shown, and a late or wrong-amount
