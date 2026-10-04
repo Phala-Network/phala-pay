@@ -553,3 +553,15 @@ def test_shared_webhook_vectors_execute_through_bound_client(
                     client.webhooks.construct_event(
                         case["body"], case["headers"], tolerance=case.get("tolerance", 300)
                     )
+
+
+@pytest.mark.parametrize("missing", ["account", "forwarder", "treasuries"])
+def test_legacy_live_constructor_requires_all_address_pins_at_construction(missing: str) -> None:
+    arguments: dict[str, Any] = {
+        "account": pins().account,
+        "forwarder": (pins().factory, pins().implementation),
+        "treasuries": dict(pins().treasuries),
+    }
+    del arguments[missing]
+    with pytest.raises(ConfigurationError, match="live mode requires"):
+        PhalaPay("https://service.test", valid_key(live=True), **arguments)

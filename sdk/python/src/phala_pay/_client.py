@@ -31,7 +31,7 @@ from topup_client.models import (
 from topup_client.types import UNSET, Unset
 from topup_sdk import TopupClient, export_account, sign_treasury_challenge
 from topup_sdk._origin import normalize_origin
-from topup_sdk.client import Metadata
+from topup_sdk.client import LIVE_KEY_PREFIXES, Metadata
 
 from ._errors import ConfigurationError, ResponseValidationError
 from ._pins import Pins, PinsError, key_livemode, parse_pins
@@ -77,7 +77,7 @@ class PhalaPay:
     `code`, `param`, `doc_url`, and `request_id`.
     """
 
-    def __init__(  # noqa: PLR0912
+    def __init__(  # noqa: PLR0912, PLR0915
         self,
         api_key: str,
         *legacy: object,
@@ -105,6 +105,10 @@ class PhalaPay:
             account = legacy_kwargs.pop("account", None)
             if legacy_kwargs:
                 raise ConfigurationError("unknown constructor argument")
+            if api_key.startswith(LIVE_KEY_PREFIXES) and not (account and forwarder and treasuries):
+                raise ConfigurationError(
+                    "live mode requires pinned account, forwarder and treasuries"
+                )
             self._pins = None
         else:
             if pins is None:

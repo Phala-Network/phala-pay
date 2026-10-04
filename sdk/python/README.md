@@ -175,7 +175,6 @@ checkout = pay.checkout_params(quote)
 event = pay.webhooks.construct_event(raw_body, request.headers)
 ```
 
-
 All network methods accept `request_deadline` in seconds; every POST also accepts
 `idempotency_key`. `list()` returns an iterator, except the existing `api_keys.list()` and
 `treasuries.list()` which return lists. Every list resource has `list_page(limit=100,
