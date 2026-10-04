@@ -22,10 +22,10 @@ asset:
 
 price:
   mode: volatile
-  allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-  primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
-  check: [{ source: binance, symbol: PHAUSDT, company: binance }]
-  fx: [{ source: kraken, symbol: USDTUSD, company: kraken }]
+  allow_unclear_sources: true # noncommercial rehearsal only; production still refuses Kraken
+  primary: [{ source: uniswap_v2_twap, rpc_group: a, rpc_group_b: b }]
+  check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
+  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: a, rpc_group_b: b }]
 
 merchant:
   min_amount: { default: 100 } # USD 1.00; smaller deposits are rejected below_minimum

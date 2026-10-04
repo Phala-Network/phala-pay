@@ -5,6 +5,7 @@ mod decimal;
 pub mod binance;
 pub mod chainlink;
 pub mod kraken;
+pub mod uniswap_v2;
 
 use std::time::Duration;
 
@@ -86,7 +87,7 @@ pub enum PriceError {
     #[error("price RPC group unavailable")]
     RpcUnavailable,
     /// Sanitized numeric feed evidence for a failed round or A/B disagreement.
-    #[error("Chainlink feed rejected: {class}")]
+    #[error("on-chain price rejected: {class}")]
     Feed {
         /// Static failure classification, never an upstream message.
         class: &'static str,

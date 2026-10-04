@@ -8,6 +8,7 @@ use std::{
 };
 use topup_adapters::pricing::{
     Observation, PriceError, PriceSource, binance::Binance, chainlink::Chainlink, kraken::Kraken,
+    uniswap_v2::UniswapV2,
 };
 use topup_core::{
     money::ScaledPrice,
@@ -18,6 +19,13 @@ use topup_core::{
         validate_spot,
     },
 };
+fn source_id(company: &str) -> &str {
+    if company == "uniswap-v2-onchain" {
+        "uniswap_v2_twap"
+    } else {
+        company
+    }
+}
 struct Entry {
     source: Arc<dyn PriceSource>,
     company: &'static str,
@@ -37,7 +45,11 @@ pub struct PricingRuntime {
 }
 impl PricingRuntime {
     /// Constructs only explicitly configured sources, never a restricted default.
-    pub fn configured(route: &RouteFile, routes: &RouteSet) -> Result<Self, String> {
+    pub fn configured(
+        route: &RouteFile,
+        routes: &RouteSet,
+        pool: sqlx::PgPool,
+    ) -> Result<Self, String> {
         route
             .pricing
             .validate(route.chain.chain_id, &route.asset.symbol, route.livemode)
@@ -55,6 +67,20 @@ impl PricingRuntime {
                         Source::Binance { symbol, .. } => {
                             Arc::new(Binance::new(symbol.clone()).map_err(|e| e.to_string())?)
                         }
+                        Source::UniswapV2Twap {
+                            rpc_group,
+                            rpc_group_b,
+                            twap,
+                            ..
+                        } => Arc::new(
+                            UniswapV2::new(
+                                routes.price_group(route, rpc_group)?,
+                                routes.price_group(route, rpc_group_b)?,
+                                twap.clone(),
+                                Arc::new(crate::db::pricing::TwapStore(pool.clone())),
+                            )
+                            .map_err(|e| e.to_string())?,
+                        ),
                         Source::Chainlink {
                             feed: name,
                             chain_id,
@@ -79,6 +105,7 @@ impl PricingRuntime {
                         }
                     };
                     let max_age_s = match s {
+                        Source::UniswapV2Twap { twap, .. } => Some(twap.max_sample_age_s),
                         Source::Chainlink {
                             feed: name,
                             chain_id,
@@ -125,6 +152,17 @@ impl PricingRuntime {
             sequencer,
             stuck_since: std::sync::Mutex::new(None),
         })
+    }
+    /// Accumulate TWAP history even when no merchant requests a quote.
+    pub async fn sample_twaps(&self, route: &RouteFile) {
+        for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
+            for entry in entries.iter().filter(|e| e.company == "uniswap-v2-onchain") {
+                let mut audit = json!({"observations":[]});
+                if let Err(evidence) = observe(entry, route, role, &mut audit).await {
+                    price_metrics::failure(route, &evidence);
+                }
+            }
+        }
     }
     /// Injects independent adapters for deterministic tests.
     pub fn injected(
@@ -265,7 +303,7 @@ impl PricingRuntime {
                     for (o, entries) in [(&p, &self.primary), (&c, &self.check), (&f, &self.fx)] {
                         let bound = entries
                             .iter()
-                            .find(|e| e.company == o.source.as_str())
+                            .find(|e| source_id(e.company) == o.source.as_str())
                             .and_then(|e| e.max_age_s)
                             .unwrap_or(route.pricing.max_age_s);
                         if now
@@ -281,7 +319,7 @@ impl PricingRuntime {
                     let usdt_quoted = self
                         .check
                         .iter()
-                        .find(|e| e.company == c.source.as_str())
+                        .find(|e| source_id(e.company) == c.source.as_str())
                         .is_none_or(|e| e.usdt_quoted);
                     let mut fx_policy = policy;
                     fx_policy.max_deviation_bps = policy.max_fx_deviation_bps;
@@ -378,9 +416,14 @@ async fn observe(
         Err(error) => {
             let code = error_code(&error);
             if let Some(list) = audit["observations"].as_array_mut() {
-                list.push(json!({"role":role,"company":entry.company,"source":entry.company,"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
+                list.push(json!({"role":role,"company":entry.company,"source":source_id(entry.company),"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
             }
             price_metrics::health(route, role, entry.company, false);
+            if code.starts_with("twap_") {
+                price_metrics::refusal(route, role, entry.company, code);
+                audit["decision"] = json!(code);
+                return Err(json!({"stage":"pricing", "error":code, "quote":audit}));
+            }
             if code == "divergent" {
                 audit["decision"] = json!("divergent");
                 price_metrics::source_event(route, role, entry.company, "divergent");
@@ -488,6 +531,51 @@ mod tests {
     }
     fn route() -> RouteFile {
         serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml")).unwrap()
+    }
+    #[tokio::test]
+    async fn twap_uses_sample_age_and_safety_refusals_cannot_fail_over() {
+        let mut r = runtime();
+        let mut twap = entry("uniswap_v2_twap", 10_000_000, 120, None);
+        twap.company = "uniswap-v2-onchain";
+        twap.max_age_s = Some(180);
+        r.primary = vec![twap];
+        r.check = vec![entry("kraken", 10_000_000, 0, None)];
+        r.check[0].usdt_quoted = false;
+        assert!(
+            r.fetch(&route()).await.is_ok(),
+            "TWAP sample age is distinct from the 90-second ticker age"
+        );
+        for code in [
+            "twap_history",
+            "twap_liquidity",
+            "twap_stale_sample",
+            "twap_spot_divergence",
+            "twap_sample_jump",
+            "twap_storage",
+            "twap_reorg",
+        ] {
+            r.primary[0] = entry(
+                "uniswap-v2-onchain",
+                10_000_000,
+                0,
+                Some(PriceError::Feed {
+                    class: code,
+                    evidence: json!({"window_s":1800}),
+                }),
+            );
+            r.primary.push(entry("fallback", 10_000_000, 0, None));
+            let failure = r.fetch(&route()).await.err().unwrap();
+            assert_eq!(failure["error"], code);
+            assert!(
+                failure["quote"]["observations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|o| o["source"] == "uniswap_v2_twap"
+                        && o["company"] == "uniswap-v2-onchain")
+            );
+            r.primary.pop();
+        }
     }
     #[tokio::test]
     async fn each_source_outage_stale_and_malformed_halts_volatile() {

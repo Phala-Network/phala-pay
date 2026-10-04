@@ -690,11 +690,6 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         .context("failed to load the route configuration")?;
     let age_config =
         AgeAlertConfig::from_routes(routes.routes()).context("invalid age alert configuration")?;
-    let rate_lock_quotes: Arc<dyn topup::locks::QuoteProvider> = Arc::new(
-        topup::locks::ConfiguredQuoteProvider::from_routes(&routes)
-            .map_err(anyhow::Error::msg)
-            .context("invalid rate-lock pricing configuration")?,
-    );
     let pump_config = PumpConfig {
         step_timeout: STEP_TIMEOUT,
         wait_interval: Duration::from_secs(args.wait_interval_s),
@@ -727,7 +722,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             maintenance_keys: config.maintenance_keys.clone(),
             public_origin,
             attestor: Arc::new(DstackAttestor::new()),
-            rate_lock_quotes,
+            rate_lock_quotes: Arc::new(topup::locks::UnavailableQuoteProvider),
             client_reads: Arc::new(topup::api::ClientReadLimiter::new(
                 client_secret_key().await?,
                 READ_ONLY_CONNECTIONS,
@@ -751,6 +746,12 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let pool = connect("run", connection_count)
         .await
         .context("failed to connect to database")?;
+    let price_provider = Arc::new(
+        topup::locks::ConfiguredQuoteProvider::from_routes(pool.clone(), &routes)
+            .map_err(anyhow::Error::msg)
+            .context("invalid rate-lock pricing configuration")?,
+    );
+    let rate_lock_quotes: Arc<dyn topup::locks::QuoteProvider> = price_provider.clone();
     // A restore from backup freezes the service until the operator reconciles it; one that booted
     // straight into this compose is found by its new PostgreSQL timeline.
     let restore = topup::restore_mode::detect(&pool)
@@ -904,6 +905,14 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             cancellation,
             recovery_digest,
         )
+    });
+    let price_routes = Arc::clone(&routes);
+    tasks.spawn("TWAP price sampler", |cancellation| {
+        after_recording(pool.clone(), cancellation, move |cancellation| async move {
+            price_provider
+                .sample_twaps(&price_routes, cancellation)
+                .await;
+        })
     });
     let scanner_pool = pool.clone();
     let scanner_routes = Arc::clone(&routes);
@@ -1772,6 +1781,13 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
                                 metadata.margin_s,
                                 metadata.deviation_bps,
                                 observation_chain_id
+                            );
+                        }
+                        if let topup_core::price::Source::UniswapV2Twap { twap, .. } = source {
+                            println!(
+                                "    TWAP={twap:?}; sample_interval_s={}; ETH/USD={:?}",
+                                topup_adapters::pricing::uniswap_v2::SAMPLE_INTERVAL_S,
+                                topup_core::price::feed("ETH_USD", 1)
                             );
                         }
                         if let Some(provider) = topup_core::price::provider(source.company()) {

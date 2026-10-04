@@ -1,7 +1,8 @@
 # Price failover
 
 Status: Accepted (owner-delegated, 2026-10-04); Chainlink on-chain consumption Allowed; PHA
-production remains gated on an independent Allowed check source. DEX TWAP is a follow-up after #331.
+production remains gated on written Kraken permission and an attested Allowed check verdict.
+Uniswap V2 TWAP is implemented with persisted service observations.
 
 ## Decision
 
@@ -30,11 +31,11 @@ existing PHA route; it is never commercial permission. Coin Metrics remains remo
 | Binance, including `data-api.binance.vision` | [Terms](https://data.binance.vision/terms-of-use.html) §3.1: **CC BY-NC-SA 4.0**; §3.4: “any commercial utilization requires a separate, written enterprise data license agreement executed with Binance”. | **Prohibited** for commercial use without an enterprise licence. |
 | Coinbase market data | [Terms](https://www.coinbase.com/legal/market_data): “exclusively for you or your entity's personal or research purposes and may not be used to build an application intended for use by end users…”; redistribution and derived works are also prohibited. | **Prohibited**. No adapter. |
 | Coin Metrics Community | [Package terms](https://docs.coinmetrics.io/packages/coin-metrics-community-data): “non-commercial use only”; [licence](https://coinmetrics.io/?p=16175): **CC BY-NC 4.0**. | **Prohibited**; removed from runtime and defaults. |
-| Uniswap V2 on-chain TWAP (follow-up) | [PHA/WETH pair contract](https://etherscan.io/address/0x8867f20c1c63baccec7617626254a060eeb0e61e): public contract state through our own RPC; no API account or terms. | **Allowed**; company `uniswap-v2-onchain`. Adapter not shipped in #331. |
+| Uniswap V2 on-chain TWAP | [PHA/WETH pair contract](https://etherscan.io/address/0x8867f20c1c63baccec7617626254a060eeb0e61e): public contract state through our own RPC; no API account or terms. | **Allowed**; source `uniswap_v2_twap`, company `uniswap-v2-onchain`. |
 
-Kraken/Binance remain in the explicit staging PHA configuration. Stablecoin defaults use only
+Staging PHA uses on-chain TWAP primary and explicitly opted-in Kraken check. Stablecoin defaults use only
 Chainlink and do not need a staging licensing opt-in. PHA production quotes/spot credit remain
-unavailable until both primary and check sources are implemented and Allowed. Source counts and
+unavailable until the Kraken check is Allowed after written permission. Source counts and
 company disjointness are never weakened to enable production.
 
 ## Valuation rules
@@ -74,16 +75,15 @@ provider outage. Every accepted valuation needs at least two fresh, agreeing sou
 and `check` company sets are disjoint, as in `rpc_companies` in [RPC failover](rpc-failover.md).
 FX is independently checked and is required for USDT-quoted markets.
 
-| Role | Ordered sources (noncommercial staging) | Rule |
+| Role | Ordered sources | Rule |
 |---|---|---|
-| primary | **Kraken PHA/USD (`PHAUSD`)** | use first healthy source; Kraken AssetPairs confirms PHAUSD |
-| check | **Binance PHAUSDT** | normalize with USDT/USD; Binance differs from Kraken |
-| fx | Chainlink USDT/USD, plus explicitly opted-in Kraken USDT/USD | fresh and within FX band |
+| primary | **Uniswap V2 PHA/WETH TWAP × Chainlink ETH/USD** | public on-chain state, Allowed |
+| check | **Kraken PHA/USD (`PHAUSD`)** | PermissionRequired; staging opt-in only until written permission |
+| fx | Chainlink USDT/USD | independently peg-checked by the existing volatile policy; the USD check is not multiplied by USDT |
 
-If Binance is unavailable, pause staging PHA quotes and spot credit. Production rejects the
-current Kraken/Binance route: Kraken requires written permission and Binance requires an enterprise
-licence. The on-chain production plan below replaces Binance rather than treating it as Allowed.
-Never substitute one company or an unreviewed endpoint.
+Production rejects the route until Kraken has written permission and an attested Allowed verdict.
+The two companies remain disjoint. Do not substitute one company or an unreviewed endpoint.
+Legacy exchange adapters remain available for explicit noncommercial rehearsal.
 
 ## PHA on-chain follow-up
 
@@ -91,29 +91,63 @@ The orchestrator found no Chainlink PHA feed in the Ethereum, Base, BSC, Polygon
 feed directories (over 1,800 feeds checked), and no Pyth PHA feed. DIA's free API is CC BY-NC-SA;
 CoinGecko paid is dropped. Do not add these as defaults or implement a CoinGecko adapter.
 
-Implement the DEX TWAP as a separate follow-up PR **after #331 merges**, because it adds persistent
-observation history and a migration beyond the current reader/config change. Production primary
-will be Uniswap V2 PHA/WETH TWAP multiplied by Chainlink ETH/USD; check will be Kraken PHA/USD
+The follow-up to #331 implements persisted Uniswap V2 PHA/WETH TWAP multiplied by Chainlink
+ETH/USD as primary; check is Kraken PHA/USD
 **after written permission** and an attested Allowed verdict. Until then PHA is production-ineligible.
 A Phala-sponsored Chainlink PHA/USD feed is a long-term option for two on-chain sources.
 
-The implementation must read the pair's `price0CumulativeLast`/`price1CumulativeLast` and reserves
-through independent Ethereum A/B RPC groups, verify token ordering and require agreement; use
-counterfactual cumulative accumulation as defined by Uniswap V2. Pair:
+The implementation reads the pair's `price0CumulativeLast`/`price1CumulativeLast` and reserves
+through independent Ethereum A/B RPC groups, verifies token ordering and requires agreement,
+using counterfactual cumulative accumulation as defined by Uniswap V2. Pair:
 `0x8867f20c1c63baccec7617626254a060eeb0e61e`; PHA:
-`0x6c5bA91642F10282b576d91922Ae6448C9d52f4E`. Persist service-recorded cumulative snapshots in
-DB and require a **minimum 30-minute window**. Restart must retain history and fail closed if it
-is insufficient. ETH/USD is a pinned Chainlink feed with the same A/B, round and freshness checks.
+`0x6c5bA91642F10282b576d91922Ae6448C9d52f4E`. Service-recorded cumulative snapshots are persisted in
+DB with a **minimum 30-minute window**. Restart retains history and fails closed if it
+is insufficient. On-chain token getters confirm PHA is token0 and WETH is token1; the reader
+validates both tokens and handles either ordering. ETH/USD is a pinned Chainlink feed with the same A/B, round and freshness checks.
 
-Guard rails include a configurable WETH-side USD reserve floor (for example **$100,000**), maximum
-TWAP/spot divergence, observation freshness and minimum window. The reviewed pool estimate is
-$312k TVL/$218k 24h volume (GeckoTerminal; indicative, not runtime evidence). Sustained manipulation
-must move pool inventory over the observation window; this raises cost relative to spot, but is
-not a guaranteed security bound. Keep exposure bounded by `max_unfinalized_credit` (default
-**$1,000**), enforce the reserve floor and independent Allowed check, and halt on divergence or
-insufficient history. Reassess caps against actual reserves before enabling production.
+Every pair getter, reserve and Chainlink round/decimals call uses one numeric block: two blocks
+behind the slower A/B head. Both groups must agree on its number, hash and timestamp before and
+after reads. Stored endpoint hashes and the latest persisted sample are rechecked for reorgs.
+This also pins the existing standalone Chainlink readers. Historical calls within the window
+must be supported; archive access to the entire chain is not required.
 
-Tests must cover arithmetic against recorded cumulative values (including wrapping counters),
+Default guard rails (under source `twap`) are:
+
+| Field | Default | Reason |
+|---|---|---|
+| `window_s` | 1800 s, configurable 1800–86400 s | prevents using a spot-sized window; at least thirty minutes |
+| `max_sample_age_s` | 180 s, configurable 60–600 s | tolerates two missed one-minute samples; also bounds every gap and anchor slack |
+| `min_weth_reserve_usd` | $100,000 | about 100× the default $1,000 unfinalized exposure cap, on the WETH side alone |
+| `max_spot_deviation_bps` | 1000 (10%) | rejects short spikes and ramps that are inconsistent with the averaging window |
+| `max_sample_jump_bps` | 500 (5%) | rejects abrupt sample-to-sample reserve-ratio changes before insertion |
+
+The service sampler runs every **60 s** even without quote traffic. Quote/credit workers share
+PostgreSQL history and an atomic per-policy lock, append no more than once a minute, and refuse
+storage failure. Between persisted samples, the quote's counterfactual endpoint still uses the same
+current pinned block as ETH/USD without writing an extra database row. Each policy has its own history so changing limits cannot reuse samples accepted
+under weaker settings. A restart with a gap exceeding the age limit needs a new continuous window;
+it cannot reuse a thirty-minute-old endpoint across an unobserved outage. Jump refusals do not
+advance the previous accepted sample. A persistent jump or a stored reorg requires investigation;
+there is no automatic price override or history reset. The expand-only migration
+`20261029000000_uniswap_twap` adds an immutable table only, retains it on binary rollback, and
+keeps compatibility floor `20261028000002` for N-1.
+
+Each refusal emits `price_source_refusals_total{code=...}` plus existing source health and
+`price-outage` alerts: `twap_history`, `twap_liquidity`, `twap_spot_divergence`,
+`twap_stale_sample`, `twap_sample_jump`, `twap_sample_order`, `twap_token_order`, `twap_storage`,
+and `twap_reorg`. A/B disagreement uses the existing `divergent` alert and disagreement counter.
+
+The reviewed pool estimate is $312k TVL/$218k 24h volume (indicative, not runtime evidence).
+An attacker must sustain a reserve-ratio skew for **at least thirty minutes** while arbitrageurs
+trade against it. This requires moving inventory, paying fees and repeatedly defending the skew;
+an isolated transaction cannot dominate the average. These costs depend on actual reserves,
+arbitrage participation and external prices, so they are not a guaranteed dollar security bound.
+A flat sustained skew can pass TWAP's internal guard rails: the independent agreeing Kraken check
+remains mandatory, and `max_unfinalized_credit` (default **$1,000**) bounds our outstanding exposure.
+Reassess all merchant/deposit/exposure caps against live reserves before production activation.
+
+Tests cover arithmetic against recorded Ethereum blocks **26,120,450** and **26,120,610**
+([raw fixture](../../crates/adapters/tests/fixtures/uniswap-v2-pha-mainnet.json)), including wrapping counters,
 liquidity floor, restart with persisted history, divergence, token ordering/A/B disagreement,
 and manipulation-shaped price spikes and sustained skew. Do not accept one company during
 bootstrap or an outage.
@@ -132,9 +166,11 @@ price:
     - { source: chainlink, feed: USDC_USD, chain_id: 8453, rpc_group: a }
     - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a,
         observation_chain_id: 11155111 }
-  primary: [{ source: kraken, symbol: PHAUSD, company: kraken }] # volatile only
-  check: [{ source: binance, symbol: PHAUSDT, company: binance }] # volatile only
-  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-b }]
+  primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b,
+              observation_chain_id: 11155111 }] # volatile PHA only
+  check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # requires written permission in production
+  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a,
+         rpc_group_b: mainnet-b, observation_chain_id: 11155111 }]
   sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
 ```
 

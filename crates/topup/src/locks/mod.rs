@@ -150,12 +150,15 @@ pub struct ConfiguredQuoteProvider {
 
 impl ConfiguredQuoteProvider {
     /// Builds adapters for every route version.
-    pub fn from_routes(routes: &crate::routes::RouteSet) -> Result<Self, String> {
+    pub fn from_routes(pool: PgPool, routes: &crate::routes::RouteSet) -> Result<Self, String> {
         let mut runtimes = BTreeMap::new();
         for route in routes.routes() {
             let key = (route.route.clone(), route.version);
             if runtimes
-                .insert(key.clone(), PricingRuntime::configured(route, routes)?)
+                .insert(
+                    key.clone(),
+                    PricingRuntime::configured(route, routes, pool.clone())?,
+                )
                 .is_some()
             {
                 return Err(format!(
@@ -165,6 +168,32 @@ impl ConfiguredQuoteProvider {
             }
         }
         Ok(Self { runtimes })
+    }
+    /// Periodic service sampler, bounded and cancelled with the service task group.
+    pub async fn sample_twaps(
+        &self,
+        routes: &crate::routes::RouteSet,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) {
+        let mut tick = tokio::time::interval(Duration::from_secs(
+            topup_adapters::pricing::uniswap_v2::SAMPLE_INTERVAL_S,
+        ));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                () = cancellation.cancelled() => return,
+                _ = tick.tick() => {
+                    for route in routes.routes() {
+                        if let Some(runtime) = self.runtimes.get(&(route.route.clone(), route.version)) {
+                            tokio::select! {
+                                () = cancellation.cancelled() => return,
+                                () = runtime.sample_twaps(route) => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

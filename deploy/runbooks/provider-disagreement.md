@@ -52,10 +52,10 @@ config change and Deploy `upgrade`. Price-source replacement also needs a Legal 
 verdict in the attested registry and disjoint primary/check companies. Never override a price
 or substitute another endpoint of the same company. Stablecoin defaults are Chainlink-only;
 Kraken requires written commercial permission and Binance/Coinbase/Coin Metrics are not
-commercially eligible. PHA production awaits the
-[Uniswap V2 TWAP plan](../../docs/design/price-failover.md#pha-on-chain-follow-up) and an Allowed Kraken
-check. The future reader must halt on TWAP/spot divergence, insufficient persisted history or
-liquidity below its floor. After repair, observe two policy windows.
+commercially eligible. PHA production uses
+[Uniswap V2 TWAP](../../docs/design/price-failover.md#pha-on-chain-follow-up) but still needs an Allowed
+Kraken check after written permission. The reader halts on TWAP/spot divergence, sample jumps,
+staleness, insufficient persisted history or liquidity below its floor. After repair, observe two policy windows.
 
 ## Done when
 

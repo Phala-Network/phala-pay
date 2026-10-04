@@ -314,6 +314,14 @@ pub fn price_pairs(route: &RouteFile) -> Result<Vec<(String, String, u64)>, Stri
     let mut pairs = Vec::new();
     for (_, sources) in route.pricing.roles() {
         for source in sources {
+            if let topup_core::price::Source::UniswapV2Twap {
+                rpc_group,
+                rpc_group_b,
+                ..
+            } = source
+            {
+                pairs.push((resolve(rpc_group)?, resolve(rpc_group_b)?, 1));
+            }
             if let topup_core::price::Source::Chainlink {
                 chain_id,
                 rpc_group,

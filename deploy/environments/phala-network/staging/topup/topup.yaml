@@ -201,11 +201,10 @@ routes:
       mode: volatile
       sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
       allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
-      check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }]
+      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
       fx:
         - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
-        - { source: kraken, symbol: USDTUSD, company: kraken }
 
     merchant:
       min_amount: { default: 100 }
@@ -322,11 +321,10 @@ routes:
     price:
       mode: volatile
       allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
-      check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }]
+      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
       fx:
         - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
-        - { source: kraken, symbol: USDTUSD, company: kraken }
 
     merchant:
       min_amount: { default: 100 }

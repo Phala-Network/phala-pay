@@ -44,6 +44,7 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 
 | Tables | `topup_app` |
 |---|---|
+| `price_twap_observations` | `SELECT`, `INSERT` (immutable samples, isolated by safety policy) |
 | `topup_migration_compatibility` (owner-written rollback ledger) | None |
 | `transitions`, `audit`, `reconciliation_findings`, `heartbeat`, `events` | `SELECT`, `INSERT` (append-only) |
 | `flushed`, `flush_failures` | `SELECT`, `INSERT` (finalized chain facts) |
@@ -301,3 +302,12 @@ window selectors with independent review markers, and owner-written recovery aud
 0.6 height-only cursors require A/B hash agreement before runtime progress. Recovery preserves
 old evidence and repairs derived address/backfill progress under the exclusive writer lock; see
 [the RPC runbook](../../../deploy/RPC.md).
+
+## TWAP observation expansion
+
+`20261029000000_uniswap_twap` adds independent, append-only service observations for the pinned
+Ethereum PHA/WETH pair. It does not change existing rows, columns, constraints or grants.
+Quote, credit and sampler workers serialize insertion by the complete guard rail policy and keep
+at most one new sample per minute. Samples survive restarts and binary rollback; the down migration
+is intentionally a no-op. Compatibility floor remains `20261028000002`, so N-1 can ignore the new
+table and ledger entry with its previous configuration. Changing policies starts a separate window.

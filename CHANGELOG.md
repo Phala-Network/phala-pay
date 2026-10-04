@@ -23,8 +23,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   the new shape; mixed schemas and restricted legacy sources fail validation. Replace Coin
   Metrics with reviewed Chainlink/exchange sources, configure mainnet A/B observation groups
   and testnet markers, and add the Base sequencer gate. Stablecoin defaults use Allowed on-chain
-  Chainlink data only. Production rejects PermissionRequired/Prohibited sources; Kraken/Binance
-  PHA remains noncommercial staging-only pending an on-chain primary and written check permission. See [migration](docs/configuration.md#price-sources).
+  Chainlink data only. Production rejects PermissionRequired/Prohibited sources. PHA uses an on-chain primary and
+  remains noncommercial staging-only pending written Kraken check permission. See
+  [migration](docs/configuration.md#price-sources).
   Ship in the next minor release; rollback uses the previous compatible image and config.
 
 ### Breaking (operators)
@@ -86,6 +87,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   ledger retains floor `20261028000002`, allowing protocol-aware N-1 rollback without undoing these migrations.
 
 ### Added
+
+- Add licence-free `uniswap_v2_twap` PHA/WETH × Chainlink ETH/USD pricing, pinned to one
+  A/B-agreed Ethereum block. Persist one-minute samples across restarts; require a continuous
+  window of at least thirty minutes with liquidity, spot divergence, freshness and sample jump
+  guard rails and distinct price refusal alerts. PHA primary/check defaults become TWAP/Kraken;
+  production still refuses Kraken pending written permission and an attested Allowed verdict.
+- Expand-only migration `20261029000000_uniswap_twap` adds immutable observation history without
+  changing existing payment tables or permissions. Compatibility floor remains `20261028000002`;
+  N-1 binary rollback uses its previous config and retains the new table and observations.
 
 - Proposed recovery-domain design for a fenced warm standby, key/storage dependencies,
   promotion and DNS switch, estimated cost and achievable recovery targets; no HA implementation.

@@ -61,10 +61,10 @@ pub fn provider(source: &str) -> Option<Provider> {
             "disabled; registry evidence only",
             Verdict::Prohibited,
         ),
-        "uniswap-v2-onchain" => (
+        "uniswap_v2_twap" | "uniswap-v2-onchain" => (
             "https://etherscan.io/address/0x8867f20c1c63baccec7617626254a060eeb0e61e",
-            "Allowed basis: public on-chain contract state consumed through our own RPC, without an API account or terms. TWAP adapter and persisted history are deferred to the follow-up after #331.",
-            "disabled until TWAP follow-up; shared RPC budgets",
+            "Allowed basis: public on-chain contract state consumed through our own RPC, without an API account or terms. PHA/WETH TWAP multiplied by public Chainlink ETH/USD state.",
+            "one sample/minute; shared RPC budgets",
             Verdict::Allowed,
         ),
         "coinmetrics" => (
@@ -81,7 +81,7 @@ pub fn provider(source: &str) -> Option<Provider> {
             "kraken" => "kraken",
             "binance" => "binance",
             "coinbase" => "coinbase",
-            "uniswap-v2-onchain" => "uniswap-v2-onchain",
+            "uniswap_v2_twap" | "uniswap-v2-onchain" => "uniswap-v2-onchain",
             _ => "coinmetrics",
         },
         url,
@@ -119,6 +119,7 @@ pub struct Feed {
 /// remain mandatory, and rounds beyond heartbeat + margin remain stale.
 pub fn feed(name: &str, chain: u64) -> Option<Feed> {
     let (address, heartbeat_s, deviation_bps) = match (chain, name) {
+        (1, "ETH_USD") => ("0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419", 3600, 50),
         (1, "USDC_USD") => ("0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6", 82800, 25),
         (1, "USDT_USD") => ("0x3E7d1eAB13ad0104d2750B8863b489D65364e32D", 86400, 25),
         (8453, "USDC_USD") => ("0x7e860098F58bBFC8648a4311b374B1D669a2bc6B", 86400, 30),
@@ -128,6 +129,7 @@ pub fn feed(name: &str, chain: u64) -> Option<Feed> {
     };
     Some(Feed {
         name: match name {
+            "ETH_USD" => "ETH_USD",
             "USDC_USD" => "USDC_USD",
             "USDT_USD" => "USDT_USD",
             _ => "BASE_SEQUENCER_UPTIME",
@@ -139,6 +141,50 @@ pub fn feed(name: &str, chain: u64) -> Option<Feed> {
         margin_s: 600,
         deviation_bps,
     })
+}
+/// Safety policy for the pinned Ethereum PHA/WETH pair; no arbitrary pools or tokens.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TwapConfig {
+    /// Minimum averaging window (at least thirty minutes).
+    pub window_s: u64,
+    /// Maximum sample age and permitted gap between samples.
+    pub max_sample_age_s: u64,
+    /// Minimum WETH-side USD reserve, in whole dollars.
+    pub min_weth_reserve_usd: u64,
+    /// Maximum spot deviation from the arithmetic TWAP.
+    pub max_spot_deviation_bps: Bps,
+    /// Maximum spot movement from the previous accepted sample.
+    pub max_sample_jump_bps: Bps,
+}
+impl Default for TwapConfig {
+    fn default() -> Self {
+        Self {
+            window_s: 1800,
+            max_sample_age_s: 180,
+            min_weth_reserve_usd: 100_000,
+            max_spot_deviation_bps: Bps::new(1000).unwrap_or_default(),
+            max_sample_jump_bps: Bps::new(500).unwrap_or_default(),
+        }
+    }
+}
+impl TwapConfig {
+    /// Reject unsafe windows, unbounded history and ineffective guard rails.
+    pub fn validate(&self) -> Result<(), RouteError> {
+        if !(1800..=86400).contains(&self.window_s)
+            || !(60..=600).contains(&self.max_sample_age_s)
+            || self.min_weth_reserve_usd == 0
+            || self.min_weth_reserve_usd > 1_000_000_000
+            || !(1..=2000).contains(&self.max_spot_deviation_bps.value())
+            || !(1..=2000).contains(&self.max_sample_jump_bps.value())
+        {
+            return Err(RouteError::validation(
+                "price",
+                "invalid TWAP window/liquidity/freshness/deviation/jump limits",
+            ));
+        }
+        Ok(())
+    }
 }
 /// One explicit source descriptor. Companies are canonical, never inferred from hosts.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -165,6 +211,20 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observation_chain_id: Option<u64>,
     },
+    /// Pinned mainnet PHA/WETH TWAP multiplied by Chainlink ETH/USD.
+    #[serde(rename = "uniswap_v2_twap")]
+    UniswapV2Twap {
+        /// Ethereum mainnet A group (or route role a on Ethereum).
+        rpc_group: String,
+        /// Independent Ethereum mainnet B group.
+        rpc_group_b: String,
+        /// Explicit destination chain for cross-network/test-token valuation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        observation_chain_id: Option<u64>,
+        /// Averaging and guard rail policy.
+        #[serde(default)]
+        twap: TwapConfig,
+    },
     /// Kraken USD market.
     Kraken {
         /// Reviewed symbol.
@@ -186,6 +246,7 @@ impl Source {
         match self {
             Self::Coinmetrics { .. } => "coinmetrics",
             Self::Chainlink { .. } => "chainlink",
+            Self::UniswapV2Twap { .. } => "uniswap-v2-onchain",
             Self::Kraken { .. } => "kraken",
             Self::Binance { .. } => "binance",
         }
@@ -194,6 +255,7 @@ impl Source {
     pub fn asset(&self) -> &str {
         match self {
             Self::Coinmetrics { asset } => asset,
+            Self::UniswapV2Twap { .. } => "pha",
             Self::Chainlink { feed, .. } => match feed.as_str() {
                 "USDC_USD" => "usdc",
                 "USDT_USD" => "usdt",
@@ -374,6 +436,23 @@ impl PriceConfig {
                     ));
                 }
                 match source {
+                    Source::UniswapV2Twap {
+                        rpc_group,
+                        rpc_group_b,
+                        observation_chain_id,
+                        twap,
+                    } => {
+                        twap.validate()?;
+                        if rpc_group.is_empty()
+                            || rpc_group_b.is_empty()
+                            || rpc_group == rpc_group_b
+                            || (chain != 1 && observation_chain_id != &Some(chain))
+                        {
+                            return Err(fail(
+                                "TWAP requires independent mainnet A/B groups and explicit cross-network observation_chain_id",
+                            ));
+                        }
+                    }
                     Source::Chainlink {
                         feed: name,
                         chain_id,
@@ -464,6 +543,55 @@ mod tests {
             "fx":[{"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"a"}]}),
         )
         .unwrap()
+    }
+    #[test]
+    fn twap_defaults_boundaries_registry_and_licensing() {
+        let mut config = volatile();
+        config.primary = vec![
+            serde_json::from_value(
+                serde_json::json!({"source":"uniswap_v2_twap","rpc_group":"a","rpc_group_b":"b"}),
+            )
+            .unwrap(),
+        ];
+        config.check = vec![Source::Kraken {
+            symbol: "PHAUSD".into(),
+            company: "kraken".into(),
+        }];
+        config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"a"})).unwrap()];
+        assert!(config.validate(1, "pha", true).is_ok());
+        assert!(config.validate_licensing(true).is_ok());
+        assert!(
+            config.validate_licensing(false).is_err(),
+            "staging opt-in never grants Kraken permission"
+        );
+        assert_eq!(config.primary[0].company(), "uniswap-v2-onchain");
+        assert_eq!(
+            provider("uniswap_v2_twap").unwrap().verdict,
+            Verdict::Allowed
+        );
+        assert_ne!(config.primary[0].company(), config.check[0].company());
+        let Source::UniswapV2Twap {
+            twap,
+            observation_chain_id,
+            ..
+        } = &mut config.primary[0]
+        else {
+            panic!("TWAP source")
+        };
+        assert_eq!(twap.window_s, 1800);
+        twap.window_s = 1799;
+        assert!(twap.validate().is_err());
+        twap.window_s = 86401;
+        assert!(twap.validate().is_err());
+        *twap = TwapConfig::default();
+        *observation_chain_id = Some(11155111);
+        config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"mainnet-a","rpc_group_b":"mainnet-b","observation_chain_id":11155111})).unwrap()];
+        assert!(config.validate(11155111, "pha", false).is_ok());
+        let Source::UniswapV2Twap { rpc_group_b, .. } = &mut config.primary[0] else {
+            panic!("TWAP source")
+        };
+        *rpc_group_b = "a".into();
+        assert!(config.validate(1, "pha", true).is_err());
     }
     #[test]
     fn licensing_gate_cannot_be_overridden_in_production() {

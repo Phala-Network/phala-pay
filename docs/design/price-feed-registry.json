@@ -48,7 +48,16 @@
       "proxyAddress": "0xBCF85224fc0756B9Fa45aA7892530B47e10b6433",
       "decimals": 0,
       "grace_s": 3600
+    },
+    {
+      "chain_id": 1,
+      "name": "ETH / USD",
+      "proxyAddress": "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
+      "heartbeat": 3600,
+      "threshold": 0.5,
+      "decimals": 8,
+      "margin_s": 600
     }
   ],
-  "freshness_comment": "Review of the last eight Ethereum rounds observed USDC/USD intervals of 82,812–82,836 s (heartbeat 82,800 s) and USDT/USD intervals of 86,412–86,436 s (heartbeat 86,400 s). Updates already arrive up to 36 s late in calm conditions. The 600 s publication margin accommodates congestion without needless source loss; deviation-triggered updates constrain movement during normal feed operation. Completeness, A/B agreement and peg gates remain mandatory; age beyond heartbeat + 600 s is stale."
+  "freshness_comment": "Review of the last eight Ethereum rounds observed USDC/USD intervals of 82,812\u201382,836 s (heartbeat 82,800 s) and USDT/USD intervals of 86,412\u201386,436 s (heartbeat 86,400 s). Updates already arrive up to 36 s late in calm conditions. The 600 s publication margin accommodates congestion without needless source loss; deviation-triggered updates constrain movement during normal feed operation. Completeness, A/B agreement and peg gates remain mandatory; age beyond heartbeat + 600 s is stale."
 }
