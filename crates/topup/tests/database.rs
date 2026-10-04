@@ -1441,6 +1441,15 @@ async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
         ensure!(before.len()==5 && before.iter().all(|(_,_,valid)|*valid));
         db::migrate(pool).await?;
         ensure!(objects().await?==before,"completed index was unnecessarily rebuilt");
+        let compatible: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM _sqlx_migrations m \
+             JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
+             WHERE m.version BETWEEN 20261029030000 AND 20261029030005 \
+               AND m.success AND c.compatibility_floor=20261028000002",
+        )
+        .fetch_one(pool)
+        .await?;
+        ensure!(compatible == 6, "scale migrations must retain the N-1 compatibility floor");
         db::MIGRATOR.undo(pool,20261028000002).await?;
         ensure!(objects().await?.is_empty());
         // Queries shipped by the previous release still work with the old or new schema.
@@ -1451,5 +1460,4 @@ async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
         ensure!(objects().await?.len()==5);
         Ok(())
     })).await
-
 }

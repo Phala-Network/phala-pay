@@ -56,7 +56,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Bound deploy stages and network calls by elapsed-time deadlines, with timeout diagnostics.
 - Alert on pgdata/observability disk usage at 75%/90%, pending WAL size/age, and stale probes;
   retain seven years of data and document safe disk-pressure response.
-
 - Bound API body reads to 5 seconds and request processing to 25 seconds; health checks have
   independent capacity and a 2-second database deadline. API connections have a 30-second read
   idle timeout and a 60-second hard lifetime, bounding incomplete headers and keep-alive work.
@@ -65,6 +64,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   persistent rotating pages for historical credit, derivation, custody, and flush-link checks,
   with a bounded 4,000-entry derivation cache and concurrent query indexes. Post-restore row checks
   still traverse the complete ledger.
+- Scale migrations `20261029030000`–`20261029030005` are expand-only: two new cursor tables
+  and five indexes leave existing rows and constraints unchanged. Their owner-written compatibility
+  ledger retains floor `20261028000002`, allowing N-1 rollback without undoing these migrations.
 
 ### Added
 
