@@ -7,7 +7,10 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/deadline.sh"
 
 # tool_error FILE: the last lines of a tool's stderr, on one line, for a failure message.
 tool_error() {
-    grep -v '^stage=' "$1" | tail -n 3 | paste -sd ' ' -
+    local message
+    message=$(grep -v '^stage=' "$1" | tail -n 3 | paste -sd ' ' -) || true
+    # A timed-out silent tool has only stage diagnostics. Keep that evidence and return success.
+    printf '%s\n' "${message:-$(tail -n 1 "$1")}"
 }
 
 # embeds_key URL: whether URL looks like it carries a credential, which an attested setting would
