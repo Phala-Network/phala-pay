@@ -1,6 +1,6 @@
 # SDK contract reference and ledger recipes
 
-Status: **Proposed**. Normative companion to [SDK ergonomics](sdk-ergonomics.md).
+Status: Accepted (owner, 2026-10-04); implementation pending
 
 ## Resource and transport contract
 

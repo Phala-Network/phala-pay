@@ -1,6 +1,6 @@
 # Design: SDK integration ergonomics
 
-Status: **Proposed**. JS/Python contract, documentation only. Go implementation is out of scope.
+Status: Accepted (owner, 2026-10-04); implementation pending
 
 ## 1. Purpose and precedents
 
