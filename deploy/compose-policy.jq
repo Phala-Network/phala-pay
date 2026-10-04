@@ -67,12 +67,6 @@ def secret_allowed($variant; $service; $key; $name):
                 and $service == "postgres" and $name == "RESTORE_\($key)"
             end)
         or ($variant == "template" and template_runtime_setting($service; $key; $name))
-        or (($variant == "service" or $variant == "template") and
-            ($service == "postgres" or $service == "backup") and
-            ($key == "WALG_WAL_TIMEOUT_SECONDS" or $key == "WALG_WAL_ATTEMPTS" or
-             $key == "WALG_BASE_TIMEOUT_SECONDS" or $key == "WALG_BASE_ATTEMPTS" or
-             $key == "WALG_RESTORE_TIMEOUT_SECONDS" or $key == "WALG_RESTORE_ATTEMPTS" or
-             $key == "WALG_OBSERVABILITY_DIR" or $key == "WALG_BIN") and $name == $key)
     end;
 
 # Every string of the compose that Compose would interpolate (a `$` left once `$$` is removed) must
@@ -83,12 +77,8 @@ def secret_violations($variant):
         | ($root | getpath($path)) as $value
         | select($value | gsub("\\$\\$"; "") | contains("$"))
         | ($value | capture("^\\$\\{(?<name>[A-Z_][A-Z0-9_]*):-\\}$").name // null) as $name
-        | select((($path | length) == 4 and $path[0] == "services" and $path[2] == "environment"
-                  and (($path[3] | tostring) | startswith("WALG_"))) | not)
         | if (($path | length) == 4 and $path[0] == "services" and $path[2] == "environment"
-                and $name != null and secret_allowed($variant; $path[1]; $path[3]; $name)
-             ) or (($path | length) == 4 and $path[0] == "services" and $path[2] == "environment"
-                 and (($name // "") | startswith("WALG_")) and ($path[1] == "postgres" or $path[1] == "backup"))
+                and $name != null and secret_allowed($variant; $path[1]; $path[3]; $name))
             then empty
             else "a sealed value may not fill \($path | map(tostring) | join("."))"
           end];
