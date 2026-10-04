@@ -31,3 +31,12 @@ if check_anonymous_pulls "$tmp/images" >"$tmp/out" 2>"$tmp/err"; then exit 1; fi
 grep -q 'exceeded its deadline' "$tmp/out"
 [[ $(tool_error "$tmp/pull.err") == *call_status=124* ]]
 echo 'silent anonymous pull expires with preserved diagnostics'
+# macOS coreutils exposes gtimeout instead of timeout; exercise that executable lookup.
+mkdir "$tmp/only-gtimeout"
+ln -s "$(command -v timeout)" "$tmp/only-gtimeout/gtimeout"
+(
+    export PATH="$tmp/only-gtimeout"
+    stage_start macos-timeout 1
+    stage_call 1 /usr/bin/true
+)
+echo 'gtimeout fallback passed'

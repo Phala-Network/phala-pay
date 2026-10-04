@@ -27,6 +27,8 @@ set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
 : "${TOPUP:?set TOPUP to a topup binary, for example target/debug/topup}"
 export TOPUP
+# Negative convergence cases use real short deadlines; happy paths settle in one call.
+export ATTESTATION_WAIT_SECONDS=2 CVM_WAIT_SECONDS=5
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 version=v9.9.9 commit=$(git -C "$root" rev-parse HEAD)
@@ -74,6 +76,7 @@ echo "gh $*" >>"$STUB_LOG"
 case "$*" in
     --version) echo "gh version $STUB_GH_VERSION (2026-09-15)" ;;
     "auth status") ;;
+    *contents/deploy/deadline.sh\?ref=v9.9.9) cat "$STUB_ROOT/deploy/deadline.sh" ;;
     *contents/deploy/verify-release.sh\?ref=v9.9.9) cat "$STUB_ROOT/deploy/verify-release.sh" ;;
     "api repos/Phala-Network/phala-pay/git/ref/tags/v9.9.9 "*) echo "commit $STUB_COMMIT" ;;
     "api repos/Phala-Network/phala-pay/compare/$STUB_COMMIT...main "*) echo ahead ;;
