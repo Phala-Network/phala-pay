@@ -46,6 +46,7 @@ For the operator who runs an instance, onboards merchants, and handles incidents
 | [Design: multi-tenant Phala Pay](design/multi-tenant.md) | The decision record behind the current design, with its amendments. |
 | [Design: per-account payment settings](design/payment-settings.md) | The operator's catalog with defaults and bounds, each account's opt-in payment settings, and the one resolver of every term. |
 | [Design: deployment configuration](design/deploy-config.md) | One typed config per environment, standard Compose overrides for the restore-check variant, and env only for secrets. |
+| [Design: SDK ergonomics](design/sdk-ergonomics.md) | Proposed shared JS/Python integration contract: server client, pins, setup, checkout handoff, ledger helpers, and compatibility options. |
 | [Plan: Go SDK](design/go-sdk.md) | Proposed backend scope, security parity, generation and release decisions, and acceptance gates; not implemented. |
 | [Plan to production](plan.md) | What remains before Phala's own instance goes live. |
 
