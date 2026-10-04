@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_args
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from topup_client.models import Deposit, Quote, Refund
 from topup_sdk import SignatureError, load_webhook_public_key, verify_webhook_signature
+from topup_sdk._secrets import protect
+
+from ._types import EventType
 
 DEFAULT_TOLERANCE = 300
 
@@ -147,16 +150,18 @@ class Webhook:
             raise SignatureVerificationError("webhook event is for the other mode")
         previous = data.get("previous_attributes")
         return Event(
-            event_id,
+            protect(event_id),
             account,
             livemode,
-            event_type,
+            protect(event_type),
             created,
-            actor,
-            None if request is None else EventRequest(request["id"], request["idempotency_key"]),
+            protect(actor),
+            None
+            if request is None
+            else EventRequest(protect(request["id"]), protect(request["idempotency_key"])),
             EventData(
                 _resource(event_type, data["object"]),
-                previous if isinstance(previous, dict) else None,
+                protect(previous) if isinstance(previous, dict) else None,
             ),
         )
 
@@ -170,15 +175,36 @@ def _is_request(value: object) -> bool:
     return key is None or isinstance(key, str)
 
 
-def _resource(event_type: str, value: dict[str, Any]) -> Deposit | Quote | Refund | dict[str, Any]:
+def _resource(  # noqa: PLR0912
+    event_type: str, value: dict[str, Any]
+) -> Deposit | Quote | Refund | dict[str, Any]:
+    if event_type not in get_args(EventType):
+        return protect(value)
     resource = event_type.partition(".")[0]
+    if resource in {"deposit", "quote", "refund"}:
+        if value.get("object") != resource or type(value.get("livemode")) is not bool:
+            raise ValueError("malformed webhook resource")
+        for field in ("id", "status"):
+            if not isinstance(value.get(field), str) or not value[field]:
+                raise ValueError("malformed webhook resource")
+        if resource in {"deposit", "quote"}:
+            amount = value.get("amount")
+            if (type(amount) is not int and amount is not None) or (
+                resource == "quote" and amount is None
+            ):
+                raise ValueError("malformed webhook resource")
+            for field in ("client_reference_id", "currency", "amount_atomic"):
+                if not isinstance(value.get(field), str):
+                    raise ValueError("malformed webhook resource")
+        if "metadata" in value and not isinstance(value["metadata"], dict):
+            raise ValueError("malformed webhook resource")
     try:
         if resource == "deposit":
-            return Deposit.from_dict(value)
+            return protect(Deposit.from_dict(value))
         if resource == "quote":
-            return Quote.from_dict(value)
+            return protect(Quote.from_dict(value))
         if resource == "refund":
-            return Refund.from_dict(value)
+            return protect(Refund.from_dict(value))
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"{event_type} carries a malformed {resource}") from error
     return value

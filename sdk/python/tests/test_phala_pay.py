@@ -132,7 +132,7 @@ def _deposit(index: int = 1) -> dict[str, object]:
 
 def _client(handler: httpx.MockTransport) -> PhalaPay:
     return PhalaPay(
-        "http://service.test",
+        "https://service.test",
         API_KEY,
         account=ACCOUNT,
         forwarder=(FACTORY, IMPLEMENTATION),
@@ -313,6 +313,7 @@ def test_deposit_addresses_create_rotate_and_list_check_every_active_address() -
                     _deposit_address(2),
                     _deposit_address(
                         1,
+                        id="da_" + "0e" * 16,
                         status="retired",
                         address=None,
                         networks=[_network(11155111, "0x" + "99" * 20, "0x" + "99" * 20)],
@@ -322,7 +323,7 @@ def test_deposit_addresses_create_rotate_and_list_check_every_active_address() -
         )
 
     with PhalaPay(
-        "http://service.test",
+        "https://service.test",
         API_KEY,
         account=ACCOUNT,
         forwarder=(FACTORY, IMPLEMENTATION),
@@ -393,7 +394,7 @@ def test_a_deposit_address_the_account_cannot_derive_is_refused(
 
     with (
         PhalaPay(
-            "http://service.test",
+            "https://service.test",
             API_KEY,
             account=ACCOUNT,
             forwarder=(FACTORY, IMPLEMENTATION),
@@ -407,7 +408,7 @@ def test_a_deposit_address_the_account_cannot_derive_is_refused(
 
 def test_the_key_must_be_an_api_key() -> None:
     with pytest.raises(ValueError, match="secret key"):
-        PhalaPay("http://service.test", "acme/v1", forwarder=(FACTORY, IMPLEMENTATION))
+        PhalaPay("https://service.test", "acme/v1", forwarder=(FACTORY, IMPLEMENTATION))
 
 
 # Webhooks ----------------------------------------------------------------------------------------

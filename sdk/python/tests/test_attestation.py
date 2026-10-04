@@ -115,7 +115,7 @@ def test_client_attestation_is_authenticated_and_verifies_the_binding() -> None:
         return httpx.Response(200, json=bodies.pop(0))
 
     with TopupClient(
-        "http://service.test:8080", api_key, transport=httpx.MockTransport(respond)
+        "https://service.test:8080", api_key, transport=httpx.MockTransport(respond)
     ) as client:
         evidence = client.attestation(NONCE)
         assert evidence.account == ACCOUNT
@@ -146,7 +146,7 @@ def test_roll_webhook_key_posts_the_overlap_once_with_an_idempotency_key() -> No
 
     api_key = "ppay_sk_test_" + "C" * 43 + "000000"
     with TopupClient(
-        "http://service.test:8080", api_key, transport=httpx.MockTransport(respond)
+        "https://service.test:8080", api_key, transport=httpx.MockTransport(respond)
     ) as client:
         rolled = client.roll_webhook_key(expires_in=3600)
     assert [key.version for key in rolled.webhook_keys] == [2, 1]

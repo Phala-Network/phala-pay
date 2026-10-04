@@ -18,11 +18,13 @@ project="topup-sandbox-$$"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/topup-sandbox.XXXXXX")
 environment="$tmp/environment"
 compose=("$root/deploy/local/compose.sh" --environment-dir "$environment" -p "$project"
-    -f "$root/deploy/sandbox/docker-compose.local.yml")
+    -f "$root/deploy/sandbox/docker-compose.local.yml"
+    -f "$root/deploy/local/test-tls.compose.yml")
 # The product side (example, reference product, and scenarios) runs in this image on the compose
 # network, so the service reaches its endpoints as http://product:8089 even where a host firewall
 # drops traffic from containers to the host.
 client_image="ghcr.io/astral-sh/uv:0.12.18-python3.14-trixie-slim@sha256:00facf17b58b02b725155862c5cd637f688f906bf7eb5b5194647886d8805cf3"
+export TOPUP_TEST_TLS_IMAGE="$client_image" TOPUP_TEST_TLS_DIR="$tmp/tls"
 client="$project-product"
 
 # shellcheck disable=SC2329  # invoked by the trap
@@ -38,6 +40,22 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT INT TERM
+
+# Trust only this run's certificate; HTTPS checks stay enabled in the SDK and HTTPX.
+mkdir "$TOPUP_TEST_TLS_DIR"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=topup-tls \
+    -addext subjectAltName=DNS:topup-tls -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
+    -out "$TOPUP_TEST_TLS_DIR/cert.pem" >/dev/null 2>&1
+python3 - "$TOPUP_TEST_TLS_DIR/cert.pem" "$TOPUP_TEST_TLS_DIR/ca.pem" <<'PYTHON'
+import ssl, sys
+from pathlib import Path
+roots = "".join(ssl.DER_cert_to_PEM_cert(c) for c in ssl.create_default_context().get_ca_certs(binary_form=True))
+Path(sys.argv[2]).write_text(roots + Path(sys.argv[1]).read_text())
+PYTHON
+export TOPUP_TEST_TLS_PROXY TOPUP_TEST_TLS_CERTIFICATE TOPUP_TEST_TLS_KEY
+TOPUP_TEST_TLS_PROXY="$(<"$root/deploy/local/tls_proxy.py")"
+TOPUP_TEST_TLS_CERTIFICATE="$(<"$TOPUP_TEST_TLS_DIR/cert.pem")"
+TOPUP_TEST_TLS_KEY="$(<"$TOPUP_TEST_TLS_DIR/key.pem")"
 
 wait_for() {
     local description=$1 attempts=90
@@ -127,7 +145,7 @@ YAML
 "${compose[@]}" run --rm --no-deps topup topup config check /etc/topup/topup.yaml
 
 echo "== starting the service"
-"${compose[@]}" up -d topup
+"${compose[@]}" up -d topup topup-tls
 wait_for "GET /healthz" curl -fsS "$service_url/healthz"
 
 echo "== creating the sandbox account through POST /v1/admin/accounts"
@@ -177,7 +195,7 @@ jq -n \
     --arg token "$(jq -er .test_token "$tmp/contracts.json")" \
     --arg unsupported "$(jq -er .unsupported_token "$tmp/contracts.json")" \
     --arg public_url "$public_url" --arg payer "$owner" --arg topup "$project-topup-1" \
-    '{service_url: "http://topup:8080", account: $account,
+    '{service_url: "https://topup-tls:8443", account: $account,
       api_key_file: "/sandbox/product.key", factory: $factory, implementation: $implementation,
       chains: [{chain_id: 11155111, name: "Sepolia", rpc_url: "http://anvil:8545",
         treasury: $payer, test_tokens: [{symbol: "PHA", address: $token}]}],
@@ -199,6 +217,7 @@ run_product() {
         --user "$(id -u):$(id -g)" "${socket[@]}" -v "$root:/repo:ro" -v "$tmp:/sandbox" \
         -e HOME=/sandbox/home -e UV_CACHE_DIR=/sandbox/uv-cache \
         -e UV_PROJECT_ENVIRONMENT=/sandbox/venv -e UV_PYTHON_DOWNLOADS=never \
+        -e SSL_CERT_FILE=/sandbox/tls/ca.pem \
         -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/repo/deploy/product -w /repo "$client_image" \
         uv run --locked --project sdk/python --quiet python "$@"
 }

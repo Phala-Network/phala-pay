@@ -122,7 +122,7 @@ def _client(
     account: str | None = None,
 ) -> TopupClient:
     return TopupClient(
-        "http://service.test:8080",
+        "https://service.test:8080",
         api_key,
         account=account,
         forwarder=(FACTORY, IMPLEMENTATION) if pinned else None,
@@ -206,9 +206,9 @@ def test_open_quotes_must_have_the_derived_address() -> None:
 def test_only_secret_and_restricted_keys_are_accepted() -> None:
     for key in ["sk_test_123", "rk_live_" + "A" * 49, "ppay_pk_test_" + "A" * 49, "acme/v1"]:
         with pytest.raises(ValueError, match="restricted key"):
-            TopupClient("http://service.test", key)
-    assert TopupClient("http://service.test", LIVE_KEY).livemode
-    assert not TopupClient("http://service.test", API_KEY).livemode
+            TopupClient("https://service.test", key)
+    assert TopupClient("https://service.test", LIVE_KEY).livemode
+    assert not TopupClient("https://service.test", API_KEY).livemode
 
 
 def _live_quote(treasury: str = TREASURY) -> dict[str, object]:
@@ -459,7 +459,7 @@ def test_a_pinned_treasury_is_the_only_one_a_quote_may_pay() -> None:
     with _client(service, treasuries={11155111: other}) as client:
         assert client.get_quote(QUOTE_ID).address == moved["address"]
     with pytest.raises(ValueError, match="forwarder"):
-        TopupClient("http://service.test", API_KEY, treasuries={1: TREASURY})
+        TopupClient("https://service.test", API_KEY, treasuries={1: TREASURY})
 
 
 def test_errors_carry_the_request_id_and_doc_url() -> None:
@@ -555,7 +555,7 @@ def test_a_rate_limit_is_retried_after_its_retry_after() -> None:
 
     service = FakeService(respond)
     client = TopupClient(
-        "http://service.test:8080",
+        "https://service.test:8080",
         API_KEY,
         transport=httpx.MockTransport(service),
         sleep=slept.append,

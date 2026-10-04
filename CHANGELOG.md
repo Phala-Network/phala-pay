@@ -21,6 +21,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   emit on state transitions with hourly reminders and log recovery without an event. Outbox
   queue alerts detect overdue processing and exclude known failing merchant endpoints; backlog
   warnings require at least two eligible endpoints.
+- Local SDK sandbox and CVM rehearsals use a disposable TLS ingress with a run-scoped
+  certificate, preserving HTTPS validation and normal system trust roots.
 - CI retries image builds once without caches only for recognized Actions cache transport failures;
   cache export failures no longer fail builds, with diagnostics retained.
 - Backup health requires a current-timeline base backup and fresh WAL data, backlog and LSN
@@ -46,6 +48,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - Proposed recovery-domain design for a fenced warm standby, key/storage dependencies,
   promotion and DNS switch, estimated cost and achievable recovery targets; no HA implementation.
+
+### Python SDK (`phala-pay`)
+
+- **Breaking:** add pins-based `PhalaPay` configuration and `from_env()`, bound webhook verification,
+  checkout parameters, pure ledger helpers, typed transport errors, and paginated address validation.
+
+- Enforce immutable canonical pins, API key checksums, origin and response identity checks, and
+  checkout handoffs from the originating verified quote with address revalidation.
+- Use one transport path for POST replay, explicit per-call controls, deadline and body timeouts,
+  bounded jitter and Retry-After; reject redirects and invalid pagination, preserve borrowed
+  transport ownership, and redact API keys and client secrets from diagnostics.
+- Validate ledger snapshots and merge cumulative refunds and reversals without floats or input
+  mutation; ignore unknown webhook types while retaining their raw objects.
 
 ### JS SDK (`@phala/pay`)
 

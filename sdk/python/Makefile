@@ -23,9 +23,9 @@ check-generated: generate
 	test -z "$$(git status --porcelain --untracked-files=all -- $(GENERATED))"
 
 lint:
-	$(UV) run --locked ruff check . ../examples ../../deploy/product ../../deploy/sandbox/scenarios ../../deploy/sandbox/smoke.py
-	$(UV) run --locked ruff format --check . ../examples ../../deploy/product ../../deploy/sandbox/scenarios ../../deploy/sandbox/smoke.py
-	$(UV) run --locked mypy src/phala_pay src/topup_sdk tests ../examples ../../deploy/product ../../deploy/sandbox/scenarios ../../deploy/sandbox/smoke.py
+	$(UV) run --locked ruff check . ../examples ../../deploy/product ../../deploy/sandbox/scenarios ../../deploy/sandbox/smoke.py ../../deploy/local/tls_proxy.py
+	$(UV) run --locked ruff format --check . ../examples ../../deploy/product ../../deploy/sandbox/scenarios ../../deploy/sandbox/smoke.py ../../deploy/local/tls_proxy.py
+	$(UV) run --locked mypy src/phala_pay src/topup_sdk tests ../examples ../../deploy/product ../../deploy/sandbox/scenarios ../../deploy/sandbox/smoke.py ../../deploy/local/tls_proxy.py
 
 test:
 	$(UV) run --locked pytest
