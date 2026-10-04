@@ -162,7 +162,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 #### Added
 
 - Branded chain and token icons in Checkout and DepositAddress, with mainnet-family artwork on testnets
-  and neutral monogram fallbacks. Export `NetworkIcon` / `AssetIcon` from `@phala/pay-react`
+  and neutral monogram fallbacks. Export `NetworkIcon` / `AssetIcon` from `@phala/pay/react`
   and framework-free `networkIcon` / `assetIcon` markup accessors from `@phala/pay`.
   Six SVGs are vendored from MIT-licensed web3icons, without a runtime dependency or injected styles.
 
@@ -283,7 +283,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Changed
 
-- **Breaking:** React components require an explicit `@phala/pay-react/styles.css` import. Removed
+- **Breaking:** React components require an explicit `@phala/pay/styles.css` import. Removed
   `appearance.variables`; set the `--pp-*` custom properties in your stylesheet. Components no
   longer inject inline styles, allowing `style-src 'self'` in integrations. The demo permits
   only its own CSS and the exact hash of Radix's fixed scrollbar stylesheet.
