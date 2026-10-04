@@ -21,10 +21,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   emit on state transitions with hourly reminders and log recovery without an event. Outbox
   queue alerts detect overdue processing and exclude known failing merchant endpoints; backlog
   warnings require at least two eligible endpoints.
-- CI retries image builds once without caches only for recognized Actions cache transport
-  failures; cache export failures no longer fail builds, with diagnostics retained.
-
-## [0.8.3] - 2026-10-04
+- CI retries image builds once without caches only for recognized Actions cache transport failures;
+  cache export failures no longer fail builds, with diagnostics retained.
+- Backup health requires a current-timeline base backup and fresh WAL data, backlog and LSN
+  progress; old backlog uploads cannot refresh recovery age. First base backups retry with
+  capped backoff until successful.
+- WAL-G uploads, backup listings and restores have separate configurable deadlines and retry
+  budgets. Timed-out recovery fetches abort recovery instead of promoting a partial restore.
+- Failed critical restore checks block acceptance and unfreeze. An explicit administrator
+  override requires a reason and is recorded atomically in audit history.
+- Local restore drills start disposable Sepolia and Base Sepolia Anvil chains with distinct A/B
+  RPC endpoints and contract fixtures, and measure recovery through a successful merchant request.
+- Restore drills enforce the 60-second RPO from failure to the last replayed committed marker,
+  including upload latency; RTO includes unfreeze and a successful merchant API request.
 
 ### JS SDK (`@phala/pay`)
 
@@ -1339,7 +1348,6 @@ happens only from two-provider finalized data.
   the endpoint.
 
 [unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.8.3...HEAD
-[0.8.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.3
 [0.8.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.2
 [0.8.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.1
 [0.8.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.0

@@ -1,22 +1,44 @@
 #!/bin/sh
 set -eu
 
+# Shared bounded WAL-G runner, also used by bootstrap and restore_command. GNU timeout
+# kills the entire process group, including a client stalled after connecting to S3.
+if [ "${1:-}" = run ] && [ "$#" -ge 3 ]; then
+    operation=$2
+    shift 2
+    case "$operation" in
+        wal) deadline=${WALG_WAL_TIMEOUT_SECONDS:-10}; attempts=${WALG_WAL_ATTEMPTS:-1} ;;
+        base) deadline=${WALG_BASE_TIMEOUT_SECONDS:-1800}; attempts=${WALG_BASE_ATTEMPTS:-2} ;;
+        restore) deadline=${WALG_RESTORE_TIMEOUT_SECONDS:-120}; attempts=${WALG_RESTORE_ATTEMPTS:-3} ;;
+        *) exit 64 ;;
+    esac
+    for value in "$deadline" "$attempts"; do
+        case "$value" in ''|*[!0-9]*|0*) echo "WAL-G deadline and attempts must be positive integers" >&2; exit 64 ;; esac
+    done
+    if ! [ "$deadline" -le 86400 ] 2>/dev/null || ! [ "$attempts" -le 10 ] 2>/dev/null; then
+        echo "WAL-G deadline must be at most 86400 seconds and attempts at most 10" >&2
+        exit 64
+    fi
+    while :; do
+        status=0
+        timeout --kill-after=5 "$deadline" "${WALG_BIN:-wal-g}" "$@" || status=$?
+        [ "$status" -ne 0 ] || exit 0
+        # A genuinely absent WAL is the sole non-retryable restore result.
+        [ "$operation" != restore ] || [ "$status" -ne 74 ] || exit 74
+        attempts=$((attempts - 1))
+        [ "$attempts" -gt 0 ] || exit "$status"
+        sleep 1
+    done
+fi
+
 write_marker() {
-    # The fixed path topup reads.
-    marker=/run/topup-observability/last-backup-unix-seconds
-    marker_dir=$(dirname "$marker")
-    mkdir -p "$marker_dir"
-    marker_tmp="$marker.tmp.$$"
-    (
-        umask 022
-        date -u +%s > "$marker_tmp"
-        chmod 0644 "$marker_tmp"
-    )
-    mv "$marker_tmp" "$marker"
+    marker="${WALG_OBSERVABILITY_DIR:-/run/topup-observability}/$1"
+    mkdir -p "$(dirname "$marker")"
+    (umask 022; printf '%s\n' "$2" > "$marker.tmp.$$"; chmod 0644 "$marker.tmp.$$")
+    mv "$marker.tmp.$$" "$marker"
 }
 
-# PostgreSQL archive_command: WAL-G uploads the segment, and the backup-age marker is refreshed only
-# after it succeeded.
+# Preserve the segment's data age: uploading an old backlog must never refresh recovery to now.
 if [ "${1:-}" = "wal-push" ] && [ "$#" -eq 2 ]; then
     # The entrypoint already sets archive_mode=off for a restore; refuse a stray call as well.
     if [ "${TOPUP_RESTORE_FROM_BACKUP:-off}" = on ]; then
@@ -30,8 +52,9 @@ if [ "${1:-}" = "wal-push" ] && [ "$#" -eq 2 ]; then
         echo "WAL archiving waits for sealed object-storage credentials" >&2
         exit 1
     fi
-    wal-g wal-push "$2"
-    write_marker
+    segment_time=$(stat -c %Y "$2")
+    "$0" run wal wal-push "$2"
+    write_marker last-backup-unix-seconds "$segment_time"
     exit 0
 fi
 
@@ -110,28 +133,44 @@ checkpoint_on_start() {
                 echo "startup CHECKPOINT failed" >&2
             fi
         fi
+        now=$(date -u +%s)
+        gap=$(psql -XAtq -c "SELECT GREATEST(pg_wal_lsn_diff(pg_current_wal_insert_lsn(),
+            (substr(last_archived_wal, 9, 8) || '/0')::pg_lsn)
+            - (('x' || substr(last_archived_wal, 17, 8))::bit(32)::bigint + 1)
+              * pg_size_bytes(current_setting('wal_segment_size')), 0)::bigint
+            FROM pg_stat_archiver WHERE last_archived_wal ~ '^[0-9A-F]{24}$'") || gap=
+        oldest=$(find "${PGDATA:-/var/lib/postgresql/data}/pg_wal/archive_status" -name '*.ready' \
+            -printf '%T@\n' 2>/dev/null | sort -n | head -1) || oldest=
+        backlog=0
+        if [ -n "$oldest" ]; then backlog=$((now - ${oldest%%.*})); fi
+        if [ -n "$gap" ]; then
+            write_marker wal-progress "$now $backlog $gap"
+        fi
         sleep 30
     done
 }
 checkpoint_on_start &
+monitor_pid=$!
+trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 # A base backup is due now, not at the schedule, when none covers the cluster's current timeline:
 # a new cluster, or one promoted after a restore (deploy/RESTORE.md, "Resume"). A failed check or
-# backup (PostgreSQL still starting, storage unreachable) is retried for five minutes.
-attempts=10
+# backup (PostgreSQL still starting, storage unreachable) keeps retrying with capped backoff.
+# Markers from a previous cluster/timeline are not evidence that this timeline is covered.
+rm -f "${WALG_OBSERVABILITY_DIR:-/run/topup-observability}/last-base-backup-unix-seconds"
+backoff=5
 while :; do
     status=0
     walg-timeline-backup "${PGDATA:-/var/lib/postgresql/data}" || status=$?
     case "$status" in
-        0) write_marker; break ;;
-        3) break ;;
+        0|3) break ;;
     esac
-    attempts=$((attempts - 1))
-    if [ "$attempts" -eq 0 ]; then
-        echo "base backup check failed; waiting for the schedule" >&2
-        break
-    fi
-    sleep 30
+    echo "base backup check failed; retrying in ${backoff}s" >&2
+    sleep "$backoff"
+    backoff=$((backoff * 2))
+    if [ "$backoff" -gt 300 ]; then backoff=300; fi
 done
 
 while :; do
@@ -142,8 +181,21 @@ while :; do
     fi
     delay=$((run_at - now))
     echo "next WAL-G base backup at $(date -u -d "@$run_at" +%FT%TZ)"
-    sleep "$delay"
-    wal-g backup-push "${PGDATA:-/var/lib/postgresql/data}"
-    write_marker
-    wal-g delete retain FULL "$retention" --use-sentinel-time --confirm
+    # Revalidate base existence on this timeline every five minutes, including after retention
+    # or an external deletion. Failure clears evidence instead of trusting an old local marker.
+    if [ "$delay" -gt 300 ]; then sleep 300; else sleep "$delay"; fi
+    status=0
+    walg-timeline-backup "${PGDATA:-/var/lib/postgresql/data}" || status=$?
+    case "$status" in
+        0|3) ;;
+        *) rm -f "${WALG_OBSERVABILITY_DIR:-/run/topup-observability}/last-base-backup-unix-seconds"; continue ;;
+    esac
+    if [ "$delay" -gt 300 ]; then continue; fi
+    if "$0" run base backup-push "${PGDATA:-/var/lib/postgresql/data}"; then
+        write_marker last-base-backup-unix-seconds "$(date -u +%s)"
+        "$0" run base delete retain FULL "$retention" --use-sentinel-time --confirm ||
+            echo "backup retention failed; retained backups left intact" >&2
+    else
+        echo "scheduled base backup failed; existing backup age continues increasing" >&2
+    fi
 done

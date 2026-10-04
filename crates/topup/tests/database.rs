@@ -197,7 +197,7 @@ async fn tenant_rows_cannot_join_another_accounts_or_modes_rows() -> Result<()> 
 }
 
 #[tokio::test]
-async fn restore_check_accepts_a_current_schema_and_fresh_heartbeat() -> Result<()> {
+async fn restore_check_rejects_failed_rpc_with_current_schema_and_fresh_heartbeat() -> Result<()> {
     with_database(|context| {
         Box::pin(async move {
             let restore_pool = db::connect(&context.owner_url, "restore-check", 4).await?;
@@ -209,7 +209,7 @@ async fn restore_check_accepts_a_current_schema_and_fresh_heartbeat() -> Result<
             let report = restore::check(&restore_pool, &expectations, &reconciler)
                 .await
                 .map_err(anyhow::Error::msg)?;
-            ensure!(report.status == "ok");
+            ensure!(report.status == "incomplete");
             // The check records the restore, which freezes the service until the operator
             // reconciles and unfreezes it.
             let restore = topup::restore_mode::active(&context.app_pool)
@@ -228,7 +228,7 @@ async fn restore_check_accepts_a_current_schema_and_fresh_heartbeat() -> Result<
             ensure!(report.wal_bytes_behind == Some(0));
             ensure!(report.expected_lsn.as_deref() == Some(heartbeat.wal_lsn.as_str()));
             ensure!(report.row_counts.get("heartbeat") == Some(&1));
-            ensure!(report.post_restore_reconciliation.status == "complete");
+            ensure!(report.post_restore_reconciliation.status == "incomplete");
             ensure!(
                 !report
                     .post_restore_reconciliation
@@ -256,7 +256,7 @@ async fn restore_check_without_a_source_lsn_flags_heartbeat_only_rpo() -> Result
             let report = restore::check(&context.owner_pool, &expectations, &reconciler)
                 .await
                 .map_err(anyhow::Error::msg)?;
-            ensure!(report.status == "ok");
+            ensure!(report.status == "incomplete");
             ensure!(report.rpo_basis == "heartbeat_only");
             ensure!(report.expected_lsn.is_none());
             ensure!(report.wal_bytes_behind.is_none());
@@ -279,7 +279,7 @@ async fn restore_check_at_boot_reports_an_unanchored_rpo() -> Result<()> {
             let report = restore::check(&context.owner_pool, &expectations, &reconciler)
                 .await
                 .map_err(anyhow::Error::msg)?;
-            ensure!(report.status == "ok");
+            ensure!(report.status == "incomplete");
             ensure!(report.rpo_basis == "unanchored");
             ensure!(report.measured_rpo_seconds.is_none());
             ensure!(report.restored_heartbeat_at == heartbeat.recorded_at);
@@ -400,17 +400,23 @@ async fn restore_check_asks_the_product_nothing_and_keeps_recorded_credits() -> 
                 .await
                 .map_err(anyhow::Error::msg)?;
             ensure!(
-                report.status == "ok",
-                "restore must pass: {:?}",
+                report.status == "incomplete",
+                "failed RPC must block acceptance: {:?}",
                 report.failures
             );
-            ensure!(report.post_restore_reconciliation.status == "complete");
-            // Chain checks are alert-only; their failure is reported but does not gate resume.
+            ensure!(report.post_restore_reconciliation.status == "incomplete");
+            // Critical chain checks fail closed, while the recorded credit stays unchanged.
             ensure!(
                 report
                     .post_restore_reconciliation
                     .failed_checks
                     .contains(&CheckName::CustodyBalance)
+            );
+            ensure!(
+                report
+                    .failures
+                    .iter()
+                    .any(|failure| failure.contains("custody_balance"))
             );
             let deposit = db::get_deposit(&context.app_pool, credited)
                 .await?
@@ -1357,4 +1363,54 @@ async fn assert_session_budgets(pool: &PgPool, expected: (&str, &str, &str)) -> 
         "unexpected session budgets: {actual:?}"
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn restore_check_counts_failure_time_and_does_not_grant_sampling_tolerance() -> Result<()> {
+    with_database(|context| {
+        Box::pin(async move {
+            let heartbeat = heartbeat::record(&context.app_pool).await?;
+            let reconciler = restore_reconciler(&context.owner_pool)?;
+            let expectations = restore::RestoreExpectations {
+                expected_heartbeat_at: Some(
+                    heartbeat.recorded_at + chrono::TimeDelta::milliseconds(60_100),
+                ),
+                expected_lsn: None,
+            };
+            let report = restore::check(&context.owner_pool, &expectations, &reconciler)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            ensure!(report.measured_rpo_seconds == Some(61));
+            ensure!(report.allowed_rpo_seconds == 60);
+            ensure!(
+                report
+                    .failures
+                    .iter()
+                    .any(|failure| failure.contains("restore RPO exceeded"))
+            );
+            let active = topup::restore_mode::active(&context.owner_pool)
+                .await?
+                .context("frozen")?;
+            topup::restore_mode::record_validation(&context.owner_pool, &active, "ok", &[]).await?;
+            // An early DB failure during a repeated validation must invalidate the old pass.
+            let invalid = restore::RestoreExpectations {
+                expected_lsn: Some("invalid-lsn".to_owned()),
+                ..expectations
+            };
+            ensure!(
+                restore::check(&context.owner_pool, &invalid, &reconciler)
+                    .await
+                    .is_err()
+            );
+            let status: String = sqlx::query_scalar(
+                "SELECT reason::jsonb ->> 'status' FROM audit WHERE action = 'restore.validation' \
+                 ORDER BY created_at DESC LIMIT 1",
+            )
+            .fetch_one(&context.owner_pool)
+            .await?;
+            ensure!(status == "incomplete");
+            Ok(())
+        })
+    })
+    .await
 }

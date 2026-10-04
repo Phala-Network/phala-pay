@@ -76,6 +76,13 @@ grep -Fx "wal-push /tmp/segment" /tmp/wal-g.call >/dev/null
 grep -E '^[0-9]+$' "$marker" >/dev/null
 [ "$(stat -c %a "$marker")" = 644 ]
 
+# An old backlog upload keeps its data timestamp instead of making health fresh.
+touch -d '10 minutes ago' /tmp/segment
+expected=$(stat -c %Y /tmp/segment)
+AWS_ACCESS_KEY_ID=test walg-cron wal-push /tmp/segment
+[ "$(cat "$marker")" -eq "$expected" ]
+[ ! -e /run/topup-observability/last-base-backup-unix-seconds ]
+
 # A failed upload must leave the marker untouched.
 rm "$marker"
 if WALG_TEST_FAIL_PUSH=1 AWS_ACCESS_KEY_ID=test walg-cron wal-push /tmp/segment 2>/dev/null; then
@@ -122,6 +129,7 @@ timeline_backup() {
     set +e
     PATH="$tmp/timeline-bin:$PATH" \
         WALG_BIN="$tmp/timeline-bin/wal-g" \
+        WALG_OBSERVABILITY_DIR="$tmp/markers" \
         TEST_BASE_BACKUP_CALL="$tmp/base-backup.call" \
         TEST_TIMELINE="$1" \
         TEST_BACKUP_LIST="$2" \
@@ -153,3 +161,40 @@ timeline_backup 2 "$listed" ''
 }
 
 echo "walg-cron dry-run test passed"
+
+# More than ten initial failures must still retry before the daily schedule. Accelerate only
+# the sleep clock; no PostgreSQL or object store is needed for this scheduler fault injection.
+cat >"$tmp/timeline-bin/wal-g" <<'FAKE'
+#!/bin/sh
+set -eu
+case "$1" in
+    backup-list)
+        count=$(cat "$TEST_COUNTER" 2>/dev/null || echo 0)
+        count=$((count + 1))
+        echo "$count" > "$TEST_COUNTER"
+        [ "$count" -gt 12 ] || exit 1
+        echo '[]' ;;
+    backup-push) touch "$TEST_SUCCEEDED" ;;
+    *) exit 70 ;;
+esac
+FAKE
+cat >"$tmp/timeline-bin/sleep" <<'FAKE'
+#!/bin/sh
+# Stop the background SQL monitor; stop the scheduler only after the first backup succeeded.
+[ "$1" -ne 30 ] || exit 77
+[ ! -e "$TEST_SUCCEEDED" ] || exit 77
+FAKE
+chmod +x "$tmp/timeline-bin/sleep"
+set +e
+PATH="$tmp/timeline-bin:$root/deploy/scripts:$PATH" TEST_TIMELINE=1 \
+    TEST_COUNTER="$tmp/retry-count" TEST_SUCCEEDED="$tmp/succeeded" \
+    AWS_ACCESS_KEY_ID=test WALG_BASE_ATTEMPTS=1 WALG_OBSERVABILITY_DIR="$tmp/markers" \
+    "$root/deploy/scripts/walg-cron" backup-push '0 3 * * *' >"$tmp/retry.log" 2>&1
+status=$?
+set -e
+[ "$status" -eq 77 ] && [ "$(cat "$tmp/retry-count")" -eq 13 ] && [ -e "$tmp/succeeded" ]
+[ -s "$tmp/markers/last-base-backup-unix-seconds" ]
+echo 'first base backup retries past the old budget and succeeds'
+
+# Keep the real-client network fault injection in the existing CI regression entry point.
+"$root/deploy/tests/walg-stalled-s3.sh" "$image"

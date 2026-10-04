@@ -11,7 +11,7 @@ if [ "$#" -ne 2 ]; then
 fi
 
 set +e
-"${WALG_BIN:-wal-g}" wal-fetch "$1" "$2"
+"$(dirname "$0")/walg-cron" run restore wal-fetch "$1" "$2"
 status=$?
 set -e
 case "$status" in

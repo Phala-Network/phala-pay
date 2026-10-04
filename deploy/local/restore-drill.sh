@@ -3,6 +3,10 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
+# Contract deployments use the same pinned Foundry profile as the sandbox/rehearsal.
+# shellcheck source=../contracts/common.sh
+source "$(dirname -- "$0")/../contracts/common.sh"
+
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
 # No bind mounts: CI's Docker daemon cannot see the checkout (see restore-drill.compose.yml).
 drill_compose="$root/deploy/local/restore-drill.compose.yml"
@@ -35,6 +39,12 @@ env_dir=
 admin_dir=
 switch_lsn=
 seed_container="$project-seed"
+foundry_out_created=false
+if [ ! -e "$root/contracts/out" ]; then
+    foundry_out_created=true
+fi
+chain_overlay=()
+service_overlay=()
 # The source runs the service variant of the rendered compose; the replacement boots the
 # restore-check variant (deploy/RESTORE.md). The controlled drill adds the merchant's product.
 variant=()
@@ -43,11 +53,19 @@ if [ "$mode" = controlled ]; then
     profiles=(--profile merchant)
 fi
 dc() {
+    local service_files=()
+    if [ "${#variant[@]}" -eq 0 ]; then
+        service_files=("${service_overlay[@]}")
+    fi
     "$root/deploy/local/compose.sh" "${variant[@]}" --environment-dir "$env_dir" -p "$project" \
-        -f "$drill_compose" "${profiles[@]}" "$@"
+        -f "$drill_compose" "${chain_overlay[@]}" "${service_files[@]}" "${profiles[@]}" "$@"
 }
 
 cleanup() {
+    local status=$?
+    if [ "$status" -ne 0 ] && [ -n "$env_dir" ]; then
+        dc logs --no-log-prefix --tail 40 postgres topup restore-check >&2 || true
+    fi
     if [ -n "$writer_pid" ]; then
         kill "$writer_pid" >/dev/null 2>&1 || true
         wait "$writer_pid" >/dev/null 2>&1 || true
@@ -59,6 +77,9 @@ cleanup() {
     dc --profile tools down --volumes --remove-orphans >/dev/null 2>&1 || true
     docker image rm "$TOPUP_LOCAL_SERVICE_IMAGE" "$TOPUP_LOCAL_POSTGRES_IMAGE" \
         "$TOPUP_LOCAL_DSTACK_IMAGE" "$TOPUP_LOCAL_PRODUCT_IMAGE" >/dev/null 2>&1 || true
+    if [ "$foundry_out_created" = true ] && [ -d "$root/contracts/out" ] && [ ! -L "$root/contracts/out" ]; then
+        find "$root/contracts/out" -depth -delete
+    fi
     if [ -n "$env_dir" ]; then
         rm -rf "$env_dir"
     fi
@@ -135,7 +156,7 @@ wal_object_uploaded_epoch() {
 }
 
 seconds_between() {
-    awk -v start="$1" -v end="$2" 'BEGIN { printf "%.3f", end - start }'
+    awk -v start="$1" -v end="$2" 'BEGIN { printf "%.6f", end - start }'
 }
 
 recovery_promoted() {
@@ -158,7 +179,9 @@ marker_epoch() {
 }
 
 seed_reconciliation_fixture() {
-    dc exec -T postgres psql -U postgres -d topup -v ON_ERROR_STOP=1 <<'SQL'
+    # A merchant credential committed before backup must authenticate after service recovery.
+    resume_merchant_key=$(new_api_key)
+    dc exec -T postgres psql -U postgres -d topup -v ON_ERROR_STOP=1 -v merchant_key="$resume_merchant_key" <<'SQL'
 CREATE TABLE restore_drill_marker (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     mode text NOT NULL,
@@ -167,6 +190,9 @@ CREATE TABLE restore_drill_marker (
 
 INSERT INTO accounts (id, name)
 VALUES ('11111111-1111-1111-1111-111111111111', 'restore-drill');
+INSERT INTO api_keys (id, account_id, livemode, kind, prefix, last4, key_hash, created_by)
+VALUES (gen_random_uuid(), '11111111-1111-1111-1111-111111111111', false, 'secret',
+        'ppay_sk_test_', right(:'merchant_key', 4), sha256(convert_to(:'merchant_key', 'UTF8')), 'admin');
 INSERT INTO customers (id, account_id, livemode, client_reference_id)
 VALUES (
     '22222222-2222-2222-2222-222222222222',
@@ -1050,7 +1076,8 @@ restore_credentials_only() {
     }
 }
 
-# The drill publishes no ports; the mock product's Python reaches topup on the compose network.
+# Only Anvil publishes ephemeral loopback ports for deployment; the mock product reaches topup
+# on the compose network.
 topup_request() {
     dc exec -T mock-product python3 - "$1" "$2" <<'PY'
 import sys, urllib.error, urllib.request
@@ -1138,6 +1165,74 @@ env_dir=$(mktemp -d)
     "$(openssl pkey -in "$admin_dir/admin.pem" -pubout -outform DER | tail -c 32 | base64)" \
     "$env_dir"
 
+# Keep the chain fixtures alive across source loss and replacement boot. Each B endpoint is a
+# forwarding HTTP server on a different port/domain, sharing A's canonical Anvil state.
+export FOUNDRY_CACHE_PATH="$admin_dir/cache"
+export FOUNDRY_BROADCAST="$admin_dir/broadcast"
+python3 - "$admin_dir/chains.json" "$admin_dir/service.json" <<'PYCHAINS'
+import json
+import sys
+proxy = """
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+import urllib.request
+class Proxy(BaseHTTPRequestHandler):
+    def do_POST(self):
+        try:
+            body = self.rfile.read(int(self.headers['Content-Length']))
+            request = urllib.request.Request(self.server.upstream, body,
+                                             {'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                result = response.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
+        except Exception:
+            self.send_error(502, 'local chain unavailable')
+    def log_message(self, *args):
+        pass
+servers = []
+for port, upstream in [(18545, 'http://anvil:8545'), (18546, 'http://anvil-base:8545')]:
+    server = ThreadingHTTPServer(('0.0.0.0', port), Proxy)
+    server.upstream = upstream
+    servers.append(server)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+threading.Event().wait()
+"""
+image = 'ghcr.io/foundry-rs/foundry:v1.8.3@sha256:2e4287278639262de76db72477301d5d3212fa1b1cce710d7d148750a46ce9e7'
+services = {}
+for name, chain_id, alias in [('anvil', 11155111, 'sepolia.drill-a.test'),
+                              ('anvil-base', 84532, 'base.drill-a.test')]:
+    services[name] = {
+        'image': image, 'entrypoint': ['anvil'],
+        'command': ['--host', '0.0.0.0', '--chain-id', str(chain_id),
+                    '--block-time', '1', '--slots-in-an-epoch', '4'],
+        'ports': ['127.0.0.1::8545'],
+        'networks': {'default': {'aliases': [alias]}},
+        'healthcheck': {'test': ['CMD', 'cast', 'chain-id', '--rpc-url',
+                                 'http://127.0.0.1:8545'],
+                        'interval': '2s', 'timeout': '2s', 'retries': 30},
+        'restart': 'no'}
+services['chain-b'] = {
+    'image': 'python:3.14-slim-trixie@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2',
+    'command': ['python3', '-c', proxy],
+    'networks': {'default': {'aliases': ['sepolia.drill-b.test', 'base.drill-b.test']}},
+    'restart': 'no'}
+with open(sys.argv[1], 'w') as output:
+    json.dump({'services': services}, output)
+with open(sys.argv[2], 'w') as output:
+    json.dump({'services': {
+        'heartbeat': {'command': ['topup', 'heartbeat', '--interval-s', '15']},
+        'topup': {'command': ['topup', 'run', '--config', '/etc/topup/topup.yaml',
+                             '--public-origin', 'http://topup:8080',
+                             '--head-poll-interval-s', '1', '--finalized-poll-interval-s', '1']}
+    }}, output)
+PYCHAINS
+chain_overlay=(-f "$admin_dir/chains.json")
+service_overlay=(-f "$admin_dir/service.json")
+
 compose_version=$(docker compose version --short)
 if [ "$(printf '%s\n' 2.24.4 "$compose_version" | sort -V | head -1)" != 2.24.4 ]; then
     echo "Docker Compose $compose_version is too old; the drill overlay needs 2.24.4+ (!override)" >&2
@@ -1149,10 +1244,81 @@ dc --profile tools config --format json |
     exit 1
 }
 
-dc build postgres dstack-simulator topup
+dc build --build-arg BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" postgres dstack-simulator topup
 if [ "$mode" = controlled ]; then
     dc build product
 fi
+# Deploy the canonical factory/implementation and Multicall3, then install local token/oracle
+# runtimes at the configured addresses so the merchant's signed fixture records stay valid.
+export FOUNDRY_OUT="$CONTRACTS_DIR/out"
+dc up -d --wait anvil anvil-base chain-b
+# The weekly Docker-only runner has no Foundry installation. Reuse the pinned image's tools
+# locally for the deployment helpers, in a task directory removed by the cleanup trap.
+if ! command -v forge >/dev/null || ! command -v cast >/dev/null; then
+    [ "$(uname -s)" = Linux ] || die "install Foundry to run the drill on this platform"
+    mkdir "$admin_dir/bin"
+    container=$(dc ps -q anvil)
+    for tool in forge cast; do
+        docker cp "$container:/usr/local/bin/$tool" "$admin_dir/bin/$tool"
+        chmod +x "$admin_dir/bin/$tool"
+    done
+    export PATH="$admin_dir/bin:$PATH"
+fi
+require_command forge
+require_command cast
+for chain in sepolia base-sepolia; do
+    service=anvil
+    [ "$chain" != base-sepolia ] || service=anvil-base
+    rpc_url="http://$(dc port "$service" 8545)"
+    install_anvil_multicall3 "$rpc_url"
+    "$DEPLOY_CONTRACTS_DIR/deploy-proxy.sh" --rpc-url "$rpc_url" --local-fund --broadcast >/dev/null
+    PRIVATE_KEY="$ANVIL_PRIVATE_KEY" "$DEPLOY_CONTRACTS_DIR/deploy-factory.sh" \
+        --rpc "$chain/a=$rpc_url" --broadcast >/dev/null
+    if [ "$chain" = sepolia ]; then
+        derived=$(cast call 0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747 \
+            'addressOf(address,bytes32)(address)' "$consistency_treasury" "$consistency_salt_v1" \
+            --rpc-url "$rpc_url")
+        [ "$(lower "$derived")" = "$consistency_address_v1" ] || die "factory fixture address changed"
+    fi
+    owner=$(cast wallet address --private-key "$ANVIL_PRIVATE_KEY")
+    "$root/deploy/sandbox/deploy-test-contracts.sh" --rpc-url "$rpc_url" \
+        --anvil-unlocked "$owner" >"$admin_dir/$chain.json"
+    token_code=$(cast code "$(jq -er .test_token "$admin_dir/$chain.json")" --rpc-url "$rpc_url")
+    usdc=$(cd "$CONTRACTS_DIR" && forge create test/mocks/MockTokens.sol:UsdcLikeToken \
+        --rpc-url "$rpc_url" --unlocked --from "$owner" --broadcast --json | jq -er .deployedTo)
+    usdt=$(cd "$CONTRACTS_DIR" && forge create test/mocks/MockTokens.sol:UsdtLikeToken \
+        --rpc-url "$rpc_url" --unlocked --from "$owner" --broadcast --json | jq -er .deployedTo)
+    usdc_code=$(cast code "$usdc" --rpc-url "$rpc_url")
+    usdt_code=$(cast code "$usdt" --rpc-url "$rpc_url")
+    oracle_code=$(cast code "$(jq -er .sanctions_oracle "$admin_dir/$chain.json")" --rpc-url "$rpc_url")
+    docker run --rm -i --network none "$TOPUP_LOCAL_SERVICE_IMAGE" topup config show /dev/stdin \
+        <"$env_dir/topup.yaml" >"$admin_dir/config.json"
+    chain_id=$(cast chain-id --rpc-url "$rpc_url")
+    while read -r token symbol oracle; do
+        case "$symbol" in
+            pha) code=$token_code ;;
+            usdc) code=$usdc_code ;;
+            usdt) code=$usdt_code ;;
+            *) die "unexpected drill asset: $symbol" ;;
+        esac
+        cast rpc --rpc-url "$rpc_url" anvil_setCode "$token" "$code" >/dev/null
+        cast rpc --rpc-url "$rpc_url" anvil_setCode "$oracle" "$oracle_code" >/dev/null
+    done < <(jq -r --argjson id "$chain_id" '.routes[] | select(.chain.chain_id == $id) |
+        [.asset.contract, .asset.symbol, .chain.sanctions_oracle] | @tsv' "$admin_dir/config.json")
+done
+# Replace whole groups, including all staging backup members: no external RPC is used.
+jq '
+    .rpc_companies.tenderly.domains = ["drill-a.test"]
+    | .rpc_companies.publicnode.domains = ["drill-b.test"]
+    | .rpc_groups |= with_entries(.key as $group | .value.members = [.value.members[0]]
+        | .value.members[0] |= (del(.sealed_key) | .url = (if $group == "provider-a" then "http://sepolia.drill-a.test:8545"
+              elif $group == "provider-b" then "http://sepolia.drill-b.test:18545"
+              elif $group == "base-sepolia-a" then "http://base.drill-a.test:8545"
+              elif $group == "base-sepolia-b" then "http://base.drill-b.test:18546"
+              else error("unexpected RPC group") end)))' "$admin_dir/config.json" >"$env_dir/topup.yaml"
+docker run --rm -i --network none "$TOPUP_LOCAL_SERVICE_IMAGE" topup config check /dev/stdin \
+    <"$env_dir/topup.yaml"
+
 seed_drill_volumes
 dc up -d keys s3-init mock-product
 wait_for keys dc exec -T keys topup keys --check \
@@ -1184,6 +1350,12 @@ case "$backup_name" in
     base_*) ;;
     *) echo "could not determine WAL-G base backup name" >&2; exit 1 ;;
 esac
+
+# Exercise wrong-key and credential controls before timing the failure window.
+last_archived_wal=$(psql_value 'SELECT last_archived_wal FROM pg_stat_archiver')
+test -n "$last_archived_wal"
+test_restore_failures_are_fatal "$last_archived_wal"
+storage_probe_writes
 
 # Time the segment that holds the first write, not whichever segment is current beforehand.
 first=$(first_sample)
@@ -1230,25 +1402,25 @@ for seconds in "$archive_wait_seconds" "$upload_latency_seconds"; do
     }
 done
 
-expected_heartbeat_at=$(psql_value \
-    "SELECT to_char(max(recorded_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM heartbeat")
 if [ "$mode" = controlled ]; then
     expected_lsn=$switch_lsn
 else
     expected_lsn=$(psql_value 'SELECT pg_current_wal_lsn()')
 fi
 expected_marker=$(psql_value 'SELECT max(id) FROM restore_drill_marker')
-last_archived_wal=$(psql_value 'SELECT last_archived_wal FROM pg_stat_archiver')
-test -n "$last_archived_wal"
-test_restore_failures_are_fatal "$last_archived_wal"
-
-storage_probe_writes
-
 if [ "$mode" = controlled ]; then
+    # Freeze archival progress at the forced switch, so every subsequent business change is
+    # genuinely lost regardless of delivery latency or the 30-second automatic switch. This
+    # is fault injection on the disposable source only; crash mode leaves the archiver running.
+    dc exec -T postgres sh -eu -c '
+        pid=$(pgrep -f "^postgres: archiver")
+        kill -STOP "$pid"
+        test "$(ps -o stat= -p "$pid" | cut -c 1)" = T
+    '
     lose_consistency_changes
 fi
-rto_started=$(date +%s)
 dc stop backup >/dev/null
+failure_at=$(date +%s.%N)
 # The controlled source is killed too, once its consistency writes are made: a clean shutdown
 # switches and archives the last segment (PostgreSQL's ShutdownXLOG with archiving on), which would
 # keep them.
@@ -1311,11 +1483,10 @@ test "$(app_login_works)" = topup_service
 
 # The boot-time report is unanchored; compare it with the source point recorded above, as the
 # operator compares it with theirs.
-restored_heartbeat_at=$(printf '%s\n' "$restore_report" | jq -er '.restored_heartbeat_at')
-measured_rpo=$(( $(date -u -d "$expected_heartbeat_at" +%s) - $(date -u -d "$restored_heartbeat_at" +%s) ))
-if [ "$measured_rpo" -lt 0 ]; then
-    measured_rpo=0
-fi
+# The marker is a committed transaction recovered from WAL. Heartbeat sampling does not
+# grant an extra minute; the failure instant includes segment close and upload latency.
+last_replayed_commit_at=$(psql_value 'SELECT extract(epoch FROM max(recorded_at)) FROM restore_drill_marker')
+measured_rpo=$(seconds_between "$last_replayed_commit_at" "$failure_at")
 allowed_rpo=$(printf '%s\n' "$restore_report" | jq -er '.allowed_rpo_seconds')
 latest_applied_lsn=$(printf '%s\n' "$restore_report" | jq -er '.latest_applied_lsn')
 wal_bytes_behind=$(psql_value \
@@ -1325,13 +1496,12 @@ reconciliation=$(printf '%s\n' "$restore_report" | jq -er '.post_restore_reconci
 restored_marker=$(psql_value 'SELECT max(id) FROM restore_drill_marker')
 restored_pricing=$(psql_value \
     "SELECT state || '|' || credit_minor::text || '|' || price_scaled::text FROM deposits WHERE id = '44444444-4444-4444-4444-444444444444'")
-rto_elapsed=$(( $(date +%s) - rto_started ))
 
 test "$reconciliation" = complete
 # The service's own record is authoritative: the restore asks the product nothing and keeps it.
 test "$restored_pricing" = 'credited|250|25000000'
-test "$measured_rpo" -le "$allowed_rpo"
-test "$rto_elapsed" -le 3600
+test "$allowed_rpo" -eq 60
+awk -v measured="$measured_rpo" 'BEGIN { exit !(measured >= 0 && measured <= 60) }'
 if [ "$mode" = controlled ]; then
     test "$restored_marker" -eq "$expected_marker"
     test "$wal_bytes_behind" -eq 0
@@ -1348,15 +1518,45 @@ test "$(storage_listing)" = "$storage_before" || {
     exit 1
 }
 
+# RTO ends only when the service variant has rescanned, an administrator lifts the freeze,
+# and a real merchant credential successfully reads the API. No synthetic cursor updates.
+variant=()
+export TOPUP_DRILL_S3_ACCESS_KEY_ID=topup-s3
+export TOPUP_DRILL_S3_SECRET_ACCESS_KEY=topup-s3-secret-key
+# Admin signatures bind to the serving variant's origin, which differs from read-only boot.
+# Initialize it here in both modes; crash has no preceding merchant reconciliation phase.
+public_origin=$(dc config --format json |
+    jq -er '.services.topup.command as $c | $c[($c | index("--public-origin")) + 1]')
+dc up --remove-orphans -d
+service_admin_ready() {
+    answer=$(admin_call GET /v1/admin/restore)
+    [ "$(call_status "$answer")" = 200 ]
+}
+wait_for "service admin API" service_admin_ready
+service_rescanned() {
+    answer=$(admin_call GET /v1/admin/restore)
+    [ "$(call_status "$answer")" = 200 ] &&
+        call_body "$answer" | jq -e '.rescan | all(.complete and (.blocked | not))' >/dev/null
+}
+wait_for "service rescan" service_rescanned
+answer=$(admin_call POST /v1/admin/restore/unfreeze '{"reason":"restore drill: checks and merchant reconciliation complete",
+    "security_changes_reapplied":true,"deposit_addresses_reissued":true,"quotes_reissued":true,
+    "delivered_events_imported":true}')
+expect_call 200 "$answer"
+answer=$(merchant_call GET /v1/account "$resume_merchant_key" </dev/null)
+expect_call 200 "$answer"
+rto_elapsed=$(seconds_between "$failure_at" "$(date +%s.%N)")
+awk -v elapsed="$rto_elapsed" 'BEGIN { exit !(elapsed >= 0 && elapsed <= 3600) }'
+
 printf 'mode=%s\n' "$mode"
 printf 'restore-check: %s\n' "$restore_report"
 printf 'base_backup=%s\n' "$backup_name"
 printf 'source_marker_range=%s..%s expected_last=%s restored_last=%s\n' \
     "$first_marker" "$last_marker" "$expected_marker" "$restored_marker"
 printf 'measured_rpo_seconds=%s\n' "$measured_rpo"
-printf 'allowed_rpo_with_sampling_seconds=%s\n' "$allowed_rpo"
+printf 'allowed_rpo_seconds=%s\n' "$allowed_rpo"
 printf 'wal_bytes_behind=%s\n' "$wal_bytes_behind"
-printf 'archive_window_seconds=60\n'
+printf 'archive_window_seconds=30\n'
 printf 'archive_wait_seconds=%s\n' "$archive_wait_seconds"
 printf 'upload_latency_seconds=%s\n' "$upload_latency_seconds"
 printf 'restored_timeline=%s storage_unchanged_by_restore_check=true\n' "$restored_timeline"

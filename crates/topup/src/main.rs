@@ -275,7 +275,7 @@ struct KeysArgs {
 
 #[derive(Args)]
 struct RestoreCheckArgs {
-    /// Last source heartbeat committed before the recorded failure point. Omitted at boot after a
+    /// Externally recorded failure instant used to measure RPO. Omitted at boot after a
     /// restore from backup: the report is then `unanchored` and the operator compares its
     /// `restored_heartbeat_at` with their own external anchor.
     #[arg(long, value_name = "RFC3339")]
