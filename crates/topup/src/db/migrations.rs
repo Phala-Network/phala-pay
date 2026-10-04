@@ -11,7 +11,7 @@ struct QueueIndex {
     drop_sql: &'static str,
 }
 
-const QUEUE_INDEXES: [QueueIndex; 2] = [
+const QUEUE_INDEXES: [QueueIndex; 7] = [
     QueueIndex {
         version: 20261028000000,
         name: "rpc_window_reviews_due_idx",
@@ -23,6 +23,36 @@ const QUEUE_INDEXES: [QueueIndex; 2] = [
         name: "rpc_reorg_ranges_pending_idx",
         definition: "CREATE INDEX rpc_reorg_ranges_pending_idx ON public.rpc_reorg_ranges USING btree (chain_id, epoch, COALESCE((replayed_through + 1), from_block)) WHERE (COALESCE(replayed_through, (from_block - 1)) < to_block)",
         drop_sql: "DROP INDEX CONCURRENTLY public.rpc_reorg_ranges_pending_idx",
+    },
+    QueueIndex {
+        version: 20261029030001,
+        name: "addresses_chain_page_idx",
+        definition: "CREATE INDEX addresses_chain_page_idx ON public.addresses USING btree (chain_id, id)",
+        drop_sql: "DROP INDEX CONCURRENTLY public.addresses_chain_page_idx",
+    },
+    QueueIndex {
+        version: 20261029030002,
+        name: "deposits_credit_page_idx",
+        definition: "CREATE INDEX deposits_credit_page_idx ON public.deposits USING btree (id) WHERE ((credit_minor IS NOT NULL) AND (price_scaled IS NOT NULL) AND (route IS NOT NULL) AND (route_version IS NOT NULL))",
+        drop_sql: "DROP INDEX CONCURRENTLY public.deposits_credit_page_idx",
+    },
+    QueueIndex {
+        version: 20261029030003,
+        name: "addresses_chain_created_idx",
+        definition: "CREATE INDEX addresses_chain_created_idx ON public.addresses USING btree (chain_id, created_block)",
+        drop_sql: "DROP INDEX CONCURRENTLY public.addresses_chain_created_idx",
+    },
+    QueueIndex {
+        version: 20261029030004,
+        name: "deposits_custody_page_idx",
+        definition: "CREATE INDEX deposits_custody_page_idx ON public.deposits USING btree (address_id, asset_contract, block_number)",
+        drop_sql: "DROP INDEX CONCURRENTLY public.deposits_custody_page_idx",
+    },
+    QueueIndex {
+        version: 20261029030005,
+        name: "deposits_flush_page_idx",
+        definition: "CREATE INDEX deposits_flush_page_idx ON public.deposits USING btree (id) WHERE ((state = 'credited'::text) AND (final_at IS NOT NULL))",
+        drop_sql: "DROP INDEX CONCURRENTLY public.deposits_flush_page_idx",
     },
 ];
 

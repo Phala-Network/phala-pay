@@ -123,6 +123,25 @@ pub(crate) async fn commit_head_scan_in(
     head_block: u64,
     transfers: &[NewPendingTransfer],
 ) -> Result<HeadCommit, sqlx::Error> {
+    commit_head_page_in(
+        transaction,
+        chain_id,
+        from_block,
+        head_block,
+        transfers,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn commit_head_page_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    chain_id: u64,
+    from_block: u64,
+    head_block: u64,
+    transfers: &[NewPendingTransfer],
+    addresses: Option<&[Uuid]>,
+) -> Result<HeadCommit, sqlx::Error> {
     let chain = to_i64(chain_id, "pending_transfers.chain_id")?;
     let from_block = to_i64(from_block, "pending_transfers.block_number")?;
     let head = to_i64(head_block, "pending_transfers.head_block")?;
@@ -149,6 +168,7 @@ pub(crate) async fn commit_head_scan_in(
         r#"
         DELETE FROM pending_transfers
         WHERE chain_id = $1
+          AND ($7::uuid[] IS NULL OR address_id = ANY($7))
           AND (
               block_number <= $2
               OR (
@@ -167,6 +187,7 @@ pub(crate) async fn commit_head_scan_in(
     .bind(&tx_hashes)
     .bind(&log_indexes)
     .bind(head)
+    .bind(addresses)
     .execute(&mut **transaction)
     .await?
     .rows_affected();

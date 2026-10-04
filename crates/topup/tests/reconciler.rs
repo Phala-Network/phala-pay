@@ -1612,3 +1612,203 @@ fn route_set(route: RouteFile) -> Result<Arc<topup::routes::RouteSet>> {
         .map(Arc::new)
         .map_err(anyhow::Error::msg)
 }
+
+/// Production queries and entry points on 200k addresses and 200k valued deposits. Only a
+/// bounded page is resident per round, progress survives new Reconciler instances, and a
+/// payment to the old cancelled quote on the final page is still recorded.
+#[tokio::test]
+async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposits() -> Result<()> {
+    with_database(|pool| async move {
+        let route=route()?;
+        let seed=seed_identity(&pool,&route,1).await?;
+        let original=seed_deposit(&pool,&route,&seed,DepositSeed::new(2,DepositState::Credited).block(3).credit(101)).await?;
+        // Clone valid fixture rows in 10k-row transactions, preserving all current constraints.
+        // Deterministic IDs put the old fixture last, so coverage requires every keyset page.
+        for start in (1..200_000_i64).step_by(10_000) {
+            let end=(start+9_999).min(199_999);
+            sqlx::query("INSERT INTO quotes SELECT copy.* FROM quotes q CROSS JOIN generate_series($1::bigint,$2::bigint) g CROSS JOIN LATERAL jsonb_populate_record(NULL::quotes,to_jsonb(q)||jsonb_build_object('id',lpad(to_hex(g),32,'0')::uuid,'idempotency_key',NULL,'client_secret_hash',NULL)) copy WHERE q.id=(SELECT quote_id FROM addresses WHERE id=$3)")
+                .bind(start).bind(end).bind(seed.address_id).execute(&pool).await?;
+            sqlx::query("INSERT INTO addresses SELECT copy.* FROM addresses a CROSS JOIN generate_series($1::bigint,$2::bigint) g CROSS JOIN LATERAL jsonb_populate_record(NULL::addresses,to_jsonb(a)||jsonb_build_object('id',lpad(to_hex(g),32,'0')::uuid,'quote_id',lpad(to_hex(g),32,'0')::uuid,'address','0x'||lpad(to_hex(g),40,'0'),'salt','0x'||lpad(to_hex(g),64,'0'),'backfilled',true)) copy WHERE a.id=$3")
+                .bind(start).bind(end).bind(seed.address_id).execute(&pool).await?;
+            sqlx::query("INSERT INTO deposits SELECT copy.* FROM deposits d CROSS JOIN generate_series($1::bigint,$2::bigint) g CROSS JOIN LATERAL jsonb_populate_record(NULL::deposits,to_jsonb(d)||jsonb_build_object('id',lpad(to_hex(g),32,'0')::uuid,'address_id',lpad(to_hex(g),32,'0')::uuid,'tx_hash','0x'||lpad(to_hex(g),64,'0'),'credit_minor',100)) copy WHERE d.id=$3")
+                .bind(start).bind(end).bind(original).execute(&pool).await?;
+        }
+        sqlx::query("UPDATE addresses SET backfilled=true WHERE id=$1").bind(seed.address_id).execute(&pool).await?;
+        sqlx::query("ANALYZE addresses").execute(&pool).await?;
+        sqlx::query("ANALYZE deposits").execute(&pool).await?;
+        let before=std::time::Instant::now();
+        let all=db::list_scan_addresses(&pool,CHAIN_ID).await?;
+        let old_time=before.elapsed();
+        let old_bytes=all.len()*std::mem::size_of::<db::ScanAddress>();
+        ensure!(all.len()==200_000);
+        drop(all);
+        let after=std::time::Instant::now();
+        let (page,more)=db::scan_address_page(&pool,CHAIN_ID,None).await?;
+        let page_time=after.elapsed();
+        let page_bytes=page.len()*std::mem::size_of::<db::ScanAddress>();
+        ensure!(page.len()==1_000 && more);
+        ensure!(page_bytes*200==old_bytes);
+        let address_plan=sqlx::query_scalar::<_,String>("EXPLAIN (ANALYZE,BUFFERS) SELECT id,address,created_block,backfilled,backfilled_through FROM addresses WHERE chain_id=$1 AND id >= $2 ORDER BY id LIMIT 1001")
+            .bind(i64::try_from(CHAIN_ID)?).bind(Uuid::from_u128(100_000)).fetch_all(&pool).await?.join("\n");
+        let credit_plan=sqlx::query_scalar::<_,String>("EXPLAIN (ANALYZE,BUFFERS) SELECT id FROM deposits WHERE credit_minor IS NOT NULL AND price_scaled IS NOT NULL AND route IS NOT NULL AND route_version IS NOT NULL AND id > $1 ORDER BY id LIMIT 1001")
+            .bind(Uuid::from_u128(100_000)).fetch_all(&pool).await?.join("\n");
+        ensure!((address_plan.contains("addresses_chain_page_idx") || address_plan.contains("addresses_pkey")) && !address_plan.contains("Sort"),"{address_plan}");
+        ensure!((credit_plan.contains("deposits_credit_page_idx") || credit_plan.contains("deposits_pkey")) && !credit_plan.contains("Sort"),"{credit_plan}");
+        println!("SCALE addresses=200000 deposits=200000 old_address_load={old_time:?} page_load={page_time:?} old_address_bytes={old_bytes} page_bytes={page_bytes}\nADDRESS PLAN\n{address_plan}\nCREDIT PLAN\n{credit_plan}");
+
+        let chain=Arc::new(MockChain::at(5));
+        let mut max_credit_round=StdDuration::ZERO;
+        let mut findings=Vec::new();
+        for round in 0..200 {
+            // New instances exercise durable progress rather than in-process indices.
+            let reconciler=reconciler(&pool,route.clone(),chain.clone())?;
+            let started=std::time::Instant::now();
+            findings.extend(reconciler.check(CheckName::CreditRecomputation).await?);
+            max_credit_round=max_credit_round.max(started.elapsed());
+            ensure!(started.elapsed()<StdDuration::from_secs(10),"unbounded credit round {round}");
+            let position:Option<Uuid>=sqlx::query_scalar("SELECT last_id FROM reconciliation_work_cursors WHERE check_name='credit' AND chain_id=0").fetch_one(&pool).await?;
+            ensure!(position.is_some()==(round<199),"credit cursor failed to wrap on round {round}");
+        }
+        ensure!(findings.len()==1 && findings[0].subjects["deposit_id"]==original.to_string(),"old credit was skipped: {findings:?}");
+        println!("SCALE credit_round_max={max_credit_round:?} old_work_per_round=200000 new_work_per_round=1000");
+
+        let old_payment=transfer(222,0,3,route.asset.contract,Address::from([13;20]),seed.address,500);
+        let (first_page,_)=db::scan_address_page(&pool,CHAIN_ID,None).await?;
+        let early=transfer(224,0,5,route.asset.contract,Address::from([13;20]),first_page[0].address,500);
+        let reader=ScaleReader {payments:vec![old_payment,early],requests:AtomicUsize::new(0),max_addresses:AtomicUsize::new(0)};
+        let configured_routes=route_set(route.clone())?;
+        let routes=topup::scanner::chain_routes(&configured_routes).remove(0);
+        db::initialize_cursor(&pool,CHAIN_ID,0,Utc::now()).await?;
+        let mut head_routes=routes.clone();
+        head_routes.chain.confirmations=topup_core::route::Confirmations::Depth(1);
+        for round in 0..200 {
+            let heads=topup_core::route::ChainHeads {latest:Some(5),safe:Some(5),finalized:5};
+            topup::scanner::scan_new_blocks(&pool,&reader,&head_routes,heads).await?.context("head page should run")?;
+            ensure!(db::get_confirmed_cursor(&pool,CHAIN_ID).await?==Some(if round<199 {0}else{5}),"confirmation cursor advanced before every page committed");
+            let pending:i64=sqlx::query_scalar("SELECT count(*) FROM pending_transfers WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
+            ensure!(pending==if round<199 {1}else{2},"head page deleted another page's pending transfer");
+        }
+        for round in 0..200 {
+            let started=std::time::Instant::now();
+            let stats=topup::scanner::scan_once(&pool,&reader,&routes).await?;
+            ensure!(stats.cursor==if round<199 {0}else{5},"scanner skipped an address page");
+            ensure!(started.elapsed()<StdDuration::from_secs(5),"unbounded scan round {round}");
+        }
+        ensure!(reader.max_addresses.load(Ordering::Relaxed)<=1_000);
+        ensure!(deposit(&pool,deposit_id(CHAIN_ID,B256::from([222;32]),0)).await?.address_id==seed.address_id);
+        println!("SCALE scanner_rounds=200 max_addresses={} rpc_requests={}",reader.max_addresses.load(Ordering::Relaxed),reader.requests.load(Ordering::Relaxed));
+        let (first_page,_)=db::scan_address_page(&pool,CHAIN_ID,None).await?;
+        for address in first_page {chain.balances.lock().unwrap().insert(address.address,U256::from(10_u64).pow(U256::from(18_u8)));}
+        let custody_started=std::time::Instant::now();
+        ensure!(reconciler(&pool,route.clone(),chain.clone())?.check(CheckName::CustodyBalance).await?.is_empty());
+        ensure!(chain.balance_reads.lock().unwrap().iter().all(|(_,a)|a.len()<=1_000));
+        ensure!(custody_started.elapsed()<StdDuration::from_secs(5));
+        println!("SCALE custody_round={:?}",custody_started.elapsed());
+        chain.logs.lock().unwrap().push(transfer(223,0,4,route.asset.contract,Address::from([13;20]),seed.address,500));
+        for round in 0..200 {
+            let reconciler=reconciler(&pool,route.clone(),chain.clone())?;
+            if round==100 {
+                *chain.fail_logs_from.lock().unwrap()=Some(0);
+                ensure!(reconciler.check(CheckName::MissingDeposit).await.is_err());
+                *chain.fail_logs_from.lock().unwrap()=None;
+            }
+            reconciler.check(CheckName::MissingDeposit).await?;
+        }
+        ensure!(deposit(&pool,deposit_id(CHAIN_ID,B256::from([223;32]),0)).await?.address_id==seed.address_id,"old address omitted by paged reconciliation");
+        let next:i64=sqlx::query_scalar("SELECT next_block FROM reconciliation_deposit_cursors WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
+        ensure!(next==6);
+        Ok(())
+    }).await
+}
+
+struct ScaleReader {
+    payments: Vec<TransferLog>,
+    requests: AtomicUsize,
+    max_addresses: AtomicUsize,
+}
+impl ScaleReader {
+    fn logs(&self, addresses: &[Address], from: u64, to: u64) -> Vec<TransferLog> {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.max_addresses
+            .fetch_max(addresses.len(), Ordering::Relaxed);
+        self.payments
+            .iter()
+            .filter(|payment| {
+                addresses.contains(&payment.to) && (from..=to).contains(&payment.block_number)
+            })
+            .cloned()
+            .collect()
+    }
+}
+impl ChainReader for ScaleReader {
+    async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
+        Ok(FinalizedHead {
+            number: 5,
+            time: Utc::now(),
+        })
+    }
+    async fn factory_logs(
+        &self,
+        _factory: Address,
+        _addresses: &[Address],
+        _from: u64,
+        _to: u64,
+    ) -> Result<Vec<topup_adapters::chain::evm::FactoryLog>, ChainError> {
+        Ok(Vec::new())
+    }
+    async fn transfer_logs_to(
+        &self,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+    ) -> Result<Vec<TransferLog>, ChainError> {
+        Ok(self.logs(addresses, from, to))
+    }
+    async fn token_transfers(
+        &self,
+        _tokens: &[Address],
+        addresses: &std::collections::BTreeSet<Address>,
+        from: u64,
+        to: u64,
+    ) -> Result<Vec<TransferLog>, ChainError> {
+        Ok(self.logs(&addresses.iter().copied().collect::<Vec<_>>(), from, to))
+    }
+    async fn confirmation_heads(
+        &self,
+        _confirmations: topup_core::route::Confirmations,
+    ) -> Result<topup_core::route::ChainHeads, ChainError> {
+        Ok(topup_core::route::ChainHeads {
+            latest: Some(5),
+            safe: Some(5),
+            finalized: 5,
+        })
+    }
+    async fn receipt_transfer(
+        &self,
+        _tx: B256,
+        _index: u64,
+    ) -> Result<topup_adapters::chain::evm::ReceiptLookup, ChainError> {
+        Ok(topup_adapters::chain::evm::ReceiptLookup::Missing)
+    }
+    async fn nonce_at(&self, _address: Address, _block: u64) -> Result<u64, ChainError> {
+        Ok(0)
+    }
+}
+
+#[tokio::test]
+async fn post_restore_ignores_a_completed_sweeps_stale_page_cursor() -> Result<()> {
+    with_database(|pool| async move {
+        let route=route()?;
+        let seed=seed_identity(&pool,&route,1).await?;
+        scanned_through(&pool,5).await?;
+        let chain=Arc::new(MockChain::at(5));
+        chain.derive(&[&seed]);
+        sqlx::query("INSERT INTO reconciliation_deposit_cursors(chain_id,next_block) VALUES($1,6)").bind(i64::try_from(CHAIN_ID)?).execute(&pool).await?;
+        // Crash after advancing the block cursor but before clearing the previous sweep.
+        sqlx::query("INSERT INTO scan_address_sweeps(chain_id,lane,epoch,anchor,from_block,through_block,last_id) VALUES($1,'missing',0,0,0,5,$2)").bind(i64::try_from(CHAIN_ID)?).bind(seed.address_id).execute(&pool).await?;
+        let reconciler=reconciler(&pool,route,chain)?;
+        let report=tokio::time::timeout(StdDuration::from_secs(5),reconciler.post_restore_once()).await??;
+        ensure!(report.succeeded() && !report.incomplete,"{report:?}");
+        Ok(())
+    }).await
+}

@@ -304,7 +304,7 @@ pub enum ApplyTransitionError {
     Database(#[from] sqlx::Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 struct DepositRecord {
     id: Uuid,
     chain_id: i64,
@@ -551,6 +551,29 @@ pub async fn get_deposit(pool: &PgPool, id: Uuid) -> Result<Option<Deposit>, sql
     .fetch_optional(pool)
     .await?;
     record.map(TryInto::try_into).transpose()
+}
+
+/// Reads a bounded ID batch using the existing deposit decoder. Row decoding failures remain
+/// associated with their IDs so reconciliation can report one corrupt row and keep progressing.
+pub(crate) async fn deposits_by_ids(
+    pool: &PgPool,
+    ids: &[Uuid],
+) -> Result<Vec<(Uuid, Result<Deposit, sqlx::Error>)>, sqlx::Error> {
+    let records = sqlx::query_as::<_, DepositRecord>(
+        "SELECT id,chain_id,tx_hash,receipt_log_index,log_index,block_number,block_hash,block_time,
+         address_id,account_id,livemode,customer_id,route,route_version,asset_contract,
+         from_address,amount_atomic::text AS amount_atomic,tx_from,tx_nonce::text AS tx_nonce,
+         final_at,state,reason,attempt,next_attempt_at,lease_token,lease_until,valuation_at,
+         price_scaled::text AS price_scaled,price_source,credit_minor::text AS credit_minor,
+         quote,created_at,updated_at FROM deposits WHERE id=ANY($1)",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(records
+        .into_iter()
+        .map(|record| (record.id, record.try_into()))
+        .collect())
 }
 
 /// Claims one due `detected` or `confirmed` deposit with a five-minute lease. A credited deposit

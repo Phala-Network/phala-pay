@@ -263,9 +263,13 @@ async fn verify_request(
     key: &VerificationKey,
 ) -> Result<VerifiedSignature, ()> {
     let body = std::mem::replace(request.body_mut(), Body::empty());
-    let bytes = to_bytes(body, MAX_SIGNED_BODY_BYTES)
-        .await
-        .map_err(|_| ())?;
+    let bytes = tokio::time::timeout(
+        super::deadlines::BODY_READ_TIMEOUT,
+        to_bytes(body, MAX_SIGNED_BODY_BYTES),
+    )
+    .await
+    .map_err(|_| ())?
+    .map_err(|_| ())?;
     *request.body_mut() = Body::from(bytes.clone());
 
     // `Host` and `X-Forwarded-*` describe the gateway hop, so the configured origin is used.

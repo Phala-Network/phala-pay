@@ -16,6 +16,21 @@ advisory lock. Matching valid builds retain their OID; unrelated definitions fai
 outer transaction commits before these concurrent operations. See the
 [plan evidence and CLI recovery tests](../../../docs/design/db-api-query-plans.md).
 
+## Scale cursors and indexes
+
+The `20261029030000` migration adds scanner sweep and reconciliation work cursors without
+changing existing rows or constraints. Scanner sweeps pin a block range, keyset position, and
+RPC epoch; chain recovery invalidates a sweep by changing that epoch. A crash between a page's
+ledger commit and its cursor save replays the page through the existing deposit identities.
+Historical credit, address derivation, custody, and flush checks wrap their cursors after each
+complete pass, so old rows remain eligible for verification. Post-restore row checks drain each
+check's pages before reporting completion.
+
+The `20261029030001`–`20261029030005` indexes build concurrently, one statement per migration.
+Normal migration retries validate their definitions and recover interrupted builds using the
+same mechanism as the RPC queue indexes. Previous service binaries can keep reading and writing
+the existing schema while these additive migrations run.
+
 ## Roles and privileges
 
 The service runs through the login role configured by `DATABASE_URL`. That login role must be a
@@ -48,6 +63,7 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 | `rpc_reorg_ranges` | `SELECT`, `INSERT`; `UPDATE` of `replayed_through` only |
 | `rpc_recoveries` | `SELECT`; recovery audit writes require the owner |
 | `_sqlx_migrations` | `SELECT` |
+| `scan_address_sweeps`, `reconciliation_work_cursors` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
 | every other table | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
 
 A migration adding a table that should not get the full operational grant must narrow it in the

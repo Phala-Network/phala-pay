@@ -191,7 +191,12 @@ pub(crate) async fn idempotent_post(
         return ApiError::internal().into_response();
     };
     let (mut parts, body) = request.into_parts();
-    let Ok(body) = to_bytes(body, MAX_BODY_BYTES).await else {
+    let Ok(Ok(body)) = tokio::time::timeout(
+        super::deadlines::BODY_READ_TIMEOUT,
+        to_bytes(body, MAX_BODY_BYTES),
+    )
+    .await
+    else {
         return ApiError::bad_request("the request body is too large").into_response();
     };
     let fingerprint = fingerprint(

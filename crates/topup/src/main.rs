@@ -883,7 +883,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let (application, _) = topup::api::router(state);
     tasks.spawn("API server", |cancellation| {
         axum::serve(
-            listener,
+            topup::api::DeadlineListener::new(listener).with_connect_info(),
             application.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(cancellation.cancelled_owned())
@@ -1247,7 +1247,7 @@ async fn serve_read_only_until(
 ) -> anyhow::Result<ExitCode> {
     let cancellation = CancellationToken::new();
     let served = axum::serve(
-        listener,
+        topup::api::DeadlineListener::new(listener).with_connect_info(),
         application.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(cancellation.clone().cancelled_owned())

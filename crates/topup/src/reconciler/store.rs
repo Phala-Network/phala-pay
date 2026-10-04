@@ -144,6 +144,7 @@ pub(crate) async fn forwarder_ledgers(
     chain_id: u64,
     token: Address,
     block: u64,
+    addresses: &[Uuid],
 ) -> Result<Vec<ForwarderLedger>, ReconciliationError> {
     let rows = sqlx::query(
         r#"
@@ -152,12 +153,12 @@ pub(crate) async fn forwarder_ledgers(
                    SUM(d.amount_atomic) FILTER (WHERE d.state <> 'reversed') AS total,
                    bool_or(d.final_at IS NULL AND d.state <> 'reversed') AS unsettled
             FROM deposits d
-            WHERE d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3
+            WHERE d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3 AND d.address_id = ANY($4)
             GROUP BY d.address_id
         ), flushed_totals AS (
             SELECT f.address_id, SUM(f.amount_atomic) AS total
             FROM flushed f
-            WHERE f.chain_id = $1 AND f.token = $2 AND f.block_number <= $3
+            WHERE f.chain_id = $1 AND f.token = $2 AND f.block_number <= $3 AND f.address_id = ANY($4)
             GROUP BY f.address_id
         )
         SELECT a.id, a.address,
@@ -166,7 +167,7 @@ pub(crate) async fn forwarder_ledgers(
         FROM addresses a
         LEFT JOIN deposit_totals d ON d.address_id = a.id
         LEFT JOIN flushed_totals f ON f.address_id = a.id
-        WHERE a.chain_id = $1 AND a.backfilled
+        WHERE a.chain_id = $1 AND a.backfilled AND a.id = ANY($4)
           AND COALESCE(d.total, 0) <> COALESCE(f.total, 0)
           AND NOT COALESCE(d.unsettled, false)
         ORDER BY a.id
@@ -175,6 +176,7 @@ pub(crate) async fn forwarder_ledgers(
     .bind(db_i64(chain_id)?)
     .bind(format!("{token:#x}"))
     .bind(db_i64(block)?)
+    .bind(addresses)
     .fetch_all(pool)
     .await?;
     rows.into_iter()
@@ -331,4 +333,29 @@ fn db_i64(value: u64) -> Result<i64, ReconciliationError> {
 
 fn db_u64(value: i64) -> Result<u64, ReconciliationError> {
     u64::try_from(value).map_err(|_| ReconciliationError::Invariant("stored block is negative"))
+}
+
+/// Round-robin keyset position. NULL restarts a completed pass, so old rows are rechecked.
+pub(crate) async fn work_cursor(
+    pool: &PgPool,
+    check: &str,
+    chain: i64,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT last_id FROM reconciliation_work_cursors WHERE check_name=$1 AND chain_id=$2",
+    )
+    .bind(check)
+    .bind(chain)
+    .fetch_optional(pool)
+    .await?
+    .flatten())
+}
+pub(crate) async fn save_work_cursor(
+    pool: &PgPool,
+    check: &str,
+    chain: i64,
+    last: Option<Uuid>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO reconciliation_work_cursors(check_name,chain_id,last_id) VALUES($1,$2,$3) ON CONFLICT(check_name,chain_id) DO UPDATE SET last_id=EXCLUDED.last_id").bind(check).bind(chain).bind(last).execute(pool).await?;
+    Ok(())
 }
