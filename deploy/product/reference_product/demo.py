@@ -735,18 +735,41 @@ class DemoConsole:
     def _sweep_of(self, deposit: dict[str, Any]) -> dict[str, Any] | None:
         """The finalized sweep (`GET /v1/sweeps`) that moved the deposit: the first of its
         forwarder after its block."""
-        sweeps = self._service().list_sweeps(
+        service = self._service()
+        deposit_address = deposit.get("deposit_address")
+        quote = deposit.get("quote")
+        if isinstance(quote, dict):
+            quote = quote.get("id")
+        forwarder = None
+        if isinstance(deposit_address, str) or isinstance(quote, str):
+            forwarders = service.list_forwarders(
+                chain_id=deposit["chain_id"],
+                deposit_address=deposit_address if isinstance(deposit_address, str) else None,
+                quote=quote
+                if not isinstance(deposit_address, str) and isinstance(quote, str)
+                else None,
+                page_size=100,
+            )
+            matches = [
+                item.id
+                for item in _take(forwarders, 100)
+                if same_address(item.address, deposit["address"])
+            ]
+            if len(matches) == 1:
+                forwarder = matches[0]
+        sweeps = service.list_sweeps(
             chain_id=deposit["chain_id"],
-            forwarder=deposit["address"],
+            forwarder=forwarder,
             token=deposit["asset_contract"],
-            page_size=1,
+            page_size=100,
         )
-        for sweep in sweeps:
-            if same_address(sweep.address, deposit["address"]) and (
-                sweep.block_number >= deposit["block_number"]
-            ):
-                return sweep.to_dict()
-        return None
+        candidate = None
+        for sweep in _take(sweeps, 100):
+            if sweep.block_number < deposit["block_number"]:
+                break
+            if same_address(sweep.address, deposit["address"]):
+                candidate = sweep.to_dict()
+        return candidate
 
     # Refunds ------------------------------------------------------------------------------------
 

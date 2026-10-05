@@ -28,6 +28,7 @@ from reference_product.fulfillment import Fulfillment, PinnedKeys
 from reference_product.ledger import ProductLedger
 from reference_product.transport import operation_deadline
 from topup_sdk import (
+    ApiError,
     credited_event_id,
     deposit_address_salt,
     forwarder_address,
@@ -234,6 +235,7 @@ class Service:
         self.deposits: list[dict[str, Any]] = []
         self.refunds: list[dict[str, Any]] = []
         self.forwarders: list[dict[str, Any]] = []
+        self.sweeps: list[dict[str, Any]] = []
         self.wrong_address: str | None = None
         self.customer = "acct"
         self.requests: list[httpx.Request] = []
@@ -330,11 +332,21 @@ class Service:
                 200, json={"object": "balance", "livemode": False, "unswept": [amount]}
             )
         if path == "/v1/forwarders":
-            return httpx.Response(200, json=_list(path, self.forwarders))
+            forwarders = self.forwarders
+            for name in ("quote", "deposit_address"):
+                if value := request.url.params.get(name):
+                    forwarders = [item for item in forwarders if item.get(name) == value]
+            return httpx.Response(200, json=_list(path, forwarders))
         if path == "/v1/sweeps":
+            forwarder = request.url.params.get("forwarder")
+            if forwarder is not None and not re.fullmatch(r"fwd_[0-9a-f]{32}", forwarder):
+                return _error(400, "invalid_forwarder")
             if request.url.params.get("token", "").lower() in self.fail_sweeps:
                 return _error(503, "screening_unavailable")
-            return httpx.Response(200, json=_list(path, []))
+            sweeps = self.sweeps
+            if forwarder is not None:
+                sweeps = [item for item in sweeps if item["forwarder"] == forwarder]
+            return httpx.Response(200, json=_list(path, sweeps))
         return _error(404, "not_here")
 
 
@@ -994,39 +1006,113 @@ def test_account_stops_at_one_full_page(demo: tuple[DemoConsole, Service]) -> No
     assert len(requests) == 1
 
 
-def test_sweep_lookup_filters_forwarder_and_stops_at_first_match(
-    demo: tuple[DemoConsole, Service],
+def _forwarder_for(deposit: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": "fwd_" + "33" * 16,
+        "object": "forwarder",
+        "livemode": False,
+        "chain_id": deposit["chain_id"],
+        "address": deposit["address"],
+        "factory": CONFIG.factory,
+        "salt": "0x" + "44" * 32,
+        "treasury": TREASURY,
+        "quote": deposit.get("quote"),
+        "deposit_address": deposit.get("deposit_address"),
+    }
+
+
+def _sweep(deposit: dict[str, Any], block_number: int) -> dict[str, Any]:
+    return {
+        "id": f"sw_{block_number:032x}",
+        "object": "sweep",
+        "livemode": False,
+        "chain_id": deposit["chain_id"],
+        "address": deposit["address"],
+        "token": TOKEN,
+        "treasury": TREASURY,
+        "amount_atomic": "100",
+        "tx_hash": "0x" + "22" * 32,
+        "block_number": block_number,
+        "forwarder": "fwd_" + "33" * 16,
+        "log_index": 0,
+        "created": NOW,
+    }
+
+
+@pytest.mark.parametrize("origin", ["quote", "deposit_address"])
+def test_sweep_lookup_filters_by_resolved_forwarder_id(
+    demo: tuple[DemoConsole, Service], origin: str
 ) -> None:
-    console, _ = demo
+    console, service = demo
     deposit = _deposit()
-    calls: list[httpx.Request] = []
-
-    def sweep(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        assert request.url.params["forwarder"] == deposit["address"]
-        assert request.url.params["limit"] == "1"
-        result = {
-            "id": "sw_" + "11" * 16,
-            "object": "sweep",
-            "livemode": False,
-            "chain_id": deposit["chain_id"],
-            "address": deposit["address"],
-            "token": TOKEN,
-            "treasury": TREASURY,
-            "amount_atomic": "100",
-            "tx_hash": "0x" + "22" * 32,
-            "block_number": deposit["block_number"] + 1,
-            "forwarder": "fwd_" + "33" * 16,
-            "log_index": 0,
-            "created": NOW,
-        }
-        return httpx.Response(200, json={**_list("/v1/sweeps", [result]), "has_more": True})
-
-    console.recorder._inner = httpx.MockTransport(sweep)
+    if origin == "deposit_address":
+        deposit.update(quote=None, deposit_address=ADDRESS_ID)
+    service.forwarders = [_forwarder_for(deposit)]
+    service.sweeps = [_sweep(deposit, deposit["block_number"] + 1)]
     result = console._sweep_of(deposit)
     assert result is not None
     assert result["address"] == deposit["address"]
-    assert len(calls) == 1
+    [lookup, sweeps] = service.requests
+    assert lookup.url.params[origin] == deposit[origin]
+    assert lookup.url.params["chain_id"] == str(deposit["chain_id"])
+    assert sweeps.url.params["forwarder"] == service.forwarders[0]["id"]
+    assert sweeps.url.params["limit"] == "100"
+
+
+def test_sweep_lookup_returns_the_earliest_sweep_after_a_reused_address_deposit(
+    demo: tuple[DemoConsole, Service],
+) -> None:
+    console, service = demo
+    deposit = _deposit(quote=None, deposit_address=ADDRESS_ID, block_number=10)
+    service.forwarders = [_forwarder_for(deposit)]
+    service.sweeps = [_sweep(deposit, block) for block in (40, 30, 20, 5)]
+
+    def paginated(request: httpx.Request) -> httpx.Response:
+        assert "starting_after" not in request.url.params
+        response = service(request)
+        if request.url.path == "/v1/sweeps":
+            return httpx.Response(200, json={**response.json(), "has_more": True})
+        return response
+
+    console.recorder._inner = httpx.MockTransport(paginated)
+    result = console._sweep_of(deposit)
+    assert result is not None
+    assert result["block_number"] == 20
+
+
+def test_sweeps_service_rejects_address_filters(demo: tuple[DemoConsole, Service]) -> None:
+    console, _ = demo
+    with pytest.raises(ApiError, match="invalid_forwarder"):
+        next(console._service().list_sweeps(forwarder=_deposit()["address"]))
+
+
+@pytest.mark.parametrize("resolved", [True, False])
+def test_sweep_lookup_reads_at_most_one_full_page(
+    demo: tuple[DemoConsole, Service], resolved: bool
+) -> None:
+    console, service = demo
+    deposit = _deposit(block_number=1)
+    service.forwarders = [_forwarder_for(deposit)] if resolved else []
+    requests: list[httpx.Request] = []
+
+    def paginated(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/v1/sweeps":
+            return service(request)
+        requests.append(request)
+        assert "starting_after" not in request.url.params
+        assert request.url.params["limit"] == "100"
+        if resolved:
+            assert request.url.params["forwarder"].startswith("fwd_")
+        else:
+            assert "forwarder" not in request.url.params
+        sweeps = [_sweep(deposit, block) for block in range(200, 100, -1)]
+        return httpx.Response(200, json={**_list("/v1/sweeps", sweeps), "has_more": True})
+
+    console.recorder._inner = httpx.MockTransport(paginated)
+    result = console._sweep_of(deposit)
+    assert result is not None
+    assert result["block_number"] == 101
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize("kind", ["trust", "networks"])
