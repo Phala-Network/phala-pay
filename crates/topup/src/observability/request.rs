@@ -129,7 +129,10 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }
-        let text = super::super::metrics::render().unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let text = super::super::metrics::render(&pool).unwrap();
         assert!(text.contains("route=\"/metrics-test/{id}\",status_class=\"5xx\""));
         assert!(text.contains("route=\"/metrics-auth/{id}\",status_class=\"4xx\""));
         assert!(text.contains("route=\"unmatched\""));

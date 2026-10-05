@@ -1103,6 +1103,15 @@ async fn admin_metrics_serve_rpc_call_counters_to_the_admin_only() -> Result<()>
             text.contains("# TYPE topup_http_requests_total counter"),
             "{text}"
         );
+        for metric in [
+            "# TYPE topup_db_pool_connections gauge",
+            "topup_db_pool_connections{state=\"idle\"}",
+            "topup_db_pool_connections{state=\"in_use\"}",
+            "topup_db_pool_max_connections 8",
+            "# TYPE topup_db_pool_acquire_timeouts_total counter",
+        ] {
+            ensure!(text.contains(metric), "missing {metric}");
+        }
         Ok(())
     }
     .await;

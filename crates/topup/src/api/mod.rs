@@ -877,7 +877,7 @@ mod tests {
                 before + 1
             );
         }
-        let metrics = crate::observability::metrics::render().unwrap();
+        let metrics = crate::observability::metrics::render(&offline_state().pool).unwrap();
         assert!(metrics.contains("method=\"HEAD\",route=\"/v1/account\",status_class=\"4xx\""));
         assert!(metrics.contains("method=\"DELETE\",route=\"/v1/quotes\",status_class=\"5xx\""));
     }

@@ -516,14 +516,15 @@ pub(crate) async fn lift_reconciliation_block(
     security(("http_message_signature" = [])),
     tag = "admin"
 )]
-pub(crate) async fn metrics() -> Result<([(header::HeaderName, &'static str); 1], String), ApiError>
-{
+pub(crate) async fn metrics(
+    State(state): State<AppState>,
+) -> Result<([(header::HeaderName, &'static str); 1], String), ApiError> {
     Ok((
         [(
             header::CONTENT_TYPE,
             crate::observability::metrics::CONTENT_TYPE,
         )],
-        crate::observability::metrics::render().map_err(|error| {
+        crate::observability::metrics::render(&state.pool).map_err(|error| {
             tracing::error!(%error, "metrics encoding failed");
             ApiError::internal()
         })?,

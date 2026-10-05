@@ -845,6 +845,13 @@ impl ApiError {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", message)
     }
 
+    /// Returns a request that did not complete within its deadline; retry.
+    #[must_use]
+    pub fn request_deadline_exceeded() -> Self {
+        Self::service_unavailable("the request did not complete within its deadline; retry")
+            .with_retry_after(2)
+    }
+
     /// A `503` for a request the database could not run now (a connection not available, or a
     /// transaction rolled back by a conflict), which a retry runs.
     #[must_use]
@@ -984,10 +991,17 @@ impl IntoResponse for ApiError {
 }
 
 impl From<sqlx::Error> for ApiError {
-    /// A `500`, except a deadlock or serialization failure (`40P01`, `40001`): PostgreSQL rolled
-    /// the transaction back, so nothing ran and the request is a `503` to retry, which an
-    /// idempotency key does not save.
+    /// A `500`, except when no pool connection was acquired or PostgreSQL rolled back a
+    /// deadlock or serialization failure (`40P01`, `40001`): the request is a `503` to retry,
+    /// which an idempotency key does not save.
     fn from(error: sqlx::Error) -> Self {
+        if matches!(error, sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed) {
+            if matches!(error, sqlx::Error::PoolTimedOut) {
+                crate::observability::metrics::pool_acquire_timed_out();
+            }
+            tracing::warn!(%error, "database connection was not acquired");
+            return Self::database_busy();
+        }
         let code = error
             .as_database_error()
             .and_then(|error| error.code())
@@ -1056,6 +1070,7 @@ mod tests {
             ApiError::paused(""),
             ApiError::chain_frozen(),
             ApiError::service_unavailable(""),
+            ApiError::request_deadline_exceeded(),
             ApiError::service_restoring(300),
             ApiError::service_maintenance(),
             ApiError::restore_not_frozen(),
@@ -1076,6 +1091,18 @@ mod tests {
                 error.code()
             );
             assert_eq!(error.detail.doc_url, format!("{DOCS_URL}{}", error.code()));
+        }
+    }
+
+    #[test]
+    fn pool_timed_out_is_unsaved_database_busy() {
+        for error in [sqlx::Error::PoolTimedOut, sqlx::Error::PoolClosed] {
+            let error = ApiError::from(error);
+            assert_eq!(error.code(), "unavailable");
+            let response = error.into_response();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+            assert!(response.extensions().get::<NotExecuted>().is_some());
         }
     }
 

@@ -78,7 +78,7 @@ pub(super) fn event(group: &RpcGroup, index: usize, class: &'static str, value: 
         *total = total.saturating_add(value);
     }
 }
-/// Failure and quota-wait counters with configured labels and bounded failure classes.
+/// Head validation, failure and quota-wait counters with configured labels and bounded classes.
 pub fn events() -> Result<Vec<MetricFamily>, prometheus::Error> {
     let failures = IntCounterVec::new(
         Opts::new(
@@ -94,22 +94,36 @@ pub fn events() -> Result<Vec<MetricFamily>, prometheus::Error> {
         ),
         &["group", "chain_id", "member"],
     )?;
+    let heads = IntCounterVec::new(
+        Opts::new(
+            "topup_rpc_head_validations_total",
+            "Head validations performed or skipped for pinned reads.",
+        ),
+        &["group", "chain_id", "member", "result"],
+    )?;
     for ((group, chain, member, class), value) in
         EVENTS.lock().unwrap_or_else(PoisonError::into_inner).iter()
     {
         let chain = chain.to_string();
-        if *class == "budget_wait" {
-            wait.with_label_values(&[group, &chain, member])
-                .inc_by(std::time::Duration::from_nanos(*value).as_secs_f64());
-        } else {
-            failures
+        match *class {
+            "budget_wait" => wait
+                .with_label_values(&[group, &chain, member])
+                .inc_by(std::time::Duration::from_nanos(*value).as_secs_f64()),
+            "head_performed" => heads
+                .with_label_values(&[group, &chain, member, "performed"])
+                .inc_by(*value),
+            "head_skipped" => heads
+                .with_label_values(&[group, &chain, member, "skipped_pinned"])
+                .inc_by(*value),
+            _ => failures
                 .with_label_values(&[group.as_str(), chain.as_str(), member.as_str(), *class])
-                .inc_by(*value);
+                .inc_by(*value),
         }
     }
     Ok(failures
         .collect()
         .into_iter()
         .chain(wait.collect())
+        .chain(heads.collect())
         .collect())
 }

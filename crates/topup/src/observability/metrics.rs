@@ -3,8 +3,10 @@ use std::sync::OnceLock;
 use std::time::{Duration, UNIX_EPOCH};
 
 use prometheus::{
-    HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, TextEncoder, core::Collector,
+    HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts,
+    TextEncoder, core::Collector,
 };
+use sqlx::PgPool;
 use topup_adapters::chain::evm::metrics::{counting_since, rpc_call_counts};
 
 /// Prometheus text media type.
@@ -13,6 +15,7 @@ pub const CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 struct HttpMetrics {
     requests: IntCounterVec,
     latency: HistogramVec,
+    deadlines: IntCounterVec,
 }
 impl HttpMetrics {
     fn new() -> Result<Self, prometheus::Error> {
@@ -20,6 +23,13 @@ impl HttpMetrics {
             requests: IntCounterVec::new(
                 Opts::new("topup_http_requests_total", "Completed HTTP requests."),
                 &["route", "method", "status_class"],
+            )?,
+            deadlines: IntCounterVec::new(
+                Opts::new(
+                    "topup_api_request_deadline_exceeded_total",
+                    "Requests that did not complete within their deadline.",
+                ),
+                &["method"],
             )?,
             latency: HistogramVec::new(
                 HistogramOpts::new(
@@ -72,8 +82,40 @@ pub(crate) fn http_observations(route: &str, method: &str, status_class: &str) -
         .get()
 }
 
-/// Renders counters and histograms without database or network I/O.
-pub fn render() -> Result<String, prometheus::Error> {
+/// Records a request that did not complete within its deadline, with a bounded method label.
+pub(crate) fn request_deadline_exceeded(method: &str) {
+    let method = match method {
+        "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" => method,
+        _ => "other",
+    };
+    match http() {
+        Ok(metrics) => metrics.deadlines.with_label_values(&[method]).inc(),
+        Err(_) => tracing::error!("HTTP metrics initialization failed"),
+    }
+}
+
+static POOL_TIMEOUTS: OnceLock<Result<IntCounter, prometheus::Error>> = OnceLock::new();
+fn pool_timeouts() -> Result<&'static IntCounter, &'static prometheus::Error> {
+    POOL_TIMEOUTS
+        .get_or_init(|| {
+            IntCounter::new(
+                "topup_db_pool_acquire_timeouts_total",
+                "Database pool connection acquisition timeouts.",
+            )
+        })
+        .as_ref()
+}
+
+/// Records a failed database pool acquisition that timed out.
+pub(crate) fn pool_acquire_timed_out() {
+    match pool_timeouts() {
+        Ok(counter) => counter.inc(),
+        Err(_) => tracing::error!("database pool metrics initialization failed"),
+    }
+}
+
+/// Renders counters, histograms and current pool gauges without database or network I/O.
+pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     let http = http().map_err(|_| prometheus::Error::Msg("HTTP metrics unavailable".into()))?;
     let calls = IntCounterVec::new(
         Opts::new(
@@ -90,7 +132,32 @@ pub fn render() -> Result<String, prometheus::Error> {
             .with_label_values(&[&count.provider, &chain, count.method])
             .inc_by(count.calls);
     }
+    let connections = IntGaugeVec::new(
+        Opts::new(
+            "topup_db_pool_connections",
+            "Current database pool connections.",
+        ),
+        &["state"],
+    )?;
+    let size = u64::from(pool.size());
+    let idle = u64::try_from(pool.num_idle()).unwrap_or(u64::MAX);
+    connections
+        .with_label_values(&["idle"])
+        .set(i64::try_from(idle).unwrap_or(i64::MAX));
+    connections
+        .with_label_values(&["in_use"])
+        .set(i64::try_from(size.saturating_sub(idle)).unwrap_or(i64::MAX));
+    let max_connections = IntGauge::new(
+        "topup_db_pool_max_connections",
+        "Maximum database pool connections.",
+    )?;
+    max_connections.set(i64::from(pool.options().get_max_connections()));
+    let timeouts = pool_timeouts()
+        .map_err(|_| prometheus::Error::Msg("database pool metrics unavailable".into()))?;
     let mut families = calls.collect();
+    families.extend(connections.collect());
+    families.extend(max_connections.collect());
+    families.extend(timeouts.collect());
     if let Some(seconds) = counting_since().and_then(|time| time.duration_since(UNIX_EPOCH).ok()) {
         let since = IntGauge::new(
             "topup_rpc_calls_since_seconds",
@@ -106,6 +173,7 @@ pub fn render() -> Result<String, prometheus::Error> {
     families.extend(super::price_metrics::collect()?);
     families.extend(http.requests.collect());
     families.extend(http.latency.collect());
+    families.extend(http.deadlines.collect());
     // Like Registry::gather, omit families with no observed series rather than inventing zeros.
     families.retain(|family| !family.get_metric().is_empty());
     TextEncoder::new().encode_to_string(&families)

@@ -1141,6 +1141,7 @@ impl RpcGroup {
                 .await?;
         }
         heads.insert(tag.to_owned(), head.clone());
+        metrics::event(self, index, "head_performed", 1);
         Ok((head, value))
     }
     /// Saves an A/B-agreed cursor hash anchor before issuing addresses or scanning past it.
