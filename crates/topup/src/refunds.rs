@@ -19,7 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Display;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use alloy::sol;
@@ -322,7 +322,18 @@ impl CachedDestinationScreener {
 #[async_trait]
 impl DestinationScreener for CachedDestinationScreener {
     async fn screen(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
-        self.inner.screen(route, destination).await
+        let verdict = self.inner.screen(route, destination).await;
+        if verdict == DestinationScreening::Sanctioned {
+            self.entries
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&(
+                    route.chain.chain_id,
+                    route.screening.sanctions_oracle,
+                    destination,
+                ));
+        }
+        verdict
     }
 
     async fn screen_cached(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
@@ -332,10 +343,7 @@ impl DestinationScreener for CachedDestinationScreener {
             destination,
         );
         {
-            let entries = self
-                .entries
-                .lock()
-                .expect("destination cache mutex poisoned");
+            let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
             if entries
                 .get(&key)
                 .is_some_and(|inserted| inserted.elapsed() < self.ttl)
@@ -346,10 +354,7 @@ impl DestinationScreener for CachedDestinationScreener {
         let verdict = self.inner.screen(route, destination).await;
         if verdict == DestinationScreening::Clear {
             let now = Instant::now();
-            let mut entries = self
-                .entries
-                .lock()
-                .expect("destination cache mutex poisoned");
+            let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
             entries.retain(|_, inserted| now.duration_since(*inserted) < self.ttl);
             if entries.len() >= 10_000 {
                 entries.clear();
@@ -1033,6 +1038,50 @@ mod tests {
             DestinationScreening::Clear
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn sanctioned_screen_evicts_cached_clear() {
+        struct EvictingScreener {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl DestinationScreener for EvictingScreener {
+            async fn screen(
+                &self,
+                _route: &RouteFile,
+                _destination: Address,
+            ) -> DestinationScreening {
+                let call = self.calls.fetch_add(1, Ordering::Relaxed);
+                if call == 0 {
+                    DestinationScreening::Clear
+                } else {
+                    DestinationScreening::Sanctioned
+                }
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cached = CachedDestinationScreener::new(Arc::new(EvictingScreener {
+            calls: Arc::clone(&calls),
+        }));
+        let route = route();
+        let destination = Address::repeat_byte(5);
+
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(
+            cached.screen(&route, destination).await,
+            DestinationScreening::Sanctioned
+        );
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Sanctioned
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 
     #[tokio::test]

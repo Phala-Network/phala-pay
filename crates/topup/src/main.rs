@@ -862,6 +862,9 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             .map_err(anyhow::Error::msg)
             .context("failed to configure the finality watch")?;
     let mut tasks = ServiceTasks::new();
+    let screening = Arc::new(topup::refunds::CachedDestinationScreener::new(Arc::new(
+        topup::refunds::OracleDestinationScreener::new(Arc::clone(&routes)),
+    )));
     let state = topup::api::AppState {
         pool: pool.clone(),
         routes: Arc::clone(&routes),
@@ -875,9 +878,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             connection_count,
         )),
         rate_limits: Arc::default(),
-        screening: Arc::new(topup::refunds::CachedDestinationScreener::new(Arc::new(
-            topup::refunds::OracleDestinationScreener::new(Arc::clone(&routes)),
-        ))),
+        screening: Arc::clone(&screening) as Arc<dyn topup::refunds::DestinationScreener>,
         contract_signatures: Arc::new(
             topup::treasuries::EvmContractSignatures::from_routes(&routes)
                 .map_err(anyhow::Error::msg)
@@ -1018,9 +1019,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let treasury_worker = topup::treasuries::TreasuryWorker::new(
         pool.clone(),
         Arc::clone(&routes),
-        Arc::new(topup::refunds::OracleDestinationScreener::new(Arc::clone(
-            &routes,
-        ))),
+        Arc::clone(&screening) as Arc<dyn topup::refunds::DestinationScreener>,
         Duration::from_secs(30),
     );
     tasks.spawn("treasury time-lock worker", |cancellation| {
