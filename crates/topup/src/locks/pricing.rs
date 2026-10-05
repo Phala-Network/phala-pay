@@ -52,16 +52,15 @@ struct Audit {
     #[serde(skip_serializing_if = "Option::is_none")]
     decision: Option<&'static str>,
 }
-fn source_id(company: &str) -> &str {
-    if company == "uniswap-v2-onchain" {
-        "uniswap_v2_twap"
-    } else {
-        company
-    }
+fn fresh(bound: u64, observed_at: UnixSeconds, now: UnixSeconds) -> bool {
+    now.value()
+        .checked_sub(observed_at.value())
+        .is_some_and(|age| age <= bound)
 }
 struct Entry {
     source: Arc<dyn PriceSource>,
     company: &'static str,
+    source_id: &'static str,
     asset: Option<String>,
     max_age_s: Option<u64>,
     usdt_quoted: bool,
@@ -152,6 +151,10 @@ impl PricingRuntime {
                     Ok(Entry {
                         source,
                         company: s.company(),
+                        source_id: match s {
+                            Source::UniswapV2Twap { .. } => "uniswap_v2_twap",
+                            _ => s.company(),
+                        },
                         asset: Some(s.asset().to_owned()),
                         max_age_s,
                         usdt_quoted: matches!(s, Source::Binance { .. }),
@@ -186,6 +189,14 @@ impl PricingRuntime {
             stuck_since: std::sync::Mutex::new(None),
         })
     }
+    fn source_ids(&self) -> impl Iterator<Item = (&'static str, &'static str)> + Clone {
+        self.sources
+            .iter()
+            .chain(&self.primary)
+            .chain(&self.check)
+            .chain(&self.fx)
+            .map(|entry| (entry.company, entry.source_id))
+    }
     /// Accumulate TWAP history even when no merchant requests a quote.
     pub async fn sample_twaps(&self, route: &RouteFile) {
         for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
@@ -209,6 +220,7 @@ impl PricingRuntime {
         let entry = |source| Entry {
             source,
             company: "injected",
+            source_id: "injected",
             asset: None,
             max_age_s: None,
             usdt_quoted: true,
@@ -257,11 +269,17 @@ impl PricingRuntime {
                         audit.sequencer = Some(evidence);
                     }
                     if code == "divergent" {
-                        price_metrics::source_event(route, "sequencer", "chainlink", code);
+                        price_metrics::source_event(
+                            route,
+                            "sequencer",
+                            "chainlink",
+                            "chainlink",
+                            code,
+                        );
                     }
                     audit.decision = Some(code);
                     let failure = PricingFailure::with_audit(code, &audit);
-                    price_metrics::decision(route, code, &failure.evidence);
+                    price_metrics::decision(route, code, &failure.evidence, self.source_ids());
                     return Err(failure);
                 }
             }
@@ -298,11 +316,7 @@ impl PricingRuntime {
             }
             let now = validation_time()?;
             for (o, bound) in observed {
-                if now
-                    .value()
-                    .checked_sub(o.observed_at.value())
-                    .is_none_or(|age| age > bound)
-                {
+                if !fresh(bound, o.observed_at, now) {
                     continue;
                 }
                 healthy = true;
@@ -310,7 +324,13 @@ impl PricingRuntime {
                 policy.max_age_s = bound;
                 policy.max_deviation_bps = route.pricing.peg_band_bps;
                 if stablecoin_price(&o, now, policy).is_err() {
-                    price_metrics::source_event(route, "sources", o.source.as_str(), "depeg");
+                    price_metrics::source_event(
+                        route,
+                        "sources",
+                        o.source.as_str(),
+                        o.source.as_str(),
+                        "depeg",
+                    );
                     depeg = true;
                 }
             }
@@ -348,7 +368,7 @@ impl PricingRuntime {
             let check = check?;
             let fx = fx?;
             match (primary, check, fx) {
-                (Some(p), Some(c), Some(f))
+                (Some((pe, p)), Some((ce, c)), Some((fe, f)))
                     if p.valuation.source != c.valuation.source
                         && f.valuation.source != c.valuation.source =>
                 {
@@ -363,27 +383,15 @@ impl PricingRuntime {
                     };
                     let (p, c, f) = (p.valuation, c.valuation, f.valuation);
                     let now = validation_time()?;
-                    for (o, entries) in [(&p, &self.primary), (&c, &self.check), (&f, &self.fx)] {
-                        let bound = entries
-                            .iter()
-                            .find(|e| source_id(e.company) == o.source.as_str())
-                            .and_then(|e| e.max_age_s)
-                            .unwrap_or(route.pricing.max_age_s);
-                        if now
-                            .value()
-                            .checked_sub(o.observed_at.value())
-                            .is_none_or(|age| age > bound)
-                        {
+                    for (o, entry) in [(&p, pe), (&c, ce), (&f, fe)] {
+                        let bound = entry.max_age_s.unwrap_or(route.pricing.max_age_s);
+                        if !fresh(bound, o.observed_at, now) {
                             return Err(PricingFailure::with_audit("stale", &audit));
                         }
                     }
                     let mut policy = ValuationPolicy::from(&route.pricing);
                     policy.max_age_s = u64::MAX;
-                    let usdt_quoted = self
-                        .check
-                        .iter()
-                        .find(|e| source_id(e.company) == c.source.as_str())
-                        .is_none_or(|e| e.usdt_quoted);
+                    let usdt_quoted = ce.usdt_quoted;
                     let mut fx_policy = policy;
                     fx_policy.max_deviation_bps = policy.max_fx_deviation_bps;
                     stablecoin_price(&f, now, fx_policy)
@@ -425,24 +433,24 @@ impl PricingRuntime {
             Err(code) => {
                 audit.decision = Some(code);
                 let failure = PricingFailure::with_audit(code, &audit);
-                price_metrics::decision(route, code, &failure.evidence);
+                price_metrics::decision(route, code, &failure.evidence, self.source_ids());
                 Err(failure)
             }
         }
     }
 }
-async fn first(
-    entries: &[Entry],
+async fn first<'a>(
+    entries: &'a [Entry],
     route: &RouteFile,
     role: &str,
     audit: &mut Audit,
-) -> Result<Option<PriceQuote>, PricingFailure> {
+) -> Result<Option<(&'a Entry, PriceQuote)>, PricingFailure> {
     for (index, entry) in entries.iter().enumerate() {
         if let Some(observation) = observe(entry, route, role, audit).await? {
             if index > 0 {
-                price_metrics::failover(route, role, entry.company);
+                price_metrics::failover(route, role, entry.source_id, entry.company);
             }
-            return Ok(Some(observation));
+            return Ok(Some((entry, observation)));
         }
     }
     Ok(None)
@@ -461,11 +469,11 @@ async fn observe(
     let now = validation_time()?;
     let result = result.and_then(|quote| {
         let o = &quote.valuation;
-        if now
-            .value()
-            .checked_sub(o.observed_at.value())
-            .is_none_or(|age| age > entry.max_age_s.unwrap_or(route.pricing.max_age_s))
-        {
+        if !fresh(
+            entry.max_age_s.unwrap_or(route.pricing.max_age_s),
+            o.observed_at,
+            now,
+        ) {
             Err(PriceError::Stale)
         } else {
             Ok(quote)
@@ -481,23 +489,29 @@ async fn observe(
         }
         Err(error) => {
             let code = error_code(&error);
-            audit.observations.push(json!({"role":role,"company":entry.company,"source":source_id(entry.company),"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
-            price_metrics::health(route, role, entry.company, false);
+            audit.observations.push(json!({"role":role,"company":entry.company,"source":entry.source_id,"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
+            price_metrics::health(route, role, entry.source_id, entry.company, false);
             if code.starts_with("twap_") {
-                price_metrics::refusal(route, role, entry.company, code);
+                price_metrics::refusal(route, role, entry.source_id, entry.company, code);
                 audit.decision = Some(code);
                 return Err(PricingFailure::new(code));
             }
             if code == "divergent" {
                 audit.decision = Some("divergent");
-                price_metrics::source_event(route, role, entry.company, "divergent");
+                price_metrics::source_event(
+                    route,
+                    role,
+                    entry.source_id,
+                    entry.company,
+                    "divergent",
+                );
                 return Err(PricingFailure::new("divergent"));
             }
             return Ok(None);
         }
     };
     audit.observations.push(evidence);
-    price_metrics::health(route, role, entry.company, true);
+    price_metrics::health(route, role, entry.source_id, entry.company, true);
     Ok(observation)
 }
 fn error_code(error: &PriceError) -> &'static str {
@@ -697,6 +711,11 @@ mod tests {
                 error,
             }),
             company: id,
+            source_id: if id == "uniswap-v2-onchain" {
+                "uniswap_v2_twap"
+            } else {
+                id
+            },
             asset: None,
             max_age_s: None,
             usdt_quoted: true,

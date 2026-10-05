@@ -51,20 +51,13 @@ fn metrics() -> Result<&'static Metrics, prometheus::Error> {
         .as_ref()
         .map_err(|_| prometheus::Error::Msg("price metrics initialization failed".into()))
 }
-fn source_name(company: &str) -> &str {
-    if company == "uniswap-v2-onchain" {
-        "uniswap_v2_twap"
-    } else {
-        company
-    }
-}
 /// Record an individually alertable safety refusal through the existing price telemetry.
-pub fn refusal(route: &RouteFile, role: &str, company: &str, code: &'static str) {
+pub fn refusal(route: &RouteFile, role: &str, source: &str, company: &str, code: &'static str) {
     sentry::metrics::counter("price_source_refusals_total", 1)
         .attribute("route", route.route.clone())
         .attribute("asset", route.asset.symbol.clone())
         .attribute("role", role.to_owned())
-        .attribute("source", source_name(company).to_owned())
+        .attribute("source", source.to_owned())
         .attribute("company", company.to_owned())
         .attribute("code", code)
         .capture();
@@ -75,7 +68,7 @@ pub fn refusal(route: &RouteFile, role: &str, company: &str, code: &'static str)
                 &route.route,
                 &route.asset.symbol,
                 role,
-                source_name(company),
+                source,
                 company,
                 code,
             ])
@@ -85,47 +78,40 @@ pub fn refusal(route: &RouteFile, role: &str, company: &str, code: &'static str)
     alert(route, code);
 }
 /// Source labels come from the attested registry, never response bodies.
-pub fn health(route: &RouteFile, role: &str, source: &str, healthy: bool) {
+pub fn health(route: &RouteFile, role: &str, source: &str, company: &str, healthy: bool) {
     sentry::metrics::gauge("price_source_health", u32::from(healthy))
         .attribute("route", route.route.clone())
         .attribute("asset", route.asset.symbol.clone())
         .attribute("role", role.to_owned())
-        .attribute("source", source_name(source).to_owned())
-        .attribute("company", source.to_owned())
+        .attribute("source", source.to_owned())
+        .attribute("company", company.to_owned())
         .capture();
     match metrics() {
         Ok(m) => m
             .health
-            .with_label_values(&[
-                &route.route,
-                &route.asset.symbol,
-                role,
-                source_name(source),
-                source,
-            ])
+            .with_label_values(&[&route.route, &route.asset.symbol, role, source, company])
             .set(i64::from(healthy)),
         Err(_) => tracing::error!("price metrics initialization failed"),
     }
 }
 /// Records ordered failover.
-pub fn failover(route: &RouteFile, role: &str, source: &str) {
-    counter("price_failover_total", route, role, source);
+pub fn failover(route: &RouteFile, role: &str, source: &str, company: &str) {
+    counter("price_failover_total", route, role, source, company);
     match metrics() {
         Ok(m) => m
             .failover
-            .with_label_values(&[
-                &route.route,
-                &route.asset.symbol,
-                role,
-                source_name(source),
-                source,
-            ])
+            .with_label_values(&[&route.route, &route.asset.symbol, role, source, company])
             .inc(),
         Err(_) => tracing::error!("price metrics initialization failed"),
     }
 }
 /// Records a rejected valuation with per-source dimensions.
-pub fn decision(route: &RouteFile, code: &str, evidence: &serde_json::Value) {
+pub fn decision(
+    route: &RouteFile,
+    code: &str,
+    evidence: &serde_json::Value,
+    source_ids: impl Iterator<Item = (&'static str, &'static str)> + Clone,
+) {
     if let Some(observations) = evidence["observations"].as_array() {
         for observation in observations {
             let role = observation["role"].as_str().unwrap_or("valuation");
@@ -138,7 +124,11 @@ pub fn decision(route: &RouteFile, code: &str, evidence: &serde_json::Value) {
                 && (observation["error"].is_null() || observation["error"] == "divergent"))
                 || (code == "fx_depeg" && role == "fx" && observation["error"].is_null())
             {
-                source_event(route, role, source, code);
+                let source_id = source_ids
+                    .clone()
+                    .find_map(|(company, id)| (company == source).then_some(id))
+                    .unwrap_or(source);
+                source_event(route, role, source_id, source, code);
             }
         }
     }
@@ -150,13 +140,13 @@ pub fn failure(route: &RouteFile, failure: &crate::locks::pricing::PricingFailur
     tracing::warn!(tags.alert = "price-outage", tags.route = route.route, tags.asset = route.asset.symbol, tags.check = code, evidence = %evidence, "price valuation halted");
 }
 /// Records rejected observations with the real source/company identity.
-pub fn source_event(route: &RouteFile, role: &str, source: &str, code: &str) {
+pub fn source_event(route: &RouteFile, role: &str, source: &str, company: &str, code: &str) {
     let name = if code == "divergent" {
         "price_disagreement_total"
     } else {
         "price_depeg_total"
     };
-    counter(name, route, role, source);
+    counter(name, route, role, source, company);
     match metrics() {
         Ok(m) => {
             let metric = if code == "divergent" {
@@ -165,13 +155,7 @@ pub fn source_event(route: &RouteFile, role: &str, source: &str, code: &str) {
                 &m.depeg
             };
             metric
-                .with_label_values(&[
-                    &route.route,
-                    &route.asset.symbol,
-                    role,
-                    source_name(source),
-                    source,
-                ])
+                .with_label_values(&[&route.route, &route.asset.symbol, role, source, company])
                 .inc();
         }
         Err(_) => tracing::error!("price metrics initialization failed"),
@@ -228,13 +212,13 @@ pub fn collect() -> Result<Vec<prometheus::proto::MetricFamily>, prometheus::Err
     Ok(families)
 }
 
-fn counter(name: &'static str, route: &RouteFile, role: &str, source: &str) {
+fn counter(name: &'static str, route: &RouteFile, role: &str, source: &str, company: &str) {
     sentry::metrics::counter(name, 1)
         .attribute("route", route.route.clone())
         .attribute("asset", route.asset.symbol.clone())
         .attribute("role", role.to_owned())
-        .attribute("source", source_name(source).to_owned())
-        .attribute("company", source.to_owned())
+        .attribute("source", source.to_owned())
+        .attribute("company", company.to_owned())
         .capture();
 }
 
@@ -257,11 +241,17 @@ mod tests {
                 tracing::subscriber::with_default(
                     crate::observability::log_subscriber(std::io::sink),
                     || {
-                        health(&route, "primary", "kraken", true);
-                        failover(&route, "primary", "kraken");
-                        source_event(&route, "check", "binance", "divergent");
-                        source_event(&route, "sources", "chainlink", "depeg");
-                        refusal(&route, "primary", "uniswap-v2-onchain", "twap_liquidity");
+                        health(&route, "primary", "kraken", "kraken", true);
+                        failover(&route, "primary", "kraken", "kraken");
+                        source_event(&route, "check", "binance", "binance", "divergent");
+                        source_event(&route, "sources", "chainlink", "chainlink", "depeg");
+                        refusal(
+                            &route,
+                            "primary",
+                            "uniswap_v2_twap",
+                            "uniswap-v2-onchain",
+                            "twap_liquidity",
+                        );
                         stuck(&route, 6);
                         failure(
                             &route,
