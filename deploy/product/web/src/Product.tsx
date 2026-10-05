@@ -17,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
 import { TokenIcon, assetOf, networkOf, tokenFullName } from "./chains.js";
-import { PRIMARY_BUTTON, ExplorerLink, InfoTip, describe, loadSdk } from "./common.js";
+import { PRIMARY_BUTTON, ExplorerLink, InfoTip, UpdatesPaused, describe, loadSdk } from "./common.js";
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
 import { atomicAmount, dollars, percent, presetDollars, rate, signedDollars, tokenName } from "./format.js";
 import { FundWallet, TestTokens, type Need } from "./Funding.js";
@@ -49,8 +49,10 @@ const METHODS: { id: Method; label: string }[] = [
 export function Product({
   account,
   accountError,
+  accountPaused,
   networks,
   networksError,
+  networksPaused,
   method,
   onMethodChange,
   session,
@@ -63,8 +65,10 @@ export function Product({
 }: {
   account: Account | null;
   accountError: string | null;
+  accountPaused: boolean;
   networks: Network[] | undefined;
   networksError: string | null;
+  networksPaused: boolean;
   method: Method;
   onMethodChange: (method: Method) => void;
   session: CreatedQuote | null;
@@ -97,6 +101,7 @@ export function Product({
     <PaymentOptions
       networks={networks}
       networksError={networksError}
+      networksPaused={networksPaused}
       network={network}
       asset={asset}
       onNetworkChange={(chainId) => setChoice({ chainId, asset: null })}
@@ -157,6 +162,7 @@ export function Product({
                   ? accountError === null ? <Skeleton className="h-9 w-32" /> : <span className="text-sm font-normal text-muted-foreground">Unavailable</span>
                   : dollars(account.balance)}
               </div>
+              {accountPaused && <UpdatesPaused />}
             </div>
           </div>
           {accountError !== null && (
@@ -317,6 +323,7 @@ function CheckoutSkeleton() {
 function PaymentOptions({
   networks,
   networksError,
+  networksPaused,
   network,
   asset,
   onNetworkChange,
@@ -324,6 +331,7 @@ function PaymentOptions({
 }: {
   networks: Network[] | undefined;
   networksError: string | null;
+  networksPaused: boolean;
   network: Network | undefined;
   asset: Asset | undefined;
   onNetworkChange: (chainId: number) => void;
@@ -342,7 +350,12 @@ function PaymentOptions({
     );
   }
   if (network === undefined || asset === undefined) {
-    return <p className="text-sm text-muted-foreground">No network accepts payments right now.</p>;
+    return (
+      <>
+        <p className="text-sm text-muted-foreground">No network accepts payments right now.</p>
+        {networksPaused && <UpdatesPaused />}
+      </>
+    );
   }
   return (
     <>
@@ -379,6 +392,7 @@ function PaymentOptions({
           ))}
         </RadioGroup>
       </div>
+      {networksPaused && <UpdatesPaused />}
     </>
   );
 }

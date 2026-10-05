@@ -230,6 +230,11 @@ export function queryErrorMessage(error: unknown, subject: string): string {
     : `${subject} unavailable right now; retrying…`;
 }
 
+/** Cached data remains visible when a permanent refusal stops its updates. */
+export function UpdatesPaused() {
+  return <p className="text-xs text-muted-foreground" role="status">Updates paused.</p>;
+}
+
 export function errorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message.split("\n")[0] : undefined;
   return message ?? fallback;

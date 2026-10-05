@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, DepositAddressResponse, Network, Selection, Timeline, Trust } from "./api.js";
-import { CopyButton, Detail, Details, Empty, ExplorerLink, InfoTip, LINK, StatusBadge, Subsection } from "./common.js";
+import { CopyButton, Detail, Details, Empty, ExplorerLink, InfoTip, LINK, StatusBadge, Subsection, UpdatesPaused } from "./common.js";
 import { AreaLabel } from "./Product.js";
 import { Refunds } from "./Refunds.js";
 import { assetOf, networkOf } from "./chains.js";
@@ -47,28 +47,38 @@ const STACKED = {
 export function Backend({
   account,
   accountError,
+  accountPaused,
   selected,
   timeline,
   timelineError,
+  timelinePaused,
   trust,
   trustError,
+  trustPaused,
   address,
   addressError,
+  addressPaused,
   networks,
   networksError,
+  networksPaused,
   onSelect,
 }: {
   account: Account | null;
   accountError: string | null;
+  accountPaused: boolean;
   selected: Selection | null;
   timeline: Timeline | null;
   timelineError: string | null;
+  timelinePaused: boolean;
   trust: Trust | null;
   trustError: string | null;
+  trustPaused: boolean;
   address: DepositAddressResponse | null;
   addressError: string | null;
+  addressPaused: boolean;
   networks: Network[] | undefined;
   networksError: string | null;
+  networksPaused: boolean;
   onSelect: (selection: Selection) => void;
 }) {
   const live = timelineError === null && (timeline?.steps.some((step) => step.state === "current") ?? selected !== null);
@@ -111,6 +121,7 @@ export function Backend({
         <ScrollArea className="lg:min-h-0 lg:flex-1 [&_[data-slot=scroll-area-viewport]>div]:flex! [&_[data-slot=scroll-area-viewport]>div]:min-h-full [&_[data-slot=scroll-area-viewport]>div]:flex-col">
           <div className="px-3 py-3" aria-live="off">
             <EventStream timeline={timeline} loading={selected?.id ?? null} error={timelineError} />
+            {timelinePaused && <UpdatesPaused />}
           </div>
           <Tabs defaultValue="credits" className="flex-1 gap-0 border-t">
             <TabsList
@@ -141,10 +152,12 @@ export function Backend({
                   account={account}
                   selected={selected}
                   address={address}
+                  addressPaused={addressPaused}
                   networks={networks}
                   onSelect={onSelect}
                 />
               )}
+              {accountPaused && <UpdatesPaused />}
             </TabsContent>
             <TabsContent value="refunds" className="p-5">
               {timeline === null || deposit === null || account === null ? (
@@ -170,7 +183,7 @@ export function Backend({
               )}
             </TabsContent>
             <TabsContent value="trust" className="p-5">
-              <TrustDetails trust={trust} trustError={trustError} networks={networks} networksError={networksError} />
+              <TrustDetails trust={trust} trustError={trustError} trustPaused={trustPaused} networks={networks} networksError={networksError} networksPaused={networksPaused} />
             </TabsContent>
           </Tabs>
         </ScrollArea>
@@ -229,12 +242,14 @@ function CreditsTab({
   account,
   selected,
   address,
+  addressPaused,
   networks,
   onSelect,
 }: {
   account: Account | null;
   selected: Selection | null;
   address: DepositAddressResponse | null;
+  addressPaused: boolean;
   networks: Network[] | undefined;
   onSelect: (selection: Selection) => void;
 }) {
@@ -405,13 +420,16 @@ function CreditsTab({
           </Subsection>
         )}
         {address !== null && (
-          <AddressView
-            account={account}
-            address={address}
-            networks={networks}
-            selected={selected}
-            onSelect={onSelect}
-          />
+          <div className="flex flex-col gap-2">
+            <AddressView
+              account={account}
+              address={address}
+              networks={networks}
+              selected={selected}
+              onSelect={onSelect}
+            />
+            {addressPaused && <UpdatesPaused />}
+          </div>
         )}
       </div>
     </div>
@@ -557,11 +575,13 @@ function MetadataJson({ metadata }: { metadata: Record<string, string> }) {
   );
 }
 
-function TrustDetails({ trust, trustError, networks, networksError }: {
+function TrustDetails({ trust, trustError, trustPaused, networks, networksError, networksPaused }: {
   trust: Trust | null;
   trustError: string | null;
+  trustPaused: boolean;
   networks: Network[] | undefined;
   networksError: string | null;
+  networksPaused: boolean;
 }) {
   const attestation = trust?.attestation;
   const evidence = trust?.tls_evidence;
@@ -627,8 +647,10 @@ function TrustDetails({ trust, trustError, networks, networksError }: {
           <p className="text-muted-foreground">
             {networks === undefined ? networksError ?? "Networks: loading…" : `Networks: ${networks.map((each) => each.name).join(", ")}`}
           </p>
+          {networksPaused && <UpdatesPaused />}
         </TrustItem>
       </div>
+      {trustPaused && <UpdatesPaused />}
     </div>
   );
 }

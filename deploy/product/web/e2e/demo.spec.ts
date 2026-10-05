@@ -394,6 +394,38 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
   expect(timelineReads).toBe(reads);
 });
 
+test("a refused timeline keeps its cached data and shows paused updates", async ({ page }) => {
+  let missing = false;
+  let reads = 0;
+  await page.clock.install();
+  await page.route("**/api/quotes/*", async (route) => {
+    reads += 1;
+    if (!missing) {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 404,
+      json: { code: "not_found" },
+      headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+    });
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  const timeline = scenes.getByRole("list", { name: "Payment timeline" });
+  await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
+  await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  missing = true;
+  await page.clock.runFor(10_000);
+  await expect(scenes.getByText("Updates paused.", { exact: true })).toBeVisible();
+  await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
+  const paused = reads;
+  await page.clock.runFor(30_000);
+  expect(reads).toBe(paused);
+});
+
 for (const sent of [false, true]) {
   test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page }) => {
     let reads = 0;
