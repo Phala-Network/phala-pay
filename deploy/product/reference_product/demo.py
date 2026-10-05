@@ -279,6 +279,14 @@ class DemoConsole:
             # The SDK refused an address the product cannot derive from its pins: never shown.
             LOG.error("demo: the service returned an address the pins do not derive")
             return _json(HTTPStatus.BAD_GATEWAY, {"code": "address_not_derivable"})
+        except TransportError:
+            LOG.warning("demo: service transport unavailable")
+            response = _json(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
+            response.headers["retry-after"] = "2"
+            return response
+        except ResponseValidationError:
+            LOG.warning("demo: service response validation failed")
+            return _json(HTTPStatus.BAD_GATEWAY, {"code": "bad_gateway"})
         except (httpx.HTTPError, MissingProductKeyError):
             LOG.warning("demo: service unavailable", exc_info=True)
             return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})

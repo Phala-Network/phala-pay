@@ -30,6 +30,7 @@ from topup_sdk import (
     quote_salt,
     sign_webhook,
 )
+from topup_sdk.errors import ResponseValidationError
 
 NOW = 1_790_000_000
 ACCOUNT = "acct_" + "ac" * 16
@@ -376,6 +377,38 @@ def _account(console: DemoConsole) -> str:
         ["Path=/", f"Max-Age={30 * 86_400}", "HttpOnly", "SameSite=Lax", "Secure"]
     )
     return name
+
+
+@pytest.mark.parametrize("path", ["assets", "account", "trust"])
+def test_service_timeouts_are_unavailable(demo: tuple[DemoConsole, Service], path: str) -> None:
+    console, _ = demo
+
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("service timeout", request=request)
+
+    console.recorder._inner = httpx.MockTransport(timeout)
+    response = console.handle("GET", f"/api/{path}", WEBSITE, b"")
+    assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
+    assert json.loads(response.body) == {"code": "unavailable"}
+    assert response.headers["retry-after"] == "2"
+
+
+def test_malformed_service_responses_are_bad_gateway(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    console, _ = demo
+
+    def malformed(*args: Any) -> Any:
+        raise ResponseValidationError("private detail")
+
+    monkeypatch.setattr(console, "_api", malformed)
+    response = console.handle("GET", "/api/assets", WEBSITE, b"")
+    assert response.status == HTTPStatus.BAD_GATEWAY
+    assert json.loads(response.body) == {"code": "bad_gateway"}
+    assert "service response validation failed" in caplog.text
+    assert "private detail" not in caplog.text
 
 
 def _customer(cookie: str) -> str:
