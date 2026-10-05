@@ -68,8 +68,6 @@ SANDBOX_ANVIL_PORT=$(free_port)
 REHEARSAL_BASE_SEPOLIA_ANVIL_PORT=$(free_port)
 REHEARSAL_MAINNET_PRICE_ANVIL_PORT=$(free_port)
 REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT=$(free_port)
-# Keep the fixture chain's final sample just behind wall-clock time so freshness checks remain real.
-REHEARSAL_PRICE_ANVIL_TIMESTAMP=$(($(date +%s) - 1950))
 registry_port=$(free_port)
 rpc_url="http://127.0.0.1:$SANDBOX_ANVIL_PORT"
 base_rpc_url="http://127.0.0.1:$REHEARSAL_BASE_SEPOLIA_ANVIL_PORT"
@@ -137,7 +135,7 @@ leftovers() {
 cleanup() {
     status=$?
     set +e
-    if ((status != 0)); then
+    if ((status != 0)) && [[ -n "${compose_file:-}" ]]; then
         echo "--- workload logs (last 60 lines per service) ---" >&2
         dc logs --no-color --tail 60 keys postgres migrate topup topup-tls backup >&2
     fi
@@ -147,7 +145,9 @@ cleanup() {
         pc logs --no-color --tail 40 product >&2
     fi
     [[ -f "$tmp/product.yml" ]] && pc down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1
-    dc down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1
+    if [[ -n "${compose_file:-}" ]]; then
+        dc down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1
+    fi
     docker rm -f -v "$registry" >/dev/null 2>&1
     # Failures show up in leftovers() below.
     docker image rm "${local_images[@]}" "$TOPUP_LOCAL_DSTACK_IMAGE" >/dev/null 2>&1
@@ -251,6 +251,8 @@ mapfile -t env_names < <(docker compose -f "$compose_file" config --variables |
     awk 'NR > 1 && NF > 0 { print $1 }' | sort)
 
 echo "== starting Anvil (asset and hermetic price chains) and the client container"
+# Anchor after image builds; build duration must not age the price fixtures.
+REHEARSAL_PRICE_ANVIL_TIMESTAMP=$(($(date +%s) - 1950))
 dc up -d --wait anvil anvil-base-sepolia anvil-mainnet-price anvil-base-mainnet-price >/dev/null
 # Both chains carry the canonical Multicall3 that topup's balance and addressOf reads go through.
 install_anvil_multicall3 "$rpc_url"
@@ -383,7 +385,7 @@ import sys
 print(int(sys.argv[1], 0))
 PY
 )
-set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 3 "$base_price_timestamp"
+set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 3 "$((base_price_timestamp - 7200))"
 set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 4 "$base_price_timestamp"
 set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 5 1
 # MockUniswapV2Pair slots: token0, token1, packed reserves/timestamp, cumulative0, cumulative1.
@@ -438,22 +440,15 @@ write_config() {
                     "phala-cloud-base-sepolia-usdc-usd": [$base_usdc, $base_oracle],
                     "phala-cloud-base-sepolia-usdt-usd": [$base_usdt, $base_oracle]}')" '
             .admin_key = {id: $id, public_key: $key}
-            | .rpc_companies.tenderly.domains = ["rehearsal-a.test", "price-mainnet-a.test", "base-price-mainnet-a.test", "tenderly.co"]
-            | .rpc_companies.drpc.domains = ["price-mainnet-b.test", "drpc.org"]
-            | .rpc_companies.publicnode.domains = ["rehearsal-b.test", "price-mainnet-b.test", "base-price-mainnet-b.test", "publicnode.com"]
-            | .rpc_companies.flashbots.domains = ["price-mainnet-b.test", "flashbots.net"]
-            | .rpc_companies.llama.domains = ["base-price-mainnet-b.test", "llamarpc.com"]
-            | .rpc_companies.sentio.domains = ["base-price-mainnet-a.test", "sentio.xyz"]
-            | .rpc_companies.mevblocker.domains = ["price-mainnet-a.test", "mevblocker.io"]
-            | .rpc_groups["provider-a"].members[0].url = "http://anvil.rehearsal-a.test:8545"
-            | .rpc_groups["provider-b"].members[0].url = "http://anvil.rehearsal-b.test:8545/?key={key}"
+            | .rpc_companies |= with_entries(.value.domains = [.key + ".test"])
+            # Match sandbox-local fixture budgets: public-provider throttling must not race
+            # the five-second reference product request deadline on our own Anvils.
+            | .rpc_budgets |= with_entries(.value = {requests_per_second: 100, burst: 100})
+            | .rpc_groups |= with_entries(.value.members |= map(
+                .url = ("http://" + .id + "." + .company + ".test:8545")
+                | del(.sealed_key)))
+            | .rpc_groups["provider-b"].members[0].url += "/?key={key}"
             | .rpc_groups["provider-b"].members[0].sealed_key = "TOPUP_RPC_PROVIDER_B_KEY"
-            | .rpc_groups["base-sepolia-a"].members[0].url = "http://base.rehearsal-a.test:8545"
-            | .rpc_groups["base-sepolia-b"].members[0].url = "http://base.rehearsal-b.test:8545"
-            | .rpc_groups["mainnet-a"].members |= map(del(.sealed_key) | .url = "http://price-mainnet-a.test:8545")
-            | .rpc_groups["mainnet-b"].members |= map(del(.sealed_key) | .url = "http://price-mainnet-b.test:8545")
-            | .rpc_groups["base-mainnet-a"].members |= map(del(.sealed_key) | .url = "http://base-price-mainnet-a.test:8545")
-            | .rpc_groups["base-mainnet-b"].members |= map(del(.sealed_key) | .url = "http://base-price-mainnet-b.test:8545")
             | .routes |= map(($assets[.route] // error("no rehearsal token for \(.route)")) as $asset
                 | .chain.forwarder_factory = $factory | .chain.implementation = $implementation
                 | .asset.contract = $asset[0] | .chain.sanctions_oracle = $asset[1]
@@ -540,28 +535,34 @@ migrate_exit=$(dc ps -a --format json migrate | jq -rs 'flatten | .[0].ExitCode'
 echo "ok: migrate exited 0"
 
 echo "== seeding the hermetic thirty-minute TWAP window"
+# Keep the sampler out of the compressed history; resume it against the completed window.
+dc stop --timeout 10 topup >/dev/null
 # The production sampler persists one sample per minute. Rehearsal time is compressed by mining
 # those timestamps on the local production-chain-id Anvil; every row still carries a real local
 # block hash, so the reader's restart/reorg checks remain exercised.
 twap_policy='{"window_s":1800,"max_sample_age_s":180,"min_weth_reserve_usd":100000,"max_spot_deviation_bps":300,"max_sample_jump_bps":500}'
 twap_sql="$tmp/twap.sql"
 : >"$twap_sql"
-pair_timestamp_last=$((price_timestamp - 1800))
+pair_timestamp_last=$((pair_timestamp - 1800))
+window_start=$(($(date +%s) - 1860))
 twap_spot=$(python3 - <<'PY'
 print((100 * 10**18 << 112) // (100_000 * 10**18))
 PY
 )
 for i in $(seq 1 31); do
-    sample_timestamp=$((price_timestamp + i * 60))
+    sample_timestamp=$((window_start + (i - 1) * 60))
     cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setNextBlockTimestamp "$sample_timestamp" >/dev/null
     cast rpc --rpc-url "$mainnet_price_rpc_url" evm_mine >/dev/null
-    sample_block=$(cast block latest --field number --rpc-url "$mainnet_price_rpc_url")
-    sample_block=$(python3 - "$sample_block" <<'PY'
+    # Capture number/hash/timestamp together, from the block actually mined.
+    sample_header=$(cast block latest --json --rpc-url "$mainnet_price_rpc_url" | jq -ce '.data')
+    sample_block=$(jq -r '.number' <<<"$sample_header")
+    sample_timestamp=$(jq -r '.timestamp' <<<"$sample_header")
+    read -r sample_block sample_timestamp < <(python3 - "$sample_block" "$sample_timestamp" <<'PY'
 import sys
-print(int(sys.argv[1], 0))
+print(*(int(value, 0) for value in sys.argv[1:]))
 PY
 )
-    sample_hash=$(cast block latest --field hash --rpc-url "$mainnet_price_rpc_url")
+    sample_hash=$(jq -r '.hash' <<<"$sample_header")
     sample_cumulative=$(python3 - "$sample_timestamp" "$pair_timestamp_last" "$twap_spot" <<'PY'
 import sys
 timestamp, previous, spot = map(int, sys.argv[1:])
@@ -580,6 +581,15 @@ PY
         "$twap_policy" "$sample_block" "$sample_timestamp" "$sample_json" >>"$twap_sql"
 done
 dc exec -T postgres psql -U postgres -d topup -X -v ON_ERROR_STOP=1 <"$twap_sql" >/dev/null
+# Price readers pin two blocks below head; make the final sample available at that height.
+for i in 1 2; do
+    cast rpc --rpc-url "$mainnet_price_rpc_url" evm_mine >/dev/null
+done
+cast rpc --rpc-url "$base_mainnet_price_rpc_url" evm_mine >/dev/null
+cast rpc --rpc-url "$base_mainnet_price_rpc_url" evm_mine >/dev/null
+cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setIntervalMining 1 >/dev/null
+cast rpc --rpc-url "$base_mainnet_price_rpc_url" anvil_setIntervalMining 1 >/dev/null
+dc start topup >/dev/null
 echo "ok: persisted 31 local samples covering the minimum TWAP window"
 
 http_status() {

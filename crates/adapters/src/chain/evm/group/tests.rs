@@ -300,8 +300,10 @@ async fn small_head_regression_is_tolerated_for_pinned_read_probes() {
         }),
     ))
     .await;
-    let mut policy = GroupPolicy::default();
-    policy.head_regression_tolerance = 2;
+    let policy = GroupPolicy {
+        head_regression_tolerance: 2,
+        ..GroupPolicy::default()
+    };
     let group = RpcGroup::new(
         "tolerant-head".into(),
         1,

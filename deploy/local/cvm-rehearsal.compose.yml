@@ -35,13 +35,13 @@ services:
 
   anvil:
     networks: !override
-      default: { aliases: [anvil-b, anvil.rehearsal-a.test, anvil.rehearsal-b.test] }
+      default: { aliases: [anvil-b, provider-a.tenderly.test, sentio-sepolia-a.sentio.test, provider-b.publicnode.test, ethpandaops-sepolia-b.ethereum-foundation.test] }
     extends: { file: ../sandbox/docker-compose.local.yml, service: anvil }
 
   # Base Sepolia's chain id, an OP-stack one: its routes credit at depth 3 on Anvil's head.
   anvil-base-sepolia:
     networks: !override
-      default: { aliases: [anvil-base-sepolia-b, base.rehearsal-a.test, base.rehearsal-b.test] }
+      default: { aliases: [anvil-base-sepolia-b, base-sepolia-a.tenderly.test, sentio-base-sepolia-a.sentio.test, base-sepolia-b.publicnode.test] }
     extends: { file: ../sandbox/docker-compose.local.yml, service: anvil }
     command: !override
       - --host
@@ -61,7 +61,7 @@ services:
   # reviewed feed/pair addresses, so CI never reaches Ethereum or Base public RPCs.
   anvil-mainnet-price:
     networks: !override
-      default: { aliases: [price-mainnet-a.test, price-mainnet-b.test] }
+      default: { aliases: [price-mainnet-a.tenderly.test, price-mainnet-a-mevblocker.mevblocker.test, price-mainnet-b.drpc.test, price-mainnet-b-flashbots.flashbots.test] }
     extends: { file: ../sandbox/docker-compose.local.yml, service: anvil }
     command: !override
       - --host
@@ -72,14 +72,12 @@ services:
       - "1"
       - --timestamp
       - "${REHEARSAL_PRICE_ANVIL_TIMESTAMP:-1}"
-      - --block-time
-      - "1"
     ports: !override
       - "127.0.0.1:${REHEARSAL_MAINNET_PRICE_ANVIL_PORT:-18547}:8545"
 
   anvil-base-mainnet-price:
     networks: !override
-      default: { aliases: [base-price-mainnet-a.test, base-price-mainnet-b.test] }
+      default: { aliases: [price-base-mainnet-a.tenderly.test, price-base-mainnet-a-sentio.sentio.test, price-base-mainnet-b.publicnode.test, price-base-mainnet-b-llama.llama.test] }
     extends: { file: ../sandbox/docker-compose.local.yml, service: anvil }
     command: !override
       - --host
@@ -90,8 +88,6 @@ services:
       - "8453"
       - --timestamp
       - "${REHEARSAL_PRICE_ANVIL_TIMESTAMP:-1}"
-      - --block-time
-      - "1"
     ports: !override
       - "127.0.0.1:${REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT:-18548}:8545"
 

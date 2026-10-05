@@ -10,11 +10,7 @@ contract MockPriceAggregator {
     uint256 public updatedAt;
     uint80 public answeredInRound;
 
-    function latestRoundData()
-        external
-        view
-        returns (uint80, int256, uint256, uint256, uint80)
-    {
+    function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
         return (roundId, answer, startedAt, updatedAt, answeredInRound);
     }
 }
