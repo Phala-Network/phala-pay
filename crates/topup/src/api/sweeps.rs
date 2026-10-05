@@ -10,7 +10,7 @@ use alloy_primitives::Address as EvmAddress;
 use axum::Json;
 use axum::extract::{Extension, RawQuery, State};
 use chrono::{DateTime, Utc};
-use futures_util::future::join_all;
+use futures_util::stream::{self, StreamExt};
 use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
@@ -480,7 +480,7 @@ async fn sweepable_treasuries(
         builder.push(" AND address.chain_id = ").push_bind(chain_id);
     }
     let candidates: Vec<(i64, String)> = builder.build_query_as().fetch_all(&state.pool).await?;
-    let screening = &state.screening;
+    let screening = &*state.screening;
     let mut checks = Vec::new();
     for (chain_id, treasury) in candidates {
         let chain_id = u64::try_from(chain_id).map_err(|_| ApiError::internal())?;
@@ -494,7 +494,7 @@ async fn sweepable_treasuries(
         let address = EvmAddress::from_str(&treasury).map_err(|_| ApiError::internal())?;
         checks.push(async move { (treasury, screening.screen_cached(route, address).await) });
     }
-    let results = join_all(checks).await;
+    let results = stream::iter(checks).buffered(4).collect::<Vec<_>>().await;
     let mut clear = Vec::new();
     for (treasury, verdict) in results {
         match verdict {
