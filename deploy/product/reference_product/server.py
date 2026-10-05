@@ -514,11 +514,18 @@ class WebhookKeys:
         self._config = config
         self._lock = threading.Lock()
         self._pinned: PinnedKeys | None = None
+        self._retry_after = 0.0
 
     def __call__(self, *, wait_s: float = 0) -> PinnedKeys:
         with self._lock:
             if self._pinned is None:
-                self._pinned = pin_webhook_keys(self._config, wait_s=wait_s)
+                if time.monotonic() < self._retry_after:
+                    raise TransientError("the service's attestation is unavailable")
+                try:
+                    self._pinned = pin_webhook_keys(self._config, wait_s=wait_s)
+                except TransientError:
+                    self._retry_after = time.monotonic() + 30
+                    raise
             return self._pinned
 
 

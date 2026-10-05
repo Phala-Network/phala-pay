@@ -9,6 +9,7 @@ import sys
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from reference_product import server
 from reference_product.__main__ import write_records
 from reference_product.config import (
     DRIVER_KEYID,
@@ -28,10 +30,16 @@ from reference_product.config import (
     MissingProductKeyError,
     ProductConfig,
 )
-from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys
+from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys, TransientError
 from reference_product.ledger import SCHEMA, Delivery, ProductLedger
 from reference_product.restore_records import export_restore_records
-from reference_product.server import AccountApi, ProductServer, _make_product, pin_webhook_keys
+from reference_product.server import (
+    AccountApi,
+    ProductServer,
+    WebhookKeys,
+    _make_product,
+    pin_webhook_keys,
+)
 from topup_sdk import (
     RequestSigner,
     credited_event_id,
@@ -948,6 +956,7 @@ def test_event_references_commit_with_the_delivery() -> None:
     ledger = ProductLedger()
     delivery = Delivery("evt_test", "1", "signature", b"{}")
     data = {"id": "re_test", "deposit": "dep_test"}
+
     def record_and_fail() -> None:
         with ledger.transaction() as db:
             ledger.record_delivery(db, delivery, "refund.created", data)
@@ -992,3 +1001,37 @@ def test_account_view_bounds_deposits_and_avoids_global_event_reads(
     view = api._account_view(TEAM)
     assert len(view["deposits"]) == 100
     assert [event["data"]["object"]["id"] for event in view["events"]] == [f"qt_{TEAM}"]
+
+
+def test_webhook_key_fetch_failures_are_negative_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    calls: list[float] = []
+    failing = [True]
+    pinned = PinnedKeys(False, [SERVICE_KEY.public_key()])
+
+    def pin(config: ProductConfig, *, wait_s: float = 0) -> PinnedKeys:
+        calls.append(wait_s)
+        if failing[0]:
+            raise TransientError("attestation unavailable")
+        return pinned
+
+    monkeypatch.setattr(server, "pin_webhook_keys", pin)
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    keys = WebhookKeys(CONFIG)
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        futures = [workers.submit(keys) for _ in range(4)]
+        for future in futures:
+            with pytest.raises(TransientError):
+                future.result()
+    assert len(calls) == 1
+    now[0] += 29
+    with pytest.raises(TransientError):
+        keys()
+    assert len(calls) == 1
+    now[0] += 2
+    failing[0] = False
+    assert keys() is pinned
+    assert keys() is pinned
+    assert len(calls) == 2
