@@ -36,7 +36,7 @@ from topup_client.models import (
 from topup_client.types import UNSET, Unset
 from topup_sdk import TopupClient, export_account, sign_treasury_challenge
 from topup_sdk._origin import normalize_origin
-from topup_sdk.client import LIVE_KEY_PREFIXES, Metadata
+from topup_sdk.client import LIVE_KEY_PREFIXES, Metadata, _paginate
 
 from ._errors import ConfigurationError, ResponseValidationError
 from ._pins import Pins, PinsError, key_livemode, parse_pins
@@ -66,19 +66,7 @@ def _request_options(options: RequestOptions) -> RequestOptions:
 def _iterate(
     page_fn: Callable[..., dict[str, Any]], starting_after: str | None, **filters: Any
 ) -> Iterator[Any]:
-    seen: set[str] = set()
-    if starting_after is not None:
-        seen.add(starting_after)
-    while True:
-        listed = page_fn(starting_after=starting_after, **filters)
-        ids = {item.id for item in listed["data"]}
-        if seen.intersection(ids):
-            raise ResponseValidationError("repeated page cursor")
-        seen.update(ids)
-        yield from listed["data"]
-        if not listed["has_more"]:
-            return
-        starting_after = listed["data"][-1].id
+    return _paginate(lambda cursor: page_fn(starting_after=cursor, **filters), starting_after)
 
 
 class PhalaPay:

@@ -197,6 +197,24 @@ Metadata = Mapping[str, str] | Literal[""]
 """A `metadata` parameter: string pairs, where `""` unsets a key, or `""` to unset every key."""
 
 
+def _paginate(
+    page: Callable[[str | None], dict[str, Any]], starting_after: str | None
+) -> Iterator[Any]:
+    seen: set[str] = set()
+    if starting_after is not None:
+        seen.add(starting_after)
+    while True:
+        listed = page(starting_after)
+        ids = {item.id for item in listed["data"]}
+        if seen.intersection(ids):
+            raise ResponseValidationError("repeated page cursor")
+        seen.update(ids)
+        yield from listed["data"]
+        if not listed["has_more"]:
+            return
+        starting_after = listed["data"][-1].id
+
+
 class TopupClient:
     """Merchant API client authenticated with an API key: a secret key (`ppay_sk_test_…`,
     `ppay_sk_live_…`) or a restricted key (`ppay_rk_test_…`, `ppay_rk_live_…`).
@@ -491,7 +509,7 @@ class TopupClient:
     ) -> Iterator[Quote]:
         """Yields the account's quotes, newest first, following every page. They are not
         recomputed when open; historical quote addresses are not payable."""
-        return self._paginate(
+        return _paginate(
             lambda cursor: self.list_quotes_page(
                 client_reference_id=client_reference_id,
                 status=status,
@@ -500,7 +518,7 @@ class TopupClient:
                 limit=page_size,
                 starting_after=cursor,
             ),
-            starting_after=starting_after,
+            starting_after,
         )
 
     def update_quote(
@@ -562,7 +580,7 @@ class TopupClient:
         """Yields the account's deposits matching the filters, newest first, following every page
         (Stripe's auto-pagination). `created_*` are Unix seconds; `expand` may name `data.quote`.
         A deposit is `final` once it can no longer be reversed."""
-        return self._paginate(
+        return _paginate(
             lambda cursor: self.list_deposits_page(
                 client_reference_id=client_reference_id,
                 quote=quote,
@@ -579,7 +597,7 @@ class TopupClient:
                 limit=page_size,
                 starting_after=cursor,
             ),
-            starting_after=starting_after,
+            starting_after,
         )
 
     def get_deposit(
@@ -672,7 +690,7 @@ class TopupClient:
         starting_after: str | None = None,
     ) -> Iterator[DepositAddress]:
         """Yields the matching deposit addresses, newest first, following every page."""
-        return self._paginate(
+        return _paginate(
             lambda cursor: self.list_deposit_addresses_page(
                 client_reference_id=client_reference_id,
                 status=status,
@@ -681,7 +699,7 @@ class TopupClient:
                 limit=page_size,
                 starting_after=cursor,
             ),
-            starting_after=starting_after,
+            starting_after,
         )
 
     def update_deposit_address(
@@ -815,7 +833,7 @@ class TopupClient:
         starting_after: str | None = None,
     ) -> Iterator[Refund]:
         """Yields the account's refunds, newest first, following every page."""
-        return self._paginate(
+        return _paginate(
             lambda cursor: self.list_refunds_page(
                 deposit=deposit,
                 status=status,
@@ -824,7 +842,7 @@ class TopupClient:
                 limit=page_size,
                 starting_after=cursor,
             ),
-            starting_after=starting_after,
+            starting_after,
         )
 
     def get_refund(
@@ -897,14 +915,14 @@ class TopupClient:
         """The API keys of this key's account and mode, newest first, without their secrets,
         from every page."""
         return list(
-            self._paginate(
+            _paginate(
                 lambda cursor: self.list_api_keys_page(
                     request_deadline=request_deadline,
                     upgrade_tolerance=upgrade_tolerance,
                     limit=page_size,
                     starting_after=cursor,
                 ),
-                starting_after=starting_after,
+                starting_after,
             )
         )
 
@@ -998,14 +1016,14 @@ class TopupClient:
         starting_after: str | None = None,
     ) -> Iterator[WebhookEndpointObject]:
         """Yields the webhook endpoints of this mode, newest first."""
-        return self._paginate(
+        return _paginate(
             lambda cursor: self.list_webhook_endpoints_page(
                 request_deadline=request_deadline,
                 upgrade_tolerance=upgrade_tolerance,
                 limit=page_size,
                 starting_after=cursor,
             ),
-            starting_after=starting_after,
+            starting_after,
         )
 
     def create_webhook_endpoint(
@@ -1134,7 +1152,7 @@ class TopupClient:
         webhook ever sent. `type` filters by one event type, such as `deposit.credited`, or a
         group, `deposit.*`; `types` by up to 20. `delivery_success=False` yields the events a
         webhook endpoint has not received yet: resend them once it is fixed."""
-        return self._paginate(
+        return _paginate(
             lambda cursor: self.list_events_page(
                 type=type,
                 types=types,
@@ -1148,7 +1166,7 @@ class TopupClient:
                 limit=page_size,
                 starting_after=cursor,
             ),
-            starting_after=starting_after,
+            starting_after,
         )
 
     def get_event(
@@ -1240,7 +1258,7 @@ class TopupClient:
     ) -> list[Treasury]:
         """The treasuries of this mode, newest first, from every page."""
         return list(
-            self._paginate(
+            _paginate(
                 lambda cursor: self.list_treasuries_page(
                     chain_id=chain_id,
                     status=status,
@@ -1249,7 +1267,7 @@ class TopupClient:
                     limit=page_size,
                     starting_after=cursor,
                 ),
-                starting_after=starting_after,
+                starting_after,
             )
         )
 
@@ -1349,7 +1367,7 @@ class TopupClient:
     ) -> Iterator[Sweep]:
         """Yields the sweeps, finalized `Flushed` events of the account's forwarders, newest
         first."""
-        return self._paginate(
+        return _paginate(
             lambda cursor: self.list_sweeps_page(
                 chain_id=chain_id,
                 forwarder=forwarder,
@@ -1359,7 +1377,7 @@ class TopupClient:
                 limit=page_size,
                 starting_after=cursor,
             ),
-            starting_after=starting_after,
+            starting_after,
         )
 
     def list_forwarders(
@@ -1379,7 +1397,7 @@ class TopupClient:
         (`da_…`, one per chain and treasury it has had). With `sweepable` (a token contract),
         only those with a final unswept balance of it that may be swept: pass them to
         `topup_sdk.flush_transaction`."""
-        return self._paginate(
+        return _paginate(
             lambda cursor: self.list_forwarders_page(
                 chain_id=chain_id,
                 quote=quote,
@@ -1390,7 +1408,7 @@ class TopupClient:
                 limit=page_size,
                 starting_after=cursor,
             ),
-            starting_after=starting_after,
+            starting_after,
         )
 
     def list_quotes_page(
@@ -1716,26 +1734,6 @@ class TopupClient:
                 self._checked_deposit_address(item)
             data.append(item)
         return {"data": data, "has_more": listed.has_more}
-
-    def _paginate(
-        self,
-        page: Callable[[str | None], dict[str, Any]],
-        *,
-        starting_after: str | None = None,
-    ) -> Iterator[Any]:
-        seen: set[str] = set()
-        if starting_after is not None:
-            seen.add(starting_after)
-        while True:
-            listed = page(starting_after)
-            ids = {item.id for item in listed["data"]}
-            if seen.intersection(ids):
-                raise ResponseValidationError("repeated page cursor")
-            seen.update(ids)
-            yield from listed["data"]
-            if not listed["has_more"]:
-                return
-            starting_after = listed["data"][-1].id
 
     def _checked(self, quote: Quote) -> Quote:
         """Raises unless an open quote's address is the one derived from the pinned forwarder
