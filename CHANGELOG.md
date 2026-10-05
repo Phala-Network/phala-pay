@@ -46,7 +46,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   CI validates every shipped environment config and example route template.
 - Cross-org callers can now pass `SENTRY_DSN`; the example passes the maintenance key and
   `bootstrap_maintenance` input.
-- Chainlink price sources omitting `rpc_group_b` on routes listing literal groups `a`/`b` in reversed order previously read one group twice, silently losing A/B independence.
+- Chainlink sources omitting `rpc_group_b` with `rpc_group: a` when the route's second RPC group is literally `a` (e.g. `["x", "a"]`) previously read one group twice, silently losing A/B independence.
   Upgrading reads two independent groups and may newly reject quotes as `divergent`.
   Configurations setting `rpc_group_b` explicitly are unaffected and need no action.
 - Sequencer uptime validation now checks the groups the service reads; previously it looked up `a`/`b` literally while the service resolved them as route aliases.
