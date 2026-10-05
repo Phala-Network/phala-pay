@@ -225,7 +225,7 @@ impl PriceSource for Chainlink {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_rpc::{self, RpcFixture};
+    use super::super::test_rpc::chainlink as rpc;
     use super::*;
     fn round() -> Round {
         Round {
@@ -306,59 +306,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-    async fn rpc(
-        id: &str,
-        answer: i64,
-        round_id: u128,
-        complete: u128,
-        updated: u64,
-        malformed: bool,
-    ) -> RpcFixture {
-        use serde_json::{Value, json};
-        test_rpc::rpc(id, move |request: Value| {
-            if request["method"] == "eth_getBlockByNumber" {
-                let mut head = serde_json::to_value(alloy::rpc::types::Block::<
-                    alloy::rpc::types::Transaction,
-                >::default())
-                .unwrap();
-                head["number"] = if request["params"][0] == "latest" {
-                    json!("0x64")
-                } else {
-                    request["params"][0].clone()
-                };
-                head["hash"] = json!(format!("0x{}", "11".repeat(32)));
-                head["parentHash"] = json!(format!("0x{}", "22".repeat(32)));
-                return head;
-            }
-            if request["method"] == "eth_blockNumber" {
-                return json!("0x64");
-            }
-            assert_eq!(request["params"][1], "0x62");
-            let data = request["params"][0]["input"]
-                .as_str()
-                .or_else(|| request["params"][0]["data"].as_str())
-                .unwrap_or("");
-            let result = if malformed {
-                "0x1234".to_owned()
-            } else if data.starts_with("0x313ce567") {
-                format!("0x{}", hex::encode(decimalsCall::abi_encode_returns(&8u8)))
-            } else {
-                let r = latestRoundDataReturn {
-                    roundId: alloy_primitives::Uint::<80, 2>::from(round_id),
-                    answer: alloy_primitives::I256::try_from(answer).unwrap(),
-                    startedAt: alloy_primitives::U256::from(updated),
-                    updatedAt: alloy_primitives::U256::from(updated),
-                    answeredInRound: alloy_primitives::Uint::<80, 2>::from(complete),
-                };
-                format!(
-                    "0x{}",
-                    hex::encode(latestRoundDataCall::abi_encode_returns(&r))
-                )
-            };
-            json!(result)
-        })
-        .await
     }
     #[tokio::test]
     async fn typed_group_round_agreement_and_fault_injection() {

@@ -8,8 +8,10 @@ publish.workspace = true
 
 [features]
 dev-signer = []
+test-support = ["dep:axum"]
 
 [dependencies]
+axum = { workspace = true, optional = true }
 async-trait.workspace = true
 alloy.workspace = true
 alloy-consensus.workspace = true
