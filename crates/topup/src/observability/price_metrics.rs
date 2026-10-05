@@ -128,16 +128,11 @@ pub fn failover(route: &RouteFile, role: &str, source: &str, company: &str) {
     );
 }
 /// Records a rejected valuation with per-source dimensions.
-pub fn decision(
-    route: &RouteFile,
-    code: &str,
-    evidence: &serde_json::Value,
-    source_ids: impl Iterator<Item = (&'static str, &'static str)> + Clone,
-) {
+pub fn decision(route: &RouteFile, code: &str, evidence: &serde_json::Value) {
     if let Some(observations) = evidence["observations"].as_array() {
         for observation in observations {
             let role = observation["role"].as_str().unwrap_or("valuation");
-            let source = observation["company"]
+            let company = observation["company"]
                 .as_str()
                 .or_else(|| observation["source"].as_str())
                 .unwrap_or("policy");
@@ -146,11 +141,8 @@ pub fn decision(
                 && (observation["error"].is_null() || observation["error"] == "divergent"))
                 || (code == "fx_depeg" && role == "fx" && observation["error"].is_null())
             {
-                let source_id = source_ids
-                    .clone()
-                    .find_map(|(company, id)| (company == source).then_some(id))
-                    .unwrap_or(source);
-                source_event(route, role, source_id, source, code);
+                let source = observation["source"].as_str().unwrap_or(company);
+                source_event(route, role, source, company, code);
             }
         }
     }

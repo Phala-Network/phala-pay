@@ -181,14 +181,6 @@ impl PricingRuntime {
             stuck_since: std::sync::Mutex::new(None),
         })
     }
-    fn source_ids(&self) -> impl Iterator<Item = (&'static str, &'static str)> + Clone {
-        self.sources
-            .iter()
-            .chain(&self.primary)
-            .chain(&self.check)
-            .chain(&self.fx)
-            .map(|entry| (entry.company, entry.source_id))
-    }
     /// Accumulate TWAP history even when no merchant requests a quote.
     pub async fn sample_twaps(&self, route: &RouteFile) {
         for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
@@ -271,7 +263,7 @@ impl PricingRuntime {
                     }
                     audit.decision = Some(code);
                     let failure = PricingFailure::with_audit(code, &audit);
-                    price_metrics::decision(route, code, &failure.evidence, self.source_ids());
+                    price_metrics::decision(route, code, &failure.evidence);
                     return Err(failure);
                 }
             }
@@ -425,7 +417,7 @@ impl PricingRuntime {
             Err(code) => {
                 audit.decision = Some(code);
                 let failure = PricingFailure::with_audit(code, &audit);
-                price_metrics::decision(route, code, &failure.evidence, self.source_ids());
+                price_metrics::decision(route, code, &failure.evidence);
                 Err(failure)
             }
         }
