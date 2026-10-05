@@ -1200,24 +1200,18 @@ mod tests {
 
     #[tokio::test]
     async fn quote_and_confirm_share_one_runtime() {
-        use crate::locks::ConfiguredQuoteProvider;
         let mut route: RouteFile =
             serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml"))
                 .unwrap();
         route.route = "shared-pricing-runtime".into();
         route.chain.rpc_providers = vec!["http://127.0.0.1:1".into(), "http://127.0.0.1:2".into()];
         let key = (route.route.clone(), route.version);
-        let runtime = Arc::new(PricingRuntime::injected(
-            Arc::new(MockPrice(Err(PriceError::Stale))),
-            None,
-            None,
-        ));
-        let pricing = Arc::new(BTreeMap::from([(key.clone(), Arc::clone(&runtime))]));
-        let _quotes = ConfiguredQuoteProvider::from_runtimes(Arc::clone(&pricing));
         let routes = RouteSet::new(vec![route.clone()]).unwrap();
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://localhost/shared-pricing")
             .unwrap();
+        let pricing = PricingRuntime::build_all(&routes, pool.clone()).unwrap();
+        let runtime = Arc::clone(&pricing[&key]);
         let confirm = ConfirmStep::from_routes(pool, &routes, pricing).unwrap();
         assert!(Arc::ptr_eq(&runtime, &confirm.routes[&key].pricing));
     }
