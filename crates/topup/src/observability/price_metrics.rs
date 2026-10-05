@@ -144,8 +144,9 @@ pub fn decision(route: &RouteFile, code: &str, evidence: &serde_json::Value) {
     }
 }
 /// Emits every failed valuation through the existing sanitized alert convention.
-pub fn failure(route: &RouteFile, evidence: &serde_json::Value) {
-    let code = evidence["error"].as_str().unwrap_or("source_failure");
+pub fn failure(route: &RouteFile, failure: &crate::locks::pricing::PricingFailure) {
+    let code = failure.code;
+    let evidence = &failure.evidence;
     tracing::warn!(tags.alert = "price-outage", tags.route = route.route, tags.asset = route.asset.symbol, tags.check = code, evidence = %evidence, "price valuation halted");
 }
 /// Records rejected observations with the real source/company identity.
@@ -264,7 +265,10 @@ mod tests {
                         stuck(&route, 6);
                         failure(
                             &route,
-                            &serde_json::json!({"error":"depeg","quote":{"decision":"depeg"}}),
+                            &crate::locks::pricing::PricingFailure {
+                                code: "depeg",
+                                evidence: serde_json::json!({"decision":"depeg"}),
+                            },
                         );
                     },
                 );

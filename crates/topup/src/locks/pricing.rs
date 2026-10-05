@@ -1,6 +1,7 @@
 //! Shared fail-closed pricing for quotes and deposit credit.
 use crate::{observability::price_metrics, routes::RouteSet};
 use chrono::Utc;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     sync::Arc,
@@ -19,6 +20,38 @@ use topup_core::{
         validate_spot,
     },
 };
+/// A pricing refusal with sanitized evidence, converted to JSON at persistence boundaries.
+#[derive(Debug)]
+pub struct PricingFailure {
+    /// Stable failure classification.
+    pub code: &'static str,
+    /// Sanitized quote audit, or null when no quote audit exists.
+    pub evidence: Value,
+}
+impl PricingFailure {
+    fn new(code: &'static str) -> Self {
+        Self {
+            code,
+            evidence: Value::Null,
+        }
+    }
+    fn with_audit(code: &'static str, audit: &Audit) -> Self {
+        Self {
+            code,
+            evidence: json!(audit),
+        }
+    }
+}
+#[derive(Default, Serialize)]
+struct Audit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<PricingMode>,
+    observations: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sequencer: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision: Option<&'static str>,
+}
 fn source_id(company: &str) -> &str {
     if company == "uniswap-v2-onchain" {
         "uniswap_v2_twap"
@@ -157,9 +190,12 @@ impl PricingRuntime {
     pub async fn sample_twaps(&self, route: &RouteFile) {
         for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
             for entry in entries.iter().filter(|e| e.company == "uniswap-v2-onchain") {
-                let mut audit = json!({"observations":[]});
-                if let Err(evidence) = observe(entry, route, role, &mut audit).await {
-                    price_metrics::failure(route, &evidence);
+                let mut audit = Audit::default();
+                if let Err(mut failure) = observe(entry, route, role, &mut audit).await {
+                    if audit.decision.is_some() {
+                        failure.evidence = json!(audit);
+                    }
+                    price_metrics::failure(route, &failure);
                 }
             }
         }
@@ -188,7 +224,7 @@ impl PricingRuntime {
         }
     }
     /// Fetches every stablecoin source or the first healthy source in each volatile role.
-    pub async fn fetch(&self, route: &RouteFile) -> Result<ValidatedQuote, Value> {
+    pub async fn fetch(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
         let result = self.fetch_inner(route).await;
         if let Err(evidence) = &result {
             price_metrics::failure(route, evidence);
@@ -207,22 +243,26 @@ impl PricingRuntime {
         }
         result
     }
-    async fn fetch_inner(&self, route: &RouteFile) -> Result<ValidatedQuote, Value> {
-        let mut audit = json!({"mode":route.pricing.mode, "observations":[]});
+    async fn fetch_inner(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
+        let mut audit = Audit {
+            mode: Some(route.pricing.mode),
+            ..Audit::default()
+        };
         if let Some((sequencer, grace)) = &self.sequencer {
             match sequencer.sequencer(*grace).await {
-                Ok(evidence) => audit["sequencer"] = evidence,
+                Ok(evidence) => audit.sequencer = Some(evidence),
                 Err(error) => {
                     let code = error_code(&error);
                     if let PriceError::Feed { evidence, .. } = error {
-                        audit["sequencer"] = evidence;
+                        audit.sequencer = Some(evidence);
                     }
                     if code == "divergent" {
                         price_metrics::source_event(route, "sequencer", "chainlink", code);
                     }
-                    audit["decision"] = json!(code);
-                    price_metrics::decision(route, code, &audit);
-                    return Err(json!({"stage":"pricing", "error":code, "quote":audit}));
+                    audit.decision = Some(code);
+                    let failure = PricingFailure::with_audit(code, &audit);
+                    price_metrics::decision(route, code, &failure.evidence);
+                    return Err(failure);
                 }
             }
         }
@@ -240,7 +280,16 @@ impl PricingRuntime {
                     .as_ref()
                     .is_none_or(|asset| asset == &route.asset.symbol)
             }) {
-                if let Some(quote) = observe(entry, route, "sources", &mut audit).await? {
+                let quote =
+                    observe(entry, route, "sources", &mut audit)
+                        .await
+                        .map_err(|mut failure| {
+                            if audit.decision.is_some() {
+                                failure.evidence = json!(audit);
+                            }
+                            failure
+                        })?;
+                if let Some(quote) = quote {
                     observed.push((
                         quote.valuation,
                         entry.max_age_s.unwrap_or(route.pricing.max_age_s),
@@ -274,28 +323,26 @@ impl PricingRuntime {
                 ScaledPrice::new(100_000_000, 8).map_err(|_| "out_of_range")
             }
         } else {
-            let mut pa = json!({"observations":[]});
-            let mut ca = json!({"observations":[]});
-            let mut fa = json!({"observations":[]});
+            let mut pa = Audit::default();
+            let mut ca = Audit::default();
+            let mut fa = Audit::default();
             let (primary, check, fx) = tokio::join!(
                 first(&self.primary, route, "primary", &mut pa),
                 first(&self.check, route, "check", &mut ca),
                 first(&self.fx, route, "fx", &mut fa)
             );
-            for part in [pa, ca, fa] {
-                if let (Some(all), Some(list)) = (
-                    audit["observations"].as_array_mut(),
-                    part["observations"].as_array(),
-                ) {
-                    all.extend(list.iter().cloned());
-                }
-            }
+            audit.observations.extend(
+                pa.observations
+                    .into_iter()
+                    .chain(ca.observations)
+                    .chain(fa.observations),
+            );
             if let Some(error) = [&primary, &check, &fx]
                 .iter()
                 .find_map(|r| r.as_ref().err())
             {
-                audit["decision"] = error["error"].clone();
-                return Err(json!({"stage":"pricing", "error":error["error"], "quote":audit}));
+                audit.decision = Some(error.code);
+                return Err(PricingFailure::with_audit(error.code, &audit));
             }
             let primary = primary?;
             let check = check?;
@@ -327,7 +374,7 @@ impl PricingRuntime {
                             .checked_sub(o.observed_at.value())
                             .is_none_or(|age| age > bound)
                         {
-                            return Err(json!({"stage":"pricing","error":"stale","quote":audit}));
+                            return Err(PricingFailure::with_audit("stale", &audit));
                         }
                     }
                     let mut policy = ValuationPolicy::from(&route.pricing);
@@ -359,10 +406,7 @@ impl PricingRuntime {
                 }
                 (Some(_), Some(_), Some(_)) => Err("company_overlap"),
                 _ => Err(
-                    if audit["observations"]
-                        .as_array()
-                        .is_some_and(|list| list.iter().any(|o| o["error"] == "stale"))
-                    {
+                    if audit.observations.iter().any(|o| o["error"] == "stale") {
                         "stale"
                     } else {
                         "source_failure"
@@ -372,16 +416,17 @@ impl PricingRuntime {
         };
         match result {
             Ok(price) => {
-                audit["decision"] = json!("accepted");
+                audit.decision = Some("accepted");
                 Ok(ValidatedQuote {
                     price,
-                    evidence: audit,
+                    evidence: json!(audit),
                 })
             }
             Err(code) => {
-                audit["decision"] = json!(code);
-                price_metrics::decision(route, code, &audit);
-                Err(json!({"stage":"pricing", "error":code, "quote":audit}))
+                audit.decision = Some(code);
+                let failure = PricingFailure::with_audit(code, &audit);
+                price_metrics::decision(route, code, &failure.evidence);
+                Err(failure)
             }
         }
     }
@@ -390,8 +435,8 @@ async fn first(
     entries: &[Entry],
     route: &RouteFile,
     role: &str,
-    audit: &mut Value,
-) -> Result<Option<PriceQuote>, Value> {
+    audit: &mut Audit,
+) -> Result<Option<PriceQuote>, PricingFailure> {
     for (index, entry) in entries.iter().enumerate() {
         if let Some(observation) = observe(entry, route, role, audit).await? {
             if index > 0 {
@@ -406,8 +451,8 @@ async fn observe(
     entry: &Entry,
     route: &RouteFile,
     role: &str,
-    audit: &mut Value,
-) -> Result<Option<PriceQuote>, Value> {
+    audit: &mut Audit,
+) -> Result<Option<PriceQuote>, PricingFailure> {
     let result = tokio::time::timeout(Duration::from_secs(30), entry.source.quote()).await;
     let result = match result {
         Ok(r) => r,
@@ -436,26 +481,22 @@ async fn observe(
         }
         Err(error) => {
             let code = error_code(&error);
-            if let Some(list) = audit["observations"].as_array_mut() {
-                list.push(json!({"role":role,"company":entry.company,"source":source_id(entry.company),"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
-            }
+            audit.observations.push(json!({"role":role,"company":entry.company,"source":source_id(entry.company),"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
             price_metrics::health(route, role, entry.company, false);
             if code.starts_with("twap_") {
                 price_metrics::refusal(route, role, entry.company, code);
-                audit["decision"] = json!(code);
-                return Err(json!({"stage":"pricing", "error":code, "quote":audit}));
+                audit.decision = Some(code);
+                return Err(PricingFailure::new(code));
             }
             if code == "divergent" {
-                audit["decision"] = json!("divergent");
+                audit.decision = Some("divergent");
                 price_metrics::source_event(route, role, entry.company, "divergent");
-                return Err(json!({"stage":"pricing", "error":"divergent", "quote":audit}));
+                return Err(PricingFailure::new("divergent"));
             }
             return Ok(None);
         }
     };
-    if let Some(list) = audit["observations"].as_array_mut() {
-        list.push(evidence);
-    }
+    audit.observations.push(evidence);
     price_metrics::health(route, role, entry.company, true);
     Ok(observation)
 }
@@ -480,14 +521,14 @@ pub struct ValidatedQuote {
     pub evidence: Value,
 }
 
-fn validation_time() -> Result<UnixSeconds, Value> {
+fn validation_time() -> Result<UnixSeconds, PricingFailure> {
     #[cfg(test)]
     if let Ok(now) = tests::GOLDEN_NOW.try_with(|now| *now) {
         return Ok(UnixSeconds::new(now));
     }
     u64::try_from(Utc::now().timestamp())
         .map(UnixSeconds::new)
-        .map_err(|_| json!({"stage": "pricing", "error": "invalid_clock"}))
+        .map_err(|_| PricingFailure::new("invalid_clock"))
 }
 
 /// Stable validation error code shared with transition evidence.
@@ -553,7 +594,7 @@ mod tests {
         let mut divergent = volatile.clone();
         divergent[0] = golden_observation("primary", "kraken", "20000000");
         assert_eq!(
-            serde_json::to_vec(&r.fetch(&route).await.err().unwrap()).unwrap(),
+            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
             golden_failure(
                 "divergent",
                 &golden_audit("volatile", "divergent", &divergent)
@@ -565,7 +606,7 @@ mod tests {
         let mut stale = volatile.clone();
         stale[0] = r#"{"company":"kraken","data":null,"descriptor":null,"error":"stale","role":"primary","source":"kraken"}"#.into();
         assert_eq!(
-            serde_json::to_vec(&r.fetch(&route).await.err().unwrap()).unwrap(),
+            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
             golden_failure("stale", &golden_audit("volatile", "stale", &stale)).as_bytes()
         );
 
@@ -597,7 +638,7 @@ mod tests {
                 r#"{{"company":"uniswap-v2-onchain","data":{{"window_s":1800}},"descriptor":null,"error":"{code}","role":"primary","source":"uniswap_v2_twap"}}"#
             );
             assert_eq!(
-                serde_json::to_vec(&r.fetch(&route).await.err().unwrap()).unwrap(),
+                serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
                 golden_failure(code, &golden_audit("volatile", code, &refused)).as_bytes(),
                 "{code}"
             );
@@ -621,7 +662,7 @@ mod tests {
         r.sources[1] = entry("chainlink", 98_000_000, 0, None);
         stable[1] = golden_observation("sources", "chainlink", "98000000");
         assert_eq!(
-            serde_json::to_vec(&r.fetch(&route).await.err().unwrap()).unwrap(),
+            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
             golden_failure("depeg", &golden_audit("stablecoin", "depeg", &stable)).as_bytes()
         );
     }
@@ -759,7 +800,7 @@ mod tests {
             r.check[0].usdt_quoted = false;
             let result = r.fetch(&route).await;
             if let Some(code) = refusal {
-                assert_eq!(result.err().unwrap()["error"], code, "{scenario}");
+                assert_eq!(result.err().unwrap().code, code, "{scenario}");
             } else {
                 let quote = result.ok().unwrap();
                 assert_eq!(quote.price.value(), expected * 100_000_000, "{scenario}");
@@ -809,9 +850,9 @@ mod tests {
             );
             r.primary.push(entry("fallback", 10_000_000, 0, None));
             let failure = r.fetch(&route()).await.err().unwrap();
-            assert_eq!(failure["error"], code);
+            assert_eq!(failure.code, code);
             assert!(
-                failure["quote"]["observations"]
+                failure.evidence["observations"]
                     .as_array()
                     .unwrap()
                     .iter()
@@ -851,11 +892,11 @@ mod tests {
         );
         assert!(r.fetch(&route()).await.is_ok());
         r.primary[0] = entry("offline", 10_000_000, 0, Some(PriceError::Disagreement));
-        assert_eq!(r.fetch(&route()).await.err().unwrap()["error"], "divergent");
+        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "divergent");
         r.primary[0] = entry("offline", 20_000_000, 0, None);
-        assert_eq!(r.fetch(&route()).await.err().unwrap()["error"], "divergent");
+        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "divergent");
         r.fx.insert(0, entry("depeg", 90_000_000, 0, None));
-        assert_eq!(r.fetch(&route()).await.err().unwrap()["error"], "fx_depeg");
+        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "fx_depeg");
     }
     #[tokio::test]
     async fn usd_check_is_not_multiplied_by_usdt_fx() {
@@ -866,10 +907,10 @@ mod tests {
         route.pricing.max_deviation_bps = topup_core::money::Bps::new(0).unwrap();
         assert!(r.fetch(&route).await.is_ok());
         r.check[0].usdt_quoted = true;
-        assert_eq!(r.fetch(&route).await.err().unwrap()["error"], "divergent");
+        assert_eq!(r.fetch(&route).await.err().unwrap().code, "divergent");
         r.check[0].usdt_quoted = false;
         r.fx[0] = entry("chainlink", 90_000_000, 0, None);
-        assert_eq!(r.fetch(&route).await.err().unwrap()["error"], "fx_depeg");
+        assert_eq!(r.fetch(&route).await.err().unwrap().code, "fx_depeg");
     }
     #[tokio::test]
     async fn stablecoin_any_fresh_depeg_overrides_all_healthy_sources() {
@@ -881,7 +922,7 @@ mod tests {
                 entry("healthy", 100_000_000, 0, None),
                 entry(id, 98_000_000, 0, None),
             ];
-            assert_eq!(r.fetch(&route).await.err().unwrap()["error"], "depeg");
+            assert_eq!(r.fetch(&route).await.err().unwrap().code, "depeg");
             r.sources[1] = entry(id, 98_000_000, 1000, None);
             assert_eq!(
                 r.fetch(&route).await.ok().unwrap().price.value(),

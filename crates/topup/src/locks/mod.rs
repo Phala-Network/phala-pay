@@ -30,7 +30,7 @@ use crate::db::{Account, Customer};
 use crate::payment_config::{self, Resolution, Status, Terms};
 use crate::routes::RouteSet;
 use crate::tenancy::Scope;
-use pricing::{PricingRuntime, ValidatedQuote};
+use pricing::{PricingFailure, PricingRuntime, ValidatedQuote};
 
 /// The columns of [`RateLockRow`]; callers append the `WHERE` clause with `concat!`.
 macro_rules! select_lock {
@@ -203,8 +203,23 @@ impl QuoteProvider for ConfiguredQuoteProvider {
         let runtime = self
             .runtimes
             .get(&(route.route.clone(), route.version))
-            .ok_or_else(|| json!({"stage": "pricing", "error": "missing_route_runtime"}))?;
-        runtime.fetch(route).await
+            .ok_or_else(|| {
+                Value::from(PricingFailure {
+                    code: "missing_route_runtime",
+                    evidence: Value::Null,
+                })
+            })?;
+        runtime.fetch(route).await.map_err(Value::from)
+    }
+}
+
+impl From<PricingFailure> for Value {
+    fn from(failure: PricingFailure) -> Self {
+        let mut value = json!({"stage": "pricing", "error": failure.code});
+        if !failure.evidence.is_null() {
+            value["quote"] = failure.evidence;
+        }
+        value
     }
 }
 
@@ -214,7 +229,11 @@ pub struct UnavailableQuoteProvider;
 #[async_trait]
 impl QuoteProvider for UnavailableQuoteProvider {
     async fn quote(&self, _route: &RouteFile) -> Result<ValidatedQuote, Value> {
-        Err(json!({"stage": "pricing", "error": "unavailable"}))
+        Err(PricingFailure {
+            code: "unavailable",
+            evidence: Value::Null,
+        }
+        .into())
     }
 }
 

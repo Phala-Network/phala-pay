@@ -436,7 +436,7 @@ impl ConfirmStep {
         let quote = match runtime.pricing.fetch(&runtime.route).await {
             Ok(quote) => quote,
             Err(evidence) => {
-                return retry(RetryError::PriceUnavailable, evidence, effects);
+                return retry(RetryError::PriceUnavailable, evidence.into(), effects);
             }
         };
         let valuation = value_deposit(
