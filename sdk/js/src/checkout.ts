@@ -327,7 +327,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
   }
 
   function refresh(): Promise<void> {
-    if (destroyed || signal.aborted || visibilityDocument?.visibilityState === "hidden") {
+    if (destroyed || signal.aborted) {
       return Promise.resolve();
     }
     inFlight ??= load().finally(() => {
@@ -343,7 +343,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
     }
     const delay = pollDelay(interval, failures, lastFailure);
     timer = setTimeout(() => {
-      if (!finished()) {
+      if (!finished() && visibilityDocument?.visibilityState !== "hidden") {
         void refresh().then(schedule);
       }
     }, delay);
@@ -363,7 +363,9 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
 
   visibilityDocument?.addEventListener("visibilitychange", visibilityChanged);
   signal.addEventListener("abort", stopPolling, { once: true });
-  void refresh().then(schedule);
+  if (visibilityDocument?.visibilityState !== "hidden") {
+    void refresh().then(schedule);
+  }
 
   return {
     getState: () => state,

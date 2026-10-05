@@ -52,7 +52,6 @@ describe("createCheckout", () => {
     const { fetch, calls } = fakeFetch(quote());
     const { checkout } = start(fetch);
     await vi.advanceTimersByTimeAsync(60_000);
-    await checkout.refresh();
     expect(calls).toHaveLength(0);
     visibility.mockReturnValue("visible");
     document.dispatchEvent(new Event("visibilitychange"));
@@ -72,6 +71,26 @@ describe("createCheckout", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(60_000);
     expect(calls).toHaveLength(3);
+  });
+
+  it("allows an explicit refresh while hidden without restarting automatic polling", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const { fetch, calls } = fakeFetch(quote(), quote({ payment_status: "seen" }));
+    const { checkout } = start(fetch);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toHaveLength(0);
+    await checkout.refresh();
+    expect(calls).toHaveLength(1);
+    expect(checkout.getState().status).toBe("waiting");
+    await checkout.refresh();
+    expect(calls).toHaveLength(2);
+    expect(checkout.getState().status).toBe("seen");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toHaveLength(2);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls).toHaveLength(4);
   });
 
   it("does not duplicate polls when visibility returns during an active read", async () => {
