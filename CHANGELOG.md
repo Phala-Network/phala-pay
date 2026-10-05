@@ -16,12 +16,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
-- Chainlink sources omitting `rpc_group_b` with `rpc_group: a` when the route's second RPC group is literally `a` (e.g. `["x", "a"]`) previously read one group twice, silently losing A/B independence.
-  Upgrading reads two independent groups and may newly reject quotes as `divergent`.
+- Chainlink sources omitting `rpc_group_b` with `rpc_group: a` when the route's second RPC group is
+  literally `a` (e.g. `["x", "a"]`) previously read one group twice, silently losing A/B
+  independence. Upgrading reads two independent groups and may newly reject quotes as `divergent`.
   Configurations setting `rpc_group_b` explicitly are unaffected and need no action.
-- Sequencer uptime validation now checks the groups the service reads; previously it looked up `a`/`b` literally while the service resolved them as route aliases.
-  Runtime is unchanged. Configurations that only validated under the old lookup may now be rejected by `config check`.
-  Shipped staging, example, and examples/ configurations use non-alias sequencer group names and are unaffected.
+- Sequencer uptime validation now checks the groups the service reads; previously it looked up
+  `a`/`b` literally while the service resolved them as route aliases. Runtime is unchanged.
+  Configurations that only validated under the old lookup may now be rejected by `config check`.
+  Shipped staging, example, and examples/ configurations use non-alias sequencer group names and are
+  unaffected.
 
 ### Python SDK (`phala-pay`)
 
