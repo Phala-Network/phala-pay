@@ -19,9 +19,10 @@ and 0 otherwise; the balance moves by the difference from what the deposit contr
 partial refund takes back its pro-rata share of the credit, a reversal all of it, and a
 `deposit.reversed` delivered before `deposit.credited` nets to zero at once.
 
-Run it against staging (install with `uv add phala-pay fastapi uvicorn`):
 For `PHALA_PAY_API_KEY`, use a restricted key with `quotes.write`; keep the secret key offline
 for administration.
+
+Run it against staging (install with `uv add phala-pay fastapi uvicorn`):
 
     PHALA_PAY_API_KEY=ppay_rk_test_... \\
     PHALA_PAY_PINS=ppay_pins_v1.... \\
