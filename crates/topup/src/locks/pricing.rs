@@ -481,6 +481,10 @@ pub struct ValidatedQuote {
 }
 
 fn validation_time() -> Result<UnixSeconds, Value> {
+    #[cfg(test)]
+    if let Ok(now) = tests::GOLDEN_NOW.try_with(|now| *now) {
+        return Ok(UnixSeconds::new(now));
+    }
     u64::try_from(Utc::now().timestamp())
         .map(UnixSeconds::new)
         .map_err(|_| json!({"stage": "pricing", "error": "invalid_clock"}))
@@ -504,6 +508,124 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use topup_core::valuation::SourceId;
+    tokio::task_local! {
+        pub(super) static GOLDEN_NOW: u64;
+    }
+
+    // Literal serialized snapshots pin persisted field names, nulls, ordering, and types.
+    fn golden_observation(role: &str, company: &str, price: &str) -> String {
+        format!(
+            r#"{{"age_s":0,"agreement_price_scaled":"{price}","company":"{company}","data":null,"descriptor":null,"observed_at":1700000000,"price_scaled":"{price}","role":"{role}","source":"{company}"}}"#
+        )
+    }
+
+    fn golden_audit(mode: &str, decision: &str, observations: &[String]) -> String {
+        format!(
+            r#"{{"decision":"{decision}","mode":"{mode}","observations":[{}]}}"#,
+            observations.join(",")
+        )
+    }
+
+    fn golden_failure(code: &str, audit: &str) -> String {
+        format!(r#"{{"error":"{code}","quote":{audit},"stage":"pricing"}}"#)
+    }
+
+    #[tokio::test]
+    async fn golden_persisted_pricing_json() {
+        GOLDEN_NOW.scope(1_700_000_000, golden_cases()).await;
+    }
+
+    async fn golden_cases() {
+        let route = route();
+        let volatile = [
+            golden_observation("primary", "kraken", "10000000"),
+            golden_observation("check", "binance", "10000000"),
+            golden_observation("fx", "chainlink", "100000000"),
+        ];
+        let quote = runtime().fetch(&route).await.ok().unwrap();
+        assert_eq!(
+            serde_json::to_vec(&quote.evidence).unwrap(),
+            golden_audit("volatile", "accepted", &volatile).as_bytes()
+        );
+
+        let mut r = runtime();
+        r.primary[0] = entry("kraken", 20_000_000, 0, None);
+        let mut divergent = volatile.clone();
+        divergent[0] = golden_observation("primary", "kraken", "20000000");
+        assert_eq!(
+            serde_json::to_vec(&r.fetch(&route).await.err().unwrap()).unwrap(),
+            golden_failure(
+                "divergent",
+                &golden_audit("volatile", "divergent", &divergent)
+            )
+            .as_bytes()
+        );
+
+        r.primary[0] = entry("kraken", 10_000_000, 1000, None);
+        let mut stale = volatile.clone();
+        stale[0] = r#"{"company":"kraken","data":null,"descriptor":null,"error":"stale","role":"primary","source":"kraken"}"#.into();
+        assert_eq!(
+            serde_json::to_vec(&r.fetch(&route).await.err().unwrap()).unwrap(),
+            golden_failure("stale", &golden_audit("volatile", "stale", &stale)).as_bytes()
+        );
+
+        for code in [
+            "twap_history",
+            "twap_liquidity",
+            "twap_stale_sample",
+            "twap_spot_divergence",
+            "twap_sample_jump",
+            "twap_storage",
+            "twap_reorg",
+            "twap_sample_order",
+            "twap_token_order",
+        ] {
+            r.primary = vec![
+                entry(
+                    "uniswap-v2-onchain",
+                    10_000_000,
+                    0,
+                    Some(PriceError::Feed {
+                        class: code,
+                        evidence: json!({"window_s":1800}),
+                    }),
+                ),
+                entry("fallback", 10_000_000, 0, None),
+            ];
+            let mut refused = volatile.clone();
+            refused[0] = format!(
+                r#"{{"company":"uniswap-v2-onchain","data":{{"window_s":1800}},"descriptor":null,"error":"{code}","role":"primary","source":"uniswap_v2_twap"}}"#
+            );
+            assert_eq!(
+                serde_json::to_vec(&r.fetch(&route).await.err().unwrap()).unwrap(),
+                golden_failure(code, &golden_audit("volatile", code, &refused)).as_bytes(),
+                "{code}"
+            );
+        }
+
+        let mut route = route;
+        route.pricing.mode = PricingMode::Stablecoin;
+        r.sources = vec![
+            entry("healthy", 100_000_000, 0, None),
+            entry("chainlink", 100_000_000, 0, None),
+        ];
+        let mut stable = [
+            golden_observation("sources", "healthy", "100000000"),
+            golden_observation("sources", "chainlink", "100000000"),
+        ];
+        let quote = r.fetch(&route).await.ok().unwrap();
+        assert_eq!(
+            serde_json::to_vec(&quote.evidence).unwrap(),
+            golden_audit("stablecoin", "accepted", &stable).as_bytes()
+        );
+        r.sources[1] = entry("chainlink", 98_000_000, 0, None);
+        stable[1] = golden_observation("sources", "chainlink", "98000000");
+        assert_eq!(
+            serde_json::to_vec(&r.fetch(&route).await.err().unwrap()).unwrap(),
+            golden_failure("depeg", &golden_audit("stablecoin", "depeg", &stable)).as_bytes()
+        );
+    }
+
     struct Fixture {
         id: &'static str,
         price: u64,
