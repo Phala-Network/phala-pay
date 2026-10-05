@@ -214,9 +214,8 @@ class PhalaPay:
         self.api_keys = ApiKeys(self._client)
         self.webhook_endpoints = WebhookEndpoints(self._client)
         self.events = Events(self._client)
-        self.webhooks: _BoundWebhook | type[Webhook] = (
-            _BoundWebhook(self._pins) if self._pins else Webhook
-        )
+        # narrow to _BoundWebhook when the legacy constructor is removed in 0.10.0
+        self.webhooks: Any = _BoundWebhook(self._pins) if self._pins else Webhook
 
     @classmethod
     def from_env(
