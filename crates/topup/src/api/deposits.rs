@@ -29,6 +29,22 @@ use super::models::{
 };
 use super::repository::{self, NewRefund};
 
+/// The joined columns used by both refund reads and list pages.
+macro_rules! select_refund {
+    () => {
+        r#"
+        SELECT refund.id, refund.livemode, refund.deposit_id, refund.amount_atomic::text AS amount_atomic,
+               refund.destination_address, address.treasury, refund.status,
+               refund.failure_reason, refund.tx_hash, refund.receipt_log_index,
+               refund.created_at,
+               refund.metadata
+        FROM refunds AS refund
+        JOIN deposits AS deposit ON deposit.id = refund.deposit_id
+        JOIN addresses AS address ON address.id = deposit.address_id
+        "#
+    };
+}
+
 type ApiResult<T> = Result<T, ApiError>;
 
 const DEFAULT_LIMIT: i64 = 10;
@@ -393,9 +409,8 @@ pub(crate) async fn list_refunds(
     RawQuery(query): RawQuery,
 ) -> ApiResult<Json<RefundList>> {
     let scope = merchant.scope;
-    let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT refund.id FROM refunds AS refund WHERE refund.account_id = ",
-    );
+    let mut builder =
+        QueryBuilder::<Postgres>::new(concat!(select_refund!(), " WHERE refund.account_id = "));
     builder
         .push_bind(scope.account_id())
         .push(" AND refund.livemode = ")
@@ -477,20 +492,19 @@ pub(crate) async fn list_refunds(
             " ORDER BY refund.created_at DESC, refund.id DESC LIMIT "
         })
         .push_bind(limit.saturating_add(1));
-    let mut ids: Vec<Uuid> = builder.build_query_scalar().fetch_all(&state.pool).await?;
-    let has_more = i64::try_from(ids.len()).map_err(|_| ApiError::internal())? > limit;
-    ids.truncate(usize::try_from(limit).map_err(|_| ApiError::internal())?);
+    let mut rows = builder
+        .build_query_as::<RefundRow>()
+        .fetch_all(&state.pool)
+        .await?;
+    let has_more = i64::try_from(rows.len()).map_err(|_| ApiError::internal())? > limit;
+    rows.truncate(usize::try_from(limit).map_err(|_| ApiError::internal())?);
     if before {
-        ids.reverse();
+        rows.reverse();
     }
-    let mut data = Vec::with_capacity(ids.len());
-    for id in ids {
-        data.push(
-            find_refund(&state.pool, scope, id)
-                .await?
-                .ok_or_else(ApiError::internal)?,
-        );
-    }
+    let data = rows
+        .into_iter()
+        .map(refund_object)
+        .collect::<ApiResult<Vec<_>>>()?;
     Ok(Json(RefundList {
         object: "list".to_owned(),
         url: "/v1/refunds".to_owned(),
@@ -752,46 +766,38 @@ pub(crate) async fn find_refund<'e>(
     scope: Scope,
     id: Uuid,
 ) -> ApiResult<Option<Refund>> {
-    let row = sqlx::query_as::<_, RefundRow>(
-        r#"
-        SELECT refund.id, refund.livemode, refund.deposit_id, refund.amount_atomic::text AS amount_atomic,
-               refund.destination_address, address.treasury, refund.status,
-               refund.failure_reason, refund.tx_hash, refund.receipt_log_index,
-               refund.created_at,
-               refund.metadata
-        FROM refunds AS refund
-        JOIN deposits AS deposit ON deposit.id = refund.deposit_id
-        JOIN addresses AS address ON address.id = deposit.address_id
-        WHERE refund.id = $1 AND refund.account_id = $2 AND refund.livemode = $3
-        "#,
-    )
+    let row = sqlx::query_as::<_, RefundRow>(concat!(
+        select_refund!(),
+        " WHERE refund.id = $1 AND refund.account_id = $2 AND refund.livemode = $3"
+    ))
     .bind(id)
     .bind(scope.account_id())
     .bind(scope.livemode())
     .fetch_optional(executor)
     .await?;
-    row.map(|row| {
-        Ok(Refund {
-            id: ids::format(ids::REFUND, row.id),
-            object: "refund".to_owned(),
-            livemode: row.livemode,
-            deposit: ExpandableDeposit::Id(ids::format(ids::DEPOSIT, row.deposit_id)),
-            amount_atomic: row.amount_atomic,
-            destination_address: row.destination_address,
-            treasury: row.treasury,
-            status: row.status,
-            failure_reason: row.failure_reason,
-            transaction_hash: row.tx_hash,
-            receipt_log_index: row
-                .receipt_log_index
-                .map(u64::try_from)
-                .transpose()
-                .map_err(|_| ApiError::internal())?,
-            created: row.created_at.timestamp(),
-            metadata: row.metadata.0,
-        })
+    row.map(refund_object).transpose()
+}
+
+fn refund_object(row: RefundRow) -> ApiResult<Refund> {
+    Ok(Refund {
+        id: ids::format(ids::REFUND, row.id),
+        object: "refund".to_owned(),
+        livemode: row.livemode,
+        deposit: ExpandableDeposit::Id(ids::format(ids::DEPOSIT, row.deposit_id)),
+        amount_atomic: row.amount_atomic,
+        destination_address: row.destination_address,
+        treasury: row.treasury,
+        status: row.status,
+        failure_reason: row.failure_reason,
+        transaction_hash: row.tx_hash,
+        receipt_log_index: row
+            .receipt_log_index
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| ApiError::internal())?,
+        created: row.created_at.timestamp(),
+        metadata: row.metadata.0,
     })
-    .transpose()
 }
 
 #[derive(FromRow)]
