@@ -111,6 +111,30 @@ describe("createCheckout", () => {
     expect(fetch).toHaveBeenCalledTimes(5);
   });
 
+  it("clears polling timers and visibility listeners when the external signal aborts", async () => {
+    const controller = new AbortController();
+    const remove = vi.spyOn(document, "removeEventListener");
+    const { fetch, calls } = fakeFetch(quote());
+    const checkout = createCheckout({
+      clientSecret: CLIENT_SECRET,
+      expectedAddress: ADDRESS,
+      apiBase: API_BASE,
+      pollInterval: 1000,
+      fetch,
+      signal: controller.signal,
+    });
+    sessions.add(checkout);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(remove).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await checkout.refresh();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toHaveLength(1);
+  });
+
   it("polls without a browser document", async () => {
     vi.stubGlobal("document", undefined);
     const { fetch, calls } = fakeFetch(quote());
