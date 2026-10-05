@@ -19,6 +19,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
   and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
   seconds per chain and could time out.
+- List endpoints for quotes, refunds, and forwarders use account-scoped indexes, and refunds load
+  in one query; they scanned whole tables as history grew. Heartbeat reads use a timestamp index
+  while preserving timestamp ordering.
 
 ## [0.9.2] - 2026-10-05
 
