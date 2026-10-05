@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypedDict, Unpack, cast
 from weakref import ref
@@ -57,6 +57,24 @@ def _request_options(options: RequestOptions) -> RequestOptions:
         if key not in {"request_deadline", "upgrade_tolerance"}:
             raise TypeError(f"unexpected keyword argument {key!r}")
     return options
+
+
+def _iterate(
+    page_fn: Callable[..., dict[str, Any]], starting_after: str | None, **filters: Any
+) -> Iterator[Any]:
+    seen: set[str] = set()
+    if starting_after is not None:
+        seen.add(starting_after)
+    while True:
+        listed = page_fn(starting_after=starting_after, **filters)
+        ids = {item.id for item in listed["data"]}
+        if seen.intersection(ids):
+            raise ResponseValidationError("repeated page cursor")
+        seen.update(ids)
+        yield from listed["data"]
+        if not listed["has_more"]:
+            return
+        starting_after = listed["data"][-1].id
 
 
 class PhalaPay:
@@ -404,12 +422,13 @@ class Quotes:
         **options: Unpack[RequestOptions],
     ) -> Iterator[Quote]:
         """Yields every matching quote, newest first, fetching pages as it goes."""
-        return self._client.list_quotes(
+        return _iterate(
+            self.list_page,
+            starting_after,
             client_reference_id=client_reference_id,
             status=status,
             **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+            limit=limit,
         )
 
     def list_page(
@@ -515,7 +534,9 @@ class Deposits:
     ) -> Iterator[Deposit]:
         """Yields every matching deposit, newest first, fetching pages as it goes. `created_*`
         are Unix seconds (Stripe's `created[gt|gte|lt|lte]`)."""
-        return self._client.list_deposits(
+        return _iterate(
+            self.list_page,
+            starting_after,
             client_reference_id=client_reference_id,
             quote=quote,
             deposit_address=deposit_address,
@@ -527,8 +548,7 @@ class Deposits:
             created_lte=created_lte,
             expand=None if expand is None else list(expand),
             **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+            limit=limit,
         )
 
     def list_page(
@@ -635,12 +655,13 @@ class DepositAddresses:
         **options: Unpack[RequestOptions],
     ) -> Iterator[DepositAddress]:
         """Yields every matching deposit address, newest first, fetching pages as it goes."""
-        return self._client.list_deposit_addresses(
+        return _iterate(
+            self.list_page,
+            starting_after,
             client_reference_id=client_reference_id,
             status=status,
             **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+            limit=limit,
         )
 
     def list_page(
@@ -776,12 +797,13 @@ class Refunds:
         **options: Unpack[RequestOptions],
     ) -> Iterator[Refund]:
         """Yields every matching refund, newest first, fetching pages as it goes."""
-        return self._client.list_refunds(
+        return _iterate(
+            self.list_page,
+            starting_after,
             deposit=deposit,
             status=status,
             **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+            limit=limit,
         )
 
     def list_page(
@@ -836,13 +858,14 @@ class Sweeps:
         **options: Unpack[RequestOptions],
     ) -> Iterator[Sweep]:
         """Yields the sweeps, newest first, fetching pages as it goes."""
-        return self._client.list_sweeps(
+        return _iterate(
+            self.list_page,
+            starting_after,
             chain_id=chain_id,
             forwarder=forwarder,
             token=token,
             **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+            limit=limit,
         )
 
     def list_page(
@@ -883,14 +906,15 @@ class Forwarders:
         """Yields the account's forwarders with their `(factory, salt, treasury)`: all of them, or
         those of one `quote` or `deposit_address`; with `sweepable` (a token contract), only those
         safe to sweep of it."""
-        return self._client.list_forwarders(
+        return _iterate(
+            self.list_page,
+            starting_after,
             chain_id=chain_id,
             quote=quote,
             deposit_address=deposit_address,
             sweepable=sweepable,
             **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+            limit=limit,
         )
 
     def list_page(
@@ -984,12 +1008,15 @@ class Treasuries:
         **options: Unpack[RequestOptions],
     ) -> list[Treasury]:
         """The treasuries of this mode, newest first."""
-        return self._client.list_treasuries(
-            chain_id=chain_id,
-            status=status,
-            **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+        return list(
+            _iterate(
+                self.list_page,
+                starting_after,
+                chain_id=chain_id,
+                status=status,
+                **_request_options(options),
+                limit=limit,
+            )
         )
 
     def list_page(
@@ -1095,10 +1122,13 @@ class ApiKeys:
         **options: Unpack[RequestOptions],
     ) -> list[ApiKeyObject]:
         """This mode's keys, without their secrets."""
-        return self._client.list_api_keys(
-            **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+        return list(
+            _iterate(
+                self.list_page,
+                starting_after,
+                **_request_options(options),
+                limit=limit,
+            )
         )
 
     def list_page(
@@ -1232,10 +1262,11 @@ class WebhookEndpoints:
         starting_after: str | None = None,
         **options: Unpack[RequestOptions],
     ) -> Iterator[WebhookEndpointObject]:
-        return self._client.list_webhook_endpoints(
+        return _iterate(
+            self.list_page,
+            starting_after,
             **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+            limit=limit,
         )
 
     def list_page(
@@ -1304,7 +1335,9 @@ class Events:
         `last_attempt` say whether it is keeping up; resend the missed events once it is fixed.
         `data.object` is the object as it was when the event happened; `*.updated` events carry
         `data.previous_attributes`, and events caused by your requests their `request`."""
-        return self._client.list_events(
+        return _iterate(
+            self.list_page,
+            starting_after,
             type=type,
             types=types,
             delivery_success=delivery_success,
@@ -1313,8 +1346,7 @@ class Events:
             created_lt=created_lt,
             created_lte=created_lte,
             **_request_options(options),
-            page_size=limit,
-            starting_after=starting_after,
+            limit=limit,
         )
 
     def list_page(
