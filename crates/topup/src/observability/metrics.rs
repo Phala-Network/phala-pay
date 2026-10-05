@@ -81,6 +81,10 @@ pub(crate) fn http_observations(route: &str, method: &str, status_class: &str) -
         .with_label_values(&[route, method, status_class])
         .get()
 }
+#[cfg(test)]
+pub(crate) fn request_deadline_observations(method: &str) -> u64 {
+    http().unwrap().deadlines.with_label_values(&[method]).get()
+}
 
 /// Records a request that did not complete within its deadline, with a bounded method label.
 pub(crate) fn request_deadline_exceeded(method: &str) {

@@ -145,6 +145,7 @@ mod tests {
                 }),
             )
             .layer(axum::middleware::from_fn(request_deadline));
+        let before = crate::observability::metrics::request_deadline_observations("POST");
         let response = app
             .oneshot(Request::post("/").body(axum::body::Body::empty()).unwrap())
             .await
@@ -163,11 +164,15 @@ mod tests {
             body["error"]["message"],
             "the request did not complete within its deadline; retry"
         );
+        assert_eq!(
+            crate::observability::metrics::request_deadline_observations("POST"),
+            before + 1
+        );
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
             .unwrap();
         let metrics = crate::observability::metrics::render(&pool).unwrap();
-        assert!(metrics.contains("topup_api_request_deadline_exceeded_total{method=\"POST\"} 1"));
+        assert!(metrics.contains("topup_api_request_deadline_exceeded_total{method=\"POST\"}"));
     }
 
     #[tokio::test(start_paused = true)]
