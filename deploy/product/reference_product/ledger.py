@@ -236,7 +236,7 @@ class ProductLedger:
                 for event_id, data in db.execute("SELECT id, data FROM webhook_events"):
                     self._record_event_refs(db, event_id, json.loads(data))
             db.execute("COMMIT")
-        except sqlite3.Error:
+        except BaseException:
             if db.in_transaction:
                 db.execute("ROLLBACK")
             raise
@@ -440,7 +440,9 @@ class ProductLedger:
         self.events_changed.notify_all()
 
     @staticmethod
-    def _record_event_refs(db: sqlite3.Connection, event_id: str, data: Mapping[str, Any]) -> None:
+    def _record_event_refs(db: sqlite3.Connection, event_id: str, data: object) -> None:
+        if not isinstance(data, Mapping):
+            return
         inner = data.get("object")
         sources = [data, inner] if isinstance(inner, dict) else [data]
         refs = {
@@ -450,7 +452,7 @@ class ProductLedger:
             if isinstance(value := source.get(key), str)
         }
         db.executemany(
-            "INSERT INTO event_refs (ref, event_id) VALUES (?, ?)",
+            "INSERT OR IGNORE INTO event_refs (ref, event_id) VALUES (?, ?)",
             [(ref, event_id) for ref in refs],
         )
 

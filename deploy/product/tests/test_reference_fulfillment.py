@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -1035,3 +1036,99 @@ def test_webhook_key_fetch_failures_are_negative_cached(
     assert keys() is pinned
     assert keys() is pinned
     assert len(calls) == 2
+
+
+def test_event_reference_backfill_tolerates_non_object_data(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA)
+        db.execute("DROP TABLE event_refs")
+        values: tuple[Any, ...] = (None, [], "text", 1)
+        for index, value in enumerate(values):
+            db.execute(
+                "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (f"evt_{index}", "test", json.dumps(value), 1, b"{}", "1", "signature"),
+            )
+    ledger = ProductLedger(str(path))
+    try:
+        with ledger.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 0
+            assert db.execute("SELECT COUNT(*) FROM webhook_events").fetchone()[0] == 4
+    finally:
+        ledger._connection.close()
+
+
+def test_event_reference_backfill_rolls_back_non_sql_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA)
+        db.execute("DROP TABLE event_refs")
+        db.execute(
+            "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("evt_test", "test", "invalid JSON", 1, b"{}", "1", "signature"),
+        )
+    connect = sqlite3.connect
+    connections: list[sqlite3.Connection] = []
+
+    def capture(database: str, **kwargs: Any) -> sqlite3.Connection:
+        connection: sqlite3.Connection = connect(database, **kwargs)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", capture)
+    with pytest.raises(json.JSONDecodeError):
+        ProductLedger(str(path))
+    [connection] = connections
+    try:
+        assert not connection.in_transaction
+        assert (
+            connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'event_refs'").fetchone()
+            is None
+        )
+    finally:
+        connection.close()
+
+
+def test_concurrent_event_reference_backfills_are_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "ledger.sqlite"
+    data = {"id": "dep_test", "client_reference_id": TEAM}
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA)
+        db.execute("DROP TABLE event_refs")
+        db.execute(
+            "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("evt_test", "test", json.dumps(data), 1, b"{}", "1", "signature"),
+        )
+    barrier = threading.Barrier(2)
+    connect = sqlite3.connect
+
+    class RacingConnection(sqlite3.Connection):
+        def execute(self, sql: str, parameters: Any = (), /) -> sqlite3.Cursor:
+            cursor = super().execute(sql, parameters)
+            if sql.startswith("SELECT 1 FROM sqlite_master WHERE type = 'table'"):
+                barrier.wait(timeout=3)
+            return cursor
+
+    def race(database: str, **kwargs: Any) -> sqlite3.Connection:
+        return connect(database, factory=RacingConnection, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", race)
+    ledgers: list[ProductLedger] = []
+    try:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            futures = [workers.submit(ProductLedger, str(path)) for _ in range(2)]
+            for future in futures:
+                ledgers.append(future.result(timeout=5))
+        for ledger in ledgers:
+            assert ledger.events_for({TEAM}) == [{"type": "test", "data": data}]
+            with ledger.transaction() as db:
+                assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 2
+    finally:
+        for ledger in ledgers:
+            ledger._connection.close()
