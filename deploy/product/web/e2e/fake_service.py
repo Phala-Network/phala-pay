@@ -417,7 +417,6 @@ class FakeTopup:
                     "id": "sw_" + uuid.uuid5(NAMESPACE, f"{log['transactionHash']}:{index}").hex,
                     "object": "sweep",
                     "livemode": False,
-                    "unavailable": False,
                     "chain_id": chain_id,
                     "forwarder": forwarder["id"],
                     "address": address,
