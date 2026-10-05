@@ -76,7 +76,7 @@ from topup_sdk.errors import ResponseValidationError, TransportError
 
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
 from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
-from .transport import DeadlineTransport
+from .transport import DeadlineTransport, operation_deadline
 
 LOG = logging.getLogger(__name__)
 
@@ -215,6 +215,7 @@ class DemoConsole:
         self._client: TopupClient | None = None
         self._sweeps_client: TopupClient | None = None
         self._lock = threading.Lock()
+        self._cache_changed = threading.Condition(self._lock)
         self._new_accounts = RateLimiter(30, 60, clock)
         self._quotes_per_account = RateLimiter(3, 60, clock)
         self._quotes_per_day = RateLimiter(20, 86_400, clock)
@@ -224,6 +225,12 @@ class DemoConsole:
         self._reads = RateLimiter(120, 60, clock)
         self._trust: tuple[float, dict[str, Any]] | None = None
         self._networks: tuple[float, list[dict[str, Any]]] | None = None
+        self._trust_refreshing = False
+        self._networks_refreshing = False
+        self._trust_expires = 0.0
+        self._networks_expires = 0.0
+        self._trust_error: TopupError | httpx.HTTPError | MissingProductKeyError | None = None
+        self._networks_error: TopupError | httpx.HTTPError | MissingProductKeyError | None = None
         self._sweeps: tuple[float, dict[str, Any]] | None = None
         self._sweeps_refreshing = False
         self._block_times: dict[tuple[int, str], tuple[int, int]] = {}
@@ -949,10 +956,36 @@ class DemoConsole:
         (`GET /v1/config`) on the configured chains (a quote on any other chain has no treasury to
         recompute its address from), in the config's order, then the service's. A configured
         chain the service does not serve yet is left out."""
-        now = self._clock()
-        with self._lock:
-            if self._networks is not None and now - self._networks[0] < 300:
-                return self._networks[1]
+        with self._cache_changed:
+            while self._networks_refreshing:
+                self._wait_for_cache()
+            if self._clock() < self._networks_expires:
+                if self._networks is not None:
+                    return self._networks[1]
+                if self._networks_error is not None:
+                    raise self._networks_error
+            self._networks_refreshing = True
+        try:
+            networks = self._fetch_payable_networks(service)
+        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+            with self._cache_changed:
+                self._networks_error = error
+                self._networks_expires = self._clock() + 30
+                if self._networks is not None:
+                    return self._networks[1]
+            raise
+        else:
+            with self._cache_changed:
+                self._networks = (self._clock(), networks)
+                self._networks_expires = self._clock() + 300
+                self._networks_error = None
+            return networks
+        finally:
+            with self._cache_changed:
+                self._networks_refreshing = False
+                self._cache_changed.notify_all()
+
+    def _fetch_payable_networks(self, service: TopupClient | None) -> list[dict[str, Any]]:
         offered = (service or self._service()).get_config().assets
         networks = []
         for chain in self.config.chains:
@@ -995,17 +1028,51 @@ class DemoConsole:
                     "assets": assets,
                 }
             )
-        with self._lock:
-            self._networks = (now, networks)
         return networks
 
     # Trust --------------------------------------------------------------------------------------
 
     def _trust_view(self) -> dict[str, Any]:
-        now = self._clock()
-        with self._lock:
-            if self._trust is not None and now - self._trust[0] < 300:
-                return self._trust[1]
+        with self._cache_changed:
+            while self._trust_refreshing:
+                self._wait_for_cache()
+            if self._clock() < self._trust_expires:
+                if self._trust is not None:
+                    return self._trust[1]
+                if self._trust_error is not None:
+                    raise self._trust_error
+            self._trust_refreshing = True
+        try:
+            view = self._fetch_trust_view()
+        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+            with self._cache_changed:
+                self._trust_error = error
+                self._trust_expires = self._clock() + 30
+                if self._trust is not None:
+                    return self._trust[1]
+            raise
+        else:
+            failed = not view["attestation"]["binding_verified"] or view["tls_evidence"] is None
+            with self._cache_changed:
+                self._trust_expires = self._clock() + (30 if failed else 300)
+                self._trust_error = None
+                if failed and self._trust is not None:
+                    return self._trust[1]
+                self._trust = (self._clock(), view)
+            return view
+        finally:
+            with self._cache_changed:
+                self._trust_refreshing = False
+                self._cache_changed.notify_all()
+
+    def _wait_for_cache(self) -> None:
+        deadline = operation_deadline.get()
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            raise TransportError("timeout")
+        self._cache_changed.wait(timeout=remaining)
+
+    def _fetch_trust_view(self) -> dict[str, Any]:
         attestation: dict[str, Any]
         try:
             evidence = self._service().attestation(secrets.token_bytes(32))
@@ -1018,8 +1085,6 @@ class DemoConsole:
             "verify_docs": VERIFY_DOCS,
             "dstack_verifier": "https://github.com/Dstack-TEE/dstack/tree/master/verifier",
         }
-        with self._lock:
-            self._trust = (now, view)
         return view
 
     def _tls_evidence(self) -> dict[str, str] | None:

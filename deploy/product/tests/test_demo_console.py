@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
@@ -30,7 +31,7 @@ from topup_sdk import (
     quote_salt,
     sign_webhook,
 )
-from topup_sdk.errors import ResponseValidationError
+from topup_sdk.errors import ResponseValidationError, TransportError
 
 NOW = 1_790_000_000
 ACCOUNT = "acct_" + "ac" * 16
@@ -1020,3 +1021,102 @@ def test_sweep_lookup_filters_forwarder_and_stops_at_first_match(
     assert result is not None
     assert result["address"] == deposit["address"]
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("kind", ["trust", "networks"])
+def test_caches_fetch_single_flight_and_serve_stale_on_failure(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    console, _ = demo
+    now = [NOW]
+    console._clock = lambda: now[0]
+    value: Any = (
+        {"attestation": {"binding_verified": True}, "tls_evidence": {"app_id": "test"}}
+        if kind == "trust"
+        else [{"chain_id": 11155111}]
+    )
+    started, release = threading.Event(), threading.Event()
+    calls: list[int] = []
+    fail = [False]
+
+    def fetch(*args: Any) -> Any:
+        calls.append(1)
+        started.set()
+        assert release.wait(2)
+        if fail[0]:
+            raise TransportError("timeout")
+        return value
+
+    method = console._trust_view if kind == "trust" else console._payable_networks
+    monkeypatch.setattr(
+        console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
+    )
+    with ThreadPoolExecutor(max_workers=5) as workers:
+        futures = [workers.submit(method) for _ in range(5)]
+        try:
+            assert started.wait(1)
+        finally:
+            release.set()
+        assert [future.result(timeout=2) for future in futures] == [value] * 5
+    assert len(calls) == 1
+    now[0] += 301
+    fail[0] = True
+    assert method() == value
+    assert method() == value
+    assert len(calls) == 2
+    now[0] += 31
+    fail[0] = False
+    assert method() == value
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("kind", ["trust", "networks"])
+def test_cold_cache_failures_retry_after_thirty_seconds(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    console, _ = demo
+    now = [NOW]
+    console._clock = lambda: now[0]
+    calls: list[int] = []
+
+    def fetch(*args: Any) -> Any:
+        calls.append(1)
+        raise TransportError("timeout")
+
+    monkeypatch.setattr(
+        console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
+    )
+    for _ in range(2):
+        response = console.handle(
+            "GET", f"/api/{'trust' if kind == 'trust' else 'assets'}", {}, b""
+        )
+        assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
+    assert len(calls) == 1
+    now[0] += 31
+    assert (
+        console.handle("GET", f"/api/{'trust' if kind == 'trust' else 'assets'}", {}, b"").status
+        == 503
+    )
+    assert len(calls) == 2
+
+
+def test_incomplete_trust_evidence_retries_after_thirty_seconds(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    console, _ = demo
+    now = [NOW]
+    console._clock = lambda: now[0]
+    calls: list[int] = []
+
+    def fetch() -> dict[str, Any]:
+        calls.append(1)
+        return {"attestation": {"binding_verified": False}, "tls_evidence": None}
+
+    monkeypatch.setattr(console, "_fetch_trust_view", fetch)
+    assert console._trust_view()["tls_evidence"] is None
+    now[0] += 29
+    console._trust_view()
+    assert len(calls) == 1
+    now[0] += 2
+    console._trust_view()
+    assert len(calls) == 2
