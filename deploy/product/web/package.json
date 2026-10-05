@@ -41,7 +41,7 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.1.1",
-    "cf": "1.0.0-beta.6",
+    "cf": "1.0.0-beta.10",
     "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "tailwindcss": "^4.3.3",
