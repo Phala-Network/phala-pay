@@ -30,7 +30,7 @@ use crate::db::{Account, Customer};
 use crate::payment_config::{self, Resolution, Status, Terms};
 use crate::routes::RouteSet;
 use crate::tenancy::Scope;
-use pricing::{PricingRuntime, ValidatedQuote};
+use pricing::{PricingFailure, PricingRuntimes, ValidatedQuote};
 
 /// The columns of [`RateLockRow`]; callers append the `WHERE` clause with `concat!`.
 macro_rules! select_lock {
@@ -145,29 +145,13 @@ pub trait QuoteProvider: Send + Sync {
 
 /// Production quote provider configured from attested route files.
 pub struct ConfiguredQuoteProvider {
-    runtimes: BTreeMap<(String, u64), PricingRuntime>,
+    runtimes: PricingRuntimes,
 }
 
 impl ConfiguredQuoteProvider {
-    /// Builds adapters for every route version.
-    pub fn from_routes(pool: PgPool, routes: &crate::routes::RouteSet) -> Result<Self, String> {
-        let mut runtimes = BTreeMap::new();
-        for route in routes.routes() {
-            let key = (route.route.clone(), route.version);
-            if runtimes
-                .insert(
-                    key.clone(),
-                    PricingRuntime::configured(route, routes, pool.clone())?,
-                )
-                .is_some()
-            {
-                return Err(format!(
-                    "duplicate pricing runtime for route `{}` version {}",
-                    key.0, key.1
-                ));
-            }
-        }
-        Ok(Self { runtimes })
+    /// Uses the service's shared per-route pricing runtimes.
+    pub fn from_runtimes(runtimes: PricingRuntimes) -> Self {
+        Self { runtimes }
     }
     /// Periodic service sampler, bounded and cancelled with the service task group.
     pub async fn sample_twaps(
@@ -203,8 +187,24 @@ impl QuoteProvider for ConfiguredQuoteProvider {
         let runtime = self
             .runtimes
             .get(&(route.route.clone(), route.version))
-            .ok_or_else(|| json!({"stage": "pricing", "error": "missing_route_runtime"}))?;
-        runtime.fetch(route).await
+            .ok_or_else(|| Value::from(PricingFailure::new("missing_route_runtime")))?;
+        runtime.fetch(route).await.map_err(Value::from)
+    }
+}
+
+impl From<PricingFailure> for Value {
+    fn from(failure: PricingFailure) -> Self {
+        Value::from(&failure)
+    }
+}
+
+impl From<&PricingFailure> for Value {
+    fn from(failure: &PricingFailure) -> Self {
+        let mut value = json!({"stage": "pricing", "error": failure.code});
+        if !failure.evidence.is_null() {
+            value["quote"] = failure.evidence.clone();
+        }
+        value
     }
 }
 
@@ -214,7 +214,7 @@ pub struct UnavailableQuoteProvider;
 #[async_trait]
 impl QuoteProvider for UnavailableQuoteProvider {
     async fn quote(&self, _route: &RouteFile) -> Result<ValidatedQuote, Value> {
-        Err(json!({"stage": "pricing", "error": "unavailable"}))
+        Err(PricingFailure::new("unavailable").into())
     }
 }
 

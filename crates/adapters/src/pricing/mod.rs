@@ -61,17 +61,13 @@ pub struct PriceQuote {
 pub trait PriceSource: Send + Sync {
     /// Fetches one current price observation.
     async fn observe(&self) -> Result<Observation, PriceError>;
-    /// Observation plus sanitized source-specific audit evidence.
-    async fn evidence(&self) -> Result<(Observation, serde_json::Value), PriceError> {
-        self.observe().await.map(|o| (o, serde_json::Value::Null))
-    }
     /// Fetch both valuation and agreement prices together; ordinary spot feeds use one price.
     async fn quote(&self) -> Result<PriceQuote, PriceError> {
-        let (valuation, evidence) = self.evidence().await?;
+        let valuation = self.observe().await?;
         Ok(PriceQuote {
             agreement_price: valuation.price,
             valuation,
-            evidence,
+            evidence: serde_json::Value::Null,
         })
     }
 }
@@ -166,6 +162,151 @@ async fn admit(source: &'static str) {
     *next = tokio::time::Instant::now()
         .checked_add(Duration::from_secs(1))
         .unwrap_or_else(tokio::time::Instant::now);
+}
+
+/// RPC fixtures shared by adapter and service tests.
+#[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+pub mod test_rpc {
+    use crate::{
+        chain::evm::{
+            EvmClient,
+            group::{
+                GroupPolicy, Member, RpcGroup,
+                budget::{BudgetSpec, Budgets},
+            },
+        },
+        redaction::Redacted,
+    };
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    use std::{collections::BTreeMap, sync::Arc};
+
+    /// Owns a typed RPC client and its disposable server.
+    pub struct RpcFixture {
+        /// Client connected to the fixture server.
+        pub client: Arc<EvmClient>,
+        task: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for RpcFixture {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+    /// Serves replies through the same typed group path as production adapters.
+    pub async fn rpc(
+        id: &str,
+        reply: impl Fn(Value) -> Value + Clone + Send + Sync + 'static,
+    ) -> RpcFixture {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handler = move |Json(request): Json<Value>| {
+            let reply = reply.clone();
+            async move {
+                let id = request["id"].clone();
+                Json(json!({"jsonrpc":"2.0","id":id,"result":reply(request)}))
+            }
+        };
+        let app = Router::new().route("/", post(handler));
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let budgets = Arc::new(
+            Budgets::new(&BTreeMap::from([
+                (
+                    "account".into(),
+                    BudgetSpec {
+                        requests_per_second: 100,
+                        burst: 100,
+                    },
+                ),
+                (
+                    "key".into(),
+                    BudgetSpec {
+                        requests_per_second: 100,
+                        burst: 100,
+                    },
+                ),
+            ]))
+            .unwrap(),
+        );
+        let group = RpcGroup::new(
+            id.into(),
+            1,
+            GroupPolicy::default(),
+            vec![Member {
+                id: id.into(),
+                company: id.into(),
+                endpoint: Redacted::parse(&url).unwrap(),
+                account: "account".into(),
+                key: "key".into(),
+                priority: 0,
+                weight: 1,
+            }],
+            budgets,
+        )
+        .unwrap();
+        group.verified(0, true);
+        RpcFixture {
+            client: Arc::new(EvmClient::from_group(group, None).unwrap()),
+            task,
+        }
+    }
+    /// Serves a Chainlink round over the shared typed RPC fixture.
+    pub async fn chainlink(
+        id: &str,
+        answer: i64,
+        round_id: u128,
+        complete: u128,
+        updated: u64,
+        malformed: bool,
+    ) -> RpcFixture {
+        use super::chainlink::{decimalsCall, latestRoundDataCall, latestRoundDataReturn};
+        use alloy_sol_types::SolCall;
+        rpc(id, move |request: Value| {
+            if request["method"] == "eth_getBlockByNumber" {
+                let mut head = serde_json::to_value(alloy::rpc::types::Block::<
+                    alloy::rpc::types::Transaction,
+                >::default())
+                .unwrap();
+                head["number"] = if request["params"][0] == "latest" {
+                    json!("0x64")
+                } else {
+                    request["params"][0].clone()
+                };
+                head["hash"] = json!(format!("0x{}", "11".repeat(32)));
+                head["parentHash"] = json!(format!("0x{}", "22".repeat(32)));
+                return head;
+            }
+            if request["method"] == "eth_blockNumber" {
+                return json!("0x64");
+            }
+            assert_eq!(request["params"][1], "0x62");
+            let data = request["params"][0]["input"]
+                .as_str()
+                .or_else(|| request["params"][0]["data"].as_str())
+                .unwrap_or("");
+            let result = if malformed {
+                "0x1234".to_owned()
+            } else if data.starts_with("0x313ce567") {
+                format!("0x{}", hex::encode(decimalsCall::abi_encode_returns(&8u8)))
+            } else {
+                let r = latestRoundDataReturn {
+                    roundId: alloy_primitives::Uint::<80, 2>::from(round_id),
+                    answer: alloy_primitives::I256::try_from(answer).unwrap(),
+                    startedAt: alloy_primitives::U256::from(updated),
+                    updatedAt: alloy_primitives::U256::from(updated),
+                    answeredInRound: alloy_primitives::Uint::<80, 2>::from(complete),
+                };
+                format!(
+                    "0x{}",
+                    hex::encode(latestRoundDataCall::abi_encode_returns(&r))
+                )
+            };
+            json!(result)
+        })
+        .await
+    }
 }
 
 #[cfg(test)]

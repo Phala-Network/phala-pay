@@ -1,8 +1,14 @@
 //! Shared fail-closed pricing for quotes and deposit credit.
-use crate::{observability::price_metrics, routes::RouteSet};
+use crate::{
+    observability::price_metrics,
+    routes::RouteSet,
+    rpc_groups::{BASE_CHAIN_ID, price_pair},
+};
 use chrono::Utc;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -19,16 +25,47 @@ use topup_core::{
         validate_spot,
     },
 };
-fn source_id(company: &str) -> &str {
-    if company == "uniswap-v2-onchain" {
-        "uniswap_v2_twap"
-    } else {
-        company
+/// A pricing refusal with sanitized evidence, converted to JSON at persistence boundaries.
+#[derive(Debug)]
+pub struct PricingFailure {
+    /// Stable failure classification.
+    pub code: &'static str,
+    /// Sanitized quote audit, or null when no quote audit exists.
+    pub evidence: Value,
+}
+impl PricingFailure {
+    pub(crate) fn new(code: &'static str) -> Self {
+        Self {
+            code,
+            evidence: Value::Null,
+        }
     }
+    fn with_audit(code: &'static str, audit: &Audit) -> Self {
+        Self {
+            code,
+            evidence: json!(audit),
+        }
+    }
+}
+#[derive(Default, Serialize)]
+struct Audit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<PricingMode>,
+    observations: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sequencer: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision: Option<&'static str>,
+}
+fn fresh(bound: u64, observed_at: UnixSeconds, now: UnixSeconds) -> bool {
+    now.value()
+        .checked_sub(observed_at.value())
+        .is_some_and(|age| age <= bound)
 }
 struct Entry {
     source: Arc<dyn PriceSource>,
     company: &'static str,
+    source_id: &'static str,
     asset: Option<String>,
     max_age_s: Option<u64>,
     usdt_quoted: bool,
@@ -43,7 +80,25 @@ pub struct PricingRuntime {
     sequencer: Option<(Chainlink, u64)>,
     stuck_since: std::sync::Mutex<Option<Instant>>,
 }
+/// Shared pricing runtimes indexed by attested route name and version.
+pub type PricingRuntimes = Arc<BTreeMap<(String, u64), Arc<PricingRuntime>>>;
+
 impl PricingRuntime {
+    /// Builds one shared pricing runtime for every attested route version.
+    pub fn build_all(routes: &RouteSet, pool: sqlx::PgPool) -> Result<PricingRuntimes, String> {
+        let mut runtimes = BTreeMap::new();
+        for route in routes.routes() {
+            let key = (route.route.clone(), route.version);
+            let runtime = Self::configured(route, routes, pool.clone())?;
+            if runtimes.insert(key.clone(), Arc::new(runtime)).is_some() {
+                return Err(format!(
+                    "duplicate pricing runtime for route `{}` version {}",
+                    key.0, key.1
+                ));
+            }
+        }
+        Ok(Arc::new(runtimes))
+    }
     /// Constructs only explicitly configured sources, never a restricted default.
     pub fn configured(
         route: &RouteFile,
@@ -67,40 +122,24 @@ impl PricingRuntime {
                         Source::Binance { symbol, .. } => {
                             Arc::new(Binance::new(symbol.clone()).map_err(|e| e.to_string())?)
                         }
-                        Source::UniswapV2Twap {
-                            rpc_group,
-                            rpc_group_b,
-                            twap,
-                            ..
-                        } => Arc::new(
-                            UniswapV2::new(
-                                routes.price_group(route, rpc_group)?,
-                                routes.price_group(route, rpc_group_b)?,
-                                twap.clone(),
-                                Arc::new(crate::db::pricing::TwapStore(pool.clone())),
+                        Source::UniswapV2Twap { twap, .. } => {
+                            let (a, b, _) = price_pair(route, s)?;
+                            Arc::new(
+                                UniswapV2::new(
+                                    routes.resolved_price_group(&a)?,
+                                    routes.resolved_price_group(&b)?,
+                                    twap.clone(),
+                                    Arc::new(crate::db::pricing::TwapStore(pool.clone())),
+                                )
+                                .map_err(|e| e.to_string())?,
                             )
-                            .map_err(|e| e.to_string())?,
-                        ),
-                        Source::Chainlink {
-                            feed: name,
-                            chain_id,
-                            rpc_group,
-                            rpc_group_b,
-                            ..
-                        } => {
-                            let b = rpc_group_b.as_deref().unwrap_or(
-                                if rpc_group == "b"
-                                    || route.chain.rpc_providers.get(1) == Some(rpc_group)
-                                {
-                                    "a"
-                                } else {
-                                    "b"
-                                },
-                            );
+                        }
+                        Source::Chainlink { feed: name, .. } => {
+                            let (a, b, chain) = price_pair(route, s)?;
                             Arc::new(Chainlink::new(
-                                routes.price_group(route, rpc_group)?,
-                                routes.price_group(route, b)?,
-                                feed(name, *chain_id).ok_or("unsupported feed")?,
+                                routes.resolved_price_group(&a)?,
+                                routes.resolved_price_group(&b)?,
+                                feed(name, chain).ok_or("unsupported feed")?,
                             ))
                         }
                     };
@@ -119,6 +158,10 @@ impl PricingRuntime {
                     Ok(Entry {
                         source,
                         company: s.company(),
+                        source_id: match s {
+                            Source::UniswapV2Twap { .. } => "uniswap_v2_twap",
+                            _ => s.company(),
+                        },
                         asset: Some(s.asset().to_owned()),
                         max_age_s,
                         usdt_quoted: matches!(s, Source::Binance { .. }),
@@ -138,7 +181,7 @@ impl PricingRuntime {
                     Chainlink::new(
                         routes.price_group(route, &s.rpc_group)?,
                         routes.price_group(route, &s.rpc_group_b)?,
-                        feed(&s.feed, 8453).ok_or("unsupported sequencer feed")?,
+                        feed(&s.feed, BASE_CHAIN_ID).ok_or("unsupported sequencer feed")?,
                     ),
                     s.grace_s,
                 ))
@@ -157,9 +200,9 @@ impl PricingRuntime {
     pub async fn sample_twaps(&self, route: &RouteFile) {
         for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
             for entry in entries.iter().filter(|e| e.company == "uniswap-v2-onchain") {
-                let mut audit = json!({"observations":[]});
-                if let Err(evidence) = observe(entry, route, role, &mut audit).await {
-                    price_metrics::failure(route, &evidence);
+                let mut audit = Audit::default();
+                if let Err(failure) = observe(entry, route, role, &mut audit).await {
+                    price_metrics::failure(route, &failure);
                 }
             }
         }
@@ -173,6 +216,7 @@ impl PricingRuntime {
         let entry = |source| Entry {
             source,
             company: "injected",
+            source_id: "injected",
             asset: None,
             max_age_s: None,
             usdt_quoted: true,
@@ -188,7 +232,7 @@ impl PricingRuntime {
         }
     }
     /// Fetches every stablecoin source or the first healthy source in each volatile role.
-    pub async fn fetch(&self, route: &RouteFile) -> Result<ValidatedQuote, Value> {
+    pub async fn fetch(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
         let result = self.fetch_inner(route).await;
         if let Err(evidence) = &result {
             price_metrics::failure(route, evidence);
@@ -207,22 +251,32 @@ impl PricingRuntime {
         }
         result
     }
-    async fn fetch_inner(&self, route: &RouteFile) -> Result<ValidatedQuote, Value> {
-        let mut audit = json!({"mode":route.pricing.mode, "observations":[]});
+    async fn fetch_inner(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
+        let mut audit = Audit {
+            mode: Some(route.pricing.mode),
+            ..Audit::default()
+        };
         if let Some((sequencer, grace)) = &self.sequencer {
             match sequencer.sequencer(*grace).await {
-                Ok(evidence) => audit["sequencer"] = evidence,
+                Ok(evidence) => audit.sequencer = Some(evidence),
                 Err(error) => {
                     let code = error_code(&error);
                     if let PriceError::Feed { evidence, .. } = error {
-                        audit["sequencer"] = evidence;
+                        audit.sequencer = Some(evidence);
                     }
                     if code == "divergent" {
-                        price_metrics::source_event(route, "sequencer", "chainlink", code);
+                        price_metrics::source_event(
+                            route,
+                            "sequencer",
+                            "chainlink",
+                            "chainlink",
+                            code,
+                        );
                     }
-                    audit["decision"] = json!(code);
-                    price_metrics::decision(route, code, &audit);
-                    return Err(json!({"stage":"pricing", "error":code, "quote":audit}));
+                    audit.decision = Some(code);
+                    let failure = PricingFailure::with_audit(code, &audit);
+                    price_metrics::decision(route, code, &failure.evidence);
+                    return Err(failure);
                 }
             }
         }
@@ -240,7 +294,8 @@ impl PricingRuntime {
                     .as_ref()
                     .is_none_or(|asset| asset == &route.asset.symbol)
             }) {
-                if let Some(quote) = observe(entry, route, "sources", &mut audit).await? {
+                let quote = observe(entry, route, "sources", &mut audit).await?;
+                if let Some(quote) = quote {
                     observed.push((
                         quote.valuation,
                         entry.max_age_s.unwrap_or(route.pricing.max_age_s),
@@ -249,11 +304,7 @@ impl PricingRuntime {
             }
             let now = validation_time()?;
             for (o, bound) in observed {
-                if now
-                    .value()
-                    .checked_sub(o.observed_at.value())
-                    .is_none_or(|age| age > bound)
-                {
+                if !fresh(bound, o.observed_at, now) {
                     continue;
                 }
                 healthy = true;
@@ -261,7 +312,13 @@ impl PricingRuntime {
                 policy.max_age_s = bound;
                 policy.max_deviation_bps = route.pricing.peg_band_bps;
                 if stablecoin_price(&o, now, policy).is_err() {
-                    price_metrics::source_event(route, "sources", o.source.as_str(), "depeg");
+                    price_metrics::source_event(
+                        route,
+                        "sources",
+                        o.source.as_str(),
+                        o.source.as_str(),
+                        "depeg",
+                    );
                     depeg = true;
                 }
             }
@@ -274,34 +331,32 @@ impl PricingRuntime {
                 ScaledPrice::new(100_000_000, 8).map_err(|_| "out_of_range")
             }
         } else {
-            let mut pa = json!({"observations":[]});
-            let mut ca = json!({"observations":[]});
-            let mut fa = json!({"observations":[]});
+            let mut pa = Audit::default();
+            let mut ca = Audit::default();
+            let mut fa = Audit::default();
             let (primary, check, fx) = tokio::join!(
                 first(&self.primary, route, "primary", &mut pa),
                 first(&self.check, route, "check", &mut ca),
                 first(&self.fx, route, "fx", &mut fa)
             );
-            for part in [pa, ca, fa] {
-                if let (Some(all), Some(list)) = (
-                    audit["observations"].as_array_mut(),
-                    part["observations"].as_array(),
-                ) {
-                    all.extend(list.iter().cloned());
-                }
-            }
+            audit.observations.extend(
+                pa.observations
+                    .into_iter()
+                    .chain(ca.observations)
+                    .chain(fa.observations),
+            );
             if let Some(error) = [&primary, &check, &fx]
                 .iter()
                 .find_map(|r| r.as_ref().err())
             {
-                audit["decision"] = error["error"].clone();
-                return Err(json!({"stage":"pricing", "error":error["error"], "quote":audit}));
+                audit.decision = Some(error.code);
+                return Err(PricingFailure::with_audit(error.code, &audit));
             }
             let primary = primary?;
             let check = check?;
             let fx = fx?;
             match (primary, check, fx) {
-                (Some(p), Some(c), Some(f))
+                (Some((pe, p)), Some((ce, c)), Some((fe, f)))
                     if p.valuation.source != c.valuation.source
                         && f.valuation.source != c.valuation.source =>
                 {
@@ -316,27 +371,15 @@ impl PricingRuntime {
                     };
                     let (p, c, f) = (p.valuation, c.valuation, f.valuation);
                     let now = validation_time()?;
-                    for (o, entries) in [(&p, &self.primary), (&c, &self.check), (&f, &self.fx)] {
-                        let bound = entries
-                            .iter()
-                            .find(|e| source_id(e.company) == o.source.as_str())
-                            .and_then(|e| e.max_age_s)
-                            .unwrap_or(route.pricing.max_age_s);
-                        if now
-                            .value()
-                            .checked_sub(o.observed_at.value())
-                            .is_none_or(|age| age > bound)
-                        {
-                            return Err(json!({"stage":"pricing","error":"stale","quote":audit}));
+                    for (o, entry) in [(&p, pe), (&c, ce), (&f, fe)] {
+                        let bound = entry.max_age_s.unwrap_or(route.pricing.max_age_s);
+                        if !fresh(bound, o.observed_at, now) {
+                            return Err(PricingFailure::with_audit("stale", &audit));
                         }
                     }
                     let mut policy = ValuationPolicy::from(&route.pricing);
                     policy.max_age_s = u64::MAX;
-                    let usdt_quoted = self
-                        .check
-                        .iter()
-                        .find(|e| source_id(e.company) == c.source.as_str())
-                        .is_none_or(|e| e.usdt_quoted);
+                    let usdt_quoted = ce.usdt_quoted;
                     let mut fx_policy = policy;
                     fx_policy.max_deviation_bps = policy.max_fx_deviation_bps;
                     stablecoin_price(&f, now, fx_policy)
@@ -359,10 +402,7 @@ impl PricingRuntime {
                 }
                 (Some(_), Some(_), Some(_)) => Err("company_overlap"),
                 _ => Err(
-                    if audit["observations"]
-                        .as_array()
-                        .is_some_and(|list| list.iter().any(|o| o["error"] == "stale"))
-                    {
+                    if audit.observations.iter().any(|o| o["error"] == "stale") {
                         "stale"
                     } else {
                         "source_failure"
@@ -372,32 +412,33 @@ impl PricingRuntime {
         };
         match result {
             Ok(price) => {
-                audit["decision"] = json!("accepted");
+                audit.decision = Some("accepted");
                 Ok(ValidatedQuote {
                     price,
-                    evidence: audit,
+                    evidence: json!(audit),
                 })
             }
             Err(code) => {
-                audit["decision"] = json!(code);
-                price_metrics::decision(route, code, &audit);
-                Err(json!({"stage":"pricing", "error":code, "quote":audit}))
+                audit.decision = Some(code);
+                let failure = PricingFailure::with_audit(code, &audit);
+                price_metrics::decision(route, code, &failure.evidence);
+                Err(failure)
             }
         }
     }
 }
-async fn first(
-    entries: &[Entry],
+async fn first<'a>(
+    entries: &'a [Entry],
     route: &RouteFile,
     role: &str,
-    audit: &mut Value,
-) -> Result<Option<PriceQuote>, Value> {
+    audit: &mut Audit,
+) -> Result<Option<(&'a Entry, PriceQuote)>, PricingFailure> {
     for (index, entry) in entries.iter().enumerate() {
         if let Some(observation) = observe(entry, route, role, audit).await? {
             if index > 0 {
-                price_metrics::failover(route, role, entry.company);
+                price_metrics::failover(route, role, entry.source_id, entry.company);
             }
-            return Ok(Some(observation));
+            return Ok(Some((entry, observation)));
         }
     }
     Ok(None)
@@ -406,8 +447,8 @@ async fn observe(
     entry: &Entry,
     route: &RouteFile,
     role: &str,
-    audit: &mut Value,
-) -> Result<Option<PriceQuote>, Value> {
+    audit: &mut Audit,
+) -> Result<Option<PriceQuote>, PricingFailure> {
     let result = tokio::time::timeout(Duration::from_secs(30), entry.source.quote()).await;
     let result = match result {
         Ok(r) => r,
@@ -416,11 +457,11 @@ async fn observe(
     let now = validation_time()?;
     let result = result.and_then(|quote| {
         let o = &quote.valuation;
-        if now
-            .value()
-            .checked_sub(o.observed_at.value())
-            .is_none_or(|age| age > entry.max_age_s.unwrap_or(route.pricing.max_age_s))
-        {
+        if !fresh(
+            entry.max_age_s.unwrap_or(route.pricing.max_age_s),
+            o.observed_at,
+            now,
+        ) {
             Err(PriceError::Stale)
         } else {
             Ok(quote)
@@ -436,27 +477,29 @@ async fn observe(
         }
         Err(error) => {
             let code = error_code(&error);
-            if let Some(list) = audit["observations"].as_array_mut() {
-                list.push(json!({"role":role,"company":entry.company,"source":source_id(entry.company),"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
-            }
-            price_metrics::health(route, role, entry.company, false);
+            audit.observations.push(json!({"role":role,"company":entry.company,"source":entry.source_id,"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
+            price_metrics::health(route, role, entry.source_id, entry.company, false);
             if code.starts_with("twap_") {
-                price_metrics::refusal(route, role, entry.company, code);
-                audit["decision"] = json!(code);
-                return Err(json!({"stage":"pricing", "error":code, "quote":audit}));
+                price_metrics::refusal(route, role, entry.source_id, entry.company, code);
+                audit.decision = Some(code);
+                return Err(PricingFailure::with_audit(code, audit));
             }
             if code == "divergent" {
-                audit["decision"] = json!("divergent");
-                price_metrics::source_event(route, role, entry.company, "divergent");
-                return Err(json!({"stage":"pricing", "error":"divergent", "quote":audit}));
+                audit.decision = Some("divergent");
+                price_metrics::source_event(
+                    route,
+                    role,
+                    entry.source_id,
+                    entry.company,
+                    "divergent",
+                );
+                return Err(PricingFailure::with_audit("divergent", audit));
             }
             return Ok(None);
         }
     };
-    if let Some(list) = audit["observations"].as_array_mut() {
-        list.push(evidence);
-    }
-    price_metrics::health(route, role, entry.company, true);
+    audit.observations.push(evidence);
+    price_metrics::health(route, role, entry.source_id, entry.company, true);
     Ok(observation)
 }
 fn error_code(error: &PriceError) -> &'static str {
@@ -480,10 +523,14 @@ pub struct ValidatedQuote {
     pub evidence: Value,
 }
 
-fn validation_time() -> Result<UnixSeconds, Value> {
+fn validation_time() -> Result<UnixSeconds, PricingFailure> {
+    #[cfg(test)]
+    if let Ok(now) = tests::GOLDEN_NOW.try_with(|now| *now) {
+        return Ok(UnixSeconds::new(now));
+    }
     u64::try_from(Utc::now().timestamp())
         .map(UnixSeconds::new)
-        .map_err(|_| json!({"stage": "pricing", "error": "invalid_clock"}))
+        .map_err(|_| PricingFailure::new("invalid_clock"))
 }
 
 /// Stable validation error code shared with transition evidence.
@@ -504,6 +551,219 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use topup_core::valuation::SourceId;
+    tokio::task_local! {
+        pub(super) static GOLDEN_NOW: u64;
+    }
+
+    // Literal serialized snapshots pin persisted field names, nulls, ordering, and types.
+    fn golden_observation(role: &str, company: &str, price: &str) -> String {
+        format!(
+            r#"{{"age_s":0,"agreement_price_scaled":"{price}","company":"{company}","data":null,"descriptor":null,"observed_at":1700000000,"price_scaled":"{price}","role":"{role}","source":"{company}"}}"#
+        )
+    }
+
+    fn golden_audit(mode: &str, decision: &str, observations: &[String]) -> String {
+        format!(
+            r#"{{"decision":"{decision}","mode":"{mode}","observations":[{}]}}"#,
+            observations.join(",")
+        )
+    }
+
+    fn golden_failure(code: &str, audit: &str) -> String {
+        format!(r#"{{"error":"{code}","quote":{audit},"stage":"pricing"}}"#)
+    }
+
+    #[tokio::test]
+    async fn golden_persisted_pricing_json() {
+        GOLDEN_NOW.scope(1_700_000_000, golden_cases()).await;
+    }
+
+    async fn golden_cases() {
+        let route = route();
+        let volatile = [
+            golden_observation("primary", "kraken", "10000000"),
+            golden_observation("check", "binance", "10000000"),
+            golden_observation("fx", "chainlink", "100000000"),
+        ];
+        let quote = runtime().fetch(&route).await.ok().unwrap();
+        assert_eq!(
+            serde_json::to_vec(&quote.evidence).unwrap(),
+            golden_audit("volatile", "accepted", &volatile).as_bytes()
+        );
+
+        let mut r = runtime();
+        r.primary[0] = entry("kraken", 20_000_000, 0, None);
+        let mut divergent = volatile.clone();
+        divergent[0] = golden_observation("primary", "kraken", "20000000");
+        assert_eq!(
+            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
+            golden_failure(
+                "divergent",
+                &golden_audit("volatile", "divergent", &divergent)
+            )
+            .as_bytes()
+        );
+
+        r.primary[0] = entry("kraken", 10_000_000, 1000, None);
+        let mut stale = volatile.clone();
+        stale[0] = r#"{"company":"kraken","data":null,"descriptor":null,"error":"stale","role":"primary","source":"kraken"}"#.into();
+        assert_eq!(
+            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
+            golden_failure("stale", &golden_audit("volatile", "stale", &stale)).as_bytes()
+        );
+
+        for code in [
+            "twap_history",
+            "twap_liquidity",
+            "twap_stale_sample",
+            "twap_spot_divergence",
+            "twap_sample_jump",
+            "twap_storage",
+            "twap_reorg",
+            "twap_sample_order",
+            "twap_token_order",
+        ] {
+            r.primary = vec![
+                entry(
+                    "uniswap-v2-onchain",
+                    10_000_000,
+                    0,
+                    Some(PriceError::Feed {
+                        class: code,
+                        evidence: json!({"window_s":1800}),
+                    }),
+                ),
+                entry("fallback", 10_000_000, 0, None),
+            ];
+            let mut refused = volatile.clone();
+            refused[0] = format!(
+                r#"{{"company":"uniswap-v2-onchain","data":{{"window_s":1800}},"descriptor":null,"error":"{code}","role":"primary","source":"uniswap_v2_twap"}}"#
+            );
+            assert_eq!(
+                serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
+                golden_failure(code, &golden_audit("volatile", code, &refused)).as_bytes(),
+                "{code}"
+            );
+        }
+
+        let mut route = route;
+        route.pricing.mode = PricingMode::Stablecoin;
+        r.sources = vec![
+            entry("healthy", 100_000_000, 0, None),
+            entry("chainlink", 100_000_000, 0, None),
+        ];
+        let mut stable = [
+            golden_observation("sources", "healthy", "100000000"),
+            golden_observation("sources", "chainlink", "100000000"),
+        ];
+        let quote = r.fetch(&route).await.ok().unwrap();
+        assert_eq!(
+            serde_json::to_vec(&quote.evidence).unwrap(),
+            golden_audit("stablecoin", "accepted", &stable).as_bytes()
+        );
+        r.sources[1] = entry("chainlink", 98_000_000, 0, None);
+        stable[1] = golden_observation("sources", "chainlink", "98000000");
+        assert_eq!(
+            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
+            golden_failure("depeg", &golden_audit("stablecoin", "depeg", &stable)).as_bytes()
+        );
+    }
+
+    fn reversed_group_route() -> RouteFile {
+        let mut route = route();
+        route.chain.rpc_providers = vec!["b".into(), "a".into()];
+        route.pricing.fx = vec![Source::Chainlink {
+            feed: "USDT_USD".into(),
+            chain_id: 1,
+            rpc_group: "a".into(),
+            rpc_group_b: None,
+            observation_chain_id: None,
+        }];
+        route
+    }
+
+    #[tokio::test]
+    async fn runtime_reads_the_reversed_pair_validation_approved() {
+        let route = reversed_group_route();
+        let now = validation_time().unwrap().value();
+        let a = topup_adapters::pricing::test_rpc::chainlink("a", 101_000_000, 20, 20, now, false)
+            .await;
+        let b = topup_adapters::pricing::test_rpc::chainlink("b", 100_000_000, 20, 20, now, false)
+            .await;
+        let expected = ("b".into(), "a".into(), 1);
+        assert_eq!(price_pair(&route, &route.pricing.fx[0]).unwrap(), expected);
+        assert_eq!(
+            crate::rpc_groups::price_pairs(&route).unwrap(),
+            vec![expected]
+        );
+        let clients = BTreeMap::from([
+            ("a".into(), a.client.clone()),
+            ("b".into(), b.client.clone()),
+        ]);
+        let routes = RouteSet::with_groups(vec![route.clone()], clients).unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/pricing-regression")
+            .unwrap();
+        let runtime = PricingRuntime::configured(&route, &routes, pool).unwrap();
+        let error = runtime.fx[0].source.quote().await.unwrap_err();
+        let PriceError::Feed { class, evidence } = error else {
+            panic!("expected A/B disagreement, got {error:?}");
+        };
+        assert_eq!(class, "divergent");
+        // Distinct answers pin both the identity and the order of the groups actually read.
+        assert_eq!(evidence["a"]["answer"], "100000000");
+        assert_eq!(evidence["b"]["answer"], "101000000");
+
+        let mut route = route;
+        route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
+            feed: "BASE_SEQUENCER_UPTIME".into(),
+            grace_s: 3600,
+            rpc_group: "a".into(),
+            rpc_group_b: "b".into(),
+        });
+        let (a, b, chain) = crate::rpc_groups::price_pairs(&route)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(
+            chain == BASE_CHAIN_ID
+                && Arc::ptr_eq(
+                    &routes.resolved_price_group(&a).unwrap(),
+                    &routes.price_group(&route, "a").unwrap()
+                )
+                && Arc::ptr_eq(
+                    &routes.resolved_price_group(&b).unwrap(),
+                    &routes.price_group(&route, "b").unwrap()
+                )
+        );
+    }
+
+    #[test]
+    fn validation_rejects_a_price_pair_resolving_to_one_group() {
+        let mut route = reversed_group_route();
+        let Source::Chainlink { rpc_group_b, .. } = &mut route.pricing.fx[0] else {
+            unreachable!();
+        };
+        *rpc_group_b = Some("a".into());
+        let fixture: Value = serde_saphyr::from_str(
+            &include_str!("../../tests/fixtures/rpc-groups.yaml")
+                .replace("alchemy", "a")
+                .replace("quicknode", "b"),
+        )
+        .unwrap();
+        let groups = serde_json::from_value(fixture["rpc_groups"].clone()).unwrap();
+        let companies = serde_json::from_value(fixture["rpc_companies"].clone()).unwrap();
+        let budgets = serde_json::from_value(fixture["rpc_budgets"].clone()).unwrap();
+        assert_eq!(
+            crate::rpc_groups::price_pairs(&route).unwrap(),
+            vec![("b".into(), "b".into(), 1)]
+        );
+        assert_eq!(
+            crate::rpc_groups::validate(&[route], &groups, &companies, &budgets).unwrap_err(),
+            "price RPC A/B must have matching chain and disjoint companies"
+        );
+    }
+
     struct Fixture {
         id: &'static str,
         price: u64,
@@ -534,6 +794,11 @@ mod tests {
                 error,
             }),
             company: id,
+            source_id: if id == "uniswap-v2-onchain" {
+                "uniswap_v2_twap"
+            } else {
+                id
+            },
             asset: None,
             max_age_s: None,
             usdt_quoted: true,
@@ -637,7 +902,7 @@ mod tests {
             r.check[0].usdt_quoted = false;
             let result = r.fetch(&route).await;
             if let Some(code) = refusal {
-                assert_eq!(result.err().unwrap()["error"], code, "{scenario}");
+                assert_eq!(result.err().unwrap().code, code, "{scenario}");
             } else {
                 let quote = result.ok().unwrap();
                 assert_eq!(quote.price.value(), expected * 100_000_000, "{scenario}");
@@ -687,9 +952,9 @@ mod tests {
             );
             r.primary.push(entry("fallback", 10_000_000, 0, None));
             let failure = r.fetch(&route()).await.err().unwrap();
-            assert_eq!(failure["error"], code);
+            assert_eq!(failure.code, code);
             assert!(
-                failure["quote"]["observations"]
+                failure.evidence["observations"]
                     .as_array()
                     .unwrap()
                     .iter()
@@ -729,11 +994,11 @@ mod tests {
         );
         assert!(r.fetch(&route()).await.is_ok());
         r.primary[0] = entry("offline", 10_000_000, 0, Some(PriceError::Disagreement));
-        assert_eq!(r.fetch(&route()).await.err().unwrap()["error"], "divergent");
+        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "divergent");
         r.primary[0] = entry("offline", 20_000_000, 0, None);
-        assert_eq!(r.fetch(&route()).await.err().unwrap()["error"], "divergent");
+        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "divergent");
         r.fx.insert(0, entry("depeg", 90_000_000, 0, None));
-        assert_eq!(r.fetch(&route()).await.err().unwrap()["error"], "fx_depeg");
+        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "fx_depeg");
     }
     #[tokio::test]
     async fn usd_check_is_not_multiplied_by_usdt_fx() {
@@ -744,10 +1009,10 @@ mod tests {
         route.pricing.max_deviation_bps = topup_core::money::Bps::new(0).unwrap();
         assert!(r.fetch(&route).await.is_ok());
         r.check[0].usdt_quoted = true;
-        assert_eq!(r.fetch(&route).await.err().unwrap()["error"], "divergent");
+        assert_eq!(r.fetch(&route).await.err().unwrap().code, "divergent");
         r.check[0].usdt_quoted = false;
         r.fx[0] = entry("chainlink", 90_000_000, 0, None);
-        assert_eq!(r.fetch(&route).await.err().unwrap()["error"], "fx_depeg");
+        assert_eq!(r.fetch(&route).await.err().unwrap().code, "fx_depeg");
     }
     #[tokio::test]
     async fn stablecoin_any_fresh_depeg_overrides_all_healthy_sources() {
@@ -759,7 +1024,7 @@ mod tests {
                 entry("healthy", 100_000_000, 0, None),
                 entry(id, 98_000_000, 0, None),
             ];
-            assert_eq!(r.fetch(&route).await.err().unwrap()["error"], "depeg");
+            assert_eq!(r.fetch(&route).await.err().unwrap().code, "depeg");
             r.sources[1] = entry(id, 98_000_000, 1000, None);
             assert_eq!(
                 r.fetch(&route).await.ok().unwrap().price.value(),

@@ -746,11 +746,12 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let pool = connect("run", connection_count)
         .await
         .context("failed to connect to database")?;
-    let price_provider = Arc::new(
-        topup::locks::ConfiguredQuoteProvider::from_routes(pool.clone(), &routes)
-            .map_err(anyhow::Error::msg)
-            .context("invalid rate-lock pricing configuration")?,
-    );
+    let pricing_runtimes = topup::locks::pricing::PricingRuntime::build_all(&routes, pool.clone())
+        .map_err(anyhow::Error::msg)
+        .context("invalid rate-lock pricing configuration")?;
+    let price_provider = Arc::new(topup::locks::ConfiguredQuoteProvider::from_runtimes(
+        Arc::clone(&pricing_runtimes),
+    ));
     let rate_lock_quotes: Arc<dyn topup::locks::QuoteProvider> = price_provider.clone();
     // A restore from backup freezes the service until the operator reconciles it; one that booted
     // straight into this compose is found by its new PostgreSQL timeline.
@@ -832,8 +833,9 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let listener = tokio::net::TcpListener::bind(args.bind)
         .await
         .with_context(|| format!("failed to bind API listener on {}", args.bind))?;
-    let confirm_step = ConfirmStep::from_routes(pool.clone(), &routes)
-        .context("invalid confirm-step configuration")?;
+    let confirm_step =
+        ConfirmStep::from_routes(pool.clone(), &routes, Arc::clone(&pricing_runtimes))
+            .context("invalid confirm-step configuration")?;
     let screen_step = ScreenStep::from_routes(pool.clone(), &routes)
         .context("failed to configure screening step")?;
     let steps = Arc::new(StepSet::new(Box::new(confirm_step), Box::new(screen_step)));
@@ -1802,7 +1804,7 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
                     println!(
                         "  sequencer: {:?}; {:?}",
                         sequencer,
-                        topup_core::price::feed(&sequencer.feed, 8453)
+                        topup_core::price::feed(&sequencer.feed, topup::rpc_groups::BASE_CHAIN_ID)
                     );
                 }
             }

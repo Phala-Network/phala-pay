@@ -10,7 +10,10 @@ use topup_adapters::chain::evm::{
         budget::{BudgetSpec, Budgets},
     },
 };
-use topup_core::route::RouteFile;
+use topup_core::{price::Source, route::RouteFile};
+
+/// Base mainnet chain identifier for price and sequencer feeds.
+pub const BASE_CHAIN_ID: u64 = 8453;
 
 /// Reviewed company identity with explicit domain evidence.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -292,64 +295,80 @@ pub fn clients(
     Ok(clients)
 }
 
+/// Resolves route A/B aliases before looking up literal observation group names.
+pub(crate) fn price_group<'a>(route: &'a RouteFile, id: &'a str) -> Result<&'a str, String> {
+    match id {
+        "a" => route
+            .chain
+            .rpc_providers
+            .first()
+            .map(String::as_str)
+            .ok_or("RPC A missing".into()),
+        "b" => route
+            .chain
+            .rpc_providers
+            .get(1)
+            .map(String::as_str)
+            .ok_or("RPC B missing".into()),
+        _ => Ok(id),
+    }
+}
+
+/// Resolves one on-chain source to the exact group identities validation approves.
+pub fn price_pair(route: &RouteFile, source: &Source) -> Result<(String, String, u64), String> {
+    let resolve = |id: &str| price_group(route, id).map(str::to_owned);
+    match source {
+        Source::UniswapV2Twap {
+            rpc_group,
+            rpc_group_b,
+            ..
+        } => Ok((resolve(rpc_group)?, resolve(rpc_group_b)?, 1)),
+        Source::Chainlink {
+            chain_id,
+            rpc_group,
+            rpc_group_b,
+            ..
+        } => {
+            let a = resolve(rpc_group)?;
+            let b = match rpc_group_b {
+                Some(b) => resolve(b)?,
+                None => {
+                    let ra = resolve("a")?;
+                    let rb = resolve("b")?;
+                    if a == ra {
+                        rb
+                    } else if a == rb {
+                        ra
+                    } else {
+                        return Err("explicit price group requires rpc_group_b".into());
+                    }
+                }
+            };
+            Ok((a, b, *chain_id))
+        }
+        _ => Err("price source has no RPC pair".into()),
+    }
+}
+
 /// Observation-only group pairs, including sequencer checks, validated like route groups.
 pub fn price_pairs(route: &RouteFile) -> Result<Vec<(String, String, u64)>, String> {
-    let resolve = |id: &str| -> Result<String, String> {
-        match id {
-            "a" => route
-                .chain
-                .rpc_providers
-                .first()
-                .cloned()
-                .ok_or("RPC A missing".into()),
-            "b" => route
-                .chain
-                .rpc_providers
-                .get(1)
-                .cloned()
-                .ok_or("RPC B missing".into()),
-            _ => Ok(id.to_owned()),
-        }
-    };
     let mut pairs = Vec::new();
     for (_, sources) in route.pricing.roles() {
         for source in sources {
-            if let topup_core::price::Source::UniswapV2Twap {
-                rpc_group,
-                rpc_group_b,
-                ..
-            } = source
-            {
-                pairs.push((resolve(rpc_group)?, resolve(rpc_group_b)?, 1));
-            }
-            if let topup_core::price::Source::Chainlink {
-                chain_id,
-                rpc_group,
-                rpc_group_b,
-                ..
-            } = source
-            {
-                let a = resolve(rpc_group)?;
-                let b = match rpc_group_b {
-                    Some(b) => resolve(b)?,
-                    None => {
-                        let ra = resolve("a")?;
-                        let rb = resolve("b")?;
-                        if a == ra {
-                            rb
-                        } else if a == rb {
-                            ra
-                        } else {
-                            return Err("explicit price group requires rpc_group_b".into());
-                        }
-                    }
-                };
-                pairs.push((a, b, *chain_id));
+            if matches!(
+                source,
+                Source::UniswapV2Twap { .. } | Source::Chainlink { .. }
+            ) {
+                pairs.push(price_pair(route, source)?);
             }
         }
     }
     if let Some(s) = &route.pricing.sequencer_uptime {
-        pairs.push((s.rpc_group.clone(), s.rpc_group_b.clone(), 8453));
+        pairs.push((
+            price_group(route, &s.rpc_group)?.to_owned(),
+            price_group(route, &s.rpc_group_b)?.to_owned(),
+            BASE_CHAIN_ID,
+        ));
     }
     Ok(pairs)
 }

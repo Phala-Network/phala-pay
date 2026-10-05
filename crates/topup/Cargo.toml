@@ -59,6 +59,7 @@ psl = "2.1.215"
 x509-parser = "=0.18.1"
 
 [dev-dependencies]
+topup-adapters = { path = "../adapters", features = ["test-support"] }
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
 sentry = { workspace = true, features = ["test"] }
