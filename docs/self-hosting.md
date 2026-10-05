@@ -216,6 +216,9 @@ comes from a release.
            type: choice
            options: [provision, upgrade]
            required: true
+         bootstrap_maintenance:
+           type: boolean
+           default: false
    permissions:
      contents: read
      attestations: read
@@ -226,10 +229,13 @@ comes from a release.
          version: v0.9.0
          environment: ${{ inputs.environment }}
          mode: ${{ inputs.mode }}
+         bootstrap_maintenance: ${{ inputs.bootstrap_maintenance }}
          environment_dir: ${{ inputs.environment }}/topup
        # In Phala Pay's organisation, `secrets: inherit` instead.
        secrets:
          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+         TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
+         SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
    ```
 
    The Environment's variables are only deployment state: `PHALA_WORKSPACE` (the display name of
@@ -254,11 +260,15 @@ Deploy `upgrade`, never a runtime setting.
   ([deploy/phala.md, "Staging routes"](../deploy/phala.md#staging-routes) lists them, with their
   tokens and faucets). Any instance can copy them from its
   [topup.yaml](../deploy/environments/phala-network/staging/topup/topup.yaml) for a first
-  instance in test mode.
+  noncommercial instance with `environment: staging` (or `testnet`, `local`, `sandbox`) and the
+  existing price-source opt-ins. PHA routes cannot be copied into a production configuration.
 - **Your own routes** are items of `topup.yaml`'s `routes`, written as route files are. The fields
   and their defaults are in [architecture §14](architecture.md#14-configuration-and-deployment),
-  and [examples/phala-cloud-pha.yaml](../examples/phala-cloud-pha.yaml) and
-  [examples/phala-cloud-usdt.yaml](../examples/phala-cloud-usdt.yaml) are mainnet examples.
+  and [examples/phala-cloud-usdt.yaml](../examples/phala-cloud-usdt.yaml) is a production-eligible
+  mainnet route template. [examples/phala-cloud-pha.yaml](../examples/phala-cloud-pha.yaml) is
+  **staging/noncommercial only**: PHA has no second Allowed independent price source. See
+  [price sources](configuration.md#price-sources). The kit's example environment ships only
+  Chainlink-priced USDC/USDT test routes, valid under `environment: production`.
   `topup config check FILE` in the release's image checks the file (section 2), and
   `config show FILE` prints it resolved.
 - **What Deploy refuses:** a live route on a test network, a test route on a mainnet, any live
@@ -503,8 +513,10 @@ into a directory and stops at the first failure:
 
 ```sh
 version=v0.9.0   # the release you adopt
-gh api -H 'Accept: application/vnd.github.raw' \
-  "repos/Phala-Network/phala-pay/contents/deploy/verify-release.sh?ref=$version" >verify-release.sh
+for tool in verify-release.sh deadline.sh; do
+  gh api -H 'Accept: application/vnd.github.raw' \
+    "repos/Phala-Network/phala-pay/contents/deploy/$tool?ref=$version" >"$tool"
+done
 bash verify-release.sh "$version" release     # prints the release's commit
 ```
 

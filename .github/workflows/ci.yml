@@ -512,6 +512,7 @@ jobs:
           deploy/tests/render.sh
           deploy/tests/render-route.sh
           deploy/tests/verify-release.sh
+          deploy/tests/release-tools.sh
           python3 .github/security/test-exceptions.py
           PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_upgrade_monitor.py
           deploy/tests/phala-cvm-wait.sh
@@ -538,9 +539,10 @@ jobs:
       # Preflight and the route-mode check read the configuration with topup; in CI, this build's.
       # The deploy kit is built from this commit and used outside the checkout, as an operator does,
       # and so is the one-command deploy, against stub GitHub, Phala Cloud, and registry tools.
-      - name: Check preflight's local checks, the route-mode check, the deploy kit, and deploy.sh
+      - name: Check shipped configs, preflight, route modes, the deploy kit, and deploy.sh
         run: |
           cargo build --locked -q -p topup
+          TOPUP="$PWD/target/debug/topup" deploy/tests/shipped-configs.sh
           TOPUP="$PWD/target/debug/topup" deploy/tests/preflight.sh
           TOPUP="$PWD/target/debug/topup" deploy/tests/check-route-modes.sh
           TOPUP="$PWD/target/debug/topup" deploy/tests/kit.sh

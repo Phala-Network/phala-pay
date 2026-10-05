@@ -14,6 +14,23 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Upgrading from 0.8.x
+
+- 0.9.0 cannot be deployed with Deploy. Upgrade 0.8.x directly to 0.9.1 and follow every step of
+  [0.9.0's "Upgrading from 0.8.x"](https://github.com/Phala-Network/phala-pay/releases/tag/v0.9.0),
+  including the pre-upgrade backup and the one-time `bootstrap_maintenance: true`.
+
+### Fixed
+
+- Deploy fetches `deploy/deadline.sh` with `deploy/verify-release.sh` at the release commit, so release
+  verification no longer fails before any change (0.9.0's Deploy stopped at "Verify the release").
+  A CI check keeps all three consumers fetching every script `verify-release.sh` sources.
+- The 0.9.0 kit's example environment failed `topup config check`; production examples now use
+  Chainlink USDC/USDT routes, and PHA is explicitly limited to noncommercial rehearsal.
+  CI validates every shipped environment config and example route template.
+- Cross-org callers can now pass `SENTRY_DSN`; the example passes the maintenance key and
+  `bootstrap_maintenance` input.
+
 ## [0.9.0] - 2026-10-05
 
 ### Upgrading from 0.8.x

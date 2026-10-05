@@ -195,7 +195,7 @@ Routes use `price:` with explicit `mode: volatile` or `mode: stablecoin`. Stable
 an Ethereum-mainnet fallback for the route asset. Runtime uses only that asset's observations;
 another stablecoin's price cannot authorize its credit. Volatile assets require ordered `primary`, `check`, and `fx`
 lists, with disjoint primary/check company identities. PHA uses `uniswap_v2_twap` (company `uniswap-v2-onchain`) primary and Kraken `PHAUSD` check.
-Missing either company pauses PHA; Kraken still requires written permission in production.
+Missing either company pauses PHA; the Kraken check is staging/noncommercial only.
 
 Source descriptors are `source: kraken`/`binance`, `symbol`, and the canonical `company`, or
 `source: chainlink`, `feed`, `chain_id`, `rpc_group`, and an independent `rpc_group_b` for explicit
@@ -230,8 +230,8 @@ refuses a staging opt-in. `DEPLOY_ENVIRONMENT=staging` is required for a testnet
 
 PHA production is unavailable until two independent sources are implemented and Allowed. The
 follow-up to #331 values PHA at min(Uniswap V2 PHA/WETH TWAP, current spot) × Chainlink ETH/USD.
-Agreement compares current Uniswap spot × ETH/USD against current Kraken PHA/USD after written
-permission; CoinGecko is dropped. See the
+Noncommercial rehearsal compares current Uniswap spot × ETH/USD against current Kraken PHA/USD;
+CoinGecko is dropped. See the
 [on-chain plan](design/price-failover.md#pha-on-chain-follow-up). `topup config check` prints ordered
 sources, verdicts, pinned feed metadata and testnet markers; `config show` emits resolved `price`.
 
@@ -247,7 +247,7 @@ For one migration window the parser accepts old `pricing.primary` and `pricing.c
 maps each to a one-item role list and the FX leg to `fx`, and emits only `price`. Mixing old and
 new sections is rejected. Coin Metrics migrates as restricted evidence and fails validation:
 replace it explicitly with an eligible source set: Chainlink for stablecoins, or the documented
-PHA TWAP/Kraken plan after written Kraken permission. Restricted exchange adapters remain staging-only.
+PHA TWAP/Kraken plan for noncommercial rehearsal only. Restricted exchange adapters remain staging-only.
 Add an independent check and FX for volatile assets; do not reduce the source count. Existing
 route versions and RPC bindings are retained. This breaking schema ships in 0.9.0, which declares
 **no rollback to 0.8.3; restore required**. Use the pre-upgrade backup and

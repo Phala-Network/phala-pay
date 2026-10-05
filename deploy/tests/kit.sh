@@ -23,7 +23,7 @@ tar -xzf "$tmp/dist/phala-pay-deploy-$version.tar.gz" -C "$operator/kit" --strip
 kit="$operator/kit"
 cp -r "$kit/deploy/environments/example/topup" "$operator/production/topup"
 env_dir="$operator/production/topup"
-# Rehearse the example under an explicit staging licensing opt-in. Production stays gated.
+# Rehearse the example's test routes as a staging deployment; shipped config validation is separate.
 sed -i -e 's|environment: production|environment: staging|' \
     -e 's|pay-api.example.com|pay-api.operator.test|' \
     -e 's|11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=|23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=|' \

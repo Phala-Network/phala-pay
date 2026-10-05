@@ -45,8 +45,10 @@ merchants are accounts, not configuration.
 
 The repository's committed routes are Phala's staging routes, test routes on Sepolia and Base
 Sepolia, listed in [deploy/phala.md, "Staging routes"](../deploy/phala.md#staging-routes).
-Phala's first live route will be Ethereum Mainnet PHA for Phala Cloud's account
-([examples/phala-cloud-pha.yaml](../examples/phala-cloud-pha.yaml)); it is not deployed yet.
+Production-eligible examples use Chainlink-priced stablecoins
+([USDT mainnet template](../examples/phala-cloud-usdt.yaml)). The
+[PHA mainnet template](../examples/phala-cloud-pha.yaml) is staging/noncommercial only: PHA has
+no second Allowed independent price source ([price sources](configuration.md#price-sources)).
 
 ## Architecture at a glance
 

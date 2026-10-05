@@ -1,4 +1,7 @@
-# First mainnet route template. No treasury: each account proves its own per chain through the
+# LOCAL / SANDBOX NONCOMMERCIAL REHEARSAL ONLY: use environment: local or sandbox.
+# Deploy rejects this live route in staging and rejects its PHA price-source licensing in production.
+# See docs/configuration.md#price-sources. Mainnet token addresses do not grant production eligibility.
+# Mainnet route template for noncommercial rehearsal. No treasury: each account proves its own per chain through the
 # API (docs/design/multi-tenant.md D10). Ships inside the dstack compose, so every value is part of the attested
 # measurement (docs/architecture.md §14). Changing a value is a new version and a new approved
 # compose hash. Every value not written here is a code default, as attested as the file (the
