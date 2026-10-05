@@ -129,19 +129,16 @@ impl RouteSet {
     }
     /// Resolves explicit observation groups or route A/B roles.
     pub fn price_group(&self, route: &RouteFile, id: &str) -> Result<Arc<EvmClient>, String> {
-        let group = crate::rpc_groups::price_group(route, id)?;
-        if matches!(id, "a" | "b") {
-            let index = route
-                .chain
-                .rpc_providers
-                .iter()
-                .position(|id| id == group)
-                .ok_or("price RPC alias missing")?;
-            self.provider(route.chain.chain_id, index)
+        match id {
+            "a" => self
+                .provider(route.chain.chain_id, 0)
                 .cloned()
-                .map_err(|e| e.to_string())
-        } else {
-            self.resolved_price_group(group)
+                .map_err(|e| e.to_string()),
+            "b" => self
+                .provider(route.chain.chain_id, 1)
+                .cloned()
+                .map_err(|e| e.to_string()),
+            _ => self.resolved_price_group(id),
         }
     }
 
