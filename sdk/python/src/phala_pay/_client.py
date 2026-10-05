@@ -350,10 +350,10 @@ class Quotes:
     def __init__(
         self,
         client: TopupClient,
-        issued_quotes: dict[int, tuple[ReferenceType[Quote], str | None]] | None = None,
+        issued_quotes: dict[int, tuple[ReferenceType[Quote], str | None]],
     ) -> None:
         self._client = client
-        self._issued_quotes = {} if issued_quotes is None else issued_quotes
+        self._issued_quotes = issued_quotes
 
     def create(
         self,

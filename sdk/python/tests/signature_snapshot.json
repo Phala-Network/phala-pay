@@ -66,7 +66,7 @@
     "from_env": "(env=None, *, api_base=None)"
   },
   "Quotes": {
-    "__init__": "(self, client, issued_quotes=None)",
+    "__init__": "(self, client, issued_quotes)",
     "cancel": "(self, quote_id, *, idempotency_key=None, **options)",
     "create": "(self, *, client_reference_id, amount, chain_id, asset, currency='usd', idempotency_key=None, metadata=None, **options)",
     "list": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
