@@ -854,6 +854,29 @@ mod tests {
         // Distinct answers pin both the identity and the order of the groups actually read.
         assert_eq!(evidence["a"]["answer"], "100000000");
         assert_eq!(evidence["b"]["answer"], "101000000");
+
+        let mut route = route;
+        route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
+            feed: "BASE_SEQUENCER_UPTIME".into(),
+            grace_s: 3600,
+            rpc_group: "a".into(),
+            rpc_group_b: "b".into(),
+        });
+        let (a, b, chain) = crate::rpc_groups::price_pairs(&route)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(
+            chain == BASE_CHAIN_ID
+                && Arc::ptr_eq(
+                    &routes.resolved_price_group(&a).unwrap(),
+                    &routes.price_group(&route, "a").unwrap()
+                )
+                && Arc::ptr_eq(
+                    &routes.resolved_price_group(&b).unwrap(),
+                    &routes.price_group(&route, "b").unwrap()
+                )
+        );
     }
 
     #[test]

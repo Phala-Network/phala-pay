@@ -295,25 +295,28 @@ pub fn clients(
     Ok(clients)
 }
 
+/// Resolves route A/B aliases before looking up literal observation group names.
+pub(crate) fn price_group<'a>(route: &'a RouteFile, id: &'a str) -> Result<&'a str, String> {
+    match id {
+        "a" => route
+            .chain
+            .rpc_providers
+            .first()
+            .map(String::as_str)
+            .ok_or("RPC A missing".into()),
+        "b" => route
+            .chain
+            .rpc_providers
+            .get(1)
+            .map(String::as_str)
+            .ok_or("RPC B missing".into()),
+        _ => Ok(id),
+    }
+}
+
 /// Resolves one on-chain source to the exact group identities validation approves.
 pub fn price_pair(route: &RouteFile, source: &Source) -> Result<(String, String, u64), String> {
-    let resolve = |id: &str| -> Result<String, String> {
-        match id {
-            "a" => route
-                .chain
-                .rpc_providers
-                .first()
-                .cloned()
-                .ok_or("RPC A missing".into()),
-            "b" => route
-                .chain
-                .rpc_providers
-                .get(1)
-                .cloned()
-                .ok_or("RPC B missing".into()),
-            _ => Ok(id.to_owned()),
-        }
-    };
+    let resolve = |id: &str| price_group(route, id).map(str::to_owned);
     match source {
         Source::UniswapV2Twap {
             rpc_group,
@@ -361,7 +364,11 @@ pub fn price_pairs(route: &RouteFile) -> Result<Vec<(String, String, u64)>, Stri
         }
     }
     if let Some(s) = &route.pricing.sequencer_uptime {
-        pairs.push((s.rpc_group.clone(), s.rpc_group_b.clone(), BASE_CHAIN_ID));
+        pairs.push((
+            price_group(route, &s.rpc_group)?.to_owned(),
+            price_group(route, &s.rpc_group_b)?.to_owned(),
+            BASE_CHAIN_ID,
+        ));
     }
     Ok(pairs)
 }
