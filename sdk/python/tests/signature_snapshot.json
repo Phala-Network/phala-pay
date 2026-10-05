@@ -1,0 +1,186 @@
+{
+  "AccountResource": {
+    "__init__": "(self, client)",
+    "pause_quotes": "(self, *, idempotency_key=None, **options)",
+    "resume_quotes": "(self, *, idempotency_key=None, **options)",
+    "retrieve": "(self, **options)",
+    "roll_webhook_key": "(self, *, expires_in=172800, idempotency_key=None, **options)"
+  },
+  "ApiKeys": {
+    "__init__": "(self, client)",
+    "create": "(self, *, name='', permissions=None, idempotency_key=None, **options)",
+    "list": "(self, *, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, limit=100, starting_after=None, **options)",
+    "retrieve": "(self, api_key_id, **options)",
+    "revoke": "(self, api_key_id, *, idempotency_key=None, **options)",
+    "roll": "(self, api_key_id, *, expires_in=0, idempotency_key=None, **options)"
+  },
+  "BalanceResource": {
+    "__init__": "(self, client)",
+    "retrieve": "(self, **options)"
+  },
+  "ConfigResource": {
+    "__init__": "(self, client)",
+    "retrieve": "(self, **options)"
+  },
+  "DepositAddresses": {
+    "__init__": "(self, client)",
+    "create": "(self, *, client_reference_id, metadata=None, idempotency_key=None, **options)",
+    "list": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
+    "retrieve": "(self, deposit_address_id, **options)",
+    "rotate": "(self, deposit_address_id, *, idempotency_key=None, **options)",
+    "update": "(self, deposit_address_id, *, metadata=None, idempotency_key=None, **options)"
+  },
+  "Deposits": {
+    "__init__": "(self, client)",
+    "list": "(self, *, client_reference_id=None, quote=None, deposit_address=None, status=None, tx_hash=None, created_gt=None, created_gte=None, created_lt=None, created_lte=None, expand=None, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, client_reference_id=None, quote=None, deposit_address=None, status=None, tx_hash=None, created_gt=None, created_gte=None, created_lt=None, created_lte=None, expand=None, limit=100, starting_after=None, **options)",
+    "retrieve": "(self, deposit_id, *, expand=None, **options)",
+    "update": "(self, deposit_id, *, metadata=None, idempotency_key=None, **options)"
+  },
+  "Events": {
+    "__init__": "(self, client)",
+    "list": "(self, *, type=None, types=None, delivery_success=None, created_gt=None, created_gte=None, created_lt=None, created_lte=None, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, type=None, types=None, delivery_success=None, created_gt=None, created_gte=None, created_lt=None, created_lte=None, limit=100, starting_after=None, **options)",
+    "resend": "(self, event_id, *, webhook_endpoint, idempotency_key=None, **options)",
+    "retrieve": "(self, event_id, **options)"
+  },
+  "Forwarders": {
+    "__init__": "(self, client)",
+    "list": "(self, *, chain_id=None, quote=None, deposit_address=None, sweepable=None, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, chain_id=None, quote=None, deposit_address=None, sweepable=None, limit=100, starting_after=None, **options)"
+  },
+  "PaymentSettingsResource": {
+    "__init__": "(self, client)",
+    "retrieve": "(self, **options)",
+    "update": "(self, *, chains=UNSET, quote_creations_per_customer_per_minute=UNSET, idempotency_key=None, **options)"
+  },
+  "PhalaPay": {
+    "__enter__": "(self)",
+    "__exit__": "(self, *_)",
+    "__init__": "(self, api_key, *legacy, pins=None, api_base=None, timeout=15.0, max_attempts=4, request_deadline=None, upgrade_tolerance=False, transport=None, **legacy_kwargs)",
+    "checkout_params": "(self, quote)",
+    "close": "(self)",
+    "export_account": "(self, directory)",
+    "from_env": "(env=None, *, api_base=None)"
+  },
+  "Quotes": {
+    "__init__": "(self, client, issued_quotes)",
+    "cancel": "(self, quote_id, *, idempotency_key=None, **options)",
+    "create": "(self, *, client_reference_id, amount, chain_id, asset, currency='usd', idempotency_key=None, metadata=None, **options)",
+    "list": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
+    "retrieve": "(self, quote_id, *, expand=None, **options)",
+    "update": "(self, quote_id, *, metadata=None, idempotency_key=None, **options)"
+  },
+  "Refunds": {
+    "__init__": "(self, client)",
+    "cancel": "(self, refund_id, *, idempotency_key=None, **options)",
+    "create": "(self, *, deposit, destination_address, amount_atomic=None, idempotency_key=None, metadata=None, **options)",
+    "list": "(self, *, deposit=None, status=None, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, deposit=None, status=None, limit=100, starting_after=None, **options)",
+    "mark_paid": "(self, refund_id, *, transaction_hash, receipt_log_index=None, idempotency_key=None, **options)",
+    "retrieve": "(self, refund_id, *, expand=None, **options)",
+    "update": "(self, refund_id, *, metadata=None, idempotency_key=None, **options)"
+  },
+  "Sweeps": {
+    "__init__": "(self, client)",
+    "list": "(self, *, chain_id=None, forwarder=None, token=None, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, chain_id=None, forwarder=None, token=None, limit=100, starting_after=None, **options)"
+  },
+  "TopupClient": {
+    "__enter__": "(self)",
+    "__exit__": "(self, *_)",
+    "__init__": "(self, base_url, api_key, *, account=None, forwarder=None, treasuries=None, timeout=15.0, max_attempts=4, request_deadline=None, upgrade_tolerance=False, initial_backoff=0.5, transport=None, sleep=time.sleep, rng=None.Random.random, clock=time.monotonic, wall_clock=time.time)",
+    "account_id": "(self)",
+    "attestation": "(self, nonce, *, request_deadline=None, upgrade_tolerance=None)",
+    "cancel_quote": "(self, quote_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "cancel_refund": "(self, refund_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "cancel_treasury": "(self, treasury_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "close": "(self)",
+    "create_api_key": "(self, *, name='', permissions=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "create_deposit_address": "(self, client_reference_id, *, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "create_quote": "(self, client_reference_id, amount, *, chain_id, asset, currency='usd', idempotency_key=None, metadata=None, request_deadline=None, upgrade_tolerance=None)",
+    "create_refund": "(self, deposit, destination_address, amount_atomic=None, *, idempotency_key=None, metadata=None, request_deadline=None, upgrade_tolerance=None)",
+    "create_treasury": "(self, chain_id, message, signature, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "create_treasury_challenge": "(self, chain_id, address, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "create_webhook_endpoint": "(self, url, enabled_events, *, description=None, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "delete_webhook_endpoint": "(self, endpoint_id, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_account": "(self, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_api_key": "(self, api_key_id, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_balance": "(self, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_config": "(self, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_deposit": "(self, deposit_id, *, expand=None, request_deadline=None, upgrade_tolerance=None)",
+    "get_deposit_address": "(self, deposit_address_id, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_event": "(self, event_id, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_payment_settings": "(self, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_quote": "(self, quote_id, *, expand=None, request_deadline=None, upgrade_tolerance=None)",
+    "get_refund": "(self, refund_id, *, expand=None, request_deadline=None, upgrade_tolerance=None)",
+    "get_treasury": "(self, treasury_id, *, request_deadline=None, upgrade_tolerance=None)",
+    "get_webhook_endpoint": "(self, endpoint_id, *, request_deadline=None, upgrade_tolerance=None)",
+    "list_api_keys": "(self, *, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_api_keys_page": "(self, *, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_deposit_addresses": "(self, *, client_reference_id=None, status=None, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_deposit_addresses_page": "(self, *, client_reference_id=None, status=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_deposits": "(self, *, client_reference_id=None, quote=None, deposit_address=None, status=None, tx_hash=None, created_gt=None, created_gte=None, created_lt=None, created_lte=None, expand=None, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_deposits_page": "(self, *, client_reference_id=None, quote=None, deposit_address=None, status=None, tx_hash=None, created_gt=None, created_gte=None, created_lt=None, created_lte=None, expand=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_events": "(self, *, type=None, types=None, delivery_success=None, created_gt=None, created_gte=None, created_lt=None, created_lte=None, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_events_page": "(self, *, type=None, types=None, delivery_success=None, created_gt=None, created_gte=None, created_lt=None, created_lte=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_forwarders": "(self, *, chain_id=None, quote=None, deposit_address=None, sweepable=None, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_forwarders_page": "(self, *, chain_id=None, quote=None, deposit_address=None, sweepable=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_quotes": "(self, *, client_reference_id=None, status=None, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_quotes_page": "(self, *, client_reference_id=None, status=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_refunds": "(self, *, deposit=None, status=None, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_refunds_page": "(self, *, deposit=None, status=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_sweeps": "(self, *, chain_id=None, forwarder=None, token=None, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_sweeps_page": "(self, *, chain_id=None, forwarder=None, token=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_treasuries": "(self, *, chain_id=None, status=None, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_treasuries_page": "(self, *, chain_id=None, status=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_webhook_endpoints": "(self, *, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "list_webhook_endpoints_page": "(self, *, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
+    "mark_refund_paid": "(self, refund_id, transaction_hash, *, receipt_log_index=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "pause_quotes": "(self, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "pause_treasury": "(self, treasury_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "resend_event": "(self, event_id, *, webhook_endpoint, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "resume_quotes": "(self, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "resume_treasury": "(self, treasury_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "revoke_api_key": "(self, api_key_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "roll_api_key": "(self, api_key_id, *, expires_in=0, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "roll_webhook_key": "(self, *, expires_in=172800, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "rotate_deposit_address": "(self, deposit_address_id, *, idempotency_key=None, request_deadline=None, upgrade_tolerance=None)",
+    "test_webhook_endpoint": "(self, endpoint_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "update_deposit": "(self, deposit_id, *, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "update_deposit_address": "(self, deposit_address_id, *, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "update_payment_settings": "(self, *, chains=UNSET, quote_creations_per_customer_per_minute=UNSET, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "update_quote": "(self, quote_id, *, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "update_refund": "(self, refund_id, *, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "update_webhook_endpoint": "(self, endpoint_id, *, url=None, enabled_events=None, description=None, disabled=None, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)"
+  },
+  "Treasuries": {
+    "__init__": "(self, client)",
+    "cancel": "(self, treasury_id, *, idempotency_key=None, **options)",
+    "challenge": "(self, *, chain_id, address, idempotency_key=None, **options)",
+    "create": "(self, *, chain_id, message, signature, idempotency_key=None, **options)",
+    "list": "(self, *, chain_id=None, status=None, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, chain_id=None, status=None, limit=100, starting_after=None, **options)",
+    "pause": "(self, treasury_id, *, idempotency_key=None, **options)",
+    "resume": "(self, treasury_id, *, idempotency_key=None, **options)",
+    "retrieve": "(self, treasury_id, **options)",
+    "set_eoa": "(self, *, chain_id, address, private_key)"
+  },
+  "WebhookEndpoints": {
+    "__init__": "(self, client)",
+    "create": "(self, *, url, enabled_events, description=None, metadata=None, idempotency_key=None, **options)",
+    "delete": "(self, endpoint_id, **options)",
+    "list": "(self, *, limit=100, starting_after=None, **options)",
+    "list_page": "(self, *, limit=100, starting_after=None, **options)",
+    "retrieve": "(self, endpoint_id, **options)",
+    "test": "(self, endpoint_id, *, idempotency_key=None, **options)",
+    "update": "(self, endpoint_id, *, url=None, enabled_events=None, description=None, disabled=None, metadata=None, idempotency_key=None, **options)"
+  },
+  "_BoundWebhook": {
+    "__init__": "(self, pins)",
+    "construct_event": "(self, payload, headers, *, tolerance=300)"
+  }
+}

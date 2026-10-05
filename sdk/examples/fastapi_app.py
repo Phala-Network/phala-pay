@@ -19,16 +19,13 @@ and 0 otherwise; the balance moves by the difference from what the deposit contr
 partial refund takes back its pro-rata share of the credit, a reversal all of it, and a
 `deposit.reversed` delivered before `deposit.credited` nets to zero at once.
 
+For `PHALA_PAY_API_KEY`, use a restricted key with `quotes.write`; keep the secret key offline
+for administration.
+
 Run it against staging (install with `uv add phala-pay fastapi uvicorn`):
 
-    PHALA_PAY_API_BASE=https://pay.example.com \\
-    PHALA_PAY_API_KEY=ppay_rk_test_... (a restricted key with quotes.write; a secret key \\
-        stays offline for administration) \\
-    PHALA_PAY_ACCOUNT=acct_... \\
-    PHALA_PAY_FORWARDER=<factory>,<implementation> of the attested deployment \\
-    PHALA_PAY_TREASURIES=<chain_id>:<your treasury>,... as you proved them \\
-    PHALA_PAY_WEBHOOK_KEYS=<your account's webhook public key in this mode, whpk_…, pinned \\
-        from GET /v1/attestation; comma-separated while a rotation overlaps> \\
+    PHALA_PAY_API_KEY=ppay_rk_test_... \\
+    PHALA_PAY_PINS=ppay_pins_v1.... \\
     uvicorn --factory fastapi_app:app_from_env
 """
 
@@ -129,11 +126,8 @@ def current_team(x_team_id: Annotated[str, Header(pattern=r"^[A-Za-z0-9._-]{1,64
 
 def create_app(
     pay: PhalaPay,
-    webhook_keys: list[str],
     database: str,
     *,
-    account: str,
-    livemode: bool,
     chain_id: int,
     asset: str,
 ) -> FastAPI:
@@ -192,9 +186,7 @@ def create_app(
     async def webhook(request: Request) -> dict[str, bool]:
         payload = await request.body()
         try:
-            event = pay.webhooks.construct_event(
-                payload, request.headers, webhook_keys, account, expected_livemode=livemode
-            )
+            event = pay.webhooks.construct_event(payload, request.headers)
         except (SignatureVerificationError, ValueError) as error:
             raise HTTPException(400) from error
 
@@ -212,29 +204,10 @@ def create_app(
 
 
 def app_from_env() -> FastAPI:
-    api_key = os.environ["PHALA_PAY_API_KEY"]
-    factory, implementation = os.environ["PHALA_PAY_FORWARDER"].split(",")
-    treasuries = {
-        int(chain_id): treasury.strip()
-        for chain_id, treasury in (
-            entry.split(":", 1)
-            for entry in os.environ["PHALA_PAY_TREASURIES"].split(",")
-            if entry.strip()
-        )
-    }
-    pay = PhalaPay(
-        os.environ["PHALA_PAY_API_BASE"],
-        api_key,
-        forwarder=(factory.strip(), implementation.strip()),
-        treasuries=treasuries,
-        account=os.environ["PHALA_PAY_ACCOUNT"],
-    )
+    pay = PhalaPay.from_env()
     return create_app(
         pay,
-        [key.strip() for key in os.environ["PHALA_PAY_WEBHOOK_KEYS"].split(",") if key.strip()],
         os.environ.get("DATABASE", "topups.sqlite3"),
-        account=os.environ["PHALA_PAY_ACCOUNT"],
-        livemode=api_key.startswith(("ppay_sk_live_", "ppay_rk_live_")),
         chain_id=int(os.environ.get("PHALA_PAY_CHAIN_ID", "11155111")),
         asset=os.environ.get("PHALA_PAY_ASSET", "pha"),
     )

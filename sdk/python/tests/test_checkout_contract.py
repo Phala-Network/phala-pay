@@ -9,8 +9,7 @@ import pytest
 
 from phala_pay import ResponseValidationError
 
-from .test_ergonomics_transport import SECRET, pay
-from .test_phala_pay import _quote
+from ._support import SECRET, _quote, pay
 
 
 def test_checkout_params_matches_js_checkout_params_contract() -> None:

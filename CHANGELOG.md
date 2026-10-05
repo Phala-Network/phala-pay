@@ -14,6 +14,20 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Python SDK (`phala-pay`)
+
+#### Changed
+
+- The 60 resource method signatures that previously declared `request_deadline` and
+  `upgrade_tolerance` now show `**options` in `help()` and `inspect.signature()`; the accepted
+  runtime keywords are unchanged. Unknown-keyword `TypeError` messages no longer include the
+  method name prefix.
+
+#### Deprecated
+
+- The legacy `PhalaPay` constructor is deprecated and emits `DeprecationWarning`; it will be
+  removed in 0.10.0. Configure pins or use `PhalaPay.from_env()` instead.
+
 ## [0.9.1] - 2026-10-05
 
 ### Upgrading from 0.8.x

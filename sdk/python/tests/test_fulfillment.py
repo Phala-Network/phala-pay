@@ -19,7 +19,7 @@ from topup_sdk import (
 )
 from topup_sdk.__main__ import send_test_event
 
-from .test_webhooks import RUST_BODY, RUST_ID, RUST_KEY, RUST_SIGNATURE, RUST_TIMESTAMP
+from ._support import RUST_BODY, RUST_ID, RUST_KEY, RUST_SIGNATURE, RUST_TIMESTAMP
 
 DEPOSIT = "dep_3f1c2b9e6a8d5c479e210b7d4f6a8c13"
 

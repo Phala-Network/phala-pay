@@ -14,14 +14,9 @@ from topup_sdk import (
     verify_webhook_signature,
 )
 
+from ._support import RUST_BODY, RUST_ID, RUST_KEY, RUST_SIGNATURE, RUST_TIMESTAMP
+
 # Fixed vector from crates/topup/src/outbox/signature.rs (seed [7; 32]).
-RUST_KEY = Ed25519PrivateKey.from_private_bytes(bytes([7] * 32))
-RUST_ID = "evt_018d5f8e8a7b7d65bc442c4f5f0a6d31"
-RUST_TIMESTAMP = 1_674_087_231
-RUST_BODY = b'{"type":"deposit.confirmed","data":{"deposit_id":"dep_123"}}'
-RUST_SIGNATURE = (
-    "v1a,YuPb4kzXzDJqX8EcTFjrfDziMBFmzlPS3V/ISzdG/7R3KS7G1TVLRBF7DOJGnAtOjjvfeFm1G32KO67JiiY0BQ=="
-)
 
 
 def _rust_headers(signature: str = RUST_SIGNATURE) -> dict[str, str]:
