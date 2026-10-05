@@ -34,7 +34,8 @@ export interface DepositAddressProps {
   apiBase?: string;
   /** Milliseconds between payment reads; default 3000. */
   pollInterval?: number;
-  /** Called on the first public view and whenever it changes, like Checkout's `onChange`.
+  /** Called after the first successful read and once per public-view content change.
+   * Unlike Checkout's `onChange`, this does not report loading.
    * Display only; credit from your `deposit.credited` webhook. */
   onChange?: (state: ClientDepositAddress) => void;
   appearance?: Appearance;

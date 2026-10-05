@@ -23,8 +23,9 @@ After ten minutes without an observed public-view change, `DepositAddress` uses 
 of `max(pollInterval, 15000)` milliseconds, so a longer configured interval stays unchanged.
 Any change or visibility regain restores the normal interval and resets the idle window.
 Its optional `onChange?: (state: ClientDepositAddress) => void` follows Checkout's callback naming:
-it receives the full public view on the first read and once per content change, including payment
-confirmations and network credit times. Unchanged polls, reconnecting alone, and replacing the
+it receives the full public view after the first successful read and then once per content change,
+including payment confirmations and network credit times. Unlike `<Checkout onChange>`, it does
+not report loading. Unchanged polls, reconnecting alone, and replacing the
 callback do not notify or restart polling. This callback is for your UI; fulfil from your
 `deposit.credited` webhook.
 

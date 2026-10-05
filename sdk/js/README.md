@@ -178,8 +178,9 @@ After ten minutes without a change in the public view, `<DepositAddress>` uses a
 of `max(pollInterval, 15000)` milliseconds, with the same jitter and failure backoff, so a longer
 configured interval stays unchanged. Any view change or visibility regain resets
 the idle window and restores `pollInterval`. Optional `onChange(state)` receives the existing
-`ClientDepositAddress` public view on its first successful read and once per content change,
-including payment confirmations and network credit times. Unchanged polls, callback replacements,
+`ClientDepositAddress` public view after the first successful read and then once per content change,
+including payment confirmations and network credit times. Unlike `<Checkout onChange>`, it does
+not report loading. Unchanged polls, callback replacements,
 and reconnecting alone do not trigger it. Use it to update your page without additional polling;
 fulfil from the `deposit.credited` webhook.
 

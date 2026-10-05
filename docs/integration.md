@@ -594,8 +594,9 @@ with uniform ±20% jitter on their normal intervals and failure backoff, respect
 After ten minutes without a public-view change, `DepositAddress` uses an idle base interval of
 `max(pollInterval, 15000)` milliseconds, so a longer configured interval stays unchanged;
 any change or visibility regain resets that window and restores `pollInterval` (default 3000 ms).
-Optional `onChange(state)` receives the `ClientDepositAddress` view on its first read and once
-per content change, including confirmations and credit times. Use it to update your page without
+Optional `onChange(state)` receives the `ClientDepositAddress` view after the first successful read
+and then once per content change, including confirmations and credit times. Unlike
+`<Checkout onChange>`, it does not report loading. Use it to update your page without
 additional polling; credit from your webhook. Checkout uses its existing error state after three
 consecutive non-terminal 4xx responses other than 408/429; 404 still stops on the first response.
 

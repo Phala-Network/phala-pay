@@ -24,8 +24,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
-- `<DepositAddress onChange(state)>` receives the public view on its first read and once per
-  content change, so integrators can update their UI without additional polling.
+- `<DepositAddress onChange(state)>` receives the public view after the first successful read
+  and then once per content change, so integrators can update their UI without additional polling.
 
 #### Changed
 
