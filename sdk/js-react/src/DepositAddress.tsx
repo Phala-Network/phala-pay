@@ -165,6 +165,8 @@ function useClientView(
     let failures = 0;
     let inFlight = false;
     let finished = false;
+    let lastView: string | undefined;
+    let lastChanged = Date.now();
     const visibilityDocument = typeof document === "undefined" ? undefined : document;
     const hidden = () => visibilityDocument?.visibilityState === "hidden";
     const load = async () => {
@@ -178,6 +180,11 @@ function useClientView(
         const view = await retrieveDepositAddress({ clientSecret, apiBase, signal: controller.signal });
         failures = 0;
         if (!stopped) {
+          const serialized = JSON.stringify(view);
+          if (serialized !== lastView) {
+            lastView = serialized;
+            lastChanged = Date.now();
+          }
           setCurrent({ key, view, reconnecting: false });
         }
       } catch (error) {
@@ -198,12 +205,14 @@ function useClientView(
         inFlight = false;
       }
       if (!stopped && !hidden()) {
-        timer = setTimeout(() => void load(), pollDelay(interval, failures, failure));
+        const nextInterval = Date.now() - lastChanged >= 600_000 ? 15_000 : interval;
+        timer = setTimeout(() => void load(), pollDelay(nextInterval, failures, failure));
       }
     };
     const visibilityChanged = () => {
       clearTimeout(timer);
       if (visibilityDocument?.visibilityState !== "hidden") {
+        lastChanged = Date.now();
         void load();
       }
     };
