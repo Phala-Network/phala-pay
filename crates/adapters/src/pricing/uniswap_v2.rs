@@ -434,6 +434,7 @@ impl PriceSource for UniswapV2 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_rpc::{self, RpcFixture};
     use super::*;
     use topup_core::money::Bps;
     fn q(value: u64) -> U256 {
@@ -723,15 +724,6 @@ mod tests {
             Ok(h.clone())
         }
     }
-    struct RpcFixture {
-        client: Arc<EvmClient>,
-        task: tokio::task::JoinHandle<()>,
-    }
-    impl Drop for RpcFixture {
-        fn drop(&mut self) {
-            self.task.abort();
-        }
-    }
     async fn rpc(
         id: &str,
         head: u64,
@@ -740,80 +732,73 @@ mod tests {
         eth_answer: i64,
         now: u64,
     ) -> RpcFixture {
-        use crate::{
-            chain::evm::group::{
-                GroupPolicy, Member, RpcGroup,
-                budget::{BudgetSpec, Budgets},
-            },
-            redaction::Redacted,
-        };
-        use axum::{Json, Router, routing::post};
-        use std::collections::BTreeMap;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let app=Router::new().route("/",post(move |Json(request):Json<Value>|{let state=state.clone();async move {
-            let result=match request["method"].as_str().unwrap(){
-                "eth_blockNumber"=>json!(format!("0x{head:x}")),
-                "eth_getBlockByNumber"=>{let mut h=serde_json::to_value(alloy::rpc::types::Block::<alloy::rpc::types::Transaction>::default()).unwrap();
-                    h["number"]=if request["params"][0]=="latest"{json!(format!("0x{head:x}"))}else{request["params"][0].clone()};
-                    h["hash"]=json!(hash);h["parentHash"]=json!(B256::repeat_byte(3));h["timestamp"]=json!(format!("0x{now:x}"));h},
-                "eth_call"=>{
-                    assert_eq!(request["params"][1],"0x62","all pair AND ETH/USD values must be pinned to min(100,102)-2");
-                    let input=request["params"][0]["input"].as_str().or_else(||request["params"][0]["data"].as_str()).unwrap();
-                    let data=match &input[..10]{
-                        "0x0dfe1681"=>token0Call::abi_encode_returns(&state.token0),
-                        "0xd21220a7"=>token1Call::abi_encode_returns(&state.token1),
-                        "0x5909c0d5"=>price0CumulativeLastCall::abi_encode_returns(&state.cumulative0),
-                        "0x5a3d5493"=>price1CumulativeLastCall::abi_encode_returns(&state.cumulative1),
-                        "0x0902f1ac"=>getReservesCall::abi_encode_returns(&getReservesReturn {reserve0:alloy_primitives::Uint::<112,2>::from(state.reserve0.to::<u128>()),reserve1:alloy_primitives::Uint::<112,2>::from(state.reserve1.to::<u128>()),blockTimestampLast:state.timestamp_last}),
-                        "0x313ce567"=>super::super::chainlink::decimalsCall::abi_encode_returns(&8),
-                        "0xfeaf968c"=>super::super::chainlink::latestRoundDataCall::abi_encode_returns(&super::super::chainlink::latestRoundDataReturn { roundId:alloy_primitives::Uint::<80,2>::from(20),answer:alloy_primitives::I256::try_from(eth_answer).unwrap(), startedAt:U256::from(now),updatedAt:U256::from(now),answeredInRound:alloy_primitives::Uint::<80,2>::from(20) }),
-                        _=>panic!("unexpected selector")};json!(format!("0x{}",hex::encode(data)))
-                },_=>panic!("unexpected RPC")}; Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
-        }}));
-        let task = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        let budgets = Arc::new(
-            Budgets::new(&BTreeMap::from([
-                (
-                    "account".into(),
-                    BudgetSpec {
-                        requests_per_second: 100,
-                        burst: 100,
-                    },
-                ),
-                (
-                    "key".into(),
-                    BudgetSpec {
-                        requests_per_second: 100,
-                        burst: 100,
-                    },
-                ),
-            ]))
-            .unwrap(),
-        );
-        let group = RpcGroup::new(
-            id.into(),
-            1,
-            GroupPolicy::default(),
-            vec![Member {
-                id: id.into(),
-                company: id.into(),
-                endpoint: Redacted::parse(&url).unwrap(),
-                account: "account".into(),
-                key: "key".into(),
-                priority: 0,
-                weight: 1,
-            }],
-            budgets,
-        )
-        .unwrap();
-        group.verified(0, true);
-        RpcFixture {
-            client: Arc::new(EvmClient::from_group(group, None).unwrap()),
-            task,
-        }
+        test_rpc::rpc(id, move |request| {
+            match request["method"].as_str().unwrap() {
+                "eth_blockNumber" => json!(format!("0x{head:x}")),
+                "eth_getBlockByNumber" => {
+                    let mut h = serde_json::to_value(alloy::rpc::types::Block::<
+                        alloy::rpc::types::Transaction,
+                    >::default())
+                    .unwrap();
+                    h["number"] = if request["params"][0] == "latest" {
+                        json!(format!("0x{head:x}"))
+                    } else {
+                        request["params"][0].clone()
+                    };
+                    h["hash"] = json!(hash);
+                    h["parentHash"] = json!(B256::repeat_byte(3));
+                    h["timestamp"] = json!(format!("0x{now:x}"));
+                    h
+                }
+                "eth_call" => {
+                    assert_eq!(
+                        request["params"][1], "0x62",
+                        "all pair AND ETH/USD values must be pinned to min(100,102)-2"
+                    );
+                    let input = request["params"][0]["input"]
+                        .as_str()
+                        .or_else(|| request["params"][0]["data"].as_str())
+                        .unwrap();
+                    let data = match &input[..10] {
+                        "0x0dfe1681" => token0Call::abi_encode_returns(&state.token0),
+                        "0xd21220a7" => token1Call::abi_encode_returns(&state.token1),
+                        "0x5909c0d5" => {
+                            price0CumulativeLastCall::abi_encode_returns(&state.cumulative0)
+                        }
+                        "0x5a3d5493" => {
+                            price1CumulativeLastCall::abi_encode_returns(&state.cumulative1)
+                        }
+                        "0x0902f1ac" => getReservesCall::abi_encode_returns(&getReservesReturn {
+                            reserve0: alloy_primitives::Uint::<112, 2>::from(
+                                state.reserve0.to::<u128>(),
+                            ),
+                            reserve1: alloy_primitives::Uint::<112, 2>::from(
+                                state.reserve1.to::<u128>(),
+                            ),
+                            blockTimestampLast: state.timestamp_last,
+                        }),
+                        "0x313ce567" => {
+                            super::super::chainlink::decimalsCall::abi_encode_returns(&8)
+                        }
+                        "0xfeaf968c" => {
+                            super::super::chainlink::latestRoundDataCall::abi_encode_returns(
+                                &super::super::chainlink::latestRoundDataReturn {
+                                    roundId: alloy_primitives::Uint::<80, 2>::from(20),
+                                    answer: alloy_primitives::I256::try_from(eth_answer).unwrap(),
+                                    startedAt: U256::from(now),
+                                    updatedAt: U256::from(now),
+                                    answeredInRound: alloy_primitives::Uint::<80, 2>::from(20),
+                                },
+                            )
+                        }
+                        _ => panic!("unexpected selector"),
+                    };
+                    json!(format!("0x{}", hex::encode(data)))
+                }
+                _ => panic!("unexpected RPC"),
+            }
+        })
+        .await
     }
     #[tokio::test]
     async fn quote_between_samples_ends_at_the_eth_usd_block_without_an_extra_row() {

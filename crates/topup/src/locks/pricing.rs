@@ -686,14 +686,13 @@ mod tests {
         route
     }
 
-    fn regression_config(
-        a: &str,
-        b: &str,
-    ) -> (
-        std::collections::BTreeMap<String, crate::rpc_groups::GroupSpec>,
-        std::collections::BTreeMap<String, crate::rpc_groups::Company>,
-        std::collections::BTreeMap<String, topup_adapters::chain::evm::group::budget::BudgetSpec>,
-    ) {
+    struct RegressionConfig {
+        groups: BTreeMap<String, crate::rpc_groups::GroupSpec>,
+        companies: BTreeMap<String, crate::rpc_groups::Company>,
+        budgets: BTreeMap<String, topup_adapters::chain::evm::group::budget::BudgetSpec>,
+    }
+
+    fn regression_config(a: &str, b: &str) -> RegressionConfig {
         use crate::rpc_groups::{Company, GroupSpec, MemberSpec};
         use std::collections::BTreeMap;
         use topup_adapters::chain::evm::group::{GroupPolicy, budget::BudgetSpec};
@@ -745,7 +744,11 @@ mod tests {
                 )
             })
             .collect();
-        (groups, companies, budgets)
+        RegressionConfig {
+            groups,
+            companies,
+            budgets,
+        }
     }
 
     struct RegressionRpc {
@@ -821,8 +824,11 @@ mod tests {
         let route = reversed_group_route();
         let a = regression_rpc(101_000_000).await;
         let b = regression_rpc(100_000_000).await;
-        let (groups, companies, budgets) =
-            regression_config(&a.url, &b.url.replace("127.0.0.1", "localhost"));
+        let RegressionConfig {
+            groups,
+            companies,
+            budgets,
+        } = regression_config(&a.url, &b.url.replace("127.0.0.1", "localhost"));
         crate::rpc_groups::validate(std::slice::from_ref(&route), &groups, &companies, &budgets)
             .unwrap();
         let expected = ("b".into(), "a".into(), 1);
@@ -857,8 +863,11 @@ mod tests {
             unreachable!();
         };
         *rpc_group_b = Some("a".into());
-        let (groups, companies, budgets) =
-            regression_config("http://127.0.0.1:1", "http://localhost:2");
+        let RegressionConfig {
+            groups,
+            companies,
+            budgets,
+        } = regression_config("http://127.0.0.1:1", "http://localhost:2");
         assert_eq!(
             crate::rpc_groups::price_pairs(&route).unwrap(),
             vec![("b".into(), "b".into(), 1)]

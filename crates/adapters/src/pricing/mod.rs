@@ -165,6 +165,91 @@ async fn admit(source: &'static str) {
 }
 
 #[cfg(test)]
+mod test_rpc {
+    use crate::{
+        chain::evm::{
+            EvmClient,
+            group::{
+                GroupPolicy, Member, RpcGroup,
+                budget::{BudgetSpec, Budgets},
+            },
+        },
+        redaction::Redacted,
+    };
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    use std::{collections::BTreeMap, sync::Arc};
+
+    pub(super) struct RpcFixture {
+        pub(super) client: Arc<EvmClient>,
+        task: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for RpcFixture {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+    pub(super) async fn rpc(
+        id: &str,
+        reply: impl Fn(Value) -> Value + Clone + Send + Sync + 'static,
+    ) -> RpcFixture {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handler = move |Json(request): Json<Value>| {
+            let reply = reply.clone();
+            async move {
+                let id = request["id"].clone();
+                Json(json!({"jsonrpc":"2.0","id":id,"result":reply(request)}))
+            }
+        };
+        let app = Router::new().route("/", post(handler));
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let budgets = Arc::new(
+            Budgets::new(&BTreeMap::from([
+                (
+                    "account".into(),
+                    BudgetSpec {
+                        requests_per_second: 100,
+                        burst: 100,
+                    },
+                ),
+                (
+                    "key".into(),
+                    BudgetSpec {
+                        requests_per_second: 100,
+                        burst: 100,
+                    },
+                ),
+            ]))
+            .unwrap(),
+        );
+        let group = RpcGroup::new(
+            id.into(),
+            1,
+            GroupPolicy::default(),
+            vec![Member {
+                id: id.into(),
+                company: id.into(),
+                endpoint: Redacted::parse(&url).unwrap(),
+                account: "account".into(),
+                key: "key".into(),
+                priority: 0,
+                weight: 1,
+            }],
+            budgets,
+        )
+        .unwrap();
+        group.verified(0, true);
+        RpcFixture {
+            client: Arc::new(EvmClient::from_group(group, None).unwrap()),
+            task,
+        }
+    }
+}
+
+#[cfg(test)]
 mod http_tests {
     use super::*;
     use axum::{
