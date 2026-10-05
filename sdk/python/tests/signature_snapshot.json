@@ -1,0 +1,4536 @@
+{
+  "AccountResource": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "pause_quotes": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "resume_quotes": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "roll_webhook_key": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expires_in",
+        "kind": "KEYWORD_ONLY",
+        "default": "172800"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "ApiKeys": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "create": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "name",
+        "kind": "KEYWORD_ONLY",
+        "default": "''"
+      },
+      {
+        "name": "permissions",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "api_key_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "revoke": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "api_key_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "roll": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "api_key_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expires_in",
+        "kind": "KEYWORD_ONLY",
+        "default": "0"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "BalanceResource": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "ConfigResource": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "DepositAddresses": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "create": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_address_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "rotate": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_address_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_address_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "Deposits": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "quote",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "deposit_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "tx_hash",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "quote",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "deposit_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "tx_hash",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "Events": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "type",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "types",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "delivery_success",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "type",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "types",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "delivery_success",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "resend": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "event_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "webhook_endpoint",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "event_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "Forwarders": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "quote",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "deposit_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "sweepable",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "quote",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "deposit_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "sweepable",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "PaymentSettingsResource": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chains",
+        "kind": "KEYWORD_ONLY",
+        "default": "UNSET"
+      },
+      {
+        "name": "quote_creations_per_customer_per_minute",
+        "kind": "KEYWORD_ONLY",
+        "default": "UNSET"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "PhalaPay": {
+    "__enter__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "__exit__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "_",
+        "kind": "VAR_POSITIONAL",
+        "default": "<required>"
+      }
+    ],
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "api_key",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "legacy",
+        "kind": "VAR_POSITIONAL",
+        "default": "<required>"
+      },
+      {
+        "name": "pins",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "api_base",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "timeout",
+        "kind": "KEYWORD_ONLY",
+        "default": "15.0"
+      },
+      {
+        "name": "max_attempts",
+        "kind": "KEYWORD_ONLY",
+        "default": "4"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "False"
+      },
+      {
+        "name": "transport",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "legacy_kwargs",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "checkout_params": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "quote",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "close": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "export_account": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "directory",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "from_env": [
+      {
+        "name": "env",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "None"
+      },
+      {
+        "name": "api_base",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "Quotes": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "cancel": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "quote_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "amount",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "asset",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "currency",
+        "kind": "KEYWORD_ONLY",
+        "default": "'usd'"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "quote_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "quote_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "Refunds": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "cancel": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "refund_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "destination_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "amount_atomic",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "mark_paid": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "refund_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "transaction_hash",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "receipt_log_index",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "refund_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "refund_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "Sweeps": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "forwarder",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "token",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "forwarder",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "token",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "TopupClient": {
+    "__enter__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "__exit__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "_",
+        "kind": "VAR_POSITIONAL",
+        "default": "<required>"
+      }
+    ],
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "base_url",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "api_key",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "account",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "forwarder",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "treasuries",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "timeout",
+        "kind": "KEYWORD_ONLY",
+        "default": "15.0"
+      },
+      {
+        "name": "max_attempts",
+        "kind": "KEYWORD_ONLY",
+        "default": "4"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "False"
+      },
+      {
+        "name": "initial_backoff",
+        "kind": "KEYWORD_ONLY",
+        "default": "0.5"
+      },
+      {
+        "name": "transport",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "sleep",
+        "kind": "KEYWORD_ONLY",
+        "default": "time.sleep"
+      },
+      {
+        "name": "rng",
+        "kind": "KEYWORD_ONLY",
+        "default": "None.Random.random"
+      },
+      {
+        "name": "clock",
+        "kind": "KEYWORD_ONLY",
+        "default": "time.monotonic"
+      },
+      {
+        "name": "wall_clock",
+        "kind": "KEYWORD_ONLY",
+        "default": "time.time"
+      }
+    ],
+    "account_id": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "attestation": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "nonce",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "cancel_quote": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "quote_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "cancel_refund": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "refund_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "cancel_treasury": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "treasury_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "close": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "create_api_key": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "name",
+        "kind": "KEYWORD_ONLY",
+        "default": "''"
+      },
+      {
+        "name": "permissions",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create_deposit_address": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create_quote": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "amount",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "asset",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "currency",
+        "kind": "KEYWORD_ONLY",
+        "default": "'usd'"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create_refund": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "destination_address",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "amount_atomic",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create_treasury": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "message",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "signature",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create_treasury_challenge": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "address",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create_webhook_endpoint": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "url",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "enabled_events",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "description",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "delete_webhook_endpoint": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "endpoint_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_account": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_api_key": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "api_key_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_balance": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_config": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_deposit": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_deposit_address": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_address_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_event": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "event_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_payment_settings": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_quote": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "quote_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_refund": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "refund_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_treasury": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "treasury_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "get_webhook_endpoint": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "endpoint_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_api_keys": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_api_keys_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_deposit_addresses": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_deposit_addresses_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_deposits": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "quote",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "deposit_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "tx_hash",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_deposits_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "quote",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "deposit_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "tx_hash",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "expand",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_events": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "type",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "types",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "delivery_success",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_events_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "type",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "types",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "delivery_success",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_gte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lt",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "created_lte",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_forwarders": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "quote",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "deposit_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "sweepable",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_forwarders_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "quote",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "deposit_address",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "sweepable",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_quotes": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_quotes_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client_reference_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_refunds": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_refunds_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_sweeps": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "forwarder",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "token",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_sweeps_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "forwarder",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "token",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_treasuries": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_treasuries_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_webhook_endpoints": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "page_size",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_webhook_endpoints_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "mark_refund_paid": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "refund_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "transaction_hash",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "receipt_log_index",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "pause_quotes": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "pause_treasury": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "treasury_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "resend_event": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "event_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "webhook_endpoint",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "resume_quotes": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "resume_treasury": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "treasury_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "revoke_api_key": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "api_key_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "roll_api_key": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "api_key_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expires_in",
+        "kind": "KEYWORD_ONLY",
+        "default": "0"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "roll_webhook_key": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "expires_in",
+        "kind": "KEYWORD_ONLY",
+        "default": "172800"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "rotate_deposit_address": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_address_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "test_webhook_endpoint": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "endpoint_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update_deposit": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update_deposit_address": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "deposit_address_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update_payment_settings": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chains",
+        "kind": "KEYWORD_ONLY",
+        "default": "UNSET"
+      },
+      {
+        "name": "quote_creations_per_customer_per_minute",
+        "kind": "KEYWORD_ONLY",
+        "default": "UNSET"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update_quote": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "quote_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update_refund": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "refund_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update_webhook_endpoint": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "endpoint_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "url",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "enabled_events",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "description",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "disabled",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "Treasuries": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "cancel": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "treasury_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "challenge": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "address",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "create": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "message",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "signature",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "status",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "pause": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "treasury_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "resume": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "treasury_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "treasury_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "set_eoa": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "chain_id",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "address",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "private_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      }
+    ]
+  },
+  "WebhookEndpoints": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "client",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "create": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "url",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "enabled_events",
+        "kind": "KEYWORD_ONLY",
+        "default": "<required>"
+      },
+      {
+        "name": "description",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "delete": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "endpoint_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "list_page": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "limit",
+        "kind": "KEYWORD_ONLY",
+        "default": "100"
+      },
+      {
+        "name": "starting_after",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "retrieve": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "endpoint_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "test": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "endpoint_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ],
+    "update": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "endpoint_id",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "url",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "enabled_events",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "description",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "disabled",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "metadata",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "request_deadline",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "upgrade_tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      },
+      {
+        "name": "idempotency_key",
+        "kind": "KEYWORD_ONLY",
+        "default": "None"
+      }
+    ]
+  },
+  "_BoundWebhook": {
+    "__init__": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "pins",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      }
+    ],
+    "construct_event": [
+      {
+        "name": "self",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "payload",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "headers",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "default": "<required>"
+      },
+      {
+        "name": "tolerance",
+        "kind": "KEYWORD_ONLY",
+        "default": "300"
+      }
+    ]
+  }
+}
