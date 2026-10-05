@@ -1329,3 +1329,18 @@ def test_sweeps_older_than_a_minute_return_immediately_with_stale_marker(
     finally:
         service.sweeps_release.set()
         console.close()
+
+
+def test_fresh_sweeps_cache_does_not_start_background_builds(
+    demo: tuple[DemoConsole, Service],
+) -> None:
+    console, service = demo
+    cookie = _account(console)
+    status, first = _get(console, cookie, "sweeps")
+    assert status == HTTPStatus.OK
+    assert console._sweeps_thread is not None
+    console._sweeps_thread.join(timeout=2)
+    for _ in range(5):
+        assert _get(console, cookie, "sweeps") == (HTTPStatus.OK, first)
+    assert not console._sweeps_refreshing
+    assert [request.url.path for request in service.requests].count("/v1/balance") == 1

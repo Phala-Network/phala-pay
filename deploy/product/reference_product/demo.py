@@ -843,7 +843,7 @@ class DemoConsole:
             view = None if self._sweeps is None else self._sweeps[1]
             if self._sweeps is not None and now - self._sweeps[0] > 60:
                 view = {**self._sweeps[1], "stale": True}
-            if not self._sweeps_refreshing:
+            if not self._sweeps_refreshing and (self._sweeps is None or now - self._sweeps[0] > 10):
                 future: Future[dict[str, Any]] = Future()
                 self._sweeps_future = future
                 self._sweeps_refreshing = True
