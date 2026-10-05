@@ -58,7 +58,7 @@ def _client(handler: httpx.MockTransport) -> PhalaPay:
     )
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_quotes_create_returns_the_client_secret_to_a_request_with_the_key() -> None:
     seen: list[httpx.Request] = []
 
@@ -81,7 +81,7 @@ def test_quotes_create_returns_the_client_secret_to_a_request_with_the_key() -> 
     assert json.loads(seen[0].content)["client_reference_id"] == "team-42"
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_metadata_is_sent_on_create_and_merged_by_update() -> None:
     seen: list[httpx.Request] = []
     refund: dict[str, object] = {
@@ -143,7 +143,7 @@ def test_metadata_is_sent_on_create_and_merged_by_update() -> None:
     ]
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_deposits_list_follows_every_page() -> None:
     pages = {None: [_deposit(3), _deposit(2)], "dep_" + f"{2:032x}": [_deposit(1)]}
 
@@ -160,7 +160,7 @@ def test_deposits_list_follows_every_page() -> None:
     assert [d.log_index for d in deposits] == [3, 2, 1]
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_deposit_addresses_create_rotate_and_list_check_every_active_address() -> None:
     seen: list[httpx.Request] = []
 
@@ -236,7 +236,7 @@ def _derived(treasury: str) -> str:
     )
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 @pytest.mark.parametrize(
     ("network", "treasuries"),
     [
@@ -277,7 +277,7 @@ def test_a_deposit_address_the_account_cannot_derive_is_refused(
         client.deposit_addresses.retrieve(DEPOSIT_ADDRESS_ID)
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_the_key_must_be_an_api_key() -> None:
     with pytest.raises(ValueError, match="secret key"):
         PhalaPay("https://service.test", "acme/v1", forwarder=(FACTORY, IMPLEMENTATION))
