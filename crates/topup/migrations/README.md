@@ -31,6 +31,10 @@ Normal migration retries validate their definitions and recover interrupted buil
 same mechanism as the RPC queue indexes. Previous service binaries can keep reading and writing
 the existing schema while these additive migrations run.
 
+The `20261029040000`–`20261029040002` account-scoped list indexes follow the same concurrent
+build and retry protocol. They are expand-only and retain reads and writes from v0.9.2, whose
+maximum migration is `20261029030005`, the compatibility floor for these additions.
+
 ## Roles and privileges
 
 The service runs through the login role configured by `DATABASE_URL`. That login role must be a
