@@ -1463,10 +1463,10 @@ async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
     })).await
 }
 
-/// Concurrent service list indexes reuse completed builds, round trip, and leave existing
+/// Concurrent service list and heartbeat indexes reuse completed builds, round trip, and leave existing
 /// compatibility ledger entries intact across rollback and migration retries.
 #[tokio::test]
-async fn service_list_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
+async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
     with_database(|context| {
         Box::pin(async move {
             let pool = &context.owner_pool;
@@ -1481,6 +1481,7 @@ async fn service_list_indexes_resume_unrecorded_builds_and_round_trip() -> Resul
                 include_str!("../migrations/20261029040000_quote_list.up.sql"),
                 include_str!("../migrations/20261029040001_refund_list.up.sql"),
                 include_str!("../migrations/20261029040002_forwarder_list.up.sql"),
+                include_str!("../migrations/20261029040003_heartbeat_recorded.up.sql"),
             ] {
                 sqlx::query(sql).execute(pool).await?;
             }
@@ -1494,27 +1495,28 @@ async fn service_list_indexes_resume_unrecorded_builds_and_round_trip() -> Resul
                     "quotes_scope_created_idx",
                     "refunds_scope_created_idx",
                     "addresses_scope_page_idx",
+                    "heartbeat_recorded_at_idx",
                 ])
                 .fetch_all(pool)
                 .await
             };
             let before = objects().await?;
-            ensure!(before.len() == 3 && before.iter().all(|(_, _, valid)| *valid));
+            ensure!(before.len() == 4 && before.iter().all(|(_, _, valid)| *valid));
             db::migrate(pool).await?;
             ensure!(objects().await? == before, "completed index was rebuilt");
             let compatible: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM _sqlx_migrations m \
                  JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
-                 WHERE m.version BETWEEN 20261029040000 AND 20261029040002 \
+                 WHERE m.version BETWEEN 20261029040000 AND 20261029040003 \
                    AND m.success AND c.compatibility_floor=20261029030005",
             )
             .fetch_one(pool)
             .await?;
-            ensure!(compatible == 3, "list indexes must retain the N-1 floor");
+            ensure!(compatible == 4, "service indexes must retain the N-1 floor");
             db::MIGRATOR.undo(pool, 20261029030005).await?;
             ensure!(objects().await?.is_empty());
             db::migrate(pool).await?;
-            ensure!(objects().await?.len() == 3);
+            ensure!(objects().await?.len() == 4);
             let retained: Vec<(i64, Vec<u8>, i64)> = sqlx::query_as(
                 "SELECT version, checksum, compatibility_floor FROM topup_migration_compatibility \
                  WHERE version <= 20261029030005 ORDER BY version",

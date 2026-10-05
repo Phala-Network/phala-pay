@@ -35,6 +35,9 @@ The `20261029040000`–`20261029040002` account-scoped list indexes follow the s
 build and retry protocol. They are expand-only and retain reads and writes from v0.9.2, whose
 maximum migration is `20261029030005`, the compatibility floor for these additions.
 
+The `20261029040003` heartbeat timestamp index follows that protocol and floor, preserving
+`max(recorded_at)` and timestamp-ordered restore reads without assuming identity/time ordering.
+
 ## Roles and privileges
 
 The service runs through the login role configured by `DATABASE_URL`. That login role must be a

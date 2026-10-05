@@ -11,7 +11,7 @@ struct QueueIndex {
     drop_sql: &'static str,
 }
 
-const QUEUE_INDEXES: [QueueIndex; 10] = [
+const QUEUE_INDEXES: [QueueIndex; 11] = [
     QueueIndex {
         version: 20261028000000,
         name: "rpc_window_reviews_due_idx",
@@ -71,6 +71,12 @@ const QUEUE_INDEXES: [QueueIndex; 10] = [
         name: "addresses_scope_page_idx",
         definition: "CREATE INDEX addresses_scope_page_idx ON public.addresses USING btree (account_id, livemode, id)",
         drop_sql: "DROP INDEX CONCURRENTLY public.addresses_scope_page_idx",
+    },
+    QueueIndex {
+        version: 20261029040003,
+        name: "heartbeat_recorded_at_idx",
+        definition: "CREATE INDEX heartbeat_recorded_at_idx ON public.heartbeat USING btree (recorded_at)",
+        drop_sql: "DROP INDEX CONCURRENTLY public.heartbeat_recorded_at_idx",
     },
 ];
 
