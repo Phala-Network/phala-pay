@@ -201,10 +201,7 @@ impl PricingRuntime {
         for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
             for entry in entries.iter().filter(|e| e.company == "uniswap-v2-onchain") {
                 let mut audit = Audit::default();
-                if let Err(mut failure) = observe(entry, route, role, &mut audit).await {
-                    if audit.decision.is_some() {
-                        failure.evidence = json!(audit);
-                    }
+                if let Err(failure) = observe(entry, route, role, &mut audit).await {
                     price_metrics::failure(route, &failure);
                 }
             }
@@ -297,15 +294,7 @@ impl PricingRuntime {
                     .as_ref()
                     .is_none_or(|asset| asset == &route.asset.symbol)
             }) {
-                let quote =
-                    observe(entry, route, "sources", &mut audit)
-                        .await
-                        .map_err(|mut failure| {
-                            if audit.decision.is_some() {
-                                failure.evidence = json!(audit);
-                            }
-                            failure
-                        })?;
+                let quote = observe(entry, route, "sources", &mut audit).await?;
                 if let Some(quote) = quote {
                     observed.push((
                         quote.valuation,
@@ -493,7 +482,7 @@ async fn observe(
             if code.starts_with("twap_") {
                 price_metrics::refusal(route, role, entry.source_id, entry.company, code);
                 audit.decision = Some(code);
-                return Err(PricingFailure::new(code));
+                return Err(PricingFailure::with_audit(code, audit));
             }
             if code == "divergent" {
                 audit.decision = Some("divergent");
@@ -504,7 +493,7 @@ async fn observe(
                     entry.company,
                     "divergent",
                 );
-                return Err(PricingFailure::new("divergent"));
+                return Err(PricingFailure::with_audit("divergent", audit));
             }
             return Ok(None);
         }
