@@ -76,6 +76,7 @@ routes:
       sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
     asset:
       symbol: usdc
+      # Circle Sepolia USDC (https://faucet.circle.com).
       contract: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
       decimals: 6
       backstop: addresses
@@ -100,6 +101,7 @@ routes:
       sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
     asset:
       symbol: usdt
+      # Aave testnet USDT (AaveV3Sepolia.USDT_UNDERLYING); faucet: 0xC959483DBa39aa9E78757139af0e9a2EDEb3f42D (mint(token, to, amount)).
       contract: "0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0"
       decimals: 6
       backstop: addresses

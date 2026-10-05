@@ -67,6 +67,9 @@ on:
         type: string
         required: true
     secrets:
+      SENTRY_DSN:
+        description: "Sentry DSN for production topup preflight; inherited, or passed by a caller in another organisation"
+        required: false
       TOPUP_MAINTENANCE_PRIVATE_KEY_PEM:
         description: "Ed25519 maintenance-only signing key PEM; required for topup upgrades, Environment protected"
         required: false

@@ -216,6 +216,9 @@ comes from a release.
            type: choice
            options: [provision, upgrade]
            required: true
+         bootstrap_maintenance:
+           type: boolean
+           default: false
    permissions:
      contents: read
      attestations: read
@@ -226,10 +229,13 @@ comes from a release.
          version: v0.9.0
          environment: ${{ inputs.environment }}
          mode: ${{ inputs.mode }}
+         bootstrap_maintenance: ${{ inputs.bootstrap_maintenance }}
          environment_dir: ${{ inputs.environment }}/topup
        # In Phala Pay's organisation, `secrets: inherit` instead.
        secrets:
          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+         TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
+         SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
    ```
 
    The Environment's variables are only deployment state: `PHALA_WORKSPACE` (the display name of
@@ -507,8 +513,10 @@ into a directory and stops at the first failure:
 
 ```sh
 version=v0.9.0   # the release you adopt
-gh api -H 'Accept: application/vnd.github.raw' \
-  "repos/Phala-Network/phala-pay/contents/deploy/verify-release.sh?ref=$version" >verify-release.sh
+for tool in verify-release.sh deadline.sh; do
+  gh api -H 'Accept: application/vnd.github.raw' \
+    "repos/Phala-Network/phala-pay/contents/deploy/$tool?ref=$version" >"$tool"
+done
 bash verify-release.sh "$version" release     # prints the release's commit
 ```
 
