@@ -770,11 +770,15 @@ class DemoConsole:
             page_size=100,
         )
         candidate = None
+        seen = 0
         for sweep in _take(sweeps, 100):
             if sweep.block_number < deposit["block_number"]:
-                break
+                return candidate
+            seen += 1
             if same_address(sweep.address, deposit["address"]):
                 candidate = sweep.to_dict()
+        if forwarder is None and seen == 100:
+            return None
         return candidate
 
     # Refunds ------------------------------------------------------------------------------------

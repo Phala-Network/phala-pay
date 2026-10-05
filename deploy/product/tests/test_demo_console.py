@@ -1093,8 +1093,9 @@ def test_sweeps_service_rejects_address_filters(demo: tuple[DemoConsole, Service
 
 
 @pytest.mark.parametrize("resolved", [True, False])
+@pytest.mark.parametrize("reaches_older", [True, False])
 def test_sweep_lookup_reads_at_most_one_full_page(
-    demo: tuple[DemoConsole, Service], resolved: bool
+    demo: tuple[DemoConsole, Service], resolved: bool, reaches_older: bool
 ) -> None:
     console, service = demo
     deposit = _deposit(block_number=1)
@@ -1112,12 +1113,17 @@ def test_sweep_lookup_reads_at_most_one_full_page(
         else:
             assert "forwarder" not in request.url.params
         sweeps = [_sweep(deposit, block) for block in range(200, 100, -1)]
+        if reaches_older:
+            sweeps[-1] = _sweep(deposit, 0)
         return httpx.Response(200, json={**_list("/v1/sweeps", sweeps), "has_more": True})
 
     console.recorder._inner = httpx.MockTransport(paginated)
     result = console._sweep_of(deposit)
-    assert result is not None
-    assert result["block_number"] == 101
+    if not resolved and not reaches_older:
+        assert result is None
+    else:
+        assert result is not None
+        assert result["block_number"] == (102 if reaches_older else 101)
     assert len(requests) == 1
 
 
