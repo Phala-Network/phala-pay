@@ -576,15 +576,7 @@ mod tests {
         }
         assert!(files.len() >= 2, "{files:?}");
         for file in files {
-            if file.components().any(|c| c.as_os_str() == "example") {
-                assert!(
-                    Config::load(&file)
-                        .unwrap_err()
-                        .contains("Allowed licensing")
-                );
-            } else {
-                Config::load(&file).unwrap_or_else(|error| panic!("{error}"));
-            }
+            Config::load(&file).unwrap_or_else(|error| panic!("{error}"));
         }
     }
 
