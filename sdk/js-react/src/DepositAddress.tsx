@@ -163,7 +163,16 @@ function useClientView(
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
+    let inFlight = false;
+    let finished = false;
+    const visibilityDocument = typeof document === "undefined" ? undefined : document;
+    const hidden = () => visibilityDocument?.visibilityState === "hidden";
     const load = async () => {
+      if (controller.signal.aborted || finished || inFlight || hidden()) {
+        return;
+      }
+      clearTimeout(timer);
+      inFlight = true;
       let failure: CheckoutError | null = null;
       try {
         const view = await retrieveDepositAddress({ clientSecret, apiBase, signal: controller.signal });
@@ -175,6 +184,7 @@ function useClientView(
         failures += 1;
         // A secret that is not valid will not become valid: stop, keep showing the address.
         if (error instanceof CheckoutError && error.code === "invalid_client_secret") {
+          finished = true;
           if (!stopped) setCurrent((previous) => ({ ...previous, reconnecting: false }));
           return;
         }
@@ -184,16 +194,26 @@ function useClientView(
             key, view: previous.key === key ? previous.view : null, reconnecting: true,
           }));
         }
+      } finally {
+        inFlight = false;
       }
-      if (!stopped) {
+      if (!stopped && !hidden()) {
         timer = setTimeout(() => void load(), pollDelay(interval, failures, failure));
       }
     };
+    const visibilityChanged = () => {
+      clearTimeout(timer);
+      if (visibilityDocument?.visibilityState !== "hidden") {
+        void load();
+      }
+    };
+    visibilityDocument?.addEventListener("visibilitychange", visibilityChanged);
     void load();
     return () => {
       stopped = true;
       controller.abort();
       clearTimeout(timer);
+      visibilityDocument?.removeEventListener("visibilitychange", visibilityChanged);
     };
   }, [key, clientSecret, apiBase, interval]);
   // Another address starts without the previous one's view.

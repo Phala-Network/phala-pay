@@ -238,6 +238,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
   const now = options.now ?? Date.now;
   const interval = options.pollInterval ?? DEFAULT_POLL_INTERVAL;
   const listeners = new Set<(state: CheckoutState) => void>();
+  const visibilityDocument = typeof document === "undefined" ? undefined : document;
 
   let state: CheckoutState = { status: "loading", quote: null, error: null };
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -314,7 +315,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
   }
 
   function refresh(): Promise<void> {
-    if (destroyed || signal.aborted) {
+    if (destroyed || signal.aborted || visibilityDocument?.visibilityState === "hidden") {
       return Promise.resolve();
     }
     inFlight ??= load().finally(() => {
@@ -324,7 +325,8 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
   }
 
   function schedule(): void {
-    if (finished()) {
+    clearTimeout(timer);
+    if (finished() || visibilityDocument?.visibilityState === "hidden") {
       return;
     }
     const delay = pollDelay(interval, failures, lastFailure);
@@ -333,6 +335,20 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
     }, delay);
   }
 
+  function visibilityChanged(): void {
+    clearTimeout(timer);
+    if (visibilityDocument?.visibilityState !== "hidden" && !finished()) {
+      void refresh().then(schedule);
+    }
+  }
+
+  function stopPolling(): void {
+    clearTimeout(timer);
+    visibilityDocument?.removeEventListener("visibilitychange", visibilityChanged);
+  }
+
+  visibilityDocument?.addEventListener("visibilitychange", visibilityChanged);
+  signal.addEventListener("abort", stopPolling, { once: true });
   void refresh().then(schedule);
 
   return {
@@ -347,7 +363,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
     destroy() {
       destroyed = true;
       controller.abort();
-      clearTimeout(timer);
+      stopPolling();
       listeners.clear();
     },
   };
