@@ -81,26 +81,22 @@ def _iterate(
 class PhalaPay:
     """A client for one account and mode, authenticated with its API key.
 
-        pay = PhalaPay(
-            api_base="https://pay.example.com",
-            api_key=os.environ["PHALA_PAY_KEY"],
-            account="acct_…",
-            forwarder=(FACTORY, IMPLEMENTATION),
-            treasuries={1: "0x…your treasury on Ethereum"},
-        )
+        pay = PhalaPay.from_env()
         quote = pay.quotes.create(client_reference_id="team-42", amount=2500,
                                   chain_id=11155111, asset="pha")
-        return {"client_secret": quote.client_secret, "expected_address": quote.address}
+        return {"checkout": pay.checkout_params(quote)}
 
-    `api_key` is a restricted key (`ppay_rk_…`, recommended for a production server) or a secret
-    key (`ppay_sk_…`, for administration); the key selects the account and the mode. Every quote
-    and deposit address is recomputed before it is returned from pins you configure yourself:
-    `forwarder`, the `(factory, implementation)` pair pinned from the attested deployment;
-    `treasuries` (`{chain_id: treasury}`), your own treasury per chain; and `account` (`acct_…`).
-    The service's `treasury` is never trusted, and an address you cannot derive raises
-    `AddressMismatchError` (fail closed). A live key requires all three pins: without them every
-    address check raises. In test mode `account` is read from `GET /v1/account` when not given,
-    and without `treasuries` the service's treasury is used with an `UnpinnedTreasuryWarning`.
+    Set `PHALA_PAY_API_KEY` to a restricted key (`ppay_rk_…`, recommended for a production
+    server) or a secret key (`ppay_sk_…`, for administration), and `PHALA_PAY_PINS` to the
+    encoded pins from setup. The key selects the account and mode; pins bind the API origin,
+    account, forwarder, treasuries, and webhook keys. You can also pass them explicitly with
+    `PhalaPay(api_key, pins=pins)`.
+
+    Every quote and deposit address is recomputed from your pins before it is returned. The
+    service's treasury is never trusted, and an address you cannot derive raises
+    `AddressMismatchError` (fail closed). The legacy constructor is deprecated and will be
+    removed in 0.10.0; its test-mode unpinned treasury fallback still emits
+    `UnpinnedTreasuryWarning`.
 
     Requests that fail with a transport error, `429` (after its `Retry-After`), or `5xx` are
     retried with backoff; `POST`s reuse one `Idempotency-Key` across retries, so a retry never

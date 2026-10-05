@@ -21,14 +21,8 @@ partial refund takes back its pro-rata share of the credit, a reversal all of it
 
 Run it against staging (install with `uv add phala-pay fastapi uvicorn`):
 
-    PHALA_PAY_API_BASE=https://pay.example.com \\
-    PHALA_PAY_API_KEY=ppay_rk_test_... (a restricted key with quotes.write; a secret key \\
-        stays offline for administration) \\
-    PHALA_PAY_ACCOUNT=acct_... \\
-    PHALA_PAY_FORWARDER=<factory>,<implementation> of the attested deployment \\
-    PHALA_PAY_TREASURIES=<chain_id>:<your treasury>,... as you proved them \\
-    PHALA_PAY_WEBHOOK_KEYS=<your account's webhook public key in this mode, whpk_…, pinned \\
-        from GET /v1/attestation; comma-separated while a rotation overlaps> \\
+    PHALA_PAY_API_KEY=ppay_rk_test_... \\
+    PHALA_PAY_PINS=ppay_pins_v1.... \\
     uvicorn --factory fastapi_app:app_from_env
 """
 
@@ -40,13 +34,13 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Annotated, cast
+from typing import Annotated
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from phala_pay import ApiError, Deposit, PhalaPay, SignatureVerificationError, Webhook
+from phala_pay import ApiError, Deposit, PhalaPay, SignatureVerificationError
 
 LOG = logging.getLogger(__name__)
 
@@ -192,9 +186,12 @@ def create_app(
     async def webhook(request: Request) -> dict[str, bool]:
         payload = await request.body()
         try:
-            event = cast(type[Webhook], pay.webhooks).construct_event(
-                payload, request.headers, webhook_keys, account, expected_livemode=livemode
-            )
+            if isinstance(pay.webhooks, type):
+                event = pay.webhooks.construct_event(
+                    payload, request.headers, webhook_keys, account, expected_livemode=livemode
+                )
+            else:
+                event = pay.webhooks.construct_event(payload, request.headers)
         except (SignatureVerificationError, ValueError) as error:
             raise HTTPException(400) from error
 
@@ -212,29 +209,13 @@ def create_app(
 
 
 def app_from_env() -> FastAPI:
-    api_key = os.environ["PHALA_PAY_API_KEY"]
-    factory, implementation = os.environ["PHALA_PAY_FORWARDER"].split(",")
-    treasuries = {
-        int(chain_id): treasury.strip()
-        for chain_id, treasury in (
-            entry.split(":", 1)
-            for entry in os.environ["PHALA_PAY_TREASURIES"].split(",")
-            if entry.strip()
-        )
-    }
-    pay = PhalaPay(
-        os.environ["PHALA_PAY_API_BASE"],
-        api_key,
-        forwarder=(factory.strip(), implementation.strip()),
-        treasuries=treasuries,
-        account=os.environ["PHALA_PAY_ACCOUNT"],
-    )
+    pay = PhalaPay.from_env()
     return create_app(
         pay,
-        [key.strip() for key in os.environ["PHALA_PAY_WEBHOOK_KEYS"].split(",") if key.strip()],
+        [key for _, key in pay.pins.webhook_keys],
         os.environ.get("DATABASE", "topups.sqlite3"),
-        account=os.environ["PHALA_PAY_ACCOUNT"],
-        livemode=api_key.startswith(("ppay_sk_live_", "ppay_rk_live_")),
+        account=pay.pins.account,
+        livemode=pay.livemode,
         chain_id=int(os.environ.get("PHALA_PAY_CHAIN_ID", "11155111")),
         asset=os.environ.get("PHALA_PAY_ASSET", "pha"),
     )

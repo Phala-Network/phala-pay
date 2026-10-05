@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from phala_pay import PhalaPay
 from topup_sdk import sign_webhook
 
+from .test_ergonomics_transport import KEY, pins
 from .test_phala_pay import (
     ACCOUNT,
     API_KEY,
@@ -35,8 +36,10 @@ from fastapi_app import create_app
 SECRET = f"{QUOTE_ID}_secret_{'ab' * 24}"
 
 
-@pytest.fixture
-def app(tmp_path: Path) -> tuple[TestClient, list[httpx.Request], Path]:
+@pytest.fixture(params=["legacy", "pins"])
+def app(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> tuple[TestClient, list[httpx.Request], Path]:
     requests: list[httpx.Request] = []
 
     def service(request: httpx.Request) -> httpx.Response:
@@ -57,13 +60,16 @@ def app(tmp_path: Path) -> tuple[TestClient, list[httpx.Request], Path]:
             )
         return httpx.Response(200, json=quote_object(client_secret=SECRET))
 
-    client = PhalaPay(
-        "https://service.test",
-        API_KEY,
-        account=ACCOUNT,
-        forwarder=(FACTORY, IMPLEMENTATION),
-        transport=httpx.MockTransport(service),
-    )
+    if request.param == "pins":
+        client = PhalaPay(KEY, pins=pins(), transport=httpx.MockTransport(service))
+    else:
+        client = PhalaPay(
+            "https://service.test",
+            API_KEY,
+            account=ACCOUNT,
+            forwarder=(FACTORY, IMPLEMENTATION),
+            transport=httpx.MockTransport(service),
+        )
     database = tmp_path / "product.sqlite3"
     api = create_app(
         client,
