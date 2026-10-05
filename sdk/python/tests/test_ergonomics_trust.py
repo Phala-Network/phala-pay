@@ -239,6 +239,7 @@ def test_api_key_format_checksum_and_mode(live: bool, restricted: bool) -> None:
         PhalaPay(key)
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_from_env_reads_exactly_two_values_and_never_merges_legacy_trust() -> None:
     class Env(dict[str, str]):
         def __init__(self) -> None:
@@ -572,6 +573,7 @@ def test_shared_webhook_vectors_execute_through_bound_client(
                     )
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 @pytest.mark.parametrize("missing", ["account", "forwarder", "treasuries"])
 def test_legacy_live_constructor_requires_all_address_pins_at_construction(missing: str) -> None:
     arguments: dict[str, Any] = {
