@@ -254,6 +254,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // CSP connects to the local origins instead.
     process.env["VITE_DEMO_API_ORIGIN"] = product;
     await (await createBuilder({ root: web, logLevel: "warn" })).buildApp();
+    await (await createBuilder({ root: web, configFile: join(web, "vite.ssr.config.ts"), logLevel: "warn" })).buildApp();
+    execFileSync(process.execPath, [join(web, "scripts/prerender.ts")], { cwd: web, stdio: ["ignore", "ignore", "inherit"] });
     const stagingApi = "https://pay-demo-api.phala.com";
     const stagingService = "https://pay-api-staging.phala.com";
     const headersFile = join(buildOutput, "v0/workers/default/assets/_headers");
