@@ -4,6 +4,8 @@ use std::sync::OnceLock;
 use topup_core::route::RouteFile;
 struct Metrics {
     health: IntGaugeVec,
+    cache: IntCounterVec,
+    quote_budget: IntCounterVec,
     failover: IntCounterVec,
     disagreement: IntCounterVec,
     depeg: IntCounterVec,
@@ -16,6 +18,20 @@ fn metrics() -> Result<&'static Metrics, prometheus::Error> {
         .get_or_init(|| {
             let labels = &["route", "asset", "role", "source", "company"];
             Ok(Metrics {
+                cache: IntCounterVec::new(
+                    Opts::new(
+                        "price_source_cache_total",
+                        "Shared price source fetches and reuse.",
+                    ),
+                    &["source", "company", "result"],
+                )?,
+                quote_budget: IntCounterVec::new(
+                    Opts::new(
+                        "price_quote_budget_exceeded_total",
+                        "Interactive pricing budget expirations.",
+                    ),
+                    &["route"],
+                )?,
                 health: IntGaugeVec::new(
                     Opts::new("price_source_health", "Fresh source status."),
                     labels,
@@ -99,6 +115,28 @@ fn gauge(name: &'static str, labels: [&str; 5], value: u64, select: fn(&Metrics)
     }
 }
 
+/// Records bounded adapter cache outcomes, including coalesced waiters.
+pub fn cache(source: &str, company: &str, result: &str) {
+    sentry::metrics::counter("price_source_cache_total", 1)
+        .attribute("source", source.to_owned())
+        .attribute("company", company.to_owned())
+        .attribute("result", result.to_owned())
+        .capture();
+    match metrics() {
+        Ok(m) => m.cache.with_label_values(&[source, company, result]).inc(),
+        Err(_) => tracing::error!("price metrics initialization failed"),
+    }
+}
+/// Records expiration of the quote-only pricing budget.
+pub fn quote_budget_exceeded(route: &RouteFile) {
+    sentry::metrics::counter("price_quote_budget_exceeded_total", 1)
+        .attribute("route", route.route.clone())
+        .capture();
+    match metrics() {
+        Ok(m) => m.quote_budget.with_label_values(&[&route.route]).inc(),
+        Err(_) => tracing::error!("price metrics initialization failed"),
+    }
+}
 /// Record an individually alertable safety refusal through the existing price telemetry.
 pub fn refusal(route: &RouteFile, role: &str, source: &str, company: &str, code: &'static str) {
     counter(
@@ -204,6 +242,8 @@ pub fn collect() -> Result<Vec<prometheus::proto::MetricFamily>, prometheus::Err
     families.extend(m.depeg.collect());
     families.extend(m.stuck.collect());
     families.extend(m.refusals.collect());
+    families.extend(m.cache.collect());
+    families.extend(m.quote_budget.collect());
     Ok(families)
 }
 
@@ -238,6 +278,8 @@ mod tests {
                             "twap_liquidity",
                         );
                         stuck(&route, 6);
+                        cache("uniswap_v2_twap", "uniswap-v2-onchain", "hit");
+                        quote_budget_exceeded(&route);
                         failure(
                             &route,
                             &crate::locks::pricing::PricingFailure {
@@ -269,6 +311,8 @@ mod tests {
             "price_depeg_total",
             "valuation_stuck_seconds",
             "price_source_refusals_total",
+            "price_source_cache_total",
+            "price_quote_budget_exceeded_total",
         ] {
             assert!(
                 captured.iter().any(|m| m.name == name),
@@ -287,5 +331,8 @@ mod tests {
         assert!(text.contains("source=\"uniswap_v2_twap\""));
         assert!(text.contains("company=\"uniswap-v2-onchain\""));
         assert!(text.contains("code=\"twap_liquidity\""));
+        assert!(text.contains("price_source_cache_total"));
+        assert!(text.contains("result=\"hit\""));
+        assert!(text.contains("price_quote_budget_exceeded_total"));
     }
 }

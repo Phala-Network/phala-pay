@@ -379,13 +379,7 @@ pub async fn price(
     treasury(&mut connection, scope, route.chain.chain_id).await?;
     drop(connection);
 
-    let quote = quotes
-        .quote(route)
-        .await
-        .map_err(|evidence| {
-            tracing::warn!(route = %route.route, quote = %evidence, "rate-lock price validation failed");
-            RateLockError::PricingUnavailable
-        })?;
+    let quote = quote_with_budget(quotes, route).await?;
     let locked_price =
         lock_price(quote.price, terms.quote_spread_bps).map_err(|_| RateLockError::Arithmetic)?;
     if locked_price.value() == 0 {
@@ -401,6 +395,25 @@ pub async fn price(
         terms,
         creations_per_minute,
     })
+}
+
+const QUOTE_PRICING_BUDGET: Duration = Duration::from_secs(15);
+
+async fn quote_with_budget(
+    quotes: &Arc<dyn QuoteProvider>,
+    route: &RouteFile,
+) -> Result<ValidatedQuote, RateLockError> {
+    tokio::time::timeout(QUOTE_PRICING_BUDGET, quotes.quote(route))
+        .await
+        .map_err(|_| {
+            tracing::warn!(route = %route.route, "rate-lock pricing budget exceeded");
+            crate::observability::price_metrics::quote_budget_exceeded(route);
+            RateLockError::PricingUnavailable
+        })?
+        .map_err(|evidence| {
+            tracing::warn!(route = %route.route, quote = %evidence, "rate-lock price validation failed");
+            RateLockError::PricingUnavailable
+        })
 }
 
 /// Creates the lock `priced` for `customer` of `account` in `transaction`, with its

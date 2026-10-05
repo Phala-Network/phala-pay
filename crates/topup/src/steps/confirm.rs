@@ -450,7 +450,7 @@ impl ConfirmStep {
         };
 
         let valuation_at = Utc::now();
-        let quote = match runtime.pricing.fetch(&runtime.route).await {
+        let quote = match runtime.pricing.fetch_fresh(&runtime.route).await {
             Ok(quote) => quote,
             Err(evidence) => {
                 return retry(RetryError::PriceUnavailable, evidence.into(), effects);
@@ -1216,6 +1216,59 @@ mod tests {
         assert!(Arc::ptr_eq(&runtime, &confirm.routes[&key].pricing));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn confirm_evidence_records_cache_provenance_on_hit() {
+        let deposit = deposit(1_000);
+        let log = transfer(&deposit);
+        let mut confirm = step(
+            route(PricingMode::Spot),
+            chain(100, vec![log.clone()]),
+            chain(100, vec![log]),
+            prices(now_seconds()),
+            context(None),
+        );
+        let runtime = confirm.routes.values_mut().next().unwrap();
+        runtime.pricing = Arc::new(PricingRuntime::injected(
+            Arc::new(DelayedPrice {
+                source: "primary",
+                value: 10_000_000,
+                delay: Duration::from_millis(10),
+            }),
+            Some(Arc::new(DelayedPrice {
+                source: "check",
+                value: 10_000_000,
+                delay: Duration::from_millis(10),
+            })),
+            Some(Arc::new(DelayedPrice {
+                source: "fx",
+                value: 100_000_000,
+                delay: Duration::from_millis(10),
+            })),
+        ));
+        // Both confirm callers arrive before the shared fetch completes (D1).
+        let (a, b) = tokio::join!(confirm.run(&deposit), confirm.run(&deposit));
+        assert_eq!(a.outcome, StepOutcome::Advance);
+        assert_eq!(b.outcome, StepOutcome::Advance);
+        let observations = &b.effects.valuation.as_ref().unwrap().quote["observations"];
+        assert!(
+            observations
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o.get("cached").is_some())
+        );
+        assert_eq!(b.evidence["quote"]["observations"], *observations);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let fresh = confirm.run(&deposit).await;
+        assert_eq!(fresh.outcome, StepOutcome::Advance);
+        assert!(
+            fresh.effects.valuation.unwrap().quote["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o.get("cached").is_none())
+        );
+    }
     #[tokio::test]
     async fn provider_disagreement_retries() {
         let deposit = deposit(1_000);

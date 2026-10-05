@@ -419,6 +419,9 @@ impl UniswapV2 {
             },
             agreement_price,
             evidence,
+            reuse_until: Some(UnixSeconds::new(
+                block.timestamp.saturating_add(self.policy.max_sample_age_s),
+            )),
         })
     }
 }
@@ -890,6 +893,69 @@ mod tests {
                 "no extra persisted quote sample"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn reuse_until_is_block_timestamp_plus_max_sample_age() {
+        let now = unix_now().unwrap().value();
+        let block_timestamp = now - 24;
+        let hash = B256::repeat_byte(1);
+        let mut state = PairState {
+            token0: PHA,
+            token1: WETH,
+            reserve0: U256::from(100_000_000_000_000_000_000_000_u128),
+            reserve1: U256::from(100_000_000_000_000_000_000_u128),
+            timestamp_last: u32::try_from(block_timestamp).unwrap(),
+            cumulative0: U256::ZERO,
+            cumulative1: U256::ZERO,
+        };
+        let spot = counterfactual(
+            &state,
+            PriceBlock {
+                number: 98,
+                hash,
+                timestamp: block_timestamp,
+            },
+        )
+        .unwrap()
+        .0
+        .spot;
+        state.cumulative0 = spot * U256::from(1800);
+        let history = (0..30_u64)
+            .map(|i| Sample {
+                block: 67 + i,
+                hash,
+                timestamp: block_timestamp - 1800 + i * 60,
+                spot,
+                cumulative: spot * U256::from(i * 60),
+            })
+            .collect();
+        let store = Arc::new(Memory(tokio::sync::Mutex::new(history)));
+        let a = rpc(
+            "reuse-a",
+            100,
+            hash,
+            state.clone(),
+            200_000_000_000,
+            block_timestamp,
+        )
+        .await;
+        let b = rpc(
+            "reuse-b",
+            100,
+            hash,
+            state,
+            200_000_000_000,
+            block_timestamp,
+        )
+        .await;
+        let policy = TwapConfig::default();
+        let reader =
+            UniswapV2::new(a.client.clone(), b.client.clone(), policy.clone(), store).unwrap();
+        assert_eq!(
+            reader.quote().await.unwrap().reuse_until,
+            Some(UnixSeconds::new(block_timestamp + policy.max_sample_age_s))
+        );
     }
     #[tokio::test]
     async fn pinned_ab_pair_header_and_eth_disagreement_fail_closed() {

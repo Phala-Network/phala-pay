@@ -2,7 +2,7 @@
 use crate::{
     observability::price_metrics,
     routes::RouteSet,
-    rpc_groups::{BASE_CHAIN_ID, price_pair},
+    rpc_groups::{BASE_CHAIN_ID, price_group, price_pair},
 };
 use chrono::Utc;
 use serde::Serialize;
@@ -62,8 +62,98 @@ fn fresh(bound: u64, observed_at: UnixSeconds, now: UnixSeconds) -> bool {
         .checked_sub(observed_at.value())
         .is_some_and(|age| age <= bound)
 }
+const SOURCE_REUSE: Duration = Duration::from_secs(12);
+
+struct SharedSource {
+    inner: Arc<dyn PriceSource>,
+    reuse: Duration,
+    slot: tokio::sync::Mutex<Option<Cached>>,
+    source_id: &'static str,
+    company: &'static str,
+}
+struct Cached {
+    quote: PriceQuote,
+    completed_at: tokio::time::Instant,
+}
+impl SharedSource {
+    fn new(
+        inner: Arc<dyn PriceSource>,
+        reuse: Duration,
+        source_id: &'static str,
+        company: &'static str,
+    ) -> Self {
+        Self {
+            inner,
+            reuse,
+            slot: tokio::sync::Mutex::new(None),
+            source_id,
+            company,
+        }
+    }
+    async fn quote_shared(&self) -> Result<(PriceQuote, Option<u64>), PriceError> {
+        self.quote_with_reuse(self.reuse).await
+    }
+    async fn quote_shared_fresh(&self) -> Result<(PriceQuote, Option<u64>), PriceError> {
+        self.quote_with_reuse(Duration::ZERO).await
+    }
+    async fn quote_with_reuse(
+        &self,
+        reuse: Duration,
+    ) -> Result<(PriceQuote, Option<u64>), PriceError> {
+        let arrived = tokio::time::Instant::now();
+        let mut slot = self.slot.lock().await;
+        if let Some(cached) = slot.as_ref() {
+            let coalesced = cached.completed_at >= arrived;
+            if (coalesced || cached.completed_at.elapsed() <= reuse)
+                && cached.quote.reuse_until.is_none_or(|until| {
+                    validation_time().is_ok_and(|now| now.value() <= until.value())
+                })
+            {
+                price_metrics::cache(
+                    self.source_id,
+                    self.company,
+                    if coalesced { "coalesced" } else { "hit" },
+                );
+                let age_ms =
+                    u64::try_from(cached.completed_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                return Ok((cached.quote.clone(), Some(age_ms)));
+            }
+        }
+        price_metrics::cache(self.source_id, self.company, "miss");
+        // Clear before awaiting so a cancelled leader leaves no reusable result behind.
+        *slot = None;
+        let quote = self.inner.quote().await?;
+        *slot = Some(Cached {
+            quote: quote.clone(),
+            completed_at: tokio::time::Instant::now(),
+        });
+        Ok((quote, None))
+    }
+}
+struct SharedSequencer {
+    inner: Chainlink,
+    grace_s: u64,
+    slot: tokio::sync::Mutex<Option<(Value, tokio::time::Instant)>>,
+}
+impl SharedSequencer {
+    async fn evidence(&self) -> Result<Value, PriceError> {
+        let arrived = tokio::time::Instant::now();
+        let mut slot = self.slot.lock().await;
+        if let Some((evidence, completed_at)) = slot.as_ref()
+            && *completed_at >= arrived
+        {
+            price_metrics::cache("sequencer", "chainlink", "coalesced");
+            return Ok(evidence.clone());
+        }
+        price_metrics::cache("sequencer", "chainlink", "miss");
+        *slot = None;
+        let evidence = self.inner.sequencer(self.grace_s).await?;
+        *slot = Some((evidence.clone(), tokio::time::Instant::now()));
+        Ok(evidence)
+    }
+}
 struct Entry {
-    source: Arc<dyn PriceSource>,
+    source: Arc<SharedSource>,
     company: &'static str,
     source_id: &'static str,
     asset: Option<String>,
@@ -77,7 +167,7 @@ pub struct PricingRuntime {
     primary: Vec<Entry>,
     check: Vec<Entry>,
     fx: Vec<Entry>,
-    sequencer: Option<(Chainlink, u64)>,
+    sequencer: Option<Arc<SharedSequencer>>,
     stuck_since: std::sync::Mutex<Option<Instant>>,
 }
 /// Shared pricing runtimes indexed by attested route name and version.
@@ -87,9 +177,12 @@ impl PricingRuntime {
     /// Builds one shared pricing runtime for every attested route version.
     pub fn build_all(routes: &RouteSet, pool: sqlx::PgPool) -> Result<PricingRuntimes, String> {
         let mut runtimes = BTreeMap::new();
+        let mut sources = BTreeMap::new();
+        let mut sequencers = BTreeMap::new();
         for route in routes.routes() {
             let key = (route.route.clone(), route.version);
-            let runtime = Self::configured(route, routes, pool.clone())?;
+            let runtime =
+                Self::configured(route, routes, pool.clone(), &mut sources, &mut sequencers)?;
             if runtimes.insert(key.clone(), Arc::new(runtime)).is_some() {
                 return Err(format!(
                     "duplicate pricing runtime for route `{}` version {}",
@@ -100,48 +193,83 @@ impl PricingRuntime {
         Ok(Arc::new(runtimes))
     }
     /// Constructs only explicitly configured sources, never a restricted default.
-    pub fn configured(
+    fn configured(
         route: &RouteFile,
         routes: &RouteSet,
         pool: sqlx::PgPool,
+        sources: &mut BTreeMap<String, Arc<SharedSource>>,
+        sequencers: &mut BTreeMap<String, Arc<SharedSequencer>>,
     ) -> Result<Self, String> {
         route
             .pricing
             .validate(route.chain.chain_id, &route.asset.symbol, route.livemode)
             .map_err(|e| e.to_string())?;
-        let entries = |list: &[Source]| -> Result<Vec<Entry>, String> {
+        let mut entries = |list: &[Source]| -> Result<Vec<Entry>, String> {
             list.iter()
                 .map(|s| {
-                    let source: Arc<dyn PriceSource> = match s {
+                    let source_id = match s {
+                        Source::UniswapV2Twap { .. } => "uniswap_v2_twap",
+                        _ => s.company(),
+                    };
+                    let (key, reuse) = match s {
                         Source::Coinmetrics { .. } => {
                             return Err("restricted legacy source requires migration".into());
                         }
                         Source::Kraken { symbol, .. } => {
-                            Arc::new(Kraken::new(symbol.clone()).map_err(|e| e.to_string())?)
+                            (format!("kraken|{symbol}"), Duration::ZERO)
                         }
                         Source::Binance { symbol, .. } => {
-                            Arc::new(Binance::new(symbol.clone()).map_err(|e| e.to_string())?)
+                            (format!("binance|{symbol}"), Duration::ZERO)
                         }
                         Source::UniswapV2Twap { twap, .. } => {
                             let (a, b, _) = price_pair(route, s)?;
-                            Arc::new(
-                                UniswapV2::new(
+                            let policy = serde_json::to_string(twap)
+                                .map_err(|_| "price source encoding failed")?;
+                            (format!("uniswap_v2_twap|{a}|{b}|{policy}"), SOURCE_REUSE)
+                        }
+                        Source::Chainlink { feed, .. } => {
+                            let (a, b, chain) = price_pair(route, s)?;
+                            (format!("chainlink|{feed}|{chain}|{a}|{b}"), SOURCE_REUSE)
+                        }
+                    };
+                    let source = if let Some(source) = sources.get(&key) {
+                        source.clone()
+                    } else {
+                        let inner: Arc<dyn PriceSource> = match s {
+                            Source::Coinmetrics { .. } => {
+                                return Err("restricted legacy source requires migration".into());
+                            }
+                            Source::Kraken { symbol, .. } => {
+                                Arc::new(Kraken::new(symbol.clone()).map_err(|e| e.to_string())?)
+                            }
+                            Source::Binance { symbol, .. } => {
+                                Arc::new(Binance::new(symbol.clone()).map_err(|e| e.to_string())?)
+                            }
+                            Source::UniswapV2Twap { twap, .. } => {
+                                let (a, b, _) = price_pair(route, s)?;
+                                Arc::new(
+                                    UniswapV2::new(
+                                        routes.resolved_price_group(&a)?,
+                                        routes.resolved_price_group(&b)?,
+                                        twap.clone(),
+                                        Arc::new(crate::db::pricing::TwapStore(pool.clone())),
+                                    )
+                                    .map_err(|e| e.to_string())?,
+                                )
+                            }
+                            Source::Chainlink { feed: name, .. } => {
+                                let (a, b, chain) = price_pair(route, s)?;
+                                Arc::new(Chainlink::new(
                                     routes.resolved_price_group(&a)?,
                                     routes.resolved_price_group(&b)?,
-                                    twap.clone(),
-                                    Arc::new(crate::db::pricing::TwapStore(pool.clone())),
-                                )
-                                .map_err(|e| e.to_string())?,
-                            )
-                        }
-                        Source::Chainlink { feed: name, .. } => {
-                            let (a, b, chain) = price_pair(route, s)?;
-                            Arc::new(Chainlink::new(
-                                routes.resolved_price_group(&a)?,
-                                routes.resolved_price_group(&b)?,
-                                feed(name, chain).ok_or("unsupported feed")?,
-                            ))
-                        }
+                                    feed(name, chain).ok_or("unsupported feed")?,
+                                ))
+                            }
+                        };
+                        let source =
+                            Arc::new(SharedSource::new(inner, reuse, source_id, s.company()));
+                        sources.insert(key, source.clone());
+                        source
                     };
                     let max_age_s = match s {
                         Source::UniswapV2Twap { twap, .. } => Some(twap.max_sample_age_s),
@@ -158,10 +286,7 @@ impl PricingRuntime {
                     Ok(Entry {
                         source,
                         company: s.company(),
-                        source_id: match s {
-                            Source::UniswapV2Twap { .. } => "uniswap_v2_twap",
-                            _ => s.company(),
-                        },
+                        source_id,
                         asset: Some(s.asset().to_owned()),
                         max_age_s,
                         usdt_quoted: matches!(s, Source::Binance { .. }),
@@ -177,14 +302,27 @@ impl PricingRuntime {
             .sequencer_uptime
             .as_ref()
             .map(|s| -> Result<_, String> {
-                Ok((
-                    Chainlink::new(
+                let key = format!(
+                    "{}|{BASE_CHAIN_ID}|{}|{}|{}",
+                    s.feed,
+                    price_group(route, &s.rpc_group)?,
+                    price_group(route, &s.rpc_group_b)?,
+                    s.grace_s
+                );
+                if let Some(sequencer) = sequencers.get(&key) {
+                    return Ok(sequencer.clone());
+                }
+                let sequencer = Arc::new(SharedSequencer {
+                    inner: Chainlink::new(
                         routes.price_group(route, &s.rpc_group)?,
                         routes.price_group(route, &s.rpc_group_b)?,
                         feed(&s.feed, BASE_CHAIN_ID).ok_or("unsupported sequencer feed")?,
                     ),
-                    s.grace_s,
-                ))
+                    grace_s: s.grace_s,
+                    slot: tokio::sync::Mutex::new(None),
+                });
+                sequencers.insert(key, sequencer.clone());
+                Ok(sequencer)
             })
             .transpose()?;
         Ok(Self {
@@ -201,7 +339,7 @@ impl PricingRuntime {
         for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
             for entry in entries.iter().filter(|e| e.company == "uniswap-v2-onchain") {
                 let mut audit = Audit::default();
-                if let Err(failure) = observe(entry, route, role, &mut audit).await {
+                if let Err(failure) = observe(entry, route, role, &mut audit, false).await {
                     price_metrics::failure(route, &failure);
                 }
             }
@@ -214,7 +352,12 @@ impl PricingRuntime {
         fx: Option<Arc<dyn PriceSource>>,
     ) -> Self {
         let entry = |source| Entry {
-            source,
+            source: Arc::new(SharedSource::new(
+                source,
+                Duration::ZERO,
+                "injected",
+                "injected",
+            )),
             company: "injected",
             source_id: "injected",
             asset: None,
@@ -233,7 +376,18 @@ impl PricingRuntime {
     }
     /// Fetches every stablecoin source or the first healthy source in each volatile role.
     pub async fn fetch(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
-        let result = self.fetch_inner(route).await;
+        self.fetch_with_reuse(route, false).await
+    }
+    /// Crediting fetches fresh evidence, sharing only fetches completed after arrival.
+    pub async fn fetch_fresh(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
+        self.fetch_with_reuse(route, true).await
+    }
+    async fn fetch_with_reuse(
+        &self,
+        route: &RouteFile,
+        fresh_only: bool,
+    ) -> Result<ValidatedQuote, PricingFailure> {
+        let result = self.fetch_inner(route, fresh_only).await;
         if let Err(evidence) = &result {
             price_metrics::failure(route, evidence);
         }
@@ -251,13 +405,17 @@ impl PricingRuntime {
         }
         result
     }
-    async fn fetch_inner(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
+    async fn fetch_inner(
+        &self,
+        route: &RouteFile,
+        fresh_only: bool,
+    ) -> Result<ValidatedQuote, PricingFailure> {
         let mut audit = Audit {
             mode: Some(route.pricing.mode),
             ..Audit::default()
         };
-        if let Some((sequencer, grace)) = &self.sequencer {
-            match sequencer.sequencer(*grace).await {
+        if let Some(sequencer) = &self.sequencer {
+            match sequencer.evidence().await {
                 Ok(evidence) => audit.sequencer = Some(evidence),
                 Err(error) => {
                     let code = error_code(&error);
@@ -294,7 +452,7 @@ impl PricingRuntime {
                     .as_ref()
                     .is_none_or(|asset| asset == &route.asset.symbol)
             }) {
-                let quote = observe(entry, route, "sources", &mut audit).await?;
+                let quote = observe(entry, route, "sources", &mut audit, fresh_only).await?;
                 if let Some(quote) = quote {
                     observed.push((
                         quote.valuation,
@@ -335,9 +493,9 @@ impl PricingRuntime {
             let mut ca = Audit::default();
             let mut fa = Audit::default();
             let (primary, check, fx) = tokio::join!(
-                first(&self.primary, route, "primary", &mut pa),
-                first(&self.check, route, "check", &mut ca),
-                first(&self.fx, route, "fx", &mut fa)
+                first(&self.primary, route, "primary", &mut pa, fresh_only),
+                first(&self.check, route, "check", &mut ca, fresh_only),
+                first(&self.fx, route, "fx", &mut fa, fresh_only)
             );
             audit.observations.extend(
                 pa.observations
@@ -432,9 +590,10 @@ async fn first<'a>(
     route: &RouteFile,
     role: &str,
     audit: &mut Audit,
+    fresh_only: bool,
 ) -> Result<Option<(&'a Entry, PriceQuote)>, PricingFailure> {
     for (index, entry) in entries.iter().enumerate() {
-        if let Some(observation) = observe(entry, route, role, audit).await? {
+        if let Some(observation) = observe(entry, route, role, audit, fresh_only).await? {
             if index > 0 {
                 price_metrics::failover(route, role, entry.source_id, entry.company);
             }
@@ -448,14 +607,22 @@ async fn observe(
     route: &RouteFile,
     role: &str,
     audit: &mut Audit,
+    fresh_only: bool,
 ) -> Result<Option<PriceQuote>, PricingFailure> {
-    let result = tokio::time::timeout(Duration::from_secs(30), entry.source.quote()).await;
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        if fresh_only {
+            entry.source.quote_shared_fresh().await
+        } else {
+            entry.source.quote_shared().await
+        }
+    })
+    .await;
     let result = match result {
         Ok(r) => r,
         Err(_) => Err(PriceError::Timeout),
     };
     let now = validation_time()?;
-    let result = result.and_then(|quote| {
+    let result = result.and_then(|(quote, age_ms)| {
         let o = &quote.valuation;
         if !fresh(
             entry.max_age_s.unwrap_or(route.pricing.max_age_s),
@@ -464,16 +631,17 @@ async fn observe(
         ) {
             Err(PriceError::Stale)
         } else {
-            Ok(quote)
+            Ok((quote, age_ms))
         }
     });
     let (evidence, observation) = match result {
-        Ok(quote) => {
+        Ok((quote, age_ms)) => {
             let o = &quote.valuation;
-            (
-                json!({"role":role, "company":entry.company, "source":o.source.as_str(), "descriptor":entry.descriptor, "price_scaled":o.price.value().to_string(), "agreement_price_scaled":quote.agreement_price.value().to_string(), "observed_at":o.observed_at.value(), "age_s":now.value().saturating_sub(o.observed_at.value()), "data":quote.evidence}),
-                Some(quote),
-            )
+            let mut evidence = json!({"role":role, "company":entry.company, "source":o.source.as_str(), "descriptor":entry.descriptor, "price_scaled":o.price.value().to_string(), "agreement_price_scaled":quote.agreement_price.value().to_string(), "observed_at":o.observed_at.value(), "age_s":now.value().saturating_sub(o.observed_at.value()), "data":quote.evidence});
+            if let Some(age_ms) = age_ms {
+                evidence["cached"] = json!({"age_ms": age_ms});
+            }
+            (evidence, Some(quote))
         }
         Err(error) => {
             let code = error_code(&error);
@@ -704,8 +872,15 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://localhost/pricing-regression")
             .unwrap();
-        let runtime = PricingRuntime::configured(&route, &routes, pool).unwrap();
-        let error = runtime.fx[0].source.quote().await.unwrap_err();
+        let runtime = PricingRuntime::configured(
+            &route,
+            &routes,
+            pool,
+            &mut BTreeMap::new(),
+            &mut BTreeMap::new(),
+        )
+        .unwrap();
+        let error = runtime.fx[0].source.quote_shared().await.unwrap_err();
         let PriceError::Feed { class, evidence } = error else {
             panic!("expected A/B disagreement, got {error:?}");
         };
@@ -787,12 +962,17 @@ mod tests {
     }
     fn entry(id: &'static str, price: u64, age: u64, error: Option<PriceError>) -> Entry {
         Entry {
-            source: Arc::new(Fixture {
+            source: Arc::new(SharedSource::new(
+                Arc::new(Fixture {
+                    id,
+                    price,
+                    age,
+                    error,
+                }),
+                Duration::ZERO,
                 id,
-                price,
-                age,
-                error,
-            }),
+                id,
+            )),
             company: id,
             source_id: if id == "uniswap-v2-onchain" {
                 "uniswap_v2_twap"
@@ -861,6 +1041,7 @@ mod tests {
                 },
                 agreement_price: usd_price(spot, eth)?,
                 evidence: json!({"twap_usd_scaled":usd_price(ratio, eth)?.value().to_string()}),
+                reuse_until: None,
             })
         }
     }
@@ -894,7 +1075,12 @@ mod tests {
             }
             let mut r = runtime();
             r.primary[0] = Entry {
-                source,
+                source: Arc::new(SharedSource::new(
+                    source,
+                    Duration::ZERO,
+                    "uniswap_v2_twap",
+                    "uniswap-v2-onchain",
+                )),
                 company: "uniswap-v2-onchain",
                 ..entry("uniswap_v2_twap", 0, 0, None)
             };
@@ -1056,5 +1242,546 @@ mod tests {
         usdt.asset = Some("usdt".into());
         r.sources = vec![usdc, usdt];
         assert!(r.fetch(&route).await.is_err());
+    }
+    struct CountingSource {
+        calls: std::sync::atomic::AtomicUsize,
+        fail: std::sync::atomic::AtomicBool,
+        delay: Duration,
+        reuse_until: Option<UnixSeconds>,
+        observed_at: UnixSeconds,
+        price: u64,
+    }
+    impl CountingSource {
+        fn new(delay: Duration) -> Arc<Self> {
+            Arc::new(Self {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                fail: std::sync::atomic::AtomicBool::new(false),
+                delay,
+                reuse_until: None,
+                observed_at: validation_time().unwrap(),
+                price: 100_000_000,
+            })
+        }
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+    #[async_trait]
+    impl PriceSource for CountingSource {
+        async fn observe(&self) -> Result<Observation, PriceError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(self.delay).await;
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(PriceError::Timeout);
+            }
+            Ok(Observation {
+                source: SourceId::new("counted"),
+                price: ScaledPrice::new(self.price, 8).unwrap(),
+                observed_at: self.observed_at,
+            })
+        }
+        async fn quote(&self) -> Result<PriceQuote, PriceError> {
+            let valuation = self.observe().await?;
+            Ok(PriceQuote {
+                agreement_price: valuation.price,
+                valuation,
+                evidence: Value::Null,
+                reuse_until: self.reuse_until,
+            })
+        }
+    }
+    fn shared(inner: Arc<dyn PriceSource>) -> SharedSource {
+        SharedSource::new(inner, SOURCE_REUSE, "counted", "counted")
+    }
+    #[tokio::test(start_paused = true)]
+    async fn shared_source_coalesces_concurrent_quotes() {
+        let inner = CountingSource::new(Duration::from_millis(10));
+        let source = shared(inner.clone());
+        let results =
+            futures_util::future::join_all((0..10).map(|_| source.quote_shared_fresh())).await;
+        assert_eq!(inner.calls(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| r.as_ref().unwrap().1.is_none())
+                .count(),
+            1
+        );
+        assert!(results.iter().all(Result::is_ok));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn shared_source_reuses_within_ttl_and_refetches_after() {
+        let inner = CountingSource::new(Duration::from_millis(1));
+        let source = shared(inner.clone());
+        assert!(source.quote_shared().await.unwrap().1.is_none());
+        tokio::time::advance(Duration::from_secs(12)).await;
+        assert_eq!(source.quote_shared().await.unwrap().1, Some(12_000));
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(source.quote_shared().await.unwrap().1.is_none());
+        assert_eq!(inner.calls(), 2);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(source.quote_shared_fresh().await.unwrap().1.is_none());
+        assert_eq!(
+            inner.calls(),
+            3,
+            "confirm cannot reuse a completed quote fetch"
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn shared_source_never_caches_errors() {
+        let inner = CountingSource::new(Duration::from_millis(1));
+        let source = shared(inner.clone());
+        source.quote_shared().await.unwrap();
+        tokio::time::advance(Duration::from_secs(13)).await;
+        inner.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(source.quote_shared().await.is_err());
+        assert!(source.slot.lock().await.is_none());
+        assert!(source.quote_shared().await.is_err());
+        inner.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(source.quote_shared().await.unwrap().1.is_none());
+        assert_eq!(inner.calls(), 4);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn shared_source_respects_reuse_until() {
+        GOLDEN_NOW
+            .scope(1000, async {
+                let inner = Arc::new(CountingSource {
+                    reuse_until: Some(UnixSeconds::new(1001)),
+                    ..Arc::try_unwrap(CountingSource::new(Duration::from_millis(1)))
+                        .ok()
+                        .unwrap()
+                });
+                let source = shared(inner.clone());
+                source.quote_shared().await.unwrap();
+                tokio::time::advance(Duration::from_millis(1)).await;
+                GOLDEN_NOW
+                    .scope(1001, async {
+                        assert!(source.quote_shared().await.unwrap().1.is_some());
+                    })
+                    .await;
+                GOLDEN_NOW
+                    .scope(1002, async {
+                        assert!(source.quote_shared().await.unwrap().1.is_none());
+                    })
+                    .await;
+                assert_eq!(inner.calls(), 2);
+            })
+            .await;
+    }
+    #[tokio::test(start_paused = true)]
+    async fn cache_hit_marks_observation_age_and_rechecks_route_freshness() {
+        GOLDEN_NOW
+            .scope(1000, async {
+                let inner = CountingSource::new(Duration::from_millis(1));
+                let mut entry = entry("counted", 100_000_000, 0, None);
+                entry.source = Arc::new(shared(inner.clone()));
+                entry.max_age_s = Some(1);
+                let mut audit = Audit::default();
+                observe(&entry, &route(), "primary", &mut audit, false)
+                    .await
+                    .unwrap();
+                assert!(audit.observations[0].get("cached").is_none());
+                tokio::time::advance(Duration::from_millis(500)).await;
+                observe(&entry, &route(), "primary", &mut audit, false)
+                    .await
+                    .unwrap();
+                assert_eq!(audit.observations[1]["cached"], json!({"age_ms":500}));
+                GOLDEN_NOW
+                    .scope(1002, async {
+                        assert!(
+                            observe(&entry, &route(), "primary", &mut audit, false)
+                                .await
+                                .unwrap()
+                                .is_none()
+                        );
+                        assert_eq!(audit.observations[2]["error"], "stale");
+                    })
+                    .await;
+                assert_eq!(inner.calls(), 1);
+            })
+            .await;
+    }
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_leader_releases_source_for_next_fetch() {
+        let inner = CountingSource::new(Duration::from_secs(20));
+        let source = shared(inner.clone());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(15), source.quote_shared())
+                .await
+                .is_err()
+        );
+        assert!(source.quote_shared_fresh().await.unwrap().1.is_none());
+        assert_eq!(inner.calls(), 2);
+    }
+    fn pha_routes() -> [RouteFile; 2] {
+        let mut a = route();
+        a.chain.rpc_providers = vec!["a".into(), "b".into()];
+        a.pricing.primary = vec![Source::UniswapV2Twap {
+            rpc_group: "a".into(),
+            rpc_group_b: "b".into(),
+            observation_chain_id: None,
+            twap: topup_core::price::TwapConfig::default(),
+        }];
+        a.pricing.check = vec![Source::Kraken {
+            symbol: "PHAUSD".into(),
+            company: "kraken".into(),
+        }];
+        a.pricing.fx = vec![Source::Chainlink {
+            feed: "USDT_USD".into(),
+            chain_id: 1,
+            rpc_group: "a".into(),
+            rpc_group_b: Some("b".into()),
+            observation_chain_id: None,
+        }];
+        let mut b = a.clone();
+        b.route = "phala-cloud-sepolia-pha-usd".into();
+        b.chain.chain_id = 11155111;
+        b.livemode = false;
+        if let Source::UniswapV2Twap {
+            observation_chain_id,
+            ..
+        } = &mut b.pricing.primary[0]
+        {
+            *observation_chain_id = Some(b.chain.chain_id);
+        }
+        if let Source::Chainlink {
+            observation_chain_id,
+            ..
+        } = &mut b.pricing.fx[0]
+        {
+            *observation_chain_id = Some(b.chain.chain_id);
+        }
+        [a, b]
+    }
+    #[tokio::test]
+    async fn routes_share_one_source_per_adapter_identity() {
+        let [a, b] = pha_routes();
+        let now = validation_time().unwrap().value();
+        let ra = topup_adapters::pricing::test_rpc::chainlink("a", 100_000_000, 20, 20, now, false)
+            .await;
+        let rb = topup_adapters::pricing::test_rpc::chainlink("b", 100_000_000, 20, 20, now, false)
+            .await;
+        let routes = RouteSet::with_groups(
+            vec![a.clone(), b.clone()],
+            BTreeMap::from([
+                ("a".into(), ra.client.clone()),
+                ("b".into(), rb.client.clone()),
+            ]),
+        )
+        .unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/shared-pricing")
+            .unwrap();
+        let runtimes = PricingRuntime::build_all(&routes, pool).unwrap();
+        let a = &runtimes[&(a.route.clone(), a.version)];
+        let b = &runtimes[&(b.route.clone(), b.version)];
+        for (a, b) in [
+            (&a.primary[0], &b.primary[0]),
+            (&a.check[0], &b.check[0]),
+            (&a.fx[0], &b.fx[0]),
+        ] {
+            assert!(Arc::ptr_eq(&a.source, &b.source));
+        }
+        assert_ne!(a.primary[0].descriptor, b.primary[0].descriptor);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn sampler_fetches_pair_once_per_interval_across_routes() {
+        let inner = CountingSource::new(Duration::from_millis(1));
+        let source = Arc::new(shared(inner.clone()));
+        let make_runtime = || {
+            let mut r = runtime();
+            r.primary[0].source = source.clone();
+            r.primary[0].company = "uniswap-v2-onchain";
+            r
+        };
+        let a = make_runtime();
+        let b = make_runtime();
+        let routes = pha_routes();
+        for expected in 1..=3 {
+            a.sample_twaps(&routes[0]).await;
+            b.sample_twaps(&routes[1]).await;
+            assert_eq!(inner.calls(), expected);
+            tokio::time::advance(Duration::from_secs(60)).await;
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn quote_pricing_budget_maps_to_pricing_unavailable() {
+        struct Stalled;
+        #[async_trait]
+        impl crate::locks::QuoteProvider for Stalled {
+            async fn quote(&self, _: &RouteFile) -> Result<ValidatedQuote, Value> {
+                std::future::pending().await
+            }
+        }
+        let provider: Arc<dyn crate::locks::QuoteProvider> = Arc::new(Stalled);
+        let started = tokio::time::Instant::now();
+        assert!(matches!(
+            crate::locks::quote_with_budget(&provider, &route()).await,
+            Err(crate::locks::RateLockError::PricingUnavailable)
+        ));
+        assert_eq!(started.elapsed(), Duration::from_secs(15));
+    }
+
+    struct CountingStore {
+        history: tokio::sync::Mutex<Vec<topup_adapters::pricing::uniswap_v2::Sample>>,
+        records: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait]
+    impl topup_adapters::pricing::uniswap_v2::ObservationStore for CountingStore {
+        async fn latest(
+            &self,
+            _: &topup_core::price::TwapConfig,
+        ) -> Result<Option<topup_adapters::pricing::uniswap_v2::Sample>, PriceError> {
+            Ok(self.history.lock().await.last().cloned())
+        }
+        async fn record(
+            &self,
+            sample: &topup_adapters::pricing::uniswap_v2::Sample,
+            _: &topup_core::price::TwapConfig,
+        ) -> Result<Vec<topup_adapters::pricing::uniswap_v2::Sample>, PriceError> {
+            self.records
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut history = self.history.lock().await;
+            if history
+                .last()
+                .is_none_or(|previous| previous.timestamp < sample.timestamp)
+            {
+                history.push(sample.clone());
+            }
+            Ok(history.clone())
+        }
+    }
+    #[tokio::test]
+    async fn concurrent_pha_quotes_send_only_one_cold_fetch_and_cached_quote_sends_zero() {
+        use alloy_primitives::{B256, U256};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use topup_adapters::pricing::uniswap_v2::{PHA, PairState, Sample, WETH, counterfactual};
+        let now = validation_time().unwrap().value();
+        let hash = B256::repeat_byte(1);
+        let mut state = PairState {
+            token0: PHA,
+            token1: WETH,
+            reserve0: U256::from(100_000_000_000_000_000_000_000_u128),
+            reserve1: U256::from(100_000_000_000_000_000_000_u128),
+            timestamp_last: u32::try_from(now).unwrap(),
+            cumulative0: U256::ZERO,
+            cumulative1: U256::ZERO,
+        };
+        let spot = counterfactual(
+            &state,
+            topup_adapters::pricing::chainlink::PriceBlock {
+                number: 98,
+                hash,
+                timestamp: now,
+            },
+        )
+        .unwrap()
+        .0
+        .spot;
+        state.cumulative0 = spot * U256::from(1800);
+        let history = (0..30_u64)
+            .map(|i| Sample {
+                block: 67 + i,
+                hash,
+                timestamp: now - 1800 + i * 60,
+                spot,
+                cumulative: spot * U256::from(i * 60),
+            })
+            .collect();
+        let store = Arc::new(CountingStore {
+            history: tokio::sync::Mutex::new(history),
+            records: AtomicUsize::new(0),
+        });
+        let sends = Arc::new(AtomicUsize::new(0));
+        let a = topup_adapters::pricing::test_rpc::uniswap_v2(
+            "a",
+            (100, hash),
+            state.clone(),
+            200_000_000_000,
+            now,
+            sends.clone(),
+        )
+        .await;
+        let b = topup_adapters::pricing::test_rpc::uniswap_v2(
+            "b",
+            (100, hash),
+            state,
+            200_000_000_000,
+            now,
+            sends.clone(),
+        )
+        .await;
+        let primary = Arc::new(SharedSource::new(
+            Arc::new(
+                UniswapV2::new(
+                    a.client.clone(),
+                    b.client.clone(),
+                    topup_core::price::TwapConfig::default(),
+                    store.clone(),
+                )
+                .unwrap(),
+            ),
+            SOURCE_REUSE,
+            "uniswap_v2_twap",
+            "uniswap-v2-onchain",
+        ));
+        let fx = Arc::new(SharedSource::new(
+            Arc::new(Chainlink::new(
+                a.client.clone(),
+                b.client.clone(),
+                feed("USDT_USD", 1).unwrap(),
+            )),
+            SOURCE_REUSE,
+            "chainlink",
+            "chainlink",
+        ));
+        let make_runtime = || {
+            let mut r = runtime();
+            r.primary[0].source = primary.clone();
+            r.primary[0].company = "uniswap-v2-onchain";
+            r.primary[0].max_age_s = Some(180);
+            r.check = vec![entry("kraken", 1, 0, None)];
+            r.check[0].usdt_quoted = false;
+            r.fx[0].source = fx.clone();
+            r
+        };
+        let price = topup_adapters::pricing::uniswap_v2::usd_price(
+            spot,
+            ScaledPrice::new(200_000_000_000, 8).unwrap(),
+        )
+        .unwrap()
+        .value();
+        let mut cold = make_runtime();
+        cold.check[0] = entry("kraken", price, 0, None);
+        cold.check[0].usdt_quoted = false;
+        sends.store(0, Ordering::SeqCst);
+        store.records.store(0, Ordering::SeqCst);
+        cold.fetch(&route()).await.unwrap();
+        let cold_sends = sends.load(Ordering::SeqCst);
+        assert!(
+            cold_sends > 0,
+            "the cold quote must actually fetch RPC evidence"
+        );
+        *primary.slot.lock().await = None;
+        *fx.slot.lock().await = None;
+        sends.store(0, Ordering::SeqCst);
+        store.records.store(0, Ordering::SeqCst);
+        let market = Arc::new(CountingSource {
+            price,
+            ..Arc::try_unwrap(CountingSource::new(Duration::from_millis(10)))
+                .ok()
+                .unwrap()
+        });
+        let check = Arc::new(SharedSource::new(
+            market.clone(),
+            Duration::ZERO,
+            "kraken",
+            "kraken",
+        ));
+        let make_runtime = || {
+            let mut r = make_runtime();
+            r.check = vec![entry("kraken", price, 0, None)];
+            r.check[0].source = check.clone();
+            r.check[0].usdt_quoted = false;
+            r
+        };
+        let runtimes = [make_runtime(), make_runtime()];
+        let routes = pha_routes();
+        let results =
+            futures_util::future::join_all((0..10).map(|i| runtimes[i % 2].fetch(&routes[i % 2])))
+                .await;
+        assert!(results.iter().all(Result::is_ok));
+        assert_eq!(store.records.load(Ordering::SeqCst), 1);
+        assert_eq!(market.calls(), 1, "CEX only coalesces concurrent fetches");
+        assert_eq!(sends.load(Ordering::SeqCst), cold_sends);
+        let quote = runtimes[1].fetch(&routes[1]).await.unwrap();
+        assert_eq!(
+            sends.load(Ordering::SeqCst),
+            cold_sends,
+            "cached quote sends zero RPCs"
+        );
+        assert!(quote.evidence["observations"][0].get("cached").is_some());
+        println!(
+            "PR-3 PHA acceptance: cold={cold_sends} sends; 10 concurrent quotes={cold_sends} sends / 1 TWAP fetch; next quote=0 additional sends"
+        );
+    }
+    #[tokio::test]
+    async fn sequencer_coalesces_only_and_never_caches_errors() {
+        use alloy::sol_types::SolCall;
+        use alloy_primitives::{B256, I256, U256};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use topup_adapters::pricing::{
+            chainlink::{decimalsCall, latestRoundDataCall, latestRoundDataReturn},
+            test_rpc,
+        };
+        let now = validation_time().unwrap().value();
+        let sends = Arc::new(AtomicUsize::new(0));
+        let down = Arc::new(AtomicBool::new(false));
+        let fixture = |id: &'static str| {
+            let sends = sends.clone();
+            let down = down.clone();
+            test_rpc::rpc(id, move |request| {
+                sends.fetch_add(1, Ordering::SeqCst);
+                if request["method"] == "eth_getBlockByNumber" {
+                    let mut head = serde_json::to_value(alloy::rpc::types::Block::<
+                        alloy::rpc::types::Transaction,
+                    >::default())
+                    .unwrap();
+                    head["number"] = if request["params"][0] == "latest" {
+                        json!("0x64")
+                    } else {
+                        request["params"][0].clone()
+                    };
+                    head["hash"] = json!(B256::repeat_byte(1));
+                    head["parentHash"] = json!(B256::repeat_byte(2));
+                    return head;
+                }
+                let input = request["params"][0]["input"]
+                    .as_str()
+                    .or_else(|| request["params"][0]["data"].as_str())
+                    .unwrap();
+                let bytes = if input.starts_with("0x313ce567") {
+                    decimalsCall::abi_encode_returns(&0)
+                } else {
+                    latestRoundDataCall::abi_encode_returns(&latestRoundDataReturn {
+                        roundId: alloy_primitives::Uint::<80, 2>::from(20),
+                        answer: I256::try_from(if down.load(Ordering::SeqCst) { 1 } else { 0 })
+                            .unwrap(),
+                        startedAt: U256::from(now - 7200),
+                        updatedAt: U256::from(now),
+                        answeredInRound: alloy_primitives::Uint::<80, 2>::from(20),
+                    })
+                };
+                json!(format!("0x{}", hex::encode(bytes)))
+            })
+        };
+        let a = fixture("sequencer-a").await;
+        let b = fixture("sequencer-b").await;
+        let sequencer = SharedSequencer {
+            inner: Chainlink::new(
+                a.client.clone(),
+                b.client.clone(),
+                feed("BASE_SEQUENCER_UPTIME", BASE_CHAIN_ID).unwrap(),
+            ),
+            grace_s: 3600,
+            slot: tokio::sync::Mutex::new(None),
+        };
+        let results = futures_util::future::join_all((0..10).map(|_| sequencer.evidence())).await;
+        assert!(results.iter().all(Result::is_ok));
+        let one_fetch = sends.load(Ordering::SeqCst);
+        assert!(one_fetch > 0, "sequencer evidence must actually be fetched");
+        sequencer.evidence().await.unwrap();
+        assert_eq!(
+            sends.load(Ordering::SeqCst),
+            2 * one_fetch,
+            "sequencer must fetch again after completion"
+        );
+        down.store(true, Ordering::SeqCst);
+        assert!(sequencer.evidence().await.is_err());
+        assert!(sequencer.slot.lock().await.is_none());
+        assert!(sequencer.evidence().await.is_err());
+        down.store(false, Ordering::SeqCst);
+        sequencer.evidence().await.unwrap();
+        assert_eq!(sends.load(Ordering::SeqCst), 5 * one_fetch);
     }
 }

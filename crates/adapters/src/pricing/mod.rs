@@ -52,6 +52,8 @@ pub struct PriceQuote {
     pub valuation: Observation,
     /// Current market price used for agreement with an independent company.
     pub agreement_price: topup_core::money::ScaledPrice,
+    /// Latest Unix timestamp at which this observation may be reused; never serialized.
+    pub reuse_until: Option<topup_core::valuation::UnixSeconds>,
     /// Sanitized source-specific audit evidence.
     pub evidence: serde_json::Value,
 }
@@ -68,6 +70,7 @@ pub trait PriceSource: Send + Sync {
             agreement_price: valuation.price,
             valuation,
             evidence: serde_json::Value::Null,
+            reuse_until: None,
         })
     }
 }
@@ -251,6 +254,95 @@ pub mod test_rpc {
             client: Arc::new(EvmClient::from_group(group, None).unwrap()),
             task,
         }
+    }
+    /// Serves a pinned pair and ETH round, counting every actual RPC send.
+    pub async fn uniswap_v2(
+        id: &str,
+        anchor: (u64, alloy_primitives::B256),
+        state: super::uniswap_v2::PairState,
+        eth_answer: i64,
+        now: u64,
+        sends: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> RpcFixture {
+        use super::uniswap_v2::*;
+        use alloy_primitives::{B256, U256};
+        use alloy_sol_types::SolCall;
+        let (head, hash) = anchor;
+        rpc(id, move |request| {
+            sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match request["method"].as_str().unwrap() {
+                "eth_blockNumber" => json!(format!("0x{head:x}")),
+                "eth_getBlockByNumber" => {
+                    let mut h = serde_json::to_value(alloy::rpc::types::Block::<
+                        alloy::rpc::types::Transaction,
+                    >::default())
+                    .unwrap();
+                    h["number"] = if request["params"][0] == "latest" {
+                        json!(format!("0x{head:x}"))
+                    } else {
+                        request["params"][0].clone()
+                    };
+                    h["hash"] = json!(hash);
+                    h["parentHash"] = json!(B256::repeat_byte(3));
+                    h["timestamp"] = json!(format!("0x{now:x}"));
+                    h
+                }
+                "eth_call" => {
+                    assert_eq!(
+                        request["params"][1], "0x62",
+                        "all pair AND ETH/USD values must be pinned to min(100,102)-2"
+                    );
+                    let input = request["params"][0]["input"]
+                        .as_str()
+                        .or_else(|| request["params"][0]["data"].as_str())
+                        .unwrap();
+                    let data = match &input[..10] {
+                        "0x0dfe1681" => token0Call::abi_encode_returns(&state.token0),
+                        "0xd21220a7" => token1Call::abi_encode_returns(&state.token1),
+                        "0x5909c0d5" => {
+                            price0CumulativeLastCall::abi_encode_returns(&state.cumulative0)
+                        }
+                        "0x5a3d5493" => {
+                            price1CumulativeLastCall::abi_encode_returns(&state.cumulative1)
+                        }
+                        "0x0902f1ac" => getReservesCall::abi_encode_returns(&getReservesReturn {
+                            reserve0: alloy_primitives::Uint::<112, 2>::from(
+                                state.reserve0.to::<u128>(),
+                            ),
+                            reserve1: alloy_primitives::Uint::<112, 2>::from(
+                                state.reserve1.to::<u128>(),
+                            ),
+                            blockTimestampLast: state.timestamp_last,
+                        }),
+                        "0x313ce567" => super::chainlink::decimalsCall::abi_encode_returns(&8),
+                        "0xfeaf968c" => super::chainlink::latestRoundDataCall::abi_encode_returns(
+                            &super::chainlink::latestRoundDataReturn {
+                                roundId: alloy_primitives::Uint::<80, 2>::from(20),
+                                answer: alloy_primitives::I256::try_from(
+                                    if request["params"][0]["to"].as_str().is_some_and(|to| {
+                                        to.eq_ignore_ascii_case(
+                                            topup_core::price::feed("ETH_USD", 1).unwrap().address,
+                                        )
+                                    }) {
+                                        eth_answer
+                                    } else {
+                                        100_000_000
+                                    },
+                                )
+                                .unwrap(),
+                                startedAt: U256::from(now),
+                                updatedAt: U256::from(now),
+                                answeredInRound: alloy_primitives::Uint::<80, 2>::from(20),
+                            },
+                        ),
+                        _ => panic!("unexpected selector"),
+                    };
+                    json!(format!("0x{}", hex::encode(data)))
+                }
+                _ => panic!("unexpected RPC"),
+            }
+        })
+        .await
     }
     /// Serves a Chainlink round over the shared typed RPC fixture.
     pub async fn chainlink(
