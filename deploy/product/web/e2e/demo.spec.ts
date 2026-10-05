@@ -470,6 +470,46 @@ for (const sent of [false, true]) {
   });
 }
 
+test("a swept payment keeps polling until its webhook arrives", async ({ page }) => {
+  let delivered = false;
+  let reads = 0;
+  await page.clock.install();
+  await page.route("**/api/quotes/*", async (route) => {
+    reads += 1;
+    const timeline: Timeline = {
+      kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events: [], api: [],
+      deposit: {
+        id: `dep_${"1".repeat(32)}`,
+        status: "credited", final: true, swept: true,
+        amount: 2000, amount_atomic: (80n * 10n ** 18n).toString(),
+        chain_id: sepolia.id, asset: "pha", exchange_rate: "0.25", price_source: "quote",
+        amount_refunded_atomic: "0", amount_refunded: 0, amount_reversed: 0,
+        from_address: env("PAYER_ADDRESS"), asset_contract: env("TOKEN_ADDRESS"),
+        tx_hash: `0x${"1".repeat(64)}`, metadata: {},
+      },
+      steps: [{ key: "webhook_received", state: delivered ? "complete" : "current", at: delivered ? 1 : null, details: [] }],
+    };
+    await route.fulfill({
+      json: timeline,
+      headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+    });
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "current");
+  await expect(scenes.getByTestId("stream-status")).toHaveText("Live");
+  await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  delivered = true;
+  await page.clock.runFor(10_000);
+  await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "complete");
+  await expect(scenes.getByTestId("stream-status")).toHaveText("Done");
+  const stopped = reads;
+  await page.clock.runFor(30_000);
+  expect(reads).toBe(stopped);
+});
+
 test("a quote: locked price, metadata, the merchant's sweep, and refunds that succeed, fail, or are canceled", async ({
   page,
   context,

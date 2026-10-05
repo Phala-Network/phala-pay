@@ -85,7 +85,8 @@ export function useTimeline(selection: Selection | null) {
         return 3000;
       }
       if (timeline?.deposit?.status === "credited" && timeline.deposit.swept) {
-        return false;
+        return timeline.steps.some((step) => step.key === "webhook_received" && step.state === "current")
+          ? 10_000 : false;
       }
       if (timeline?.deposit === null && timeline.sent === null && timeline.quote !== null) {
         if (timeline.quote.status === "canceled") {
