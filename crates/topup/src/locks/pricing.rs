@@ -84,6 +84,21 @@ pub struct PricingRuntime {
 pub type PricingRuntimes = Arc<BTreeMap<(String, u64), Arc<PricingRuntime>>>;
 
 impl PricingRuntime {
+    /// Builds one shared pricing runtime for every attested route version.
+    pub fn build_all(routes: &RouteSet, pool: sqlx::PgPool) -> Result<PricingRuntimes, String> {
+        let mut runtimes = BTreeMap::new();
+        for route in routes.routes() {
+            let key = (route.route.clone(), route.version);
+            let runtime = Self::configured(route, routes, pool.clone())?;
+            if runtimes.insert(key.clone(), Arc::new(runtime)).is_some() {
+                return Err(format!(
+                    "duplicate pricing runtime for route `{}` version {}",
+                    key.0, key.1
+                ));
+            }
+        }
+        Ok(Arc::new(runtimes))
+    }
     /// Constructs only explicitly configured sources, never a restricted default.
     pub fn configured(
         route: &RouteFile,

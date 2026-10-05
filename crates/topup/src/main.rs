@@ -746,25 +746,9 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let pool = connect("run", connection_count)
         .await
         .context("failed to connect to database")?;
-    let mut pricing_runtimes = std::collections::BTreeMap::new();
-    for route in routes.routes() {
-        let key = (route.route.clone(), route.version);
-        let runtime =
-            topup::locks::pricing::PricingRuntime::configured(route, &routes, pool.clone())
-                .map_err(anyhow::Error::msg)
-                .context("invalid rate-lock pricing configuration")?;
-        if pricing_runtimes
-            .insert(key.clone(), Arc::new(runtime))
-            .is_some()
-        {
-            bail!(
-                "duplicate pricing runtime for route `{}` version {}",
-                key.0,
-                key.1
-            );
-        }
-    }
-    let pricing_runtimes: topup::locks::pricing::PricingRuntimes = Arc::new(pricing_runtimes);
+    let pricing_runtimes = topup::locks::pricing::PricingRuntime::build_all(&routes, pool.clone())
+        .map_err(anyhow::Error::msg)
+        .context("invalid rate-lock pricing configuration")?;
     let price_provider = Arc::new(topup::locks::ConfiguredQuoteProvider::from_runtimes(
         Arc::clone(&pricing_runtimes),
     ));
