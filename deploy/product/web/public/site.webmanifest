@@ -1,7 +1,7 @@
 {
   "name": "Phala Pay",
   "short_name": "Phala Pay",
-  "description": "Fast, secure, non-custodial crypto payments",
+  "description": "Self-hosted, non-custodial crypto payments API for ERC-20 tokens on Ethereum and Base",
   "start_url": "/",
   "display": "browser",
   "background_color": "#0a0a0a",

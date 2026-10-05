@@ -99,7 +99,7 @@ function SweepSection({ group }: { group: SweepGroup }) {
               </Disclosure>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" disabled={send.isPending} onClick={() => send.mutate(flush)}>
-                  {send.isPending ? "Confirm in your wallet…" : "Sign the flush from my wallet"}
+                  {send.isPending ? "Confirm in your wallet…" : "Sweep to treasury from my wallet"}
                 </Button>
                 <Button
                   type="button"

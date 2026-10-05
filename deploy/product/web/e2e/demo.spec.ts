@@ -453,7 +453,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   // only reach the treasury), indexed by the service once final.
   const sweeps = (await openTab(scenes, "Sweeps")).getByRole("region", { name: "PHA on Sepolia testnet" });
   await expect(sweeps.getByTestId("unswept")).toContainText("80 PHA in 1 forwarder", { timeout: 30_000 });
-  await sweeps.getByRole("button", { name: "Sign the flush from my wallet" }).click();
+  await sweeps.getByRole("button", { name: "Sweep to treasury from my wallet" }).click();
   await expect(sweeps.getByTestId("flush-status")).toContainText("Flush sent: 0x");
   await expectComplete(timeline, ["swept"]);
   expect(await tokenBalance(env("TREASURY"))).toBe(parseEther("80"));

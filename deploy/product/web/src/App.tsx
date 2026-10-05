@@ -7,7 +7,7 @@ import { Backend } from "./Backend.js";
 import { describe } from "./common.js";
 import { Product, type Method } from "./Product.js";
 import { keys, useAccount, useDepositAddress, useNetworks, useTimeline, useTrust } from "./queries.js";
-import { CONTAINER, Hero, Properties, SiteFooter, SiteHeader } from "./Site.js";
+import { ClosingCta, CompareTeaser, CONTAINER, Faq, Hero, HowItWorks, Properties, SiteFooter, SiteHeader } from "./Site.js";
 import { useTheme } from "./theme.js";
 
 export function App() {
@@ -54,7 +54,9 @@ export function App() {
         <SiteHeader theme={theme} onThemeChange={setTheme} />
         <main id="top" className="flex-1">
           <Hero />
-          <section id="demo" aria-label="Live demo" className={`${CONTAINER} scroll-mt-24 pb-16 lg:pb-20`}>
+          <HowItWorks />
+          <section id="demo" aria-labelledby="demo-title" className={`${CONTAINER} scroll-mt-24 pb-16 lg:pb-20`}>
+            <h2 id="demo-title" className="mb-8 text-2xl font-semibold tracking-tight">Live demo (testnet)</h2>
             {/* The product at a billing page's width, as a customer's browser shows it; its backend
                 takes the rest, so the backend's tables fit. */}
             <div className="grid items-start gap-x-8 gap-y-12 lg:grid-cols-[25rem_minmax(0,1fr)] xl:grid-cols-[27.5rem_minmax(0,1fr)] 2xl:gap-x-10">
@@ -87,6 +89,9 @@ export function App() {
             </div>
           </section>
           <Properties />
+          <CompareTeaser />
+          <Faq />
+          <ClosingCta />
         </main>
         <SiteFooter />
       </div>
