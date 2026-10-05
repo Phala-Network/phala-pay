@@ -234,6 +234,12 @@ pub enum DestinationScreening {
 pub trait DestinationScreener: Send + Sync {
     /// Screens `destination` with `route`'s sanctions oracle on its chain.
     async fn screen(&self, route: &RouteFile, destination: Address) -> DestinationScreening;
+
+    /// Screens a destination and may reuse a recent clear verdict; for paths where funds can only
+    /// reach the merchant's own address.
+    async fn screen_cached(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
+        self.screen(route, destination).await
+    }
 }
 
 /// Screens through the route's sanctions oracle on its chain's first two providers, at provider
@@ -285,9 +291,9 @@ impl DestinationScreener for OracleDestinationScreener {
     }
 }
 
-/// Caches clear treasury and refund destinations so interactive API paths do not queue on RPC
-/// budgets: a clear destination is reused for 10 minutes, while deposit screening and the
-/// treasury worker's daily re-screen remain unaffected.
+/// Caches clear sweepable treasury destinations so interactive API paths do not queue on RPC
+/// budgets: a clear destination is reused for 10 minutes, while refund, deposit, and treasury
+/// screening paths call [`DestinationScreener::screen`] and remain fresh.
 pub struct CachedDestinationScreener {
     inner: Arc<dyn DestinationScreener>,
     entries: Mutex<HashMap<(u64, Address, Address), Instant>>,
@@ -316,6 +322,10 @@ impl CachedDestinationScreener {
 #[async_trait]
 impl DestinationScreener for CachedDestinationScreener {
     async fn screen(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
+        self.inner.screen(route, destination).await
+    }
+
+    async fn screen_cached(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
         let key = (
             route.chain.chain_id,
             route.screening.sanctions_oracle,
@@ -993,6 +1003,28 @@ mod tests {
         let destination = Address::repeat_byte(1);
 
         assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn screen_always_delegates_without_cache() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(CountingScreener {
+            calls: Arc::clone(&calls),
+            verdict: DestinationScreening::Clear,
+        });
+        let cached = CachedDestinationScreener::new(inner);
+        let route = route();
+        let destination = Address::repeat_byte(4);
+
+        assert_eq!(
             cached.screen(&route, destination).await,
             DestinationScreening::Clear
         );
@@ -1000,7 +1032,7 @@ mod tests {
             cached.screen(&route, destination).await,
             DestinationScreening::Clear
         );
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]
@@ -1018,8 +1050,8 @@ mod tests {
             let route = route();
             let destination = Address::repeat_byte(2);
 
-            assert_eq!(cached.screen(&route, destination).await, verdict);
-            assert_eq!(cached.screen(&route, destination).await, verdict);
+            assert_eq!(cached.screen_cached(&route, destination).await, verdict);
+            assert_eq!(cached.screen_cached(&route, destination).await, verdict);
             assert_eq!(calls.load(Ordering::Relaxed), 2);
         }
     }
@@ -1036,11 +1068,11 @@ mod tests {
         let destination = Address::repeat_byte(3);
 
         assert_eq!(
-            cached.screen(&route, destination).await,
+            cached.screen_cached(&route, destination).await,
             DestinationScreening::Clear
         );
         assert_eq!(
-            cached.screen(&route, destination).await,
+            cached.screen_cached(&route, destination).await,
             DestinationScreening::Clear
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);

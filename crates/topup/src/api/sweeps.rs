@@ -5,7 +5,6 @@
 //! built offline by the SDKs from the forwarders.
 
 use std::str::FromStr;
-use std::sync::Arc;
 
 use alloy_primitives::Address as EvmAddress;
 use axum::Json;
@@ -481,7 +480,7 @@ async fn sweepable_treasuries(
         builder.push(" AND address.chain_id = ").push_bind(chain_id);
     }
     let candidates: Vec<(i64, String)> = builder.build_query_as().fetch_all(&state.pool).await?;
-    let screening = Arc::clone(&state.screening);
+    let screening = &state.screening;
     let mut checks = Vec::new();
     for (chain_id, treasury) in candidates {
         let chain_id = u64::try_from(chain_id).map_err(|_| ApiError::internal())?;
@@ -493,9 +492,7 @@ async fn sweepable_treasuries(
             continue;
         };
         let address = EvmAddress::from_str(&treasury).map_err(|_| ApiError::internal())?;
-        let route = route.clone();
-        let screening = Arc::clone(&screening);
-        checks.push(async move { (treasury, screening.screen(&route, address).await) });
+        checks.push(async move { (treasury, screening.screen_cached(route, address).await) });
     }
     let results = join_all(checks).await;
     let mut clear = Vec::new();
