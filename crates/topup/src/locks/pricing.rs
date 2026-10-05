@@ -34,7 +34,7 @@ pub struct PricingFailure {
     pub evidence: Value,
 }
 impl PricingFailure {
-    fn new(code: &'static str) -> Self {
+    pub(crate) fn new(code: &'static str) -> Self {
         Self {
             code,
             evidence: Value::Null,

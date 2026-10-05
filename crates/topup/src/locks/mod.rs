@@ -187,12 +187,7 @@ impl QuoteProvider for ConfiguredQuoteProvider {
         let runtime = self
             .runtimes
             .get(&(route.route.clone(), route.version))
-            .ok_or_else(|| {
-                Value::from(PricingFailure {
-                    code: "missing_route_runtime",
-                    evidence: Value::Null,
-                })
-            })?;
+            .ok_or_else(|| Value::from(PricingFailure::new("missing_route_runtime")))?;
         runtime.fetch(route).await.map_err(Value::from)
     }
 }
@@ -213,11 +208,7 @@ pub struct UnavailableQuoteProvider;
 #[async_trait]
 impl QuoteProvider for UnavailableQuoteProvider {
     async fn quote(&self, _route: &RouteFile) -> Result<ValidatedQuote, Value> {
-        Err(PricingFailure {
-            code: "unavailable",
-            evidence: Value::Null,
-        }
-        .into())
+        Err(PricingFailure::new("unavailable").into())
     }
 }
 
