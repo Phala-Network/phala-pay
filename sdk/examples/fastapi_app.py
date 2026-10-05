@@ -123,11 +123,8 @@ def current_team(x_team_id: Annotated[str, Header(pattern=r"^[A-Za-z0-9._-]{1,64
 
 def create_app(
     pay: PhalaPay,
-    webhook_keys: list[str],
     database: str,
     *,
-    account: str,
-    livemode: bool,
     chain_id: int,
     asset: str,
 ) -> FastAPI:
@@ -186,12 +183,7 @@ def create_app(
     async def webhook(request: Request) -> dict[str, bool]:
         payload = await request.body()
         try:
-            if isinstance(pay.webhooks, type):
-                event = pay.webhooks.construct_event(
-                    payload, request.headers, webhook_keys, account, expected_livemode=livemode
-                )
-            else:
-                event = pay.webhooks.construct_event(payload, request.headers)
+            event = pay.webhooks.construct_event(payload, request.headers)
         except (SignatureVerificationError, ValueError) as error:
             raise HTTPException(400) from error
 
@@ -212,10 +204,7 @@ def app_from_env() -> FastAPI:
     pay = PhalaPay.from_env()
     return create_app(
         pay,
-        [key for _, key in pay.pins.webhook_keys],
         os.environ.get("DATABASE", "topups.sqlite3"),
-        account=pay.pins.account,
-        livemode=pay.livemode,
         chain_id=int(os.environ.get("PHALA_PAY_CHAIN_ID", "11155111")),
         asset=os.environ.get("PHALA_PAY_ASSET", "pha"),
     )

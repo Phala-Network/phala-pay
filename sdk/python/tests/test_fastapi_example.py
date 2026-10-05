@@ -17,14 +17,10 @@ from topup_sdk import sign_webhook
 
 from ._support import (
     ACCOUNT,
-    API_KEY,
     EVENT_ID,
-    FACTORY,
-    IMPLEMENTATION,
     KEY,
     QUOTE_ID,
     SERVICE_KEY,
-    SERVICE_PUBLIC_KEY,
     _deposit,
     pins,
 )
@@ -37,10 +33,8 @@ from fastapi_app import create_app
 SECRET = f"{QUOTE_ID}_secret_{'ab' * 24}"
 
 
-@pytest.fixture(params=["legacy", "pins"])
-def app(
-    tmp_path: Path, request: pytest.FixtureRequest
-) -> tuple[TestClient, list[httpx.Request], Path]:
+@pytest.fixture
+def app(tmp_path: Path) -> tuple[TestClient, list[httpx.Request], Path]:
     requests: list[httpx.Request] = []
 
     def service(request: httpx.Request) -> httpx.Response:
@@ -61,23 +55,11 @@ def app(
             )
         return httpx.Response(200, json=quote_object(client_secret=SECRET))
 
-    if request.param == "pins":
-        client = PhalaPay(KEY, pins=pins(), transport=httpx.MockTransport(service))
-    else:
-        client = PhalaPay(
-            "https://service.test",
-            API_KEY,
-            account=ACCOUNT,
-            forwarder=(FACTORY, IMPLEMENTATION),
-            transport=httpx.MockTransport(service),
-        )
+    client = PhalaPay(KEY, pins=pins(), transport=httpx.MockTransport(service))
     database = tmp_path / "product.sqlite3"
     api = create_app(
         client,
-        [SERVICE_PUBLIC_KEY],
         str(database),
-        account=ACCOUNT,
-        livemode=False,
         chain_id=11155111,
         asset="pha",
     )
