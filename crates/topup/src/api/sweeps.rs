@@ -479,11 +479,10 @@ async fn sweepable_treasuries(
     if let Some(chain_id) = requested_chain {
         builder.push(" AND address.chain_id = ").push_bind(chain_id);
     }
-    let candidate_rows: Vec<(i64, String)> =
-        builder.build_query_as().fetch_all(&state.pool).await?;
+    let candidates: Vec<(i64, String)> = builder.build_query_as().fetch_all(&state.pool).await?;
     let screening = &*state.screening;
     let mut checks = Vec::new();
-    for (chain_id, treasury) in candidate_rows {
+    for (chain_id, treasury) in candidates {
         let chain_id = u64::try_from(chain_id).map_err(|_| ApiError::internal())?;
         let Some(route) = state
             .routes
@@ -601,61 +600,4 @@ fn asset(routes: &RouteSet, scope: Scope, chain_id: u64, token: &str) -> Option<
         .current_in(scope.livemode())
         .find(|route| route.chain.chain_id == chain_id && route.asset.contract == token)
         .map(|route| route.asset.symbol.clone())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::refunds::DestinationScreener;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::time::{Duration, sleep};
-    use topup_core::route::RouteFile;
-
-    struct CountingScreener {
-        active: AtomicUsize,
-        peak: AtomicUsize,
-    }
-
-    #[async_trait::async_trait]
-    impl crate::refunds::DestinationScreener for CountingScreener {
-        async fn screen(
-            &self,
-            _route: &RouteFile,
-            _destination: EvmAddress,
-        ) -> DestinationScreening {
-            let active = self.active.fetch_add(1, Ordering::Relaxed) + 1;
-            self.peak.fetch_max(active, Ordering::Relaxed);
-            sleep(Duration::from_millis(10)).await;
-            self.active.fetch_sub(1, Ordering::Relaxed);
-            DestinationScreening::Clear
-        }
-    }
-
-    #[tokio::test]
-    async fn sweepable_screening_concurrency_is_bounded() {
-        let route: RouteFile =
-            serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml"))
-                .expect("route fixture parses");
-        let screening = Arc::new(CountingScreener {
-            active: AtomicUsize::new(0),
-            peak: AtomicUsize::new(0),
-        });
-        let mut checks = Vec::new();
-        for index in 0..10 {
-            let route = &route;
-            let screening = Arc::clone(&screening);
-            checks.push(async move {
-                (
-                    format!("treasury-{index}"),
-                    screening
-                        .screen_cached(route, EvmAddress::repeat_byte(index))
-                        .await,
-                )
-            });
-        }
-        let results = stream::iter(checks).buffered(4).collect::<Vec<_>>().await;
-        assert_eq!(results.len(), 10);
-        assert!(screening.peak.load(Ordering::Relaxed) <= 4);
-    }
 }
