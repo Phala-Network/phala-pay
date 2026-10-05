@@ -6,7 +6,7 @@ import { ClosingCta, CompareTeaser, DemoSection, Faq, Hero, HowItWorks, Properti
 export function render(page: "home" | "compare"): string {
   return renderToString(
     <div className="flex min-h-svh flex-col">
-      <div id="site-header"><SiteHeader theme="light" onThemeChange={() => undefined} /></div>
+      <div id="site-header" className="sticky top-0 z-50"><SiteHeader theme="light" onThemeChange={() => undefined} /></div>
       {page === "home" ? (
         <main id="top" className="flex-1">
           <Hero />

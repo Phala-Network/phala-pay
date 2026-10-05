@@ -19,7 +19,7 @@ async function prerender() {
   }
   const organization = {
     "@type": "Organization", "@id": `${origin}/#organization`, name: "Phala Network", url: "https://phala.com",
-    logo: `${origin}/icon-512.png`, sameAs: ["https://github.com/Phala-Network"],
+    logo: "https://phala.com/home/logo.svg", sameAs: ["https://github.com/Phala-Network"],
   };
   const website = {
     "@type": "WebSite", "@id": `${origin}/#website`, name: "Phala Pay", url: `${origin}/`,

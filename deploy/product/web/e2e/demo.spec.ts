@@ -984,4 +984,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Menu", exact: true }).click();
   await expect(page.getByRole("navigation", { name: "Menu" }).getByRole("link", { name: "Demo" })).toHaveAttribute("href", "/#demo");
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect.poll(async () => (await page.getByRole("banner").boundingBox())?.y).toBe(0);
 });

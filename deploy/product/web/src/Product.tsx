@@ -246,7 +246,7 @@ function TestnetBadge({ network }: { network: string }) {
     <Popover>
       <PopoverTrigger asChild>
         <button type="button" data-testid="testnet-badge" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <Badge variant="outline" className="gap-1 border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+          <Badge variant="outline" className="gap-1 border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300">
             <FlaskConical aria-hidden="true" />
             Testnet
           </Badge>
@@ -468,7 +468,7 @@ function AmountPicker({
             {options.map((option) => (
               <FieldLabel key={option.value} htmlFor={`${id}-${option.value}`} className={CHOICE}>
                 <Field orientation="horizontal" className="h-10 gap-2 px-3! py-0!">
-                  <RadioGroupItem value={option.value} id={`${id}-${option.value}`} />
+                  <RadioGroupItem value={option.value} id={`${id}-${option.value}`} aria-label={option.label} />
                   <span className="text-sm font-medium tabular-nums">{option.label}</span>
                 </Field>
               </FieldLabel>
