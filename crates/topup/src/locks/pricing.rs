@@ -621,6 +621,7 @@ async fn observe(
         Ok(r) => r,
         Err(_) => Err(PriceError::Timeout),
     };
+    let cached_age_ms = result.as_ref().ok().and_then(|(_, age_ms)| *age_ms);
     let now = validation_time()?;
     let result = result.and_then(|(quote, age_ms)| {
         let o = &quote.valuation;
@@ -645,7 +646,11 @@ async fn observe(
         }
         Err(error) => {
             let code = error_code(&error);
-            audit.observations.push(json!({"role":role,"company":entry.company,"source":entry.source_id,"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}}));
+            let mut evidence = json!({"role":role,"company":entry.company,"source":entry.source_id,"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}});
+            if let Some(age_ms) = cached_age_ms {
+                evidence["cached"] = json!({"age_ms": age_ms});
+            }
+            audit.observations.push(evidence);
             price_metrics::health(route, role, entry.source_id, entry.company, false);
             if code.starts_with("twap_") {
                 price_metrics::refusal(route, role, entry.source_id, entry.company, code);
@@ -1395,6 +1400,7 @@ mod tests {
                                 .is_none()
                         );
                         assert_eq!(audit.observations[2]["error"], "stale");
+                        assert_eq!(audit.observations[2]["cached"], json!({"age_ms": 500}));
                     })
                     .await;
                 assert_eq!(inner.calls(), 1);
