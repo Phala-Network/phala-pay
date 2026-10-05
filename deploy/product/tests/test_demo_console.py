@@ -967,3 +967,56 @@ def test_the_config_validates_its_chains() -> None:
             replace(CONFIG, bonus_bps=bonus)
     with pytest.raises(ValueError, match="not configured"):
         CONFIG.chain(1)
+
+
+def test_account_stops_at_one_full_page(demo: tuple[DemoConsole, Service]) -> None:
+    console, service = demo
+    requests: list[httpx.Request] = []
+
+    def paginated(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/v1/deposits":
+            return service(request)
+        requests.append(request)
+        assert request.url.params["limit"] == "50"
+        assert "starting_after" not in request.url.params
+        deposits = [_deposit(id=f"dep_{index:032x}") for index in range(50)]
+        return httpx.Response(200, json={**_list("/v1/deposits", deposits), "has_more": True})
+
+    console.recorder._inner = httpx.MockTransport(paginated)
+    _account(console)
+    assert len(requests) == 1
+
+
+def test_sweep_lookup_filters_forwarder_and_stops_at_first_match(
+    demo: tuple[DemoConsole, Service],
+) -> None:
+    console, _ = demo
+    deposit = _deposit()
+    calls: list[httpx.Request] = []
+
+    def sweep(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        assert request.url.params["forwarder"] == deposit["address"]
+        assert request.url.params["limit"] == "1"
+        result = {
+            "id": "sw_" + "11" * 16,
+            "object": "sweep",
+            "livemode": False,
+            "chain_id": deposit["chain_id"],
+            "address": deposit["address"],
+            "token": TOKEN,
+            "treasury": TREASURY,
+            "amount_atomic": "100",
+            "tx_hash": "0x" + "22" * 32,
+            "block_number": deposit["block_number"] + 1,
+            "forwarder": "fwd_" + "33" * 16,
+            "log_index": 0,
+            "created": NOW,
+        }
+        return httpx.Response(200, json={**_list("/v1/sweeps", [result]), "has_more": True})
+
+    console.recorder._inner = httpx.MockTransport(sweep)
+    result = console._sweep_of(deposit)
+    assert result is not None
+    assert result["address"] == deposit["address"]
+    assert len(calls) == 1

@@ -54,6 +54,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
+from itertools import islice
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -370,7 +371,9 @@ class DemoConsole:
     def _account(self, account: str) -> dict[str, Any]:
         deposits = [
             deposit.to_dict()
-            for deposit in _take(self._service().list_deposits(client_reference_id=account), 50)
+            for deposit in _take(
+                self._service().list_deposits(client_reference_id=account, page_size=50), 50
+            )
         ]
         now = self._clock()
         with self.ledger.transaction() as db:
@@ -527,7 +530,7 @@ class DemoConsole:
             return None
         with self.recorder.capture() as calls:
             quote = self._service().get_quote(quote_id)
-            deposits = list(_take(self._service().list_deposits(quote=quote_id), 10))
+            deposits = list(_take(self._service().list_deposits(quote=quote_id, page_size=10), 10))
             payment = quote.payment.to_dict() if isinstance(quote.payment, Payment) else None
             view = self._payment_view(
                 deposits[0].to_dict() if deposits else None, payment, quote.to_dict()
@@ -618,7 +621,9 @@ class DemoConsole:
         if deposit is not None:
             refunds = [
                 refund.to_dict()
-                for refund in _take(self._service().list_refunds(deposit=deposit["id"]), 20)
+                for refund in _take(
+                    self._service().list_refunds(deposit=deposit["id"], page_size=20), 20
+                )
             ]
             if deposit["swept"]:
                 sweep = self._sweep_of(deposit)
@@ -703,15 +708,17 @@ class DemoConsole:
         """The finalized sweep (`GET /v1/sweeps`) that moved the deposit: the first of its
         forwarder after its block."""
         sweeps = self._service().list_sweeps(
-            chain_id=deposit["chain_id"], token=deposit["asset_contract"]
+            chain_id=deposit["chain_id"],
+            forwarder=deposit["address"],
+            token=deposit["asset_contract"],
+            page_size=1,
         )
-        found = None
-        for sweep in _take(sweeps, 100):
+        for sweep in sweeps:
             if same_address(sweep.address, deposit["address"]) and (
                 sweep.block_number >= deposit["block_number"]
             ):
-                found = sweep.to_dict()
-        return found
+                return sweep.to_dict()
+        return None
 
     # Refunds ------------------------------------------------------------------------------------
 
@@ -885,13 +892,17 @@ class DemoConsole:
         if amounts["final_amount_atomic"] != "0":
             forwarders = list(
                 _take(
-                    service.list_forwarders(chain_id=chain_id, sweepable=token),
+                    service.list_forwarders(
+                        chain_id=chain_id, sweepable=token, page_size=min(MAX_SWEEP_FORWARDERS, 100)
+                    ),
                     MAX_SWEEP_FORWARDERS,
                 )
             )
         sweeps = [
             sweep.to_dict()
-            for sweep in _take(service.list_sweeps(chain_id=chain_id, token=token), 10)
+            for sweep in _take(
+                service.list_sweeps(chain_id=chain_id, token=token, page_size=10), 10
+            )
         ]
         # Flush only forwarders the pins derive: the service's word decides nothing here.
         derived = [
@@ -1471,10 +1482,7 @@ def _redact_key(authorization: str) -> str:
 
 
 def _take[T](items: Iterator[T], limit: int) -> Iterator[T]:
-    for index, item in enumerate(items):
-        if index >= limit:
-            return
-        yield item
+    return islice(items, limit)
 
 
 def _json_body(body: bytes) -> dict[str, Any] | None:
