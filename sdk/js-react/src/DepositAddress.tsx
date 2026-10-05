@@ -159,6 +159,7 @@ function useClientView(
     callback.current = onChange;
   });
   const key = clientSecret === undefined || apiBase === undefined ? "" : `${apiBase} ${clientSecret}`;
+  const lastView = useRef<{ key: string; serialized: string } | null>(null);
   const [current, setCurrent] = useState<{ key: string; view: ClientDepositAddress | null; reconnecting: boolean }>({
     key: "",
     view: null,
@@ -174,7 +175,6 @@ function useClientView(
     let failures = 0;
     let inFlight = false;
     let finished = false;
-    let lastView: string | undefined;
     let lastChanged = Date.now();
     const visibilityDocument = typeof document === "undefined" ? undefined : document;
     const hidden = () => visibilityDocument?.visibilityState === "hidden";
@@ -191,8 +191,9 @@ function useClientView(
         failures = 0;
         if (!stopped) {
           const serialized = JSON.stringify(view);
-          if (serialized !== lastView) {
-            lastView = serialized;
+          const previous = lastView.current;
+          if (previous === null || previous.key !== key || previous.serialized !== serialized) {
+            lastView.current = { key, serialized };
             lastChanged = Date.now();
             changedView = view;
           }

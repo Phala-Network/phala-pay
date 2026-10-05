@@ -368,6 +368,29 @@ describe("DepositAddress payments", () => {
     expect(latest).toHaveBeenLastCalledWith(parseClientDepositAddress(served));
   });
 
+  it("does not re-notify identical content when pollInterval changes", async () => {
+    vi.useFakeTimers();
+    let served = view([]);
+    const fetch = vi.fn(() => Promise.resolve(Response.json(served)));
+    vi.stubGlobal("fetch", fetch);
+    const onChange = vi.fn();
+    const props = { depositAddress: details(), clientSecret: SECRET, apiBase: "https://pay.example", onChange };
+    const { rerender } = render(<DepositAddress {...props} pollInterval={1000} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(parseClientDepositAddress(served));
+    rerender(<DepositAddress {...props} pollInterval={30000} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    served = view([payment()]);
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith(parseClientDepositAddress(served));
+  });
+
   it("does not report an observed view without client credentials", () => {
     const onChange = vi.fn();
     render(<DepositAddress depositAddress={details()} onChange={onChange} />);
