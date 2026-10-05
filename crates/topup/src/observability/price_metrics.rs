@@ -51,59 +51,105 @@ fn metrics() -> Result<&'static Metrics, prometheus::Error> {
         .as_ref()
         .map_err(|_| prometheus::Error::Msg("price metrics initialization failed".into()))
 }
-/// Record an individually alertable safety refusal through the existing price telemetry.
-pub fn refusal(route: &RouteFile, role: &str, source: &str, company: &str, code: &'static str) {
-    sentry::metrics::counter("price_source_refusals_total", 1)
-        .attribute("route", route.route.clone())
-        .attribute("asset", route.asset.symbol.clone())
-        .attribute("role", role.to_owned())
-        .attribute("source", source.to_owned())
-        .attribute("company", company.to_owned())
-        .attribute("code", code)
-        .capture();
+#[derive(Clone, Copy)]
+enum Kind {
+    Health(bool),
+    Failover,
+    Disagreement,
+    Depeg,
+    Stuck(u64),
+    Refusal,
+}
+
+fn emit(kind: Kind, labels: [&str; 5], code: Option<&str>) {
+    let name = match kind {
+        Kind::Health(_) => "price_source_health",
+        Kind::Failover => "price_failover_total",
+        Kind::Disagreement => "price_disagreement_total",
+        Kind::Depeg => "price_depeg_total",
+        Kind::Stuck(_) => "valuation_stuck_seconds",
+        Kind::Refusal => "price_source_refusals_total",
+    };
+    let attributes = ["route", "asset", "role", "source", "company"]
+        .into_iter()
+        .zip(labels);
+    match kind {
+        Kind::Health(_) | Kind::Stuck(_) => {
+            let value = match kind {
+                Kind::Health(healthy) => u32::from(healthy),
+                Kind::Stuck(seconds) => u32::try_from(seconds).unwrap_or(u32::MAX),
+                _ => unreachable!(),
+            };
+            attributes
+                .fold(
+                    sentry::metrics::gauge(name, value),
+                    |metric, (key, value)| metric.attribute(key, value.to_owned()),
+                )
+                .capture();
+        }
+        _ => {
+            let mut metric = attributes
+                .fold(sentry::metrics::counter(name, 1), |metric, (key, value)| {
+                    metric.attribute(key, value.to_owned())
+                });
+            if let Some(code) = code {
+                metric = metric.attribute("code", code.to_owned());
+            }
+            metric.capture();
+        }
+    }
     match metrics() {
-        Ok(m) => m
-            .refusals
-            .with_label_values(&[
-                &route.route,
-                &route.asset.symbol,
-                role,
-                source,
-                company,
-                code,
-            ])
-            .inc(),
+        Ok(m) => match kind {
+            Kind::Health(healthy) => m.health.with_label_values(&labels).set(i64::from(healthy)),
+            Kind::Stuck(seconds) => m
+                .stuck
+                .with_label_values(&labels)
+                .set(i64::try_from(seconds).unwrap_or(i64::MAX)),
+            Kind::Refusal => {
+                let mut labels = labels.to_vec();
+                if let Some(code) = code {
+                    labels.push(code);
+                }
+                m.refusals.with_label_values(&labels).inc();
+            }
+            _ => {
+                let metric = match kind {
+                    Kind::Failover => &m.failover,
+                    Kind::Disagreement => &m.disagreement,
+                    Kind::Depeg => &m.depeg,
+                    _ => unreachable!(),
+                };
+                metric.with_label_values(&labels).inc();
+            }
+        },
         Err(_) => tracing::error!("price metrics initialization failed"),
     }
+}
+
+/// Record an individually alertable safety refusal through the existing price telemetry.
+pub fn refusal(route: &RouteFile, role: &str, source: &str, company: &str, code: &'static str) {
+    emit(
+        Kind::Refusal,
+        [&route.route, &route.asset.symbol, role, source, company],
+        Some(code),
+    );
     alert(route, code);
 }
 /// Source labels come from the attested registry, never response bodies.
 pub fn health(route: &RouteFile, role: &str, source: &str, company: &str, healthy: bool) {
-    sentry::metrics::gauge("price_source_health", u32::from(healthy))
-        .attribute("route", route.route.clone())
-        .attribute("asset", route.asset.symbol.clone())
-        .attribute("role", role.to_owned())
-        .attribute("source", source.to_owned())
-        .attribute("company", company.to_owned())
-        .capture();
-    match metrics() {
-        Ok(m) => m
-            .health
-            .with_label_values(&[&route.route, &route.asset.symbol, role, source, company])
-            .set(i64::from(healthy)),
-        Err(_) => tracing::error!("price metrics initialization failed"),
-    }
+    emit(
+        Kind::Health(healthy),
+        [&route.route, &route.asset.symbol, role, source, company],
+        None,
+    );
 }
 /// Records ordered failover.
 pub fn failover(route: &RouteFile, role: &str, source: &str, company: &str) {
-    counter("price_failover_total", route, role, source, company);
-    match metrics() {
-        Ok(m) => m
-            .failover
-            .with_label_values(&[&route.route, &route.asset.symbol, role, source, company])
-            .inc(),
-        Err(_) => tracing::error!("price metrics initialization failed"),
-    }
+    emit(
+        Kind::Failover,
+        [&route.route, &route.asset.symbol, role, source, company],
+        None,
+    );
 }
 /// Records a rejected valuation with per-source dimensions.
 pub fn decision(
@@ -141,51 +187,30 @@ pub fn failure(route: &RouteFile, failure: &crate::locks::pricing::PricingFailur
 }
 /// Records rejected observations with the real source/company identity.
 pub fn source_event(route: &RouteFile, role: &str, source: &str, company: &str, code: &str) {
-    let name = if code == "divergent" {
-        "price_disagreement_total"
+    let kind = if code == "divergent" {
+        Kind::Disagreement
     } else {
-        "price_depeg_total"
+        Kind::Depeg
     };
-    counter(name, route, role, source, company);
-    match metrics() {
-        Ok(m) => {
-            let metric = if code == "divergent" {
-                &m.disagreement
-            } else {
-                &m.depeg
-            };
-            metric
-                .with_label_values(&[&route.route, &route.asset.symbol, role, source, company])
-                .inc();
-        }
-        Err(_) => tracing::error!("price metrics initialization failed"),
-    }
+    emit(
+        kind,
+        [&route.route, &route.asset.symbol, role, source, company],
+        None,
+    );
 }
 /// Reports how long pricing has remained unavailable; successful valuation clears it.
 pub fn stuck(route: &RouteFile, seconds: u64) {
-    sentry::metrics::gauge(
-        "valuation_stuck_seconds",
-        u32::try_from(seconds).unwrap_or(u32::MAX),
-    )
-    .attribute("route", route.route.clone())
-    .attribute("asset", route.asset.symbol.clone())
-    .attribute("role", "valuation")
-    .attribute("source", "policy")
-    .attribute("company", "policy")
-    .capture();
-    match metrics() {
-        Ok(m) => m
-            .stuck
-            .with_label_values(&[
-                &route.route,
-                &route.asset.symbol,
-                "valuation",
-                "policy",
-                "policy",
-            ])
-            .set(i64::try_from(seconds).unwrap_or(i64::MAX)),
-        Err(_) => tracing::error!("price metrics initialization failed"),
-    }
+    emit(
+        Kind::Stuck(seconds),
+        [
+            &route.route,
+            &route.asset.symbol,
+            "valuation",
+            "policy",
+            "policy",
+        ],
+        None,
+    );
     if seconds > route.alerts.stuck_after_s.detected {
         alert(route, "valuation_stuck");
     }
@@ -210,16 +235,6 @@ pub fn collect() -> Result<Vec<prometheus::proto::MetricFamily>, prometheus::Err
     families.extend(m.stuck.collect());
     families.extend(m.refusals.collect());
     Ok(families)
-}
-
-fn counter(name: &'static str, route: &RouteFile, role: &str, source: &str, company: &str) {
-    sentry::metrics::counter(name, 1)
-        .attribute("route", route.route.clone())
-        .attribute("asset", route.asset.symbol.clone())
-        .attribute("role", role.to_owned())
-        .attribute("source", source.to_owned())
-        .attribute("company", company.to_owned())
-        .capture();
 }
 
 #[cfg(test)]
