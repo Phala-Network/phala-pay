@@ -33,6 +33,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Cross-org callers can now pass `SENTRY_DSN`; the example passes the maintenance key and
   `bootstrap_maintenance` input.
 
+### Python SDK (`phala-pay`)
+
+#### Deprecated
+
+- The legacy `PhalaPay` constructor is deprecated and emits `DeprecationWarning`; it will be
+  removed in 0.10.0. Configure pins or use `PhalaPay.from_env()` instead.
+
 ## [0.9.0] - 2026-10-05
 
 ### Upgrading from 0.8.x

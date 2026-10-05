@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypedDict, Unpack, cast
@@ -122,6 +123,12 @@ class PhalaPay:
         **legacy_kwargs: object,
     ) -> None:
         if legacy or legacy_kwargs:
+            warnings.warn(
+                "The legacy PhalaPay constructor is deprecated and will be removed in 0.10.0; "
+                "use pins or PhalaPay.from_env().",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             if pins is not None:
                 raise ConfigurationError(
                     "pins cannot be combined with legacy constructor arguments"
@@ -188,7 +195,9 @@ class PhalaPay:
         self.api_keys = ApiKeys(self._client)
         self.webhook_endpoints = WebhookEndpoints(self._client)
         self.events = Events(self._client)
-        self.webhooks: Any = _BoundWebhook(self._pins) if self._pins else Webhook
+        self.webhooks: _BoundWebhook | type[Webhook] = (
+            _BoundWebhook(self._pins) if self._pins else Webhook
+        )
 
     @classmethod
     def from_env(

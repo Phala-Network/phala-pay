@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import FrozenInstanceError, replace
 from itertools import permutations
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -24,6 +24,7 @@ from phala_pay import (
     encode_pins,
     parse_pins,
 )
+from phala_pay._client import _BoundWebhook
 from topup_sdk import sign_webhook
 
 from .test_ergonomics_transport import KEY, SECRET, pay, pins, valid_key
@@ -305,19 +306,23 @@ def test_bound_webhook_inclusive_bilateral_window_and_zero_exact_match(
     with pay(lambda _: httpx.Response(200)) as client:
         if accept:
             assert (
-                client.webhooks.construct_event(body, headers, tolerance=tolerance).deposit.amount
+                cast(_BoundWebhook, client.webhooks)
+                .construct_event(body, headers, tolerance=tolerance)
+                .deposit.amount
                 == 2500
             )
         else:
             with pytest.raises(SignatureVerificationError):
-                client.webhooks.construct_event(body, headers, tolerance=tolerance)
+                cast(_BoundWebhook, client.webhooks).construct_event(
+                    body, headers, tolerance=tolerance
+                )
 
 
 @pytest.mark.parametrize("tolerance", [-1, float("nan"), float("inf"), True])
 def test_bound_webhook_invalid_tolerance_is_configuration_error(tolerance: float) -> None:
     body, headers = _delivery()
     with pay(lambda _: httpx.Response(200)) as client, pytest.raises(ConfigurationError):
-        client.webhooks.construct_event(body, headers, tolerance=tolerance)
+        cast(_BoundWebhook, client.webhooks).construct_event(body, headers, tolerance=tolerance)
 
 
 @pytest.mark.parametrize("duplicate", ["webhook-id", "webhook-timestamp", "webhook-signature"])
@@ -328,10 +333,10 @@ def test_bound_webhooks_reject_duplicate_signing_headers(duplicate: str) -> None
         pay(lambda _: httpx.Response(200)) as client,
         pytest.raises(SignatureVerificationError, match="duplicate"),
     ):
-        client.webhooks.construct_event(body, headers)
+        cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
     pairs = [(name, value) for name, value in headers.items()]
     with pay(lambda _: httpx.Response(200)) as client, pytest.raises(SignatureVerificationError):
-        client.webhooks.construct_event(body, httpx.Headers(pairs))
+        cast(_BoundWebhook, client.webhooks).construct_event(body, httpx.Headers(pairs))
 
 
 @pytest.mark.parametrize(
@@ -355,19 +360,21 @@ def test_bound_webhooks_fail_closed_for_invalid_identity_envelope_and_resource(c
     if change == "unsigned":
         headers = {}
     with pay(lambda _: httpx.Response(200)) as client, pytest.raises(SignatureVerificationError):
-        client.webhooks.construct_event(body, headers)
+        cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
 
 
 def test_bound_webhooks_use_only_pins_accept_text_and_unknown_types_stay_raw() -> None:
     for event_type in ("future.created", "deposit.future", "quote.future", "refund.future"):
         body, headers = _delivery(event_type, {"future": 1})
         with pay(lambda _: pytest.fail("webhook verification must not fetch keys")) as client:
-            event = client.webhooks.construct_event(
+            event = cast(_BoundWebhook, client.webhooks).construct_event(
                 body.decode(), {k.upper(): v for k, v in headers.items()}
             )
             assert event.data.object == {"future": 1}
             with pytest.raises(TypeError):
-                client.webhooks.construct_event(body, headers, public_key=SERVICE_PUBLIC_KEY)
+                cast(Any, client.webhooks).construct_event(
+                    body, headers, public_key=SERVICE_PUBLIC_KEY
+                )
 
 
 def test_bound_webhook_rotation_requires_explicit_pins_and_notices_do_not_change_trust() -> None:
@@ -377,13 +384,16 @@ def test_bound_webhook_rotation_requires_explicit_pins_and_notices_do_not_change
         "account.updated", {"webhook_keys": [{"version": 3, "public_key": "whpk_bad"}]}
     )
     with PhalaPay(KEY, pins=trust) as client:
-        assert client.webhooks.construct_event(body, headers).type == "account.updated"
+        assert (
+            cast(_BoundWebhook, client.webhooks).construct_event(body, headers).type
+            == "account.updated"
+        )
         assert client.pins.webhook_keys == trust.webhook_keys
     with (
         PhalaPay(KEY, pins=replace(trust, webhook_keys=((2, new_key),))) as client,
         pytest.raises(SignatureVerificationError),
     ):
-        client.webhooks.construct_event(body, headers)
+        cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
 
 
 def snapshot(**fields: Any) -> dict[str, Any]:
@@ -495,7 +505,7 @@ def test_ledger_pending_rejected_reversal_and_null_to_valued_rules() -> None:
 def test_webhook_quote_secret_does_not_leak_in_event_repr() -> None:
     body, headers = _delivery("quote.expired", _quote(status="expired", client_secret=SECRET))
     with pay(lambda _: httpx.Response(200)) as client:
-        event = client.webhooks.construct_event(body, headers)
+        event = cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
     assert SECRET not in repr(event)
     assert event.quote.client_secret == SECRET
 
@@ -544,14 +554,16 @@ def test_shared_webhook_vectors_execute_through_bound_client(
         with PhalaPay(valid_key(live=trust.livemode), pins=trust) as client:
             if case["outcome"] == "accept":
                 assert (
-                    client.webhooks.construct_event(
+                    cast(_BoundWebhook, client.webhooks)
+                    .construct_event(
                         case["body"], case["headers"], tolerance=case.get("tolerance", 300)
-                    ).id
+                    )
+                    .id
                     == case["headers"]["webhook-id"]
                 )
             else:
                 with pytest.raises(SignatureVerificationError):
-                    client.webhooks.construct_event(
+                    cast(_BoundWebhook, client.webhooks).construct_event(
                         case["body"], case["headers"], tolerance=case.get("tolerance", 300)
                     )
 
@@ -577,7 +589,7 @@ def test_bound_webhook_resource_mode_must_match_pins(event_type: str) -> None:
         pay(lambda _: pytest.fail("verification must stay offline")) as client,
         pytest.raises(SignatureVerificationError, match="mode"),
     ):
-        client.webhooks.construct_event(body, headers)
+        cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
 
 
 def test_webhook_request_and_previous_attributes_secret_reprs_are_redacted() -> None:
@@ -588,7 +600,7 @@ def test_webhook_request_and_previous_attributes_secret_reprs_are_redacted() -> 
     body = json.dumps(envelope).encode()
     headers = sign_webhook(SERVICE_KEY, EVENT_ID, int(time.time()), body)
     with pay(lambda _: httpx.Response(200)) as client:
-        event = client.webhooks.construct_event(body, headers)
+        event = cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
     assert event.request.id == KEY
     assert event.request.idempotency_key == SECRET
     assert event.data.previous_attributes == {"client_secret": SECRET, "api_key": KEY}

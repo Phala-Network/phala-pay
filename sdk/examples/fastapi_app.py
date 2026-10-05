@@ -40,13 +40,13 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Annotated
+from typing import Annotated, cast
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from phala_pay import ApiError, Deposit, PhalaPay, SignatureVerificationError
+from phala_pay import ApiError, Deposit, PhalaPay, SignatureVerificationError, Webhook
 
 LOG = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ def create_app(
     async def webhook(request: Request) -> dict[str, bool]:
         payload = await request.body()
         try:
-            event = pay.webhooks.construct_event(
+            event = cast(type[Webhook], pay.webhooks).construct_event(
                 payload, request.headers, webhook_keys, account, expected_livemode=livemode
             )
         except (SignatureVerificationError, ValueError) as error:
