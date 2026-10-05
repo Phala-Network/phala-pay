@@ -1,5 +1,5 @@
 //! Chainlink AggregatorV3 reader over the existing bounded A/B RPC clients.
-use super::{PriceError, PriceSource, unix_now};
+use super::{PriceError, PriceQuote, PriceSource, unix_now};
 use crate::chain::evm::EvmClient;
 use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_primitives::{Address, B256, Bytes};
@@ -203,7 +203,7 @@ impl PriceSource for Chainlink {
     async fn observe(&self) -> Result<Observation, PriceError> {
         validate_round(&self.round().await?, self.feed, unix_now()?.value())
     }
-    async fn evidence(&self) -> Result<(Observation, serde_json::Value), PriceError> {
+    async fn quote(&self) -> Result<PriceQuote, PriceError> {
         let r = self.round().await?;
         let o = validate_round(&r, self.feed, unix_now()?.value()).map_err(|error| {
             PriceError::Feed {
@@ -215,7 +215,11 @@ impl PriceSource for Chainlink {
                 evidence: round_evidence(&r, self.feed),
             }
         })?;
-        Ok((o, round_evidence(&r, self.feed)))
+        Ok(PriceQuote {
+            agreement_price: o.price,
+            valuation: o,
+            evidence: round_evidence(&r, self.feed),
+        })
     }
 }
 
@@ -445,7 +449,7 @@ mod tests {
                 b.client.clone(),
                 topup_core::price::feed("USDC_USD", 1).unwrap(),
             );
-            let observation = reader.evidence().await;
+            let observation = reader.quote().await;
             assert_eq!(observation.is_ok(), healthy, "{observation:?}");
         }
         let old = now.saturating_sub(90000);
@@ -457,7 +461,7 @@ mod tests {
             topup_core::price::feed("USDC_USD", 1).unwrap(),
         );
         assert!(matches!(
-            reader.evidence().await,
+            reader.quote().await,
             Err(PriceError::Feed { class: "stale", .. })
         ));
         b.client.group().unwrap().verified(0, false);

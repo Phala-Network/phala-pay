@@ -61,17 +61,13 @@ pub struct PriceQuote {
 pub trait PriceSource: Send + Sync {
     /// Fetches one current price observation.
     async fn observe(&self) -> Result<Observation, PriceError>;
-    /// Observation plus sanitized source-specific audit evidence.
-    async fn evidence(&self) -> Result<(Observation, serde_json::Value), PriceError> {
-        self.observe().await.map(|o| (o, serde_json::Value::Null))
-    }
     /// Fetch both valuation and agreement prices together; ordinary spot feeds use one price.
     async fn quote(&self) -> Result<PriceQuote, PriceError> {
-        let (valuation, evidence) = self.evidence().await?;
+        let valuation = self.observe().await?;
         Ok(PriceQuote {
             agreement_price: valuation.price,
             valuation,
-            evidence,
+            evidence: serde_json::Value::Null,
         })
     }
 }

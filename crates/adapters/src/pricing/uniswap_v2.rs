@@ -427,9 +427,6 @@ impl PriceSource for UniswapV2 {
     async fn observe(&self) -> Result<Observation, PriceError> {
         self.fetch().await.map(|q| q.valuation)
     }
-    async fn evidence(&self) -> Result<(Observation, Value), PriceError> {
-        self.fetch().await.map(|q| (q.valuation, q.evidence))
-    }
     async fn quote(&self) -> Result<PriceQuote, PriceError> {
         self.fetch().await
     }
@@ -944,7 +941,7 @@ mod tests {
                 store.clone(),
             )
             .unwrap();
-            let result = reader.evidence().await;
+            let result = reader.quote().await;
             if fault == "none" {
                 class(result, "twap_history");
                 assert_eq!(store.0.lock().await.len(), 1);
