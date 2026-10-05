@@ -1,13 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { COMPARE_ACCESSED, COMPARE_DESCRIPTION, COMPARE_TITLE } from "../src/content/compare.ts";
 import { FAQ } from "../src/content/site.ts";
 
 const web = resolve(import.meta.dirname, "..");
 const assets = resolve(web, ".cloudflare/output/v0/workers/default/assets");
 const ROOT_MARKER = '<div id="root"></div>';
-const COMPARE_TITLE = "Crypto payment gateways compared for tokens | Phala Pay";
-const COMPARE_DESCRIPTION = "How Phala Pay compares with Stripe, Coinbase Business, BTCPay Server, NOWPayments, and MoonPay Commerce on custody, fees, chains, speed, and refunds.";
 
 async function prerender() {
   const { render } = await import(pathToFileURL(resolve(web, ".prerender/entry-server.js")).href) as typeof import("../src/entry-server.js");
@@ -24,6 +23,16 @@ async function prerender() {
         .replace(/(<meta\s+(?:name|property)="(?:og:title|twitter:title)"\s+content=")[^"]*("\s*\/>)/g, `$1${COMPARE_TITLE}$2`)
         .replaceAll('href="https://pay.phala.com/"', 'href="https://pay.phala.com/compare"')
         .replace('content="https://pay.phala.com/"', 'content="https://pay.phala.com/compare"');
+    }
+    if (page === "compare") {
+      const graph = { "@context": "https://schema.org", "@graph": [
+        { "@type": "WebPage", "@id": "https://pay.phala.com/compare#webpage", url: "https://pay.phala.com/compare", name: COMPARE_TITLE, description: COMPARE_DESCRIPTION, dateModified: COMPARE_ACCESSED },
+        { "@type": "BreadcrumbList", itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Phala Pay", item: "https://pay.phala.com/" },
+          { "@type": "ListItem", position: 2, name: "Compare", item: "https://pay.phala.com/compare" },
+        ] },
+      ] };
+      html = html.replace("</head>", `<script type="application/ld+json">${JSON.stringify(graph).replaceAll("<", "\\u003c")}</script>\n</head>`);
     }
     if (page === "home") {
       const faq = { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: FAQ.map(({ question, answer }) => ({ "@type": "Question", name: question, acceptedAnswer: { "@type": "Answer", text: answer } })) };
