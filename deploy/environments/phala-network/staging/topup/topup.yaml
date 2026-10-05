@@ -6,6 +6,11 @@ public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1
   public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=
+# Maintenance-only key for deploy pause/resume (deploy/README.md); its PEM is the staging
+# Environment's TOPUP_MAINTENANCE_PRIVATE_KEY_PEM, its id TOPUP_MAINTENANCE_KEY_ID.
+maintenance_keys:
+  - id: maintenance/staging-v1
+    public_key: CtqyNNdC0DWZ/+TKeI+nvBvlV6Dq+A2/NXw5zDU7AFQ=
 # Independent A/B groups per chain, with keyless public backups (deploy/phala.md).
 # A makes the scanner's log requests; a company belongs to only one group per chain.
 rpc_companies:
