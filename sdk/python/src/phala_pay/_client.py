@@ -55,7 +55,7 @@ class RequestOptions(TypedDict, total=False):
 
 def _request_options(options: RequestOptions) -> RequestOptions:
     for key in options:
-        if key not in {"request_deadline", "upgrade_tolerance"}:
+        if key not in RequestOptions.__optional_keys__:
             raise TypeError(f"unexpected keyword argument {key!r}")
     return options
 
