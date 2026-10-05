@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   // src/components/ui is shadcn/ui's generated code, kept as its CLI writes it (still type-checked).
-  { ignores: [".cloudflare", "node_modules", "test-results", "playwright-report", "src/components/ui"] },
+  { ignores: [".cloudflare", ".prerender", "node_modules", "test-results", "playwright-report", "src/components/ui"] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   reactHooks.configs.flat.recommended,
@@ -17,5 +17,6 @@ export default tseslint.config(
       "@typescript-eslint/no-confusing-void-expression": ["error", { ignoreArrowShorthand: true }],
     },
   },
-  { files: ["eslint.config.js"], ...tseslint.configs.disableTypeChecked },
+  { files: ["eslint.config.js", "public/theme.js"], ...tseslint.configs.disableTypeChecked },
+  { files: ["public/theme.js"], languageOptions: { globals: { window: "readonly", document: "readonly", localStorage: "readonly" } } },
 );

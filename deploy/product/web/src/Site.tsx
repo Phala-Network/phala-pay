@@ -1,4 +1,5 @@
 import { BookOpen, Braces, Cpu, Menu, Rocket, Clock, Coins, Wallet, type LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { FAQ, HERO_SUBHEAD, TAGLINE } from "./content/site.js";
@@ -322,4 +323,18 @@ export function ClosingCta() {
       </div>
     </section>
   );
+}
+
+/** The same reserved space is used before the demo chunk loads and in static HTML. */
+export function DemoSection({ children }: { children?: ReactNode }) {
+  return (
+    <section id="demo" aria-labelledby="demo-title" className={`${CONTAINER} min-h-[80rem] scroll-mt-24 pb-16 lg:min-h-[56rem] lg:pb-20`}>
+      <h2 id="demo-title" className="mb-8 text-2xl font-semibold tracking-tight">Live demo (testnet)</h2>
+      {children ?? <DemoPlaceholder />}
+    </section>
+  );
+}
+
+export function DemoPlaceholder() {
+  return <p className="text-sm leading-6 text-muted-foreground">The demo runs on testnets with test tokens.</p>;
 }

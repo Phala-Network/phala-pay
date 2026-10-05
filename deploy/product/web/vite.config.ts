@@ -14,6 +14,9 @@ export default defineConfig({
   base: "./",
   plugins: [react(), tailwindcss(), cloudflare()],
   resolve: { alias: { "@": resolve(import.meta.dirname, "src") } },
-  build: { sourcemap: false },
+  build: {
+    sourcemap: false,
+    rollupOptions: { input: { home: resolve(import.meta.dirname, "index.html"), compare: resolve(import.meta.dirname, "compare.html") } },
+  },
   logLevel: "warn",
 });

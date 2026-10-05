@@ -6,9 +6,11 @@ export type Theme = "light" | "dark";
 /** The visitor's theme: stored, else the system's; `dark` on `<html>`. */
 export function useTheme(): [Theme, (theme: Theme) => void] {
   const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem("demo-theme");
-    if (stored === "light" || stored === "dark") {
-      return stored;
+    try {
+      const stored = localStorage.getItem("demo-theme");
+      if (stored === "light" || stored === "dark") return stored;
+    } catch {
+      // Use the system preference when storage is unavailable.
     }
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
@@ -18,7 +20,11 @@ export function useTheme(): [Theme, (theme: Theme) => void] {
   return [
     theme,
     (next) => {
-      localStorage.setItem("demo-theme", next);
+      try {
+        localStorage.setItem("demo-theme", next);
+      } catch {
+        // Theme changes still work for this visit when persistence is unavailable.
+      }
       setTheme(next);
     },
   ];

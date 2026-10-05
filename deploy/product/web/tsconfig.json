@@ -13,7 +13,8 @@
     "skipLibCheck": true,
     "types": ["node"],
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src", "e2e", "brand", "*.config.ts"]
+  "include": ["src", "e2e", "brand", "scripts", "*.config.ts"]
 }

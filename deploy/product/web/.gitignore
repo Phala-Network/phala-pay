@@ -4,3 +4,4 @@ test-results/
 playwright-report/
 # Public build settings, not secrets (the repository ignores .env.*).
 !.env.production
+.prerender/
