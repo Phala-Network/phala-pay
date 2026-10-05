@@ -23,8 +23,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   the new shape; mixed schemas and restricted legacy sources fail validation. Replace Coin
   Metrics with reviewed Chainlink/exchange sources, configure mainnet A/B observation groups
   and testnet markers, and add the Base sequencer gate. Stablecoin defaults use Allowed on-chain
-  Chainlink data only. Production rejects PermissionRequired/Prohibited sources; Kraken/Binance
-  PHA remains noncommercial staging-only pending an on-chain primary and written check permission. See [migration](docs/configuration.md#price-sources).
+  Chainlink data only. Production rejects PermissionRequired/Prohibited sources. PHA uses an on-chain primary and
+  remains staging-only because no second Allowed independent source exists. See
+  [migration](docs/configuration.md#price-sources).
   Ship in the next minor release; rollback uses the previous compatible image and config.
 
 ### Breaking (operators)
@@ -36,6 +37,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   compatibility floor require restoration. N-1 is always the latest stable release.
 
 ### Fixed
+
+- Add the expand-only persisted Uniswap V2 PHA/WETH TWAP observation table and hermetic local
+  Chainlink/Uniswap/exchange fixtures for CVM rehearsal; price RPC groups tolerate small pinned-read
+  head regressions and fail over within a group.
 
 - Planned upgrade admission via an audited, process-owned expiring instance mutation pause: `503
   service_maintenance` with `Retry-After`, reads and in-flight work continue, automatic resume
@@ -86,6 +91,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   ledger retains floor `20261028000002`, allowing protocol-aware N-1 rollback without undoing these migrations.
 
 ### Added
+
+- Add licence-free `uniswap_v2_twap` PHA/WETH × Chainlink ETH/USD pricing, pinned to one
+  A/B-agreed Ethereum block. Persist one-minute samples across restarts; require a continuous
+  window of at least thirty minutes with liquidity, spot divergence, freshness and sample jump
+  guard rails and distinct price refusal alerts. PHA primary/check defaults become TWAP/Kraken;
+  value at min(TWAP, current spot) × ETH/USD and compare current Uniswap spot × ETH/USD against
+  current Kraken PHA/USD. Default spot/TWAP divergence is 3%, pausing faster moves; the stricter
+  policy starts a new thirty-minute observation window. PHA remains staging-only because no second
+  Allowed independent source exists; production stablecoin routes are unaffected.
+- Expand-only migration `20261029000000_uniswap_twap` adds immutable observation history without
+  changing existing payment tables or permissions. Compatibility floor remains `20261028000002`;
+  Protocol-aware compatible binary rollback uses its previous config and retains observations.
+  The 0.9.0 restore-only declaration above still applies to legacy 0.8.x releases.
 
 - Proposed recovery-domain design for a fenced warm standby, key/storage dependencies,
   promotion and DNS switch, estimated cost and achievable recovery targets; no HA implementation.

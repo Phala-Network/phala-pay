@@ -6,6 +6,7 @@ mod deposits;
 pub(crate) mod migrations;
 mod outbox;
 mod pending;
+pub mod pricing;
 pub mod rpc;
 mod scanner;
 mod sweeps;

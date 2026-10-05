@@ -1,8 +1,8 @@
 //! Chainlink AggregatorV3 reader over the existing bounded A/B RPC clients.
 use super::{PriceError, PriceSource, unix_now};
 use crate::chain::evm::EvmClient;
-use alloy_eips::BlockId;
-use alloy_primitives::{Address, Bytes};
+use alloy_eips::{BlockId, BlockNumberOrTag};
+use alloy_primitives::{Address, B256, Bytes};
 use alloy_sol_types::{SolCall, sol};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -30,6 +30,42 @@ pub struct Round {
     /// Completed round identifier.
     pub answered_in_round: u128,
 }
+/// A single block agreed by both groups, including timestamp and canonical hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PriceBlock {
+    /// Ethereum block height.
+    pub number: u64,
+    /// Canonical block hash.
+    pub hash: B256,
+    /// Full Unix timestamp (the pair uses its low 32 bits).
+    pub timestamp: u64,
+}
+/// Compare both headers at one explicit block number.
+pub async fn confirm_block(
+    a: &EvmClient,
+    b: &EvmClient,
+    number: u64,
+) -> Result<PriceBlock, PriceError> {
+    let (a, b) = tokio::try_join!(
+        a.price_block(BlockNumberOrTag::Number(number)),
+        b.price_block(BlockNumberOrTag::Number(number))
+    )
+    .map_err(|_| PriceError::RpcUnavailable)?;
+    if a != b || a.0 != number {
+        return Err(PriceError::Disagreement);
+    }
+    Ok(PriceBlock {
+        number,
+        hash: a.1,
+        timestamp: a.2,
+    })
+}
+/// Pin two blocks behind the slower head, then require identical numeric headers.
+pub async fn agreed_block(a: &EvmClient, b: &EvmClient) -> Result<PriceBlock, PriceError> {
+    let (ha, hb) = tokio::try_join!(a.latest_head(), b.latest_head())
+        .map_err(|_| PriceError::RpcUnavailable)?;
+    confirm_block(a, b, ha.min(hb).saturating_sub(2)).await
+}
 /// Shared independent group clients; no alternate direct HTTP endpoint.
 pub struct Chainlink {
     a: Arc<EvmClient>,
@@ -41,7 +77,7 @@ impl Chainlink {
     pub fn new(a: Arc<EvmClient>, b: Arc<EvmClient>, feed: Feed) -> Self {
         Self { a, b, feed }
     }
-    async fn read(&self, client: &EvmClient) -> Result<Round, PriceError> {
+    async fn read(&self, client: &EvmClient, block: u64) -> Result<Round, PriceError> {
         let address: Address = self
             .feed
             .address
@@ -52,13 +88,13 @@ impl Chainlink {
                 "price round",
                 address,
                 Bytes::from(latestRoundDataCall {}.abi_encode()),
-                Some(BlockId::latest())
+                Some(BlockId::number(block))
             ),
             client.call(
                 "price decimals",
                 address,
                 Bytes::from(decimalsCall {}.abi_encode()),
-                Some(BlockId::latest())
+                Some(BlockId::number(block))
             )
         )
         .map_err(|_| PriceError::RpcUnavailable)?;
@@ -85,7 +121,16 @@ impl Chainlink {
     }
     /// Read both groups and reject different rounds, values or timestamps.
     pub async fn round(&self) -> Result<Round, PriceError> {
-        let (a, b) = tokio::try_join!(self.read(&self.a), self.read(&self.b))?;
+        let block = agreed_block(&self.a, &self.b).await?;
+        let round = self.round_at(block.number).await?;
+        if confirm_block(&self.a, &self.b, block.number).await? != block {
+            return Err(PriceError::Disagreement);
+        }
+        Ok(round)
+    }
+    /// Read round and decimals at the same numeric block as a composite on-chain source.
+    pub async fn round_at(&self, block: u64) -> Result<Round, PriceError> {
+        let (a, b) = tokio::try_join!(self.read(&self.a, block), self.read(&self.b, block))?;
         if a != b {
             return Err(PriceError::Feed {
                 class: "divergent",
@@ -294,12 +339,19 @@ mod tests {
                         alloy::rpc::types::Transaction,
                     >::default())
                     .unwrap();
-                    head["number"] = json!("0x64");
+                    head["number"] = if request["params"][0] == "latest" {
+                        json!("0x64")
+                    } else {
+                        request["params"][0].clone()
+                    };
                     head["hash"] = json!(format!("0x{}", "11".repeat(32)));
                     head["parentHash"] = json!(format!("0x{}", "22".repeat(32)));
                     return Json(json!({"jsonrpc":"2.0","id":request["id"],"result":head}));
                 }
-                assert_eq!(request["params"][1], "latest");
+                if request["method"] == "eth_blockNumber" {
+                    return Json(json!({"jsonrpc":"2.0","id":request["id"],"result":"0x64"}));
+                }
+                assert_eq!(request["params"][1], "0x62");
                 let data = request["params"][0]["input"]
                     .as_str()
                     .or_else(|| request["params"][0]["data"].as_str())

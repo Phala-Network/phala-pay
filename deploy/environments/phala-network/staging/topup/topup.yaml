@@ -17,6 +17,12 @@ rpc_companies:
   publicnode:
     domains:
     - publicnode.com
+  flashbots:
+    domains: [flashbots.net]
+  llama:
+    domains: [llamarpc.com]
+  mevblocker:
+    domains: [mevblocker.io]
   ethereum-foundation:
     # ethPandaOps team: github.com/ethpandaops; public Sepolia RPC, no API key.
     domains:
@@ -68,10 +74,31 @@ rpc_budgets:
   price-mainnet-b-key:
     requests_per_second: 5
     burst: 2
+  price-mainnet-mevblocker-key:
+    requests_per_second: 5
+    burst: 2
+  price-mainnet-mevblocker-account:
+    requests_per_second: 5
+    burst: 2
+  price-mainnet-flashbots-key:
+    requests_per_second: 5
+    burst: 2
+  price-mainnet-flashbots-account:
+    requests_per_second: 5
+    burst: 2
   price-base-mainnet-a-key:
     requests_per_second: 5
     burst: 2
   price-base-mainnet-b-key:
+    requests_per_second: 5
+    burst: 2
+  price-base-mainnet-sentio-key:
+    requests_per_second: 5
+    burst: 2
+  price-base-mainnet-llama-key:
+    requests_per_second: 5
+    burst: 2
+  price-base-mainnet-llama-account:
     requests_per_second: 5
     burst: 2
 rpc_groups:
@@ -99,7 +126,7 @@ rpc_groups:
     - id: provider-b
       company: publicnode
       url: https://ethereum-sepolia-rpc.publicnode.com
-      account_budget: publicnode-account
+      account_budget: price-mainnet-mevblocker-account
       key_budget: provider-b-key
     - id: ethpandaops-sepolia-b
       company: ethereum-foundation
@@ -138,36 +165,60 @@ rpc_groups:
   # Observation-only groups: no scanning or deployed payment contracts on these mainnets.
   mainnet-a:
     chain_id: 1
+    policy: { head_regression_tolerance: 2 }
     members:
     - id: price-mainnet-a
       company: tenderly
       url: https://mainnet.gateway.tenderly.co
       account_budget: tenderly-account
       key_budget: price-mainnet-a-key
+    - id: price-mainnet-a-mevblocker
+      company: mevblocker
+      url: https://rpc.mevblocker.io
+      account_budget: price-mainnet-mevblocker-account
+      key_budget: price-mainnet-mevblocker-key
   mainnet-b:
     chain_id: 1
+    policy: { head_regression_tolerance: 2 }
     members:
     - id: price-mainnet-b
       company: drpc
       url: https://eth.drpc.org
       account_budget: drpc-account
       key_budget: price-mainnet-b-key
+    - id: price-mainnet-b-flashbots
+      company: flashbots
+      url: https://rpc.flashbots.net
+      account_budget: price-mainnet-flashbots-account
+      key_budget: price-mainnet-flashbots-key
   base-mainnet-a:
     chain_id: 8453
+    policy: { head_regression_tolerance: 2 }
     members:
     - id: price-base-mainnet-a
       company: tenderly
       url: https://base.gateway.tenderly.co
       account_budget: tenderly-account
       key_budget: price-base-mainnet-a-key
+    - id: price-base-mainnet-a-sentio
+      company: sentio
+      url: https://base-mainnet.rpc.sentio.xyz
+      account_budget: sentio-account
+      key_budget: price-base-mainnet-sentio-key
   base-mainnet-b:
     chain_id: 8453
+    policy: { head_regression_tolerance: 2 }
     members:
     - id: price-base-mainnet-b
       company: publicnode
       url: https://base-rpc.publicnode.com
       account_budget: publicnode-account
       key_budget: price-base-mainnet-b-key
+    - id: price-base-mainnet-b-llama
+      company: llama
+      url: https://base.llamarpc.com
+      account_budget: price-base-mainnet-llama-account
+      key_budget: price-base-mainnet-llama-key
 routes:
   # Staging route on Base Sepolia, the PHA route of Sepolia on a second chain: a test-mode route
   # (`livemode: false`) any account can quote on and pay its own treasury through. Test PHA here is
@@ -201,11 +252,10 @@ routes:
       mode: volatile
       sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
       allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
-      check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }]
+      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
       fx:
         - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
-        - { source: kraken, symbol: USDTUSD, company: kraken }
 
     merchant:
       min_amount: { default: 100 }
@@ -322,11 +372,10 @@ routes:
     price:
       mode: volatile
       allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
-      check: [{ source: binance, symbol: PHAUSDT, company: binance }]
+      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }]
+      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
       fx:
         - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
-        - { source: kraken, symbol: USDTUSD, company: kraken }
 
     merchant:
       min_amount: { default: 100 }

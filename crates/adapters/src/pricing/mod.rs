@@ -5,6 +5,7 @@ mod decimal;
 pub mod binance;
 pub mod chainlink;
 pub mod kraken;
+pub mod uniswap_v2;
 
 use std::time::Duration;
 
@@ -44,6 +45,17 @@ async fn response_bytes(
     Ok(body)
 }
 
+/// Valuation and independent agreement prices from one fetch and observation timestamp.
+#[derive(Clone, Debug)]
+pub struct PriceQuote {
+    /// Merchant valuation, which may conservatively differ from the current market price.
+    pub valuation: Observation,
+    /// Current market price used for agreement with an independent company.
+    pub agreement_price: topup_core::money::ScaledPrice,
+    /// Sanitized source-specific audit evidence.
+    pub evidence: serde_json::Value,
+}
+
 /// A timestamped USD price observation provider.
 #[async_trait]
 pub trait PriceSource: Send + Sync {
@@ -52,6 +64,15 @@ pub trait PriceSource: Send + Sync {
     /// Observation plus sanitized source-specific audit evidence.
     async fn evidence(&self) -> Result<(Observation, serde_json::Value), PriceError> {
         self.observe().await.map(|o| (o, serde_json::Value::Null))
+    }
+    /// Fetch both valuation and agreement prices together; ordinary spot feeds use one price.
+    async fn quote(&self) -> Result<PriceQuote, PriceError> {
+        let (valuation, evidence) = self.evidence().await?;
+        Ok(PriceQuote {
+            agreement_price: valuation.price,
+            valuation,
+            evidence,
+        })
     }
 }
 
@@ -86,7 +107,7 @@ pub enum PriceError {
     #[error("price RPC group unavailable")]
     RpcUnavailable,
     /// Sanitized numeric feed evidence for a failed round or A/B disagreement.
-    #[error("Chainlink feed rejected: {class}")]
+    #[error("on-chain price rejected: {class}")]
     Feed {
         /// Static failure classification, never an upstream message.
         class: &'static str,

@@ -13,6 +13,9 @@ groups:
   - alert: PriceDepeg
     expr: increase(price_depeg_total[5m]) > 0
     labels: { severity: page }
+  - alert: PriceSourceSafetyRefusal
+    expr: increase(price_source_refusals_total[5m]) > 0
+    labels: { severity: page }
   - alert: PriceRepeatedFailover
     expr: increase(price_failover_total[5m]) >= 3
     labels: { severity: page }

@@ -615,6 +615,7 @@ const DOCUMENTED_GRANTS: &[(&str, &[&str])] = &[
     ("rpc_reorg_ranges", &["SELECT", "INSERT"]),
     ("_sqlx_migrations", &["SELECT"]),
     ("topup_migration_compatibility", &[]),
+    ("price_twap_observations", &["SELECT", "INSERT"]),
     ("accounts", OPERATIONAL),
     ("payment_settings_revisions", &["SELECT", "INSERT"]),
     ("payment_settings_state", OPERATIONAL),

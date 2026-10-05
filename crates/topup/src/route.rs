@@ -138,7 +138,16 @@ mod tests {
             "0x49f2f1f1a25269ea0c6ff2ab1c7b09dcbe9c5ba9"
         );
         assert_eq!(route.chain.rpc_providers, ["provider-a", "provider-b"]);
-        assert_eq!(route.pricing.check[0].company(), "binance");
+        assert_eq!(route.pricing.primary[0].company(), "uniswap-v2-onchain");
+        assert!(matches!(
+            route.pricing.primary[0],
+            topup_core::price::Source::UniswapV2Twap { .. }
+        ));
+        assert_eq!(route.pricing.check[0].company(), "kraken");
+        assert!(
+            route.pricing.validate_licensing(false).is_err(),
+            "the staging opt-in never grants Kraken commercial permission"
+        );
         assert_eq!(route.pricing.fx[0].asset(), "usdt");
         assert!(route.merchant.min_deposit_atomic.default.value().is_zero());
         assert_eq!(route.merchant.quote_ttl_seconds.default, 900);

@@ -96,7 +96,8 @@ impl ConfirmStep {
     pub fn from_routes(pool: PgPool, routes: &RouteSet) -> Result<Self, ConfirmConfigError> {
         let mut runtimes = BTreeMap::new();
         for route in routes.routes() {
-            let pricing = PricingRuntime::configured(route, routes).map_err(ConfirmConfigError)?;
+            let pricing = PricingRuntime::configured(route, routes, pool.clone())
+                .map_err(ConfirmConfigError)?;
             runtimes.insert(
                 (route.route.clone(), route.version),
                 RouteRuntime {

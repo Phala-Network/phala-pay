@@ -656,21 +656,27 @@ read only for specific deposits.
 
 **Valuation** happens inside the confirm step, so `valuation_at` is the confirmation
 observation and the price uses current validated evidence. Routes declare `price.mode:
-volatile | stablecoin`. PHA uses Kraken PHA/USD and independent Binance PHAUSDT normalized
-with a fresh, peg-checked USDT/USD FX observation. Ordered role failover advances only on
+volatile | stablecoin`. PHA uses persisted Uniswap V2 PHA/WETH TWAP × Chainlink ETH/USD primary
+and independent Kraken PHA/USD check; the existing volatile FX leg remains peg-checked and does
+not multiply a USD check by USDT. Ordered role failover advances only on
 unavailable, stale or malformed data; disagreement halts. Primary/check company sets are disjoint.
 Stablecoins credit exactly one dollar iff a fresh source is within the peg band and no fresh
 source is outside it. All source observations and the decision are audited.
 
 Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, complete positive
-rounds and independent RPC A/B agreement. Base additionally gates on the sequencer uptime
+rounds and independent RPC A/B agreement at one pinned numeric block. PHA samples public pair
+cumulatives once/minute into PostgreSQL, requires a continuous thirty-minute window, and enforces
+liquidity, spot divergence (default 3%), sample freshness and jump limits. PHA valuation uses
+min(TWAP, current spot) × ETH/USD; independent Kraken agreement checks current spot × ETH/USD,
+so average lag cannot overvalue a falling market or reject ordinary agreeing spot moves.
+Base additionally gates on the sequencer uptime
 feed with recovery grace. Test tokens explicitly observe configured mainnet groups. Licensing
 verdicts are compiled into the attested provider registry: only Allowed can run in production;
 Chainlink on-chain consumption is Allowed and is the stablecoin default. Kraken is
 PermissionRequired; Binance/Coinbase/Coin Metrics are Prohibited for commercial use.
-`environment: staging` plus explicit route opt-in permits noncommercial Kraken/Binance PHA
-rehearsal. PHA production awaits the [DEX TWAP follow-up](design/price-failover.md#pha-on-chain-follow-up)
-and written Kraken permission; Coin Metrics remains disabled.
+`environment: staging` plus explicit route opt-in permits noncommercial TWAP/Kraken PHA
+rehearsal. PHA production still requires written Kraken permission and an attested Allowed verdict;
+see the [on-chain source](design/price-failover.md#pha-on-chain-follow-up). Coin Metrics remains disabled.
 See [price failover](design/price-failover.md) and [configuration](configuration.md#price-sources).
 
 **Screening** is direct sanctions-list screening plus per-deposit bounds. KYC, KYT, and the Travel
@@ -1507,6 +1513,7 @@ defaulted addresses from it. The defaults and why:
 | `asset.backstop` | `token`: every transfer of the token is requested and kept locally, one request per block range whatever the address count; `addresses` for a token with many transfers per block, such as USDC (§8) |
 | `price.mode`, role lists | explicit `volatile` or `stablecoin`; no implicit providers |
 | `price.max_age_s`, `peg_band_bps`, `max_deviation_bps`, `max_fx_deviation_bps` | 90, 100, 100, 100; Chainlink uses its pinned heartbeat + 600 s |
+| `price.primary[].twap` | 1800 s window, 180 s sample age/gap, $100,000 WETH reserve, 300 bps spot divergence, 500 bps sample jump; samples every 60 s |
 | `merchant.min_amount`, `max_deposit_atomic`, `min_refund_atomic` | the default is required; an account may raise the minimum credit and lower the maximum deposit, and keeps the refund floor unless the operator sets `min` and `max` |
 | `merchant.min_deposit_atomic` | 0, which an account may raise: `min_amount` rejects dust *(policy: finance confirms before production)* |
 | `merchant.quote_ttl_seconds`, `quote_spread_bps`, `quote_tolerance_bps` | defaults 900, 50, 100; bounds 30 to 3 600 seconds and 0 to 500 basis points. The code refuses an operator bound above 86 400 seconds, a spread above 5 000, or a tolerance above 1 000 basis points |

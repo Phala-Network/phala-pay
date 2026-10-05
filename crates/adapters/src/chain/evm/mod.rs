@@ -807,6 +807,25 @@ impl EvmClient {
         .await
     }
 
+    /// Reads a complete numbered/tagged header through the bounded group transport.
+    pub async fn price_block(
+        &self,
+        block: BlockNumberOrTag,
+    ) -> Result<(u64, B256, u64), ChainError> {
+        let block = self
+            .bounded(
+                "price block header",
+                self.provider.get_block_by_number(block),
+            )
+            .await?
+            .ok_or(ChainError::MissingField("price block"))?;
+        Ok((
+            block.header.inner.number,
+            block.header.hash,
+            block.header.inner.timestamp,
+        ))
+    }
+
     /// Returns the provider's current `latest` block number, which the head loop polls.
     pub async fn latest_head(&self) -> Result<u64, ChainError> {
         self.bounded("latest head fetch", self.provider.get_block_number())

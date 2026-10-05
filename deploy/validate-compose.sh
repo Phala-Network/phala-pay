@@ -128,7 +128,7 @@ jq -e --slurpfile service "$tmp/service-runtime.json" '
 jq -e '[.services[].volumes[]? | select(.type == "bind")] == []' "$tmp/rehearsal.json" >/dev/null ||
     fail "the CVM rehearsal stack bind-mounts a host path"
 jq -e '[.services | to_entries[] | select((.value.ports // []) | length > 0) | .key] | sort
-    == ["anvil", "anvil-base-sepolia"]' "$tmp/rehearsal.json" >/dev/null ||
+    == ["anvil", "anvil-base-mainnet-price", "anvil-base-sepolia", "anvil-mainnet-price"]' "$tmp/rehearsal.json" >/dev/null ||
     fail "only the Anvils may publish a port in the CVM rehearsal stack"
 
 echo "every committed environment renders and passes deploy/compose-policy.jq; the local overlays apply"
