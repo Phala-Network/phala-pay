@@ -50,6 +50,7 @@ import time
 import uuid
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -76,7 +77,7 @@ from topup_sdk.errors import ResponseValidationError, TransportError
 
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
 from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
-from .transport import DeadlineTransport, operation_deadline
+from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
 
 LOG = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ MIN_AMOUNT = 100
 MAX_AMOUNT = 100_000
 # The forwarders one flush call may name (topup_sdk.sweeps.MAX_SALTS_PER_FLUSH).
 MAX_SWEEP_FORWARDERS = 200
+SWEEPS_WAIT_SECONDS = 8
 EXPLORERS = {
     1: "https://etherscan.io",
     8453: "https://basescan.org",
@@ -233,6 +235,8 @@ class DemoConsole:
         self._networks_error: TopupError | httpx.HTTPError | MissingProductKeyError | None = None
         self._sweeps: tuple[float, dict[str, Any]] | None = None
         self._sweeps_refreshing = False
+        self._sweeps_future: Future[dict[str, Any]] | None = None
+        self._sweeps_thread: threading.Thread | None = None
         self._block_times: OrderedDict[
             tuple[int, str], tuple[float | None, tuple[int, int] | None]
         ] = OrderedDict()
@@ -809,43 +813,50 @@ class DemoConsole:
 
     def _sweeps_view(self) -> dict[str, Any]:
         """Per network and token the product offers: the account's unswept balance, the flush
-        the merchant signs, and the finalized sweeps; the same for every visitor, cached for 10
-        seconds."""
+        the merchant signs, and the finalized sweeps; cached views return immediately while
+        one background build refreshes them. Cold readers wait at most eight seconds."""
         now = self._clock()
-        refresh = False
-        synchronous = False
         with self._lock:
-            if self._sweeps is not None:
-                age = now - self._sweeps[0]
-                if age < 10:
-                    return self._sweeps[1]
-                if age >= 60:
-                    self._sweeps_refreshing = True
-                    synchronous = True
-                elif not self._sweeps_refreshing:
-                    self._sweeps_refreshing = True
-                    refresh = True
-                view = self._sweeps[1]
-            else:
-                view = None
-        if synchronous:
-            try:
-                return self._build_sweeps_view(now)
-            finally:
-                with self._lock:
+            view = None if self._sweeps is None else self._sweeps[1]
+            if self._sweeps is not None and now - self._sweeps[0] > 60:
+                view = {**self._sweeps[1], "stale": True}
+            if not self._sweeps_refreshing:
+                future: Future[dict[str, Any]] = Future()
+                self._sweeps_future = future
+                self._sweeps_refreshing = True
+                self._sweeps_thread = threading.Thread(
+                    target=self._refresh_sweeps, args=(now, future), daemon=True
+                )
+                try:
+                    self._sweeps_thread.start()
+                except RuntimeError:
                     self._sweeps_refreshing = False
+                    self._sweeps_thread = None
+                    raise
+            pending = self._sweeps_future
         if view is not None:
-            if refresh:
-                threading.Thread(target=self._refresh_sweeps, args=(now,), daemon=True).start()
             return view
-        return self._build_sweeps_view(now)
-
-    def _refresh_sweeps(self, now: float) -> None:
+        deadline = time.monotonic() + SWEEPS_WAIT_SECONDS
+        caller_deadline = operation_deadline.get()
+        if caller_deadline is not None:
+            deadline = min(deadline, caller_deadline)
+        if pending is None:
+            raise TransportError("unavailable")
         try:
-            self._build_sweeps_view(now)
-        except TopupError:
-            LOG.warning("sweeps refresh failed", exc_info=True)
+            return pending.result(timeout=max(0, deadline - time.monotonic()))
+        except TimeoutError as error:
+            # Keep the build running under its own budget after this reader stops waiting.
+            raise TransportError("timeout") from error
+
+    def _refresh_sweeps(self, now: float, future: Future[dict[str, Any]]) -> None:
+        token = operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
+        try:
+            future.set_result(self._build_sweeps_view(now))
+        except Exception as error:
+            LOG.warning("sweeps refresh failed: %s", type(error).__name__)
+            future.set_exception(error)
         finally:
+            operation_deadline.reset(token)
             with self._lock:
                 self._sweeps_refreshing = False
 
@@ -1159,6 +1170,10 @@ class DemoConsole:
             return self._sweeps_client
 
     def close(self) -> None:
+        with self._lock:
+            refresh = self._sweeps_thread
+        if refresh is not None:
+            refresh.join()
         with self._lock:
             if self._client is not None:
                 self._client.close()

@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from http import HTTPStatus
@@ -20,10 +21,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from reference_product import demo as demo_module
 from reference_product.config import ChainConfig, MintableToken, ProductConfig
 from reference_product.demo import ApiRecorder, DemoConsole
 from reference_product.fulfillment import Fulfillment, PinnedKeys
 from reference_product.ledger import ProductLedger
+from reference_product.transport import operation_deadline
 from topup_sdk import (
     credited_event_id,
     deposit_address_salt,
@@ -354,7 +357,7 @@ def _rpc(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.fixture
-def demo(tmp_path: Path) -> tuple[DemoConsole, Service]:
+def demo(tmp_path: Path) -> Iterator[tuple[DemoConsole, Service]]:
     (tmp_path / "product.key").write_text("ppay_rk_test_" + "A" * 43 + "000000\n")
     service = Service()
     console = DemoConsole(
@@ -364,7 +367,10 @@ def demo(tmp_path: Path) -> tuple[DemoConsole, Service]:
         http=httpx.Client(transport=httpx.MockTransport(_rpc)),
         clock=lambda: NOW,
     )
-    return console, service
+    try:
+        yield console, service
+    finally:
+        console.close()
 
 
 def _account(console: DemoConsole) -> str:
@@ -1177,3 +1183,63 @@ def test_block_time_cache_evicts_the_least_recently_used_entry(
     console._block_time(11155111, hashes[1])
     assert len(calls) == 1026
     assert len(console._block_times) == 1024
+
+
+def test_cold_sweeps_timeout_keeps_one_build_running_with_its_own_deadline(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    console, service = demo
+    cookie = _account(console)
+    service.sweeps_block = True
+    monkeypatch.setattr(demo_module, "SWEEPS_WAIT_SECONDS", 0.02)
+    deadlines: list[float | None] = []
+    build = console._build_sweeps_view
+
+    def record_deadline(now: float) -> dict[str, Any]:
+        deadlines.append(operation_deadline.get())
+        return build(now)
+
+    monkeypatch.setattr(console, "_build_sweeps_view", record_deadline)
+    caller_deadline = time.monotonic() + 0.1
+    token = operation_deadline.set(caller_deadline)
+    try:
+        status, body = _get(console, cookie, "sweeps")
+        assert (status, body) == (HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
+        assert service.sweeps_started.is_set()
+        assert console._sweeps_refreshing
+        assert deadlines[0] is not None
+        assert deadlines[0] > caller_deadline + 24
+        assert _get(console, cookie, "sweeps")[0] == HTTPStatus.SERVICE_UNAVAILABLE
+        assert len(deadlines) == 1
+    finally:
+        operation_deadline.reset(token)
+        service.sweeps_release.set()
+        assert console._sweeps_thread is not None
+        console._sweeps_thread.join(timeout=2)
+    assert console._sweeps is not None
+    assert not console._sweeps_refreshing
+    assert _get(console, cookie, "sweeps")[0] == HTTPStatus.OK
+    console.close()
+
+
+def test_sweeps_older_than_a_minute_return_immediately_with_stale_marker(
+    demo: tuple[DemoConsole, Service],
+) -> None:
+    console, service = demo
+    now = [NOW]
+    console._clock = lambda: now[0]
+    cookie = _account(console)
+    _, first = _get(console, cookie, "sweeps")
+    now[0] += 61
+    service.sweeps_block = True
+    try:
+        started = time.monotonic()
+        status, cached = _get(console, cookie, "sweeps")
+        assert time.monotonic() - started < 0.5
+        assert status == HTTPStatus.OK
+        assert cached == {**first, "stale": True}
+        assert service.sweeps_started.wait(1)
+        assert _get(console, cookie, "sweeps")[1] == cached
+    finally:
+        service.sweeps_release.set()
+        console.close()
