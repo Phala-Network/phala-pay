@@ -662,7 +662,11 @@ and independent Kraken PHA/USD check; the existing volatile FX leg remains peg-c
 not multiply a USD check by USDT. Ordered role failover advances only on
 unavailable, stale or malformed data; disagreement halts. Primary/check company sets are disjoint.
 Stablecoins credit exactly one dollar iff a fresh source is within the peg band and no fresh
-source is outside it. All source observations and the decision are audited.
+source is outside it. All source observations and the decision are audited. Identical adapters share
+process-local observations across routes. Quotes may reuse an on-chain observation for up to 12
+seconds; crediting (confirm) always fetches fresh, sharing only a fetch completed after the caller
+arrived. Every use still checks each source's freshness limits. CEX prices and sequencer uptime only
+coalesce concurrent fetches. Cached observations record their age in the pricing audit.
 
 Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, complete positive
 rounds and independent RPC A/B agreement at one pinned numeric block. PHA samples public pair
@@ -684,6 +688,11 @@ See [price failover](design/price-failover.md) and [configuration](configuration
 Rule are not part of the software: they are the operator's and the merchant's responsibility (§15).
 
 ## 9. Quotes
+
+Quote pricing has a 15-second budget within the API request deadline. On-chain observations from
+the same adapter may be reused for up to 12 seconds across routes, with each source's freshness
+limits checked on every use. Crediting (confirm) always fetches fresh and only coalesces concurrent
+fetches; it does not use this quote pricing budget.
 
 Invoice model, with this service's exception profile:
 

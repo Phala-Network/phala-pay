@@ -18,6 +18,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - Request deadline errors now say "the request did not complete within its deadline; retry"
   instead of blaming the database, with `503 unavailable` and `Retry-After: 2`.
+- Price adapters are shared across routes and coalesce concurrent fetches. Quotes may reuse
+  on-chain observations for up to 12 s, with source freshness checked on every use; crediting
+  (confirm) always fetches fresh and only coalesces concurrent fetches. CEX prices and sequencer
+  uptime only coalesce. TWAP sampling fetches each shared pair once per interval.
+- Quote pricing has a 15 s budget and returns pricing unavailable when it expires, leaving room
+  for database work within the request deadline. Cache provenance is included in pricing audits;
+  new metrics report cache outcomes and pricing budget expirations.
 
 ### Fixed
 
