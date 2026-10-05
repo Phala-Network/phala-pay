@@ -56,16 +56,10 @@ jobs:
       - name: Resolve and verify the previous stable release
         timeout-minutes: 10
         run: |
-          section="$RUNNER_TEMP/rollback-release-notes"
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            scripts/changelog-section.sh CHANGELOG.md "${GITHUB_REF_NAME#v}" >"$section"
-          else
-            awk '/^## / { if (active) exit; active = ($0 == "## [Unreleased]"); next } active' CHANGELOG.md >"$section"
-          fi
           previous=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
             jq -r --arg current "$GITHUB_REF_NAME" '[.[] | select(.draft == false and .prerelease == false and .tag_name != $current)] | .[0].tag_name')
           [[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          mode=$(deploy/rollback-policy.sh "$previous" "$section")
+          mode=$(deploy/rollback-policy.sh "$previous" CHANGELOG.md "$(scripts/version.sh)")
           echo "ROLLBACK_MODE=$mode" >>"$GITHUB_ENV"
           if [[ "$mode" == declared ]]; then
             {

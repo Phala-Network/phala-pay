@@ -14,19 +14,106 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
-### Service
+## [0.9.0] - 2026-10-05
 
-#### Breaking
+### Upgrading from 0.8.x
 
-- Replace route `pricing` with explicit `price` stablecoin sources or ordered volatile
-  primary/check/FX lists. The legacy parser is available for one migration window and emits
-  the new shape; mixed schemas and restricted legacy sources fail validation. Replace Coin
-  Metrics with reviewed Chainlink/exchange sources, configure mainnet A/B observation groups
-  and testnet markers, and add the Base sequencer gate. Stablecoin defaults use Allowed on-chain
-  Chainlink data only. Production rejects PermissionRequired/Prohibited sources. PHA uses an on-chain primary and
-  remains staging-only because no second Allowed independent source exists. See
-  [migration](docs/configuration.md#price-sources).
-  Ship in the next minor release; rollback uses the previous compatible image and config.
+- **Breaking:** rollback is restore-only: **no rollback to 0.8.3; restore required**. Keep a
+  pre-upgrade backup and follow the [restore runbook](deploy/RESTORE.md); no 0.8.x rollback is
+  supported.
+- **Breaking:** migrate route `pricing` to `price`, configure independent observation RPC groups
+  and the Base sequencer gate, and replace restricted price sources. See the
+  [configuration migration](docs/configuration.md#price-sources).
+- Set up an independent maintenance key in attested `maintenance_keys` and the deployment
+  Environment before using planned upgrade admission. Follow
+  [maintenance key setup](deploy/README.md#planned-upgrade-admission-and-downtime), including
+  the explicit first-rollout bootstrap procedure.
+- **Breaking:** migrate JavaScript imports to the three packages using the
+  [import table below](#js-sdk-phalapay-phalapay-react-phalapay-server); review Python's typed
+  transport errors and stricter validation before upgrading.
+- Pin every SDK to the service version: `@phala/pay`, `@phala/pay-react`, `@phala/pay-server`, and
+  `phala-pay` must all use **0.9.0** with service **0.9.0**.
+
+### Added
+
+- Planned upgrade admission uses an audited, process-owned mutation pause with an expiring lease.
+  New mutations return `503 service_maintenance` with `Retry-After`; reads and in-flight work
+  continue. Deployment health checks resume admission, with failure cleanup, automatic expiry,
+  and a [manual-clear runbook](deploy/runbooks/instance-maintenance.md). Business pauses remain
+  in effect. Deploy artifacts and the job summary record sampled first-failed/first-healthy
+  downtime.
+- Independent maintenance signing keys and key IDs: attested `maintenance_keys` authorize only
+  instance pause/resume; other admin routes return audited `403 permission_denied`. Full
+  operator admin authority remains outside deployment CI.
+- Sentry business alerts for webhook backlog and stalled delivery, internal signer/egress
+  failures, stale RPO heartbeats, overdue treasury/refund work, and ingress certificate expiry.
+  Probes emit on state transitions with hourly reminders and log recovery without an event.
+  Outbox alerts detect overdue processing and exclude known failing merchant endpoints; backlog
+  warnings require at least two eligible endpoints. Staging synthetic alert commands and a
+  production DSN preflight check support verification.
+- Capacity alerts for pgdata/observability disk usage at 75%/90%, pending WAL size/age, and stale
+  probes. Data retention remains seven years, with documented safe disk-pressure response.
+- Licence-free `uniswap_v2_twap` PHA/WETH × Chainlink ETH/USD pricing, pinned to one A/B-agreed
+  Ethereum block. One-minute samples persist across restarts; prices require a continuous window
+  of at least thirty minutes, with liquidity, spot divergence, freshness and sample jump guard
+  rails and distinct price refusal alerts. PHA defaults use TWAP/Kraken: value at
+  min(TWAP, current spot) × ETH/USD and compare current Uniswap spot × ETH/USD against current
+  Kraken PHA/USD. Default spot/TWAP divergence is 3%, pausing faster moves; the stricter policy
+  starts a new thirty-minute observation window. PHA remains staging-only because no second
+  Allowed independent source exists; production stablecoin routes are unaffected.
+- Migration compatibility floors and checksum checks for N-1 rollback, verified against the
+  actual previous-release image. 0.9.0 establishes the compatibility-ledger protocol with an
+  explicit legacy bootstrap boundary; the restore-only declaration below governs this upgrade.
+
+### Changed
+
+- **Breaking:** replace route `pricing` with explicit `price` stablecoin sources or ordered
+  volatile primary/check/FX lists. The legacy parser remains available for one migration window
+  and emits the new shape; mixed schemas and restricted legacy sources fail validation. Replace Coin Metrics
+  with reviewed Chainlink/exchange sources, configure mainnet A/B observation groups and testnet
+  markers, and add the Base sequencer gate. Stablecoin defaults use only Allowed on-chain
+  Chainlink data; production rejects PermissionRequired/Prohibited sources. See the
+  [migration guide](docs/configuration.md#price-sources).
+- Price sources fail over independently within ordered roles and fail closed on insufficient
+  evidence. Stablecoins credit exactly $1 only with a fresh in-band observation and no fresh
+  depeg; volatile assets require two agreeing independent companies. Chainlink freshness allows
+  the pinned heartbeat plus 600 seconds without weakening completeness, agreement or peg gates.
+- WAL-G uploads, backup listings and restores have separate configurable deadlines and retry
+  budgets. Timed-out recovery fetches abort recovery instead of promoting a partial restore.
+- Ingress TCP connect/client/server timeouts are 5s/30s/30s. Production preflight enforces Sentry
+  configuration; capacity thresholds use the shared business alert emitter. Deploy stages and
+  network calls have elapsed-time deadlines with timeout diagnostics.
+- Expand-only migration `20261029000000_uniswap_twap` adds immutable observation history without
+  changing payment tables or permissions. Scale migrations `20261029030000`–`20261029030005` add
+  two cursor tables and five indexes without changing existing rows or constraints. Their
+  compatibility ledger retains floor `20261028000002`: compatible protocol-aware binary rollback
+  uses the previous config and retains observations. This does not permit rollback to 0.8.x.
+- Local SDK sandbox and CVM rehearsals use disposable TLS ingress with a run-scoped certificate,
+  preserving HTTPS validation and normal system trust roots. Hermetic local Chainlink, Uniswap
+  and exchange fixtures support price rehearsal.
+
+### Fixed
+
+- Price RPC groups tolerate small pinned-read head regressions and fail over within a group.
+- Image builds retry once without caches for recognized Actions cache transport failures only;
+  cache export failures no longer fail builds, and diagnostics remain available.
+- Backup health requires a current-timeline base backup and fresh WAL data, backlog and LSN
+  progress; old backlog uploads cannot refresh recovery age. First base backups retry with
+  capped backoff until successful.
+- Failed critical restore checks block acceptance and unfreeze. An explicit administrator
+  override requires a reason and is recorded atomically in audit history.
+- Local restore drills use disposable Sepolia and Base Sepolia Anvil chains with distinct A/B
+  RPC endpoints and contract fixtures. They enforce the 60-second RPO from failure to the last
+  replayed committed marker, including upload latency; RTO includes unfreeze and a successful
+  merchant API request.
+- API body reads are bounded to 5 seconds and request processing to 25 seconds; health checks
+  have independent capacity and a 2-second database deadline. API connections have a 30-second
+  read idle timeout and a 60-second hard lifetime, bounding incomplete headers and keep-alive work.
+- Scan all issued addresses, including retired addresses, in durable pages of 1,000. Finalized
+  and confirmation cursors advance only after every address page commits. Reconciliation uses
+  persistent rotating pages for historical credit, derivation, custody, and flush-link checks,
+  with a bounded 4,000-entry derivation cache and concurrent query indexes. Post-restore row checks
+  still traverse the complete ledger.
 
 ### Breaking (operators)
 
@@ -36,99 +123,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   from 0.10.0 onward, real N-1 rollback is enforced unless an operator declaration and a raised
   compatibility floor require restoration. N-1 is always the latest stable release.
 
-### Fixed
-
-- Add the expand-only persisted Uniswap V2 PHA/WETH TWAP observation table and hermetic local
-  Chainlink/Uniswap/exchange fixtures for CVM rehearsal; price RPC groups tolerate small pinned-read
-  head regressions and fail over within a group.
-
-- Planned upgrade admission via an audited, process-owned expiring instance mutation pause: `503
-  service_maintenance` with `Retry-After`, reads and in-flight work continue, automatic resume
-  after deployment health checks, failure cleanup, and a manual-clear runbook. Business pauses
-  are preserved. Deploy records sampled first-failed/first-healthy downtime in artifacts and
-  the job summary. Topup upgrades use an independent maintenance signing key and key id:
-  attested `maintenance_keys` authorize only instance pause/resume; other admin routes return
-  audited `403 permission_denied`. Full operator admin authority remains outside CI.
-
-- Alert in Sentry on webhook backlog and stalled delivery progress, internal signer/egress
-  failures, stale RPO heartbeats, overdue treasury/refund work, and ingress certificate expiry.
-  Add staging synthetic alert commands and a production DSN preflight check. Business probes
-  emit on state transitions with hourly reminders and log recovery without an event. Outbox
-  queue alerts detect overdue processing and exclude known failing merchant endpoints; backlog
-  warnings require at least two eligible endpoints.
-- Local SDK sandbox and CVM rehearsals use a disposable TLS ingress with a run-scoped
-  certificate, preserving HTTPS validation and normal system trust roots.
-- CI retries image builds once without caches only for recognized Actions cache transport failures;
-  cache export failures no longer fail builds, with diagnostics retained.
-- Backup health requires a current-timeline base backup and fresh WAL data, backlog and LSN
-  progress; old backlog uploads cannot refresh recovery age. First base backups retry with
-  capped backoff until successful.
-- WAL-G uploads, backup listings and restores have separate configurable deadlines and retry
-  budgets. Timed-out recovery fetches abort recovery instead of promoting a partial restore.
-- Failed critical restore checks block acceptance and unfreeze. An explicit administrator
-  override requires a reason and is recorded atomically in audit history.
-- Local restore drills start disposable Sepolia and Base Sepolia Anvil chains with distinct A/B
-  RPC endpoints and contract fixtures, and measure recovery through a successful merchant request.
-- Restore drills enforce the 60-second RPO from failure to the last replayed committed marker,
-  including upload latency; RTO includes unfreeze and a successful merchant API request.
-- Add owner-recorded migration compatibility floors and checksum checks for N-1 rollback, with
-  a real previous-release image smoke and an explicit legacy protocol bootstrap boundary.
-- Set ingress TCP connect/client/server timeouts to 5s/30s/30s and enforce production Sentry
-  configuration during preflight; use the shared business alert emitter for capacity thresholds.
-- Bound deploy stages and network calls by elapsed-time deadlines, with timeout diagnostics.
-- Alert on pgdata/observability disk usage at 75%/90%, pending WAL size/age, and stale probes;
-  retain seven years of data and document safe disk-pressure response.
-- Bound API body reads to 5 seconds and request processing to 25 seconds; health checks have
-  independent capacity and a 2-second database deadline. API connections have a 30-second read
-  idle timeout and a 60-second hard lifetime, bounding incomplete headers and keep-alive work.
-- Scan all issued addresses, including retired addresses, in durable pages of 1,000. Finalized
-  and confirmation cursors advance only after every address page commits. Reconciliation uses
-  persistent rotating pages for historical credit, derivation, custody, and flush-link checks,
-  with a bounded 4,000-entry derivation cache and concurrent query indexes. Post-restore row checks
-  still traverse the complete ledger.
-- Scale migrations `20261029030000`–`20261029030005` are expand-only: two new cursor tables
-  and five indexes leave existing rows and constraints unchanged. Their owner-written compatibility
-  ledger retains floor `20261028000002`, allowing protocol-aware N-1 rollback without undoing these migrations.
-
-### Added
-
-- Add licence-free `uniswap_v2_twap` PHA/WETH × Chainlink ETH/USD pricing, pinned to one
-  A/B-agreed Ethereum block. Persist one-minute samples across restarts; require a continuous
-  window of at least thirty minutes with liquidity, spot divergence, freshness and sample jump
-  guard rails and distinct price refusal alerts. PHA primary/check defaults become TWAP/Kraken;
-  value at min(TWAP, current spot) × ETH/USD and compare current Uniswap spot × ETH/USD against
-  current Kraken PHA/USD. Default spot/TWAP divergence is 3%, pausing faster moves; the stricter
-  policy starts a new thirty-minute observation window. PHA remains staging-only because no second
-  Allowed independent source exists; production stablecoin routes are unaffected.
-- Expand-only migration `20261029000000_uniswap_twap` adds immutable observation history without
-  changing existing payment tables or permissions. Compatibility floor remains `20261028000002`;
-  Protocol-aware compatible binary rollback uses its previous config and retains observations.
-  The 0.9.0 restore-only declaration above still applies to legacy 0.8.x releases.
-
-- Proposed recovery-domain design for a fenced warm standby, key/storage dependencies,
-  promotion and DNS switch, estimated cost and achievable recovery targets; no HA implementation.
-
-### Python SDK (`phala-pay`)
-
-- **Breaking:** add pins-based `PhalaPay` configuration and `from_env()`, bound webhook verification,
-  checkout parameters, pure ledger helpers, typed transport errors, and paginated address validation.
-
-- Enforce immutable canonical pins, API key checksums, origin and response identity checks, and
-  checkout handoffs from the originating verified quote with address revalidation.
-- Use one transport path for POST replay, explicit per-call controls, deadline and body timeouts,
-  bounded jitter and Retry-After; reject redirects and invalid pagination, preserve borrowed
-  transport ownership, and redact API keys and client secrets from diagnostics.
-- Validate ledger snapshots and merge cumulative refunds and reversals without floats or input
-  mutation; ignore unknown webhook types while retaining their raw objects.
-
-#### Added
-
-- Opt-in Python `upgrade_tolerance` at client construction and per resource call for GET and
-  replayable idempotent POST retries through maintenance, network/attempt timeouts, and gateway
-  502/503/504 (including HTML) for at most five minutes. Explicit deadlines stay hard limits,
-  body/key stay fixed, and interrupts or replayed errors terminate retries. Interactive defaults
-  remain 15 seconds per attempt, four attempts, and 60 seconds total.
-
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Added
@@ -136,25 +130,24 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Opt-in `upgradeTolerance` in `@phala/pay-server` for GET and idempotent POST retries across
   maintenance, connection failures, and gateway 502/503/504 for up to five minutes. Explicit
   deadlines and cancellation remain effective; keys and bodies stay fixed. Browser core checkout
-  and React deposit address polling preserve their last view through outages and show neutral
+  and React deposit address polling preserve their last view through outages and show a neutral
   reconnecting state.
-
 - Merchant server client at `@phala/pay-server`: all OpenAPI resources, typed parameters/responses,
   verified quote/address results, two-variable `PhalaPay.fromEnv()`, frozen pins parse/encode,
   bound Ed25519 webhooks and `checkoutParams` with browser-exported `CheckoutParams`.
 - Deadline-bounded transport with attempt timeouts, jitter, Retry-After, frozen POST idempotency,
   redirect refusal, lossless integer validation, cancellation and typed redacted errors.
 - Pure `depositNetAmount` / `balanceDelta` helpers with monotone ledger convergence and strict
-  validation; JS implements all five shared fixture groups.
+  validation, covering all five shared fixture groups.
 - `@phala/pay-server/helpers` for keyless address, webhook and offline sweep builders. Existing
   server helper exports remain available; `ForwarderResponse` names the generated API forwarder
   while `Forwarder` retains its legacy contract-pins type.
 
-#### Changed (breaking)
+#### Changed
 
-- The JavaScript SDK is now three packages. `@phala/pay` is framework-free browser code,
-  `@phala/pay-react` contains the React components and `styles.css`, and `@phala/pay-server`
-  contains the merchant client and server helpers. The old entry points migrate as follows:
+- **Breaking:** the JavaScript SDK is now three packages. `@phala/pay` is framework-free browser
+  code, `@phala/pay-react` contains the React components and `styles.css`, and `@phala/pay-server`
+  contains the merchant client and server helpers. Migrate the removed entry points as follows:
 
   | Old import | New import |
   | --- | --- |
@@ -163,15 +156,40 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   | `@phala/pay/server` | `@phala/pay-server` |
   | `@phala/pay/server/helpers` | `@phala/pay-server/helpers` |
 
-  Install the new package explicitly at the same version. The removed paths are a breaking change
-  in 0.9.0; `@phala/pay` has no React peer dependency or server/key-handling code.
+  Install the new package explicitly at the service version. `@phala/pay` has no React peer
+  dependency or server/key-handling code.
+- **Breaking:** `@phala/pay-server` rejects browser-like environments before reading credentials.
+  Move browser offline helper imports to `@phala/pay-server/helpers`. Node.js >=20.3, Bun and
+  Deno server runtimes are supported when fetch, AbortSignal.any and WebCrypto are available.
+  The browser core entry and existing checkout props remain keyless.
+- **Breaking:** duplicate webhook signing headers and non-exact UTF-8 bodies are rejected. The
+  legacy `WebhookSignatureError` export is an alias of `SignatureVerificationError`.
 
-- `@phala/pay-server` rejects browser-like environments before reading credentials. Move browser
-  offline helper imports to `@phala/pay-server/helpers`. Node.js >=20.3, Bun and Deno server
-  runtimes are supported when fetch, AbortSignal.any and WebCrypto are available. The browser core
-  entry and existing checkout props remain keyless.
-- Duplicate webhook signing headers and non-exact UTF-8 bodies are rejected. The legacy
-  `WebhookSignatureError` export is an alias of `SignatureVerificationError`.
+### Python SDK (`phala-pay`)
+
+#### Added
+
+- Pins-based `PhalaPay` configuration and `from_env()`, bound webhook verification, checkout
+  parameters, and paginated address validation. Checkout handoffs bind the originating verified
+  quote and revalidate its address.
+- Pure ledger helpers validate snapshots and merge cumulative refunds and reversals without
+  floats or input mutation. Unknown webhook types are ignored while their raw objects remain
+  available.
+- Opt-in `upgrade_tolerance` at client construction and per resource call for GET and replayable
+  idempotent POST retries through maintenance, network/attempt timeouts, and gateway 502/503/504
+  (including HTML) for at most five minutes. Explicit deadlines stay hard limits, body/key stay
+  fixed, and interrupts or replayed errors terminate retries. Interactive defaults remain
+  15 seconds per attempt, four attempts, and 60 seconds total.
+
+#### Changed
+
+- **Breaking:** transport failures are wrapped in typed SDK errors; update handlers that catch
+  underlying transport exceptions. Diagnostics redact API keys and client secrets.
+- **Breaking:** enforce immutable canonical pins, API key checksums, origin and response identity
+  checks, and checkout handoffs from the originating verified quote. Redirects and invalid
+  pagination are rejected; callers relying on previously accepted invalid inputs must migrate.
+- Use one transport path for POST replay, explicit per-call controls, deadline and body timeouts,
+  bounded jitter and Retry-After; borrowed transports retain their original ownership.
 
 ## [0.8.3] - 2026-10-04
 
@@ -1487,7 +1505,9 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.8.3...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.9.0
+[0.8.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.3
 [0.8.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.2
 [0.8.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.1
 [0.8.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.8.0

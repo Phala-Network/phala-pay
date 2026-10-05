@@ -931,7 +931,8 @@ restore required**, and no rollback to any 0.8.x release: follow [RESTORE.md](RE
 pre-upgrade backup. Earlier immutable images cannot understand newer migrations; route configuration
 and SDK changes also prevent rollback. CI resolves the latest stable release as N-1 automatically.
 For any N-1, an exact `no rollback to <N-1 version>; restore required` declaration in
-`### Breaking (operators)` under `## [Unreleased]` (the dated release section after tagging)
+`### Breaking (operators)` under `## [Unreleased]` or the dated section matching the workspace
+version (including the release PR before tagging)
 selects `declared` mode: CI skips the image smoke and prints the declaration in its job summary.
 For protocol-era N-1, `COMPATIBILITY_FLOOR` must also exceed the value in N-1's tag; CI fails
 if the floor is unchanged or lower. Without a declaration, pre-protocol N-1 fails and protocol-era

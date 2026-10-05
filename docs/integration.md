@@ -1560,8 +1560,9 @@ release only fixes or adds.
 #### Compatibility
 
 Use the SDK version equal to your operator's service version, `info.version` of its
-`GET /openapi.json`: against service v0.8.2, `@phala/pay`, `@phala/pay-react`, `@phala/pay-server`, and `phala-pay` 0.8.2. No other
-pairing is supported, so upgrade the SDKs when your operator upgrades the service.
+`GET /openapi.json`: against service v0.9.0, use `@phala/pay`, `@phala/pay-react`,
+`@phala/pay-server`, and `phala-pay` 0.9.0. No other pairing is supported, so upgrade the SDKs
+when your operator upgrades the service.
 [CHANGELOG.md](../CHANGELOG.md) records each release's SDK changes under "JS SDK" and "Python SDK".
 
 ### 5.10 SDK development

@@ -3,13 +3,26 @@
 set -euo pipefail
 previous=${1:?previous stable release tag required}
 notes=${2:?current changelog section required}
+# With a release version, read only Unreleased and that dated section from the full changelog.
+# Release PRs move the declaration before tagging; older release notes must not authorize it.
+release=${3:-}
+[[ -z "$release" || "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || exit 64
 # 0.9.0 is the first immutable release implementing the compatibility-ledger protocol.
 first_protocol_release=0.9.0
 [[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 64
 version=${previous#v}
 oldest=$(printf '%s\n' "$version" "$first_protocol_release" | sort -V | head -n 1)
 declaration="no rollback to $version; restore required"
-if awk '/^## / { active = 0 } /^### / { active = ($0 == "### Breaking (operators)"); next } active' "$notes" |
+if awk -v release="$release" '
+    BEGIN { section = (release == "") }
+    /^## / {
+        section = (release == "" || $0 == "## [Unreleased]" ||
+            index($0, "## [" release "] - ") == 1)
+        active = 0
+    }
+    /^### / { active = (section && $0 == "### Breaking (operators)"); next }
+    active
+' "$notes" |
     grep -Fq "$declaration"; then
     if [[ "$oldest" == "$first_protocol_release" ]]; then
         source=crates/topup/src/db/migrations.rs

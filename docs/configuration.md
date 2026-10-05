@@ -249,5 +249,6 @@ new sections is rejected. Coin Metrics migrates as restricted evidence and fails
 replace it explicitly with an eligible source set: Chainlink for stablecoins, or the documented
 PHA TWAP/Kraken plan after written Kraken permission. Restricted exchange adapters remain staging-only.
 Add an independent check and FX for volatile assets; do not reduce the source count. Existing
-route versions and RPC bindings are retained. Release this breaking schema in the next minor
-version; rollback requires the previous compatible image and its configuration.
+route versions and RPC bindings are retained. This breaking schema ships in 0.9.0, which declares
+**no rollback to 0.8.3; restore required**. Use the pre-upgrade backup and
+[restore runbook](../deploy/RESTORE.md); no 0.8.x rollback is supported.
