@@ -236,8 +236,11 @@ def pins() -> Pins:
 
 
 def pay(handler: Callable[[httpx.Request], httpx.Response], **options: Any) -> PhalaPay:
+    hooks: dict[str, Any] = {
+        key: options.pop(key) for key in ("clock", "sleep", "rng", "wall_clock") if key in options
+    }
     return PhalaPay._with_test_hooks(
-        KEY, pins=pins(), transport=httpx.MockTransport(handler), **options
+        KEY, hooks=hooks, pins=pins(), transport=httpx.MockTransport(handler), **options
     )
 
 

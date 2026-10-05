@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import math
 import os
-import random
-import time
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
@@ -103,16 +101,11 @@ class PhalaPay:
         cls,
         api_key: str,
         *,
-        clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
-        rng: Callable[[], float] = random.random,
-        wall_clock: Callable[[], float] = time.time,
+        hooks: Mapping[str, Any],
         **options: Any,
     ) -> PhalaPay:
         client = cls.__new__(cls)
-        client._client_factory = partial(
-            TopupClient, clock=clock, sleep=sleep, rng=rng, wall_clock=wall_clock
-        )
+        client._client_factory = partial(TopupClient, **hooks)
         cls.__init__(client, api_key, **options)
         return client
 
