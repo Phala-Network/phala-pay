@@ -20,6 +20,22 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
   seconds per chain and could time out.
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Added
+
+- `<DepositAddress onChange(state)>` receives the public view on its first read and once per
+  content change, so integrators can update their UI without additional polling.
+
+#### Changed
+
+- Checkout and React deposit-address polling use uniform ±20% jitter, pause in hidden tabs, and
+  read immediately on visibility regain. `Retry-After` remains a minimum delay.
+- `<DepositAddress>` slows to a 15-second interval after ten minutes without an observed change;
+  any view change or visibility regain restores the normal interval and resets the idle window.
+- Checkout stops after three consecutive non-terminal 4xx responses other than 408/429 and
+  surfaces its existing error state. 404 still stops immediately as `invalid_client_secret`.
+
 ## [0.9.2] - 2026-10-05
 
 ### Fixed
@@ -180,8 +196,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
-- `<DepositAddress onChange(state)>` receives the public view on its first read and once per
-  content change, so integrators can update their UI without additional polling.
 - Opt-in `upgradeTolerance` in `@phala/pay-server` for GET and idempotent POST retries across
   maintenance, connection failures, and gateway 502/503/504 for up to five minutes. Explicit
   deadlines and cancellation remain effective; keys and bodies stay fixed. Browser core checkout
@@ -200,12 +214,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Changed
 
-- Checkout and React deposit-address polling use uniform ±20% jitter, pause in hidden tabs, and
-  read immediately on visibility regain. `Retry-After` remains a minimum delay.
-- `<DepositAddress>` slows to a 15-second interval after ten minutes without an observed change;
-  any view change or visibility regain restores the normal interval and resets the idle window.
-- Checkout stops after three consecutive non-terminal 4xx responses other than 408/429 and
-  surfaces its existing error state. 404 still stops immediately as `invalid_client_secret`.
 - **Breaking:** the JavaScript SDK is now three packages. `@phala/pay` is framework-free browser
   code, `@phala/pay-react` contains the React components and `styles.css`, and `@phala/pay-server`
   contains the merchant client and server helpers. Migrate the removed entry points as follows:
