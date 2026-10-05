@@ -40,13 +40,13 @@ topup-sdk = "topup_sdk.__main__:main"
 
 [dependency-groups]
 dev = [
-    "mypy==2.3.1",
+    "mypy==2.4.0",
     "pytest==9.1.1",
-    "ruff==0.16.9",
+    "ruff==0.16.10",
 ]
 codegen = [
     "openapi-python-client==0.29.1",
-    "ruff==0.16.9",
+    "ruff==0.16.10",
 ]
 product = [
     "granian==2.8.4",
@@ -55,7 +55,7 @@ product = [
 ]
 # The FastAPI example (sdk/examples/fastapi_app.py) and its test.
 examples = [
-    "fastapi==0.142.1",
+    "fastapi==0.142.2",
 ]
 
 [build-system]
