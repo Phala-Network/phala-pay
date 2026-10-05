@@ -51,104 +51,80 @@ fn metrics() -> Result<&'static Metrics, prometheus::Error> {
         .as_ref()
         .map_err(|_| prometheus::Error::Msg("price metrics initialization failed".into()))
 }
-#[derive(Clone, Copy)]
-enum Kind {
-    Health(bool),
-    Failover,
-    Disagreement,
-    Depeg,
-    Stuck(u64),
-    Refusal,
+fn counter(
+    name: &'static str,
+    labels: [&str; 5],
+    code: Option<&str>,
+    select: fn(&Metrics) -> &IntCounterVec,
+) {
+    let mut metric = ["route", "asset", "role", "source", "company"]
+        .into_iter()
+        .zip(labels)
+        .fold(sentry::metrics::counter(name, 1), |metric, (key, value)| {
+            metric.attribute(key, value.to_owned())
+        });
+    if let Some(code) = code {
+        metric = metric.attribute("code", code.to_owned());
+    }
+    metric.capture();
+    match metrics() {
+        Ok(m) => {
+            if let Some(code) = code {
+                let [route, asset, role, source, company] = labels;
+                select(m)
+                    .with_label_values(&[route, asset, role, source, company, code])
+                    .inc();
+            } else {
+                select(m).with_label_values(&labels).inc();
+            }
+        }
+        Err(_) => tracing::error!("price metrics initialization failed"),
+    }
 }
 
-fn emit(kind: Kind, labels: [&str; 5], code: Option<&str>) {
-    let name = match kind {
-        Kind::Health(_) => "price_source_health",
-        Kind::Failover => "price_failover_total",
-        Kind::Disagreement => "price_disagreement_total",
-        Kind::Depeg => "price_depeg_total",
-        Kind::Stuck(_) => "valuation_stuck_seconds",
-        Kind::Refusal => "price_source_refusals_total",
-    };
-    let attributes = ["route", "asset", "role", "source", "company"]
+fn gauge(name: &'static str, labels: [&str; 5], value: u64, select: fn(&Metrics) -> &IntGaugeVec) {
+    ["route", "asset", "role", "source", "company"]
         .into_iter()
-        .zip(labels);
-    match kind {
-        Kind::Health(_) | Kind::Stuck(_) => {
-            let value = match kind {
-                Kind::Health(healthy) => u32::from(healthy),
-                Kind::Stuck(seconds) => u32::try_from(seconds).unwrap_or(u32::MAX),
-                _ => unreachable!(),
-            };
-            attributes
-                .fold(
-                    sentry::metrics::gauge(name, value),
-                    |metric, (key, value)| metric.attribute(key, value.to_owned()),
-                )
-                .capture();
-        }
-        _ => {
-            let mut metric = attributes
-                .fold(sentry::metrics::counter(name, 1), |metric, (key, value)| {
-                    metric.attribute(key, value.to_owned())
-                });
-            if let Some(code) = code {
-                metric = metric.attribute("code", code.to_owned());
-            }
-            metric.capture();
-        }
-    }
+        .zip(labels)
+        .fold(
+            sentry::metrics::gauge(name, u32::try_from(value).unwrap_or(u32::MAX)),
+            |metric, (key, value)| metric.attribute(key, value.to_owned()),
+        )
+        .capture();
     match metrics() {
-        Ok(m) => match kind {
-            Kind::Health(healthy) => m.health.with_label_values(&labels).set(i64::from(healthy)),
-            Kind::Stuck(seconds) => m
-                .stuck
-                .with_label_values(&labels)
-                .set(i64::try_from(seconds).unwrap_or(i64::MAX)),
-            Kind::Refusal => {
-                let mut labels = labels.to_vec();
-                if let Some(code) = code {
-                    labels.push(code);
-                }
-                m.refusals.with_label_values(&labels).inc();
-            }
-            _ => {
-                let metric = match kind {
-                    Kind::Failover => &m.failover,
-                    Kind::Disagreement => &m.disagreement,
-                    Kind::Depeg => &m.depeg,
-                    _ => unreachable!(),
-                };
-                metric.with_label_values(&labels).inc();
-            }
-        },
+        Ok(m) => select(m)
+            .with_label_values(&labels)
+            .set(i64::try_from(value).unwrap_or(i64::MAX)),
         Err(_) => tracing::error!("price metrics initialization failed"),
     }
 }
 
 /// Record an individually alertable safety refusal through the existing price telemetry.
 pub fn refusal(route: &RouteFile, role: &str, source: &str, company: &str, code: &'static str) {
-    emit(
-        Kind::Refusal,
+    counter(
+        "price_source_refusals_total",
         [&route.route, &route.asset.symbol, role, source, company],
         Some(code),
+        |m| &m.refusals,
     );
     alert(route, code);
 }
 /// Source labels come from the attested registry, never response bodies.
 pub fn health(route: &RouteFile, role: &str, source: &str, company: &str, healthy: bool) {
-    emit(
-        Kind::Health(healthy),
+    gauge(
+        "price_source_health",
         [&route.route, &route.asset.symbol, role, source, company],
-        None,
+        u64::from(healthy),
+        |m| &m.health,
     );
 }
 /// Records ordered failover.
 pub fn failover(route: &RouteFile, role: &str, source: &str, company: &str) {
-    emit(
-        Kind::Failover,
+    counter(
+        "price_failover_total",
         [&route.route, &route.asset.symbol, role, source, company],
         None,
+        |m| &m.failover,
     );
 }
 /// Records a rejected valuation with per-source dimensions.
@@ -187,21 +163,22 @@ pub fn failure(route: &RouteFile, failure: &crate::locks::pricing::PricingFailur
 }
 /// Records rejected observations with the real source/company identity.
 pub fn source_event(route: &RouteFile, role: &str, source: &str, company: &str, code: &str) {
-    let kind = if code == "divergent" {
-        Kind::Disagreement
+    let (name, select): (_, fn(&Metrics) -> &IntCounterVec) = if code == "divergent" {
+        ("price_disagreement_total", |m| &m.disagreement)
     } else {
-        Kind::Depeg
+        ("price_depeg_total", |m| &m.depeg)
     };
-    emit(
-        kind,
+    counter(
+        name,
         [&route.route, &route.asset.symbol, role, source, company],
         None,
+        select,
     );
 }
 /// Reports how long pricing has remained unavailable; successful valuation clears it.
 pub fn stuck(route: &RouteFile, seconds: u64) {
-    emit(
-        Kind::Stuck(seconds),
+    gauge(
+        "valuation_stuck_seconds",
         [
             &route.route,
             &route.asset.symbol,
@@ -209,7 +186,8 @@ pub fn stuck(route: &RouteFile, seconds: u64) {
             "policy",
             "policy",
         ],
-        None,
+        seconds,
+        |m| &m.stuck,
     );
     if seconds > route.alerts.stuck_after_s.detected {
         alert(route, "valuation_stuck");
