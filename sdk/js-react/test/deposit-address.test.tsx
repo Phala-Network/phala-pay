@@ -1,4 +1,5 @@
 import axe from "axe-core";
+import { StrictMode } from "react";
 import { userEvent } from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -419,6 +420,36 @@ describe("DepositAddress payments", () => {
     expect(microtask).toHaveBeenCalledTimes(2);
     expect(screen.getByText("1.5 PHA on Sepolia credited")).toBeDefined();
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("removes its visibilitychange listener on unmount", async () => {
+    vi.useFakeTimers();
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    const fetch = vi.fn(() => Promise.resolve(Response.json(view([]))));
+    vi.stubGlobal("fetch", fetch);
+    const { unmount } = render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(add).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    const registration = add.mock.calls.find(([type]) => type === "visibilitychange");
+    unmount();
+    expect(remove).toHaveBeenCalledWith("visibilitychange", registration?.[1]);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies the first successful view only once under StrictMode", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", () => Promise.resolve(Response.json(view([]))));
+    const onChange = vi.fn();
+    render(
+      <StrictMode>
+        <DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} onChange={onChange} />
+      </StrictMode>,
+    );
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(parseClientDepositAddress(view([])));
   });
 
   it("does not report an observed view without client credentials", () => {
