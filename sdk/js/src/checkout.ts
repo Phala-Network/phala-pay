@@ -92,10 +92,19 @@ export function responseError(response: Response, notFound: string): CheckoutErr
   );
 }
 
-/** The delay before the next read after `failures` failed ones, at least what `error` asks. */
-export function pollDelay(interval: number, failures: number, error: CheckoutError | null): number {
+/**
+ * The next read's delay with uniform ±20% jitter, at least what `error` asks via Retry-After.
+ * `random` defaults to Math.random and can be injected for deterministic tests.
+ */
+export function pollDelay(
+  interval: number,
+  failures: number,
+  error: CheckoutError | null,
+  random: () => number = Math.random,
+): number {
   const backoff = failures === 0 ? interval : Math.min(interval * 2 ** failures, MAX_BACKOFF);
-  return Math.max(backoff, (error?.retryAfter ?? 0) * 1000);
+  const retryAfter = (error?.retryAfter ?? 0) * 1000;
+  return Math.max(Math.max(backoff, retryAfter) * (0.8 + 0.4 * random()), retryAfter);
 }
 
 export interface CheckoutState {
