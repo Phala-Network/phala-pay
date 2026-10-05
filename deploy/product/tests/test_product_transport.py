@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -382,3 +383,93 @@ def test_outbound_calls_share_total_budget_and_preserve_compressed_body(
         assert calls[0].url.query == b"key=value"
     finally:
         operation_deadline.reset(token)
+
+
+def test_outbound_calls_reuse_one_connection() -> None:
+    connections: set[tuple[str, int]] = set()
+
+    class Upstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self) -> None:
+            connections.add(self.client_address)
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *_: object) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    thread = threading.Thread(target=upstream.serve_forever)
+    thread.start()
+    transport = DeadlineTransport()
+    try:
+        with httpx.Client(transport=transport) as client:
+            for path in ("first", "second"):
+                assert client.get(f"http://127.0.0.1:{upstream.server_port}/{path}").text == "ok"
+        assert len(connections) == 1
+        assert not transport._thread.is_alive()
+        transport.close()
+    finally:
+        transport.close()
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join()
+
+
+def test_expired_outbound_deadline_never_calls_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    async_client = httpx.AsyncClient
+    calls: list[httpx.Request] = []
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200)
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: async_client(transport=httpx.MockTransport(upstream), **kw),
+    )
+    token = operation_deadline.set(time.monotonic() - 1)
+    try:
+        with (
+            httpx.Client(transport=DeadlineTransport()) as client,
+            pytest.raises(httpx.TimeoutException, match="operation deadline"),
+        ):
+            client.get("http://test/")
+        assert not calls
+    finally:
+        operation_deadline.reset(token)
+
+
+def test_pooled_transport_keeps_concurrent_callers_deadlines_independent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async_client = httpx.AsyncClient
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.1)
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: async_client(transport=httpx.MockTransport(upstream), **kw),
+    )
+    with httpx.Client(transport=DeadlineTransport()) as client:
+
+        def call(timeout: float) -> str:
+            token = operation_deadline.set(time.monotonic() + timeout)
+            try:
+                return client.get("http://test/").text
+            finally:
+                operation_deadline.reset(token)
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            short = workers.submit(call, 0.02)
+            long = workers.submit(call, 2)
+            with pytest.raises(httpx.TimeoutException, match="operation deadline"):
+                short.result(timeout=2)
+            assert long.result(timeout=2) == "ok"
