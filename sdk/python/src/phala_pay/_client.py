@@ -183,8 +183,7 @@ class PhalaPay:
         self.payment_settings = PaymentSettingsResource(self._client)
         self.config = ConfigResource(self._client)
         self._issued_quotes: dict[int, tuple[ReferenceType[Quote], str | None]] = {}
-        self.quotes = Quotes(self._client)
-        self.quotes._issued_quotes = self._issued_quotes
+        self.quotes = Quotes(self._client, self._issued_quotes)
         self.deposits = Deposits(self._client)
         self.deposit_addresses = DepositAddresses(self._client)
         self.refunds = Refunds(self._client)
@@ -364,9 +363,13 @@ class ConfigResource:
 
 
 class Quotes:
-    def __init__(self, client: TopupClient) -> None:
+    def __init__(
+        self,
+        client: TopupClient,
+        issued_quotes: dict[int, tuple[ReferenceType[Quote], str | None]] | None = None,
+    ) -> None:
         self._client = client
-        self._issued_quotes: dict[int, tuple[ReferenceType[Quote], str | None]] = {}
+        self._issued_quotes = {} if issued_quotes is None else issued_quotes
 
     def create(
         self,
