@@ -14,6 +14,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Deploy fetches `deploy/deadline.sh` with `deploy/verify-release.sh` at the release commit, so release
+  verification no longer fails before any change (0.9.0's Deploy stopped at "Verify the release").
+  A CI check keeps both callers fetching every script `verify-release.sh` sources.
+
 ## [0.9.0] - 2026-10-05
 
 ### Upgrading from 0.8.x
