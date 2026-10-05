@@ -56,7 +56,6 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from email.utils import parsedate_to_datetime
 from functools import partial
 from typing import Any, Literal, TypeVar
-from weakref import ReferenceType
 
 import httpx
 
@@ -247,7 +246,6 @@ class TopupClient:
             raise ValueError("pinning treasuries needs the forwarder to recompute addresses")
         self.livemode = api_key.startswith(LIVE_KEY_PREFIXES)
         """Whether the key is a live key, which requires every address pin."""
-        self._issued_quotes: dict[int, tuple[ReferenceType[Quote], str | None]] = {}
         self._account = account
         self._account_pinned = account is not None
         self.forwarder = forwarder

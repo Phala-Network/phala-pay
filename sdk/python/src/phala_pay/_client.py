@@ -7,7 +7,7 @@ import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypedDict, Unpack, cast
-from weakref import ref
+from weakref import ReferenceType, ref
 
 import httpx
 
@@ -175,7 +175,9 @@ class PhalaPay:
         self.account = AccountResource(self._client)
         self.payment_settings = PaymentSettingsResource(self._client)
         self.config = ConfigResource(self._client)
+        self._issued_quotes: dict[int, tuple[ReferenceType[Quote], str | None]] = {}
         self.quotes = Quotes(self._client)
+        self.quotes._issued_quotes = self._issued_quotes
         self.deposits = Deposits(self._client)
         self.deposit_addresses = DepositAddresses(self._client)
         self.refunds = Refunds(self._client)
@@ -214,7 +216,7 @@ class PhalaPay:
         return self._client.livemode
 
     def checkout_params(self, quote: Quote) -> dict[str, str]:
-        issued = self._client._issued_quotes.get(id(quote))
+        issued = self._issued_quotes.get(id(quote))
         if (
             not isinstance(quote, Quote)
             or quote.status != "open"
@@ -356,6 +358,7 @@ class ConfigResource:
 class Quotes:
     def __init__(self, client: TopupClient) -> None:
         self._client = client
+        self._issued_quotes: dict[int, tuple[ReferenceType[Quote], str | None]] = {}
 
     def create(
         self,
@@ -391,7 +394,7 @@ class Quotes:
             metadata=metadata,
             **_request_options(options),
         )
-        issued_quotes = self._client._issued_quotes
+        issued_quotes = self._issued_quotes
         quote_key = id(quote)
         issued_quotes[quote_key] = (
             ref(quote, lambda _: issued_quotes.pop(quote_key, None)),
