@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
@@ -22,7 +22,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reference_product import demo as demo_module
-from reference_product.config import ChainConfig, MintableToken, ProductConfig
+from reference_product.config import (
+    ChainConfig,
+    MintableToken,
+    MissingProductKeyError,
+    ProductConfig,
+)
 from reference_product.demo import ApiRecorder, DemoConsole
 from reference_product.fulfillment import Fulfillment, PinnedKeys
 from reference_product.ledger import ProductLedger
@@ -1423,3 +1428,51 @@ def test_cached_failures_raise_fresh_exceptions_for_concurrent_readers(
         elif isinstance(error, ResponseValidationError):
             assert error.status_code == 200
             assert error.request_id == "test"
+
+
+@pytest.mark.parametrize("failure", ["transport", "http", "missing_key"])
+def test_cold_sweeps_waiters_receive_distinct_refresh_exceptions(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    console, _ = demo
+    waiting = threading.Barrier(3)
+    started, release = threading.Event(), threading.Event()
+    pending_ids: list[int] = []
+    error: TransportError | httpx.HTTPError | MissingProductKeyError
+    if failure == "transport":
+        error = TransportError("timeout", "refresh failed")
+    elif failure == "http":
+        error = httpx.HTTPError("refresh failed")
+    else:
+        error = MissingProductKeyError("refresh failed")
+
+    class WaitingFuture(Future[dict[str, Any]]):
+        def result(self, timeout: float | None = None) -> dict[str, Any]:
+            pending_ids.append(id(self))
+            waiting.wait(timeout=2)
+            return super().result(timeout=timeout)
+
+    def build(now: float) -> dict[str, Any]:
+        started.set()
+        assert release.wait(3)
+        raise error
+
+    monkeypatch.setattr(demo_module, "Future", WaitingFuture)
+    monkeypatch.setattr(console, "_build_sweeps_view", build)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        futures = [workers.submit(console._sweeps_view) for _ in range(2)]
+        try:
+            assert started.wait(1)
+            waiting.wait(timeout=2)
+        finally:
+            release.set()
+        with pytest.raises(type(error)) as first:
+            futures[0].result(timeout=3)
+        with pytest.raises(type(error)) as second:
+            futures[1].result(timeout=3)
+    assert len(pending_ids) == 2
+    assert len(set(pending_ids)) == 1
+    assert first.value is not second.value
+    assert first.value is not error
+    assert second.value is not error
+    assert str(first.value) == str(second.value) == str(error)

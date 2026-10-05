@@ -873,6 +873,8 @@ class DemoConsole:
             raise TransportError("unavailable")
         try:
             return pending.result(timeout=max(0, deadline - time.monotonic()))
+        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+            raise _failure_factory(error)() from None
         except TimeoutError as error:
             # Keep the build running under its own budget after this reader stops waiting.
             raise TransportError("timeout") from error
