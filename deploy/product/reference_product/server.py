@@ -47,6 +47,7 @@ from topup_sdk import (
     verify_request,
 )
 from topup_sdk.addresses import forwarder_address, quote_salt
+from topup_sdk.errors import ResponseValidationError, TransportError
 from topup_sdk.ids import DEPOSIT, object_id, parse_id
 
 from .config import (
@@ -386,6 +387,12 @@ class AccountApi:
                 HTTPStatus.BAD_GATEWAY,
                 {"service_status": error.status_code, "service_code": error.code},
             )
+        except TransportError:
+            LOG.warning("service transport unavailable for the account API")
+            return Answer(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
+        except ResponseValidationError:
+            LOG.warning("service response validation failed for the account API")
+            return Answer(HTTPStatus.BAD_GATEWAY, {"code": "bad_gateway"})
         except httpx.HTTPError:
             LOG.warning("service unavailable for the account API")
             return Answer(HTTPStatus.SERVICE_UNAVAILABLE)

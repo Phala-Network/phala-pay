@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from starlette.testclient import TestClient
@@ -43,6 +44,7 @@ from reference_product.server import (
 )
 from topup_sdk import (
     RequestSigner,
+    TopupClient,
     credited_event_id,
     load_public_key,
     sign_webhook,
@@ -1132,3 +1134,34 @@ def test_concurrent_event_reference_backfills_are_idempotent(
     finally:
         for ledger in ledgers:
             ledger._connection.close()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "network", "malformed"])
+def test_account_api_isolates_sdk_service_failures(
+    failure: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    fulfillment = _fulfillment()
+    api = AccountApi(CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()))
+
+    def service(request: httpx.Request) -> httpx.Response:
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private service detail", request=request)
+        if failure == "network":
+            raise httpx.ConnectError("private service detail", request=request)
+        return httpx.Response(200, json={"private service detail": "invalid list"})
+
+    api._client = TopupClient(
+        "https://service.test",
+        "ppay_rk_test_" + "A" * 43 + "000000",
+        account=CONFIG.account,
+        transport=httpx.MockTransport(service),
+        max_attempts=1,
+    )
+    try:
+        answer = _account_call(api, "GET", f"/accounts/{TEAM}", b"")
+        assert answer.status == (502 if failure == "malformed" else 503)
+        assert answer.body == {"code": "bad_gateway" if failure == "malformed" else "unavailable"}
+        assert "account API" in caplog.text
+        assert "private service detail" not in caplog.text
+    finally:
+        api.close()
