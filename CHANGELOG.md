@@ -31,7 +31,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - Checkout and React deposit-address polling use uniform ±20% jitter, pause in hidden tabs, and
   read immediately on visibility regain. `Retry-After` remains a minimum delay.
-- `<DepositAddress>` slows to a 15-second interval after ten minutes without an observed change;
+- `<DepositAddress>` uses an idle base interval of `max(pollInterval, 15000)` after ten minutes
+  without an observed change;
   any view change or visibility regain restores the normal interval and resets the idle window.
 - Checkout stops after three consecutive non-terminal 4xx responses other than 408/429 and
   surfaces its existing error state. 404 still stops immediately as `invalid_client_secret`.

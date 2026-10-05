@@ -19,8 +19,9 @@ tabs and reads immediately when they become visible. Checkout stops after three 
 non-terminal 4xx responses other than 408/429, using its existing error state. Success or another
 kind of failure resets the count; 404 still stops immediately as `invalid_client_secret`.
 
-`DepositAddress` uses a 15-second interval after ten minutes without an observed public-view
-change. Any change or visibility regain restores the normal interval and resets the idle window.
+After ten minutes without an observed public-view change, `DepositAddress` uses a base interval
+of `max(pollInterval, 15000)` milliseconds, so a longer configured interval stays unchanged.
+Any change or visibility regain restores the normal interval and resets the idle window.
 Its optional `onChange?: (state: ClientDepositAddress) => void` follows Checkout's callback naming:
 it receives the full public view on the first read and once per content change, including payment
 confirmations and network credit times. Unchanged polls, reconnecting alone, and replacing the

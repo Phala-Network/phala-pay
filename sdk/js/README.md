@@ -171,8 +171,9 @@ block of the transfer, then "credited" (or rejected or reversed). Display only. 
 network's typical credit time from the view's `typical_credit_seconds` ("usually in about 30 seconds
 on Sepolia and about 7 seconds on Base Sepolia"); until the view is loaded it names no time.
 
-After ten minutes without a change in the public view, `<DepositAddress>` uses a 15-second
-interval, with the same jitter and failure backoff. Any view change or visibility regain resets
+After ten minutes without a change in the public view, `<DepositAddress>` uses a base interval
+of `max(pollInterval, 15000)` milliseconds, with the same jitter and failure backoff, so a longer
+configured interval stays unchanged. Any view change or visibility regain resets
 the idle window and restores `pollInterval`. Optional `onChange(state)` receives the existing
 `ClientDepositAddress` public view on its first successful read and once per content change,
 including payment confirmations and network credit times. Unchanged polls, callback replacements,

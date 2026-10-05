@@ -591,7 +591,8 @@ confirmation", then "credited".
 
 Both React components pause polling in hidden tabs and read immediately on visibility regain,
 with uniform ±20% jitter on their normal intervals and failure backoff, respecting `Retry-After`.
-`DepositAddress` slows to a 15-second interval after ten minutes without a public-view change;
+After ten minutes without a public-view change, `DepositAddress` uses an idle base interval of
+`max(pollInterval, 15000)` milliseconds, so a longer configured interval stays unchanged;
 any change or visibility regain resets that window and restores `pollInterval` (default 3000 ms).
 Optional `onChange(state)` receives the `ClientDepositAddress` view on its first read and once
 per content change, including confirmations and credit times. Use it to update your page without

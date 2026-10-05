@@ -216,7 +216,7 @@ function useClientView(
         inFlight = false;
       }
       if (!stopped && !hidden()) {
-        const nextInterval = Date.now() - lastChanged >= 600_000 ? 15_000 : interval;
+        const nextInterval = Date.now() - lastChanged >= 600_000 ? Math.max(interval, 15_000) : interval;
         timer = setTimeout(() => void load(), pollDelay(nextInterval, failures, failure));
       }
       // Notify every observed change, even when React batches multiple polling updates.

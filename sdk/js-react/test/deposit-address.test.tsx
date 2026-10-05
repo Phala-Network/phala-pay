@@ -274,6 +274,21 @@ describe("DepositAddress payments", () => {
     expect(fetch).toHaveBeenCalledTimes(203);
   });
 
+  it("keeps a 30-second interval after ten idle minutes instead of speeding up", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(() => Promise.resolve(Response.json(view([]))));
+    vi.stubGlobal("fetch", fetch);
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={30000} />);
+    await act(() => vi.advanceTimersByTimeAsync(600_000));
+    expect(fetch).toHaveBeenCalledTimes(21);
+    await act(() => vi.advanceTimersByTimeAsync(29_999));
+    expect(fetch).toHaveBeenCalledTimes(21);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetch).toHaveBeenCalledTimes(22);
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetch).toHaveBeenCalledTimes(23);
+  });
+
   it("restarts the ten-minute idle window when any observed view field changes", async () => {
     vi.useFakeTimers();
     let served = view([], [clientNetwork(11155111)]);
