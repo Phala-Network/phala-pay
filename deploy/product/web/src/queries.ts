@@ -3,7 +3,6 @@
 
 import { QueryClient, skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ApiError,
   cancelRefund,
   createDepositAddress,
   createQuote,
@@ -15,14 +14,15 @@ import {
   getTimeline,
   getTrust,
   markRefundPaid,
+  isTerminalApiError,
   type Selection,
 } from "./api.js";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // The product's refusals (4xx) are answers, not outages: only other failures are retried.
-      retry: (failures, error) => !(error instanceof ApiError && error.status < 500) && failures < 2,
+      // Permanent client refusals are answers, not outages; timeouts and rate limits can recover.
+      retry: (failures, error) => !isTerminalApiError(error) && failures < 2,
     },
     mutations: { retry: false },
   },
@@ -43,20 +43,31 @@ export function useAccount() {
   return useQuery({
     queryKey: keys.account,
     queryFn: ({ signal }) => getAccount(signal),
-    refetchInterval: (query) => query.state.data?.payments.some((payment) =>
-      !["credited", "expired", "canceled", "rejected", "reversed"].includes(payment.status),
-    ) ? 4000 : 15_000,
+    refetchInterval: (query) => isTerminalApiError(query.state.error) ? false :
+      query.state.data?.payments.some((payment) =>
+        !["credited", "expired", "canceled", "rejected", "reversed"].includes(payment.status),
+      ) ? 4000 : 15_000,
   });
 }
 
 /** The networks, and their tokens, a customer can pay with; the service's config changes rarely. */
 export function useNetworks() {
-  return useQuery({ queryKey: keys.networks, queryFn: ({ signal }) => getNetworks(signal), staleTime: 5 * 60_000 });
+  return useQuery({
+    queryKey: keys.networks,
+    queryFn: ({ signal }) => getNetworks(signal),
+    staleTime: 5 * 60_000,
+    refetchInterval: (query) => query.state.status === "error" && !isTerminalApiError(query.state.error) ? 15_000 : false,
+  });
 }
 
 /** The service's attestation, checked by the product (cached there for 5 minutes). */
 export function useTrust() {
-  return useQuery({ queryKey: keys.trust, queryFn: ({ signal }) => getTrust(signal), staleTime: 5 * 60_000 });
+  return useQuery({
+    queryKey: keys.trust,
+    queryFn: ({ signal }) => getTrust(signal),
+    staleTime: 5 * 60_000,
+    refetchInterval: (query) => query.state.status === "error" && !isTerminalApiError(query.state.error) ? 15_000 : false,
+  });
 }
 
 /** The followed payment's timeline, live. */
@@ -65,6 +76,9 @@ export function useTimeline(selection: Selection | null) {
     queryKey: keys.timeline(selection),
     queryFn: selection === null ? skipToken : ({ signal }) => getTimeline(selection, signal),
     refetchInterval: (query) => {
+      if (isTerminalApiError(query.state.error)) {
+        return false;
+      }
       const timeline = query.state.data;
       // Marked-paid refunds stay pending until their transfer is verified at finality.
       if (timeline?.refunds.some((refund) => !["succeeded", "failed", "canceled"].includes(refund.status))) {
@@ -93,9 +107,10 @@ export function useDepositAddress(enabled: boolean) {
     queryKey: keys.depositAddress,
     queryFn: ({ signal }) => getDepositAddress(signal),
     enabled,
-    refetchInterval: (query) => query.state.data?.deposit_address.payments.some((payment) =>
-      !["credited", "rejected", "reversed"].includes(payment.status),
-    ) ? 3000 : 15_000,
+    refetchInterval: (query) => isTerminalApiError(query.state.error) ? false :
+      query.state.data?.deposit_address.payments.some((payment) =>
+        !["credited", "rejected", "reversed"].includes(payment.status),
+      ) ? 3000 : 15_000,
   });
 }
 

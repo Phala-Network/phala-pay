@@ -46,22 +46,32 @@ const STACKED = {
 
 export function Backend({
   account,
+  accountError,
   selected,
   timeline,
+  timelineError,
   trust,
+  trustError,
   address,
+  addressError,
   networks,
+  networksError,
   onSelect,
 }: {
   account: Account | null;
+  accountError: string | null;
   selected: Selection | null;
   timeline: Timeline | null;
+  timelineError: string | null;
   trust: Trust | null;
+  trustError: string | null;
   address: DepositAddressResponse | null;
+  addressError: string | null;
   networks: Network[] | undefined;
+  networksError: string | null;
   onSelect: (selection: Selection) => void;
 }) {
-  const live = timeline?.steps.some((step) => step.state === "current") ?? selected !== null;
+  const live = timelineError === null && (timeline?.steps.some((step) => step.state === "current") ?? selected !== null);
   const order = timeline?.quote?.metadata["order_id"];
   const deposit = timeline?.deposit ?? null;
   return (
@@ -86,7 +96,7 @@ export function Backend({
               {live && <span className="absolute inset-0 rounded-full bg-success/60 motion-safe:animate-ping" />}
               <span className={cn("relative size-2 rounded-full", live ? "bg-success" : "bg-muted-foreground/50")} />
             </span>
-            {selected === null ? "Idle" : live ? "Live" : "Done"}
+            {selected === null ? "Idle" : timelineError !== null ? "Unavailable" : live ? "Live" : "Done"}
           </Badge>
           {selected !== null && (
             <dl className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
@@ -100,7 +110,7 @@ export function Backend({
             least its height, so an empty tab centres its message in the space left. */}
         <ScrollArea className="lg:min-h-0 lg:flex-1 [&_[data-slot=scroll-area-viewport]>div]:flex! [&_[data-slot=scroll-area-viewport]>div]:min-h-full [&_[data-slot=scroll-area-viewport]>div]:flex-col">
           <div className="px-3 py-3" aria-live="off">
-            <EventStream timeline={timeline} loading={selected?.id ?? null} />
+            <EventStream timeline={timeline} loading={selected?.id ?? null} error={timelineError} />
           </div>
           <Tabs defaultValue="credits" className="flex-1 gap-0 border-t">
             <TabsList
@@ -123,13 +133,18 @@ export function Backend({
               <Tab value="trust">Trust</Tab>
             </TabsList>
             <TabsContent value="credits" className="flex flex-col p-5">
-              <CreditsTab
-                account={account}
-                selected={selected}
-                address={address}
-                networks={networks}
-                onSelect={onSelect}
-              />
+              {addressError !== null && <p className="text-xs text-muted-foreground" role="status">{addressError}</p>}
+              {accountError !== null ? (
+                <p className="text-xs text-muted-foreground" role="status">{accountError}</p>
+              ) : (
+                <CreditsTab
+                  account={account}
+                  selected={selected}
+                  address={address}
+                  networks={networks}
+                  onSelect={onSelect}
+                />
+              )}
             </TabsContent>
             <TabsContent value="refunds" className="p-5">
               {timeline === null || deposit === null || account === null ? (
@@ -155,7 +170,7 @@ export function Backend({
               )}
             </TabsContent>
             <TabsContent value="trust" className="p-5">
-              <TrustDetails trust={trust} networks={networks} />
+              <TrustDetails trust={trust} trustError={trustError} networks={networks} networksError={networksError} />
             </TabsContent>
           </Tabs>
         </ScrollArea>
@@ -542,7 +557,12 @@ function MetadataJson({ metadata }: { metadata: Record<string, string> }) {
   );
 }
 
-function TrustDetails({ trust, networks }: { trust: Trust | null; networks: Network[] | undefined }) {
+function TrustDetails({ trust, trustError, networks, networksError }: {
+  trust: Trust | null;
+  trustError: string | null;
+  networks: Network[] | undefined;
+  networksError: string | null;
+}) {
   const attestation = trust?.attestation;
   const evidence = trust?.tls_evidence;
   return (
@@ -564,7 +584,7 @@ function TrustDetails({ trust, networks }: { trust: Trust | null; networks: Netw
       <div className="grid gap-3 @4xl/console:grid-cols-3">
         <TrustItem icon={<ShieldCheck />} title="Attestation">
           {attestation === undefined ? (
-            <p className="text-muted-foreground">Loading…</p>
+            <p className="text-muted-foreground" role="status">{trustError ?? "Loading…"}</p>
           ) : attestation.binding_verified ? (
             <p className="text-muted-foreground">
               <span className="font-medium text-success">Verified</span> for a fresh nonce: the TDX quote's report data
@@ -605,7 +625,7 @@ function TrustDetails({ trust, networks }: { trust: Trust | null; networks: Netw
             no transactions: the merchant sweeps and refunds itself.
           </p>
           <p className="text-muted-foreground">
-            {networks === undefined ? "Networks: loading…" : `Networks: ${networks.map((each) => each.name).join(", ")}`}
+            {networks === undefined ? networksError ?? "Networks: loading…" : `Networks: ${networks.map((each) => each.name).join(", ")}`}
           </p>
         </TrustItem>
       </div>

@@ -50,6 +50,7 @@ export function Product({
   account,
   accountError,
   networks,
+  networksError,
   method,
   onMethodChange,
   session,
@@ -63,6 +64,7 @@ export function Product({
   account: Account | null;
   accountError: string | null;
   networks: Network[] | undefined;
+  networksError: string | null;
   method: Method;
   onMethodChange: (method: Method) => void;
   session: CreatedQuote | null;
@@ -94,6 +96,7 @@ export function Product({
   const picker = (
     <PaymentOptions
       networks={networks}
+      networksError={networksError}
       network={network}
       asset={asset}
       onNetworkChange={(chainId) => setChoice({ chainId, asset: null })}
@@ -150,62 +153,63 @@ export function Product({
                 aria-labelledby="balance-title"
                 data-testid="balance"
               >
-                {account === null ? <Skeleton className="h-9 w-32" /> : dollars(account.balance)}
+                {account === null
+                  ? accountError === null ? <Skeleton className="h-9 w-32" /> : <span className="text-sm font-normal text-muted-foreground">Unavailable</span>
+                  : dollars(account.balance)}
               </div>
             </div>
           </div>
           {accountError !== null && (
-            <Alert variant="destructive">
-              <CircleAlert aria-hidden="true" />
-              <AlertDescription>Could not load the account: {accountError}</AlertDescription>
-            </Alert>
+            <p className="text-sm text-muted-foreground" role="status">{accountError}</p>
           )}
           <Separator />
           <section aria-labelledby="pay-title" className="flex flex-col gap-4">
             <h3 id="pay-title" className="text-base font-semibold">
               Add credits
             </h3>
-            <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
-              <TabsList aria-label="Payment method" className="w-full">
-                {METHODS.map(({ id, label }) => (
-                  <TabsTrigger key={id} value={id}>
-                    {label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-              <TabsContent value="quote" className="pt-4">
-                {session === null || account === null ? (
-                  <AmountPicker account={account} network={network} asset={asset} picker={picker} onQuote={onQuote} />
-                ) : (
-                  <QuoteCheckout
-                    key={session.quote}
-                    session={session}
-                    account={account}
-                    network={networkOf(networks, session.chain_id)}
-                    appearance={appearance}
-                    onCredited={onCredited}
-                    onNewTopUp={onNewTopUp}
-                  />
-                )}
-              </TabsContent>
-              <TabsContent value="address" className="pt-4">
-                {account === null ? (
-                  <CheckoutSkeleton />
-                ) : (
-                  <DepositAddressPanel
-                    account={account}
-                    picker={picker}
-                    network={network}
-                    asset={asset}
-                    appearance={appearance}
-                    created={address}
-                    onCreated={onAddress}
-                    sendAmount={sendAmount}
-                    onSendAmountChange={setSendAmount}
-                  />
-                )}
-              </TabsContent>
-            </Tabs>
+            {(account !== null || accountError === null) && (
+              <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
+                <TabsList aria-label="Payment method" className="w-full">
+                  {METHODS.map(({ id, label }) => (
+                    <TabsTrigger key={id} value={id}>
+                      {label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+                <TabsContent value="quote" className="pt-4">
+                  {session === null || account === null ? (
+                    <AmountPicker account={account} network={network} asset={asset} picker={picker} onQuote={onQuote} />
+                  ) : (
+                    <QuoteCheckout
+                      key={session.quote}
+                      session={session}
+                      account={account}
+                      network={networkOf(networks, session.chain_id)}
+                      appearance={appearance}
+                      onCredited={onCredited}
+                      onNewTopUp={onNewTopUp}
+                    />
+                  )}
+                </TabsContent>
+                <TabsContent value="address" className="pt-4">
+                  {account === null ? (
+                    <CheckoutSkeleton />
+                  ) : (
+                    <DepositAddressPanel
+                      account={account}
+                      picker={picker}
+                      network={network}
+                      asset={asset}
+                      appearance={appearance}
+                      created={address}
+                      onCreated={onAddress}
+                      sendAmount={sendAmount}
+                      onSendAmountChange={setSendAmount}
+                    />
+                  )}
+                </TabsContent>
+              </Tabs>
+            )}
           </section>
         </div>
       </section>
@@ -312,12 +316,14 @@ function CheckoutSkeleton() {
  */
 function PaymentOptions({
   networks,
+  networksError,
   network,
   asset,
   onNetworkChange,
   onAssetChange,
 }: {
   networks: Network[] | undefined;
+  networksError: string | null;
   network: Network | undefined;
   asset: Asset | undefined;
   onNetworkChange: (chainId: number) => void;
@@ -325,6 +331,9 @@ function PaymentOptions({
 }) {
   const id = useId();
   if (networks === undefined) {
+    if (networksError !== null) {
+      return <p className="text-sm text-muted-foreground" role="status">{networksError}</p>;
+    }
     return (
       <div className="space-y-6" aria-hidden="true">
         <Skeleton className="h-10 w-full rounded-lg" />

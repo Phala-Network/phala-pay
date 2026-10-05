@@ -84,7 +84,7 @@ const PREVIEW: StepKey[] = ["quote_created", "sent", "received", "credited", "we
  * The payment's steps as a compact live log: one line per step, with its status and its real
  * time; each line opens to what it waits for and its data.
  */
-export function EventStream({ timeline, loading }: { timeline: Timeline | null; loading: string | null }) {
+export function EventStream({ timeline, loading, error }: { timeline: Timeline | null; loading: string | null; error: string | null }) {
   const networks = useNetworks().data;
   // The payment's own chain and token, for its amounts and links.
   const chainId = timeline?.deposit?.chain_id ?? timeline?.quote?.chain_id;
@@ -112,6 +112,9 @@ export function EventStream({ timeline, loading }: { timeline: Timeline | null; 
     );
   }
   if (timeline === null) {
+    if (error !== null) {
+      return <p className="px-2 text-sm text-muted-foreground" role="status">{error}</p>;
+    }
     return (
       <ol className="flex flex-col" aria-label={`Loading ${short(loading)}`} aria-busy="true">
         {PREVIEW.map((key) => (

@@ -317,6 +317,12 @@ export class ApiError extends Error {
   }
 }
 
+/** Timeouts and rate limits can recover; other client refusals need a different request. */
+export function isTerminalApiError(error: unknown): boolean {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500 &&
+    error.status !== 408 && error.status !== 429;
+}
+
 const API = `${import.meta.env.VITE_DEMO_API_ORIGIN}/api/`;
 
 // Cross-origin with the visitor's demo account cookie, which the API allows only for the website.
