@@ -7,15 +7,17 @@ import json
 import time
 import zlib
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from phala_pay import PhalaPay, Pins
-from topup_sdk import deposit_address, quote_address, sign_webhook
+from topup_sdk import TopupClient, deposit_address, quote_address, sign_webhook
 
 API_KEY = "ppay_sk_test_" + "B" * 43 + "000000"
 SERVICE_KEY = Ed25519PrivateKey.from_private_bytes(bytes([9] * 32))
@@ -239,9 +241,8 @@ def pay(handler: Callable[[httpx.Request], httpx.Response], **options: Any) -> P
     hooks: dict[str, Any] = {
         key: options.pop(key) for key in ("clock", "sleep", "rng", "wall_clock") if key in options
     }
-    return PhalaPay._with_test_hooks(
-        KEY, hooks=hooks, pins=pins(), transport=httpx.MockTransport(handler), **options
-    )
+    with mock.patch("phala_pay._client.TopupClient", partial(TopupClient, **hooks)):
+        return PhalaPay(KEY, pins=pins(), transport=httpx.MockTransport(handler), **options)
 
 
 def record_response(

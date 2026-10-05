@@ -6,7 +6,6 @@ import math
 import os
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from functools import partial
 from pathlib import Path
 from typing import Any, TypedDict, Unpack, cast
 from weakref import ReferenceType, ref
@@ -94,21 +93,6 @@ class PhalaPay:
     `code`, `param`, `doc_url`, and `request_id`.
     """
 
-    _client_factory: Callable[..., TopupClient] = TopupClient
-
-    @classmethod
-    def _with_test_hooks(
-        cls,
-        api_key: str,
-        *,
-        hooks: Mapping[str, Any],
-        **options: Any,
-    ) -> PhalaPay:
-        client = cls.__new__(cls)
-        client._client_factory = partial(TopupClient, **hooks)
-        cls.__init__(client, api_key, **options)
-        return client
-
     def __init__(  # noqa: PLR0912, PLR0915
         self,
         api_key: str,
@@ -167,7 +151,7 @@ class PhalaPay:
             forwarder = (self._pins.factory, self._pins.implementation)
             treasuries = self._pins.treasuries
             account = self._pins.account
-        self._client = self._client_factory(
+        self._client = TopupClient(
             api_base,
             api_key,
             account=cast(str | None, account),
