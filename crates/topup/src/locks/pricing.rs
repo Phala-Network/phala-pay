@@ -760,14 +760,13 @@ mod tests {
             self.task.abort();
         }
     }
-    async fn regression_rpc(answer: i64) -> RegressionRpc {
+    async fn regression_rpc(answer: i64, now: u64) -> RegressionRpc {
         use alloy::sol_types::SolCall;
         use alloy_primitives::{B256, I256, U256, Uint};
         use axum::{Json, Router, routing::post};
         use topup_adapters::pricing::chainlink::{
             decimalsCall, latestRoundDataCall, latestRoundDataReturn,
         };
-        let now = validation_time().unwrap().value();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let handler = move |Json(request): Json<Value>| async move {
@@ -822,8 +821,9 @@ mod tests {
     #[tokio::test]
     async fn runtime_reads_the_reversed_pair_validation_approved() {
         let route = reversed_group_route();
-        let a = regression_rpc(101_000_000).await;
-        let b = regression_rpc(100_000_000).await;
+        let now = validation_time().unwrap().value();
+        let a = regression_rpc(101_000_000, now).await;
+        let b = regression_rpc(100_000_000, now).await;
         let RegressionConfig {
             groups,
             companies,
