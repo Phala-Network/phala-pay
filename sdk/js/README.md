@@ -68,7 +68,8 @@ mode".
 
 Checkout and React deposit-address polling apply uniform ±20% jitter to normal intervals and
 failure backoff, while respecting `Retry-After`. Hidden tabs pause polling and read immediately
-when visible again; the checkout core also works without `document`. `pollInterval` sets the
+when visible again. Jittered delays are capped at 30 seconds; a longer `Retry-After` remains
+a minimum. The checkout core also works without `document`. `pollInterval` sets the
 normal polling interval. Explicit `checkout.refresh()` still reads immediately while hidden,
 including the post-broadcast refresh used by `<Checkout>`.
 `pollInterval` is in milliseconds (default 3000). Other than 408/429, non-terminal 4xx responses

@@ -100,7 +100,8 @@ export function responseError(response: Response, notFound: string): CheckoutErr
 }
 
 /**
- * The next read's delay with uniform ±20% jitter, at least what `error` asks via Retry-After.
+ * The next read's delay with uniform ±20% jitter capped at MAX_BACKOFF after jitter.
+ * Retry-After remains a minimum, even when it asks for longer than the backoff cap.
  * `random` defaults to Math.random and can be injected for deterministic tests.
  */
 export function pollDelay(
@@ -111,7 +112,8 @@ export function pollDelay(
 ): number {
   const backoff = failures === 0 ? interval : Math.min(interval * 2 ** failures, MAX_BACKOFF);
   const retryAfter = (error?.retryAfter ?? 0) * 1000;
-  return Math.max(Math.max(backoff, retryAfter) * (0.8 + 0.4 * random()), retryAfter);
+  const jittered = Math.max(backoff, retryAfter) * (0.8 + 0.4 * random());
+  return Math.max(Math.min(jittered, MAX_BACKOFF), retryAfter);
 }
 
 export interface CheckoutState {

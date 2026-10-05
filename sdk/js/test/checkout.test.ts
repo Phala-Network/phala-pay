@@ -272,7 +272,7 @@ describe("pollDelay", () => {
       for (const sample of [0, 0.25, 0.5, 0.75, 1]) {
         const random = vi.fn(() => sample);
         const delay = pollDelay(interval, failures, null, random);
-        expect(delay).toBeCloseTo(base * (0.8 + 0.4 * sample));
+        expect(delay).toBeCloseTo(Math.min(base * (0.8 + 0.4 * sample), 30_000));
         expect(random).toHaveBeenCalledTimes(1);
       }
     },
@@ -281,7 +281,13 @@ describe("pollDelay", () => {
   it("never retries before Retry-After, including with negative jitter", () => {
     const error = new CheckoutError("rate_limited", "limited", { retryAfter: 30 });
     expect(pollDelay(1000, 1, error, () => 0)).toBe(30_000);
-    expect(pollDelay(1000, 1, error, () => 1)).toBeCloseTo(36_000);
+    expect(pollDelay(1000, 1, error, () => 1)).toBe(30_000);
+  });
+
+  it("caps positive jitter at 30 seconds while honoring a longer Retry-After", () => {
+    expect(pollDelay(3000, 10, null, () => 1)).toBe(30_000);
+    const error = new CheckoutError("rate_limited", "limited", { retryAfter: 60 });
+    expect(pollDelay(3000, 10, error, () => 1)).toBe(60_000);
   });
 });
 
