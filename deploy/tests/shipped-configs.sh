@@ -10,7 +10,7 @@ cd "$root"
 mapfile -d '' -t configs < <(git ls-files -z 'deploy/environments/**/topup.yaml' 'examples/*.yaml')
 for config in "${configs[@]}"; do
     echo "Checking shipped config: $config"
-    if [[ "$config" == examples/* ]] && rg -q '^route:' "$config"; then
+    if [[ "$config" == examples/* ]] && grep -q '^route:' "$config"; then
         "$TOPUP" route validate --template "$config"
     else
         "$TOPUP" config check "$config"
