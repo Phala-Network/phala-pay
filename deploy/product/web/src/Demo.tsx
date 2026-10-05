@@ -33,6 +33,32 @@ function DemoContent({ theme }: { theme: Theme }) {
   const timelineError = timeline.isError && timeline.data === undefined ? queryErrorMessage(timeline.error, "Timeline is") : null;
   const addressError = current.isError && current.data === undefined ? queryErrorMessage(current.error, "Deposit address is") : null;
 
+  // Server-side settlement moves the balance and address view without a customer mutation.
+  const observedTimeline = useRef<{ key: string; signature: string } | null>(null);
+  useEffect(() => {
+    if (selected === null || timeline.data === undefined) {
+      observedTimeline.current = null;
+      return;
+    }
+    const deposit = timeline.data.deposit;
+    const signature = JSON.stringify([
+      deposit?.status,
+      deposit?.swept,
+      deposit?.final,
+      deposit?.amount_refunded_atomic,
+      [...timeline.data.refunds].sort((left, right) => left.id.localeCompare(right.id))
+        .map((refund) => [refund.id, refund.status]),
+    ]);
+    const key = `${selected.kind}:${selected.id}`;
+    const previous = observedTimeline.current;
+    observedTimeline.current = { key, signature };
+    if (previous === null || previous.key !== key || previous.signature === signature) {
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: keys.account });
+    void queryClient.invalidateQueries({ queryKey: keys.depositAddress });
+  }, [selected, timeline.data, queryClient]);
+
   // A new payment to the deposit address is followed as it arrives, as a quote is once created.
   const seenPayments = useRef<Set<string> | null>(null);
   useEffect(() => {
