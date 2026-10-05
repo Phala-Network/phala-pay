@@ -131,7 +131,7 @@ rpc_groups:
     - id: provider-b
       company: publicnode
       url: https://ethereum-sepolia-rpc.publicnode.com
-      account_budget: price-mainnet-mevblocker-account
+      account_budget: publicnode-account
       key_budget: provider-b-key
     - id: ethpandaops-sepolia-b
       company: ethereum-foundation
