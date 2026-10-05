@@ -12,12 +12,12 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/js-server/src/index.d.ts",
-      "default": "./dist/js-server/src/index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./helpers": {
-      "types": "./dist/js-server/src/helpers.d.ts",
-      "default": "./dist/js-server/src/helpers.js"
+      "types": "./dist/helpers.d.ts",
+      "default": "./dist/helpers.js"
     }
   },
   "files": [

@@ -1,5 +1,5 @@
 import { requireServer, serverEnv } from "./runtime.js";
-import type { CheckoutParams } from "../../js/src/shared/checkout-params.js";
+import type { CheckoutParams } from "./checkout-params.js";
 import type { Quote, Deposit, EventObjectResponse } from "./types.js";
 import {
   ConfigurationError,

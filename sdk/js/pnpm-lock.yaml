@@ -206,9 +206,6 @@ importers:
       jsqr:
         specifier: ^1.4.0
         version: 1.4.0
-      openapi-typescript:
-        specifier: 7.13.0
-        version: 7.13.0(typescript@6.0.3)
       react:
         specifier: ^19.3.0
         version: 19.3.0

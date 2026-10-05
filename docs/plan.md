@@ -48,6 +48,7 @@ decisions are the [design](design/multi-tenant.md) (§16 is its PR plan), and th
 | Production R2 bucket and keys for WAL-G | Ops | open |
 | Production Phala Cloud workspace and API key for the CVM (`production` Environment) | Ops | open |
 | Production admin key (the operator's RFC 9421 key) | Operator | open |
+| `TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` secret and `TOPUP_MAINTENANCE_KEY_ID` variable in the production Environment, matching the attested `maintenance_keys` entry; separate from the full admin key ([planned upgrades](../deploy/README.md#planned-upgrade-admission-and-downtime)) | Operator / Ops | open |
 | Sentry quota for production | Ops | open |
 | DNS for Phala's production domain, `pay-api.phala.com` (CNAME and `_dstack-app-address` TXT) | Ops | open |
 | Route defaults in architecture §14 (minimum deposit 0, minimum credit $1, 4 quote decimals, deposit bounds, open exposure caps) and Phala Cloud's `max_unfinalized_credit` (default $1 000) | Finance | to confirm |

@@ -1,6 +1,15 @@
 # Zero-downtime planned upgrades
 
-Status: Proposed
+Status: Not adopted (owner: no second CVM, 2026-10-05)
+
+## Implemented instead
+
+Planned upgrades use maintenance admission control (`503 service_maintenance` with `Retry-After`)
+and opt-in SDK upgrade tolerance, implemented in [#336](https://github.com/Phala-Network/phala-pay/pull/336)
+and [#339](https://github.com/Phala-Network/phala-pay/pull/339). The deployment reference's
+[planned-upgrade section](../../deploy/README.md#planned-upgrade-admission-and-downtime) describes
+the single-CVM procedure and its downtime. The proposal below remains a record of the option
+that was not adopted.
 
 ## Decision and scope
 
