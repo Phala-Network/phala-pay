@@ -87,10 +87,14 @@ export function useTimeline(selection: Selection | null) {
       if (timeline?.deposit?.status === "credited" && timeline.deposit.swept) {
         return false;
       }
-      if (timeline?.deposit === null && timeline.quote !== null &&
-          (["expired", "canceled"].includes(timeline.quote.status) ||
-           (timeline.quote.status === "open" && Date.now() >= timeline.quote.expires_at * 1000))) {
-        return false;
+      if (timeline?.deposit === null && timeline.sent === null && timeline.quote !== null) {
+        if (timeline.quote.status === "canceled") {
+          return false;
+        }
+        if (timeline.quote.status === "expired" ||
+            (timeline.quote.status === "open" && Date.now() >= timeline.quote.expires_at * 1000)) {
+          return 30_000;
+        }
       }
       const inFlight = timeline?.deposit != null
         ? !["credited", "rejected", "reversed"].includes(timeline.deposit.status)

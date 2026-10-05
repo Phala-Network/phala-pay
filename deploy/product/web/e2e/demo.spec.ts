@@ -16,6 +16,7 @@ import {
   type Hash,
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
+import type { Timeline } from "../src/api.js";
 
 declare global {
   interface Window {
@@ -392,6 +393,50 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
   await page.clock.runFor(30_000);
   expect(timelineReads).toBe(reads);
 });
+
+for (const sent of [false, true]) {
+  test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page }) => {
+    let reads = 0;
+    await page.clock.install();
+    await page.route("**/api/quotes/*", async (route) => {
+      reads += 1;
+      const timeline: Timeline = {
+        kind: "quote",
+        quote: {
+          id: new URL(route.request().url()).pathname.split("/").at(-1) ?? "",
+          status: sent ? "open" : "expired",
+          chain_id: sepolia.id,
+          asset: "pha",
+          exchange_rate: "0.25",
+          expires_at: 1,
+          metadata: {},
+        },
+        deposit: null,
+        sent: sent ? { tx_hash: `0x${"1".repeat(64)}`, block_number: 1, at: 1 } : null,
+        steps: [{ key: "sent", state: sent ? "current" : "failed", at: null, details: [] }],
+        refunds: [], ledger: null, events: [], api: [],
+      };
+      await route.fulfill({
+        json: timeline,
+        headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+      });
+    });
+    await page.goto(env("SITE_URL"));
+    const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+    await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+    await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
+    await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+    const initial = reads;
+    await page.clock.runFor(10_000);
+    if (sent) {
+      expect(reads).toBeGreaterThan(initial);
+    } else {
+      expect(reads).toBe(initial);
+      await page.clock.runFor(30_000);
+      expect(reads).toBeGreaterThan(initial);
+    }
+  });
+}
 
 test("a quote: locked price, metadata, the merchant's sweep, and refunds that succeed, fail, or are canceled", async ({
   page,
