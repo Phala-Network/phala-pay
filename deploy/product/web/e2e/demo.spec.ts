@@ -331,6 +331,68 @@ async function declareRefund(scenes: Locator, amount: string): Promise<Locator> 
   return refund;
 }
 
+test("query outages show retrying states, recover, and preserve the last account data", async ({ page }) => {
+  let available = false;
+  let accountReads = 0;
+  await page.route("**/api/{account,assets,trust}", async (route) => {
+    if (route.request().url().endsWith("/account")) {
+      accountReads += 1;
+    }
+    if (available) {
+      await route.continue();
+    } else {
+      await route.fulfill({
+        status: 503,
+        json: { code: "service_unavailable" },
+        headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+      });
+    }
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await expect(product).toContainText("Account is unavailable right now; retrying…", { timeout: 15_000 });
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  const trust = await openTab(scenes, "Trust");
+  await expect(trust).toContainText("Trust information is unavailable right now; retrying…");
+  await expect(trust).toContainText("Networks are unavailable right now; retrying…");
+
+  available = true;
+  await expect(product.getByTestId("balance")).toHaveText("$0.00", { timeout: 25_000 });
+  await expect(product.getByLabel("Network", { exact: true })).toBeEnabled({ timeout: 25_000 });
+  await expect(trust).toContainText("Attestation verified", { timeout: 25_000 });
+  await expect(trust).not.toContainText("retrying…");
+
+  const reads = accountReads;
+  available = false;
+  await expect.poll(() => accountReads, { timeout: 25_000 }).toBeGreaterThan(reads);
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  await expect(product).not.toContainText("Account is unavailable");
+});
+
+test("a missing timeline shows a terminal message and stops polling", async ({ page }) => {
+  let timelineReads = 0;
+  await page.clock.install();
+  await page.route("**/api/quotes/*", async (route) => {
+    timelineReads += 1;
+    await route.fulfill({
+      status: 404,
+      json: { code: "not_found" },
+      headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+    });
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  await expect(scenes).toContainText("Timeline is unavailable for this request.");
+  await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  await expect(scenes.getByTestId("stream-status")).toHaveText("Unavailable");
+  await expect(scenes.getByRole("list", { name: /^Loading/ })).toHaveCount(0);
+  const reads = timelineReads;
+  await page.clock.runFor(30_000);
+  expect(timelineReads).toBe(reads);
+});
+
 test("a quote: locked price, metadata, the merchant's sweep, and refunds that succeed, fail, or are canceled", async ({
   page,
   context,
@@ -592,25 +654,37 @@ test("a deposit address: one verified address, any amount credited at spot, then
   await expect(testTokens).toContainText("Minted:");
   const form = product.getByRole("form", { name: "Pay to the deposit address from a browser wallet" });
   await form.getByLabel(/^Send from your browser wallet/).fill("25");
-  await form.getByRole("button", { name: "Send" }).click();
-  await expect(form).toContainText("Sent: 0x");
-
-  // The backend follows the payment as it arrives.
-  const payment = scenes.getByTestId("address-payment").first();
-  await expect(payment).toContainText("25 PHA");
-  await expect(payment.getByRole("button", { name: /^View/ })).toHaveAttribute("aria-pressed", "true");
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
-  await expectComplete(timeline, ["sent", "received", "credited", "webhook_received"]);
+  const mining = async (state: "pause" | "resume") => {
+    expect((await fetch(`${env("SERVICE_URL")}/_test/mining/${state}`, { method: "POST" })).status).toBe(200);
+  };
+  // Hold the payment before finality while the product's 15 s discovery read catches up.
+  await mining("pause");
+  try {
+    await form.getByRole("button", { name: "Send" }).click();
+    await expect(form).toContainText("Sent: 0x");
+    const chain = createTestClient({ mode: "anvil", chain: sepolia, transport: http(env("ANVIL_URL")) });
+    await chain.mine({ blocks: 1 });
 
-  // Before it is final, the service's finality watch proves the transaction dropped (here, the
-  // stand-in's test hook): deposit.reversed takes the credit back.
-  const deposit = await page.evaluate(async (api) => {
-    const response = await fetch(`${api}/api/deposit_address`, { credentials: "include" });
-    return ((await response.json()) as { deposit_address: { payments: { deposit: string }[] } }).deposit_address
-      .payments[0]?.deposit;
-  }, env("API_URL"));
-  const reversed = await fetch(`${env("SERVICE_URL")}/_test/deposits/${deposit ?? ""}/reverse`, { method: "POST" });
-  expect(reversed.status).toBe(200);
+    // The backend follows the payment as it arrives.
+    const payment = scenes.getByTestId("address-payment").first();
+    // The product discovers a new payment on its 15 s fallback read; then pending payments poll at 3 s.
+    await expect(payment).toContainText("25 PHA", { timeout: 20_000 });
+    await expect(payment.getByRole("button", { name: /^View/ })).toHaveAttribute("aria-pressed", "true");
+    await expectComplete(timeline, ["sent", "received", "credited", "webhook_received"]);
+
+    // Before it is final, the service's finality watch proves the transaction dropped (here, the
+    // stand-in's test hook): deposit.reversed takes the credit back.
+    const deposit = await page.evaluate(async (api) => {
+      const response = await fetch(`${api}/api/deposit_address`, { credentials: "include" });
+      return ((await response.json()) as { deposit_address: { payments: { deposit: string }[] } }).deposit_address
+        .payments[0]?.deposit;
+    }, env("API_URL"));
+    const reversed = await fetch(`${env("SERVICE_URL")}/_test/deposits/${deposit ?? ""}/reverse`, { method: "POST" });
+    expect(reversed.status).toBe(200);
+  } finally {
+    await mining("resume");
+  }
 
   // 25 PHA at 0.25 USD, credited at spot; the address's metadata arrived with the deposit.
   await openStep(timeline, "credited");
