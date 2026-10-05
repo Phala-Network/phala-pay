@@ -299,9 +299,11 @@ impl InstancePause {
             .await?;
             tx.commit().await
         };
+        // The audit commit may already have landed when this deadline expires. Its outcome is
+        // unknown, so this must not be classified as a pool acquisition timeout.
         tokio::time::timeout(std::time::Duration::from_secs(5), record)
             .await
-            .map_err(|_| sqlx::Error::PoolTimedOut)??;
+            .map_err(|_| sqlx::Error::Io(std::io::ErrorKind::TimedOut.into()))??;
         *lease = InstanceLease {
             owner: owner.to_owned(),
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(seconds),
@@ -315,6 +317,7 @@ impl InstancePause {
 #[cfg(test)]
 mod instance_tests {
     use super::*;
+    use axum::response::IntoResponse;
 
     #[tokio::test(start_paused = true)]
     async fn startup_pause_expires_without_a_health_probe_or_worker() {
@@ -342,7 +345,28 @@ mod instance_tests {
                 "test upgrade",
             )
             .await;
-        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            matches!(&error, sqlx::Error::Io(error) if error.kind() == std::io::ErrorKind::TimedOut)
+        );
+        let error = crate::api::error::ApiError::from(error);
+        assert_eq!(error.code(), "internal_error");
+        let response = error.into_response();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(
+            response
+                .extensions()
+                .get::<crate::api::error::NotExecuted>()
+                .is_none()
+        );
+        assert!(
+            !response
+                .headers()
+                .contains_key(axum::http::header::RETRY_AFTER)
+        );
         assert!(started.elapsed() <= std::time::Duration::from_secs(5));
         assert!(!pause.mutations_paused().await);
         pool.close().await;
