@@ -61,6 +61,9 @@ export class CheckoutError extends Error {
   }
 }
 
+// Response classification stays internal; consumers keep the existing CheckoutError contract.
+const nonRetryableClientErrors = new WeakSet<CheckoutError>();
+
 /**
  * The error of a failed read of a public view, with the response's `Request-Id` and, on `429`,
  * its `Retry-After`.
@@ -85,11 +88,15 @@ export function responseError(response: Response, notFound: string): CheckoutErr
       ...(Number.isFinite(seconds) && seconds > 0 ? { retryAfter: seconds } : {}),
     });
   }
-  return new CheckoutError(
+  const error = new CheckoutError(
     "api_error",
     `the payment service answered ${response.status}`,
     requestId,
   );
+  if (response.status >= 400 && response.status < 500 && response.status !== 408) {
+    nonRetryableClientErrors.add(error);
+  }
+  return error;
 }
 
 /**
@@ -243,6 +250,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
   let state: CheckoutState = { status: "loading", quote: null, error: null };
   let timer: ReturnType<typeof setTimeout> | undefined;
   let failures = 0;
+  let clientFailures = 0;
   let lastFailure: CheckoutError | null = null;
   let destroyed = false;
   let inFlight: Promise<void> | undefined;
@@ -283,6 +291,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
         return;
       }
       failures = 0;
+      clientFailures = 0;
       lastFailure = null;
       setState({ status: checkoutStatus(quote, now() / 1000), quote, error: null });
     } catch (cause) {
@@ -294,12 +303,15 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
           ? cause
           : new CheckoutError("network_error", "could not reach the payment service", { cause });
       failures += 1;
+      clientFailures = nonRetryableClientErrors.has(error) ? clientFailures + 1 : 0;
       lastFailure = error;
       const quote = state.quote;
       if (error.code === "address_mismatch") {
         // Fail closed: forget the quote, so nothing about its address is shown.
         setState({ status: "error", quote: null, error });
       } else if (error.code === "invalid_client_secret") {
+        setState({ status: "error", quote, error });
+      } else if (clientFailures >= 3) {
         setState({ status: "error", quote, error });
       } else if (error.code === "network_error" || error.code === "service_unavailable") {
         // Do not infer expiry or discard the payer's view while chain progress is unknown.
@@ -331,7 +343,9 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
     }
     const delay = pollDelay(interval, failures, lastFailure);
     timer = setTimeout(() => {
-      void refresh().then(schedule);
+      if (!finished()) {
+        void refresh().then(schedule);
+      }
     }, delay);
   }
 
