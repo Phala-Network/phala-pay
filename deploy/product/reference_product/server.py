@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from functools import partial
 from http import HTTPStatus
+from itertools import islice
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -392,7 +393,9 @@ class AccountApi:
         return Answer(HTTPStatus.NOT_FOUND)
 
     def _account_view(self, team: str) -> dict[str, Any]:
-        deposits = list(self._service().list_deposits(client_reference_id=team))
+        deposits = list(
+            islice(self._service().list_deposits(client_reference_id=team, page_size=100), 100)
+        )
         ids = {deposit.id for deposit in deposits}
         return {
             "account_id": team,
@@ -413,7 +416,7 @@ class AccountApi:
             ],
             "events": [
                 event
-                for event in self.ledger.all_events()
+                for event in self.ledger.events_for(ids | {team})
                 if (event["data"].get("object") or {}).get("id") in ids
                 or (event["data"].get("object") or {}).get("client_reference_id") == team
             ],

@@ -8,6 +8,7 @@ import sqlite3
 import sys
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -546,7 +547,10 @@ def test_account_api_requires_the_driver_key_and_valid_refs(
 
 def test_the_account_view_lists_the_workspaces_quote_events() -> None:
     class Service:
-        def list_deposits(self, *, client_reference_id: str) -> list[SimpleNamespace]:
+        def list_deposits(
+            self, *, client_reference_id: str, page_size: int
+        ) -> list[SimpleNamespace]:
+            assert page_size == 100
             return []
 
     fulfillment = _fulfillment()
@@ -955,3 +959,36 @@ def test_event_references_commit_with_the_delivery() -> None:
     with ledger.transaction() as db:
         ledger.record_delivery(db, delivery, "refund.created", data)
     assert ledger.events_for({"re_test", "dep_test"}) == [{"type": "refund.created", "data": data}]
+
+
+def test_account_view_bounds_deposits_and_avoids_global_event_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Service:
+        def list_deposits(
+            self, *, client_reference_id: str, page_size: int
+        ) -> Iterator[SimpleNamespace]:
+            assert client_reference_id == TEAM
+            assert page_size == 100
+            for index in range(100):
+                yield SimpleNamespace(id=f"dep_{index}", to_dict=lambda: {"object": "deposit"})
+            raise AssertionError("read beyond the newest 100 deposits")
+
+    fulfillment = _fulfillment()
+    for team in (TEAM, "team-2"):
+        assert (
+            fulfillment.handle(
+                *_delivery("quote.expired", {"id": f"qt_{team}", "client_reference_id": team})
+            ).status
+            == 204
+        )
+    api = AccountApi(CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()))
+    api._client = Service()  # type: ignore[assignment]
+
+    def global_events() -> list[dict[str, Any]]:
+        raise AssertionError("account view must query references")
+
+    monkeypatch.setattr(fulfillment.ledger, "all_events", global_events)
+    view = api._account_view(TEAM)
+    assert len(view["deposits"]) == 100
+    assert [event["data"]["object"]["id"] for event in view["events"]] == [f"qt_{TEAM}"]
