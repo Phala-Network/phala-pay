@@ -1073,8 +1073,8 @@ writes
 its actor.
 
 The attested `maintenance_keys` configuration holds a second, maintenance-only admin credential,
-separate from the operator's full admin key. Each entry names a key ID and Ed25519 public key;
-the private key is a deployment secret. It uses the same RFC 9421 signature verification and
+separate from the operator's full admin key. Each entry names a key ID (`id`) and Ed25519
+public key (`public_key`); the private key is a deployment secret. It uses the same RFC 9421 signature verification and
 replay protection, but authorizes only `POST /v1/admin/instance/pause` and
 `POST /v1/admin/instance/resume`. Every other admin route, including maintenance inspection,
 returns audited `403 permission_denied` for this credential. The full admin key still works.
@@ -1122,8 +1122,8 @@ GET    /v1/events?type&types[]&delivery_success&created[gt|gte|lt|lte]&limit&sta
 GET    /v1/events/{id}
 POST   /v1/events/{id}/resend {webhook_endpoint}                  deliver it again to an enabled endpoint
 
-POST   /v1/admin/instance/pause                              planned-upgrade mutation admission pause with owner and lease
-POST   /v1/admin/instance/resume                             release the owned maintenance pause
+GET|POST /v1/admin/instance/pause                              planned-upgrade mutation admission pause with owner and lease; GET reads the current pause (scopes, owner, expires_at)
+POST   /v1/admin/instance/resume                               release the owned maintenance pause
 POST   /v1/admin/accounts {name, contact, due_diligence, charges_enabled, reason}   + first keys
 GET    /v1/admin/accounts/{acct}                               the account, its caps, and its payment settings per mode
 POST   /v1/admin/accounts/{acct} {charges_enabled?, restricted?, contact?, max_unfinalized_credit?, reason}   enabling live → first live key
