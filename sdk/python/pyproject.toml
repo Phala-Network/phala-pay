@@ -1,6 +1,6 @@
 [project]
 name = "phala-pay"
-version = "0.9.1rc1"
+version = "0.9.1"
 description = "Phala Pay for Python: quotes, deposits, refunds, and webhooks"
 readme = "README.md"
 requires-python = ">=3.12"
