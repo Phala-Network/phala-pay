@@ -1,13 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PhalaPay, checkoutStatus, createCheckout, type CheckoutState } from "../src/index.js";
+import { CheckoutError, PhalaPay, checkoutStatus, createCheckout, pollDelay, type CheckoutSession, type CheckoutState } from "../src/index.js";
 import { ADDRESS, API_BASE, CLIENT_SECRET, QUOTE_ID, fakeFetch, quote } from "./fixtures.js";
 
 const NOW = (quote().expires_at - 600) * 1000;
+const sessions = new Set<CheckoutSession>();
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
 });
 afterEach(() => {
+  for (const session of sessions) session.destroy();
+  sessions.clear();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -21,10 +27,127 @@ function start(fetch: typeof globalThis.fetch) {
     pollInterval: 1000,
   });
   checkout.subscribe((state) => states.push(state));
+  sessions.add(checkout);
   return { checkout, states };
 }
 
 describe("createCheckout", () => {
+  it("jitters normal reads and failed-read backoff", async () => {
+    vi.mocked(Math.random).mockReturnValue(0);
+    const { fetch, calls } = fakeFetch(quote(), 503, quote());
+    const { checkout } = start(fetch);
+    await vi.advanceTimersByTimeAsync(799);
+    expect(calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1599);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toHaveLength(3);
+    expect(checkout.getState().reconnecting).toBeUndefined();
+  });
+
+  it("makes no hidden-tab requests and reads immediately on becoming visible", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const { fetch, calls } = fakeFetch(quote());
+    const { checkout } = start(fetch);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await checkout.refresh();
+    expect(calls).toHaveLength(0);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(1);
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toHaveLength(1);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls).toHaveLength(3);
+    checkout.destroy();
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("does not duplicate polls when visibility returns during an active read", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let respond: ((response: Response) => void) | undefined;
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { respond = resolve; }))
+      .mockImplementation(() => Promise.resolve(Response.json(quote())));
+    start(fetch);
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    respond?.(Response.json(quote()));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(fetch).toHaveBeenCalledTimes(5);
+  });
+
+  it("polls without a browser document", async () => {
+    vi.stubGlobal("document", undefined);
+    const { fetch, calls } = fakeFetch(quote());
+    start(fetch);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls).toHaveLength(3);
+  });
+
+  it.each([400, 401, 403, 409, 410, 422, 499])(
+    "stops after three consecutive %s responses using the existing error state",
+    async (status) => {
+      const initial = quote();
+      const { fetch, calls } = fakeFetch(initial, status);
+      const { checkout } = start(fetch);
+      await vi.advanceTimersByTimeAsync(6999);
+      expect(calls).toHaveLength(3);
+      expect(checkout.getState().status).toBe("waiting");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(checkout.getState()).toMatchObject({ status: "error", quote: initial, error: { code: "api_error" } });
+      await vi.advanceTimersByTimeAsync(120_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(4);
+    },
+  );
+
+  it("stops after three consecutive non-retryable 4xx responses before any quote is read", async () => {
+    const { fetch, calls } = fakeFetch(401, 403, 422);
+    const { checkout } = start(fetch);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(calls).toHaveLength(3);
+    expect(checkout.getState()).toMatchObject({ status: "error", quote: null, error: { code: "api_error" } });
+  });
+
+  it.each([408, 429, 503, 302, new TypeError("offline"), quote()])(
+    "resets consecutive client errors after %s",
+    async (interruption) => {
+      const { fetch, calls } = fakeFetch(401, 403, interruption, 401, 403, 422);
+      const { checkout } = start(fetch);
+      await vi.advanceTimersByTimeAsync(0);
+      for (let read = 0; read < 4; read += 1) await checkout.refresh();
+      expect(checkout.getState().status).not.toBe("error");
+      await checkout.refresh();
+      expect(checkout.getState().status).toBe("error");
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(calls).toHaveLength(6);
+    },
+  );
+
+  it.each([408, 429])("keeps polling repeated %s responses", async (status) => {
+    const { fetch, calls } = fakeFetch(status);
+    const { checkout } = start(fetch);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(calls.length).toBeGreaterThan(3);
+    expect(checkout.getState().status).not.toBe("error");
+  });
   it("retains payment state through a three-minute outage even past local expiry", async () => {
     const initial = quote({ payment_status: "seen", confirmations: 1, expires_at: NOW / 1000 + 30 });
     const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(() => {
@@ -120,6 +243,26 @@ describe("createCheckout", () => {
     checkout.destroy();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("pollDelay", () => {
+  it.each([[1000, 0, 1000], [1000, 1, 2000], [3000, 10, 30_000]])(
+    "keeps jitter between 80%% and 120%% for interval %s and %s failures",
+    (interval, failures, base) => {
+      for (const sample of [0, 0.25, 0.5, 0.75, 1]) {
+        const random = vi.fn(() => sample);
+        const delay = pollDelay(interval, failures, null, random);
+        expect(delay).toBeCloseTo(base * (0.8 + 0.4 * sample));
+        expect(random).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it("never retries before Retry-After, including with negative jitter", () => {
+    const error = new CheckoutError("rate_limited", "limited", { retryAfter: 30 });
+    expect(pollDelay(1000, 1, error, () => 0)).toBe(30_000);
+    expect(pollDelay(1000, 1, error, () => 1)).toBeCloseTo(36_000);
   });
 });
 

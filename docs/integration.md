@@ -589,6 +589,15 @@ renders exactly that from `address` and `networks` (pass only those and the `cli
 browser) and, with the secret, shows each payment as it arrives: "1.5 PHA received on Sepolia, 1
 confirmation", then "credited".
 
+Both React components pause polling in hidden tabs and read immediately on visibility regain,
+with uniform ±20% jitter on their normal intervals and failure backoff, respecting `Retry-After`.
+`DepositAddress` slows to a 15-second interval after ten minutes without a public-view change;
+any change or visibility regain resets that window and restores `pollInterval` (default 3000 ms).
+Optional `onChange(state)` receives the `ClientDepositAddress` view on its first read and once
+per content change, including confirmations and credit times. Use it to update your page without
+additional polling; credit from your webhook. Checkout uses its existing error state after three
+consecutive non-terminal 4xx responses other than 408/429; 404 still stops on the first response.
+
 ### 1.6 Treasuries
 
 Your treasury is the only address your forwarders can pay: one per chain and mode, an EOA or a
