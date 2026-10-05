@@ -16,7 +16,8 @@ import { Requests } from "./Timeline.js";
  * permissionless: whoever sends it pays the gas, and the funds can only reach the treasury.
  */
 export function Sweeps() {
-  const view = useSweeps().data ?? null;
+  const query = useSweeps();
+  const view = query.data ?? null;
   return (
     <div className="@container flex flex-col gap-5 text-xs">
       <p className="flex items-center gap-1.5 text-muted-foreground">
@@ -32,7 +33,7 @@ export function Sweeps() {
       </p>
       {view === null ? (
         <p className="text-muted-foreground" aria-busy="true">
-          Loading…
+          {query.isError ? "Sweeps are unavailable right now; retrying…" : "Loading…"}
         </p>
       ) : (
         <>
@@ -70,7 +71,10 @@ function SweepSection({ group }: { group: SweepGroup }) {
           {group.network}
         </span>
       </h3>
-      <div className="grid gap-6 @4xl:grid-cols-2 @4xl:gap-8">
+      {group.unavailable ? (
+        <p className="text-muted-foreground">Temporarily unavailable; retrying.</p>
+      ) : (
+        <div className="grid gap-6 @4xl:grid-cols-2 @4xl:gap-8">
         <div className="flex min-w-0 flex-col gap-4">
           <Details data-testid="unswept" className="tabular-nums">
             <Detail label="Unswept">{tokens(group.unswept_atomic, symbol, decimals)}</Detail>
@@ -142,7 +146,8 @@ function SweepSection({ group }: { group: SweepGroup }) {
             </Table>
           </div>
         )}
-      </div>
+        </div>
+      )}
     </section>
   );
 }

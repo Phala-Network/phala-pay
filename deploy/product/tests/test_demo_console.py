@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import threading
 import time
 from dataclasses import replace
 from http import HTTPStatus
@@ -231,6 +232,10 @@ class Service:
         self.wrong_address: str | None = None
         self.customer = "acct"
         self.requests: list[httpx.Request] = []
+        self.fail_sweeps: set[str] = set()
+        self.sweeps_block = False
+        self.sweeps_started = threading.Event()
+        self.sweeps_release = threading.Event()
         # Test PHA and a second token on the product's chain, and a token on a chain the
         # product's pins do not cover.
         self.assets = [
@@ -306,6 +311,9 @@ class Service:
             self.refunds[0].update(status="canceled")
             return httpx.Response(200, json=self.refunds[0])
         if path == "/v1/balance":
+            if self.sweeps_block:
+                self.sweeps_started.set()
+                self.sweeps_release.wait(1)
             amount = {
                 "chain_id": 11155111,
                 "token": TOKEN,
@@ -319,6 +327,8 @@ class Service:
         if path == "/v1/forwarders":
             return httpx.Response(200, json=_list(path, self.forwarders))
         if path == "/v1/sweeps":
+            if request.url.params.get("token", "").lower() in self.fail_sweeps:
+                return _error(503, "screening_unavailable")
             return httpx.Response(200, json=_list(path, []))
         return _error(404, "not_here")
 
@@ -686,6 +696,46 @@ def test_the_sweep_is_built_only_from_forwarders_the_pins_derive(
     assert (usdc["unswept_atomic"], usdc["flush"], usdc["safe_batch"]) == ("0", [], None)
     forwarder_reads = [r for r in service.requests if r.url.path == "/v1/forwarders"]
     assert [r.url.params["sweepable"] for r in forwarder_reads] == [TOKEN]
+
+
+def test_stale_sweeps_return_the_cached_view_and_start_one_refresh(
+    demo: tuple[DemoConsole, Service],
+) -> None:
+    console, service = demo
+    now = [NOW]
+    console._clock = lambda: now[0]
+    cookie = _account(console)
+    status, first = _get(console, cookie, "sweeps")
+    assert status == HTTPStatus.OK
+    service.sweeps_block = True
+    now[0] += 11
+    status, cached = _get(console, cookie, "sweeps")
+    assert status == HTTPStatus.OK
+    assert cached == first
+    assert service.sweeps_started.wait(1)
+    # A second stale request observes the in-flight refresh and does not start another one.
+    _, still_cached = _get(console, cookie, "sweeps")
+    assert still_cached == first
+    service.sweeps_release.set()
+    deadline = time.monotonic() + 1
+    while console._sweeps_refreshing and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not console._sweeps_refreshing
+    assert [r.url.path for r in service.requests].count("/v1/balance") == 2
+
+
+def test_one_unavailable_sweep_group_does_not_hide_the_others(
+    demo: tuple[DemoConsole, Service],
+) -> None:
+    console, service = demo
+    service.fail_sweeps.add(TOKEN.lower())
+    cookie = _account(console)
+    status, view = _get(console, cookie, "sweeps")
+    assert status == HTTPStatus.OK
+    groups = {group["asset"]: group for group in view["groups"]}
+    assert groups["pha"]["unavailable"] is True
+    assert groups["pha"]["unswept_atomic"] == "0"
+    assert groups["usdc"]["unavailable"] is False
 
 
 def test_requests_need_the_cookie_and_posts_need_json(demo: tuple[DemoConsole, Service]) -> None:

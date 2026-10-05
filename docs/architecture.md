@@ -1276,8 +1276,10 @@ forwarders hold (deposits not reversed minus finalized `flushed` amounts) and it
 `GET /v1/sweeps` lists `flushed` rows as `sw_…` objects (the id is a UUID of the event's identity).
 `GET /v1/forwarders` exports every address row with its `(factory, salt, treasury)`; with
 `sweepable=<token>` only rows with a final unswept balance of it, none holding a `sanctioned`
-deposit, and none paying a treasury the route's oracle names at request time (`503` if it cannot
-answer), so an SDK-built `flush` never sweeps a sanctioned deposit or pays a sanctioned treasury.
+deposit, and none paying a treasury the route's oracle names at request time; sweepable listing
+reuses a clear verdict for up to 10 minutes (refund destinations and treasury changes are screened
+fresh; `503` if screening cannot answer), so an SDK-built `flush` never sweeps a sanctioned deposit
+or pays a sanctioned treasury.
 
 **Refund.** `{id, object: "refund", deposit, amount_atomic, destination_address, treasury, status,
 failure_reason, transaction_hash, receipt_log_index, created}`, Stripe's Refund statuses in BTCPay's

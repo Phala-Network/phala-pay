@@ -17,10 +17,10 @@
 //! transaction; or with `transaction_not_found` when neither provider has returned the transaction
 //! for [`NOT_FOUND_AFTER`] since it was attached. The merchant then requests a new refund.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Display;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use alloy::sol;
 use alloy_primitives::{Address, B256, U256};
@@ -234,6 +234,12 @@ pub enum DestinationScreening {
 pub trait DestinationScreener: Send + Sync {
     /// Screens `destination` with `route`'s sanctions oracle on its chain.
     async fn screen(&self, route: &RouteFile, destination: Address) -> DestinationScreening;
+
+    /// Screens a destination and may reuse a recent clear verdict; for paths where funds can only
+    /// reach the merchant's own address.
+    async fn screen_cached(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
+        self.screen(route, destination).await
+    }
 }
 
 /// Screens through the route's sanctions oracle on its chain's first two providers, at provider
@@ -282,6 +288,75 @@ impl DestinationScreener for OracleDestinationScreener {
             Some([SanctionsAnswer::Clear, SanctionsAnswer::Clear]) => DestinationScreening::Clear,
             Some(_) | None => DestinationScreening::Unavailable,
         }
+    }
+}
+
+/// Caches clear sweepable treasury destinations so interactive API paths do not queue on RPC
+/// budgets: a clear destination is reused for 10 minutes, while refund, deposit, and treasury
+/// screening paths call [`DestinationScreener::screen`] and remain fresh.
+pub struct CachedDestinationScreener {
+    inner: Arc<dyn DestinationScreener>,
+    entries: Mutex<HashMap<(u64, Address, Address), Instant>>,
+    ttl: Duration,
+}
+
+impl CachedDestinationScreener {
+    /// Wraps `inner` with the production ten-minute clear-verdict cache.
+    #[must_use]
+    pub fn new(inner: Arc<dyn DestinationScreener>) -> Self {
+        Self::with_ttl(inner, Duration::from_secs(10 * 60))
+    }
+
+    /// Wraps `inner` with a cache using `ttl`; intended for deterministic tests as well as the
+    /// production constructor.
+    #[must_use]
+    pub fn with_ttl(inner: Arc<dyn DestinationScreener>, ttl: Duration) -> Self {
+        Self {
+            inner,
+            entries: Mutex::new(HashMap::new()),
+            ttl,
+        }
+    }
+}
+
+#[async_trait]
+impl DestinationScreener for CachedDestinationScreener {
+    async fn screen(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
+        self.inner.screen(route, destination).await
+    }
+
+    async fn screen_cached(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
+        let key = (
+            route.chain.chain_id,
+            route.screening.sanctions_oracle,
+            destination,
+        );
+        {
+            let entries = self
+                .entries
+                .lock()
+                .expect("destination cache mutex poisoned");
+            if entries
+                .get(&key)
+                .is_some_and(|inserted| inserted.elapsed() < self.ttl)
+            {
+                return DestinationScreening::Clear;
+            }
+        }
+        let verdict = self.inner.screen(route, destination).await;
+        if verdict == DestinationScreening::Clear {
+            let now = Instant::now();
+            let mut entries = self
+                .entries
+                .lock()
+                .expect("destination cache mutex poisoned");
+            entries.retain(|_, inserted| now.duration_since(*inserted) < self.ttl);
+            if entries.len() >= 10_000 {
+                entries.clear();
+            }
+            entries.insert(key, now);
+        }
+        verdict
     }
 }
 
@@ -891,4 +966,115 @@ fn to_i64(value: u64) -> Result<i64, sqlx::Error> {
 
 fn decode_error(error: impl Display) -> sqlx::Error {
     sqlx::Error::Decode(error.to_string().into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingScreener {
+        calls: Arc<AtomicUsize>,
+        verdict: DestinationScreening,
+    }
+
+    #[async_trait]
+    impl DestinationScreener for CountingScreener {
+        async fn screen(&self, _route: &RouteFile, _destination: Address) -> DestinationScreening {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.verdict
+        }
+    }
+
+    fn route() -> RouteFile {
+        serde_saphyr::from_str(include_str!("../tests/fixtures/phala-cloud-pha.yaml"))
+            .expect("route fixture parses")
+    }
+
+    #[tokio::test]
+    async fn clear_verdicts_are_cached_within_ttl() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(CountingScreener {
+            calls: Arc::clone(&calls),
+            verdict: DestinationScreening::Clear,
+        });
+        let cached = CachedDestinationScreener::with_ttl(inner, Duration::from_secs(600));
+        let route = route();
+        let destination = Address::repeat_byte(1);
+
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn screen_always_delegates_without_cache() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(CountingScreener {
+            calls: Arc::clone(&calls),
+            verdict: DestinationScreening::Clear,
+        });
+        let cached = CachedDestinationScreener::new(inner);
+        let route = route();
+        let destination = Address::repeat_byte(4);
+
+        assert_eq!(
+            cached.screen(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(
+            cached.screen(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn sanctioned_and_unavailable_verdicts_are_not_cached() {
+        for verdict in [
+            DestinationScreening::Sanctioned,
+            DestinationScreening::Unavailable,
+        ] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let inner = Arc::new(CountingScreener {
+                calls: Arc::clone(&calls),
+                verdict,
+            });
+            let cached = CachedDestinationScreener::new(inner);
+            let route = route();
+            let destination = Address::repeat_byte(2);
+
+            assert_eq!(cached.screen_cached(&route, destination).await, verdict);
+            assert_eq!(cached.screen_cached(&route, destination).await, verdict);
+            assert_eq!(calls.load(Ordering::Relaxed), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_clear_verdicts_are_screened_again() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(CountingScreener {
+            calls: Arc::clone(&calls),
+            verdict: DestinationScreening::Clear,
+        });
+        let cached = CachedDestinationScreener::with_ttl(inner, Duration::ZERO);
+        let route = route();
+        let destination = Address::repeat_byte(3);
+
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
 }

@@ -285,6 +285,7 @@ export interface FlushCall {
 
 /** One token's sweep on one network. */
 export interface SweepGroup {
+  unavailable: boolean;
   chain_id: number;
   network: string;
   asset: string;

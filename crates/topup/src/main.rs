@@ -875,8 +875,8 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             connection_count,
         )),
         rate_limits: Arc::default(),
-        screening: Arc::new(topup::refunds::OracleDestinationScreener::new(Arc::clone(
-            &routes,
+        screening: Arc::new(topup::refunds::CachedDestinationScreener::new(Arc::new(
+            topup::refunds::OracleDestinationScreener::new(Arc::clone(&routes)),
         ))),
         contract_signatures: Arc::new(
             topup::treasuries::EvmContractSignatures::from_routes(&routes)
