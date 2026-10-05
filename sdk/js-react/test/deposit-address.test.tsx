@@ -391,6 +391,36 @@ describe("DepositAddress payments", () => {
     expect(onChange).toHaveBeenLastCalledWith(parseClientDepositAddress(served));
   });
 
+  it("rethrows callback errors in a microtask while continuing to poll", async () => {
+    vi.useFakeTimers();
+    let served = view([payment()]);
+    const fetch = vi.fn(() => Promise.resolve(Response.json(served)));
+    vi.stubGlobal("fetch", fetch);
+    const originalMicrotask = globalThis.queueMicrotask;
+    const microtask = vi.fn<typeof queueMicrotask>(() => {
+      vi.stubGlobal("queueMicrotask", originalMicrotask);
+    });
+    const error = new Error("consumer callback failed");
+    const onChange = vi.fn(() => {
+      vi.stubGlobal("queueMicrotask", microtask);
+      throw error;
+    });
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} onChange={onChange} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(microtask).toHaveBeenCalledTimes(1);
+    expect(() => microtask.mock.calls[0]?.[0]()).toThrow(error);
+    expect(screen.getByText("1.5 PHA received on Sepolia, 1 confirmation")).toBeDefined();
+    expect(screen.queryByRole("status")).toBeNull();
+    served = view([payment({ status: "credited" })]);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(microtask).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("1.5 PHA on Sepolia credited")).toBeDefined();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("does not report an observed view without client credentials", () => {
     const onChange = vi.fn();
     render(<DepositAddress depositAddress={details()} onChange={onChange} />);

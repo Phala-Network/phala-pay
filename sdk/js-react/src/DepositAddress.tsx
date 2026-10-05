@@ -223,7 +223,11 @@ function useClientView(
       // Notify every observed change, even when React batches multiple polling updates.
       // Consumer callbacks run outside the request catch so they cannot become network errors.
       if (!stopped && changedView !== undefined) {
-        callback.current?.(changedView);
+        try {
+          callback.current?.(changedView);
+        } catch (error) {
+          queueMicrotask(() => { throw error; });
+        }
       }
     };
     const visibilityChanged = () => {
