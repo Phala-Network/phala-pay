@@ -64,6 +64,7 @@ LOG = logging.getLogger(__name__)
 
 MAX_BODY_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30
+DEMO_TIMEOUT_SECONDS = 8
 HEADER_TIMEOUT_MILLISECONDS = 5000
 CONNECTION_LIMIT = 32
 LISTEN_BACKLOG = 128
@@ -93,11 +94,18 @@ class ProductServer:
         # Keep timed-out synchronous work admitted until it actually finishes. A client timeout
         # cannot stop a Python thread or undo a mutation, and must not admit unlimited new work.
         self._capacity = threading.BoundedSemaphore(16)
+        self._webhook_workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="webhook")
+        self._webhook_capacity = threading.BoundedSemaphore(4)
 
         def dispatch(
             method: str, target: str, headers: dict[str, str], body: bytes
         ) -> HttpResponse:
-            operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
+            timeout = (
+                DEMO_TIMEOUT_SECONDS
+                if method == "GET" and self.demo is not None and self.demo.handles(target)
+                else OPERATION_TIMEOUT_SECONDS
+            )
+            operation_deadline.set(time.monotonic() + timeout)
             if method == "POST" and urlsplit(target).path == base_path + "/webhooks":
                 answer = self.fulfillment.handle(headers, body)
             elif method == "GET" and urlsplit(target).path == base_path + "/healthz":
@@ -143,10 +151,15 @@ class ProductServer:
                     target = request.scope["raw_path"].decode("ascii")
                     if request.url.query:
                         target += "?" + request.url.query
-                    if not self._capacity.acquire(blocking=False):
+                    webhook = (
+                        request.method == "POST" and request.url.path == base_path + "/webhooks"
+                    )
+                    capacity = self._webhook_capacity if webhook else self._capacity
+                    workers = self._webhook_workers if webhook else self._workers
+                    if not capacity.acquire(blocking=False):
                         return error(request, HTTPStatus.SERVICE_UNAVAILABLE)
                     try:
-                        future = self._workers.submit(
+                        future = workers.submit(
                             dispatch,
                             request.method,
                             target,
@@ -154,9 +167,9 @@ class ProductServer:
                             bytes(body),
                         )
                     except RuntimeError:
-                        self._capacity.release()
+                        capacity.release()
                         raise
-                    future.add_done_callback(lambda _: self._capacity.release())
+                    future.add_done_callback(lambda _: capacity.release())
                     return await asyncio.wrap_future(future)
             except TimeoutError:
                 return error(request, HTTPStatus.REQUEST_TIMEOUT)
@@ -210,6 +223,7 @@ class ProductServer:
 
     def close(self) -> None:
         self._workers.shutdown(wait=True, cancel_futures=True)
+        self._webhook_workers.shutdown(wait=True, cancel_futures=True)
         if self.accounts is not None:
             self.accounts.close()
         if self.demo is not None:

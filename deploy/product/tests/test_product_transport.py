@@ -15,6 +15,7 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, suppress
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,6 +30,8 @@ from starlette.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reference_product import server as transport
+from reference_product.demo import DemoConsole
+from reference_product.demo import Response as DemoResponse
 from reference_product.fulfillment import Answer
 from reference_product.server import MAX_BODY_BYTES, ProductServer
 from reference_product.transport import DeadlineTransport, operation_deadline
@@ -48,7 +51,7 @@ def product() -> Iterator[ProductServer]:
     try:
         yield product
     finally:
-        product._workers.shutdown(wait=True, cancel_futures=True)
+        product.close()
 
 
 @pytest.mark.parametrize("length", ["-1", "invalid", "1.5", "+2", "9" * 5000])
@@ -109,7 +112,7 @@ def test_timed_out_workers_remain_bounded(
     product: ProductServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(transport, "REQUEST_TIMEOUT_SECONDS", 0.02)
-    product._capacity = threading.BoundedSemaphore(1)
+    product._webhook_capacity = threading.BoundedSemaphore(1)
     done = threading.Event()
     cast(Mock, product.fulfillment.handle).side_effect = lambda *_: (done.wait(2), Answer(200))[1]
     try:
@@ -473,3 +476,39 @@ def test_pooled_transport_keeps_concurrent_callers_deadlines_independent(
             with pytest.raises(httpx.TimeoutException, match="operation deadline"):
                 short.result(timeout=2)
             assert long.result(timeout=2) == "ok"
+
+
+def test_webhooks_have_reserved_workers_and_slots(product: ProductServer) -> None:
+    done = threading.Event()
+    for _ in range(16):
+        assert product._capacity.acquire(blocking=False)
+        product._workers.submit(done.wait, 5)
+    try:
+        with TestClient(product.app) as client:
+            assert client.get("/topup/healthz").status_code == 503
+            assert client.post("/topup/webhooks", content=b"{}").status_code == 200
+        cast(Mock, product.fulfillment.handle).assert_called_once()
+    finally:
+        done.set()
+        for _ in range(16):
+            product._capacity.release()
+
+
+def test_demo_gets_have_eight_second_operation_deadlines(product: ProductServer) -> None:
+    demo = Mock(spec=DemoConsole)
+    demo.handles.return_value = True
+    remaining: list[float] = []
+
+    def handle(*args: object) -> DemoResponse:
+        deadline = operation_deadline.get()
+        assert deadline is not None
+        remaining.append(deadline - time.monotonic())
+        return DemoResponse(HTTPStatus.OK, b"{}")
+
+    demo.handle.side_effect = handle
+    product.demo = cast(DemoConsole, demo)
+    with TestClient(product.app) as client:
+        assert client.get("/topup/api/assets").status_code == 200
+        assert client.post("/topup/api/quotes", content=b"{}").status_code == 200
+    assert 7.5 < remaining[0] <= 8
+    assert 24.5 < remaining[1] <= 25
