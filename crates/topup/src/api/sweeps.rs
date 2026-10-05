@@ -5,11 +5,13 @@
 //! built offline by the SDKs from the forwarders.
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use alloy_primitives::Address as EvmAddress;
 use axum::Json;
 use axum::extract::{Extension, RawQuery, State};
 use chrono::{DateTime, Utc};
+use futures_util::future::join_all;
 use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
@@ -304,11 +306,16 @@ pub(crate) async fn list_forwarders(
 ) -> ApiResult<Json<ForwarderList>> {
     let scope = merchant.scope;
     let mut sweepable = None;
+    let mut requested_chain = None;
     let mut conditions = Vec::new();
     let mut page = Page::default();
     for (name, value) in query_pairs(query.as_deref()) {
         match name.as_str() {
-            "chain_id" => conditions.push(Condition::Chain(chain_id(&value)?)),
+            "chain_id" => {
+                let chain_id = chain_id(&value)?;
+                requested_chain = Some(chain_id);
+                conditions.push(Condition::Chain(chain_id));
+            }
             "quote" => conditions.push(Condition::Quote(
                 ids::parse(ids::QUOTE, &value)
                     .ok_or_else(|| ApiError::invalid_param("quote", "not a qt_ id"))?,
@@ -349,7 +356,7 @@ pub(crate) async fn list_forwarders(
          FROM addresses AS address ",
     );
     if let Some(token) = &sweepable {
-        let treasuries = sweepable_treasuries(&state, scope, token).await?;
+        let treasuries = sweepable_treasuries(&state, scope, token, requested_chain).await?;
         builder
             .push(
                 "JOIN held ON held.address_id = address.id AND held.final_unswept > 0 \
@@ -460,6 +467,7 @@ async fn sweepable_treasuries(
     state: &AppState,
     scope: Scope,
     token: &str,
+    requested_chain: Option<i64>,
 ) -> ApiResult<Vec<String>> {
     let mut builder = with_held(scope);
     builder
@@ -469,8 +477,12 @@ async fn sweepable_treasuries(
              WHERE held.final_unswept > 0 AND NOT held.sanctioned AND held.token = ",
         )
         .push_bind(token.to_owned());
+    if let Some(chain_id) = requested_chain {
+        builder.push(" AND address.chain_id = ").push_bind(chain_id);
+    }
     let candidates: Vec<(i64, String)> = builder.build_query_as().fetch_all(&state.pool).await?;
-    let mut clear = Vec::new();
+    let screening = Arc::clone(&state.screening);
+    let mut checks = Vec::new();
     for (chain_id, treasury) in candidates {
         let chain_id = u64::try_from(chain_id).map_err(|_| ApiError::internal())?;
         let Some(route) = state
@@ -481,7 +493,14 @@ async fn sweepable_treasuries(
             continue;
         };
         let address = EvmAddress::from_str(&treasury).map_err(|_| ApiError::internal())?;
-        match state.screening.screen(route, address).await {
+        let route = route.clone();
+        let screening = Arc::clone(&screening);
+        checks.push(async move { (treasury, screening.screen(&route, address).await) });
+    }
+    let results = join_all(checks).await;
+    let mut clear = Vec::new();
+    for (treasury, verdict) in results {
+        match verdict {
             DestinationScreening::Clear => clear.push(treasury),
             DestinationScreening::Sanctioned => {}
             DestinationScreening::Unavailable => {

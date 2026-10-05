@@ -14,6 +14,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
+  and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
+  seconds per chain and could time out.
+
 ## [0.9.2] - 2026-10-05
 
 ### Fixed
