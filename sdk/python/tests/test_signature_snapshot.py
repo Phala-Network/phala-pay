@@ -1,11 +1,16 @@
-"""Committed public parameter contracts; annotations are deliberately excluded."""
+"""Committed public parameter contracts; annotations are deliberately excluded.
+
+Regenerate from sdk/python with:
+    uv run --locked python -m tests.test_signature_snapshot
+
+Callable defaults and UNSET use stable names instead of process-specific object addresses.
+"""
 
 from __future__ import annotations
 
 import inspect
 import json
 from pathlib import Path
-from typing import Any
 
 from phala_pay import _client
 from topup_client.types import UNSET
@@ -14,7 +19,15 @@ from topup_sdk.client import TopupClient
 SNAPSHOT = Path(__file__).with_name("signature_snapshot.json")
 
 
-def public_signatures() -> dict[str, dict[str, list[dict[str, str]]]]:
+class _DefaultRepr:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __repr__(self) -> str:
+        return self.value
+
+
+def public_signatures() -> dict[str, dict[str, str]]:
     classes = {
         name: cls
         for name, cls in vars(_client).items()
@@ -27,24 +40,27 @@ def public_signatures() -> dict[str, dict[str, list[dict[str, str]]]]:
         for method, member in inspect.getmembers(cls, callable):
             if method.startswith("_") and method not in {"__init__", "__enter__", "__exit__"}:
                 continue
+            signature = inspect.signature(member)
             parameters = []
-            for parameter in inspect.signature(member).parameters.values():
-                default: Any = parameter.default
-                if default is inspect.Parameter.empty:
-                    encoded = "<required>"
-                elif default is UNSET:
-                    encoded = "UNSET"
-                elif callable(default):
-                    encoded = f"{default.__module__}.{default.__qualname__}"
-                else:
-                    encoded = repr(default)
+            for parameter in signature.parameters.values():
+                default = parameter.default
+                if default is UNSET:
+                    default = _DefaultRepr("UNSET")
+                elif default is not inspect.Parameter.empty and callable(default):
+                    default = _DefaultRepr(f"{default.__module__}.{default.__qualname__}")
                 parameters.append(
-                    {"name": parameter.name, "kind": parameter.kind.name, "default": encoded}
+                    parameter.replace(annotation=inspect.Parameter.empty, default=default)
                 )
-            methods[method] = parameters
+            methods[method] = str(
+                signature.replace(parameters=parameters, return_annotation=inspect.Signature.empty)
+            )
         result[name] = methods
     return result
 
 
 def test_public_signature_snapshot() -> None:
     assert public_signatures() == json.loads(SNAPSHOT.read_text())
+
+
+if __name__ == "__main__":
+    SNAPSHOT.write_text(json.dumps(public_signatures(), indent=2) + "\n")
