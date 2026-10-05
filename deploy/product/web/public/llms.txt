@@ -1,0 +1,33 @@
+# Phala Pay
+
+> Self-hosted, open-source, non-custodial crypto payments API for ERC-20 tokens on Ethereum and Base.
+
+Phala Pay accepts ERC-20 tokens on Ethereum and Base: stablecoins such as USDC and USDT, and volatile tokens priced on-chain, such as PHA via TWAP, valued in USD at confirmation. A live (production) route needs commercially licensed price sources; USDC and USDT are ready today, other tokens depend on their price feeds.
+
+The software is free under Apache-2.0 and takes no per-payment fee. Operators pay for their own Phala Cloud instance, two RPC providers per chain, backup storage, and sweep gas. Payers pay network fees.
+
+Deposit addresses are forwarder contracts that can only pay the merchant's treasury. The merchant sets it with a signed message, and sweeps and refunds from its own wallet or Safe. The service holds no funds and sends no transactions.
+
+Credit arrives in about 7 seconds on Base or 30 seconds on Ethereum, confirmed by a second RPC provider and watched to finality. Signed webhooks update the merchant's ledger. The service runs in an Intel TDX confidential VM with verifiable attestation.
+
+Examples include top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute. There is no public hosted service: each operator runs its own instance on its own Phala Cloud workspace. Phala runs an instance only for Phala Cloud.
+
+Phala Pay is pre-1.0 and has not had a third-party security audit. The live demo uses test tokens on Sepolia and Base Sepolia.
+
+## Documentation
+
+- [Documentation](https://github.com/Phala-Network/phala-pay#documentation)
+- [How it works](https://github.com/Phala-Network/phala-pay/blob/main/docs/overview.md)
+- [Architecture](https://github.com/Phala-Network/phala-pay/blob/main/docs/architecture.md)
+- [Integration](https://github.com/Phala-Network/phala-pay/blob/main/docs/integration.md)
+- [Self-hosting](https://github.com/Phala-Network/phala-pay/blob/main/docs/self-hosting.md#one-command-deploy)
+- [API reference](https://phala-network.github.io/phala-pay/)
+
+## SDKs and source
+
+- [@phala/pay on npm](https://www.npmjs.com/package/@phala/pay)
+- [@phala/pay-react on npm](https://www.npmjs.com/package/@phala/pay-react)
+- [@phala/pay-server on npm](https://www.npmjs.com/package/@phala/pay-server)
+- [phala-pay on PyPI](https://pypi.org/project/phala-pay/)
+- [GitHub](https://github.com/Phala-Network/phala-pay)
+- [Compare](https://pay.phala.com/compare)
