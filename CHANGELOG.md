@@ -14,6 +14,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Chainlink sources omitting `rpc_group_b` with `rpc_group: a` when the route's second RPC group is literally `a` (e.g. `["x", "a"]`) previously read one group twice, silently losing A/B independence.
+  Upgrading reads two independent groups and may newly reject quotes as `divergent`.
+  Configurations setting `rpc_group_b` explicitly are unaffected and need no action.
+- Sequencer uptime validation now checks the groups the service reads; previously it looked up `a`/`b` literally while the service resolved them as route aliases.
+  Runtime is unchanged. Configurations that only validated under the old lookup may now be rejected by `config check`.
+  Shipped staging, example, and examples/ configurations use non-alias sequencer group names and are unaffected.
+
 ### Python SDK (`phala-pay`)
 
 #### Changed
@@ -46,12 +55,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   CI validates every shipped environment config and example route template.
 - Cross-org callers can now pass `SENTRY_DSN`; the example passes the maintenance key and
   `bootstrap_maintenance` input.
-- Chainlink sources omitting `rpc_group_b` with `rpc_group: a` when the route's second RPC group is literally `a` (e.g. `["x", "a"]`) previously read one group twice, silently losing A/B independence.
-  Upgrading reads two independent groups and may newly reject quotes as `divergent`.
-  Configurations setting `rpc_group_b` explicitly are unaffected and need no action.
-- Sequencer uptime validation now checks the groups the service reads; previously it looked up `a`/`b` literally while the service resolved them as route aliases.
-  Runtime is unchanged. Configurations that only validated under the old lookup may now be rejected by `config check`.
-  Shipped staging, example, and examples/ configurations use non-alias sequencer group names and are unaffected.
 
 ## [0.9.0] - 2026-10-05
 
