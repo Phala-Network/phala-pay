@@ -48,7 +48,7 @@ import secrets
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -233,7 +233,9 @@ class DemoConsole:
         self._networks_error: TopupError | httpx.HTTPError | MissingProductKeyError | None = None
         self._sweeps: tuple[float, dict[str, Any]] | None = None
         self._sweeps_refreshing = False
-        self._block_times: dict[tuple[int, str], tuple[int, int]] = {}
+        self._block_times: OrderedDict[
+            tuple[int, str], tuple[float | None, tuple[int, int] | None]
+        ] = OrderedDict()
         self._chain_ids = set(config.treasuries())
 
     # Routing ------------------------------------------------------------------------------------
@@ -689,25 +691,40 @@ class DemoConsole:
 
     def _block_time(self, chain_id: int, tx_hash: str) -> dict[str, Any] | None:
         """The block and time of the transaction's block, from the product's RPC of its chain."""
-        cached = self._block_times.get((chain_id, tx_hash))
-        if cached is None:
-            try:
-                receipt = self._rpc(chain_id, "eth_getTransactionReceipt", tx_hash)
-                if not isinstance(receipt, dict):
-                    return None
+        key = (chain_id, tx_hash)
+        with self._lock:
+            entry = self._block_times.get(key)
+            if entry is not None and (entry[0] is None or self._clock() < entry[0]):
+                self._block_times.move_to_end(key)
+                return self._block_time_view(tx_hash, entry[1])
+        value = None
+        try:
+            receipt = self._rpc(chain_id, "eth_getTransactionReceipt", tx_hash)
+            if isinstance(receipt, dict):
                 block = self._rpc(chain_id, "eth_getBlockByNumber", receipt["blockNumber"], False)
-                cached = (int(receipt["blockNumber"], 16), int(block["timestamp"], 16))
-            except (httpx.HTTPError, ValueError, KeyError, TypeError):
-                LOG.warning("demo: block time lookup failed", exc_info=True)
-                return None
-            with self._lock:
-                self._block_times[(chain_id, tx_hash)] = cached
-        return {"tx_hash": tx_hash, "block_number": cached[0], "at": cached[1]}
+                value = (int(receipt["blockNumber"], 16), int(block["timestamp"], 16))
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            LOG.warning("demo: block time lookup failed", exc_info=True)
+        with self._lock:
+            self._block_times[key] = (self._clock() + 30 if value is None else None, value)
+            self._block_times.move_to_end(key)
+            while len(self._block_times) > 1024:
+                self._block_times.popitem(last=False)
+        return self._block_time_view(tx_hash, value)
+
+    @staticmethod
+    def _block_time_view(tx_hash: str, value: tuple[int, int] | None) -> dict[str, Any] | None:
+        return (
+            None
+            if value is None
+            else {"tx_hash": tx_hash, "block_number": value[0], "at": value[1]}
+        )
 
     def _rpc(self, chain_id: int, method: str, *params: Any) -> Any:
         body = self._http.post(
             self.config.chain(chain_id).rpc_url,
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
+            timeout=2,
         ).json()
         return body["result"]
 

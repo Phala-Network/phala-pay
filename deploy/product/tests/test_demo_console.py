@@ -1120,3 +1120,60 @@ def test_incomplete_trust_evidence_retries_after_thirty_seconds(
     now[0] += 2
     console._trust_view()
     assert len(calls) == 2
+
+
+def test_rpc_failures_are_cached_for_thirty_seconds(demo: tuple[DemoConsole, Service]) -> None:
+    console, _ = demo
+    now = [NOW]
+    console._clock = lambda: now[0]
+    calls: list[httpx.Request] = []
+    failing = [True]
+
+    def rpc(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        assert request.extensions["timeout"]["read"] == 2
+        if failing[0]:
+            raise httpx.ReadTimeout("RPC timeout", request=request)
+        return _rpc(request)
+
+    console._http.close()
+    console._http = httpx.Client(transport=httpx.MockTransport(rpc))
+    tx_hash = "0x" + "11" * 32
+    assert console._block_time(11155111, tx_hash) is None
+    assert console._block_time(11155111, tx_hash) is None
+    assert len(calls) == 1
+    now[0] += 31
+    failing[0] = False
+    assert console._block_time(11155111, tx_hash) == {
+        "tx_hash": tx_hash,
+        "block_number": 1,
+        "at": NOW - 12,
+    }
+    now[0] += 300
+    assert console._block_time(11155111, tx_hash) is not None
+    assert len(calls) == 3
+
+
+def test_block_time_cache_evicts_the_least_recently_used_entry(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    console, _ = demo
+    calls: list[str] = []
+
+    def rpc(chain_id: int, method: str, *params: Any) -> dict[str, str]:
+        if method == "eth_getTransactionReceipt":
+            calls.append(params[0])
+            return {"blockNumber": "0x1"}
+        return {"timestamp": hex(NOW)}
+
+    monkeypatch.setattr(console, "_rpc", rpc)
+    hashes = [f"0x{index:064x}" for index in range(1025)]
+    for tx_hash in hashes[:1024]:
+        console._block_time(11155111, tx_hash)
+    console._block_time(11155111, hashes[0])
+    console._block_time(11155111, hashes[-1])
+    console._block_time(11155111, hashes[0])
+    assert len(calls) == 1025
+    console._block_time(11155111, hashes[1])
+    assert len(calls) == 1026
+    assert len(console._block_times) == 1024
