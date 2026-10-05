@@ -1,5 +1,6 @@
 import type { CheckoutStatus } from "@phala/pay";
 import type { Appearance } from "@phala/pay-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Check, CircleAlert, Cloud, CircleCheck, Copy, FlaskConical, Gift, Lock } from "lucide-react";
 import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -20,7 +21,7 @@ import { PRIMARY_BUTTON, ExplorerLink, InfoTip, describe, loadSdk } from "./comm
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
 import { atomicAmount, dollars, percent, presetDollars, rate, signedDollars, tokenName } from "./format.js";
 import { FundWallet, TestTokens, type Need } from "./Funding.js";
-import { useCreateQuote } from "./queries.js";
+import { keys, useCreateQuote } from "./queries.js";
 import type { PaidWith } from "./testTokens.js";
 import { cn } from "@/lib/utils";
 
@@ -547,6 +548,7 @@ function QuoteCheckout({
   onNewTopUp: () => void;
 }) {
   const [status, setStatus] = useState<CheckoutStatus>("loading");
+  const queryClient = useQueryClient();
   // The wallet that held too little for the quote, so the checkout sent nothing.
   const [short, setShort] = useState<PaidWith | null>(null);
   const testnet = network?.testnet ?? true;
@@ -579,7 +581,10 @@ function QuoteCheckout({
             expectedAddress={session.expected_address}
             apiBase={account.api_base}
             appearance={appearance}
-            onChange={(state) => setStatus(state.status)}
+            onChange={(state) => {
+              setStatus(state.status);
+              void queryClient.invalidateQueries({ queryKey: keys.timelines });
+            }}
             onWalletError={(error, wallet) => setShort(error.code === "insufficient_balance" ? wallet : null)}
             onSuccess={onCredited}
           />

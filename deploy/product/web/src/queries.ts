@@ -40,7 +40,13 @@ export const keys = {
 
 /** The visitor's demo account: balance, ledger lines, and payments. */
 export function useAccount() {
-  return useQuery({ queryKey: keys.account, queryFn: ({ signal }) => getAccount(signal), refetchInterval: 4000 });
+  return useQuery({
+    queryKey: keys.account,
+    queryFn: ({ signal }) => getAccount(signal),
+    refetchInterval: (query) => query.state.data?.payments.some((payment) =>
+      !["credited", "expired", "canceled", "rejected", "reversed"].includes(payment.status),
+    ) ? 4000 : 15_000,
+  });
 }
 
 /** The networks, and their tokens, a customer can pay with; the service's config changes rarely. */
@@ -58,13 +64,39 @@ export function useTimeline(selection: Selection | null) {
   return useQuery({
     queryKey: keys.timeline(selection),
     queryFn: selection === null ? skipToken : ({ signal }) => getTimeline(selection, signal),
-    refetchInterval: 3000,
+    refetchInterval: (query) => {
+      const timeline = query.state.data;
+      // Marked-paid refunds stay pending until their transfer is verified at finality.
+      if (timeline?.refunds.some((refund) => !["succeeded", "failed", "canceled"].includes(refund.status))) {
+        return 3000;
+      }
+      if (timeline?.deposit?.status === "credited" && timeline.deposit.swept) {
+        return false;
+      }
+      if (timeline?.deposit === null && timeline.quote !== null &&
+          (["expired", "canceled"].includes(timeline.quote.status) ||
+           (timeline.quote.status === "open" && Date.now() >= timeline.quote.expires_at * 1000))) {
+        return false;
+      }
+      const inFlight = timeline?.deposit != null
+        ? !["credited", "rejected", "reversed"].includes(timeline.deposit.status)
+        : timeline?.sent != null;
+      return inFlight ? 3000 : 10_000;
+    },
   });
 }
 
 /** The visitor's deposit address and its payments, followed once the product has shown it. */
 export function useDepositAddress(enabled: boolean) {
-  return useQuery({ queryKey: keys.depositAddress, queryFn: ({ signal }) => getDepositAddress(signal), enabled, refetchInterval: 3000 });
+  // The SDK's DepositAddress polls too, but has no change callback to refresh the product's view.
+  return useQuery({
+    queryKey: keys.depositAddress,
+    queryFn: ({ signal }) => getDepositAddress(signal),
+    enabled,
+    refetchInterval: (query) => query.state.data?.deposit_address.payments.some((payment) =>
+      !["credited", "rejected", "reversed"].includes(payment.status),
+    ) ? 3000 : 15_000,
+  });
 }
 
 export function useSweeps() {
