@@ -65,6 +65,7 @@ from topup_sdk import (
     ApiError,
     AttestationError,
     TopupClient,
+    TopupError,
     flush_transactions,
     forwarder_address,
     safe_batch,
@@ -210,6 +211,7 @@ class DemoConsole:
         )
         self._clock = clock
         self._client: TopupClient | None = None
+        self._sweeps_client: TopupClient | None = None
         self._lock = threading.Lock()
         self._new_accounts = RateLimiter(30, 60, clock)
         self._quotes_per_account = RateLimiter(3, 60, clock)
@@ -221,6 +223,7 @@ class DemoConsole:
         self._trust: tuple[float, dict[str, Any]] | None = None
         self._networks: tuple[float, list[dict[str, Any]]] | None = None
         self._sweeps: tuple[float, dict[str, Any]] | None = None
+        self._sweeps_refreshing = False
         self._block_times: dict[tuple[int, str], tuple[int, int]] = {}
         self._chain_ids = set(config.treasuries())
 
@@ -773,14 +776,39 @@ class DemoConsole:
         the merchant signs, and the finalized sweeps; the same for every visitor, cached for 10
         seconds."""
         now = self._clock()
+        refresh = False
         with self._lock:
-            if self._sweeps is not None and now - self._sweeps[0] < 10:
-                return self._sweeps[1]
-        networks = self._payable_networks()
+            if self._sweeps is not None:
+                if now - self._sweeps[0] < 10:
+                    return self._sweeps[1]
+                if not self._sweeps_refreshing:
+                    self._sweeps_refreshing = True
+                    refresh = True
+                view = self._sweeps[1]
+            else:
+                view = None
+        if view is not None:
+            if refresh:
+                threading.Thread(target=self._refresh_sweeps, args=(now,), daemon=True).start()
+            return view
+        return self._build_sweeps_view(now)
+
+    def _refresh_sweeps(self, now: float) -> None:
+        try:
+            view = self._build_sweeps_view(now)
+        except TopupError:
+            LOG.warning("sweeps refresh failed", exc_info=True)
+        finally:
+            with self._lock:
+                self._sweeps_refreshing = False
+
+    def _build_sweeps_view(self, now: float) -> dict[str, Any]:
+        service = self._sweeps_service()
+        networks = self._payable_networks(service)
         with self.recorder.capture() as calls:
-            unswept = self._service().get_balance().unswept
+            unswept = service.get_balance().unswept
             groups = [
-                self._sweep_group(network, asset, unswept, now)
+                self._sweep_group(network, asset, unswept, now, service)
                 for network in networks
                 for asset in network["assets"]
             ]
@@ -790,10 +818,44 @@ class DemoConsole:
         return view
 
     def _sweep_group(
-        self, network: dict[str, Any], asset: dict[str, Any], unswept: list[Any], now: float
+        self,
+        network: dict[str, Any],
+        asset: dict[str, Any],
+        unswept: list[Any],
+        now: float,
+        service: TopupClient,
     ) -> dict[str, Any]:
         """One token's sweep on one network."""
         chain_id, token, treasury = network["chain_id"], asset["contract"], network["treasury"]
+        static = {
+            "chain_id": chain_id,
+            "network": network["name"],
+            "asset": asset["asset"],
+            "symbol": asset["symbol"],
+            "decimals": asset["decimals"],
+            "token": token,
+            "treasury": treasury,
+        }
+        try:
+            return self._sweep_group_data(static, service, unswept, now)
+        except TopupError as error:
+            LOG.warning("sweep group unavailable for chain %s asset %s: %s", chain_id, token, error)
+            return {
+                **static,
+                "unavailable": True,
+                "unswept_atomic": "0",
+                "final_unswept_atomic": "0",
+                "sweepable_forwarders": 0,
+                "refused_forwarders": 0,
+                "flush": [],
+                "safe_batch": None,
+                "sweeps": [],
+            }
+
+    def _sweep_group_data(
+        self, static: dict[str, Any], service: TopupClient, unswept: list[Any], now: float
+    ) -> dict[str, Any]:
+        chain_id, token, treasury = static["chain_id"], static["token"], static["treasury"]
         amounts = next(
             (
                 amount.to_dict()
@@ -807,13 +869,13 @@ class DemoConsole:
         if amounts["final_amount_atomic"] != "0":
             forwarders = list(
                 _take(
-                    self._service().list_forwarders(chain_id=chain_id, sweepable=token),
+                    service.list_forwarders(chain_id=chain_id, sweepable=token),
                     MAX_SWEEP_FORWARDERS,
                 )
             )
         sweeps = [
             sweep.to_dict()
-            for sweep in _take(self._service().list_sweeps(chain_id=chain_id, token=token), 10)
+            for sweep in _take(service.list_sweeps(chain_id=chain_id, token=token), 10)
         ]
         # Flush only forwarders the pins derive: the service's word decides nothing here.
         derived = [
@@ -833,13 +895,8 @@ class DemoConsole:
         ]
         calls_to_sign = flush_transactions(derived, token) if derived else []
         return {
-            "chain_id": chain_id,
-            "network": network["name"],
-            "asset": asset["asset"],
-            "symbol": asset["symbol"],
-            "decimals": asset["decimals"],
-            "token": token,
-            "treasury": treasury,
+            **static,
+            "unavailable": False,
             "unswept_atomic": amounts["amount_atomic"],
             "final_unswept_atomic": amounts["final_amount_atomic"],
             "sweepable_forwarders": len(derived),
@@ -852,7 +909,7 @@ class DemoConsole:
                 treasury,
                 calls_to_sign,
                 name="Phala Pay sweep",
-                description=f"Sweep {asset['symbol']} to the treasury",
+                description=f"Sweep {static['symbol']} to the treasury",
                 created_at_ms=int(now * 1000),
             ),
             "sweeps": sweeps,
@@ -860,7 +917,7 @@ class DemoConsole:
 
     # Networks -----------------------------------------------------------------------------------
 
-    def _payable_networks(self) -> list[dict[str, Any]]:
+    def _payable_networks(self, service: TopupClient | None = None) -> list[dict[str, Any]]:
         """The networks a customer can pay on, each with its tokens: the service's payable assets
         (`GET /v1/config`) on the configured chains (a quote on any other chain has no treasury to
         recompute its address from), in the config's order, then the service's. A configured
@@ -869,7 +926,7 @@ class DemoConsole:
         with self._lock:
             if self._networks is not None and now - self._networks[0] < 300:
                 return self._networks[1]
-        offered = self._service().get_config().assets
+        offered = (service or self._service()).get_config().assets
         networks = []
         for chain in self.config.chains:
             testnet = chain.chain_id not in MAINNETS
@@ -977,10 +1034,27 @@ class DemoConsole:
                 )
             return self._client
 
+    def _sweeps_service(self) -> TopupClient:
+        with self._lock:
+            if self._sweeps_client is None:
+                self._sweeps_client = TopupClient(
+                    self.config.service_url,
+                    self.config.api_key(),
+                    account=self.config.account,
+                    forwarder=(self.config.factory, self.config.implementation),
+                    treasuries=self.config.treasuries(),
+                    transport=self.recorder,
+                    timeout=20,
+                    max_attempts=1,
+                )
+            return self._sweeps_client
+
     def close(self) -> None:
         with self._lock:
             if self._client is not None:
                 self._client.close()
+            if self._sweeps_client is not None:
+                self._sweeps_client.close()
         self._http.close()
 
 
