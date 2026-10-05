@@ -194,9 +194,15 @@ impl QuoteProvider for ConfiguredQuoteProvider {
 
 impl From<PricingFailure> for Value {
     fn from(failure: PricingFailure) -> Self {
+        Value::from(&failure)
+    }
+}
+
+impl From<&PricingFailure> for Value {
+    fn from(failure: &PricingFailure) -> Self {
         let mut value = json!({"stage": "pricing", "error": failure.code});
         if !failure.evidence.is_null() {
-            value["quote"] = failure.evidence;
+            value["quote"] = failure.evidence.clone();
         }
         value
     }
