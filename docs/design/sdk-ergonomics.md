@@ -1,6 +1,6 @@
 # Design: SDK integration ergonomics
 
-Status: Accepted (owner, 2026-10-04); implementation pending
+Status: Phases 1–2 implemented in 0.9.0; phase 3 (setup CLI) pending
 
 ## 1. Purpose and precedents
 
@@ -18,8 +18,11 @@ setup. Avoid global clients, shared-secret signatures, legacy pairing and secret
 
 JS: `new PhalaPay({apiKey, pins, apiBase?, timeoutMs?, maxAttempts?, requestDeadlineMs?, fetch?})`
 from `@phala/pay-server`. Python: `PhalaPay(api_key, *, pins, api_base=None, timeout=15.0,
-max_attempts=4, request_deadline=60.0, transport=None)`. Pins accept string or frozen Pins value. JS
-defaults are 15000 ms / four attempts / 60000 ms. No global mutable client or trust discovery.
+max_attempts=4, request_deadline=None, transport=None)`. Pins accept string or frozen Pins value. JS
+defaults are 15000 ms / four attempts / 60000 ms. Python `request_deadline=None` uses 60 seconds
+normally, or 300 seconds when upgrade tolerance activates; an explicit deadline remains a hard
+limit. See the [reference amendment](sdk-ergonomics-reference.md#upgrade-tolerance-amendment-js-and-python-implemented).
+No global mutable client or trust discovery.
 
 Resources mirror Python: quotes, depositAddresses, deposits, refunds, paymentSettings, config,
 account, treasuries, apiKeys, webhookEndpoints, events, balance, sweeps, forwarders; Python uses

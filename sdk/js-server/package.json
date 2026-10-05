@@ -12,12 +12,12 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/js-server/src/index.d.ts",
-      "default": "./dist/js-server/src/index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./helpers": {
-      "types": "./dist/js-server/src/helpers.d.ts",
-      "default": "./dist/js-server/src/helpers.js"
+      "types": "./dist/helpers.d.ts",
+      "default": "./dist/helpers.js"
     }
   },
   "files": [
@@ -39,7 +39,7 @@
     "test": "vitest run",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build && pnpm run check-generated",
     "generate:types": "openapi-typescript ../../crates/topup/openapi.json -o src/generated/openapi.ts --immutable && node scripts/generate-server.mjs",
-    "check-generated": "bash ../scripts/check-generated-js.sh server",
+    "check-generated": "bash ../scripts/check-generated-js.sh",
     "generate:server": "node scripts/generate-server.mjs"
   },
   "dependencies": {

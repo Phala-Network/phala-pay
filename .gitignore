@@ -16,3 +16,7 @@
 
 # Python
 __pycache__/
+
+# JavaScript SDK build outputs
+/sdk/js-server/dist/
+/sdk/js-react/dist/

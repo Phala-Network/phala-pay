@@ -248,7 +248,7 @@ flowchart TB
 
 ```text
 crates/core       pure, no I/O: money, route schema, CREATE2 math, state machine, valuation, screening
-crates/adapters   chain::evm, signer::dstack, pricing::{chainlink,binance,kraken}, risk::oracle
+crates/adapters   chain::evm, signer::dstack, pricing::{chainlink,binance,kraken,uniswap_v2}, risk::oracle
 crates/topup      binary: db, pump, scanner, finality, outbox, reconciler, api, cli
 contracts/        Forwarder.sol, ForwarderFactory.sol, deploy scripts, Foundry tests
 deploy/           compose, deployment scripts, runbooks; deploy/environments: each deployment's attested settings and routes
@@ -1072,6 +1072,16 @@ writes
 `audit`, and each key or account change is also an `api_key.*` or `account.updated` event with
 its actor.
 
+The attested `maintenance_keys` configuration holds a second, maintenance-only admin credential,
+separate from the operator's full admin key. Each entry names a key ID (`id`) and Ed25519
+public key (`public_key`); the private key is a deployment secret. It uses the same RFC 9421 signature verification and
+replay protection, but authorizes only `POST /v1/admin/instance/pause` and
+`POST /v1/admin/instance/resume`. Every other admin route, including maintenance inspection,
+returns audited `403 permission_denied` for this credential. The full admin key still works.
+The pause admits no new mutations, returns unsaved `503 service_maintenance` with `Retry-After`,
+and expires automatically if deployment fails. See the deployment reference's
+[planned-upgrade procedure](../deploy/README.md#planned-upgrade-admission-and-downtime).
+
 ```text
 GET    /v1/account                                                the key's account, in its mode
 GET|POST /v1/api_keys, GET|DELETE /v1/api_keys/{id}, POST /v1/api_keys/{id}/roll {expires_in}
@@ -1112,6 +1122,8 @@ GET    /v1/events?type&types[]&delivery_success&created[gt|gte|lt|lte]&limit&sta
 GET    /v1/events/{id}
 POST   /v1/events/{id}/resend {webhook_endpoint}                  deliver it again to an enabled endpoint
 
+GET|POST /v1/admin/instance/pause                              planned-upgrade mutation admission pause with owner and lease; GET reads the current pause (scopes, owner, expires_at)
+POST   /v1/admin/instance/resume                               release the owned maintenance pause
 POST   /v1/admin/accounts {name, contact, due_diligence, charges_enabled, reason}   + first keys
 GET    /v1/admin/accounts/{acct}                               the account, its caps, and its payment settings per mode
 POST   /v1/admin/accounts/{acct} {charges_enabled?, restricted?, contact?, max_unfinalized_credit?, reason}   enabling live → first live key
@@ -1298,7 +1310,7 @@ destination is `400 destination_sanctioned`. A reversed deposit is not refundabl
 | 401 | `invalid_request_error` | `signature_replayed` (admin: the signature was already used) |
 | 409 | `idempotency_error` | `idempotency_key_in_use` (a request with the key still runs; retry); the only `409` |
 | 429 | `invalid_request_error` | `rate_limit` (requests per account and mode; reads of a public view by `client_secret`), `customer_rate_limit` (quote creations per minute and deposit address rotations per hour of one customer); each with `Retry-After` |
-| 503 | `api_error` | `unavailable` (no fresh price, database unavailable), `service_restoring` (every merchant request with an API key, reads included, while the service is frozen after a restore, §14; with `Retry-After`) |
+| 503 | `api_error` | `unavailable` (no fresh price, database unavailable), `service_maintenance` (planned upgrades pause new mutations; reads continue while the process is up; retry after `Retry-After` with the same `Idempotency-Key`, since the request has not executed), `service_restoring` (every merchant request with an API key, reads included, while the service is frozen after a restore, §14; with `Retry-After`) |
 | 400 | `invalid_request_error` | admin only: `restore_not_frozen`, `restore_rescan_incomplete` (§14) |
 | 500 | `api_error` | `internal_error` |
 
@@ -1357,7 +1369,7 @@ example of every object and body; statuses stay plain strings so a new value nev
 client). There are two documents: `crates/topup/openapi.json`, the merchant API the SDKs are
 generated from and the reference is built from, and `openapi.admin.json`, the operator's; both
 are also served (`/openapi.json`, `/openapi.admin.json`). The SDKs (`phala-pay` for Python,
-`@phala/pay` for JavaScript) verify webhooks, recompute addresses from the merchant's pins, build
+`@phala/pay-server` for JavaScript) verify webhooks, recompute addresses from the merchant's pins, build
 sweeps offline, and export an account; they ship with a runnable integration example
 (`sdk/examples/fastapi_app.py`) and a versioning and deprecation policy (integration guide §5.9).
 Integrators build against production test mode (Sepolia routes, test keys); the local sandbox

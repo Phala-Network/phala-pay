@@ -58,7 +58,6 @@ sdk-check:
 
 sdk-generate:
 	$(MAKE) -C sdk/python generate
-	npx -y pnpm@12.6.0 --dir sdk/js run generate:types
 	npx -y pnpm@12.6.0 --dir sdk/js-server run generate:types
 
 sandbox-local:

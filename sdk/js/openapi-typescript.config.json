@@ -1,7 +1,0 @@
-{
-  "generator": "openapi-typescript",
-  "version": "7.13.0",
-  "spec": "../../crates/topup/openapi.json",
-  "output": "src/generated/openapi.d.ts",
-  "command": "pnpm run generate:types"
-}
