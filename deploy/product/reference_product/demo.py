@@ -659,14 +659,10 @@ class DemoConsole:
     def _events(self, keys: set[str]) -> list[dict[str, Any]]:
         """This product's verified webhook events about the quote, the deposit, or its refunds."""
         with self.ledger.transaction() as db:
-            rows = db.execute(
-                "SELECT id, type, data, received_at FROM webhook_events ORDER BY received_at"
-            ).fetchall()
+            rows = ProductLedger.event_rows(db, keys)
         events = []
         for event_id, event_type, data, received_at in rows:
             payload = json.loads(data)
-            if not keys & _event_refs(payload):
-                continue
             events.append(
                 {
                     "id": event_id,
@@ -1424,18 +1420,6 @@ def _attestation_view(evidence: AttestationResponse) -> dict[str, Any]:
         "webhook_public_key": evidence.webhook_keys[0].public_key,
         "report_data": evidence.report_data,
         "quote_bytes": len(evidence.tdx_quote) // 2,
-    }
-
-
-def _event_refs(payload: dict[str, Any]) -> set[str]:
-    """Deposit, quote, and refund ids an event names, in the flat and the enveloped forms."""
-    inner = payload.get("object")
-    sources = [payload, inner] if isinstance(inner, dict) else [payload]
-    return {
-        value
-        for source in sources
-        for key in ("deposit_id", "id", "quote", "deposit")
-        if isinstance(value := source.get(key), str)
     }
 
 

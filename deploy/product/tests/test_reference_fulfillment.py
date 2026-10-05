@@ -28,7 +28,7 @@ from reference_product.config import (
     ProductConfig,
 )
 from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys
-from reference_product.ledger import Delivery, ProductLedger
+from reference_product.ledger import SCHEMA, Delivery, ProductLedger
 from reference_product.restore_records import export_restore_records
 from reference_product.server import AccountApi, ProductServer, _make_product, pin_webhook_keys
 from topup_sdk import (
@@ -915,3 +915,43 @@ def test_restore_records_over_asgi_preserves_signed_query_and_payload() -> None:
             assert client.get(target).status_code == 401
     finally:
         product.close()
+
+
+def test_event_references_upgrade_once_and_deduplicate_matches(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    data = {"object": {"id": "dep_test", "quote": "qt_test", "client_reference_id": TEAM}}
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA)
+        db.execute("DROP TABLE event_refs")
+        db.execute(
+            "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("evt_test", "deposit.credited", json.dumps(data), 1, b"{}", "1", "signature"),
+        )
+    for _ in range(2):
+        ledger = ProductLedger(str(path))
+        try:
+            assert ledger.events_for({"dep_test", "qt_test", TEAM}) == [
+                {"type": "deposit.credited", "data": data}
+            ]
+            assert ledger.events_for({"other-team"}) == []
+            with ledger.transaction() as db:
+                assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 3
+        finally:
+            ledger._connection.close()
+
+
+def test_event_references_commit_with_the_delivery() -> None:
+    ledger = ProductLedger()
+    delivery = Delivery("evt_test", "1", "signature", b"{}")
+    data = {"id": "re_test", "deposit": "dep_test"}
+    def record_and_fail() -> None:
+        with ledger.transaction() as db:
+            ledger.record_delivery(db, delivery, "refund.created", data)
+            raise RuntimeError("rollback")
+
+    with pytest.raises(RuntimeError, match="rollback"):
+        record_and_fail()
+    assert ledger.events_for({"re_test"}) == []
+    with ledger.transaction() as db:
+        ledger.record_delivery(db, delivery, "refund.created", data)
+    assert ledger.events_for({"re_test", "dep_test"}) == [{"type": "refund.created", "data": data}]
