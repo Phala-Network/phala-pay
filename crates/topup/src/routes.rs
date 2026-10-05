@@ -138,12 +138,16 @@ impl RouteSet {
                 .provider(route.chain.chain_id, 1)
                 .cloned()
                 .map_err(|e| e.to_string()),
-            _ => self
-                .groups
-                .get(id)
-                .cloned()
-                .ok_or_else(|| format!("price RPC group {id} missing")),
+            _ => self.resolved_price_group(id),
         }
+    }
+
+    /// Looks up an already resolved group identity without reinterpreting A/B aliases.
+    pub(crate) fn resolved_price_group(&self, id: &str) -> Result<Arc<EvmClient>, String> {
+        self.groups
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("price RPC group {id} missing"))
     }
 
     fn from_resolver(

@@ -1802,7 +1802,7 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
                     println!(
                         "  sequencer: {:?}; {:?}",
                         sequencer,
-                        topup_core::price::feed(&sequencer.feed, 8453)
+                        topup_core::price::feed(&sequencer.feed, topup::rpc_groups::BASE_CHAIN_ID)
                     );
                 }
             }

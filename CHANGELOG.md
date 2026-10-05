@@ -47,6 +47,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Cross-org callers can now pass `SENTRY_DSN`; the example passes the maintenance key and
   `bootstrap_maintenance` input.
 
+- Runtime now reads the A/B groups validation approved when `rpc_group_b` is omitted.
+
 ## [0.9.0] - 2026-10-05
 
 ### Upgrading from 0.8.x

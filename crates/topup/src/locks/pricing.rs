@@ -1,5 +1,9 @@
 //! Shared fail-closed pricing for quotes and deposit credit.
-use crate::{observability::price_metrics, routes::RouteSet};
+use crate::{
+    observability::price_metrics,
+    routes::RouteSet,
+    rpc_groups::{BASE_CHAIN_ID, price_pair},
+};
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -99,40 +103,24 @@ impl PricingRuntime {
                         Source::Binance { symbol, .. } => {
                             Arc::new(Binance::new(symbol.clone()).map_err(|e| e.to_string())?)
                         }
-                        Source::UniswapV2Twap {
-                            rpc_group,
-                            rpc_group_b,
-                            twap,
-                            ..
-                        } => Arc::new(
-                            UniswapV2::new(
-                                routes.price_group(route, rpc_group)?,
-                                routes.price_group(route, rpc_group_b)?,
-                                twap.clone(),
-                                Arc::new(crate::db::pricing::TwapStore(pool.clone())),
+                        Source::UniswapV2Twap { twap, .. } => {
+                            let (a, b, _) = price_pair(route, s)?;
+                            Arc::new(
+                                UniswapV2::new(
+                                    routes.resolved_price_group(&a)?,
+                                    routes.resolved_price_group(&b)?,
+                                    twap.clone(),
+                                    Arc::new(crate::db::pricing::TwapStore(pool.clone())),
+                                )
+                                .map_err(|e| e.to_string())?,
                             )
-                            .map_err(|e| e.to_string())?,
-                        ),
-                        Source::Chainlink {
-                            feed: name,
-                            chain_id,
-                            rpc_group,
-                            rpc_group_b,
-                            ..
-                        } => {
-                            let b = rpc_group_b.as_deref().unwrap_or(
-                                if rpc_group == "b"
-                                    || route.chain.rpc_providers.get(1) == Some(rpc_group)
-                                {
-                                    "a"
-                                } else {
-                                    "b"
-                                },
-                            );
+                        }
+                        Source::Chainlink { feed: name, .. } => {
+                            let (a, b, chain) = price_pair(route, s)?;
                             Arc::new(Chainlink::new(
-                                routes.price_group(route, rpc_group)?,
-                                routes.price_group(route, b)?,
-                                feed(name, *chain_id).ok_or("unsupported feed")?,
+                                routes.resolved_price_group(&a)?,
+                                routes.resolved_price_group(&b)?,
+                                feed(name, chain).ok_or("unsupported feed")?,
                             ))
                         }
                     };
@@ -174,7 +162,7 @@ impl PricingRuntime {
                     Chainlink::new(
                         routes.price_group(route, &s.rpc_group)?,
                         routes.price_group(route, &s.rpc_group_b)?,
-                        feed(&s.feed, 8453).ok_or("unsupported sequencer feed")?,
+                        feed(&s.feed, BASE_CHAIN_ID).ok_or("unsupported sequencer feed")?,
                     ),
                     s.grace_s,
                 ))
@@ -678,6 +666,202 @@ mod tests {
         assert_eq!(
             serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
             golden_failure("depeg", &golden_audit("stablecoin", "depeg", &stable)).as_bytes()
+        );
+    }
+
+    fn reversed_group_route() -> RouteFile {
+        let mut route = route();
+        route.chain.rpc_providers = vec!["b".into(), "a".into()];
+        route.pricing.fx = vec![Source::Chainlink {
+            feed: "USDT_USD".into(),
+            chain_id: 1,
+            rpc_group: "a".into(),
+            rpc_group_b: None,
+            observation_chain_id: None,
+        }];
+        route
+    }
+
+    fn regression_config(
+        a: &str,
+        b: &str,
+    ) -> (
+        std::collections::BTreeMap<String, crate::rpc_groups::GroupSpec>,
+        std::collections::BTreeMap<String, crate::rpc_groups::Company>,
+        std::collections::BTreeMap<String, topup_adapters::chain::evm::group::budget::BudgetSpec>,
+    ) {
+        use crate::rpc_groups::{Company, GroupSpec, MemberSpec};
+        use std::collections::BTreeMap;
+        use topup_adapters::chain::evm::group::{GroupPolicy, budget::BudgetSpec};
+        let groups = [("a", a), ("b", b)]
+            .into_iter()
+            .map(|(id, url)| {
+                (
+                    id.into(),
+                    GroupSpec {
+                        chain_id: 1,
+                        policy: GroupPolicy::default(),
+                        members: vec![MemberSpec {
+                            id: format!("price-{id}"),
+                            company: format!("provider-{id}"),
+                            url: url.into(),
+                            sealed_key: None,
+                            account_budget: "account".into(),
+                            key_budget: "key".into(),
+                            priority: 0,
+                            weight: 1,
+                        }],
+                    },
+                )
+            })
+            .collect();
+        let companies = BTreeMap::from([
+            (
+                "provider-a".into(),
+                Company {
+                    domains: vec!["127.0.0.1".into()],
+                },
+            ),
+            (
+                "provider-b".into(),
+                Company {
+                    domains: vec!["localhost".into()],
+                },
+            ),
+        ]);
+        let budgets = ["account", "key"]
+            .into_iter()
+            .map(|id| {
+                (
+                    id.into(),
+                    BudgetSpec {
+                        requests_per_second: 100,
+                        burst: 100,
+                    },
+                )
+            })
+            .collect();
+        (groups, companies, budgets)
+    }
+
+    struct RegressionRpc {
+        url: String,
+        task: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for RegressionRpc {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+    async fn regression_rpc(answer: i64) -> RegressionRpc {
+        use alloy::sol_types::SolCall;
+        use alloy_primitives::{B256, I256, U256, Uint};
+        use axum::{Json, Router, routing::post};
+        use topup_adapters::pricing::chainlink::{
+            decimalsCall, latestRoundDataCall, latestRoundDataReturn,
+        };
+        let now = validation_time().unwrap().value();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handler = move |Json(request): Json<Value>| async move {
+            let result = match request["method"].as_str().unwrap() {
+                "eth_blockNumber" => json!("0x64"),
+                "eth_getBlockByNumber" => {
+                    let mut block = serde_json::to_value(alloy::rpc::types::Block::<
+                        alloy::rpc::types::Transaction,
+                    >::default())
+                    .unwrap();
+                    block["number"] = if request["params"][0] == "latest" {
+                        json!("0x64")
+                    } else {
+                        request["params"][0].clone()
+                    };
+                    block["hash"] = json!(B256::repeat_byte(1));
+                    block["parentHash"] = json!(B256::repeat_byte(2));
+                    block["timestamp"] = json!(format!("0x{now:x}"));
+                    block
+                }
+                "eth_call" => {
+                    assert_eq!(request["params"][1], "0x62");
+                    let call = &request["params"][0];
+                    let input = call["input"]
+                        .as_str()
+                        .or_else(|| call["data"].as_str())
+                        .unwrap();
+                    let data = if input.starts_with("0x313ce567") {
+                        decimalsCall::abi_encode_returns(&8)
+                    } else {
+                        latestRoundDataCall::abi_encode_returns(&latestRoundDataReturn {
+                            roundId: Uint::<80, 2>::from(20),
+                            answer: I256::try_from(answer).unwrap(),
+                            startedAt: U256::from(now),
+                            updatedAt: U256::from(now),
+                            answeredInRound: Uint::<80, 2>::from(20),
+                        })
+                    };
+                    json!(format!("0x{}", hex::encode(data)))
+                }
+                _ => panic!("unexpected RPC"),
+            };
+            Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
+        };
+        let app = Router::new().route("/", post(handler));
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        RegressionRpc { url, task }
+    }
+
+    #[tokio::test]
+    async fn runtime_reads_the_reversed_pair_validation_approved() {
+        let route = reversed_group_route();
+        let a = regression_rpc(101_000_000).await;
+        let b = regression_rpc(100_000_000).await;
+        let (groups, companies, budgets) =
+            regression_config(&a.url, &b.url.replace("127.0.0.1", "localhost"));
+        crate::rpc_groups::validate(std::slice::from_ref(&route), &groups, &companies, &budgets)
+            .unwrap();
+        let expected = ("b".into(), "a".into(), 1);
+        assert_eq!(price_pair(&route, &route.pricing.fx[0]).unwrap(), expected);
+        assert_eq!(
+            crate::rpc_groups::price_pairs(&route).unwrap(),
+            vec![expected]
+        );
+        let clients = crate::rpc_groups::clients(&groups, &budgets, |_| None).unwrap();
+        for client in clients.values() {
+            client.group().unwrap().verified(0, true);
+        }
+        let routes = RouteSet::with_groups(vec![route.clone()], clients).unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/pricing-regression")
+            .unwrap();
+        let runtime = PricingRuntime::configured(&route, &routes, pool).unwrap();
+        let error = runtime.fx[0].source.quote().await.unwrap_err();
+        let PriceError::Feed { class, evidence } = error else {
+            panic!("expected A/B disagreement, got {error:?}");
+        };
+        assert_eq!(class, "divergent");
+        // Distinct answers pin both the identity and the order of the groups actually read.
+        assert_eq!(evidence["a"]["answer"], "100000000");
+        assert_eq!(evidence["b"]["answer"], "101000000");
+    }
+
+    #[test]
+    fn validation_rejects_a_price_pair_resolving_to_one_group() {
+        let mut route = reversed_group_route();
+        let Source::Chainlink { rpc_group_b, .. } = &mut route.pricing.fx[0] else {
+            unreachable!();
+        };
+        *rpc_group_b = Some("a".into());
+        let (groups, companies, budgets) =
+            regression_config("http://127.0.0.1:1", "http://localhost:2");
+        assert_eq!(
+            crate::rpc_groups::price_pairs(&route).unwrap(),
+            vec![("b".into(), "b".into(), 1)]
+        );
+        assert_eq!(
+            crate::rpc_groups::validate(&[route], &groups, &companies, &budgets).unwrap_err(),
+            "price RPC A/B must have matching chain and disjoint companies"
         );
     }
 
