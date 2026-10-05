@@ -20,8 +20,7 @@ from topup_sdk import (
 
 from ._support import CLIENT_ACCOUNT as ACCOUNT
 from ._support import CLIENT_API_KEY as API_KEY
-from ._support import CLIENT_NOW as NOW
-from ._support import CLIENT_QUOTE_ID as QUOTE_ID
+from ._support import EPOCH, QUOTE_ID
 from ._support import _client_deposit as _deposit
 
 LIVE_KEY = "ppay_rk_live_" + "A" * 43 + "000000"
@@ -70,8 +69,8 @@ def _quote(**fields: object) -> dict[str, object]:
         "address": address,
         "payment_uri": f"ethereum:0x{'22' * 20}@11155111/transfer?address={address}&uint256=100",
         "status": "open",
-        "expires_at": NOW + 900,
-        "created": NOW,
+        "expires_at": EPOCH + 900,
+        "created": EPOCH,
         "payment": None,
         "deposit": None,
         "terms": QUOTE_TERMS,
@@ -100,7 +99,7 @@ class FakeService:
                     "charges_enabled": False,
                     "paused_scopes": [],
                     "webhook_keys": [{"version": 1, "expires_at": None}],
-                    "created": NOW,
+                    "created": EPOCH,
                 },
             )
         self.requests.append(request)
@@ -275,7 +274,7 @@ def test_restricted_keys_are_created_with_their_permissions() -> None:
         "secret": "ppay_rk_test_" + "B" * 49,
         "redacted": "ppay_rk_test_…BBBB",
         "status": "active",
-        "created": NOW,
+        "created": EPOCH,
         "expires_at": None,
         "last_used": None,
     }
@@ -340,7 +339,7 @@ REFUND = {
     "failure_reason": None,
     "transaction_hash": None,
     "receipt_log_index": None,
-    "created": NOW,
+    "created": EPOCH,
 }
 
 
@@ -387,7 +386,7 @@ def test_quote_payment_is_optional_and_parsed() -> None:
         "tx_hash": "0x" + "ab" * 32,
         "amount_atomic": "100",
         "confirmations": 1,
-        "estimated_final_at": NOW + 900,
+        "estimated_final_at": EPOCH + 900,
         "matches_quote": True,
         "deposit": "dep_" + "08" * 16,
     }
@@ -550,14 +549,14 @@ def test_account_settings_keys_endpoints_and_events_use_their_paths() -> None:
         "charges_enabled": False,
         "paused_scopes": ["quotes"],
         "webhook_keys": [{"version": 1, "expires_at": None}],
-        "created": NOW,
+        "created": EPOCH,
     }
     settings = {
         "object": "payment_settings",
         "livemode": False,
         "status": "configured",
         "revision": "psrev_" + "04" * 16,
-        "updated": NOW,
+        "updated": EPOCH,
         "quote_creations_per_customer_per_minute": None,
         "chains": [
             {"chain_id": 11155111, "confirmations": "finalized", "assets": [{"asset": "usdc"}]}
@@ -572,7 +571,7 @@ def test_account_settings_keys_endpoints_and_events_use_their_paths() -> None:
         "name": "ci",
         "redacted": "ppay_sk_test_…AAAA",
         "status": "active",
-        "created": NOW,
+        "created": EPOCH,
         "expires_at": None,
         "last_used": None,
     }
@@ -582,7 +581,7 @@ def test_account_settings_keys_endpoints_and_events_use_their_paths() -> None:
         "account": ACCOUNT,
         "livemode": False,
         "type": "deposit.credited",
-        "created": NOW,
+        "created": EPOCH,
         "actor": "system",
         "data": {"object": {}},
         "pending_webhooks": 0,

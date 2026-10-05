@@ -11,7 +11,7 @@ from topup_sdk import TopupClient, export_account
 
 from ._support import CLIENT_ACCOUNT as ACCOUNT
 from ._support import CLIENT_API_KEY as API_KEY
-from ._support import CLIENT_NOW as NOW
+from ._support import EPOCH
 from ._support import _client_deposit as _deposit
 
 LISTS = {
@@ -53,7 +53,7 @@ def _service(request: httpx.Request) -> httpx.Response:
                 "charges_enabled": False,
                 "paused_scopes": [],
                 "webhook_keys": [],
-                "created": NOW,
+                "created": EPOCH,
             },
         )
     if path == "/v1/payment_settings":
@@ -64,7 +64,7 @@ def _service(request: httpx.Request) -> httpx.Response:
                 "livemode": False,
                 "status": "unconfigured",
                 "revision": "psrev_" + "05" * 16,
-                "updated": NOW,
+                "updated": EPOCH,
                 "quote_creations_per_customer_per_minute": None,
                 "chains": [],
                 "available": [],

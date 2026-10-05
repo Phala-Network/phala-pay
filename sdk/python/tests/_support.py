@@ -51,8 +51,6 @@ SECRET = QUOTE_ID + "_secret_" + "ab" * 24
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 CLIENT_API_KEY = "ppay_sk_test_" + "A" * 43 + "000000"
 CLIENT_ACCOUNT = "acct_" + "0a" * 16
-CLIENT_NOW = 1_790_000_000
-CLIENT_QUOTE_ID = "qt_" + "0c" * 16
 RUST_KEY = Ed25519PrivateKey.from_private_bytes(bytes([7] * 32))
 RUST_ID = "evt_018d5f8e8a7b7d65bc442c4f5f0a6d31"
 RUST_TIMESTAMP = 1_674_087_231
@@ -286,7 +284,7 @@ def _client_deposit(index: int) -> dict[str, object]:
         "object": "deposit",
         "livemode": False,
         "client_reference_id": "ws 1",
-        "quote": CLIENT_QUOTE_ID,
+        "quote": QUOTE_ID,
         "deposit_address": None,
         "status": "credited",
         "final": True,
@@ -301,7 +299,7 @@ def _client_deposit(index: int) -> dict[str, object]:
         "currency": "usd",
         "exchange_rate": "1.00000000",
         "price_source": "quote",
-        "valued_at": CLIENT_NOW,
+        "valued_at": EPOCH,
         "address": "0x" + "11" * 20,
         "from_address": "0x" + "33" * 20,
         "tx_hash": "0x" + "ab" * 32,
@@ -310,12 +308,12 @@ def _client_deposit(index: int) -> dict[str, object]:
         "log_index": index,
         "block_number": 1,
         "block_hash": "0x" + "cd" * 32,
-        "block_time": CLIENT_NOW,
+        "block_time": EPOCH,
         "amount_refunded_atomic": "0",
         "refunded": False,
         "amount_refunded": 0,
         "amount_reversed": 0,
-        "created": CLIENT_NOW,
+        "created": EPOCH,
     }
 
 
