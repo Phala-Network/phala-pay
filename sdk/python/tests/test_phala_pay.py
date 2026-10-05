@@ -22,110 +22,27 @@ from phala_pay import (
     Webhook,
 )
 from topup_client.models import DepositMetadata, QuoteMetadata
-from topup_sdk import deposit_address, load_webhook_public_key, quote_address, sign_webhook
+from topup_sdk import deposit_address, load_webhook_public_key, sign_webhook
 
-API_KEY = "ppay_sk_test_" + "B" * 43 + "000000"
-SERVICE_KEY = Ed25519PrivateKey.from_private_bytes(bytes([9] * 32))
-SERVICE_PUBLIC_KEY = (
-    "whpk_"
-    + base64.b64encode(
-        SERVICE_KEY.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    ).decode()
+from ._support import (
+    ACCOUNT,
+    ADDRESS,
+    API_KEY,
+    DEPOSIT_ADDRESS_ID,
+    EVENT_ID,
+    FACTORY,
+    IMPLEMENTATION,
+    QUOTE_ID,
+    REFUND_ID,
+    SERVICE_KEY,
+    SERVICE_PUBLIC_KEY,
+    TREASURY,
+    _delivery,
+    _deposit,
+    _deposit_address,
+    _network,
+    _quote,
 )
-QUOTE_ID = "qt_" + "0c" * 16
-EVENT_ID = "evt_" + "26" * 16
-REFUND_ID = "re_" + "0d" * 16
-ADDRESS = "0x" + "11" * 20
-ACCOUNT = "acct_" + "a1" * 16
-
-
-# The terms a quote was issued with (`Quote.terms`), as the service resolves them from a route's
-# defaults.
-QUOTE_TERMS = {
-    "quote_ttl_seconds": 900,
-    "quote_spread_bps": 50,
-    "quote_tolerance_bps": 100,
-    "quote_amount_decimals": 4,
-    "min_amount": 100,
-    "min_deposit_atomic": "0",
-    "max_deposit_atomic": "1000000000000000000000000",
-    "min_refund_atomic": "1",
-    "confirmations": "2",
-}
-
-
-def _quote(**fields: object) -> dict[str, object]:
-    address = quote_address(
-        FACTORY,
-        IMPLEMENTATION,
-        TREASURY,
-        account=ACCOUNT,
-        client_reference_id="team-42",
-        quote_id=QUOTE_ID,
-    )
-    return {
-        "id": QUOTE_ID,
-        "object": "quote",
-        "livemode": False,
-        "client_reference_id": "team-42",
-        "treasury": TREASURY.lower(),
-        "metadata": {},
-        "amount": 2500,
-        "currency": "usd",
-        "chain_id": 11155111,
-        "asset": "pha",
-        "amount_atomic": "100",
-        "exchange_rate": "25.00000000",
-        "address": address,
-        "payment_uri": f"ethereum:0x{'22' * 20}@11155111/transfer?address={address}&uint256=100",
-        "status": "open",
-        "expires_at": 1_790_000_900,
-        "created": 1_790_000_000,
-        "payment": None,
-        "deposit": None,
-        "terms": QUOTE_TERMS,
-        **fields,
-    }
-
-
-def _deposit(index: int = 1) -> dict[str, object]:
-    return {
-        "id": f"dep_{index:032x}",
-        "object": "deposit",
-        "livemode": False,
-        "client_reference_id": "team-42",
-        "quote": QUOTE_ID,
-        "deposit_address": None,
-        "status": "credited",
-        "final": False,
-        "swept": False,
-        "rejection_reason": None,
-        "chain_id": 11155111,
-        "asset": "pha",
-        "asset_contract": "0x" + "22" * 20,
-        "amount_atomic": "100",
-        "amount": 2500,
-        "currency": "usd",
-        "exchange_rate": "25.00000000",
-        "price_source": "quote",
-        "valued_at": 1_790_000_300,
-        "address": ADDRESS,
-        "from_address": "0x" + "33" * 20,
-        "tx_hash": "0x" + "ab" * 32,
-        "receipt_log_index": index,
-        "revision": 0,
-        "log_index": index,
-        "block_number": 1,
-        "block_hash": "0x" + "cd" * 32,
-        "block_time": 1_790_000_290,
-        "amount_refunded_atomic": "0",
-        "refunded": False,
-        "amount_refunded": 0,
-        "amount_reversed": 0,
-        "created": 1_790_000_300,
-        "metadata": {"order_id": "6735"},
-    }
-
 
 # Resources ---------------------------------------------------------------------------------------
 
@@ -238,57 +155,6 @@ def test_deposits_list_follows_every_page() -> None:
     with _client(httpx.MockTransport(handler)) as client:
         deposits = list(client.deposits.list(client_reference_id="team-42"))
     assert [d.log_index for d in deposits] == [3, 2, 1]
-
-
-ACCOUNT = "acct_" + "0c" * 16
-FACTORY = "0xe8A9Ab1AbC7651A5b7C2ED5B662F2f80BF5C446d"
-IMPLEMENTATION = "0xfeb1871c9897251C74b39DFC74e577888290faE6"
-TREASURY = "0x0000000000000000000000000000000000007EA5"
-DEPOSIT_ADDRESS_ID = "da_" + "0d" * 16
-
-
-def _network(chain_id: int, address: str, treasury: str = TREASURY) -> dict[str, object]:
-    return {
-        "chain_id": chain_id,
-        "address": address,
-        "treasury": treasury.lower(),
-        "assets": [
-            {
-                "asset": "pha",
-                "contract": "0x" + "22" * 20,
-                "decimals": 18,
-                "payment_uri": f"ethereum:0x{'22' * 20}@{chain_id}/transfer?address={address}",
-            }
-        ],
-    }
-
-
-def _deposit_address(version: int = 1, **fields: object) -> dict[str, object]:
-    address = deposit_address(
-        FACTORY,
-        IMPLEMENTATION,
-        TREASURY,
-        account=ACCOUNT,
-        livemode=False,
-        client_reference_id="team-42",
-        version=version,
-    ).lower()
-    return {
-        "id": DEPOSIT_ADDRESS_ID,
-        "object": "deposit_address",
-        "livemode": False,
-        "client_reference_id": "team-42",
-        "address": address,
-        "version": version,
-        "salt": "0x" + "00" * 32,
-        "status": "active",
-        "created": 1_790_000_000,
-        "retired_at": None,
-        "metadata": {},
-        "networks": [_network(11155111, address), _network(84532, address)],
-        "payments": [],
-        **fields,
-    }
 
 
 def test_deposit_addresses_create_rotate_and_list_check_every_active_address() -> None:
@@ -412,37 +278,6 @@ def test_the_key_must_be_an_api_key() -> None:
 
 
 # Webhooks ----------------------------------------------------------------------------------------
-
-
-def _delivery(
-    event_type: str = "deposit.credited",
-    obj: dict[str, object] | None = None,
-    *,
-    event_id: str = EVENT_ID,
-    webhook_id: str = EVENT_ID,
-    timestamp: int | None = None,
-    key: Ed25519PrivateKey | list[Ed25519PrivateKey] = SERVICE_KEY,
-    account: str = ACCOUNT,
-    livemode: bool = False,
-    extra: dict[str, object] | None = None,
-) -> tuple[bytes, dict[str, str]]:
-    data: dict[str, object] = {"object": _deposit() if obj is None else obj}
-    body = json.dumps(
-        {
-            "id": event_id,
-            "object": "event",
-            "account": account,
-            "livemode": livemode,
-            "type": event_type,
-            "created": 1_790_000_321,
-            "actor": "system",
-            "request": None,
-            "data": data,
-            **(extra or {}),
-        }
-    ).encode()
-    stamp = int(time.time()) if timestamp is None else timestamp
-    return body, sign_webhook(key, webhook_id, stamp, body)
 
 
 def _construct(

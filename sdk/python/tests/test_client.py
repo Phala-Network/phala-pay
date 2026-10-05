@@ -18,14 +18,16 @@ from topup_sdk import (
     quote_address,
 )
 
-API_KEY = "ppay_sk_test_" + "A" * 43 + "000000"
+from ._support import CLIENT_ACCOUNT as ACCOUNT
+from ._support import CLIENT_API_KEY as API_KEY
+from ._support import CLIENT_NOW as NOW
+from ._support import CLIENT_QUOTE_ID as QUOTE_ID
+from ._support import _client_deposit as _deposit
+
 LIVE_KEY = "ppay_rk_live_" + "A" * 43 + "000000"
-ACCOUNT = "acct_" + "0a" * 16
-NOW = 1_790_000_000
 FACTORY = "0x" + "aa" * 20
 IMPLEMENTATION = "0x" + "bb" * 20
 TREASURY = "0x" + "cc" * 20
-QUOTE_ID = "qt_" + "0c" * 16
 
 
 # The terms a quote was issued with (`Quote.terms`), as the service resolves them from a route's
@@ -286,45 +288,6 @@ def test_restricted_keys_are_created_with_their_permissions() -> None:
         "name": "checkout",
         "type": "restricted",
         "permissions": ["quotes.write"],
-    }
-
-
-def _deposit(index: int) -> dict[str, object]:
-    return {
-        "id": f"dep_{index:032x}",
-        "object": "deposit",
-        "livemode": False,
-        "client_reference_id": "ws 1",
-        "quote": QUOTE_ID,
-        "deposit_address": None,
-        "status": "credited",
-        "final": True,
-        "swept": False,
-        "metadata": {},
-        "rejection_reason": None,
-        "chain_id": 11155111,
-        "asset": "pha",
-        "asset_contract": "0x" + "22" * 20,
-        "amount_atomic": "1",
-        "amount": 1,
-        "currency": "usd",
-        "exchange_rate": "1.00000000",
-        "price_source": "quote",
-        "valued_at": NOW,
-        "address": "0x" + "11" * 20,
-        "from_address": "0x" + "33" * 20,
-        "tx_hash": "0x" + "ab" * 32,
-        "receipt_log_index": index,
-        "revision": 0,
-        "log_index": index,
-        "block_number": 1,
-        "block_hash": "0x" + "cd" * 32,
-        "block_time": NOW,
-        "amount_refunded_atomic": "0",
-        "refunded": False,
-        "amount_refunded": 0,
-        "amount_reversed": 0,
-        "created": NOW,
     }
 
 

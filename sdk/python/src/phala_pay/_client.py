@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import math
 import os
+import random
+import time
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any, TypedDict, Unpack, cast
 from weakref import ReferenceType, ref
@@ -105,6 +108,26 @@ class PhalaPay:
     `code`, `param`, `doc_url`, and `request_id`.
     """
 
+    _client_factory: Callable[..., TopupClient] = TopupClient
+
+    @classmethod
+    def _with_test_hooks(
+        cls,
+        api_key: str,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+        rng: Callable[[], float] = random.random,
+        wall_clock: Callable[[], float] = time.time,
+        **options: Any,
+    ) -> PhalaPay:
+        client = cls.__new__(cls)
+        client._client_factory = partial(
+            TopupClient, clock=clock, sleep=sleep, rng=rng, wall_clock=wall_clock
+        )
+        cls.__init__(client, api_key, **options)
+        return client
+
     def __init__(  # noqa: PLR0912, PLR0915
         self,
         api_key: str,
@@ -163,7 +186,7 @@ class PhalaPay:
             forwarder = (self._pins.factory, self._pins.implementation)
             treasuries = self._pins.treasuries
             account = self._pins.account
-        self._client = TopupClient(
+        self._client = self._client_factory(
             api_base,
             api_key,
             account=cast(str | None, account),

@@ -9,7 +9,10 @@ import httpx
 
 from topup_sdk import TopupClient, export_account
 
-from .test_client import ACCOUNT, API_KEY, NOW, _deposit
+from ._support import CLIENT_ACCOUNT as ACCOUNT
+from ._support import CLIENT_API_KEY as API_KEY
+from ._support import CLIENT_NOW as NOW
+from ._support import _client_deposit as _deposit
 
 LISTS = {
     "/v1/quotes",

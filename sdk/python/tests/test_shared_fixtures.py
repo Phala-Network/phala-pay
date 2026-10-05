@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from email.utils import formatdate
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -30,16 +28,7 @@ from topup_sdk import (
 from topup_sdk.client import TopupClient, _ErrorResponseError, _seconds
 from topup_sdk.errors import ApiError, SignatureError
 
-FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
-
-
-def load(name: str) -> dict[str, Any]:
-    value = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
-    assert isinstance(value, dict)
-    assert value["schema_version"] == 1
-    if name != "manifest.json":
-        assert isinstance(value["group"], str)
-    return value
+from ._support import load
 
 
 def test_manifest_declares_implemented_and_pending_groups() -> None:

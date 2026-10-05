@@ -27,18 +27,22 @@ from phala_pay import (
 from phala_pay._client import _BoundWebhook
 from topup_sdk import sign_webhook
 
-from .test_ergonomics_transport import KEY, SECRET, pay, pins, valid_key
-from .test_phala_pay import (
+from ._support import (
     ACCOUNT,
     EVENT_ID,
+    KEY,
+    SECRET,
     SERVICE_KEY,
     SERVICE_PUBLIC_KEY,
     _delivery,
     _deposit,
     _deposit_address,
     _quote,
+    load,
+    pay,
+    pins,
+    valid_key,
 )
-from .test_shared_fixtures import load
 
 
 def encoded(value: Any) -> str:

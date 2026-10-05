@@ -15,19 +15,20 @@ from fastapi.testclient import TestClient
 from phala_pay import PhalaPay
 from topup_sdk import sign_webhook
 
-from .test_ergonomics_transport import KEY, pins
-from .test_phala_pay import (
+from ._support import (
     ACCOUNT,
     API_KEY,
     EVENT_ID,
     FACTORY,
     IMPLEMENTATION,
+    KEY,
     QUOTE_ID,
     SERVICE_KEY,
     SERVICE_PUBLIC_KEY,
     _deposit,
+    pins,
 )
-from .test_phala_pay import _quote as quote_object
+from ._support import _quote as quote_object
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "examples"))
 

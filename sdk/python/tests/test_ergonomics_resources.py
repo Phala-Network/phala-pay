@@ -10,8 +10,7 @@ import pytest
 
 from phala_pay import ApiError, Deposit
 
-from .test_ergonomics_transport import pay, record_response
-from .test_phala_pay import _deposit, _quote
+from ._support import _deposit, _quote, pay, record_response
 
 OPERATIONS = [
     (

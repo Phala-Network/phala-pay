@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from email.utils import formatdate
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -12,48 +11,12 @@ import pytest
 from phala_pay import (
     ApiError,
     ConfigurationError,
-    PhalaPay,
     ResponseValidationError,
     TransportError,
 )
-from topup_sdk._transport import REQUEST_STATE, HTTPClient
+from topup_sdk._transport import REQUEST_STATE
 
-from .test_ergonomics_transport import Clock, pay
-from .test_phala_pay import QUOTE_ID, _quote
-
-EPOCH = 1_790_000_000
-
-
-def merchant(
-    handler: Callable[[httpx.Request], httpx.Response], clock: Clock, **options: Any
-) -> PhalaPay:
-    client = pay(handler, **options)
-    # Exercise public resources using the transport's existing injected clock/RNG.
-    client._client._clock = clock
-    client._client._sleep = clock.sleep
-    client._client._rng = lambda: 0.0
-    client._client._wall_clock = lambda: EPOCH + clock.now
-    http = client._client._client.get_httpx_client()
-    assert isinstance(http, HTTPClient)
-    http.clock = clock
-    return client
-
-
-def maintenance(*, headers: dict[str, str] | None = None) -> httpx.Response:
-    return httpx.Response(
-        503,
-        json={"error": {"code": "service_maintenance", "message": "Restarting"}},
-        headers=headers,
-    )
-
-
-def invoke(client: PhalaPay, method: str, **options: Any) -> None:
-    if method == "GET":
-        client.quotes.retrieve(QUOTE_ID, **options)
-    else:
-        client.quotes.create(
-            client_reference_id="order-42", amount=2500, chain_id=11155111, asset="pha", **options
-        )
+from ._support import Clock, _quote, invoke, maintenance, merchant
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])
@@ -90,23 +53,6 @@ def test_three_minute_outage_recovers_with_fixed_body_and_key(method: str, outag
     assert max(clock.delays) <= 10
     if outage in {"maintenance", "mixed"}:
         assert attempts[1][0] == 5
-
-
-@pytest.mark.parametrize("rng_value", [0.0, 0.25, 1.0])
-def test_upgrade_jitter_half_full_exponential_and_ten_second_cap(rng_value: float) -> None:
-    clock = Clock()
-    calls = 0
-
-    def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return maintenance() if calls <= 8 else httpx.Response(200, json=_quote())
-
-    with merchant(handler, clock, upgrade_tolerance=True) as client:
-        client._client._rng = lambda: rng_value
-        invoke(client, "GET")
-    caps = [0.5, 1, 2, 4, 8, 10, 10, 10]
-    assert clock.delays == [cap * (0.5 + 0.5 * rng_value) for cap in caps]
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])
@@ -163,23 +109,6 @@ def test_explicit_deadline_is_never_extended(scope: str, deadline: float) -> Non
         assert timeouts == [2]
 
 
-@pytest.mark.parametrize("http_date", [False, True])
-def test_gateway_retry_after_minimum_and_remaining_deadline(http_date: bool) -> None:
-    clock = Clock()
-    calls: list[float] = []
-
-    def handler(_: httpx.Request) -> httpx.Response:
-        calls.append(clock.now)
-        seconds = 5 if len(calls) == 1 else 300
-        header = formatdate(EPOCH + clock.now + seconds, usegmt=True) if http_date else str(seconds)
-        return httpx.Response(502, text="<html>down</html>", headers={"Retry-After": header})
-
-    with merchant(handler, clock, upgrade_tolerance=True) as client, pytest.raises(TransportError):
-        invoke(client, "GET")
-    assert calls == [0, 5]
-    assert clock.delays == [5]
-
-
 @pytest.mark.parametrize("stage", ["request", "body", "sleep"])
 def test_keyboard_interrupt_is_terminal_and_closes_body(stage: str) -> None:
     clock = Clock()
@@ -206,42 +135,20 @@ def test_keyboard_interrupt_is_terminal_and_closes_body(stage: str) -> None:
     def interrupted_sleep(_: float) -> None:
         raise KeyboardInterrupt
 
-    with merchant(handler, clock, upgrade_tolerance=True) as client:
-        if stage == "sleep":
-            client._client._sleep = interrupted_sleep
-        with pytest.raises(KeyboardInterrupt):
-            invoke(client, "POST")
+    with (
+        merchant(
+            handler,
+            clock,
+            upgrade_tolerance=True,
+            sleep=interrupted_sleep if stage == "sleep" else clock.sleep,
+        ) as client,
+        pytest.raises(KeyboardInterrupt),
+    ):
+        invoke(client, "POST")
     assert calls == 1
     assert clock.delays == []
     assert closed == ([True] if stage == "body" else [])
     assert REQUEST_STATE.get() is None
-
-
-@pytest.mark.parametrize("fault", ["api", "html", "body_timeout"])
-def test_replayed_error_ends_upgrade_retries(fault: str) -> None:
-    clock = Clock()
-    calls = 0
-
-    class SlowBody(httpx.SyncByteStream):
-        def __iter__(self) -> Iterator[bytes]:
-            clock.now += 16
-            yield b"late"
-
-    def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        headers = {"Idempotent-Replayed": "True"}
-        if fault == "api":
-            return maintenance(headers=headers)
-        if fault == "html":
-            return httpx.Response(502, text="<html>down</html>", headers=headers)
-        return httpx.Response(503, stream=SlowBody(), headers=headers)
-
-    expected = TransportError if fault == "body_timeout" else ApiError
-    with merchant(handler, clock, upgrade_tolerance=True) as client, pytest.raises(expected):
-        invoke(client, "POST")
-    assert calls == 1
-    assert clock.delays == []
 
 
 @pytest.mark.parametrize("method", ["DELETE", "PATCH"])
@@ -267,25 +174,6 @@ def test_non_idempotent_methods_are_not_extended(method: str, fault: str) -> Non
             inner._call(operation, object)
     assert calls == 1
     assert clock.delays == []
-
-
-def test_unreplayable_post_is_rejected_before_io() -> None:
-    clock = Clock()
-    calls: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return maintenance()
-
-    with merchant(handler, clock, upgrade_tolerance=True) as client:
-        inner = client._client
-
-        def operation() -> Any:
-            return inner._client.get_httpx_client().request("POST", "/test", content=iter([b"x"]))
-
-        with pytest.raises(ConfigurationError, match="replayable"):
-            inner._call(operation, object)
-    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -373,21 +261,6 @@ def test_upgrade_tolerance_requires_boolean_before_io(scope: str, invalid: Any) 
     ):
         invoke(client, "GET", **({"upgrade_tolerance": invalid} if scope == "call" else {}))
     assert calls == []
-
-
-def test_default_total_deadline_includes_attempts_and_sleeps() -> None:
-    clock = Clock()
-    timeouts: list[float] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        timeouts.append(request.extensions["timeout"]["read"])
-        clock.now += timeouts[-1]
-        raise httpx.ReadTimeout("offline")
-
-    with merchant(handler, clock) as client, pytest.raises(TransportError):
-        invoke(client, "GET")
-    assert timeouts == [15, 15, 15, 13.25]
-    assert clock.now == 60
 
 
 @pytest.mark.parametrize("status", [502, 503, 504])
@@ -512,9 +385,10 @@ def test_expired_wait_returns_last_error_without_another_request() -> None:
     def delayed_sleep(_: float) -> None:
         clock.now = 300
 
-    with merchant(handler, clock, upgrade_tolerance=True) as client:
-        client._client._sleep = delayed_sleep
-        with pytest.raises(ApiError) as raised:
-            invoke(client, "GET")
+    with (
+        merchant(handler, clock, upgrade_tolerance=True, sleep=delayed_sleep) as client,
+        pytest.raises(ApiError) as raised,
+    ):
+        invoke(client, "GET")
     assert raised.value.code == "service_maintenance"
     assert calls == 1

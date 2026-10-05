@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-import zlib
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from email.utils import formatdate
 from typing import Any
 
@@ -18,7 +17,6 @@ from phala_pay import (
     ApiError,
     ConfigurationError,
     PhalaPay,
-    Pins,
     Quote,
     ResponseValidationError,
     TopupError,
@@ -27,170 +25,106 @@ from phala_pay import (
 from topup_client.types import Unset
 from topup_sdk.client import TopupClient
 
-from .test_phala_pay import (
-    ACCOUNT,
-    FACTORY,
-    IMPLEMENTATION,
+from ._support import (
+    EPOCH,
+    KEY,
     QUOTE_ID,
-    SERVICE_PUBLIC_KEY,
+    SECRET,
     TREASURY,
+    Clock,
     _deposit,
     _deposit_address,
     _quote,
+    error,
+    invoke,
+    maintenance,
+    merchant,
+    pay,
+    pins,
+    record_response,
 )
 
-SECRET = QUOTE_ID + "_secret_" + "ab" * 24
 
-
-def valid_key(*, live: bool = False, restricted: bool = False) -> str:
-    body = f"ppay_{'rk' if restricted else 'sk'}_{'live' if live else 'test'}_" + "A" * 43
-    crc = zlib.crc32(body.encode())
-    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-    checksum = ""
-    for _ in range(6):
-        crc, digit = divmod(crc, 62)
-        checksum = alphabet[digit] + checksum
-    return body + checksum
-
-
-KEY = valid_key()
-
-
-def pins() -> Pins:
-    return Pins(
-        "https://service.test",
-        ACCOUNT,
-        False,
-        FACTORY,
-        IMPLEMENTATION,
-        {11155111: TREASURY, 84532: TREASURY},
-        ((1, SERVICE_PUBLIC_KEY),),
-    )
-
-
-def pay(handler: Callable[[httpx.Request], httpx.Response], **options: Any) -> PhalaPay:
-    return PhalaPay(KEY, pins=pins(), transport=httpx.MockTransport(handler), **options)
-
-
-def record_response(
-    requests: list[httpx.Request],
-    request: httpx.Request,
-    response: httpx.Response,
-) -> httpx.Response:
-    requests.append(request)
-    return response
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = 0.0
-        self.delays: list[float] = []
-
-    def __call__(self) -> float:
-        return self.now
-
-    def sleep(self, delay: float) -> None:
-        self.delays.append(delay)
-        self.now += delay
-
-
-def error(status: int, code: str = "unavailable", **headers: str) -> httpx.Response:
-    return httpx.Response(status, json={"error": {"code": code}}, headers=headers)
-
-
+@pytest.mark.parametrize("upgrade_tolerance", [False, True])
 @pytest.mark.parametrize("rng_value", [0.0, 0.25, 1.0])
-def test_retry_jitter_half_full_exponential_and_five_second_cap(rng_value: float) -> None:
+def test_retry_jitter_half_full_exponential_and_mode_cap(
+    upgrade_tolerance: bool, rng_value: float
+) -> None:
     clock = Clock()
     requests: list[httpx.Request] = []
+    caps = [0.5, 1, 2, 4, 8, 10, 10, 10] if upgrade_tolerance else [0.5, 1, 2, 4, 5, 5]
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return error(503) if len(requests) < 7 else httpx.Response(200, json=_quote())
+        if len(requests) <= len(caps):
+            return maintenance() if upgrade_tolerance else error(503)
+        return httpx.Response(200, json=_quote())
 
-    with TopupClient(
-        "https://service.test",
-        KEY,
-        transport=httpx.MockTransport(handler),
+    with merchant(
+        handler,
+        clock,
+        upgrade_tolerance=upgrade_tolerance,
         max_attempts=7,
-        sleep=clock.sleep,
         rng=lambda: rng_value,
-        clock=clock,
     ) as client:
-        client.get_quote(QUOTE_ID)
-    for actual, base in zip(clock.delays, [0.5, 1.0, 2.0, 4.0, 5.0, 5.0], strict=True):
-        assert 0.5 * base <= actual <= base
-        assert actual == base * (0.5 + 0.5 * rng_value)
-    assert len(requests) == 7
+        invoke(client, "GET")
+    assert clock.delays == [cap * (0.5 + 0.5 * rng_value) for cap in caps]
+    assert len(requests) == len(caps) + 1
 
 
+@pytest.mark.parametrize("upgrade_tolerance", [False, True])
 @pytest.mark.parametrize("http_date", [False, True])
-def test_retry_after_is_exact_minimum_wait(http_date: bool) -> None:
+@pytest.mark.parametrize("scenario", ["minimum", "budget", "minimum_then_budget"])
+def test_retry_after_minimum_wait_and_remaining_budget(
+    upgrade_tolerance: bool, http_date: bool, scenario: str
+) -> None:
     clock = Clock()
     requests: list[httpx.Request] = []
-    epoch = 1_790_000_000
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        retry_after = formatdate(epoch + 3, usegmt=True) if http_date else "3"
-        return (
-            error(429, **{"retry-after": retry_after})
-            if len(requests) == 1
-            else httpx.Response(200, json=_quote())
-        )
+        if scenario == "minimum" and len(requests) == 2:
+            return httpx.Response(200, json=_quote())
+        if scenario == "budget":
+            clock.now += 1.0
+        seconds = {
+            "minimum": 3,
+            "budget": 4,
+            "minimum_then_budget": 5 if len(requests) == 1 else 300,
+        }[scenario]
+        header = formatdate(EPOCH + clock.now + seconds, usegmt=True) if http_date else str(seconds)
+        headers = {"retry-after": header, "request-id": "req_last"}
+        if scenario == "budget":
+            return error(503, "last_error", **headers)
+        if upgrade_tolerance or scenario == "minimum_then_budget":
+            return httpx.Response(502, text="<html>down</html>", headers=headers)
+        return error(429, **headers)
 
-    with TopupClient(
-        "https://service.test",
-        KEY,
-        transport=httpx.MockTransport(handler),
-        sleep=clock.sleep,
-        clock=clock,
-        wall_clock=lambda: epoch + clock.now,
+    with merchant(
+        handler,
+        clock,
+        upgrade_tolerance=upgrade_tolerance,
+        request_deadline=4 if scenario == "budget" else None,
         rng=lambda: 1.0,
     ) as client:
-        client.get_quote(QUOTE_ID)
-    assert clock.delays == [3.0]
-    assert clock.now == 3.0
-    assert len(requests) == 2
-
-
-@pytest.mark.parametrize("http_date", [False, True])
-def test_retry_after_exceeding_remaining_budget_returns_last_error(http_date: bool) -> None:
-    clock = Clock()
-    requests: list[httpx.Request] = []
-    epoch = 1_790_000_000
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        clock.now += 1.0
-        return error(
-            503,
-            "last_error",
-            **{
-                "retry-after": formatdate(epoch + 5, usegmt=True) if http_date else "4",
-                "request-id": "req_last",
-            },
-        )
-
-    with (
-        TopupClient(
-            "https://service.test",
-            KEY,
-            transport=httpx.MockTransport(handler),
-            request_deadline=4,
-            sleep=clock.sleep,
-            clock=clock,
-            wall_clock=lambda: epoch + clock.now,
-        ) as client,
-        pytest.raises(ApiError) as raised,
-    ):
-        client.get_quote(QUOTE_ID)
-    assert (raised.value.code, raised.value.request_id, raised.value.retry_after) == (
-        "last_error",
-        "req_last",
-        4.0,
+        if scenario == "minimum":
+            invoke(client, "GET")
+        else:
+            expected = TransportError if upgrade_tolerance else ApiError
+            with pytest.raises(expected) as raised:
+                invoke(client, "GET")
+            if scenario == "budget" and not upgrade_tolerance:
+                assert isinstance(raised.value, ApiError)
+                assert (raised.value.code, raised.value.request_id, raised.value.retry_after) == (
+                    "last_error",
+                    "req_last",
+                    4.0,
+                )
+    assert clock.delays == (
+        [] if scenario == "budget" else [3.0] if scenario == "minimum" else [5.0]
     )
-    assert clock.delays == []
-    assert len(requests) == 1
+    assert clock.now == (1 if scenario == "budget" else 3 if scenario == "minimum" else 5)
+    assert len(requests) == (1 if scenario == "budget" else 2)
 
 
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
@@ -220,8 +154,7 @@ def test_only_documented_retry_statuses_and_409_code_retry(status: int) -> None:
             else httpx.Response(200, json=_quote())
         )
 
-    with pay(handler) as client:
-        client._client._sleep = lambda _: None
+    with pay(handler, sleep=lambda _: None) as client:
         client.quotes.retrieve(QUOTE_ID)
     assert len(requests) == 2
 
@@ -241,25 +174,40 @@ def test_other_statuses_and_conflicts_are_terminal(status: int, code: str) -> No
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize("status", [200, 500])
-def test_replayed_responses_end_retries(status: int) -> None:
+@pytest.mark.parametrize("upgrade_tolerance", [False, True])
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("fault", ["success", "internal", "api", "html", "body_timeout"])
+def test_replayed_responses_end_retries(upgrade_tolerance: bool, method: str, fault: str) -> None:
+    clock = Clock()
     requests: list[httpx.Request] = []
+
+    class SlowReplayedBody(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            clock.now += 16
+            yield b"late"
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(
-            status,
-            json=_quote() if status == 200 else {"error": {"code": "unavailable"}},
-            headers={"Idempotent-Replayed": "true"},
-        )
+        headers = {"Idempotent-Replayed": "True"}
+        if fault == "success":
+            return httpx.Response(200, json=_quote(), headers=headers)
+        if fault == "internal":
+            return error(500, **headers)
+        if fault == "api":
+            return maintenance(headers=headers)
+        if fault == "html":
+            return httpx.Response(502, text="<html>down</html>", headers=headers)
+        return httpx.Response(503, stream=SlowReplayedBody(), headers=headers)
 
-    with pay(handler) as client:
-        if status == 200:
-            assert client.quotes.retrieve(QUOTE_ID).id == QUOTE_ID
+    with merchant(handler, clock, upgrade_tolerance=upgrade_tolerance) as client:
+        if fault == "success":
+            invoke(client, method)
         else:
-            with pytest.raises(ApiError):
-                client.quotes.retrieve(QUOTE_ID)
+            expected = TransportError if fault == "body_timeout" else ApiError
+            with pytest.raises(expected):
+                invoke(client, method)
     assert len(requests) == 1
+    assert clock.delays == []
 
 
 def test_post_replay_freezes_body_and_generates_one_uuid_per_invocation(
@@ -281,8 +229,7 @@ def test_post_replay_freezes_body_and_generates_one_uuid_per_invocation(
         metadata["order"] = "changed"
         return error(503) if len(requests) == 1 else httpx.Response(200, json=_quote())
 
-    with pay(handler) as client:
-        client._client._sleep = lambda _: None
+    with pay(handler, sleep=lambda _: None) as client:
         for _ in range(2):
             metadata["order"] = "original"
             client.quotes.create(
@@ -330,8 +277,10 @@ def test_network_failures_retry_then_raise_public_transport_error_without_cause(
         requests.append(request)
         raise failure(f"{KEY} {SECRET}")
 
-    with pay(handler, max_attempts=2) as client, pytest.raises(TransportError) as raised:  # noqa: PT012
-        client._client._sleep = lambda _: None
+    with (
+        pay(handler, max_attempts=2, sleep=lambda _: None) as client,
+        pytest.raises(TransportError) as raised,
+    ):
         client.quotes.retrieve(QUOTE_ID)
     assert raised.value.code == ("timeout" if failure is httpx.ReadTimeout else "network")
     assert isinstance(raised.value, TopupError)
@@ -416,31 +365,47 @@ def test_attempt_timeout_includes_response_body_and_closes_stream() -> None:
     assert body.closed
 
 
-def test_deadline_includes_attempts_sleeps_and_per_call_override() -> None:
+@pytest.mark.parametrize("upgrade_tolerance", [False, True])
+@pytest.mark.parametrize("deadline", [None, 1.5])
+def test_total_deadline_includes_attempts_sleeps_and_per_call_override(
+    upgrade_tolerance: bool, deadline: float | None
+) -> None:
     clock = Clock()
     timeouts: list[float] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         timeouts.append(request.extensions["timeout"]["read"])
-        clock.now += 0.4
-        return error(503)
+        clock.now += 0.4 if deadline is not None else timeouts[-1]
+        if deadline is not None:
+            return maintenance()
+        raise httpx.ReadTimeout("offline")
 
     with (
-        TopupClient(
-            "https://service.test",
-            KEY,
-            timeout=15,
-            clock=clock,
-            sleep=clock.sleep,
-            rng=lambda: 1.0,
-            transport=httpx.MockTransport(handler),
+        merchant(
+            handler,
+            clock,
+            upgrade_tolerance=upgrade_tolerance,
+            request_deadline=20 if deadline is not None else None,
+            rng=lambda: 1.0 if deadline is not None else 0.0,
         ) as client,
-        pytest.raises(ApiError),
+        pytest.raises(ApiError if deadline is not None else TransportError),
     ):
-        client.get_quote(QUOTE_ID, request_deadline=1.5)
-    assert timeouts == [1.5, pytest.approx(0.6)]
-    assert clock.delays == [0.5]
-    assert clock.now == pytest.approx(1.3)
+        client.quotes.retrieve(QUOTE_ID, request_deadline=deadline)
+    if deadline is not None:
+        assert timeouts == [1.5, pytest.approx(0.6)]
+        assert clock.delays == [0.5]
+        assert clock.now == pytest.approx(1.3)
+    else:
+        budget = 300 if upgrade_tolerance else 60
+        assert sum(timeouts) + sum(clock.delays) == clock.now
+        assert all(0 < timeout <= 15 for timeout in timeouts)
+        if upgrade_tolerance:
+            assert 290 < clock.now <= budget
+            assert clock.now + 5 >= budget
+            assert len(timeouts) > 4
+        else:
+            assert clock.now == budget
+            assert timeouts == [15, 15, 15, 13.25]
 
 
 @pytest.mark.parametrize(
@@ -784,9 +749,17 @@ def test_api_keys_and_client_secrets_are_redacted_in_reprs_errors_and_logs(
     assert SECRET not in caplog.text
 
 
-def test_unreplayable_post_body_is_rejected_before_authenticated_io() -> None:
+@pytest.mark.parametrize("upgrade_tolerance", [False, True])
+def test_unreplayable_post_body_is_rejected_before_authenticated_io(
+    upgrade_tolerance: bool,
+) -> None:
+    clock = Clock()
     requests: list[httpx.Request] = []
-    with pay(lambda r: record_response(requests, r, httpx.Response(200))) as client:
+    with merchant(
+        lambda r: record_response(requests, r, httpx.Response(200)),
+        clock,
+        upgrade_tolerance=upgrade_tolerance,
+    ) as client:
 
         def operation() -> Any:
             return client._client._client.get_httpx_client().request(
@@ -796,6 +769,7 @@ def test_unreplayable_post_body_is_rejected_before_authenticated_io() -> None:
         with pytest.raises(ConfigurationError, match="replayable"):
             client._client._call(operation, object)
     assert requests == []
+    assert clock.delays == []
 
 
 @pytest.mark.parametrize("method", ["list", "list_page"])

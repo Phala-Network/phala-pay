@@ -11,8 +11,7 @@ import pytest
 from phala_pay import ConfigurationError, PhalaPay
 from topup_sdk import UnpinnedTreasuryWarning
 
-from .test_ergonomics_transport import KEY, pins
-from .test_phala_pay import QUOTE_ID, _quote
+from ._support import KEY, QUOTE_ID, _quote, pins
 
 
 @pytest.mark.parametrize("positional", [False, True])
