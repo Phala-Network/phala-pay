@@ -512,3 +512,16 @@ def test_demo_gets_have_eight_second_operation_deadlines(product: ProductServer)
         assert client.post("/topup/api/quotes", content=b"{}").status_code == 200
     assert 7.5 < remaining[0] <= 8
     assert 24.5 < remaining[1] <= 25
+
+
+def test_worker_selection_uses_the_dispatchers_raw_path(product: ProductServer) -> None:
+    for _ in range(4):
+        assert product._webhook_capacity.acquire(blocking=False)
+    try:
+        with TestClient(product.app) as client:
+            assert client.post("/topup/%77ebhooks", content=b"{}").status_code == 404
+            assert client.post("/topup/webhooks", content=b"{}").status_code == 503
+        cast(Mock, product.fulfillment.handle).assert_not_called()
+    finally:
+        for _ in range(4):
+            product._webhook_capacity.release()

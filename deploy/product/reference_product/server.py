@@ -153,7 +153,8 @@ class ProductServer:
                     if request.url.query:
                         target += "?" + request.url.query
                     webhook = (
-                        request.method == "POST" and request.url.path == base_path + "/webhooks"
+                        request.method == "POST"
+                        and urlsplit(target).path == base_path + "/webhooks"
                     )
                     capacity = self._webhook_capacity if webhook else self._capacity
                     workers = self._webhook_workers if webhook else self._workers
