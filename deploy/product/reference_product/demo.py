@@ -71,6 +71,7 @@ from topup_sdk import (
     safe_batch,
 )
 from topup_sdk.addresses import same_address
+from topup_sdk.errors import ResponseValidationError, TransportError
 
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
 from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
@@ -777,16 +778,27 @@ class DemoConsole:
         seconds."""
         now = self._clock()
         refresh = False
+        synchronous = False
         with self._lock:
             if self._sweeps is not None:
-                if now - self._sweeps[0] < 10:
+                age = now - self._sweeps[0]
+                if age < 10:
                     return self._sweeps[1]
-                if not self._sweeps_refreshing:
+                if age >= 60:
+                    self._sweeps_refreshing = True
+                    synchronous = True
+                elif not self._sweeps_refreshing:
                     self._sweeps_refreshing = True
                     refresh = True
                 view = self._sweeps[1]
             else:
                 view = None
+        if synchronous:
+            try:
+                return self._build_sweeps_view(now)
+            finally:
+                with self._lock:
+                    self._sweeps_refreshing = False
         if view is not None:
             if refresh:
                 threading.Thread(target=self._refresh_sweeps, args=(now,), daemon=True).start()
@@ -795,7 +807,7 @@ class DemoConsole:
 
     def _refresh_sweeps(self, now: float) -> None:
         try:
-            view = self._build_sweeps_view(now)
+            self._build_sweeps_view(now)
         except TopupError:
             LOG.warning("sweeps refresh failed", exc_info=True)
         finally:
@@ -814,7 +826,7 @@ class DemoConsole:
             ]
         view = {"factory": self.config.factory, "groups": groups, "api": calls}
         with self._lock:
-            self._sweeps = (now, view)
+            self._sweeps = (self._clock(), view)
         return view
 
     def _sweep_group(
@@ -838,7 +850,7 @@ class DemoConsole:
         }
         try:
             return self._sweep_group_data(static, service, unswept, now)
-        except TopupError as error:
+        except (ApiError, TransportError, ResponseValidationError) as error:
             LOG.warning("sweep group unavailable for chain %s asset %s: %s", chain_id, token, error)
             return {
                 **static,
