@@ -30,7 +30,7 @@ use crate::db::{Account, Customer};
 use crate::payment_config::{self, Resolution, Status, Terms};
 use crate::routes::RouteSet;
 use crate::tenancy::Scope;
-use pricing::{PricingFailure, PricingRuntime, ValidatedQuote};
+use pricing::{PricingFailure, PricingRuntimes, ValidatedQuote};
 
 /// The columns of [`RateLockRow`]; callers append the `WHERE` clause with `concat!`.
 macro_rules! select_lock {
@@ -145,29 +145,13 @@ pub trait QuoteProvider: Send + Sync {
 
 /// Production quote provider configured from attested route files.
 pub struct ConfiguredQuoteProvider {
-    runtimes: BTreeMap<(String, u64), PricingRuntime>,
+    runtimes: PricingRuntimes,
 }
 
 impl ConfiguredQuoteProvider {
-    /// Builds adapters for every route version.
-    pub fn from_routes(pool: PgPool, routes: &crate::routes::RouteSet) -> Result<Self, String> {
-        let mut runtimes = BTreeMap::new();
-        for route in routes.routes() {
-            let key = (route.route.clone(), route.version);
-            if runtimes
-                .insert(
-                    key.clone(),
-                    PricingRuntime::configured(route, routes, pool.clone())?,
-                )
-                .is_some()
-            {
-                return Err(format!(
-                    "duplicate pricing runtime for route `{}` version {}",
-                    key.0, key.1
-                ));
-            }
-        }
-        Ok(Self { runtimes })
+    /// Uses the service's shared per-route pricing runtimes.
+    pub fn from_runtimes(runtimes: PricingRuntimes) -> Self {
+        Self { runtimes }
     }
     /// Periodic service sampler, bounded and cancelled with the service task group.
     pub async fn sample_twaps(

@@ -8,6 +8,7 @@ use chrono::Utc;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -79,6 +80,9 @@ pub struct PricingRuntime {
     sequencer: Option<(Chainlink, u64)>,
     stuck_since: std::sync::Mutex<Option<Instant>>,
 }
+/// Shared pricing runtimes indexed by attested route name and version.
+pub type PricingRuntimes = Arc<BTreeMap<(String, u64), Arc<PricingRuntime>>>;
+
 impl PricingRuntime {
     /// Constructs only explicitly configured sources, never a restricted default.
     pub fn configured(

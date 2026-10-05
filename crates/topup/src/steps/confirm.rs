@@ -32,7 +32,9 @@ use crate::db::{
     CanonicalEvidence, Deposit, EventObject, LockConsumption, OutboxEvent, StoredValuation,
     TransitionEffects,
 };
-use crate::locks::pricing::{PricingRuntime, ValidatedQuote, valuation_error_code};
+use crate::locks::pricing::{
+    PricingRuntime, PricingRuntimes, ValidatedQuote, valuation_error_code,
+};
 use crate::payment_config::{Binding, Resolution, Terms, required_confirmations};
 use crate::pump::{Step, StepResult};
 use crate::restore_mode::{DeliveredTransfer, ImportedCredit};
@@ -75,7 +77,7 @@ struct ChainPair {
 
 struct RouteRuntime {
     route: RouteFile,
-    pricing: PricingRuntime,
+    pricing: Arc<PricingRuntime>,
 }
 
 /// Invalid detected-step runtime configuration.
@@ -93,11 +95,22 @@ pub struct ConfirmStep {
 
 impl ConfirmStep {
     /// Builds production adapters for every loaded route version and each chain's providers.
-    pub fn from_routes(pool: PgPool, routes: &RouteSet) -> Result<Self, ConfirmConfigError> {
+    pub fn from_routes(
+        pool: PgPool,
+        routes: &RouteSet,
+        pricing: PricingRuntimes,
+    ) -> Result<Self, ConfirmConfigError> {
         let mut runtimes = BTreeMap::new();
         for route in routes.routes() {
-            let pricing = PricingRuntime::configured(route, routes, pool.clone())
-                .map_err(ConfirmConfigError)?;
+            let pricing = pricing
+                .get(&(route.route.clone(), route.version))
+                .cloned()
+                .ok_or_else(|| {
+                    ConfirmConfigError(format!(
+                        "missing pricing runtime for route `{}` version {}",
+                        route.route, route.version
+                    ))
+                })?;
             runtimes.insert(
                 (route.route.clone(), route.version),
                 RouteRuntime {
@@ -169,7 +182,11 @@ impl ConfirmStep {
                 key.clone(),
                 RouteRuntime {
                     route,
-                    pricing: PricingRuntime::injected(primary_price, check_price, fx_price),
+                    pricing: Arc::new(PricingRuntime::injected(
+                        primary_price,
+                        check_price,
+                        fx_price,
+                    )),
                 },
             )]),
             asset_routes: BTreeMap::from([((chain_id, asset_contract), key)]),
@@ -1182,6 +1199,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn quote_and_confirm_share_one_runtime_and_stuck_gauge() {
+        use crate::locks::{ConfiguredQuoteProvider, QuoteProvider};
+        let mut route: RouteFile =
+            serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml"))
+                .unwrap();
+        route.route = "shared-pricing-runtime".into();
+        route.chain.rpc_providers = vec!["http://127.0.0.1:1".into(), "http://127.0.0.1:2".into()];
+        let key = (route.route.clone(), route.version);
+        let runtime = Arc::new(PricingRuntime::injected(
+            Arc::new(MockPrice(Err(PriceError::Stale))),
+            None,
+            None,
+        ));
+        let pricing = Arc::new(BTreeMap::from([(key.clone(), Arc::clone(&runtime))]));
+        let quotes = ConfiguredQuoteProvider::from_runtimes(Arc::clone(&pricing));
+        let routes = RouteSet::new(vec![route.clone()]).unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/shared-pricing")
+            .unwrap();
+        let confirm = ConfirmStep::from_routes(pool, &routes, pricing).unwrap();
+        assert!(Arc::ptr_eq(&runtime, &confirm.routes[&key].pricing));
+        assert!(quotes.quote(&route).await.is_err());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(confirm.routes[&key].pricing.fetch(&route).await.is_err());
+        let families = crate::observability::price_metrics::collect().unwrap();
+        let gauge = families
+            .iter()
+            .find(|family| family.name() == "valuation_stuck_seconds")
+            .unwrap()
+            .get_metric()
+            .iter()
+            .find(|metric| {
+                metric.get_label().iter().any(|label| {
+                    label.name() == "route" && label.value() == "shared-pricing-runtime"
+                })
+            })
+            .unwrap();
+        assert!(
+            gauge.get_gauge().get_value() >= 1.0,
+            "confirmation must continue the quote failure's timer"
+        );
+    }
+
+    #[tokio::test]
     async fn provider_disagreement_retries() {
         let deposit = deposit(1_000);
         let first = transfer(&deposit);
@@ -1467,13 +1528,13 @@ mod tests {
         let now = now_seconds();
         let runtime = |route: RouteFile| RouteRuntime {
             route,
-            pricing: PricingRuntime::injected(
+            pricing: Arc::new(PricingRuntime::injected(
                 Arc::new(MockPrice(Ok(observation("primary", 10_000_000, now)))),
                 Some(Arc::new(MockPrice(Ok(observation(
                     "check", 10_000_000, now,
                 ))))),
                 Some(Arc::new(MockPrice(Ok(observation("fx", 100_000_000, now))))),
-            ),
+            )),
         };
         let context = context(None);
         let step = ConfirmStep {
@@ -1526,13 +1587,13 @@ mod tests {
         quote.terms.confirmations = Confirmations::Depth(10);
         let runtime = |route: RouteFile| RouteRuntime {
             route,
-            pricing: PricingRuntime::injected(
+            pricing: Arc::new(PricingRuntime::injected(
                 Arc::new(MockPrice(Ok(observation("primary", 10_000_000, now)))),
                 Some(Arc::new(MockPrice(Ok(observation(
                     "check", 10_000_000, now,
                 ))))),
                 Some(Arc::new(MockPrice(Ok(observation("fx", 100_000_000, now))))),
-            ),
+            )),
         };
         let other_key = (other.route.clone(), other.version);
         let quoted_key = (quoted.route.clone(), quoted.version);
@@ -1594,7 +1655,7 @@ mod tests {
         route.pricing.max_age_s = 1;
         let runtime = RouteRuntime {
             route,
-            pricing: PricingRuntime::injected(
+            pricing: Arc::new(PricingRuntime::injected(
                 Arc::new(DelayedPrice {
                     source: "primary",
                     value: 10_000_000,
@@ -1610,7 +1671,7 @@ mod tests {
                     value: 100_000_000,
                     delay: Duration::from_secs(2),
                 })),
-            ),
+            )),
         };
         let quote = runtime
             .pricing
@@ -2060,7 +2121,7 @@ mod tests {
                 key.clone(),
                 RouteRuntime {
                     route,
-                    pricing: PricingRuntime::injected(
+                    pricing: Arc::new(PricingRuntime::injected(
                         Arc::new(MockPrice(Ok(prices.primary))),
                         prices.check.map(|observation| {
                             Arc::new(MockPrice(Ok(observation))) as Arc<dyn PriceSource>
@@ -2068,7 +2129,7 @@ mod tests {
                         prices.fx.map(|observation| {
                             Arc::new(MockPrice(Ok(observation))) as Arc<dyn PriceSource>
                         }),
-                    ),
+                    )),
                 },
             )]),
             asset_routes: BTreeMap::from([((chain_id, asset_contract), key)]),
