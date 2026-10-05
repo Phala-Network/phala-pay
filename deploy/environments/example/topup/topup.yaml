@@ -62,8 +62,10 @@ rpc_groups:
       account_budget: publicnode-account
       key_budget: publicnode-sepolia-key
 # The fields and their defaults are in docs/architecture.md §14; `topup config show` prints them.
+# Production-eligible Chainlink stablecoins only. PHA is staging/noncommercial only:
+# docs/configuration.md#price-sources.
 routes:
-  - route: example-sepolia-pha-usd
+  - route: example-sepolia-usdc-usd
     version: 1
     livemode: false
     chain:
@@ -73,18 +75,41 @@ routes:
       rpc_groups: { a: alchemy-sepolia, b: publicnode-sepolia }
       sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
     asset:
-      symbol: pha
-      contract: "0x8F40e7E99678F44c88158f049E62817580ab113B"
-      decimals: 18
-      backstop: token
+      symbol: usdc
+      contract: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+      decimals: 6
+      backstop: addresses
     price:
-      mode: volatile
-      allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }]
-      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
-      fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }]
-
+      mode: stablecoin
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+      peg_band_bps: 100
     merchant:
       min_amount: { default: 100 }
-      max_deposit_atomic: { default: "200000000000000000000000" }
-      min_refund_atomic: { default: "20000000000000000000" }
+      max_deposit_atomic: { default: "10000000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }
+  - route: example-sepolia-usdt-usd
+    version: 1
+    livemode: false
+    chain:
+      chain_id: 11155111
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2
+      rpc_groups: { a: alchemy-sepolia, b: publicnode-sepolia }
+      sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
+    asset:
+      symbol: usdt
+      contract: "0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0"
+      decimals: 6
+      backstop: addresses
+    price:
+      mode: stablecoin
+      sources:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+      peg_band_bps: 100
+    merchant:
+      min_amount: { default: 100 }
+      max_deposit_atomic: { default: "10000000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }

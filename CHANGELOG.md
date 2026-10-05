@@ -19,6 +19,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Deploy fetches `deploy/deadline.sh` with `deploy/verify-release.sh` at the release commit, so release
   verification no longer fails before any change (0.9.0's Deploy stopped at "Verify the release").
   A CI check keeps both callers fetching every script `verify-release.sh` sources.
+- Shipped production examples use Chainlink USDC/USDT routes; PHA is explicitly staging-only.
+  CI validates every shipped environment config and example route template.
+- Rollback smoke explicitly runs the previous release's config in a noncommercial environment,
+  allowing v0.9.0's shipped example to start.
 
 ## [0.9.0] - 2026-10-05
 

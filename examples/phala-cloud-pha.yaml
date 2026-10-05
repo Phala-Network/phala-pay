@@ -1,4 +1,7 @@
-# First mainnet route template. No treasury: each account proves its own per chain through the
+# STAGING / NONCOMMERCIAL ONLY: use environment: staging (or local/testnet/sandbox).
+# PHA has no second Allowed independent price source; production rejects this route.
+# See docs/configuration.md#price-sources. Mainnet token addresses do not grant production eligibility.
+# Mainnet route template for noncommercial rehearsal. No treasury: each account proves its own per chain through the
 # API (docs/design/multi-tenant.md D10). Ships inside the dstack compose, so every value is part of the attested
 # measurement (docs/architecture.md §14). Changing a value is a new version and a new approved
 # compose hash. Every value not written here is a code default, as attested as the file (the

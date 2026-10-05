@@ -254,11 +254,15 @@ Deploy `upgrade`, never a runtime setting.
   ([deploy/phala.md, "Staging routes"](../deploy/phala.md#staging-routes) lists them, with their
   tokens and faucets). Any instance can copy them from its
   [topup.yaml](../deploy/environments/phala-network/staging/topup/topup.yaml) for a first
-  instance in test mode.
+  noncommercial instance with `environment: staging` (or `testnet`, `local`, `sandbox`) and the
+  existing price-source opt-ins. PHA routes cannot be copied into a production configuration.
 - **Your own routes** are items of `topup.yaml`'s `routes`, written as route files are. The fields
   and their defaults are in [architecture §14](architecture.md#14-configuration-and-deployment),
-  and [examples/phala-cloud-pha.yaml](../examples/phala-cloud-pha.yaml) and
-  [examples/phala-cloud-usdt.yaml](../examples/phala-cloud-usdt.yaml) are mainnet examples.
+  and [examples/phala-cloud-usdt.yaml](../examples/phala-cloud-usdt.yaml) is a production-eligible
+  mainnet route template. [examples/phala-cloud-pha.yaml](../examples/phala-cloud-pha.yaml) is
+  **staging/noncommercial only**: PHA has no second Allowed independent price source. See
+  [price sources](configuration.md#price-sources). The kit's example environment ships only
+  Chainlink-priced USDC/USDT test routes, valid under `environment: production`.
   `topup config check FILE` in the release's image checks the file (section 2), and
   `config show FILE` prints it resolved.
 - **What Deploy refuses:** a live route on a test network, a test route on a mainnet, any live
