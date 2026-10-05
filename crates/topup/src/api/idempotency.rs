@@ -108,6 +108,9 @@ impl Idempotent {
     ) -> Result<Transaction<'static, Postgres>, ApiError> {
         // Nothing ran yet, so a failure here is an unsaved `503` the client retries.
         let unavailable = |error: sqlx::Error| {
+            if matches!(error, sqlx::Error::PoolTimedOut) {
+                crate::observability::metrics::pool_acquire_timed_out();
+            }
             tracing::warn!(%error, "the request's transaction did not begin");
             ApiError::database_busy()
         };
@@ -348,6 +351,9 @@ fn claim_error(error: sqlx::Error) -> ApiError {
         return ApiError::idempotency_key_in_use();
     }
     if matches!(error, sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed) {
+        if matches!(error, sqlx::Error::PoolTimedOut) {
+            crate::observability::metrics::pool_acquire_timed_out();
+        }
         tracing::warn!(%error, "the idempotency key was not claimed");
         return ApiError::database_busy();
     }
