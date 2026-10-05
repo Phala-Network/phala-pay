@@ -241,6 +241,7 @@ class DemoConsole:
         ) = None
         self._sweeps: tuple[float, dict[str, Any]] | None = None
         self._sweeps_refreshing = False
+        self._sweeps_failed_at: float | None = None
         self._sweeps_future: Future[dict[str, Any]] | None = None
         self._sweeps_thread: threading.Thread | None = None
         self._block_times: OrderedDict[
@@ -853,7 +854,11 @@ class DemoConsole:
             view = None if self._sweeps is None else self._sweeps[1]
             if self._sweeps is not None and now - self._sweeps[0] > 60:
                 view = {**self._sweeps[1], "stale": True}
-            if not self._sweeps_refreshing and (self._sweeps is None or now - self._sweeps[0] > 10):
+            if (
+                not self._sweeps_refreshing
+                and (self._sweeps is None or now - self._sweeps[0] > 10)
+                and (self._sweeps_failed_at is None or now - self._sweeps_failed_at >= 10)
+            ):
                 future: Future[dict[str, Any]] = Future()
                 self._sweeps_future = future
                 self._sweeps_refreshing = True
@@ -886,8 +891,13 @@ class DemoConsole:
     def _refresh_sweeps(self, now: float, future: Future[dict[str, Any]]) -> None:
         token = operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
         try:
-            future.set_result(self._build_sweeps_view(now))
+            view = self._build_sweeps_view(now)
+            with self._lock:
+                self._sweeps_failed_at = None
+            future.set_result(view)
         except Exception as error:
+            with self._lock:
+                self._sweeps_failed_at = self._clock()
             LOG.warning("sweeps refresh failed: %s", type(error).__name__)
             future.set_exception(error)
         finally:

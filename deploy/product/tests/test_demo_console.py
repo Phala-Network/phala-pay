@@ -1482,3 +1482,46 @@ def test_cold_sweeps_waiters_receive_distinct_refresh_exceptions(
     assert first.value is not error
     assert second.value is not error
     assert str(first.value) == str(second.value) == str(error)
+
+
+@pytest.mark.parametrize("warm", [True, False])
+def test_failed_sweeps_refreshes_back_off_from_failure_completion(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, warm: bool
+) -> None:
+    console, _ = demo
+    now = [NOW]
+    console._clock = lambda: now[0]
+    cached = None
+    if warm:
+        cached = console._sweeps_view()
+        assert console._sweeps_thread is not None
+        console._sweeps_thread.join(timeout=2)
+        now[0] += 11
+    calls: list[int] = []
+
+    def fail(started: float) -> dict[str, Any]:
+        calls.append(now[0])
+        now[0] += 5
+        raise TransportError("network")
+
+    def read() -> None:
+        if warm:
+            assert console._sweeps_view() == cached
+        else:
+            with pytest.raises(TransportError):
+                console._sweeps_view()
+        assert console._sweeps_thread is not None
+        console._sweeps_thread.join(timeout=2)
+        assert not console._sweeps_refreshing
+
+    monkeypatch.setattr(console, "_build_sweeps_view", fail)
+    read()
+    for _ in range(5):
+        read()
+    assert len(calls) == 1
+    now[0] += 9
+    read()
+    assert len(calls) == 1
+    now[0] += 1
+    read()
+    assert len(calls) == 2
