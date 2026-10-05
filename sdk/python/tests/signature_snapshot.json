@@ -19,19 +19,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "resume_quotes": [
@@ -41,19 +36,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -63,14 +53,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "roll_webhook_key": [
@@ -85,19 +70,14 @@
         "default": "172800"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -131,19 +111,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list": [
@@ -153,16 +128,6 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -171,6 +136,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -180,16 +150,6 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -198,6 +158,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -212,14 +177,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "revoke": [
@@ -234,19 +194,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "roll": [
@@ -266,19 +221,14 @@
         "default": "0"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -302,14 +252,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -333,14 +278,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -374,19 +314,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list": [
@@ -406,16 +341,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -424,6 +349,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -443,16 +373,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -461,6 +381,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -475,14 +400,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "rotate": [
@@ -502,14 +422,9 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "update": [
@@ -529,19 +444,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -615,16 +525,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -633,6 +533,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -692,16 +597,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -710,6 +605,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -729,14 +629,9 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "update": [
@@ -756,19 +651,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -827,16 +717,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -845,6 +725,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -889,16 +774,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -907,6 +782,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "resend": [
@@ -926,19 +806,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -953,14 +828,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -1004,16 +874,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -1022,6 +882,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -1051,16 +916,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -1069,6 +924,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -1092,14 +952,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "update": [
@@ -1119,19 +974,14 @@
         "default": "UNSET"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -1281,19 +1131,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "create": [
@@ -1338,14 +1183,9 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list": [
@@ -1365,16 +1205,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -1383,6 +1213,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -1402,16 +1237,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -1420,6 +1245,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -1439,14 +1269,9 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "update": [
@@ -1466,19 +1291,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -1507,19 +1327,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "create": [
@@ -1554,14 +1369,9 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list": [
@@ -1581,16 +1391,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -1599,6 +1399,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -1618,16 +1423,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -1636,6 +1431,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "mark_paid": [
@@ -1660,19 +1460,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -1692,14 +1487,9 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "update": [
@@ -1719,19 +1509,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -1770,16 +1555,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -1788,6 +1563,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -1812,16 +1592,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -1830,6 +1600,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },
@@ -4007,19 +3782,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "challenge": [
@@ -4039,19 +3809,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "create": [
@@ -4076,19 +3841,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list": [
@@ -4108,16 +3868,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -4126,6 +3876,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -4145,16 +3900,6 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -4163,6 +3908,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "pause": [
@@ -4177,19 +3927,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "resume": [
@@ -4204,19 +3949,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -4231,14 +3971,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "set_eoa": [
@@ -4304,19 +4039,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "delete": [
@@ -4331,14 +4061,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list": [
@@ -4348,16 +4073,6 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -4366,6 +4081,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "list_page": [
@@ -4375,16 +4095,6 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "limit",
         "kind": "KEYWORD_ONLY",
         "default": "100"
@@ -4393,6 +4103,11 @@
         "name": "starting_after",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "retrieve": [
@@ -4407,14 +4122,9 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "test": [
@@ -4429,19 +4139,14 @@
         "default": "<required>"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ],
     "update": [
@@ -4481,19 +4186,14 @@
         "default": "None"
       },
       {
-        "name": "request_deadline",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
-        "name": "upgrade_tolerance",
-        "kind": "KEYWORD_ONLY",
-        "default": "None"
-      },
-      {
         "name": "idempotency_key",
         "kind": "KEYWORD_ONLY",
         "default": "None"
+      },
+      {
+        "name": "options",
+        "kind": "VAR_KEYWORD",
+        "default": "<required>"
       }
     ]
   },

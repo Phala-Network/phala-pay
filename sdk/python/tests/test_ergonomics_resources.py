@@ -123,11 +123,16 @@ def test_every_resource_method_uses_single_transport_and_explicit_controls(  # n
         requests.append(request)
         return httpx.Response(400, json={"error": {"code": "controlled"}})
 
-    controls: dict[str, Any] = {"request_deadline": 0.25}
+    controls: dict[str, Any] = {"request_deadline": 0.25, "upgrade_tolerance": True}
     if verb == "POST":
         controls["idempotency_key"] = "order-1"
-    with pay(handler) as client, pytest.raises(ApiError):
-        getattr(getattr(client, resource), method)(*args, **params, **controls)
+    with pay(handler) as client:
+        operation = getattr(getattr(client, resource), method)
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            operation(*args, **params, **controls, unexpected_option=True)
+        assert requests == []
+        with pytest.raises(ApiError):
+            operation(*args, **params, **controls)
     assert len(requests) == 1
     assert requests[0].method == verb
     assert requests[0].url.path == path
@@ -163,11 +168,19 @@ def test_every_list_page_passes_limit_cursor_and_deadline(resource: str) -> None
         )
     ) as client:
         target = getattr(client, resource)
-        assert target.list_page(limit=7, starting_after="cursor /?", request_deadline=0.25) == {
+        for method in (target.list, target.list_page):
+            with pytest.raises(TypeError, match="unexpected keyword argument"):
+                method(unexpected_option=True)
+        assert requests == []
+        assert target.list_page(
+            limit=7, starting_after="cursor /?", request_deadline=0.25, upgrade_tolerance=True
+        ) == {
             "data": [],
             "has_more": False,
         }
-        result = target.list(limit=7, starting_after="cursor /?", request_deadline=0.25)
+        result = target.list(
+            limit=7, starting_after="cursor /?", request_deadline=0.25, upgrade_tolerance=True
+        )
         if resource in {"api_keys", "treasuries"}:
             assert isinstance(result, list)
         else:

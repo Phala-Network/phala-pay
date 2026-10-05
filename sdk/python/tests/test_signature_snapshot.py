@@ -18,7 +18,7 @@ def public_signatures() -> dict[str, dict[str, list[dict[str, str]]]]:
     classes = {
         name: cls
         for name, cls in vars(_client).items()
-        if inspect.isclass(cls) and cls.__module__ == _client.__name__
+        if inspect.isclass(cls) and cls.__module__ == _client.__name__ and not issubclass(cls, dict)
     }
     classes["TopupClient"] = TopupClient
     result = {}
