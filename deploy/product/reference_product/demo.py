@@ -210,6 +210,7 @@ class DemoConsole:
         self.web_origin = config.web_origin
         self.secure_cookie = urlsplit(config.public_url).scheme == "https"
         self.recorder = recorder or ApiRecorder()
+        self._owns_recorder = recorder is None
         self._http = http or httpx.Client(
             timeout=5, follow_redirects=False, transport=DeadlineTransport()
         )
@@ -1198,11 +1199,17 @@ class DemoConsole:
         if refresh is not None:
             refresh.join()
         with self._lock:
-            if self._client is not None:
-                self._client.close()
-            if self._sweeps_client is not None:
-                self._sweeps_client.close()
-        self._http.close()
+            try:
+                if self._client is not None:
+                    self._client.close()
+                if self._sweeps_client is not None:
+                    self._sweeps_client.close()
+            finally:
+                try:
+                    if self._owns_recorder:
+                        self.recorder.close()
+                finally:
+                    self._http.close()
 
 
 # Views ------------------------------------------------------------------------------------------

@@ -26,6 +26,7 @@ from reference_product.config import ChainConfig, MintableToken, ProductConfig
 from reference_product.demo import ApiRecorder, DemoConsole
 from reference_product.fulfillment import Fulfillment, PinnedKeys
 from reference_product.ledger import ProductLedger
+from reference_product.server import AccountApi
 from reference_product.transport import operation_deadline
 from topup_sdk import (
     ApiError,
@@ -1344,3 +1345,28 @@ def test_fresh_sweeps_cache_does_not_start_background_builds(
         assert _get(console, cookie, "sweeps") == (HTTPStatus.OK, first)
     assert not console._sweeps_refreshing
     assert [request.url.path for request in service.requests].count("/v1/balance") == 1
+
+
+@pytest.mark.parametrize("kind", ["demo", "account"])
+def test_product_closes_owned_http_threads(demo: tuple[DemoConsole, Service], kind: str) -> None:
+    fixture_console, _ = demo
+    assert not [thread for thread in threading.enumerate() if thread.name == "product-http"]
+    if kind == "demo":
+        console = DemoConsole(fixture_console.config, ProductLedger())
+        try:
+            console._service()
+            console._sweeps_service()
+            assert len([t for t in threading.enumerate() if t.name == "product-http"]) == 2
+        finally:
+            console.close()
+        console.close()
+    else:
+        driver_key = Ed25519PrivateKey.from_private_bytes(bytes([7] * 32)).public_key()
+        api = AccountApi(fixture_console.config, ProductLedger(), driver_key)
+        try:
+            api._service()
+            assert len([t for t in threading.enumerate() if t.name == "product-http"]) == 1
+        finally:
+            api.close()
+        api.close()
+    assert not [thread for thread in threading.enumerate() if thread.name == "product-http"]

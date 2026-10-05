@@ -59,7 +59,7 @@ from .demo import DemoConsole
 from .fulfillment import Answer, Fulfillment, PinnedKeys, TransientError, parse_decimal
 from .ledger import ProductLedger
 from .restore_records import export_restore_records
-from .transport import OPERATION_TIMEOUT_SECONDS, operation_deadline
+from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
 
 LOG = logging.getLogger(__name__)
 
@@ -284,6 +284,7 @@ class AccountApi:
         self.driver_key = driver_key
         self.accounts_path = urlsplit(config.public_url).path.rstrip("/") + "/accounts"
         self._client: TopupClient | None = None
+        self._transport: DeadlineTransport | None = None
         self._client_lock = threading.Lock()
 
     def handles(self, target: str) -> bool:
@@ -425,13 +426,23 @@ class AccountApi:
     def _service(self) -> TopupClient:
         with self._client_lock:
             if self._client is None:
-                self._client = self.config.client()
+                transport = DeadlineTransport()
+                try:
+                    self._client = self.config.client(transport=transport)
+                except BaseException:
+                    transport.close()
+                    raise
+                self._transport = transport
             return self._client
 
     def close(self) -> None:
         with self._client_lock:
-            if self._client is not None:
-                self._client.close()
+            try:
+                if self._client is not None:
+                    self._client.close()
+            finally:
+                if self._transport is not None:
+                    self._transport.close()
 
 
 def _account_ref(value: object) -> str:
