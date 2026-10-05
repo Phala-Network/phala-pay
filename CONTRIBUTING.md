@@ -308,11 +308,13 @@ Release rollback rules:
   known to N-1 for compatible new migrations. Review this value whenever adding migrations.
   Applied ledger entries are immutable across rollback. Breaking migrations set the floor to
   the new schema's maximum and declare `no rollback to <N-1 version>; restore required` in
-  `### Breaking (operators)` under `## [Unreleased]` (the dated release section after tagging),
+  `### Breaking (operators)` under `## [Unreleased]` (the dated section in the release PR),
   with a tested pre-upgrade restore/reconciliation plan and owner acceptance.
 - CI resolves N-1 as the latest stable release. 0.9.0 is the first compatibility-ledger protocol
-  release. For any N-1, the exact version-specific declaration selects `declared` mode: skip the
-  image smoke and print the declaration in the job summary. For protocol-era N-1, CI additionally
+  release. CI reads declarations from `Unreleased` and the dated section matching the workspace
+  version, so release preparation preserves the policy before tagging. For any N-1, the exact
+  version-specific declaration selects `declared` mode: skip the image smoke and print the
+  declaration in the job summary. For protocol-era N-1, CI additionally
   requires `COMPATIBILITY_FLOOR` to exceed the value in N-1's tag; an unchanged or lower floor
   fails. Without a declaration, pre-protocol N-1 fails and protocol-era N-1 runs the real smoke.
 - The `Deploy rollback` workflow migrates with the current build, runs N-1's migration entrypoint,
