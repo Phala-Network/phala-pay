@@ -1370,3 +1370,56 @@ def test_product_closes_owned_http_threads(demo: tuple[DemoConsole, Service], ki
             api.close()
         api.close()
     assert not [thread for thread in threading.enumerate() if thread.name == "product-http"]
+
+
+@pytest.mark.parametrize("kind", ["trust", "networks"])
+@pytest.mark.parametrize("failure", ["transport", "api", "validation"])
+def test_cached_failures_raise_fresh_exceptions_for_concurrent_readers(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, kind: str, failure: str
+) -> None:
+    console, _ = demo
+    original: TransportError | ApiError | ResponseValidationError
+    if failure == "transport":
+        original = TransportError("timeout", "service timeout")
+    elif failure == "api":
+        original = ApiError(503, "service_unavailable", "service failed", request_id="request-test")
+    else:
+        original = ResponseValidationError("malformed response", status_code=200, request_id="test")
+    calls: list[int] = []
+
+    def fetch(*args: Any) -> Any:
+        calls.append(1)
+        raise original
+
+    monkeypatch.setattr(
+        console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
+    )
+    method = console._trust_view if kind == "trust" else console._payable_networks
+    with pytest.raises(type(original)) as first:
+        method()
+
+    def read_failure() -> Exception:
+        try:
+            method()
+        except (TransportError, ApiError, ResponseValidationError) as error:
+            return error
+        raise AssertionError("expected cached failure")
+
+    with ThreadPoolExecutor(max_workers=5) as workers:
+        errors = [
+            future.result(timeout=2) for future in [workers.submit(read_failure) for _ in range(5)]
+        ]
+    assert len({id(error) for error in [first.value, *errors]}) == 6
+    assert len(calls) == 1
+    for error in errors:
+        assert type(error) is type(original)
+        assert str(error) == str(original)
+        if isinstance(error, TransportError):
+            assert error.code == "timeout"
+        elif isinstance(error, ApiError):
+            assert error.status_code == 503
+            assert error.code == "service_unavailable"
+            assert error.request_id == "request-test"
+        elif isinstance(error, ResponseValidationError):
+            assert error.status_code == 200
+            assert error.request_id == "test"

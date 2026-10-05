@@ -53,6 +53,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from itertools import islice
@@ -232,8 +233,12 @@ class DemoConsole:
         self._networks_refreshing = False
         self._trust_expires = 0.0
         self._networks_expires = 0.0
-        self._trust_error: TopupError | httpx.HTTPError | MissingProductKeyError | None = None
-        self._networks_error: TopupError | httpx.HTTPError | MissingProductKeyError | None = None
+        self._trust_error: (
+            Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError] | None
+        ) = None
+        self._networks_error: (
+            Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError] | None
+        ) = None
         self._sweeps: tuple[float, dict[str, Any]] | None = None
         self._sweeps_refreshing = False
         self._sweeps_future: Future[dict[str, Any]] | None = None
@@ -1015,13 +1020,13 @@ class DemoConsole:
                 if self._networks is not None:
                     return self._networks[1]
                 if self._networks_error is not None:
-                    raise self._networks_error
+                    raise self._networks_error()
             self._networks_refreshing = True
         try:
             networks = self._fetch_payable_networks(service)
         except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
             with self._cache_changed:
-                self._networks_error = error
+                self._networks_error = _failure_factory(error)
                 self._networks_expires = self._clock() + 30
                 if self._networks is not None:
                     return self._networks[1]
@@ -1092,13 +1097,13 @@ class DemoConsole:
                 if self._trust is not None:
                     return self._trust[1]
                 if self._trust_error is not None:
-                    raise self._trust_error
+                    raise self._trust_error()
             self._trust_refreshing = True
         try:
             view = self._fetch_trust_view()
         except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
             with self._cache_changed:
-                self._trust_error = error
+                self._trust_error = _failure_factory(error)
                 self._trust_expires = self._clock() + 30
                 if self._trust is not None:
                     return self._trust[1]
@@ -1610,6 +1615,36 @@ def _redact_key(authorization: str) -> str:
 
 def _take[T](items: Iterator[T], limit: int) -> Iterator[T]:
     return islice(items, limit)
+
+
+def _failure_factory(
+    error: TopupError | httpx.HTTPError | MissingProductKeyError,
+) -> Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError]:
+    """Cache failure details without retaining an exception and its request traceback."""
+    if isinstance(error, ApiError):
+        return partial(
+            ApiError,
+            error.status_code,
+            error.code,
+            error.message,
+            error_type=error.error_type,
+            param=error.param,
+            doc_url=error.doc_url,
+            request_id=error.request_id,
+            retry_after=error.retry_after,
+        )
+    if isinstance(error, TransportError):
+        return partial(TransportError, error.code, str(error))
+    if isinstance(error, ResponseValidationError):
+        return partial(
+            ResponseValidationError,
+            str(error),
+            status_code=error.status_code,
+            request_id=error.request_id,
+        )
+    if isinstance(error, httpx.HTTPError):
+        return partial(httpx.HTTPError, str(error))
+    return partial(type(error), str(error))
 
 
 def _json_body(body: bytes) -> dict[str, Any] | None:
