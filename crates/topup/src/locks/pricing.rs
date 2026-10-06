@@ -2576,13 +2576,31 @@ mod tests {
             }
         }
         let dropped = Arc::new(Mutex::new(None));
-        let source = shared(Arc::new(Slow {
+        let inner: Arc<dyn PriceSource> = Arc::new(Slow {
             dropped: dropped.clone(),
-        }));
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let result = source.quote_shared(deadline).await;
+        });
+        let source = Coalesced::new("slow", "slow");
+        let fetch_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let waiter_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let result = source
+            .get(
+                Duration::ZERO,
+                tokio::time::Instant::now(),
+                waiter_deadline,
+                |_| true,
+                || {
+                    let inner = inner.clone();
+                    async move {
+                        tokio::time::timeout_at(fetch_deadline, inner.quote())
+                            .await
+                            .map_err(|_| PriceError::Timeout)?
+                    }
+                    .boxed()
+                },
+            )
+            .await;
         assert!(matches!(result, Err(PriceError::Timeout)));
-        assert_eq!(*dropped.lock().unwrap(), Some(deadline));
+        assert_eq!(*dropped.lock().unwrap(), Some(fetch_deadline));
     }
     struct CountingStore {
         history: tokio::sync::Mutex<Vec<topup_adapters::pricing::uniswap_v2::Sample>>,
