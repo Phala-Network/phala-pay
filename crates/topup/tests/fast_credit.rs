@@ -782,6 +782,7 @@ async fn assert_credited_within(
     eprintln!("provider A calls over {blocks} blocks: {calls:?}");
     let count = |method| calls.get(method).copied().unwrap_or_default();
     ensure!(count("eth_blockNumber") <= 2 * blocks + 4, "{calls:?}");
+    ensure!(count("eth_getBlockByNumber") <= 2, "{calls:?}");
     // The finalized backstop runs alongside: a pass that finds `finalized` advanced reads the new
     // blocks once (one transfer and one factory request per window) and moves the cursor past
     // them; it never re-reads below the cursor.

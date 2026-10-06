@@ -747,7 +747,14 @@ pub async fn run_chain(
         || {
             let published = finalized_heads.get(chain_id).map_or(0, |head| head.number);
             scanned_from.store(published, Ordering::Relaxed);
-            scan_once(&pool, &reader, &routes)
+            let (pool, reader, routes, scanned_from) = (&pool, &reader, &routes, &scanned_from);
+            async move {
+                let result = scan_once(pool, reader, routes).await;
+                if let Ok(stats) = &result {
+                    scanned_from.fetch_max(stats.finalized, Ordering::Relaxed);
+                }
+                result
+            }
         },
         |delay| {
             let mut advances = finalized_heads.subscribe();
