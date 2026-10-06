@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
+import { ROOT_MARKER } from "./src/content/template.ts";
 import { renderPage } from "./scripts/prerender-page.ts";
 
 // The website, pay.phala.com: static pages at `/` and `/compare` with their assets in `assets/`, served by Cloudflare
@@ -20,7 +21,7 @@ export default defineConfig({
       if (context.server === undefined) return html;
       const { render } = await context.server.ssrLoadModule("/src/entry-server.tsx") as typeof import("./src/entry-server.js");
       const page = context.filename === resolve(import.meta.dirname, "compare.html") ? "compare" : "home";
-      return renderPage(html, render(page));
+      return renderPage(html, render(page), ROOT_MARKER);
     },
   }],
   resolve: { alias: { "@": resolve(import.meta.dirname, "src") } },

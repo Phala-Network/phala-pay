@@ -13,6 +13,11 @@ export default tseslint.config(
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
     },
     rules: {
+      // Core ESLint's JSX AST selector enforces the same constraint as forbid-dom-props.
+      "no-restricted-syntax": ["error", {
+        selector: 'JSXAttribute[name.name="style"]',
+        message: "Inline style props violate the CSP. Use CSS classes instead.",
+      }],
       "@typescript-eslint/restrict-template-expressions": ["error", { allowNumber: true }],
       "@typescript-eslint/no-confusing-void-expression": ["error", { ignoreArrowShorthand: true }],
     },

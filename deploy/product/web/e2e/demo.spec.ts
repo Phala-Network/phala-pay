@@ -1016,3 +1016,29 @@ test("loading home islands preserves the original prerendered hero", async ({ pa
     releaseEntry?.();
   }
 });
+
+
+test("home and comparison hydrate in either theme without CSP violations or React errors", async ({ browser }) => {
+  for (const colorScheme of ["light", "dark"] as const) {
+    for (const path of ["", "compare"]) {
+      const context = await browser.newContext({ colorScheme });
+      try {
+        const page = await context.newPage();
+        const problems = await watchConsole(page);
+        await page.goto(new URL(path, env("SITE_URL")).href);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        if (path === "") await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+        const next = colorScheme === "dark" ? "light" : "dark";
+        await page.getByRole("button", { name: `Switch to ${next} theme` }).click();
+        await expect(page.locator("html")).toHaveClass(next === "dark" ? /dark/ : /^$/);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.getByRole("button", { name: "Menu", exact: true }).click();
+        await expect(page.getByRole("navigation", { name: "Menu" })).toBeVisible();
+        await page.keyboard.press("Escape");
+        expect(problems).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+});
