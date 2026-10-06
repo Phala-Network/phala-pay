@@ -23,6 +23,15 @@ def _backfill_event_refs(db: sqlite3.Connection) -> None:
 
 
 def _backfill_quote_statuses(db: sqlite3.Connection) -> None:
+    for event_type, data in db.execute(
+        "SELECT type, data FROM webhook_events WHERE type LIKE 'quote.%' ORDER BY received_at, id"
+    ):
+        try:
+            event_data = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(event_data, Mapping):
+            ProductLedger._record_quote_webhook_status(db, event_type, event_data)
     for quote_id, response in db.execute("SELECT id, response FROM quote_records"):
         try:
             quote = json.loads(response)

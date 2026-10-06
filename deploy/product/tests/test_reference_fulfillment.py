@@ -1203,13 +1203,36 @@ def test_ledger_migrations_upgrade_legacy_and_versioned_schemas(
 def test_quote_status_migration_backfills_and_is_idempotent(tmp_path: Path) -> None:
     path = tmp_path / "ledger.sqlite"
     quote = _quote()
+    expired_quote_id = "qt_" + "0d" * 16
     with sqlite3.connect(path) as db:
         _create_ledger_schema(db, version=2)
         db.execute("INSERT INTO teams (id) VALUES (?)", (TEAM,))
         db.execute(
             "INSERT INTO quote_records (id, team_id, response, recorded_at) VALUES (?, ?, ?, ?)",
-            (quote["id"], TEAM, json.dumps({**quote, "status": "canceled"}), 1),
+            (quote["id"], TEAM, json.dumps({**quote, "status": "open"}), 1),
         )
+        db.execute(
+            "INSERT INTO quote_records (id, team_id, response, recorded_at) VALUES (?, ?, ?, ?)",
+            (expired_quote_id, TEAM, json.dumps({**quote, "id": expired_quote_id}), 2),
+        )
+        for event_id, quote_id, event_type, received_at in (
+            ("evt_canceled", quote["id"], "quote.canceled", 3),
+            ("evt_expired", expired_quote_id, "quote.expired", 4),
+        ):
+            db.execute(
+                "INSERT INTO webhook_events "
+                "(id, type, data, received_at, body, webhook_timestamp, webhook_signature) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event_id,
+                    event_type,
+                    json.dumps({"object": {"id": quote_id}}),
+                    received_at,
+                    b"{}",
+                    "1",
+                    "signature",
+                ),
+            )
         db.execute("PRAGMA user_version = 2")
     for _ in range(2):
         ledger = ProductLedger(str(path))
@@ -1218,6 +1241,9 @@ def test_quote_status_migration_backfills_and_is_idempotent(tmp_path: Path) -> N
                 assert db.execute(
                     "SELECT status FROM quote_statuses WHERE quote_id = ?", (quote["id"],)
                 ).fetchone() == ("canceled",)
+                assert db.execute(
+                    "SELECT status FROM quote_statuses WHERE quote_id = ?", (expired_quote_id,)
+                ).fetchone() == ("expired",)
                 assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         finally:
             ledger._connection.close()
