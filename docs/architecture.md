@@ -658,7 +658,11 @@ read only for specific deposits.
 **Valuation** happens inside the confirm step, so `valuation_at` is the confirmation
 observation and the price uses current validated evidence. Routes declare `price.mode:
 volatile | stablecoin`. PHA uses persisted Uniswap V2 PHA/WETH TWAP × Chainlink ETH/USD primary
-and independent Kraken PHA/USD check; the existing volatile FX leg remains peg-checked and does
+and independent Kraken PHA/USD order-book mid check, with spread relative to mid bounded by
+`max_deviation_bps`; wider spreads make the check unavailable (`wide_spread`), allowing ordered
+failover or `source_failure` without recording price disagreement. Kraken evidence records bid,
+ask and last trade, while pricing uses `(bid + ask) / 2`, rounded down. Its USDT/USD and USDC/USD
+observations also use book mid. The existing volatile FX leg remains peg-checked and does
 not multiply a USD check by USDT. Ordered role failover advances only on
 unavailable, stale or malformed data; disagreement halts. Primary/check company sets are disjoint.
 Stablecoins credit exactly one dollar iff a fresh source is within the peg band and no fresh
@@ -673,8 +677,8 @@ Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, comple
 rounds and independent RPC A/B agreement at one pinned numeric block. PHA samples public pair
 cumulatives once/minute into PostgreSQL, requires a continuous thirty-minute window, and enforces
 liquidity, spot divergence (default 3%), sample freshness and jump limits. PHA valuation uses
-min(TWAP, current spot) × ETH/USD; independent Kraken agreement checks current spot × ETH/USD,
-so average lag cannot overvalue a falling market or reject ordinary agreeing spot moves.
+min(TWAP, current spot) × ETH/USD; independent Kraken order-book mid agreement checks current spot
+× ETH/USD, so average lag cannot overvalue a falling market or reject ordinary agreeing spot moves.
 Base additionally gates on the sequencer uptime
 feed with recovery grace. Test tokens explicitly observe configured mainnet groups. Licensing
 verdicts are compiled into the attested provider registry: only Allowed can run in production;

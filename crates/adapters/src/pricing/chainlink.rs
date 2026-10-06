@@ -217,6 +217,7 @@ impl PriceSource for Chainlink {
         })?;
         Ok(PriceQuote {
             agreement_price: o.price,
+            spread_bps: None,
             valuation: o,
             evidence: round_evidence(&r, self.feed),
             reuse_until: Some(UnixSeconds::new(

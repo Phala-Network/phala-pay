@@ -79,7 +79,7 @@ FX is independently checked and is required for USDT-quoted markets.
 | Role | Ordered sources | Rule |
 |---|---|---|
 | primary | **min(Uniswap V2 PHA/WETH TWAP, current spot) × Chainlink ETH/USD** | public on-chain state, Allowed; agreement uses current spot × ETH/USD |
-| check | **Kraken current PHA/USD (`PHAUSD`)** | compare against Uniswap current spot; PermissionRequired and staging-only |
+| check | **Kraken PHA/USD order-book mid (`PHAUSD`)** | compare against Uniswap current spot; spread guard at `max_deviation_bps`; PermissionRequired and staging-only |
 | fx | Chainlink USDT/USD | independently peg-checked by the existing volatile policy; the USD check is not multiplied by USDT |
 
 Production rejects the route because Kraken is PermissionRequired and no second Allowed source is
@@ -94,8 +94,8 @@ feed directories (over 1,800 feeds checked), and no Pyth PHA feed. DIA's free AP
 CoinGecko paid is dropped. Do not add these as defaults or implement a CoinGecko adapter.
 
 The follow-up to #331 implements persisted Uniswap V2 PHA/WETH TWAP and current spot, multiplied by
-Chainlink ETH/USD, as the staging primary; the Kraken current PHA/USD check remains an explicit
-staging-only test source. Kraken permission and a sponsored Chainlink PHA/USD feed are out of
+Chainlink ETH/USD, as the staging primary; the Kraken PHA/USD order-book mid check remains an
+explicit staging-only test source. Kraken permission and a sponsored Chainlink PHA/USD feed are out of
 scope, so PHA is production-ineligible until a separately reviewed Allowed source exists.
 
 The implementation reads the pair's `price0CumulativeLast`/`price1CumulativeLast` and reserves
@@ -115,9 +115,14 @@ valuation above TWAP; depressing spot reduces the credit the payer receives. Thi
 spot-only manipulation incentive, but does not replace the independent market check or exposure
 caps. Quote and deposit-credit workers use the same rule.
 
-Independent agreement compares **current Uniswap spot × ETH/USD against Kraken current PHA/USD**
-at the route's `max_deviation_bps` (default 100, or 1%). It does not compare the thirty-minute
-average or the conservative valuation against a live ticker. A normal 2% move can therefore pass
+Independent agreement compares **current Uniswap spot × ETH/USD against Kraken PHA/USD order-book
+mid**, calculated as `(bid + ask) / 2` and rounded down at the service price scale, at the route's
+`max_deviation_bps` (default 100, or 1%). A Kraken check whose spread relative to mid exceeds that
+same bound is unavailable (`wide_spread`), permitting ordered failover or failing closed with
+`source_failure`; it is not a price disagreement. Missing, invalid, zero or crossed books are
+malformed. Kraken audit evidence records bid, ask and last trade; the last trade does not price
+the observation. The adapter also uses book mid for USDT/USD and USDC/USD. It does not compare the
+thirty-minute average or the conservative valuation against a live ticker. A normal 2% move can pass
 when the current arbitraged markets agree, while an isolated 2% Uniswap pump fails the Kraken
 check even though valuation remains capped at TWAP. The TWAP is the manipulation guard: a
 spot/TWAP difference **above 3%** pauses valuation by default in either direction, so fast markets
