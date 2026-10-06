@@ -6,7 +6,16 @@ set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 server_pid=
-trap '[[ -z "${server_pid:-}" ]] || kill "$server_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT INT TERM
+
+cleanup() {
+    if [[ -n "${server_pid:-}" ]]; then
+        kill "$server_pid" 2>/dev/null || true
+        wait "$server_pid" 2>/dev/null || true
+    fi
+    rm -rf "$tmp"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 openssl genpkey -algorithm Ed25519 -out "$tmp/key.pem" 2>/dev/null
 
@@ -19,6 +28,7 @@ start_server() {
     python3 - "$port_file" "$count_file" "$signature_file" "$mode" >"$tmp/$mode.log" 2>&1 <<'PY' &
 import http.server
 import pathlib
+import socket
 import sys
 
 port_file = pathlib.Path(sys.argv[1])
@@ -35,9 +45,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             signatures.write(self.headers.get("Signature-Input", "") + "\n")
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)
-        if mode == "retry" and count <= 2:
+        if mode == "connection-reset" and count == 1:
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.close()
+            return
+        if mode == "retry-after-zero" and count == 1:
             self.send_response(503)
-            self.send_header("Retry-After", "1")
+            self.send_header("Retry-After", "0")
             body = b'{"error":"warming up"}\n'
         elif mode == "400":
             self.send_response(400)
@@ -45,6 +60,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif mode == "401":
             self.send_response(401)
             body = b'{"error":"unauthorized"}\n'
+        elif mode == "redirect":
+            self.send_response(302)
+            self.send_header("Location", "/v1/admin/instance/resume")
+            body = b'{"error":"redirect"}\n'
         else:
             self.send_response(200)
             body = b'{"paused_scopes":[],"owner":"test-owner","expires_at":0}\n'
@@ -91,14 +110,40 @@ run_pause() {
         >"$output_file" 2>"$error_file"
 }
 
-start_server retry
-run_pause retry "$tmp/retry.out" "$tmp/retry.err"
-[[ "$(jq -r '.paused_scopes | join(",")' "$tmp/retry.out")" == "" ]]
-[[ "$(<"$tmp/retry.count")" == 3 ]]
-[[ "$(wc -l <"$tmp/retry.signatures" | tr -d ' ')" == 3 ]]
-[[ "$(sed -n 's/.*created=\([0-9][0-9]*\).*/\1/p' "$tmp/retry.signatures" | sort -u | wc -l | tr -d ' ')" == 3 ]]
-grep -q 'retrying resume after HTTP 503 (attempt 1' "$tmp/retry.err"
-grep -q 'retrying resume after HTTP 503 (attempt 2' "$tmp/retry.err"
+created_count() {
+    sed -n 's/.*created=\([0-9][0-9]*\).*/\1/p' "$1" | sort -u | wc -l | tr -d '[:space:]'
+}
+
+cat >"$tmp/expected-body" <<'EOF'
+{"paused_scopes":[],"owner":"test-owner","expires_at":0}
+EOF
+
+start_server connection-reset
+run_pause connection-reset "$tmp/connection-reset.out" "$tmp/connection-reset.err"
+cmp -s "$tmp/expected-body" "$tmp/connection-reset.out"
+[[ "$(<"$tmp/connection-reset.count")" == 2 ]]
+[[ "$(created_count "$tmp/connection-reset.signatures")" == 2 ]]
+grep -q 'transport failure (curl=52)' "$tmp/connection-reset.err"
+stop_server
+
+start_server retry-after-zero
+run_pause retry-after-zero "$tmp/retry-after-zero.out" "$tmp/retry-after-zero.err"
+cmp -s "$tmp/expected-body" "$tmp/retry-after-zero.out"
+[[ "$(<"$tmp/retry-after-zero.count")" == 2 ]]
+[[ "$(created_count "$tmp/retry-after-zero.signatures")" == 2 ]]
+grep -q 'retrying resume after HTTP 503 (attempt 1, backoff 1s)' "$tmp/retry-after-zero.err"
+stop_server
+
+start_server redirect
+if run_pause redirect "$tmp/redirect.out" "$tmp/redirect.err"; then
+    echo 'instance-pause accepted a 3xx response' >&2
+    exit 1
+else
+    status=$?
+fi
+[[ "$status" == 22 ]]
+[[ "$(<"$tmp/redirect.count")" == 1 ]]
+grep -q 'redirect' "$tmp/redirect.err"
 stop_server
 
 for mode in 400 401; do
@@ -111,8 +156,8 @@ for mode in 400 401; do
     fi
     [[ "$status" == 22 ]]
     [[ "$(<"$tmp/$mode.count")" == 1 ]]
-    [[ "$(wc -l <"$tmp/$mode.signatures" | tr -d ' ')" == 1 ]]
+    [[ "$(wc -l <"$tmp/$mode.signatures" | tr -d '[:space:]')" == 1 ]]
     stop_server
 done
 
-echo 'instance-pause transient retry and client error tests passed'
+echo 'instance-pause transport/status retry and client error tests passed'

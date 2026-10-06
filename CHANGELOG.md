@@ -43,8 +43,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
-- Deploy pause and resume requests retry transient transport and gateway failures with fresh
-  signatures, so a settling ingress does not fail an otherwise healthy upgrade.
+- Deploy pause and resume requests retry transport errors and HTTP 408, 429, 500, 502, 503, and 504
+  responses; each attempt is signed fresh, delays are at least 1 second, and the operation is bounded
+  by a 60-second deadline.
 - `topup restore-check` and `topup reconcile` bind durable RPC state to price-observation groups too; with such a group sorted first they failed with `chain_unavailable`.
 - `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
   and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several

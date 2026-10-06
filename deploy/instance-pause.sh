@@ -9,12 +9,6 @@ set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=deploy/deadline.sh
 source "$root/deadline.sh"
-retry_base=${INSTANCE_PAUSE_RETRY_BASE_SECONDS:-1}
-retry_max=${INSTANCE_PAUSE_RETRY_MAX_SECONDS:-16}
-[[ "$retry_base" =~ ^[1-9][0-9]*$ && "$retry_max" =~ ^[1-9][0-9]*$ ]] || {
-    echo "instance-pause: retry delays must be positive integers" >&2
-    exit 64
-}
 stage_start "instance-$1" "${INSTANCE_PAUSE_DEADLINE_SECONDS:-60}"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -30,49 +24,28 @@ url="${2%/}/v1/admin/instance/$1"
 retryable_transport() {
     case "$1" in
         # curl: could not resolve host, connect, timeout, TLS, empty reply, send/receive failure.
-        6|7|28|35|52|55|56) return 0 ;;
+        6|7|28|35|52|55|56|124) return 0 ;;
         *) return 1 ;;
     esac
 }
 
 retry_delay() {
-    local delay=$retry_base count=$1
-    while ((count > 1)); do
-        if ((delay >= retry_max)); then
-            delay=$retry_max
-            break
-        fi
+    local delay=1 count=$1
+    while ((count > 1 && delay < 16)); do
         delay=$((delay * 2))
         ((count--))
     done
-    ((delay <= retry_max)) || delay=$retry_max
     printf '%s\n' "$delay"
 }
 
 retry_after() {
-    local value target now
+    local value
     value=$(awk 'tolower($0) ~ /^retry-after:[[:space:]]*[0-9]+[[:space:]]*$/ {
             sub(/^[^:]*:[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); value=$0
         }
         END { if (value != "") print value }' "$tmp/response.headers")
-    if [[ "$value" =~ ^[0-9]+$ ]]; then
-        printf '%s\n' "$value"
-        return 0
-    fi
-
-    value=$(awk 'tolower($0) ~ /^retry-after:/ {
-            sub(/^[^:]*:[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); value=$0
-        }
-        END { if (value != "") print value }' "$tmp/response.headers")
-    [[ -n "$value" ]] || return 1
-    target=$(date -u -d "$value" +%s 2>/dev/null) ||
-        target=$(date -u -j -f '%a, %d %b %Y %H:%M:%S GMT' "$value" +%s 2>/dev/null) || return 1
-    now=$(date -u +%s)
-    if ((target > now)); then
-        printf '%s\n' "$((target - now))"
-    else
-        printf '0\n'
-    fi
+    [[ "$value" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$value"
 }
 
 attempt=1
@@ -102,25 +75,22 @@ while stage_remaining; do
     http_status=$(<"$tmp/status")
     [[ "$http_status" =~ ^[0-9]{3}$ ]] || http_status=000
 
-    if [[ "$http_status" =~ ^2[0-9][0-9]$ || "$http_status" =~ ^3[0-9][0-9]$ ]]; then
+    if ((curl_status == 0)) && [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
         cat "$tmp/response.body"
         exit 0
     fi
 
     should_retry=false retry_reason=
-    if retryable_transport "$curl_status" || [[ "$http_status" == 000 ]]; then
+    if retryable_transport "$curl_status"; then
         should_retry=true
         retry_reason="transport failure (curl=$curl_status)"
-    elif [[ "$http_status" =~ ^(502|503|504)$ ]]; then
-        should_retry=true
-        retry_reason="HTTP $http_status"
-    elif [[ "$http_status" =~ ^(408|429)$ ]]; then
+    elif ((curl_status == 0)) && [[ "$http_status" =~ ^(408|429|500|502|503|504)$ ]]; then
         should_retry=true
         retry_reason="HTTP $http_status"
     fi
 
     if [[ "$should_retry" != true ]]; then
-        [[ -s "$tmp/response.body" ]] && cat "$tmp/response.body"
+        [[ -s "$tmp/response.body" ]] && cat "$tmp/response.body" >&2
         if [[ "$curl_status" -ne 0 ]]; then
             exit "$curl_status"
         fi
@@ -129,7 +99,16 @@ while stage_remaining; do
 
     delay=$(retry_delay "$attempt")
     if retry_after_value=$(retry_after); then
-        delay=$retry_after_value
+        ((retry_after_value > delay)) && delay=$retry_after_value
+    fi
+    ((delay < 1)) && delay=1
+    remaining=$((stage_deadline - SECONDS))
+    if ((delay >= remaining)); then
+        [[ -s "$tmp/response.body" ]] && cat "$tmp/response.body" >&2
+        if [[ "$curl_status" -ne 0 ]]; then
+            exit "$curl_status"
+        fi
+        exit 22
     fi
     echo "instance-pause: retrying $1 after $retry_reason (attempt $attempt, backoff ${delay}s)" >&2
     stage_sleep "$delay"
