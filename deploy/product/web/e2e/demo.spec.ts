@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { errors, expect, test, type Locator, type Page } from "@playwright/test";
 import {
   createPublicClient,
   createTestClient,
@@ -35,6 +35,24 @@ function env(name: string): string {
     throw new Error(`${name} is not set; global setup did not run`);
   }
   return value;
+}
+
+/** Finish the visible page's initial timeline refresh before observing its polling interval. */
+async function refetchTimeline(page: Page) {
+  const response = page.waitForResponse("**/api/quotes/*");
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  const current = await response;
+  await current.finished();
+  return current;
+}
+
+/** Observe a bounded response window, including responses delivered after the clock advance. */
+async function expectNoTimelineResponse(page: Page, windowMs: number) {
+  const response = page.waitForResponse("**/api/quotes/*", { timeout: windowMs });
+  await Promise.all([
+    page.clock.runFor(windowMs),
+    expect(response).rejects.toThrow(errors.TimeoutError),
+  ]);
 }
 
 /** The owner's balance of a token: Sepolia's test PHA unless named. */
@@ -355,9 +373,11 @@ test("query outages show retrying states, recover, and preserve the last account
   await expect(trust).toContainText("Networks are unavailable right now; retrying…");
 
   available = true;
-  const recovered = page.waitForResponse((response) => response.url().endsWith("/api/account") && response.status() === 200);
+  const recovered = page.waitForResponse("**/api/account");
   await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
-  await recovered;
+  const recoveredResponse = await recovered;
+  expect(recoveredResponse.status()).toBe(200);
+  await recoveredResponse.finished();
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
   await expect(product.getByRole("combobox", { name: "Network", exact: true })).toBeEnabled();
   await expect(trust).toContainText("Attestation verified");
@@ -378,10 +398,8 @@ test("query outages show retrying states, recover, and preserve the last account
 });
 
 test("a missing timeline shows a terminal message and stops polling", async ({ page }) => {
-  let timelineReads = 0;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
-    timelineReads += 1;
     await route.fulfill({
       status: 404,
       json: { code: "not_found" },
@@ -396,17 +414,14 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
   await expect(scenes.getByTestId("stream-status")).toHaveText("Unavailable");
   await expect(scenes.getByRole("list", { name: /^Loading/ })).toHaveCount(0);
-  const reads = timelineReads;
-  await page.clock.runFor(3 * TIMELINE_INTERVAL_MS);
-  expect(timelineReads).toBe(reads);
+  expect((await refetchTimeline(page)).status()).toBe(404);
+  await expectNoTimelineResponse(page, 3 * TIMELINE_INTERVAL_MS);
 });
 
 test("a refused timeline keeps its cached data and shows paused updates", async ({ page }) => {
   let missing = false;
-  let reads = 0;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
-    reads += 1;
     if (!missing) {
       await route.continue();
       return;
@@ -424,25 +439,22 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  expect((await refetchTimeline(page)).status()).toBe(200);
   missing = true;
-  const response = page.waitForResponse((response) =>
-    new URL(response.url()).pathname.startsWith("/api/quotes/") && response.status() === 404,
-  );
+  const response = page.waitForResponse("**/api/quotes/*");
   await page.clock.runFor(TIMELINE_INTERVAL_MS);
-  await response;
+  const refused = await response;
+  expect(refused.status()).toBe(404);
+  await refused.finished();
   await expect(scenes.getByText("Updates paused.", { exact: true })).toBeVisible();
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
-  const paused = reads;
-  await page.clock.runFor(3 * TIMELINE_INTERVAL_MS);
-  expect(reads).toBe(paused);
+  await expectNoTimelineResponse(page, 3 * TIMELINE_INTERVAL_MS);
 });
 
 for (const sent of [false, true]) {
   test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page }) => {
-    let reads = 0;
     await page.clock.install();
     await page.route("**/api/quotes/*", async (route) => {
-      reads += 1;
       const timeline: Timeline = {
         kind: "quote",
         quote: {
@@ -469,27 +481,22 @@ for (const sent of [false, true]) {
     await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
     await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
-    const initial = reads;
-    const request = page.waitForRequest("**/api/quotes/*");
-    const response = page.waitForResponse(async (response) => response.request() === await request);
-    if (sent) {
-      await page.clock.runFor(TIMELINE_ACTIVE_INTERVAL_MS);
-    } else {
-      await page.clock.runFor(TIMELINE_INTERVAL_MS);
-      expect(reads).toBe(initial);
-      await page.clock.runFor(EXPIRED_QUOTE_INTERVAL_MS - TIMELINE_INTERVAL_MS);
+    expect((await refetchTimeline(page)).status()).toBe(200);
+    if (!sent) {
+      await expectNoTimelineResponse(page, TIMELINE_INTERVAL_MS);
     }
-    await response;
-    expect(reads).toBeGreaterThan(initial);
+    const response = page.waitForResponse("**/api/quotes/*");
+    await page.clock.runFor(sent ? TIMELINE_ACTIVE_INTERVAL_MS : EXPIRED_QUOTE_INTERVAL_MS - TIMELINE_INTERVAL_MS);
+    const update = await response;
+    expect(update.status()).toBe(200);
+    await update.finished();
   });
 }
 
 test("a swept payment keeps polling until its webhook arrives", async ({ page }) => {
   let delivered = false;
-  let reads = 0;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
-    reads += 1;
     const timeline: Timeline = {
       kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events: [], api: [],
       deposit: {
@@ -515,17 +522,55 @@ test("a swept payment keeps polling until its webhook arrives", async ({ page })
   await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "current");
   await expect(scenes.getByTestId("stream-status")).toHaveText("Live");
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  expect((await refetchTimeline(page)).status()).toBe(200);
   delivered = true;
-  const request = page.waitForRequest("**/api/quotes/*");
-  const response = page.waitForResponse(async (response) => response.request() === await request);
+  const response = page.waitForResponse("**/api/quotes/*");
   await page.clock.runFor(TIMELINE_INTERVAL_MS);
-  await response;
+  const update = await response;
+  expect(update.status()).toBe(200);
+  await update.finished();
   await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "complete");
   await expect(scenes.getByTestId("stream-status")).toHaveText("Done");
-  const stopped = reads;
-  await page.clock.runFor(3 * TIMELINE_INTERVAL_MS);
-  expect(reads).toBe(stopped);
+  await expectNoTimelineResponse(page, 3 * TIMELINE_INTERVAL_MS);
 });
+
+for (const status of ["reversed", "rejected"] as const) {
+  test(`a ${status} deposit ${status === "reversed" ? "stops" : "continues"} timeline polling`, async ({ page }) => {
+    await page.clock.install();
+    await page.route("**/api/quotes/*", async (route) => {
+      const timeline: Timeline = {
+        kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events: [], api: [],
+        deposit: {
+          id: `dep_${"1".repeat(32)}`, status, final: false, swept: false,
+          amount: status === "reversed" ? 2000 : null, amount_atomic: (80n * 10n ** 18n).toString(),
+          chain_id: sepolia.id, asset: "pha", exchange_rate: status === "reversed" ? "0.25" : null,
+          price_source: status === "reversed" ? "quote" : null,
+          amount_refunded_atomic: "0", amount_refunded: 0, amount_reversed: status === "reversed" ? 2000 : 0,
+          from_address: env("PAYER_ADDRESS"), asset_contract: env("TOKEN_ADDRESS"),
+          tx_hash: `0x${"1".repeat(64)}`, metadata: {},
+        },
+        steps: [{ key: status === "reversed" ? "reversed" : "credited", state: "failed", at: 1, details: [] }],
+      };
+      await route.fulfill({
+        json: timeline,
+        headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+      });
+    });
+    await page.goto(env("SITE_URL"));
+    const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+    await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+    await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
+    await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+    expect((await refetchTimeline(page)).status()).toBe(200);
+    if (status === "reversed") {
+      await expectNoTimelineResponse(page, 3 * TIMELINE_INTERVAL_MS);
+    } else {
+      const response = page.waitForResponse("**/api/quotes/*");
+      await page.clock.runFor(TIMELINE_INTERVAL_MS);
+      expect((await response).status()).toBe(200);
+    }
+  });
+}
 
 test("a quote: locked price, metadata, the merchant's sweep, and refunds that succeed, fail, or are canceled", async ({
   page,
