@@ -990,6 +990,19 @@ impl IntoResponse for ApiError {
     }
 }
 
+impl From<crate::pause::PauseError> for ApiError {
+    fn from(error: crate::pause::PauseError) -> Self {
+        use crate::pause::PauseError;
+        match error {
+            PauseError::Database(error) => Self::from(error),
+            error @ (PauseError::InvalidDuration | PauseError::AuditOutcomeUnknown) => {
+                tracing::error!(%error, "instance pause operation failed");
+                Self::internal()
+            }
+        }
+    }
+}
+
 impl From<sqlx::Error> for ApiError {
     /// A `500`, except when no pool connection was acquired or PostgreSQL rolled back a
     /// deadlock or serialization failure (`40P01`, `40001`): the request is a `503` to retry,

@@ -209,6 +209,17 @@ pub(crate) struct InstancePause {
     lease: tokio::sync::Mutex<InstanceLease>,
 }
 
+/// Instance pause failures mapped at the API boundary.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PauseError {
+    #[error("invalid pause duration")]
+    InvalidDuration,
+    #[error("instance pause audit deadline expired; commit outcome is unknown")]
+    AuditOutcomeUnknown,
+    #[error("{0}")]
+    Database(#[from] sqlx::Error),
+}
+
 struct InstanceLease {
     owner: String,
     deadline: tokio::time::Instant,
@@ -275,13 +286,12 @@ impl InstancePause {
         duration: i64,
         actor: &Actor,
         reason: &str,
-    ) -> Result<bool, sqlx::Error> {
+    ) -> Result<bool, PauseError> {
         let mut lease = self.lease.lock().await;
         if lease.deadline > tokio::time::Instant::now() && lease.owner != owner {
             return Ok(false);
         }
-        let seconds = u64::try_from(duration)
-            .map_err(|_| sqlx::Error::Protocol("invalid pause duration".to_owned()))?;
+        let seconds = u64::try_from(duration).map_err(|_| PauseError::InvalidDuration)?;
         // Admission shares this lock with mutations. Bound audit persistence so a stalled
         // database cannot prevent requests from observing lease expiry indefinitely.
         let record = async {
@@ -303,7 +313,7 @@ impl InstancePause {
         // unknown, so this must not be classified as a pool acquisition timeout.
         tokio::time::timeout(std::time::Duration::from_secs(5), record)
             .await
-            .map_err(|_| sqlx::Error::Io(std::io::ErrorKind::TimedOut.into()))??;
+            .map_err(|_| PauseError::AuditOutcomeUnknown)??;
         *lease = InstanceLease {
             owner: owner.to_owned(),
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(seconds),
@@ -346,9 +356,7 @@ mod instance_tests {
             )
             .await;
         let error = result.unwrap_err();
-        assert!(
-            matches!(&error, sqlx::Error::Io(error) if error.kind() == std::io::ErrorKind::TimedOut)
-        );
+        assert!(matches!(error, PauseError::AuditOutcomeUnknown));
         let error = crate::api::error::ApiError::from(error);
         assert_eq!(error.code(), "internal_error");
         let response = error.into_response();
