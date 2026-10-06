@@ -7,10 +7,30 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
+from http import HTTPStatus
 
 from topup_sdk.errors import TransportError
 
 from .transport import operation_deadline
+
+
+@dataclass(frozen=True)
+class Failure:
+    """Public response details, without an exception, traceback, or SDK constructor."""
+
+    status: HTTPStatus
+    code: str
+    retry_after: str | None
+    message: str
+
+
+class CachedFailureError(Exception):
+    """A fresh control-flow signal carrying a cached failure value to the HTTP boundary."""
+
+    def __init__(self, failure: Failure) -> None:
+        super().__init__(failure.message)
+        self.failure = failure
 
 
 class SingleFlightTTL[T]:
@@ -26,10 +46,11 @@ class SingleFlightTTL[T]:
         clock: Callable[[], float],
         ttl: float,
         negative_ttl: float,
-        failure: Callable[[Exception], Callable[[], Exception]],
+        failure: Callable[[Exception], Failure],
         executor: ThreadPoolExecutor | None = None,
         incomplete: Callable[[T], bool] = lambda _: False,
         inclusive: bool = False,
+        cache_errors: tuple[type[Exception], ...] = (Exception,),
     ) -> None:
         self._clock = clock
         self._ttl = ttl
@@ -38,13 +59,14 @@ class SingleFlightTTL[T]:
         self._executor = executor
         self._incomplete = incomplete
         self._inclusive = inclusive
+        self._cache_errors = cache_errors
         self._changed = threading.Condition()
         self._value: T | None = None
         self._stored_at = 0.0
         self._expires = 0.0
-        self._error: Callable[[], Exception] | None = None
+        self._error: Failure | None = None
         self._refreshing = False
-        self._future: Future[T] | None = None
+        self._future: Future[T | Failure] | None = None
 
     def get(
         self,
@@ -66,7 +88,7 @@ class SingleFlightTTL[T]:
                 if self._value is not None:
                     return stale(self._value, now - self._stored_at)
                 if self._error is not None:
-                    raise self._error()
+                    raise CachedFailureError(self._error)
             if not self._refreshing:
                 self._refreshing = True
                 if self._executor is not None:
@@ -81,15 +103,14 @@ class SingleFlightTTL[T]:
                 return stale(self._value, now - self._stored_at)
             pending = self._future
         if leader:
-            return self._refresh(fetch)
+            return self._unwrap(self._refresh(fetch))
         if pending is None:
             raise TransportError("unavailable")
         try:
-            return pending.result(timeout=self._remaining(timeout))
+            result = pending.result(timeout=self._remaining(timeout))
         except TimeoutError as error:
             raise TransportError("timeout") from error
-        except Exception as error:
-            raise self._failure(error)() from None
+        return self._unwrap(result)
 
     @staticmethod
     def _remaining(timeout: float | None) -> float | None:
@@ -101,16 +122,22 @@ class SingleFlightTTL[T]:
             raise TransportError("timeout")
         return remaining if timeout is None else min(timeout, remaining)
 
-    def _refresh(self, fetch: Callable[[], T]) -> T:
+    @staticmethod
+    def _unwrap(value: T | Failure) -> T:
+        if isinstance(value, Failure):
+            raise CachedFailureError(value)
+        return value
+
+    def _refresh(self, fetch: Callable[[], T]) -> T | Failure:
         try:
             value = fetch()
-        except Exception as error:
+        except self._cache_errors as error:
             with self._changed:
                 self._error = self._failure(error)
                 self._expires = self._clock() + self._negative_ttl
                 if self._value is not None:
                     return self._value
-            raise
+                return self._error
         else:
             with self._changed:
                 incomplete = self._incomplete(value)

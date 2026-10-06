@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reference_product import demo as demo_module
+from reference_product.cache import CachedFailureError
 from reference_product.config import (
     ChainConfig,
     MintableToken,
@@ -1376,17 +1377,21 @@ def test_product_closes_owned_http_threads(demo: tuple[DemoConsole, Service], ki
 
 @pytest.mark.parametrize("kind", ["trust", "networks"])
 @pytest.mark.parametrize("failure", ["transport", "api", "validation"])
-def test_cached_failures_raise_fresh_exceptions_for_concurrent_readers(
+def test_cached_failures_preserve_http_responses_for_concurrent_readers(
     demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, kind: str, failure: str
 ) -> None:
     console, _ = demo
     original: TransportError | ApiError | ResponseValidationError
+    expected: tuple[int, str, str | None]
     if failure == "transport":
-        original = TransportError("timeout", "service timeout")
+        original = TransportError("timeout", "private service detail")
+        expected = (503, "unavailable", "2")
     elif failure == "api":
-        original = ApiError(503, "service_unavailable", "service failed", request_id="request-test")
+        original = ApiError(503, "service_unavailable", "private service detail")
+        expected = (502, "service_unavailable", None)
     else:
-        original = ResponseValidationError("malformed response", status_code=200, request_id="test")
+        original = ResponseValidationError("private service detail")
+        expected = (502, "bad_gateway", None)
     calls: list[int] = []
 
     def fetch(*args: Any) -> Any:
@@ -1396,83 +1401,66 @@ def test_cached_failures_raise_fresh_exceptions_for_concurrent_readers(
     monkeypatch.setattr(
         console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
     )
-    method = console._trust_view if kind == "trust" else console._payable_networks
-    with pytest.raises(type(original)) as first:
-        method()
 
-    def read_failure() -> Exception:
-        try:
-            method()
-        except (TransportError, ApiError, ResponseValidationError) as error:
-            return error
-        raise AssertionError("expected cached failure")
+    def read_failure() -> tuple[int, str, str | None]:
+        response = console.handle(
+            "GET", f"/api/{'trust' if kind == 'trust' else 'assets'}", {}, b""
+        )
+        return (
+            response.status,
+            json.loads(response.body)["code"],
+            response.headers.get("retry-after"),
+        )
 
+    assert read_failure() == expected
     with ThreadPoolExecutor(max_workers=5) as workers:
-        errors = [
+        results = [
             future.result(timeout=2) for future in [workers.submit(read_failure) for _ in range(5)]
         ]
-    assert len({id(error) for error in [first.value, *errors]}) == 6
+    assert results == [expected] * 5
     assert len(calls) == 1
-    for error in errors:
-        assert type(error) is type(original)
-        assert str(error) == str(original)
-        if isinstance(error, TransportError):
-            assert error.code == "timeout"
-        elif isinstance(error, ApiError):
-            assert error.status_code == 503
-            assert error.code == "service_unavailable"
-            assert error.request_id == "request-test"
-        elif isinstance(error, ResponseValidationError):
-            assert error.status_code == 200
-            assert error.request_id == "test"
 
 
-@pytest.mark.parametrize("failure", ["transport", "http", "missing_key"])
-def test_cold_sweeps_waiters_receive_distinct_refresh_exceptions(
+@pytest.mark.parametrize("failure", ["transport", "http", "missing_key", "unexpected"])
+def test_cold_sweeps_waiters_share_failure_values(
     demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     console, _ = demo
-    waiting = threading.Barrier(3)
+    cookie = _account(console)
     started, release = threading.Event(), threading.Event()
-    pending_ids: list[int] = []
-    error: TransportError | httpx.HTTPError | MissingProductKeyError
+    calls: list[int] = []
+    error: Exception
     if failure == "transport":
-        error = TransportError("timeout", "refresh failed")
+        error = TransportError("timeout", "private refresh detail")
     elif failure == "http":
-        error = httpx.HTTPError("refresh failed")
+        error = httpx.HTTPError("private refresh detail")
+    elif failure == "missing_key":
+        error = MissingProductKeyError("private refresh detail")
     else:
-        error = MissingProductKeyError("refresh failed")
-
-    class WaitingFuture(Future[dict[str, Any]]):
-        def result(self, timeout: float | None = None) -> dict[str, Any]:
-            pending_ids.append(id(self))
-            waiting.wait(timeout=2)
-            return super().result(timeout=timeout)
+        error = TypeError("private refresh detail")
 
     def build(now: float) -> dict[str, Any]:
+        calls.append(1)
         started.set()
         assert release.wait(3)
         raise error
 
-    monkeypatch.setattr(demo_module, "Future", WaitingFuture)
     monkeypatch.setattr(console, "_build_sweeps_view", build)
     with ThreadPoolExecutor(max_workers=2) as workers:
-        futures = [workers.submit(console._sweeps_view) for _ in range(2)]
+        futures = [workers.submit(_get, console, cookie, "sweeps") for _ in range(2)]
         try:
-            assert started.wait(1)
-            waiting.wait(timeout=2)
+            assert started.wait(2)
         finally:
             release.set()
-        with pytest.raises(type(error)) as first:
-            futures[0].result(timeout=3)
-        with pytest.raises(type(error)) as second:
-            futures[1].result(timeout=3)
-    assert len(pending_ids) == 2
-    assert len(set(pending_ids)) == 1
-    assert first.value is not second.value
-    assert first.value is not error
-    assert second.value is not error
-    assert str(first.value) == str(second.value) == str(error)
+        results = [future.result(timeout=3) for future in futures]
+    expected = (
+        (500, {"code": "internal_server_error"})
+        if failure == "unexpected"
+        else (503, {"code": "unavailable"})
+    )
+    assert results == [expected] * 2
+    console.drain()
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("warm", [True, False])
@@ -1498,7 +1486,7 @@ def test_failed_sweeps_refreshes_back_off_from_failure_completion(
         if warm:
             assert console._sweeps_view() == cached
         else:
-            with pytest.raises(TransportError):
+            with pytest.raises(CachedFailureError):
                 console._sweeps_view()
         console.drain()
 

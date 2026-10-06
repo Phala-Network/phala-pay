@@ -53,7 +53,6 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import partial
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from itertools import islice
@@ -68,6 +67,7 @@ from topup_sdk import (
     ApiError,
     AttestationError,
     TopupClient,
+    TopupError,
     flush_transactions,
     forwarder_address,
     safe_batch,
@@ -75,7 +75,7 @@ from topup_sdk import (
 from topup_sdk.addresses import same_address
 from topup_sdk.errors import ResponseValidationError, TransportError
 
-from .cache import ExpiringLRU, SingleFlightTTL
+from .cache import CachedFailureError, ExpiringLRU, Failure, SingleFlightTTL
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
 from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
 from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
@@ -231,7 +231,8 @@ class DemoConsole:
             clock=clock,
             ttl=300,
             negative_ttl=30,
-            failure=_failure_factory,
+            failure=_failure_value,
+            cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError),
             incomplete=lambda view: (
                 not view["attestation"]["binding_verified"] or view["tls_evidence"] is None
             ),
@@ -240,13 +241,14 @@ class DemoConsole:
             clock=clock,
             ttl=300,
             negative_ttl=30,
-            failure=_failure_factory,
+            failure=_failure_value,
+            cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError),
         )
         self._sweeps_cache = SingleFlightTTL[dict[str, Any]](
             clock=clock,
             ttl=10,
             negative_ttl=10,
-            failure=_failure_factory,
+            failure=_failure_value,
             executor=self._refresh_workers,
             inclusive=True,
         )
@@ -290,6 +292,12 @@ class DemoConsole:
     def _handle_api(self, method: str, name: str, headers: dict[str, str], body: bytes) -> Response:
         try:
             return self._api(method, name, headers, body)
+        except CachedFailureError as error:
+            failure = error.failure
+            response = _json(failure.status, {"code": failure.code})
+            if failure.retry_after is not None:
+                response.headers["retry-after"] = failure.retry_after
+            return response
         except ApiError as error:
             # The service's documented code is public; its message and everything else are not.
             LOG.warning("demo: service answered %s %s", error.status_code, error.code)
@@ -1525,34 +1533,29 @@ def _take[T](items: Iterator[T], limit: int) -> Iterator[T]:
     return islice(items, limit)
 
 
-def _failure_factory(
-    error: Exception,
-) -> Callable[[], Exception]:
-    """Cache failure details without retaining an exception and its request traceback."""
+def _failure_value(error: Exception) -> Failure:
+    """Map failures once, preserving the demo's HTTP contract without SDK exceptions."""
+    if isinstance(error, CachedFailureError):
+        return error.failure
     if isinstance(error, ApiError):
-        return partial(
-            ApiError,
-            error.status_code,
-            error.code,
-            error.message,
-            error_type=error.error_type,
-            param=error.param,
-            doc_url=error.doc_url,
-            request_id=error.request_id,
-            retry_after=error.retry_after,
-        )
+        if error.status_code == 429:
+            status = HTTPStatus.TOO_MANY_REQUESTS
+        elif 400 <= error.status_code < 500:
+            status = HTTPStatus.BAD_REQUEST
+        else:
+            status = HTTPStatus.BAD_GATEWAY
+        return Failure(status, error.code, None, "service request failed")
+    if isinstance(error, AddressMismatchError):
+        return Failure(HTTPStatus.BAD_GATEWAY, "address_not_derivable", None, "address mismatch")
     if isinstance(error, TransportError):
-        return partial(TransportError, error.code, str(error))
+        return Failure(HTTPStatus.SERVICE_UNAVAILABLE, "unavailable", "2", "service unavailable")
     if isinstance(error, ResponseValidationError):
-        return partial(
-            ResponseValidationError,
-            str(error),
-            status_code=error.status_code,
-            request_id=error.request_id,
-        )
-    if isinstance(error, httpx.HTTPError):
-        return partial(httpx.HTTPError, str(error))
-    return partial(type(error), str(error))
+        return Failure(HTTPStatus.BAD_GATEWAY, "bad_gateway", None, "invalid service response")
+    if isinstance(error, (httpx.HTTPError, MissingProductKeyError)):
+        return Failure(HTTPStatus.SERVICE_UNAVAILABLE, "unavailable", None, "service unavailable")
+    return Failure(
+        HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", None, "request failed"
+    )
 
 
 def _json_body(body: bytes) -> dict[str, Any] | None:
