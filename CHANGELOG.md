@@ -43,6 +43,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- Deploy pause and resume requests retry transient transport and gateway failures with fresh
+  signatures, so a settling ingress does not fail an otherwise healthy upgrade.
 - `topup restore-check` and `topup reconcile` bind durable RPC state to price-observation groups too; with such a group sorted first they failed with `chain_unavailable`.
 - `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
   and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
