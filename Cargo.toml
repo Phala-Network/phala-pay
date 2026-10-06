@@ -61,7 +61,7 @@ tracing-subscriber = { version = "0.3.23", features = ["json"] }
 utoipa = { version = "=6.0.0", features = ["chrono", "uuid"] }
 utoipa-axum = "=0.3.0"
 url = "=2.5.8"
-uuid = { version = "=1.26.1", features = ["serde", "v4", "v5"] }
+uuid = { version = "=1.27.0", features = ["serde", "v4", "v5"] }
 zeroize = "=1.9.0"
 
 [workspace.lints.rust]
