@@ -61,7 +61,8 @@ function CopyButton({
 /**
  * A hash, address, or id: monospaced and middle-truncated by the page's one rule (`short`); linked
  * when `href` is given, with a copy button when `copyLabel` is. The full value is a link's tooltip
- * (on hover and focus); unlinked, it is the text's title, and what screen readers read.
+ * (on hover and focus); unlinked, it is the text's title, and what screen readers read. A link's
+ * target is 44px tall, around its line.
  */
 function Hash({
   value,
@@ -92,7 +93,7 @@ function Hash({
     const link = (
       <a
         data-slot="hash-value"
-        className="rounded-sm font-mono text-[13px] underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground"
+        className="relative rounded-sm font-mono text-[13px] underline decoration-foreground/30 underline-offset-4 transition-colors before:absolute before:inset-x-0 before:-inset-y-3 hover:decoration-foreground"
         href={href}
         target="_blank"
         rel="noreferrer"

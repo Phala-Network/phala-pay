@@ -1166,7 +1166,7 @@ def _steps(
             "complete",
             quote["created"],
             [
-                {"label": "Quote", "value": quote["id"], "mono": True},
+                {"label": "Quote", "value": quote["id"], "kind": "id"},
                 {
                     "label": "Locked price",
                     "value": quote["exchange_rate"],
@@ -1180,7 +1180,7 @@ def _steps(
                     "kind": "address",
                 },
                 {"label": "Expires", "value": quote["expires_at"], "kind": "time"},
-                {"label": "Metadata", "value": _metadata_text(quote.get("metadata"))},
+                {"label": "Metadata", "value": _metadata(quote.get("metadata")), "kind": "json"},
             ],
         )
 
@@ -1192,7 +1192,7 @@ def _steps(
             sent["at"],
             [
                 {"label": "Transaction", "value": sent["tx_hash"], "kind": "tx"},
-                {"label": "Block", "value": sent["block_number"]},
+                {"label": "Block", "value": sent["block_number"], "kind": "text"},
             ],
         )
     else:
@@ -1205,7 +1205,7 @@ def _steps(
             "complete",
             deposit["created"],
             [
-                {"label": "Deposit", "value": deposit["id"], "mono": True},
+                {"label": "Deposit", "value": deposit["id"], "kind": "id"},
                 {"label": "From", "value": deposit["from_address"], "kind": "address"},
                 {"label": "Amount", "value": deposit["amount_atomic"], "kind": "atomic"},
             ],
@@ -1215,10 +1215,16 @@ def _steps(
             {"label": "Amount", "value": payment["amount_atomic"], "kind": "atomic"},
         ]
         if isinstance(payment.get("confirmations"), int):
-            details.append({"label": "Confirmations", "value": payment["confirmations"]})
+            details.append(
+                {"label": "Confirmations", "value": payment["confirmations"], "kind": "text"}
+            )
         if isinstance(payment.get("matches_quote"), bool):
             details.append(
-                {"label": "Matches the quote", "value": "yes" if payment["matches_quote"] else "no"}
+                {
+                    "label": "Matches the quote",
+                    "value": "yes" if payment["matches_quote"] else "no",
+                    "kind": "text",
+                }
             )
         step("received", "complete", None, details)
     else:
@@ -1227,7 +1233,7 @@ def _steps(
     # Credited: valued and screened at the route's confirmation.
     if status == "rejected" and deposit is not None:
         reason = deposit.get("rejection_reason") or ""
-        step("credited", "failed", None, [{"label": "Reason", "value": reason}])
+        step("credited", "failed", None, [{"label": "Reason", "value": reason, "kind": "text"}])
     elif credited and deposit is not None:
         step(
             "credited",
@@ -1240,6 +1246,7 @@ def _steps(
                     "value": "the quote's locked price"
                     if deposit.get("price_source") == "quote"
                     else "spot (market rate on arrival)",
+                    "kind": "text",
                 },
                 {
                     "label": "Rate",
@@ -1256,13 +1263,22 @@ def _steps(
     if delivered is not None:
         obj = delivered["data"].get("object") or {}
         details = [
-            {"label": "Event", "value": delivered["id"], "mono": True},
-            {"label": "Signature", "value": "verified (Standard Webhooks v1a, pinned key)"},
-            {"label": "data.object.metadata", "value": _metadata_text(obj.get("metadata"))},
+            {"label": "Event", "value": delivered["id"], "kind": "id"},
+            {
+                "label": "Signature",
+                "value": "verified (Standard Webhooks v1a, pinned key)",
+                "kind": "text",
+            },
+            {
+                "label": "data.object.metadata",
+                "value": _metadata(obj.get("metadata")),
+                "kind": "json",
+            },
         ]
         if ledger is not None and ledger["credit"] is not None:
             details += [
-                {"label": "Ledger order", "value": f"{ledger['status']} ({ledger['order_key']})"},
+                {"label": "Ledger order", "value": ledger["status"], "kind": "text"},
+                {"label": "Order key", "value": ledger["order_key"], "kind": "id"},
                 {"label": "Credit", "value": ledger["credit"], "kind": "usd_delta"},
             ]
             if ledger["bonus"]:
@@ -1283,7 +1299,7 @@ def _steps(
             "final",
             "complete",
             deposit.get("final_at"),
-            [{"label": "Block", "value": deposit["block_number"]}],
+            [{"label": "Block", "value": deposit["block_number"], "kind": "text"}],
         )
     elif status != "reversed":
         step("final", "current" if deposit is not None else "upcoming", None, [])
@@ -1295,7 +1311,11 @@ def _steps(
             None if reversal is None else reversal["received_at"],
             [
                 {"label": "Taken back", "value": deposit["amount_reversed"], "kind": "usd"},
-                {"label": "Event", "value": "deposit.reversed" if reversal else "not received"},
+                {
+                    "label": "Event",
+                    "value": "deposit.reversed" if reversal else "not received",
+                    "kind": "text",
+                },
             ],
         )
 
@@ -1457,10 +1477,11 @@ def _ledger_lines(db: Any, account: str) -> list[dict[str, Any]]:
     ]
 
 
-def _metadata_text(metadata: Any) -> str:
-    if not isinstance(metadata, dict) or not metadata:
-        return "{}"
-    return json.dumps(metadata, sort_keys=True)
+def _metadata(metadata: Any) -> dict[str, Any]:
+    """Metadata as a JSON object for the page to show, its keys sorted; `{}` when there is none."""
+    if not isinstance(metadata, dict):
+        return {}
+    return dict(sorted(metadata.items()))
 
 
 def _attestation_view(evidence: AttestationResponse) -> dict[str, Any]:

@@ -109,13 +109,24 @@ export type StepKey =
   | "reversed"
   | "swept";
 
+/** A timeline step's labelled value, with the kind of value it is, which says how to show it. */
 export interface Detail {
   label: string;
-  value: string | number | null;
-  kind?: "address" | "tx" | "time" | "usd" | "usd_delta" | "atomic" | "rate";
+  value: string | number | Record<string, unknown> | null;
+  kind:
+    | "id"
+    | "hash"
+    | "json"
+    | "text"
+    | "address"
+    | "tx"
+    | "time"
+    | "usd"
+    | "usd_delta"
+    | "atomic"
+    | "rate";
   /** A rate's token symbol: `1 PHA = $0.25`. */
   unit?: string;
-  mono?: boolean;
 }
 
 export interface Step {

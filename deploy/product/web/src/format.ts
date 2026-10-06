@@ -11,6 +11,11 @@ export function presetDollars(cents: number): string {
   return cents % 100 === 0 ? usd.format(cents / 100).replace(/\.00$/, "") : dollars(cents);
 }
 
+/** An amount taken off: `−$5.00`, but `$0.00` when nothing was. */
+export function minusDollars(cents: number): string {
+  return cents === 0 ? dollars(0) : `−${dollars(cents)}`;
+}
+
 /** `+$20.00` or `−$2.50`. */
 export function signedDollars(cents: number): string {
   return `${cents < 0 ? "−" : "+"}${usd.format(Math.abs(cents) / 100)}`;
@@ -43,6 +48,7 @@ export function short(value: string): string {
   return value.length > prefix + 11 ? `${value.slice(0, prefix + 6)}…${value.slice(-4)}` : value;
 }
 
+/** A moment, `Oct 6, 13:05:05`: the 24-hour clock, as every time on the page. */
 export function time(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString("en-US", {
     month: "short",
@@ -50,6 +56,7 @@ export function time(seconds: number): string {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    hourCycle: "h23",
   });
 }
 

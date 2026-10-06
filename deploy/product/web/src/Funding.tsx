@@ -1,20 +1,20 @@
 import { useMutation } from "@tanstack/react-query";
-import { ExternalLink, Wallet } from "lucide-react";
-import type { ReactNode } from "react";
+import { CircleAlert, ExternalLink, Wallet } from "lucide-react";
+import { useId, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Asset, Network } from "./api.js";
 import { ChainIcon, TokenIcon } from "./chains.js";
-import { ExplorerLink, InfoTip, errorMessage, wallet } from "./common.js";
+import { ExplorerLink, TOUCH, errorMessage, wallet } from "./common.js";
 import { tokenName, tokens } from "./format.js";
 import type { PaidWith } from "./testTokens.js";
 
 /**
- * A row of the test tokens card, the same for its action and its links: the token's mark and what
- * the row does, and at its end the kind of action (the wallet, or a link out).
+ * A row of the test tokens list, the same for its actions and its links: the token's or network's
+ * mark, then what the row does; 44px on a phone.
  */
-const TOKEN_ROW = "w-full justify-between";
+const TOKEN_ROW = cn("w-full justify-start", TOUCH);
 
 // The mint's whole tokens: 1,000 test PHA (about $75 at staging's rate) unless a payment needs
 // more, then that payment's amount, rounded up to a whole hundred tokens.
@@ -57,64 +57,66 @@ function useMint(network: Network, need: Need | null, using?: PaidWith) {
   return { mint, label };
 }
 
-/** A faucet, off the page: its mark and name, and the external-link icon at the row's end. */
+/** A faucet, off the page: its mark and name, marked as a link out. */
 function FaucetLink({ href, icon, title, children }: { href: string; icon: ReactNode; title?: string; children: ReactNode }) {
   return (
     <Button asChild variant="secondary" className={TOKEN_ROW}>
       <a href={href} target="_blank" rel="noreferrer" title={title}>
-        <span className="flex items-center gap-2">
-          {icon}
-          {children}
-        </span>
-        <ExternalLink aria-hidden="true" />
+        {icon}
+        {children}
+        <ExternalLink className="size-3.5 text-muted-foreground" aria-hidden="true" />
       </a>
     </Button>
   );
 }
 
-/** The mint button: the token's mark and the amount, marked with the wallet that mints it. */
+/** The mint button: the token's mark and the amount. */
 function MintButton({ token, label, mint }: { token: Asset } & ReturnType<typeof useMint>) {
   return (
     <Button type="button" variant="secondary" className={TOKEN_ROW} onClick={() => mint.mutate(token)} disabled={mint.isPending}>
-      <span className="flex items-center gap-2">
-        <TokenIcon asset={token.asset} className="size-4" />
-        {mint.isPending && mint.variables.asset === token.asset ? "Confirm in your wallet…" : label(token)}
-      </span>
-      <Wallet aria-hidden="true" />
+      <TokenIcon asset={token.asset} className="size-4" />
+      {mint.isPending && mint.variables.asset === token.asset ? "Confirm in your wallet…" : label(token)}
     </Button>
+  );
+}
+
+/** A failed mint's reason, under the button that tried it. */
+function MintError({ error }: { error: unknown }) {
+  return (
+    <span className="flex items-start gap-2">
+      <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
+      {errorMessage(error, "Minting failed.")}
+    </span>
   );
 }
 
 /**
  * Where to get test tokens on the selected network, whatever token is selected: each mintable test
- * token's public mint, from the visitor's wallet (a button, marked with the wallet), of enough for
- * the payment at hand (`need`); then, as links out, another test token's issuer faucet and the
- * network's gas faucets.
+ * token's public mint, from the visitor's wallet, of enough for the payment at hand (`need`); then,
+ * as links out, another test token's issuer faucet and the network's gas faucets.
  */
-export function TestTokens({ network, need, className }: { network: Network; need: Need | null; className?: string }) {
+export function TestTokens({ network, need }: { network: Network; need: Need | null }) {
   const mintable = network.assets.filter((each) => each.mintable);
   const fromFaucet = network.assets.find((each) => !each.mintable && each.faucet !== null);
   const { mint, label } = useMint(network, need);
   const chain = chainName(network);
+  const id = useId();
+  const sources = [
+    ...(mintable.length > 0 ? [`mint test ${mintable.map((each) => each.symbol).join(" or ")} from your wallet`] : []),
+    ...(fromFaucet === undefined ? [] : [`get test ${fromFaucet.symbol} from Circle's faucet`]),
+    `get ${chain} ETH for gas from a faucet`,
+  ];
   return (
-    <div
-      role="note"
-      aria-label="Test tokens"
-      className={cn("rounded-xl border border-dashed text-sm", className)}
-    >
-      <div className="flex items-center justify-between gap-2 px-5 pt-4 sm:px-6">
-        <span className="font-medium">Need test tokens?</span>
-        <InfoTip label="About test tokens">
-          {mintable.map((each) =>
-            each.minter === null
-              ? `Test ${each.symbol} is free: its contract lets anyone mint it, so your own wallet mints it. `
-              : `Test ${each.symbol} is free: a public faucet contract mints it to anyone, within the faucet's limits, so your own wallet mints it. `,
-          )}
-          {fromFaucet !== undefined && `Test ${fromFaucet.symbol} is free from Circle's faucet: pick ${chain} as the network there. `}
-          Gas is {chain} ETH, also free, from a public faucet.
-        </InfoTip>
+    <div role="note" aria-labelledby={id} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1">
+        <h4 id={id} className="text-sm font-semibold">
+          Test tokens
+        </h4>
+        <p className="text-sm text-pretty text-muted-foreground">
+          Free on {chain}: {sources.join(", ")}.
+        </p>
       </div>
-      <div className="flex flex-col gap-2 px-5 pt-3 pb-4 sm:px-6">
+      <div className="flex flex-col gap-2">
         {mintable.map((each) => (
           <MintButton key={each.asset} token={each} mint={mint} label={label} />
         ))}
@@ -129,13 +131,13 @@ export function TestTokens({ network, need, className }: { network: Network; nee
           </FaucetLink>
         )}
       </div>
-      <p aria-live="polite" className="border-t px-5 py-3 text-xs text-muted-foreground empty:hidden sm:px-6">
+      <p aria-live="polite" className="text-sm text-muted-foreground empty:hidden">
         {mint.isSuccess && (
           <>
             Minted: <ExplorerLink chainId={network.chain_id} kind="tx" value={mint.data} copy />
           </>
         )}
-        {mint.isError && <span className="text-destructive">{errorMessage(mint.error, "Minting failed.")}</span>}
+        {mint.isError && <MintError error={mint.error} />}
       </p>
     </div>
   );
@@ -176,13 +178,13 @@ export function FundWallet({
         {token.mintable ? (
           <>
             <MintButton token={token} mint={mint} label={label} />
-            <p aria-live="polite" className="text-xs text-muted-foreground empty:hidden">
+            <p aria-live="polite" className="text-sm text-muted-foreground empty:hidden">
               {mint.isSuccess && (
                 <>
                   Minted: <ExplorerLink chainId={network.chain_id} kind="tx" value={mint.data} />. Pay again.
                 </>
               )}
-              {mint.isError && <span className="text-destructive">{errorMessage(mint.error, "Minting failed.")}</span>}
+              {mint.isError && <MintError error={mint.error} />}
             </p>
           </>
         ) : (
