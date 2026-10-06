@@ -102,6 +102,7 @@ class ProductServer:
         self._capacity = anyio.CapacityLimiter(16)
         self._webhook_capacity = anyio.CapacityLimiter(4)
         self._admission = anyio.Lock()
+        self._webhook_admission = anyio.Lock()
         self._requests: anyio.abc.TaskGroup | None = None
 
         def dispatch(
@@ -192,7 +193,8 @@ class ProductServer:
                         target += "?" + request.url.query
                     capacity = self._webhook_capacity if webhook else self._capacity
                     pending = _PendingResponse()
-                    async with self._admission:
+                    admission = self._webhook_admission if webhook else self._admission
+                    async with admission:
                         if capacity.available_tokens == 0:
                             return error(request, HTTPStatus.SERVICE_UNAVAILABLE)
                         if self._requests is None:
@@ -203,7 +205,8 @@ class ProductServer:
                     # The lifespan owns the worker. Cancelling this wait cannot release its
                     # limiter token or cancel a mutation; shutdown drains the task group.
                     await pending.done.wait()
-                    assert pending.response is not None
+                    if pending.response is None:
+                        raise RuntimeError("product handler completed without a response")
                     return pending.response
             except TimeoutError:
                 return error(request, HTTPStatus.REQUEST_TIMEOUT)
