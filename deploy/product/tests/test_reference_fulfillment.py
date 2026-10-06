@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import create_autospec
 
 import httpx
 import pytest
@@ -33,7 +34,7 @@ from reference_product.config import (
     ProductConfig,
 )
 from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys, TransientError
-from reference_product.ledger import SCHEMA, Delivery, ProductLedger
+from reference_product.ledger import MIGRATIONS, SCHEMA_VERSION, Delivery, ProductLedger
 from reference_product.restore_records import export_restore_records
 from reference_product.server import (
     AccountApi,
@@ -95,6 +96,14 @@ QUOTE_TERMS = {
     "min_refund_atomic": "1",
     "confirmations": "2",
 }
+
+
+def _create_ledger_schema(db: sqlite3.Connection, *, version: int) -> None:
+    for statements, backfill in MIGRATIONS[:version]:
+        for statement in statements:
+            db.execute(statement)
+        if backfill is not None:
+            backfill(db)
 
 
 def _fulfillment(
@@ -569,8 +578,10 @@ def test_the_account_view_lists_the_workspaces_quote_events() -> None:
     for team in (TEAM, "team-2"):
         quote = {"id": f"qt_{team}", "client_reference_id": team}
         assert fulfillment.handle(*_delivery("quote.expired", quote)).status == 204
-    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()))
-    api._client = Service()  # type: ignore[assignment]
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    service = Service()
+    client.list_deposits.side_effect = service.list_deposits
+    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()), client=client)
     answer = _account_call(api, "GET", f"/accounts/{TEAM}", b"")
     assert answer.status == 200
     assert answer.body is not None
@@ -596,8 +607,11 @@ def test_refund_requests_only_name_the_workspaces_own_deposits() -> None:
 
     ledger = ProductLedger()
     ledger.add_team(TEAM)
-    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()))
-    api._client = Service()  # type: ignore[assignment]
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    service = Service()
+    client.list_deposits.side_effect = service.list_deposits
+    client.create_refund.side_effect = service.create_refund
+    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()), client=client)
     to = "0x" + "66" * 20
 
     def refund(deposit: str, body: dict[str, Any]) -> Answer:
@@ -936,8 +950,7 @@ def test_event_references_upgrade_once_and_deduplicate_matches(tmp_path: Path) -
     path = tmp_path / "ledger.sqlite"
     data = {"object": {"id": "dep_test", "quote": "qt_test", "client_reference_id": TEAM}}
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA)
-        db.execute("DROP TABLE event_refs")
+        _create_ledger_schema(db, version=1)
         db.execute(
             "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("evt_test", "deposit.credited", json.dumps(data), 1, b"{}", "1", "signature"),
@@ -951,6 +964,7 @@ def test_event_references_upgrade_once_and_deduplicate_matches(tmp_path: Path) -
             assert ledger.events_for({"other-team"}) == []
             with ledger.transaction() as db:
                 assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 3
+                assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         finally:
             ledger._connection.close()
 
@@ -994,8 +1008,12 @@ def test_account_view_bounds_deposits_and_avoids_global_event_reads(
             ).status
             == 204
         )
-    api = AccountApi(CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()))
-    api._client = Service()  # type: ignore[assignment]
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    service = Service()
+    client.list_deposits.side_effect = service.list_deposits
+    api = AccountApi(
+        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
+    )
 
     def global_events() -> list[dict[str, Any]]:
         raise AssertionError("account view must query references")
@@ -1043,8 +1061,7 @@ def test_webhook_key_fetch_failures_are_negative_cached(
 def test_event_reference_backfill_tolerates_non_object_data(tmp_path: Path) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA)
-        db.execute("DROP TABLE event_refs")
+        _create_ledger_schema(db, version=1)
         values: tuple[Any, ...] = (None, [], "text", 1)
         for index, value in enumerate(values):
             db.execute(
@@ -1062,36 +1079,22 @@ def test_event_reference_backfill_tolerates_non_object_data(tmp_path: Path) -> N
 
 def test_event_reference_backfill_rolls_back_non_sql_errors(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA)
-        db.execute("DROP TABLE event_refs")
+        _create_ledger_schema(db, version=1)
         db.execute(
             "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("evt_test", "test", "invalid JSON", 1, b"{}", "1", "signature"),
         )
-    connect = sqlite3.connect
-    connections: list[sqlite3.Connection] = []
-
-    def capture(database: str, **kwargs: Any) -> sqlite3.Connection:
-        connection: sqlite3.Connection = connect(database, **kwargs)
-        connections.append(connection)
-        return connection
-
-    monkeypatch.setattr(sqlite3, "connect", capture)
     with pytest.raises(json.JSONDecodeError):
         ProductLedger(str(path))
-    [connection] = connections
-    try:
-        assert not connection.in_transaction
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
         assert (
             connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'event_refs'").fetchone()
             is None
         )
-    finally:
-        connection.close()
 
 
 def test_concurrent_event_reference_backfills_are_idempotent(
@@ -1101,8 +1104,7 @@ def test_concurrent_event_reference_backfills_are_idempotent(
     path = tmp_path / "ledger.sqlite"
     data = {"id": "dep_test", "client_reference_id": TEAM}
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA)
-        db.execute("DROP TABLE event_refs")
+        _create_ledger_schema(db, version=1)
         db.execute(
             "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("evt_test", "test", json.dumps(data), 1, b"{}", "1", "signature"),
@@ -1110,15 +1112,10 @@ def test_concurrent_event_reference_backfills_are_idempotent(
     barrier = threading.Barrier(2)
     connect = sqlite3.connect
 
-    class RacingConnection(sqlite3.Connection):
-        def execute(self, sql: str, parameters: Any = (), /) -> sqlite3.Cursor:
-            cursor = super().execute(sql, parameters)
-            if sql.startswith("SELECT 1 FROM sqlite_master WHERE type = 'table'"):
-                barrier.wait(timeout=3)
-            return cursor
-
     def race(database: str, **kwargs: Any) -> sqlite3.Connection:
-        return connect(database, factory=RacingConnection, **kwargs)
+        connection: sqlite3.Connection = connect(database, **kwargs)
+        barrier.wait(timeout=3)
+        return connection
 
     monkeypatch.setattr(sqlite3, "connect", race)
     ledgers: list[ProductLedger] = []
@@ -1141,7 +1138,6 @@ def test_account_api_isolates_sdk_service_failures(
     failure: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     fulfillment = _fulfillment()
-    api = AccountApi(CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()))
 
     def service(request: httpx.Request) -> httpx.Response:
         if failure == "timeout":
@@ -1150,12 +1146,15 @@ def test_account_api_isolates_sdk_service_failures(
             raise httpx.ConnectError("private service detail", request=request)
         return httpx.Response(200, json={"private service detail": "invalid list"})
 
-    api._client = TopupClient(
+    client = TopupClient(
         "https://service.test",
         "ppay_rk_test_" + "A" * 43 + "000000",
         account=CONFIG.account,
         transport=httpx.MockTransport(service),
         max_attempts=1,
+    )
+    api = AccountApi(
+        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
     )
     try:
         answer = _account_call(api, "GET", f"/accounts/{TEAM}", b"")
@@ -1165,3 +1164,49 @@ def test_account_api_isolates_sdk_service_failures(
         assert "private service detail" not in caplog.text
     finally:
         api.close()
+        client.close()
+
+
+def test_account_api_leaves_injected_client_open() -> None:
+    fulfillment = _fulfillment()
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    client.list_deposits.return_value = iter([])
+    api = AccountApi(
+        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
+    )
+    try:
+        assert _account_call(api, "GET", f"/accounts/{TEAM}", b"").status == 200
+        api.close()
+        client.close.assert_not_called()
+    finally:
+        api.close()
+        fulfillment.ledger._connection.close()
+
+
+@pytest.mark.parametrize("version", [0, 1])
+def test_ledger_migrations_upgrade_legacy_and_versioned_schemas(
+    tmp_path: Path, version: int
+) -> None:
+    path = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(path) as db:
+        _create_ledger_schema(db, version=1)
+        if version == 1:
+            db.execute("PRAGMA user_version = 1")
+    ledger = ProductLedger(str(path))
+    try:
+        with ledger.transaction() as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+            assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 0
+    finally:
+        ledger._connection.close()
+
+
+def test_ledger_rejects_future_schema_without_changing_it(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA user_version = 3")
+    with pytest.raises(ValueError, match="schema is newer"):
+        ProductLedger(str(path))
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute("SELECT name FROM sqlite_master").fetchall() == []

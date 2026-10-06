@@ -4,24 +4,28 @@ collection methods, refunds, sweeps, and the timeline's and ledger's states."""
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sys
 import threading
 import time
 from collections.abc import Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
+from unittest.mock import Mock
 
 import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reference_product import demo as demo_module
+from reference_product.cache import CachedFailureError
 from reference_product.config import (
     ChainConfig,
     MintableToken,
@@ -31,9 +35,10 @@ from reference_product.config import (
 from reference_product.demo import ApiRecorder, DemoConsole
 from reference_product.fulfillment import Fulfillment, PinnedKeys
 from reference_product.ledger import ProductLedger
-from reference_product.server import AccountApi
+from reference_product.server import AccountApi, ProductServer
 from reference_product.transport import operation_deadline
 from topup_sdk import (
+    AddressMismatchError,
     ApiError,
     credited_event_id,
     deposit_address_salt,
@@ -41,7 +46,7 @@ from topup_sdk import (
     quote_salt,
     sign_webhook,
 )
-from topup_sdk.errors import ResponseValidationError, TransportError
+from topup_sdk.errors import ConfigurationError, ResponseValidationError, TransportError
 
 NOW = 1_790_000_000
 ACCOUNT = "acct_" + "ac" * 16
@@ -326,7 +331,7 @@ class Service:
         if path == "/v1/balance":
             if self.sweeps_block:
                 self.sweeps_started.set()
-                self.sweeps_release.wait(1)
+                assert self.sweeps_release.wait(5)
             amount = {
                 "chain_id": 11155111,
                 "token": TOKEN,
@@ -374,21 +379,63 @@ def _rpc(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": result})
 
 
+@dataclass
+class Clock:
+    now: float = NOW
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class DemoFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        rpc_transport: httpx.BaseTransport | None = None,
+    ) -> DemoConsole: ...
+
+
 @pytest.fixture
-def demo(tmp_path: Path) -> Iterator[tuple[DemoConsole, Service]]:
+def clock() -> Clock:
+    return Clock()
+
+
+@pytest.fixture
+def service() -> Service:
+    return Service()
+
+
+@pytest.fixture
+def demo_factory(tmp_path: Path, clock: Clock, service: Service) -> Iterator[DemoFactory]:
     (tmp_path / "product.key").write_text("ppay_rk_test_" + "A" * 43 + "000000\n")
-    service = Service()
-    console = DemoConsole(
-        replace(CONFIG, api_key_file=str(tmp_path / "product.key")),
-        ProductLedger(),
-        recorder=ApiRecorder(httpx.MockTransport(service)),
-        http=httpx.Client(transport=httpx.MockTransport(_rpc)),
-        clock=lambda: NOW,
-    )
+    consoles: list[DemoConsole] = []
+
+    def create(
+        *,
+        transport: httpx.BaseTransport | None = None,
+        rpc_transport: httpx.BaseTransport | None = None,
+    ) -> DemoConsole:
+        console = DemoConsole(
+            replace(CONFIG, api_key_file=str(tmp_path / "product.key")),
+            ProductLedger(),
+            recorder=ApiRecorder(transport or httpx.MockTransport(service)),
+            http=httpx.Client(transport=rpc_transport or httpx.MockTransport(_rpc)),
+            clock=clock,
+        )
+        consoles.append(console)
+        return console
+
     try:
-        yield console, service
+        yield create
     finally:
-        console.close()
+        for console in consoles:
+            console.close()
+
+
+@pytest.fixture
+def demo(demo_factory: DemoFactory, service: Service) -> tuple[DemoConsole, Service]:
+    return demo_factory(), service
 
 
 def _account(console: DemoConsole) -> str:
@@ -405,13 +452,14 @@ def _account(console: DemoConsole) -> str:
 
 
 @pytest.mark.parametrize("path", ["assets", "account", "trust"])
-def test_service_timeouts_are_unavailable(demo: tuple[DemoConsole, Service], path: str) -> None:
-    console, _ = demo
-
+def test_service_timeouts_are_unavailable(
+    path: str,
+    demo_factory: DemoFactory,
+) -> None:
     def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("service timeout", request=request)
 
-    console.recorder._inner = httpx.MockTransport(timeout)
+    console = demo_factory(transport=httpx.MockTransport(timeout))
     response = console.handle("GET", f"/api/{path}", WEBSITE, b"")
     assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
     assert json.loads(response.body) == {"code": "unavailable"}
@@ -758,15 +806,14 @@ def test_the_sweep_is_built_only_from_forwarders_the_pins_derive(
 
 def test_stale_sweeps_return_the_cached_view_and_start_one_refresh(
     demo: tuple[DemoConsole, Service],
+    clock: Clock,
 ) -> None:
     console, service = demo
-    now = [NOW]
-    console._clock = lambda: now[0]
     cookie = _account(console)
     status, first = _get(console, cookie, "sweeps")
     assert status == HTTPStatus.OK
     service.sweeps_block = True
-    now[0] += 11
+    clock.now += 11
     status, cached = _get(console, cookie, "sweeps")
     assert status == HTTPStatus.OK
     assert cached == first
@@ -775,10 +822,7 @@ def test_stale_sweeps_return_the_cached_view_and_start_one_refresh(
     _, still_cached = _get(console, cookie, "sweeps")
     assert still_cached == first
     service.sweeps_release.set()
-    deadline = time.monotonic() + 1
-    while console._sweeps_refreshing and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert not console._sweeps_refreshing
+    console.drain()
     assert [r.url.path for r in service.requests].count("/v1/balance") == 2
 
 
@@ -994,8 +1038,10 @@ def test_the_config_validates_its_chains() -> None:
         CONFIG.chain(1)
 
 
-def test_account_stops_at_one_full_page(demo: tuple[DemoConsole, Service]) -> None:
-    console, service = demo
+def test_account_stops_at_one_full_page(
+    service: Service,
+    demo_factory: DemoFactory,
+) -> None:
     requests: list[httpx.Request] = []
 
     def paginated(request: httpx.Request) -> httpx.Response:
@@ -1007,7 +1053,7 @@ def test_account_stops_at_one_full_page(demo: tuple[DemoConsole, Service]) -> No
         deposits = [_deposit(id=f"dep_{index:032x}") for index in range(50)]
         return httpx.Response(200, json={**_list("/v1/deposits", deposits), "has_more": True})
 
-    console.recorder._inner = httpx.MockTransport(paginated)
+    console = demo_factory(transport=httpx.MockTransport(paginated))
     _account(console)
     assert len(requests) == 1
 
@@ -1066,9 +1112,9 @@ def test_sweep_lookup_filters_by_resolved_forwarder_id(
 
 
 def test_sweep_lookup_returns_the_earliest_sweep_after_a_reused_address_deposit(
-    demo: tuple[DemoConsole, Service],
+    service: Service,
+    demo_factory: DemoFactory,
 ) -> None:
-    console, service = demo
     deposit = _deposit(quote=None, deposit_address=ADDRESS_ID, block_number=10)
     service.forwarders = [_forwarder_for(deposit)]
     service.sweeps = [_sweep(deposit, block) for block in (40, 30, 20, 5)]
@@ -1080,7 +1126,7 @@ def test_sweep_lookup_returns_the_earliest_sweep_after_a_reused_address_deposit(
             return httpx.Response(200, json={**response.json(), "has_more": True})
         return response
 
-    console.recorder._inner = httpx.MockTransport(paginated)
+    console = demo_factory(transport=httpx.MockTransport(paginated))
     result = console._sweep_of(deposit)
     assert result is not None
     assert result["block_number"] == 20
@@ -1095,9 +1141,11 @@ def test_sweeps_service_rejects_address_filters(demo: tuple[DemoConsole, Service
 @pytest.mark.parametrize("resolved", [True, False])
 @pytest.mark.parametrize("reaches_older", [True, False])
 def test_sweep_lookup_reads_at_most_one_full_page(
-    demo: tuple[DemoConsole, Service], resolved: bool, reaches_older: bool
+    service: Service,
+    resolved: bool,
+    reaches_older: bool,
+    demo_factory: DemoFactory,
 ) -> None:
-    console, service = demo
     deposit = _deposit(block_number=1)
     service.forwarders = [_forwarder_for(deposit)] if resolved else []
     requests: list[httpx.Request] = []
@@ -1117,7 +1165,7 @@ def test_sweep_lookup_reads_at_most_one_full_page(
             sweeps[-1] = _sweep(deposit, 0)
         return httpx.Response(200, json={**_list("/v1/sweeps", sweeps), "has_more": True})
 
-    console.recorder._inner = httpx.MockTransport(paginated)
+    console = demo_factory(transport=httpx.MockTransport(paginated))
     result = console._sweep_of(deposit)
     if not resolved and not reaches_older:
         assert result is None
@@ -1129,11 +1177,12 @@ def test_sweep_lookup_reads_at_most_one_full_page(
 
 @pytest.mark.parametrize("kind", ["trust", "networks"])
 def test_caches_fetch_single_flight_and_serve_stale_on_failure(
-    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, kind: str
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    clock: Clock,
 ) -> None:
     console, _ = demo
-    now = [NOW]
-    console._clock = lambda: now[0]
     value: Any = (
         {"attestation": {"binding_verified": True}, "tls_evidence": {"app_id": "test"}}
         if kind == "trust"
@@ -1163,12 +1212,12 @@ def test_caches_fetch_single_flight_and_serve_stale_on_failure(
             release.set()
         assert [future.result(timeout=2) for future in futures] == [value] * 5
     assert len(calls) == 1
-    now[0] += 301
+    clock.now += 301
     fail[0] = True
     assert method() == value
     assert method() == value
     assert len(calls) == 2
-    now[0] += 31
+    clock.now += 31
     fail[0] = False
     assert method() == value
     assert len(calls) == 3
@@ -1176,11 +1225,12 @@ def test_caches_fetch_single_flight_and_serve_stale_on_failure(
 
 @pytest.mark.parametrize("kind", ["trust", "networks"])
 def test_cold_cache_failures_retry_after_thirty_seconds(
-    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, kind: str
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    clock: Clock,
 ) -> None:
     console, _ = demo
-    now = [NOW]
-    console._clock = lambda: now[0]
     calls: list[int] = []
 
     def fetch(*args: Any) -> Any:
@@ -1196,7 +1246,7 @@ def test_cold_cache_failures_retry_after_thirty_seconds(
         )
         assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
     assert len(calls) == 1
-    now[0] += 31
+    clock.now += 31
     assert (
         console.handle("GET", f"/api/{'trust' if kind == 'trust' else 'assets'}", {}, b"").status
         == 503
@@ -1205,11 +1255,11 @@ def test_cold_cache_failures_retry_after_thirty_seconds(
 
 
 def test_incomplete_trust_evidence_retries_after_thirty_seconds(
-    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    clock: Clock,
 ) -> None:
     console, _ = demo
-    now = [NOW]
-    console._clock = lambda: now[0]
     calls: list[int] = []
 
     def fetch() -> dict[str, Any]:
@@ -1218,18 +1268,18 @@ def test_incomplete_trust_evidence_retries_after_thirty_seconds(
 
     monkeypatch.setattr(console, "_fetch_trust_view", fetch)
     assert console._trust_view()["tls_evidence"] is None
-    now[0] += 29
+    clock.now += 29
     console._trust_view()
     assert len(calls) == 1
-    now[0] += 2
+    clock.now += 2
     console._trust_view()
     assert len(calls) == 2
 
 
-def test_rpc_failures_are_cached_for_thirty_seconds(demo: tuple[DemoConsole, Service]) -> None:
-    console, _ = demo
-    now = [NOW]
-    console._clock = lambda: now[0]
+def test_rpc_failures_are_cached_for_thirty_seconds(
+    clock: Clock,
+    demo_factory: DemoFactory,
+) -> None:
     calls: list[httpx.Request] = []
     failing = [True]
 
@@ -1240,37 +1290,36 @@ def test_rpc_failures_are_cached_for_thirty_seconds(demo: tuple[DemoConsole, Ser
             raise httpx.ReadTimeout("RPC timeout", request=request)
         return _rpc(request)
 
-    console._http.close()
-    console._http = httpx.Client(transport=httpx.MockTransport(rpc))
+    console = demo_factory(rpc_transport=httpx.MockTransport(rpc))
     tx_hash = "0x" + "11" * 32
     assert console._block_time(11155111, tx_hash) is None
     assert console._block_time(11155111, tx_hash) is None
     assert len(calls) == 1
-    now[0] += 31
+    clock.now += 31
     failing[0] = False
     assert console._block_time(11155111, tx_hash) == {
         "tx_hash": tx_hash,
         "block_number": 1,
         "at": NOW - 12,
     }
-    now[0] += 300
+    clock.now += 300
     assert console._block_time(11155111, tx_hash) is not None
     assert len(calls) == 3
 
 
-def test_block_time_cache_evicts_the_least_recently_used_entry(
-    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    console, _ = demo
+def test_block_time_cache_evicts_the_least_recently_used_entry(demo_factory: DemoFactory) -> None:
     calls: list[str] = []
 
-    def rpc(chain_id: int, method: str, *params: Any) -> dict[str, str]:
-        if method == "eth_getTransactionReceipt":
-            calls.append(params[0])
-            return {"blockNumber": "0x1"}
-        return {"timestamp": hex(NOW)}
+    def rpc(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["method"] == "eth_getTransactionReceipt":
+            calls.append(body["params"][0])
+            result = {"blockNumber": "0x1"}
+        else:
+            result = {"timestamp": hex(NOW)}
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": result})
 
-    monkeypatch.setattr(console, "_rpc", rpc)
+    console = demo_factory(rpc_transport=httpx.MockTransport(rpc))
     hashes = [f"0x{index:064x}" for index in range(1025)]
     for tx_hash in hashes[:1024]:
         console._block_time(11155111, tx_hash)
@@ -1304,7 +1353,6 @@ def test_cold_sweeps_timeout_keeps_one_build_running_with_its_own_deadline(
         status, body = _get(console, cookie, "sweeps")
         assert (status, body) == (HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
         assert service.sweeps_started.is_set()
-        assert console._sweeps_refreshing
         assert deadlines[0] is not None
         assert deadlines[0] > caller_deadline + 24
         assert _get(console, cookie, "sweeps")[0] == HTTPStatus.SERVICE_UNAVAILABLE
@@ -1312,23 +1360,19 @@ def test_cold_sweeps_timeout_keeps_one_build_running_with_its_own_deadline(
     finally:
         operation_deadline.reset(token)
         service.sweeps_release.set()
-        assert console._sweeps_thread is not None
-        console._sweeps_thread.join(timeout=2)
-    assert console._sweeps is not None
-    assert not console._sweeps_refreshing
+        console.drain()
     assert _get(console, cookie, "sweeps")[0] == HTTPStatus.OK
     console.close()
 
 
 def test_sweeps_older_than_a_minute_return_immediately_with_stale_marker(
     demo: tuple[DemoConsole, Service],
+    clock: Clock,
 ) -> None:
     console, service = demo
-    now = [NOW]
-    console._clock = lambda: now[0]
     cookie = _account(console)
     _, first = _get(console, cookie, "sweeps")
-    now[0] += 61
+    clock.now += 61
     service.sweeps_block = True
     try:
         started = time.monotonic()
@@ -1350,11 +1394,9 @@ def test_fresh_sweeps_cache_does_not_start_background_builds(
     cookie = _account(console)
     status, first = _get(console, cookie, "sweeps")
     assert status == HTTPStatus.OK
-    assert console._sweeps_thread is not None
-    console._sweeps_thread.join(timeout=2)
+    console.drain()
     for _ in range(5):
         assert _get(console, cookie, "sweeps") == (HTTPStatus.OK, first)
-    assert not console._sweeps_refreshing
     assert [request.url.path for request in service.requests].count("/v1/balance") == 1
 
 
@@ -1385,17 +1427,25 @@ def test_product_closes_owned_http_threads(demo: tuple[DemoConsole, Service], ki
 
 @pytest.mark.parametrize("kind", ["trust", "networks"])
 @pytest.mark.parametrize("failure", ["transport", "api", "validation"])
-def test_cached_failures_raise_fresh_exceptions_for_concurrent_readers(
-    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, kind: str, failure: str
+def test_cached_failures_preserve_http_responses_for_concurrent_readers(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    failure: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     console, _ = demo
     original: TransportError | ApiError | ResponseValidationError
+    expected: tuple[int, str, str | None]
     if failure == "transport":
-        original = TransportError("timeout", "service timeout")
+        original = TransportError("timeout", "private service detail")
+        expected = (503, "unavailable", "2")
     elif failure == "api":
-        original = ApiError(503, "service_unavailable", "service failed", request_id="request-test")
+        original = ApiError(503, "service_unavailable", "private service detail")
+        expected = (502, "service_unavailable", None)
     else:
-        original = ResponseValidationError("malformed response", status_code=200, request_id="test")
+        original = ResponseValidationError("private service detail")
+        expected = (502, "bad_gateway", None)
     calls: list[int] = []
 
     def fetch(*args: Any) -> Any:
@@ -1405,123 +1455,392 @@ def test_cached_failures_raise_fresh_exceptions_for_concurrent_readers(
     monkeypatch.setattr(
         console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
     )
-    method = console._trust_view if kind == "trust" else console._payable_networks
-    with pytest.raises(type(original)) as first:
-        method()
 
-    def read_failure() -> Exception:
-        try:
-            method()
-        except (TransportError, ApiError, ResponseValidationError) as error:
-            return error
-        raise AssertionError("expected cached failure")
+    def read_failure() -> tuple[int, str, str | None]:
+        response = console.handle(
+            "GET", f"/api/{'trust' if kind == 'trust' else 'assets'}", {}, b""
+        )
+        return (
+            response.status,
+            json.loads(response.body)["code"],
+            response.headers.get("retry-after"),
+        )
 
+    assert read_failure() == expected
     with ThreadPoolExecutor(max_workers=5) as workers:
-        errors = [
+        results = [
             future.result(timeout=2) for future in [workers.submit(read_failure) for _ in range(5)]
         ]
-    assert len({id(error) for error in [first.value, *errors]}) == 6
+    assert results == [expected] * 5
     assert len(calls) == 1
-    for error in errors:
-        assert type(error) is type(original)
-        assert str(error) == str(original)
-        if isinstance(error, TransportError):
-            assert error.code == "timeout"
-        elif isinstance(error, ApiError):
-            assert error.status_code == 503
-            assert error.code == "service_unavailable"
-            assert error.request_id == "request-test"
-        elif isinstance(error, ResponseValidationError):
-            assert error.status_code == 200
-            assert error.request_id == "test"
+    message = {
+        "transport": "demo: service transport unavailable",
+        "api": "demo: service answered 503 service_unavailable",
+        "validation": "demo: service response validation failed",
+    }[failure]
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.WARNING, message)
+    ] * 6
 
 
 @pytest.mark.parametrize("failure", ["transport", "http", "missing_key"])
-def test_cold_sweeps_waiters_receive_distinct_refresh_exceptions(
+def test_cold_sweeps_waiters_share_failure_values(
     demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     console, _ = demo
-    waiting = threading.Barrier(3)
+    cookie = _account(console)
     started, release = threading.Event(), threading.Event()
-    pending_ids: list[int] = []
-    error: TransportError | httpx.HTTPError | MissingProductKeyError
+    calls: list[int] = []
+    error: Exception
     if failure == "transport":
-        error = TransportError("timeout", "refresh failed")
+        error = TransportError("timeout", "private refresh detail")
     elif failure == "http":
-        error = httpx.HTTPError("refresh failed")
+        error = httpx.HTTPError("private refresh detail")
+    elif failure == "missing_key":
+        error = MissingProductKeyError("private refresh detail")
     else:
-        error = MissingProductKeyError("refresh failed")
-
-    class WaitingFuture(Future[dict[str, Any]]):
-        def result(self, timeout: float | None = None) -> dict[str, Any]:
-            pending_ids.append(id(self))
-            waiting.wait(timeout=2)
-            return super().result(timeout=timeout)
+        error = TypeError("private refresh detail")
 
     def build(now: float) -> dict[str, Any]:
+        calls.append(1)
         started.set()
         assert release.wait(3)
         raise error
 
-    monkeypatch.setattr(demo_module, "Future", WaitingFuture)
     monkeypatch.setattr(console, "_build_sweeps_view", build)
     with ThreadPoolExecutor(max_workers=2) as workers:
-        futures = [workers.submit(console._sweeps_view) for _ in range(2)]
+        futures = [workers.submit(_get, console, cookie, "sweeps") for _ in range(2)]
         try:
-            assert started.wait(1)
-            waiting.wait(timeout=2)
+            assert started.wait(2)
         finally:
             release.set()
-        with pytest.raises(type(error)) as first:
-            futures[0].result(timeout=3)
-        with pytest.raises(type(error)) as second:
-            futures[1].result(timeout=3)
-    assert len(pending_ids) == 2
-    assert len(set(pending_ids)) == 1
-    assert first.value is not second.value
-    assert first.value is not error
-    assert second.value is not error
-    assert str(first.value) == str(second.value) == str(error)
+        results = [future.result(timeout=3) for future in futures]
+    expected = (503, {"code": "unavailable"})
+    assert results == [expected] * 2
+    console.drain()
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("warm", [True, False])
 def test_failed_sweeps_refreshes_back_off_from_failure_completion(
-    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, warm: bool
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    warm: bool,
+    clock: Clock,
 ) -> None:
     console, _ = demo
-    now = [NOW]
-    console._clock = lambda: now[0]
     cached = None
     if warm:
         cached = console._sweeps_view()
-        assert console._sweeps_thread is not None
-        console._sweeps_thread.join(timeout=2)
-        now[0] += 11
-    calls: list[int] = []
+        console.drain()
+        clock.now += 11
+    calls: list[float] = []
 
     def fail(started: float) -> dict[str, Any]:
-        calls.append(now[0])
-        now[0] += 5
+        calls.append(clock.now)
+        clock.now += 5
         raise TransportError("network")
 
-    def read() -> None:
+    def read(*, refresh: bool = False) -> None:
         if warm:
             assert console._sweeps_view() == cached
         else:
-            with pytest.raises(TransportError):
+            with pytest.raises(TransportError if refresh else CachedFailureError):
                 console._sweeps_view()
-        assert console._sweeps_thread is not None
-        console._sweeps_thread.join(timeout=2)
-        assert not console._sweeps_refreshing
+        console.drain()
 
     monkeypatch.setattr(console, "_build_sweeps_view", fail)
-    read()
+    read(refresh=True)
     for _ in range(5):
         read()
     assert len(calls) == 1
-    now[0] += 9
+    clock.now += 9
     read()
     assert len(calls) == 1
-    now[0] += 1
-    read()
+    clock.now += 1
+    read(refresh=True)
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("kind", ["trust", "networks"])
+@pytest.mark.parametrize("warm", [True, False])
+def test_unexpected_sync_cache_errors_do_not_serve_stale_or_back_off(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    clock: Clock,
+    kind: str,
+    warm: bool,
+) -> None:
+    console, _ = demo
+    method = console._trust_view if kind == "trust" else console._payable_networks
+    if warm:
+        value: Any = (
+            {"attestation": {"binding_verified": True}, "tls_evidence": {"app_id": "test"}}
+            if kind == "trust"
+            else [{"chain_id": 11155111}]
+        )
+        monkeypatch.setattr(
+            console,
+            "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks",
+            lambda *args: value,
+        )
+        method()
+        clock.now += 301
+    calls: list[int] = []
+
+    def fetch(*args: Any) -> Any:
+        calls.append(1)
+        raise ValueError("unexpected backend failure")
+
+    monkeypatch.setattr(
+        console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
+    )
+    for _ in range(2):
+        with pytest.raises(ValueError, match="unexpected backend failure"):
+            method()
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("warm", [True, False])
+def test_unexpected_sweeps_errors_reach_server_logging(
+    demo: tuple[DemoConsole, Service],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    warm: bool,
+) -> None:
+    console, _ = demo
+    cookie = _account(console)
+    if warm:
+        assert _get(console, cookie, "sweeps")[0] == 200
+        console.drain()
+        clock.now += 11
+    calls: list[int] = []
+
+    def fail(now: float) -> dict[str, Any]:
+        calls.append(1)
+        raise ValueError("unexpected sweep failure")
+
+    monkeypatch.setattr(console, "_build_sweeps_view", fail)
+    fulfillment = Mock(spec=Fulfillment)
+    fulfillment.config = console.config
+    with TestClient(ProductServer(fulfillment, demo=console).app) as client:
+        if warm:
+            assert client.get("/api/sweeps", headers={"cookie": cookie}).status_code == 200
+            console.drain()
+        response = client.get("/api/sweeps", headers={"cookie": cookie})
+        assert response.status_code == 500
+        assert response.json() == {"code": "internal_server_error"}
+        if not warm:
+            assert client.get("/api/sweeps", headers={"cookie": cookie}).status_code == 500
+            assert len(calls) == 2
+    records = [record for record in caplog.records if record.name == "reference_product.server"]
+    assert records
+    assert all(record.getMessage() == "product request failed" for record in records)
+    assert all(record.levelno == logging.ERROR and record.exc_info for record in records)
+
+
+@pytest.mark.parametrize("cached", [True, False])
+@pytest.mark.parametrize(
+    ("error", "status", "body", "retry", "level", "message"),
+    [
+        (
+            ApiError(429, "rate_limited", "private", retry_after=9),
+            429,
+            b'{"code": "rate_limited"}',
+            None,
+            logging.WARNING,
+            "demo: service answered 429 rate_limited",
+        ),
+        (
+            ApiError(404, "not_found", "private"),
+            400,
+            b'{"code": "not_found"}',
+            None,
+            logging.WARNING,
+            "demo: service answered 404 not_found",
+        ),
+        (
+            ApiError(503, "service_unavailable", "private"),
+            502,
+            b'{"code": "service_unavailable"}',
+            None,
+            logging.WARNING,
+            "demo: service answered 503 service_unavailable",
+        ),
+        (
+            AddressMismatchError("private"),
+            502,
+            b'{"code": "address_not_derivable"}',
+            None,
+            logging.ERROR,
+            "demo: the service returned an address the pins do not derive",
+        ),
+        (
+            TransportError("timeout", "private"),
+            503,
+            b'{"code": "unavailable"}',
+            "2",
+            logging.WARNING,
+            "demo: service transport unavailable",
+        ),
+        (
+            ResponseValidationError("private"),
+            502,
+            b'{"code": "bad_gateway"}',
+            None,
+            logging.WARNING,
+            "demo: service response validation failed",
+        ),
+        (
+            httpx.HTTPError("private"),
+            503,
+            b'{"code": "unavailable"}',
+            None,
+            logging.WARNING,
+            "demo: service unavailable",
+        ),
+        (
+            MissingProductKeyError("private"),
+            503,
+            b'{"code": "unavailable"}',
+            None,
+            logging.WARNING,
+            "demo: service unavailable",
+        ),
+    ],
+)
+def test_failure_boundary_preserves_bytes_headers_and_logs(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    *,
+    cached: bool,
+    error: Exception,
+    status: int,
+    body: bytes,
+    retry: str | None,
+    level: int,
+    message: str,
+) -> None:
+    console, _ = demo
+
+    def fail(*args: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(console, "_fetch_payable_networks" if cached else "_api", fail)
+    for _ in range(2):
+        response = console.handle("GET", "/api/assets", {}, b"")
+        assert response.status == status
+        assert response.body == body
+        assert response.headers.get("retry-after") == retry
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (level, message)
+    ] * 2
+
+
+def test_sweeps_refresh_logging_preserves_cached_sdk_failure_type(
+    demo: tuple[DemoConsole, Service],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    console, _ = demo
+    cookie = _account(console)
+    clock.now += 301
+
+    def fail(*args: Any) -> Any:
+        raise TransportError("network")
+
+    monkeypatch.setattr(console, "_fetch_payable_networks", fail)
+    assert _get(console, cookie, "sweeps") == (503, {"code": "unavailable"})
+    assert "sweeps refresh failed: TransportError" in caplog.messages
+    assert "demo: service transport unavailable" in caplog.messages
+
+
+@pytest.mark.parametrize("kind", ["api", "trust", "networks", "sweeps"])
+def test_unmapped_sdk_errors_preserve_server_response_and_traceback(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+) -> None:
+    console, _ = demo
+    cookie = _account(console) if kind == "sweeps" else ""
+    calls: list[int] = []
+
+    def fail(*args: Any) -> Any:
+        calls.append(1)
+        raise ConfigurationError("misconfigured service")
+
+    methods = {
+        "api": "_api",
+        "trust": "_fetch_trust_view",
+        "networks": "_fetch_payable_networks",
+        "sweeps": "_build_sweeps_view",
+    }
+    monkeypatch.setattr(console, methods[kind], fail)
+    fulfillment = Mock(spec=Fulfillment)
+    fulfillment.config = console.config
+    path = f"/api/{'assets' if kind in {'api', 'networks'} else kind}"
+    with TestClient(ProductServer(fulfillment, demo=console).app) as client:
+        for _ in range(2):
+            response = client.get(path, headers={"cookie": cookie})
+            assert response.status_code == 500
+            # main 0ef587d6 routes unmapped SDK errors through server.error()/JSONResponse.
+            assert response.content == b'{"code":"internal_server_error"}'
+            assert "cache-control" not in response.headers
+    assert len(calls) == 2
+    records = [record for record in caplog.records if record.name == "reference_product.server"]
+    assert len(records) == 2
+    for record in records:
+        assert record.levelno == logging.ERROR
+        assert record.getMessage() == "product request failed"
+        assert record.exc_info is not None
+        assert record.exc_info[0] is ConfigurationError
+        assert record.exc_info[2] is not None
+
+
+@pytest.mark.parametrize("kind", ["trust", "networks", "sweeps"])
+@pytest.mark.parametrize("error_type", [httpx.HTTPError, MissingProductKeyError])
+def test_cache_leader_logs_original_traceback_and_replays_source_message(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+    error_type: type[Exception],
+) -> None:
+    console, _ = demo
+    cookie = _account(console) if kind == "sweeps" else ""
+    calls: list[int] = []
+
+    def fail(*args: Any) -> Any:
+        calls.append(1)
+        raise error_type("original failure text")
+
+    monkeypatch.setattr(
+        console,
+        {
+            "trust": "_fetch_trust_view",
+            "networks": "_fetch_payable_networks",
+            "sweeps": "_build_sweeps_view",
+        }[kind],
+        fail,
+    )
+    path = f"/api/{'assets' if kind == 'networks' else kind}"
+    for _ in range(2):
+        response = console.handle("GET", path, {"cookie": cookie}, b"")
+        assert response.status == 503
+        assert response.body == b'{"code": "unavailable"}'
+    assert len(calls) == 1
+    records = [
+        record for record in caplog.records if record.getMessage() == "demo: service unavailable"
+    ]
+    assert len(records) == 2
+    first, replay = records
+    assert first.exc_info is not None
+    assert first.exc_info[0] is error_type
+    assert first.exc_info[2] is not None
+    assert replay.exc_info is not None
+    assert replay.exc_info[0] is CachedFailureError
+    assert str(replay.exc_info[1]) == f"{error_type.__name__}: original failure text"

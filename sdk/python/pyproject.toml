@@ -49,6 +49,8 @@ codegen = [
     "ruff==0.16.10",
 ]
 product = [
+    "anyio==4.15.1",
+    "cachetools==7.2.1",
     "granian==2.8.4",
     "starlette==1.7.0",
     "web3==8.0.0",

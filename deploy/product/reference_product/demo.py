@@ -48,12 +48,11 @@ import secrets
 import threading
 import time
 import uuid
-from collections import OrderedDict, deque
+from collections import deque
 from collections.abc import Callable, Iterator
-from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import partial
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from itertools import islice
@@ -61,6 +60,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from cachetools import TLRUCache
 
 from topup_client.models import AttestationResponse, DepositAddress, Payment
 from topup_sdk import (
@@ -68,7 +68,6 @@ from topup_sdk import (
     ApiError,
     AttestationError,
     TopupClient,
-    TopupError,
     flush_transactions,
     forwarder_address,
     safe_batch,
@@ -76,9 +75,21 @@ from topup_sdk import (
 from topup_sdk.addresses import same_address
 from topup_sdk.errors import ResponseValidationError, TransportError
 
+from .cache import CachedFailureError, Failure, SingleFlightTTL
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
 from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
 from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
+
+# Only these failures have a public demo response. Other SDK errors reach the server logger.
+MAPPED_FAILURES: tuple[type[Exception], ...] = (
+    CachedFailureError,
+    ApiError,
+    AddressMismatchError,
+    TransportError,
+    ResponseValidationError,
+    httpx.HTTPError,
+    MissingProductKeyError,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -219,7 +230,6 @@ class DemoConsole:
         self._client: TopupClient | None = None
         self._sweeps_client: TopupClient | None = None
         self._lock = threading.Lock()
-        self._cache_changed = threading.Condition(self._lock)
         self._new_accounts = RateLimiter(30, 60, clock)
         self._quotes_per_account = RateLimiter(3, 60, clock)
         self._quotes_per_day = RateLimiter(20, 86_400, clock)
@@ -227,26 +237,36 @@ class DemoConsole:
         self._writes_per_account = RateLimiter(10, 60, clock)
         self._writes = RateLimiter(60, 60, clock)
         self._reads = RateLimiter(120, 60, clock)
-        self._trust: tuple[float, dict[str, Any]] | None = None
-        self._networks: tuple[float, list[dict[str, Any]]] | None = None
-        self._trust_refreshing = False
-        self._networks_refreshing = False
-        self._trust_expires = 0.0
-        self._networks_expires = 0.0
-        self._trust_error: (
-            Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError] | None
-        ) = None
-        self._networks_error: (
-            Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError] | None
-        ) = None
-        self._sweeps: tuple[float, dict[str, Any]] | None = None
-        self._sweeps_refreshing = False
-        self._sweeps_failed_at: float | None = None
-        self._sweeps_future: Future[dict[str, Any]] | None = None
-        self._sweeps_thread: threading.Thread | None = None
-        self._block_times: OrderedDict[
-            tuple[int, str], tuple[float | None, tuple[int, int] | None]
-        ] = OrderedDict()
+        self._refresh_workers = ThreadPoolExecutor(max_workers=1, thread_name_prefix="demo-refresh")
+        self._trust_cache = SingleFlightTTL[dict[str, Any]](
+            clock=clock,
+            ttl=300,
+            negative_ttl=30,
+            failure=_failure_value,
+            cache_errors=MAPPED_FAILURES,
+            incomplete=lambda view: (
+                not view["attestation"]["binding_verified"] or view["tls_evidence"] is None
+            ),
+        )
+        self._networks_cache = SingleFlightTTL[list[dict[str, Any]]](
+            clock=clock,
+            ttl=300,
+            negative_ttl=30,
+            failure=_failure_value,
+            cache_errors=MAPPED_FAILURES,
+        )
+        self._sweeps_cache = SingleFlightTTL[dict[str, Any]](
+            clock=clock,
+            ttl=10,
+            negative_ttl=10,
+            failure=_failure_value,
+            executor=self._refresh_workers,
+            cache_errors=MAPPED_FAILURES,
+            inclusive=True,
+        )
+        self._block_times = TLRUCache[tuple[int, str], tuple[int, int] | None](
+            maxsize=1024, ttu=_block_time_expiry, timer=clock
+        )
         self._chain_ids = set(config.treasuries())
 
     # Routing ------------------------------------------------------------------------------------
@@ -286,31 +306,8 @@ class DemoConsole:
     def _handle_api(self, method: str, name: str, headers: dict[str, str], body: bytes) -> Response:
         try:
             return self._api(method, name, headers, body)
-        except ApiError as error:
-            # The service's documented code is public; its message and everything else are not.
-            LOG.warning("demo: service answered %s %s", error.status_code, error.code)
-            if error.status_code == 429:
-                status = HTTPStatus.TOO_MANY_REQUESTS
-            elif 400 <= error.status_code < 500:
-                status = HTTPStatus.BAD_REQUEST
-            else:
-                status = HTTPStatus.BAD_GATEWAY
-            return _json(status, {"code": error.code})
-        except AddressMismatchError:
-            # The SDK refused an address the product cannot derive from its pins: never shown.
-            LOG.error("demo: the service returned an address the pins do not derive")
-            return _json(HTTPStatus.BAD_GATEWAY, {"code": "address_not_derivable"})
-        except TransportError:
-            LOG.warning("demo: service transport unavailable")
-            response = _json(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
-            response.headers["retry-after"] = "2"
-            return response
-        except ResponseValidationError:
-            LOG.warning("demo: service response validation failed")
-            return _json(HTTPStatus.BAD_GATEWAY, {"code": "bad_gateway"})
-        except (httpx.HTTPError, MissingProductKeyError):
-            LOG.warning("demo: service unavailable", exc_info=True)
-            return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
+        except MAPPED_FAILURES as error:
+            return _failure_response(_failure_value(error))
 
     def _api(self, method: str, name: str, headers: dict[str, str], body: bytes) -> Response:
         # The same for every visitor, cached, and read before a demo account exists.
@@ -704,10 +701,12 @@ class DemoConsole:
         """The block and time of the transaction's block, from the product's RPC of its chain."""
         key = (chain_id, tx_hash)
         with self._lock:
-            entry = self._block_times.get(key)
-            if entry is not None and (entry[0] is None or self._clock() < entry[0]):
-                self._block_times.move_to_end(key)
-                return self._block_time_view(tx_hash, entry[1])
+            try:
+                cached = self._block_times[key]
+            except KeyError:
+                pass
+            else:
+                return self._block_time_view(tx_hash, cached)
         value = None
         try:
             receipt = self._rpc(chain_id, "eth_getTransactionReceipt", tx_hash)
@@ -717,10 +716,7 @@ class DemoConsole:
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             LOG.warning("demo: block time lookup failed", exc_info=True)
         with self._lock:
-            self._block_times[key] = (self._clock() + 30 if value is None else None, value)
-            self._block_times.move_to_end(key)
-            while len(self._block_times) > 1024:
-                self._block_times.popitem(last=False)
+            self._block_times[key] = value
         return self._block_time_view(tx_hash, value)
 
     @staticmethod
@@ -849,61 +845,24 @@ class DemoConsole:
         """Per network and token the product offers: the account's unswept balance, the flush
         the merchant signs, and the finalized sweeps; cached views return immediately while
         one background build refreshes them. Cold readers wait at most eight seconds."""
-        now = self._clock()
-        with self._lock:
-            view = None if self._sweeps is None else self._sweeps[1]
-            if self._sweeps is not None and now - self._sweeps[0] > 60:
-                view = {**self._sweeps[1], "stale": True}
-            if (
-                not self._sweeps_refreshing
-                and (self._sweeps is None or now - self._sweeps[0] > 10)
-                and (self._sweeps_failed_at is None or now - self._sweeps_failed_at >= 10)
-            ):
-                future: Future[dict[str, Any]] = Future()
-                self._sweeps_future = future
-                self._sweeps_refreshing = True
-                self._sweeps_thread = threading.Thread(
-                    target=self._refresh_sweeps, args=(now, future), daemon=True
-                )
-                try:
-                    self._sweeps_thread.start()
-                except RuntimeError:
-                    self._sweeps_refreshing = False
-                    self._sweeps_thread = None
-                    raise
-            pending = self._sweeps_future
-        if view is not None:
-            return view
-        deadline = time.monotonic() + SWEEPS_WAIT_SECONDS
-        caller_deadline = operation_deadline.get()
-        if caller_deadline is not None:
-            deadline = min(deadline, caller_deadline)
-        if pending is None:
-            raise TransportError("unavailable")
-        try:
-            return pending.result(timeout=max(0, deadline - time.monotonic()))
-        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
-            raise _failure_factory(error)() from None
-        except TimeoutError as error:
-            # Keep the build running under its own budget after this reader stops waiting.
-            raise TransportError("timeout") from error
+        return self._sweeps_cache.get(
+            self._refresh_sweeps,
+            timeout=SWEEPS_WAIT_SECONDS,
+            stale=lambda view, age: {**view, "stale": True} if age > 60 else view,
+        )
 
-    def _refresh_sweeps(self, now: float, future: Future[dict[str, Any]]) -> None:
+    def _refresh_sweeps(self) -> dict[str, Any]:
         token = operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
         try:
-            view = self._build_sweeps_view(now)
-            with self._lock:
-                self._sweeps_failed_at = None
-            future.set_result(view)
-        except Exception as error:
-            with self._lock:
-                self._sweeps_failed_at = self._clock()
-            LOG.warning("sweeps refresh failed: %s", type(error).__name__)
-            future.set_exception(error)
+            return self._build_sweeps_view(self._clock())
+        except MAPPED_FAILURES as error:
+            source_type = (
+                error.failure.source_type if isinstance(error, CachedFailureError) else None
+            )
+            LOG.warning("sweeps refresh failed: %s", source_type or type(error).__name__)
+            raise
         finally:
             operation_deadline.reset(token)
-            with self._lock:
-                self._sweeps_refreshing = False
 
     def _build_sweeps_view(self, now: float) -> dict[str, Any]:
         service = self._sweeps_service()
@@ -916,8 +875,6 @@ class DemoConsole:
                 for asset in network["assets"]
             ]
         view = {"factory": self.config.factory, "groups": groups, "api": calls}
-        with self._lock:
-            self._sweeps = (self._clock(), view)
         return view
 
     def _sweep_group(
@@ -1029,34 +986,7 @@ class DemoConsole:
         (`GET /v1/config`) on the configured chains (a quote on any other chain has no treasury to
         recompute its address from), in the config's order, then the service's. A configured
         chain the service does not serve yet is left out."""
-        with self._cache_changed:
-            while self._networks_refreshing:
-                self._wait_for_cache()
-            if self._clock() < self._networks_expires:
-                if self._networks is not None:
-                    return self._networks[1]
-                if self._networks_error is not None:
-                    raise self._networks_error()
-            self._networks_refreshing = True
-        try:
-            networks = self._fetch_payable_networks(service)
-        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
-            with self._cache_changed:
-                self._networks_error = _failure_factory(error)
-                self._networks_expires = self._clock() + 30
-                if self._networks is not None:
-                    return self._networks[1]
-            raise
-        else:
-            with self._cache_changed:
-                self._networks = (self._clock(), networks)
-                self._networks_expires = self._clock() + 300
-                self._networks_error = None
-            return networks
-        finally:
-            with self._cache_changed:
-                self._networks_refreshing = False
-                self._cache_changed.notify_all()
+        return self._networks_cache.get(lambda: self._fetch_payable_networks(service))
 
     def _fetch_payable_networks(self, service: TopupClient | None) -> list[dict[str, Any]]:
         offered = (service or self._service()).get_config().assets
@@ -1106,44 +1036,7 @@ class DemoConsole:
     # Trust --------------------------------------------------------------------------------------
 
     def _trust_view(self) -> dict[str, Any]:
-        with self._cache_changed:
-            while self._trust_refreshing:
-                self._wait_for_cache()
-            if self._clock() < self._trust_expires:
-                if self._trust is not None:
-                    return self._trust[1]
-                if self._trust_error is not None:
-                    raise self._trust_error()
-            self._trust_refreshing = True
-        try:
-            view = self._fetch_trust_view()
-        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
-            with self._cache_changed:
-                self._trust_error = _failure_factory(error)
-                self._trust_expires = self._clock() + 30
-                if self._trust is not None:
-                    return self._trust[1]
-            raise
-        else:
-            failed = not view["attestation"]["binding_verified"] or view["tls_evidence"] is None
-            with self._cache_changed:
-                self._trust_expires = self._clock() + (30 if failed else 300)
-                self._trust_error = None
-                if failed and self._trust is not None:
-                    return self._trust[1]
-                self._trust = (self._clock(), view)
-            return view
-        finally:
-            with self._cache_changed:
-                self._trust_refreshing = False
-                self._cache_changed.notify_all()
-
-    def _wait_for_cache(self) -> None:
-        deadline = operation_deadline.get()
-        remaining = None if deadline is None else deadline - time.monotonic()
-        if remaining is not None and remaining <= 0:
-            raise TransportError("timeout")
-        self._cache_changed.wait(timeout=remaining)
+        return self._trust_cache.get(self._fetch_trust_view)
 
     def _fetch_trust_view(self) -> dict[str, Any]:
         attestation: dict[str, Any]
@@ -1214,11 +1107,12 @@ class DemoConsole:
                 )
             return self._sweeps_client
 
+    def drain(self) -> None:
+        """Wait for the currently submitted sweeps refresh to finish."""
+        self._sweeps_cache.drain()
+
     def close(self) -> None:
-        with self._lock:
-            refresh = self._sweeps_thread
-        if refresh is not None:
-            refresh.join()
+        self._refresh_workers.shutdown(wait=True)
         with self._lock:
             try:
                 if self._client is not None:
@@ -1633,34 +1527,77 @@ def _take[T](items: Iterator[T], limit: int) -> Iterator[T]:
     return islice(items, limit)
 
 
-def _failure_factory(
-    error: TopupError | httpx.HTTPError | MissingProductKeyError,
-) -> Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError]:
-    """Cache failure details without retaining an exception and its request traceback."""
+def _block_time_expiry(key: tuple[int, str], value: tuple[int, int] | None, now: float) -> float:
+    return float("inf") if value is not None else now + 30
+
+
+def _failure_value(error: Exception) -> Failure:
+    """Map failures once, preserving the demo's HTTP contract without SDK exceptions."""
+    if isinstance(error, CachedFailureError):
+        return error.failure
+    source_type = type(error).__name__
     if isinstance(error, ApiError):
-        return partial(
-            ApiError,
-            error.status_code,
+        if error.status_code == 429:
+            status = HTTPStatus.TOO_MANY_REQUESTS
+        elif 400 <= error.status_code < 500:
+            status = HTTPStatus.BAD_REQUEST
+        else:
+            status = HTTPStatus.BAD_GATEWAY
+        return Failure(
+            status,
             error.code,
-            error.message,
-            error_type=error.error_type,
-            param=error.param,
-            doc_url=error.doc_url,
-            request_id=error.request_id,
-            retry_after=error.retry_after,
+            None,
+            f"demo: service answered {error.status_code} {error.code}",
+            source_type=source_type,
+            source_message=str(error),
+        )
+    if isinstance(error, AddressMismatchError):
+        return Failure(
+            HTTPStatus.BAD_GATEWAY,
+            "address_not_derivable",
+            None,
+            "demo: the service returned an address the pins do not derive",
+            logging.ERROR,
+            source_type=source_type,
+            source_message=str(error),
         )
     if isinstance(error, TransportError):
-        return partial(TransportError, error.code, str(error))
-    if isinstance(error, ResponseValidationError):
-        return partial(
-            ResponseValidationError,
-            str(error),
-            status_code=error.status_code,
-            request_id=error.request_id,
+        return Failure(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            "unavailable",
+            "2",
+            "demo: service transport unavailable",
+            source_type=source_type,
+            source_message=str(error),
         )
-    if isinstance(error, httpx.HTTPError):
-        return partial(httpx.HTTPError, str(error))
-    return partial(type(error), str(error))
+    if isinstance(error, ResponseValidationError):
+        return Failure(
+            HTTPStatus.BAD_GATEWAY,
+            "bad_gateway",
+            None,
+            "demo: service response validation failed",
+            source_type=source_type,
+            source_message=str(error),
+        )
+    if isinstance(error, (httpx.HTTPError, MissingProductKeyError)):
+        return Failure(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            "unavailable",
+            None,
+            "demo: service unavailable",
+            log_exc_info=True,
+            source_type=source_type,
+            source_message=str(error),
+        )
+    raise error
+
+
+def _failure_response(failure: Failure) -> Response:
+    LOG.log(failure.log_level, failure.message, exc_info=failure.log_exc_info)
+    response = _json(failure.status, {"code": failure.code})
+    if failure.retry_after is not None:
+        response.headers["retry-after"] = failure.retry_after
+    return response
 
 
 def _json_body(body: bytes) -> dict[str, Any] | None:
