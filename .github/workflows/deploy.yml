@@ -58,10 +58,6 @@ on:
         description: "provision: create the target's first CVM; upgrade: update the target's CVM"
         type: string
         required: true
-      bootstrap_maintenance:
-        description: "One-time rollout from a pre-feature service: allow missing pause API (404) only"
-        type: boolean
-        default: false
       environment_dir:
         description: "The target's environment directory in the caller's repository"
         type: string
@@ -308,18 +304,7 @@ jobs:
         if: inputs.mode == 'upgrade' && inputs.target == 'topup'
         env:
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
-          BOOTSTRAP_MAINTENANCE: ${{ inputs.bootstrap_maintenance }}
         run: |
-          if [[ "$BOOTSTRAP_MAINTENANCE" == true ]]; then
-            # A pre-feature router returns 404; the new admin route requires a signature (401).
-            code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$PUBLIC_URL/v1/admin/instance/pause")
-            if [[ "$code" == 404 ]]; then
-              echo "enabled=false" >>"$GITHUB_OUTPUT"
-              echo "::warning::Explicit first-rollout bootstrap: the running release has no pause API. Upgrade tolerance is required for this rollout."
-              echo "First-rollout bootstrap: no maintenance signal available from the old release." >>"$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-          fi
           "$KIT/deploy/instance-pause.sh" pause "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance.json"
           # The response proves the lease was committed before any Phala Cloud upgrade call.
           jq -e '.paused_scopes == ["mutations"]' "$WORK/maintenance.json"
@@ -495,15 +480,8 @@ jobs:
         env:
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
-          code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$PUBLIC_URL/v1/admin/instance/pause")
-          if [[ "$code" == 404 ]]; then
-            # A rollback to a pre-feature image has no process lease to inherit or resume.
-            jq -n '{maintenance_supported: false, cleared_by: "process_exit"}' >"$WORK/maintenance-cleared.json"
-            echo "Target has no maintenance API; process exit cleared the drain lease." >>"$GITHUB_STEP_SUMMARY"
-          else
-            "$KIT/deploy/instance-pause.sh" resume "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance-cleared.json"
-            jq -e '.paused_scopes == []' "$WORK/maintenance-cleared.json"
-          fi
+          "$KIT/deploy/instance-pause.sh" resume "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance-cleared.json"
+          jq -e '.paused_scopes == []' "$WORK/maintenance-cleared.json"
 
       # Right after a DNS change the domain can still reach the previous instance, from a resolver's
       # cache, or the new one can still be obtaining its certificate: retried every 30 seconds for

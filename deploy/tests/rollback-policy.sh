@@ -6,41 +6,21 @@ trap 'rm -r "$tmp"' EXIT
 tmp=$(CDPATH='' cd -- "$tmp" && pwd)
 notes="$tmp/notes"
 policy="$root/deploy/rollback-policy.sh"
-printf '%s\n' '### Breaking (operators)' '- no rollback to 0.8.3; restore required' >"$notes"
-[[ $("$policy" v0.8.3 "$notes") == declared ]]
-if "$policy" v0.8.4 "$notes"; then exit 1; fi
-printf '%s\n' '### Fixed' '- no rollback to 0.8.3; restore required' >"$notes"
-if "$policy" v0.8.3 "$notes"; then exit 1; fi
+printf '%s\n' '### Breaking (operators)' '- no rollback to 0.9.1; restore required' >"$notes"
+[[ $("$policy" v0.9.2 "$notes") == rollback ]]
+printf '%s\n' '### Fixed' '- no rollback to 0.9.1; restore required' >"$notes"
+[[ $("$policy" v0.9.1 "$notes") == rollback ]]
 : >"$notes"
-if "$policy" v0.8.3 "$notes"; then exit 1; fi
 [[ $("$policy" v0.9.0 "$notes") == rollback ]]
+[[ $("$policy" v0.9.2 "$notes") == rollback ]]
 [[ $("$policy" v0.10.0 "$notes") == rollback ]]
-[[ $("$policy" v1.0.0 "$notes") == rollback ]]
-# A release PR has empty Unreleased notes and the declaration in its dated version section.
-cat >"$notes" <<'NOTES'
-## [Unreleased]
-
-## [0.9.0] - 2026-10-05
-
-### Breaking (operators)
-
-- 0.9.0: **no rollback to 0.8.3; restore required**.
-NOTES
-[[ $("$policy" v0.8.3 "$notes" 0.9.0) == declared ]]
-# The same declaration in an older release must not authorize the current release.
-if "$policy" v0.8.3 "$notes" 0.10.0; then exit 1; fi
-sed -i 's/### Breaking (operators)/### Fixed/' "$notes"
-if "$policy" v0.8.3 "$notes" 0.9.0; then exit 1; fi
-cat >"$notes" <<'NOTES'
-## [Unreleased]
-
-### Breaking (operators)
-
-- no rollback to 0.8.3; restore required
-
-## [0.8.3] - 2026-10-04
-NOTES
-[[ $("$policy" v0.8.3 "$notes" 0.9.0) == declared ]]
+# N-1 below the supported minimum is rejected even with an operator declaration.
+printf '%s\n' '### Breaking (operators)' '- no rollback to 0.8.9; restore required' >"$notes"
+if "$policy" v0.8.9 "$notes"; then
+    exit 1
+else
+    [[ $? -eq 64 ]]
+fi
 # A tiny repository fixture exercises comparison against immutable N-1 tags.
 mkdir -p "$tmp/repo/crates/topup/src/db"
 cd "$tmp/repo"
@@ -56,7 +36,7 @@ printf '%s\n' 'const COMPATIBILITY_FLOOR: i64 = 20261028000001;' >"$source_file"
 if "$policy" v0.9.0 "$notes"; then exit 1; fi
 printf '%s\n' 'const COMPATIBILITY_FLOOR: i64 = 20261029030005;' >"$source_file"
 [[ $("$policy" v0.9.0 "$notes") == declared ]]
-# Dated declarations still require a raised floor for protocol-era N-1.
+# A release PR has empty Unreleased notes and the declaration in its dated version section.
 cat >"$notes" <<'NOTES'
 ## [Unreleased]
 
@@ -67,9 +47,25 @@ cat >"$notes" <<'NOTES'
 - no rollback to 0.9.0; restore required
 NOTES
 [[ $("$policy" v0.9.0 "$notes" 0.10.0) == declared ]]
+sed -i 's/### Breaking (operators)/### Fixed/' "$notes"
+[[ $("$policy" v0.9.0 "$notes" 0.10.0) == rollback ]]
+sed -i 's/### Fixed/### Breaking (operators)/' "$notes"
 printf '%s\n' 'const COMPATIBILITY_FLOOR: i64 = 20261028000002;' >"$source_file"
 if "$policy" v0.9.0 "$notes" 0.10.0; then exit 1; fi
 printf '%s\n' 'const COMPATIBILITY_FLOOR: i64 = 20261029030005;' >"$source_file"
+# The same declaration in an older release must not authorize the current release.
+sed -i 's/## \[0.10.0\] - 2026-10-06/## [0.9.2] - 2026-10-05/' "$notes"
+[[ $("$policy" v0.9.0 "$notes" 0.10.0) == rollback ]]
+cat >"$notes" <<'NOTES'
+## [Unreleased]
+
+### Breaking (operators)
+
+- no rollback to 0.9.0; restore required
+
+## [0.9.0] - 2026-10-05
+NOTES
+[[ $("$policy" v0.9.0 "$notes" 0.10.0) == declared ]]
 # A declaration for a different version does not suppress the real rollback smoke.
 [[ $("$policy" v0.10.0 "$notes") == rollback ]]
 printf '%s\n' '### Fixed' '- no rollback to 0.9.0; restore required' >"$notes"

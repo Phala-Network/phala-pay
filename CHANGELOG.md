@@ -30,6 +30,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Database pool acquisition timeouts and closed pools now return `503 unavailable` instead of
   `500 internal_error`, allowing retries without saving an idempotency response.
 
+### Removed
+
+- **Breaking:** the reusable Deploy workflow no longer accepts bootstrap_maintenance; upgrades from 0.8.x are unsupported.
+
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Added
