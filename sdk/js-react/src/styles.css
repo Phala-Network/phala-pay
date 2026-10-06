@@ -6,7 +6,10 @@
   --pp-color-surface: #f4f4f5;
   --pp-color-text: #18181b;
   --pp-color-text-muted: #52525b;
+  /* Dividers and the QR code's frame; a choice's edge is --pp-color-input, at 3:1 or more against
+     the background, as WCAG 1.4.11 asks. */
   --pp-color-border: #e4e4e7;
+  --pp-color-input: #8a8a93;
   --pp-color-primary: #171717;
   --pp-color-primary-foreground: #fafafa;
   --pp-color-focus: #2563eb;
@@ -29,6 +32,7 @@
   --pp-color-text: #fafafa;
   --pp-color-text-muted: #a1a1aa;
   --pp-color-border: #27272a;
+  --pp-color-input: #71717a;
   --pp-color-primary: #fafafa;
   --pp-color-primary-foreground: #18181b;
   --pp-color-focus: #60a5fa;
@@ -149,7 +153,7 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
   min-height: var(--pp-control-height); padding: 0.5em 0.75em; border-radius: var(--pp-radius);
   font-weight: 500; text-align: center; cursor: pointer; }
 .pp-choices__input { position: absolute; inset: 0; margin: 0; appearance: none;
-  border: 1px solid var(--pp-color-border); border-radius: inherit; background: none; cursor: pointer;
+  border: 1px solid var(--pp-color-input); border-radius: inherit; background: none; cursor: pointer;
   transition: border-color 150ms; }
 .pp-choices__input:hover { border-color: var(--pp-color-text-muted); }
 .pp-choices__input:checked { border: 2px solid var(--pp-color-primary); }
