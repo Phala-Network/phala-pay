@@ -15,6 +15,9 @@
 /
   Cache-Control: no-cache
 
+/compare
+  Cache-Control: no-cache
+
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
@@ -45,7 +48,5 @@
 https://:version.:subdomain.workers.dev/*
   X-Robots-Tag: noindex
 
-/compare
-  Cache-Control: no-cache
 /llms.txt
   Cache-Control: public, max-age=86400
