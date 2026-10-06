@@ -307,21 +307,26 @@ async function watchConsole(page: Page): Promise<string[]> {
 }
 
 /**
- * Checks the page with axe in the theme it is in, then in the other (switched with the header's
- * toggle, and back): no serious or critical violation in either.
+ * Checks the page with axe at its width and at a phone's (390px), each in the theme it is in, then
+ * in the other (switched with the header's toggle, and back): no serious or critical violation.
  */
 async function expectAccessible(page: Page, state: string): Promise<void> {
-  for (let pass = 0; pass < 2; pass++) {
-    // Colours are read once the theme's colour transitions have settled.
-    await page.waitForFunction(() => !document.getAnimations().some((animation) => animation instanceof CSSTransition));
-    const theme = (await page.locator("html").getAttribute("class"))?.includes("dark") ? "dark" : "light";
-    const { violations } = await new AxeBuilder({ page }).analyze();
-    const serious = violations
-      .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
-      .map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(" ")).join(", ")}`);
-    expect(serious, `${state}, ${theme} theme`).toEqual([]);
-    await page.getByRole("button", { name: /^Switch to (dark|light) theme$/ }).click();
+  const viewport = page.viewportSize() ?? { width: 1360, height: 1000 };
+  for (const width of [viewport.width, 390]) {
+    await page.setViewportSize({ width, height: viewport.height });
+    for (let pass = 0; pass < 2; pass++) {
+      // Colours are read once the theme's colour transitions have settled.
+      await page.waitForFunction(() => !document.getAnimations().some((animation) => animation instanceof CSSTransition));
+      const theme = (await page.locator("html").getAttribute("class"))?.includes("dark") ? "dark" : "light";
+      const { violations } = await new AxeBuilder({ page }).analyze();
+      const serious = violations
+        .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
+        .map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(" ")).join(", ")}`);
+      expect(serious, `${state}, ${width}px, ${theme} theme`).toEqual([]);
+      await page.getByRole("button", { name: /^Switch to (dark|light) theme$/ }).click();
+    }
   }
+  await page.setViewportSize(viewport);
 }
 
 /**
@@ -1334,6 +1339,37 @@ test("loading home islands preserves the original prerendered hero", async ({ pa
   }
 });
 
+
+test("forced colors keep the chosen amount, the active tab, and keyboard focus visible", async ({ page }) => {
+  await page.emulateMedia({ forcedColors: "active" });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  const style = (locator: Locator, property: "backgroundColor" | "outlineStyle") =>
+    locator.evaluate((element, name) => getComputedStyle(element)[name], property);
+
+  // The chosen option and the active tab stand out from their track (which the system paints as
+  // its canvas, like the others) in the system's highlight.
+  const amounts = product.getByRole("radiogroup", { name: "Amount" });
+  const chosen = amounts.getByRole("radio", { name: "$20", exact: true });
+  await expect(chosen).toBeChecked();
+  expect(await style(chosen, "backgroundColor")).not.toBe(await style(amounts, "backgroundColor"));
+  const methods = product.getByRole("tablist", { name: "Payment method" });
+  const active = methods.getByRole("tab", { name: "Exact amount" });
+  await expect(active).toHaveAttribute("aria-selected", "true");
+  expect(await style(active, "backgroundColor")).not.toBe(await style(methods, "backgroundColor"));
+
+  // Keyboard focus on a select and a text field keeps an outline, which the system colours.
+  await chosen.focus();
+  await page.keyboard.press("Tab");
+  const network = product.getByRole("combobox", { name: "Network" });
+  await expect(network).toBeFocused();
+  expect(await style(network, "outlineStyle")).not.toBe("none");
+  await amounts.getByRole("radio", { name: "Custom", exact: true }).click();
+  const custom = product.getByLabel("Custom amount (USD)");
+  await custom.focus();
+  expect(await style(custom, "outlineStyle")).not.toBe("none");
+});
 
 test("home and comparison hydrate in either theme without CSP violations or React errors", async ({ browser }) => {
   for (const colorScheme of ["light", "dark"] as const) {

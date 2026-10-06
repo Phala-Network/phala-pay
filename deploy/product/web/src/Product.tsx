@@ -274,7 +274,7 @@ function Workspace({ account }: { account: Account | null }) {
           type="button"
           onClick={copy}
           aria-label={`Workspace ${account.account_id}, copy`}
-          className="flex h-7 max-w-40 items-center gap-1.5 rounded-full border px-2.5 font-mono text-xs text-muted-foreground transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex h-7 max-w-40 items-center gap-1.5 rounded-full border px-2.5 font-mono text-xs text-muted-foreground transition-colors focus-visible:outline-hidden hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
         >
           <span className="size-1.5 shrink-0 rounded-full bg-success" aria-hidden="true" />
           <span className="truncate">{account.account_id}</span>

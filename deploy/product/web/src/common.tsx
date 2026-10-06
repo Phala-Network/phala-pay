@@ -71,7 +71,7 @@ export function InfoTip({ label, children, className }: { label: string; childre
           type="button"
           aria-label={label}
           className={cn(
-            "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground",
+            "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors focus-visible:outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground",
             className,
           )}
         >
@@ -131,7 +131,7 @@ export function Subsection({
 export function Disclosure({ summary, children }: { summary: ReactNode; children: ReactNode }) {
   return (
     <details className="group/disclosure text-xs">
-      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-sm font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <ChevronRight
           className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/disclosure:rotate-90 motion-reduce:transition-none"
           aria-hidden="true"

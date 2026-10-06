@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { isAddress, isHash, parseUnits } from "viem";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -57,7 +57,7 @@ export function Refunds({ timeline, deposit }: { timeline: Timeline; deposit: De
         </p>
       )}
       {timeline.refunds.length > 0 && (
-        <ul className="flex flex-col gap-3" aria-label="Refunds of this deposit">
+        <ul className="flex flex-col divide-y border-t" aria-label="Refunds of this deposit">
           {timeline.refunds.map((refund) => (
             <RefundItem key={refund.id} refund={refund} token={token} />
           ))}
@@ -182,7 +182,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
   const transfer = refund.transfer;
   return (
     <li
-      className="flex flex-col gap-3 rounded-lg border bg-card p-4"
+      className="flex flex-col gap-3 py-4"
       data-testid="refund"
       data-refund={refund.id}
       data-status={refund.status}
@@ -273,20 +273,16 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
         </p>
       )}
       {refund.status === "succeeded" && (
-        <Alert variant="success" role="status">
-          <CircleCheck aria-hidden="true" />
-          <AlertTitle>Succeeded</AlertTitle>
-          <AlertDescription>
-            The service verified the treasury's transfer at finality and sent <code>deposit.refunded</code>, which took
-            the refunded share back from the balance.
-          </AlertDescription>
-        </Alert>
+        <p role="status">
+          The service verified the treasury's transfer at finality and sent <code>deposit.refunded</code>, which took the
+          refunded share back from the balance.
+        </p>
       )}
       {refund.status === "failed" && (
         <Alert variant="destructive" role="status">
           <CircleAlert aria-hidden="true" />
           <AlertTitle>
-            Failed: <code>{refund.failure_reason}</code>
+            <code>{refund.failure_reason}</code>
           </AlertTitle>
           <AlertDescription>
             {refund.failure_explanation} Its reservation of the deposit is released; declare a new refund and pay it from
@@ -294,7 +290,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
           </AlertDescription>
         </Alert>
       )}
-      {refund.status === "canceled" && <p className="text-muted-foreground">Canceled before any payment was attached.</p>}
+      {refund.status === "canceled" && <p className="text-muted-foreground">No payment was attached before it was canceled.</p>}
       {error !== null && <ErrorAlert text={error} />}
       {pay.isError && <ErrorAlert text={errorMessage(pay.error, "The wallet did not send it.")} />}
     </li>

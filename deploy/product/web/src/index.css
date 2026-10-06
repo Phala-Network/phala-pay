@@ -60,8 +60,11 @@
     --success-muted: oklch(0.982 0.018 155.826);
     --warning-muted: oklch(0.987 0.022 95.277);
     --destructive-muted: oklch(0.971 0.013 17.38);
+    /* Dividers and card edges. A form control's edge is --input, at 3:1 or more against the page
+       (3.22:1), cards (3.36:1), and muted surfaces (3.08:1), as WCAG 1.4.11 asks of the boundary
+       that identifies a control. */
     --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
+    --input: oklch(0.64 0 0);
     /* Keyboard focus: Phala's lime darkened to an olive, over 6:1 against the page, cards, and
        muted surfaces. Always opaque. */
     --focus: oklch(0.45 0.13 128);
@@ -87,11 +90,12 @@
     --destructive: oklch(0.704 0.191 22.216);
     --success: oklch(0.792 0.209 151.711);
     --warning: oklch(0.828 0.189 84.429);
-    --success-muted: oklch(0.266 0.065 152.934);
-    --warning-muted: oklch(0.279 0.077 45.635);
-    --destructive-muted: oklch(0.258 0.092 26.042);
+    --success-muted: oklch(0.266 0.035 152.934);
+    --warning-muted: oklch(0.279 0.04 45.635);
+    --destructive-muted: oklch(0.258 0.04 26.042);
     --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
+    /* 3.14:1 against the page and muted surfaces, 3.23:1 against cards. */
+    --input: oklch(1 0 0 / 35%);
     /* Phala's lime itself: over 12:1 against the dark page and its surfaces. */
     --focus: oklch(0.93 0.19 124);
     --ring: var(--focus);

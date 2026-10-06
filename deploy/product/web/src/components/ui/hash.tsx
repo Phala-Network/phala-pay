@@ -59,8 +59,9 @@ function CopyButton({
 }
 
 /**
- * A hash, address, or id: monospaced and middle-truncated by the page's one rule (`short`), with
- * the full value in a tooltip; linked when `href` is given, with a copy button when `copyLabel` is.
+ * A hash, address, or id: monospaced and middle-truncated by the page's one rule (`short`); linked
+ * when `href` is given, with a copy button when `copyLabel` is. The full value is a link's tooltip
+ * (on hover and focus); unlinked, it is the text's title, and what screen readers read.
  */
 function Hash({
   value,
@@ -74,12 +75,21 @@ function Hash({
   className?: string | undefined
 }) {
   const text = short(value)
-  const shown =
-    href === undefined ? (
+  const truncated = text !== value
+  let shown: React.ReactNode
+  if (href === undefined) {
+    shown = truncated ? (
+      <span data-slot="hash-value" className="font-mono text-[13px]" title={value}>
+        <span aria-hidden="true">{text}</span>
+        <span className="sr-only">{value}</span>
+      </span>
+    ) : (
       <span data-slot="hash-value" className="font-mono text-[13px]">
         {text}
       </span>
-    ) : (
+    )
+  } else {
+    const link = (
       <a
         data-slot="hash-value"
         className="rounded-sm font-mono text-[13px] underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground"
@@ -90,19 +100,22 @@ function Hash({
         {text}
       </a>
     )
+    shown = truncated ? (
+      <Tooltip>
+        <TooltipTrigger asChild>{link}</TooltipTrigger>
+        <TooltipContent className="font-mono break-all">{value}</TooltipContent>
+      </Tooltip>
+    ) : (
+      link
+    )
+  }
+  // 8px apart: the copy button's 44px hit area (6px around it) stays clear of a link beside it.
   return (
     <span
       data-slot="hash"
-      className={cn("inline-flex max-w-full items-center gap-1 align-middle", className)}
+      className={cn("inline-flex max-w-full items-center gap-2 align-middle", className)}
     >
-      {text === value ? (
-        shown
-      ) : (
-        <Tooltip>
-          <TooltipTrigger asChild>{shown}</TooltipTrigger>
-          <TooltipContent className="font-mono break-all">{value}</TooltipContent>
-        </Tooltip>
-      )}
+      {shown}
       {copyLabel !== undefined && <CopyButton value={value} label={copyLabel} />}
     </span>
   )

@@ -3,11 +3,13 @@ import { cn } from "cn"
 
 import { Label } from "@/components/ui/label"
 
-/** A form field: its label above its control, 8px apart. */
+/**
+ * A form field: its label above its one control, 8px apart. A layout box, not a group: the label
+ * names the control, and a group named the same would only repeat it.
+ */
 function Field({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
-      role="group"
       data-slot="field"
       className={cn(
         "group/field flex w-full flex-col gap-2 *:w-full [&>.sr-only]:w-auto",

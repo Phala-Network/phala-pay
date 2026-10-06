@@ -13,7 +13,7 @@ function CodeBlock({
   className,
 }: {
   value: string
-  /** What the block holds, for its copy button: "Copy {label}". */
+  /** What the block holds: its name, and its copy button's ("Copy {label}"). */
   label: string
   className?: string | undefined
 }) {
@@ -21,6 +21,8 @@ function CodeBlock({
     <div data-slot="code-block" className="relative min-w-0">
       <pre
         tabIndex={0}
+        role="region"
+        aria-label={label}
         className={cn(
           "max-h-60 overflow-auto rounded-lg border bg-muted/50 py-3 pr-12 pl-3 font-mono text-xs leading-relaxed",
           className

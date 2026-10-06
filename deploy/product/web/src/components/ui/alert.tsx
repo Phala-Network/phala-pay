@@ -33,7 +33,8 @@ function Alert({
     <div
       data-slot="alert"
       data-variant={variant}
-      role="alert"
+      // Only an error interrupts a screen reader; the other tones are announced politely.
+      role={variant === "destructive" ? "alert" : "status"}
       className={cn(alertVariants({ variant }), className)}
       {...props}
     />
