@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -23,6 +24,8 @@ class Failure:
     code: str
     retry_after: str | None
     message: str
+    log_level: int = logging.WARNING
+    log_exc_info: bool = False
 
 
 class CachedFailureError(Exception):
@@ -50,7 +53,7 @@ class SingleFlightTTL[T]:
         executor: ThreadPoolExecutor | None = None,
         incomplete: Callable[[T], bool] = lambda _: False,
         inclusive: bool = False,
-        cache_errors: tuple[type[Exception], ...] = (Exception,),
+        cache_errors: tuple[type[Exception], ...],
     ) -> None:
         self._clock = clock
         self._ttl = ttl
@@ -77,6 +80,11 @@ class SingleFlightTTL[T]:
     ) -> T:
         leader = False
         with self._changed:
+            if self._future is not None and self._future.done():
+                finished, self._future = self._future, None
+                # Surface unexpected executor failures to the next HTTP reader, even
+                # when the refresh was started by a reader receiving a stale value.
+                finished.result()
             while self._refreshing and self._executor is None:
                 remaining = self._remaining(None)
                 self._changed.wait(timeout=remaining)
@@ -110,6 +118,10 @@ class SingleFlightTTL[T]:
             result = pending.result(timeout=self._remaining(timeout))
         except TimeoutError as error:
             raise TransportError("timeout") from error
+        finally:
+            with self._changed:
+                if pending.done() and self._future is pending:
+                    self._future = None
         return self._unwrap(result)
 
     @staticmethod

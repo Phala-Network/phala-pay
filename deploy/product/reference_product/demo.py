@@ -250,6 +250,7 @@ class DemoConsole:
             negative_ttl=10,
             failure=_failure_value,
             executor=self._refresh_workers,
+            cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError, CachedFailureError),
             inclusive=True,
         )
         self._block_times = ExpiringLRU[tuple[int, str], tuple[int, int] | None](1024, clock)
@@ -294,6 +295,7 @@ class DemoConsole:
             return self._api(method, name, headers, body)
         except CachedFailureError as error:
             failure = error.failure
+            _log_failure(failure)
             response = _json(failure.status, {"code": failure.code})
             if failure.retry_after is not None:
                 response.headers["retry-after"] = failure.retry_after
@@ -867,6 +869,9 @@ class DemoConsole:
         token = operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
         try:
             return self._build_sweeps_view(self._clock())
+        except (TopupError, httpx.HTTPError, MissingProductKeyError, CachedFailureError) as error:
+            LOG.warning("sweeps refresh failed: %s", type(error).__name__)
+            raise
         finally:
             operation_deadline.reset(token)
 
@@ -1544,18 +1549,43 @@ def _failure_value(error: Exception) -> Failure:
             status = HTTPStatus.BAD_REQUEST
         else:
             status = HTTPStatus.BAD_GATEWAY
-        return Failure(status, error.code, None, "service request failed")
+        return Failure(
+            status, error.code, None, f"demo: service answered {error.status_code} {error.code}"
+        )
     if isinstance(error, AddressMismatchError):
-        return Failure(HTTPStatus.BAD_GATEWAY, "address_not_derivable", None, "address mismatch")
+        return Failure(
+            HTTPStatus.BAD_GATEWAY,
+            "address_not_derivable",
+            None,
+            "demo: the service returned an address the pins do not derive",
+            logging.ERROR,
+        )
     if isinstance(error, TransportError):
-        return Failure(HTTPStatus.SERVICE_UNAVAILABLE, "unavailable", "2", "service unavailable")
+        return Failure(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            "unavailable",
+            "2",
+            "demo: service transport unavailable",
+        )
     if isinstance(error, ResponseValidationError):
-        return Failure(HTTPStatus.BAD_GATEWAY, "bad_gateway", None, "invalid service response")
+        return Failure(
+            HTTPStatus.BAD_GATEWAY, "bad_gateway", None, "demo: service response validation failed"
+        )
     if isinstance(error, (httpx.HTTPError, MissingProductKeyError)):
-        return Failure(HTTPStatus.SERVICE_UNAVAILABLE, "unavailable", None, "service unavailable")
+        return Failure(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            "unavailable",
+            None,
+            "demo: service unavailable",
+            log_exc_info=True,
+        )
     return Failure(
         HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", None, "request failed"
     )
+
+
+def _log_failure(failure: Failure) -> None:
+    LOG.log(failure.log_level, failure.message, exc_info=failure.log_exc_info)
 
 
 def _json_body(body: bytes) -> dict[str, Any] | None:

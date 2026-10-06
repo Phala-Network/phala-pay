@@ -4,6 +4,7 @@ collection methods, refunds, sweeps, and the timeline's and ledger's states."""
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sys
 import threading
@@ -14,10 +15,12 @@ from dataclasses import dataclass, replace
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Protocol
+from unittest.mock import Mock
 
 import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -32,7 +35,7 @@ from reference_product.config import (
 from reference_product.demo import ApiRecorder, DemoConsole
 from reference_product.fulfillment import Fulfillment, PinnedKeys
 from reference_product.ledger import ProductLedger
-from reference_product.server import AccountApi
+from reference_product.server import AccountApi, ProductServer
 from reference_product.transport import operation_deadline
 from topup_sdk import (
     ApiError,
@@ -1424,7 +1427,11 @@ def test_product_closes_owned_http_threads(demo: tuple[DemoConsole, Service], ki
 @pytest.mark.parametrize("kind", ["trust", "networks"])
 @pytest.mark.parametrize("failure", ["transport", "api", "validation"])
 def test_cached_failures_preserve_http_responses_for_concurrent_readers(
-    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, kind: str, failure: str
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    failure: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     console, _ = demo
     original: TransportError | ApiError | ResponseValidationError
@@ -1465,9 +1472,17 @@ def test_cached_failures_preserve_http_responses_for_concurrent_readers(
         ]
     assert results == [expected] * 5
     assert len(calls) == 1
+    message = {
+        "transport": "demo: service transport unavailable",
+        "api": "demo: service answered 503 service_unavailable",
+        "validation": "demo: service response validation failed",
+    }[failure]
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.WARNING, message)
+    ] * 6
 
 
-@pytest.mark.parametrize("failure", ["transport", "http", "missing_key", "unexpected"])
+@pytest.mark.parametrize("failure", ["transport", "http", "missing_key"])
 def test_cold_sweeps_waiters_share_failure_values(
     demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -1499,11 +1514,7 @@ def test_cold_sweeps_waiters_share_failure_values(
         finally:
             release.set()
         results = [future.result(timeout=3) for future in futures]
-    expected = (
-        (500, {"code": "internal_server_error"})
-        if failure == "unexpected"
-        else (503, {"code": "unavailable"})
-    )
+    expected = (503, {"code": "unavailable"})
     assert results == [expected] * 2
     console.drain()
     assert len(calls) == 1
@@ -1587,3 +1598,42 @@ def test_unexpected_sync_cache_errors_do_not_serve_stale_or_back_off(
         with pytest.raises(ValueError, match="unexpected backend failure"):
             method()
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("warm", [True, False])
+def test_unexpected_sweeps_errors_reach_server_logging(
+    demo: tuple[DemoConsole, Service],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    warm: bool,
+) -> None:
+    console, _ = demo
+    cookie = _account(console)
+    if warm:
+        assert _get(console, cookie, "sweeps")[0] == 200
+        console.drain()
+        clock.now += 11
+    calls: list[int] = []
+
+    def fail(now: float) -> dict[str, Any]:
+        calls.append(1)
+        raise ValueError("unexpected sweep failure")
+
+    monkeypatch.setattr(console, "_build_sweeps_view", fail)
+    fulfillment = Mock(spec=Fulfillment)
+    fulfillment.config = console.config
+    with TestClient(ProductServer(fulfillment, demo=console).app) as client:
+        if warm:
+            assert client.get("/api/sweeps", headers={"cookie": cookie}).status_code == 200
+            console.drain()
+        response = client.get("/api/sweeps", headers={"cookie": cookie})
+        assert response.status_code == 500
+        assert response.json() == {"code": "internal_server_error"}
+        if not warm:
+            assert client.get("/api/sweeps", headers={"cookie": cookie}).status_code == 500
+            assert len(calls) == 2
+    records = [record for record in caplog.records if record.name == "reference_product.server"]
+    assert records
+    assert all(record.getMessage() == "product request failed" for record in records)
+    assert all(record.levelno == logging.ERROR and record.exc_info for record in records)
