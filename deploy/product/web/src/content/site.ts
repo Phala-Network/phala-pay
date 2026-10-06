@@ -15,3 +15,6 @@ export const FAQ = [
 ];
 
 export const HOME_KEYWORDS = "non-custodial crypto payment gateway, self-hosted crypto payments, accept USDC payments API, crypto top-up API";
+
+// Update when landing copy changes; independent of checkout history and build time.
+export const SITE_UPDATED = "2026-10-06";

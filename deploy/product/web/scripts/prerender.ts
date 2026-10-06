@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { SITE_UPDATED } from "../src/content/site.ts";
 import { COMPARE_ACCESSED } from "../src/content/compare.ts";
 import { THEME_SCRIPT } from "../src/content/theme-script.ts";
 import { renderPage } from "./prerender-page.ts";
@@ -22,9 +22,7 @@ async function prerender() {
     const template = await readFile(file, "utf8");
     await writeFile(file, renderPage(template, render(page)));
   }
-  const homeLastmod = execFileSync("git", ["log", "-1", "--format=%cs", "--", "src/content/site.ts"], { cwd: web, encoding: "utf8" }).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(homeLastmod)) throw new Error("Missing content commit date for sitemap");
-  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${[["/", homeLastmod], ["/compare", COMPARE_ACCESSED]].map(([path, lastmod]) => `  <url><loc>${origin}${path}</loc><lastmod>${lastmod}</lastmod></url>`).join("\n")}\n</urlset>\n`;
+  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${[["/", SITE_UPDATED], ["/compare", COMPARE_ACCESSED]].map(([path, lastmod]) => `  <url><loc>${origin}${path}</loc><lastmod>${lastmod}</lastmod></url>`).join("\n")}\n</urlset>\n`;
   await writeFile(resolve(assets, "sitemap.xml"), sitemap);
 }
 
