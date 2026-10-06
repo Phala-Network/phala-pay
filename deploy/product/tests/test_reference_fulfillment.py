@@ -1164,6 +1164,23 @@ def test_account_api_isolates_sdk_service_failures(
         assert "private service detail" not in caplog.text
     finally:
         api.close()
+        client.close()
+
+
+def test_account_api_leaves_injected_client_open() -> None:
+    fulfillment = _fulfillment()
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    client.list_deposits.return_value = iter([])
+    api = AccountApi(
+        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
+    )
+    try:
+        assert _account_call(api, "GET", f"/accounts/{TEAM}", b"").status == 200
+        api.close()
+        client.close.assert_not_called()
+    finally:
+        api.close()
+        fulfillment.ledger._connection.close()
 
 
 @pytest.mark.parametrize("version", [0, 1])

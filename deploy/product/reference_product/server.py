@@ -333,11 +333,13 @@ class AccountApi:
         *,
         client: TopupClient | None = None,
     ) -> None:
+        """Borrow an injected client; otherwise lazily create and own the service client."""
         self.config = config
         self.ledger = ledger
         self.driver_key = driver_key
         self.accounts_path = urlsplit(config.public_url).path.rstrip("/") + "/accounts"
         self._client: TopupClient | None = client
+        self._owns_client = client is None
         self._transport: DeadlineTransport | None = None
         self._client_lock = threading.Lock()
 
@@ -498,7 +500,7 @@ class AccountApi:
     def close(self) -> None:
         with self._client_lock:
             try:
-                if self._client is not None:
+                if self._owns_client and self._client is not None:
                     self._client.close()
             finally:
                 if self._transport is not None:
