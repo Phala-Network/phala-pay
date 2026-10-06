@@ -664,8 +664,9 @@ unavailable, stale or malformed data; disagreement halts. Primary/check company 
 Stablecoins credit exactly one dollar iff a fresh source is within the peg band and no fresh
 source is outside it. All source observations and the decision are audited. Identical adapters share
 process-local observations across routes. Quotes may reuse an on-chain observation for up to 12
-seconds; crediting (confirm) always fetches fresh, sharing only a fetch completed after the caller
-arrived. Every use still checks each source's freshness limits. CEX prices and sequencer uptime only
+seconds; crediting (confirm) always fetches fresh, sharing only an in-flight fetch that started
+after the caller arrived; it never reuses one completed before arrival. Every use still checks
+each source's freshness limits. CEX prices and sequencer uptime only
 coalesce concurrent fetches. Cached observations record their age in the pricing audit.
 
 Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, complete positive
@@ -692,7 +693,8 @@ Rule are not part of the software: they are the operator's and the merchant's re
 Quote pricing has a 15-second budget within the API request deadline. On-chain observations from
 the same adapter may be reused for up to 12 seconds across routes, with each source's freshness
 limits checked on every use. Crediting (confirm) always fetches fresh and only coalesces concurrent
-fetches; it does not use this quote pricing budget.
+fetches; it does not use this quote pricing budget. A fresh caller may join an in-flight fetch, but
+never reuses an observation completed before it arrived.
 
 Invoice model, with this service's exception profile:
 

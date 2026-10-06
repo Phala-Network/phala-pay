@@ -60,7 +60,9 @@ impl<'de> Deserialize<'de> for AtomicAmount {
 }
 
 /// An amount in the destination product's minor unit.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 pub struct MinorAmount(u64);
 
@@ -147,7 +149,9 @@ impl From<ScaledPrice> for ScaledPriceRepr {
 }
 
 /// Basis points, constrained to the inclusive range 0 through 10,000.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(try_from = "u16", into = "u16")]
 pub struct Bps(u16);
 

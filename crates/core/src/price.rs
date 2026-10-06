@@ -143,7 +143,7 @@ pub fn feed(name: &str, chain: u64) -> Option<Feed> {
     })
 }
 /// Safety policy for the pinned Ethereum PHA/WETH pair; no arbitrary pools or tokens.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TwapConfig {
     /// Minimum averaging window (at least thirty minutes).
