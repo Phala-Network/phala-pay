@@ -1287,6 +1287,11 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     await expect(answer).toBeVisible();
     await expectMetadata(staticPage);
     await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
+    // The theme button cannot know the visitor's theme, so it states none; and the demo, which never
+    // arrives without script, reserves no space: only its note shows.
+    await expect(staticPage.getByRole("button", { name: "Dark theme" })).not.toHaveAttribute("aria-pressed");
+    await expect(staticPage.locator("#demo-root p")).toHaveText("The demo needs JavaScript.");
+    expect((await staticPage.locator("#demo-root").boundingBox())?.height).toBeLessThan(48);
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Demo", exact: true })).toHaveAttribute("href", "/#demo");
     const homeHtml = await home?.text();

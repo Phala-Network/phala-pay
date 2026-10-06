@@ -148,19 +148,21 @@ export const sources = [...new Set([phalaPay, ...competitors].flatMap((vendor) =
   return { url, title, host: new URL(url).host, archived: archived.has(url) };
 });
 
-// The home page's summary of the comparison, from the rows above: hosted processors are Stripe,
-// Coinbase Business, NOWPayments, and MoonPay Commerce; their fees run from 1% to 2% per payment
-// (2% with NOWPayments' auto-conversion), and they custody funds or forward them by provider.
-export const HOSTED_PROCESSORS = "Stripe, Coinbase Business, NOWPayments, and MoonPay Commerce";
+export type DimensionKey = keyof Omit<Competitor, "id" | "name">;
+function vendor(id: string): Competitor {
+  const found = competitors.find((candidate) => candidate.id === id);
+  if (found === undefined) throw new Error(`Unknown comparison vendor: ${id}`);
+  return found;
+}
+// The home page's summary: Phala Pay beside a hosted processor and a self-hosted one, on four of the
+// dimensions above, with their values exactly as stated there.
+const teaserKeys: readonly DimensionKey[] = ["custody", "fees", "selfHosted", "chains"];
 export const TEASER = {
-  columns: ["Phala Pay", "Hosted processors", "BTCPay Server"],
-  rows: [
-    { label: "Custody", cells: ["Non-custodial: contracts that can only pay your treasury", "Varies: some hold funds, some pay your wallet", "Non-custodial: paid to your wallet"] },
-    { label: "Fees", cells: ["No per-payment fee", "1–2% per payment", "No transaction fees"] },
-    { label: "Self-hosted", cells: ["Yes, Apache-2.0", "No", "Yes, MIT"] },
-    { label: "Chains", cells: ["ERC-20 tokens on Ethereum and Base", "Varies by provider", "Bitcoin and Lightning; altcoins via plugins"] },
-  ],
+  vendors: [phalaPay, vendor("stripe"), vendor("btcpay")],
+  dimensions: dimensions.filter(({ key }) => teaserKeys.includes(key)),
 };
+export const TEASER_OTHERS = competitors.filter(({ id }) => !TEASER.vendors.some((shown) => shown.id === id)).map(({ name }) => name);
+
 export const COMPARE_TITLE = "Crypto payment gateways compared | Phala Pay";
 export const COMPARE_DESCRIPTION = "How Phala Pay compares with Stripe, Coinbase Business, BTCPay Server, NOWPayments, and MoonPay Commerce on custody, fees, chains, speed, and refunds.";
 

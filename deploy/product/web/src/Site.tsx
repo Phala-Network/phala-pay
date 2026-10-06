@@ -5,11 +5,14 @@ import { CodeBlock } from "@/components/ui/code-block";
 import { CopyButton } from "@/components/ui/hash";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useHydrated } from "./islands.js";
-import { HOSTED_PROCESSORS, TEASER } from "./content/compare.js";
+import { ComparisonCell } from "./ComparisonCell.js";
+import { TEASER, TEASER_OTHERS } from "./content/compare.js";
+import { HERO_CODE, HERO_CODE_NOTE } from "./content/hero-code.js";
 import {
-  CLOSING_LEAD, CLOSING_TITLE, DEMO_LEAD, DEMO_TITLE, FAQ, HERO_CODE, HERO_CODE_NOTE, HERO_META, HERO_SUBHEAD,
-  PROPERTIES, PROPERTIES_LEAD, STEPS, TAGLINE,
+  CLOSING_LEAD, CLOSING_TITLE, DEMO_LEAD, DEMO_TITLE, FAQ, HERO_META, HERO_SUBHEAD, PROPERTIES, PROPERTIES_LEAD, STEPS,
+  TAGLINE,
 } from "./content/site.js";
+import { unbroken } from "./text.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 
 export const REPO = "https://github.com/Phala-Network/phala-pay";
@@ -161,12 +164,12 @@ function Lockup() {
 export function Hero() {
   return (
     <section aria-labelledby="hero-title">
-      <div className={`${CONTAINER} grid gap-12 py-12 md:py-20 lg:grid-cols-12 lg:items-center lg:gap-8`}>
+      <div className={`${CONTAINER} grid gap-12 py-12 md:py-20 lg:grid-cols-12 lg:items-start lg:gap-8`}>
         <div className="lg:col-span-7">
           <h1 id="hero-title" className="max-w-2xl text-3xl/tight font-semibold tracking-tight text-balance sm:text-4xl/tight">
             {TAGLINE}
           </h1>
-          <p className="mt-4 max-w-xl text-lg/8 text-pretty text-muted-foreground">{HERO_SUBHEAD}</p>
+          <p className="mt-4 max-w-xl text-lg/8 text-pretty text-muted-foreground">{unbroken(HERO_SUBHEAD)}</p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
             <Button asChild size="lg" variant="secondary"><a href={LINKS.docs}>Read the docs</a></Button>
@@ -223,8 +226,9 @@ export function DemoSection({ children }: { children?: ReactNode }) {
 }
 
 // The demo's first view (product and backend, the account loaded) measures 1830px tall at 390px wide
-// (1894px at 320), 1672 to 1692px from 640px, and 1025px from 1024px, where its columns sit side by side.
-const DEMO_HEIGHT = "min-h-[114rem] sm:min-h-[105rem] lg:min-h-[64rem]";
+// (1894px at 320), 1672 to 1692px from 640px, and 1025px from 1024px, where its columns sit side by
+// side. Without scripting the demo never arrives, so nothing is reserved.
+const DEMO_HEIGHT = "min-h-[114rem] sm:min-h-[105rem] lg:min-h-[64rem] noscript:min-h-0";
 
 /** The demo's space in static HTML and while the page hydrates. */
 export function DemoPlaceholder() {
@@ -258,7 +262,7 @@ export function HowItWorks() {
                 {String(index + 1).padStart(2, "0")}
               </span>
               <h3 className="mt-2 font-semibold">{title}</h3>
-              <p className="mt-1 max-w-prose text-sm/6 text-pretty text-muted-foreground">{text}</p>
+              <p className="mt-1 max-w-prose text-sm/6 text-pretty text-muted-foreground">{unbroken(text)}</p>
             </li>
           ))}
         </ol>
@@ -281,7 +285,7 @@ export function Properties() {
           {PROPERTIES.map(({ title, text }) => (
             <div key={title} className="grid gap-1 py-5 sm:grid-cols-3 sm:gap-6">
               <dt className="font-semibold">{title}</dt>
-              <dd className="text-sm/6 text-pretty text-muted-foreground sm:col-span-2">{text}</dd>
+              <dd className="text-sm/6 text-pretty text-muted-foreground sm:col-span-2">{unbroken(text)}</dd>
             </div>
           ))}
         </dl>
@@ -290,31 +294,36 @@ export function Properties() {
   );
 }
 
+/** Names in prose: "A, B, and C". */
+const list = new Intl.ListFormat("en", { type: "conjunction" });
+
 export function CompareTeaser() {
+  const [phala, ...others] = TEASER.vendors;
   return (
     <section aria-labelledby="compare-title" className={SECTION}>
       <div className={CONTAINER}>
         <h2 id="compare-title" className={H2}>How Phala Pay compares</h2>
         <p className="mt-2 max-w-prose text-pretty text-muted-foreground">
-          Beside hosted processors ({HOSTED_PROCESSORS}) and the self-hosted BTCPay Server.
+          Beside {list.format(others.map(({ name }) => name))}, as each states it. The full comparison
+          adds {list.format(TEASER_OTHERS)}, with a source for every value.
         </p>
         <Table className="mt-8 hidden table-fixed md:table">
-          <TableCaption className="sr-only">Phala Pay, hosted processors, and BTCPay Server on four dimensions.</TableCaption>
+          <TableCaption className="sr-only">{list.format(TEASER.vendors.map(({ name }) => name))} on {TEASER.dimensions.length} dimensions.</TableCaption>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead scope="col" className="w-40 pl-0 text-xs text-muted-foreground">Dimension</TableHead>
-              {TEASER.columns.map((column, index) => (
-                <TableHead key={column} scope="col" className={`px-4 ${index === 0 ? "bg-muted/40" : ""}`}>{column}</TableHead>
+              <TableHead scope="col" className="w-48 pl-0 text-xs text-muted-foreground">Dimension</TableHead>
+              {TEASER.vendors.map(({ id, name }) => (
+                <TableHead key={id} scope="col" className={`px-4 whitespace-normal ${id === phala?.id ? "bg-muted/40" : ""}`}>{name}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {TEASER.rows.map(({ label, cells }) => (
-              <TableRow key={label}>
-                <TableHead scope="row" className="h-auto py-3 pl-0 align-top">{label}</TableHead>
-                {cells.map((cell, index) => (
-                  <TableCell key={index} className={`px-4 py-3 align-top whitespace-normal ${index === 0 ? "bg-muted/40" : "text-muted-foreground"}`}>
-                    {cell}
+            {TEASER.dimensions.map(({ key, label }) => (
+              <TableRow key={key}>
+                <TableHead scope="row" className="h-auto py-3 pl-0 align-top whitespace-normal">{label}</TableHead>
+                {TEASER.vendors.map((vendor) => (
+                  <TableCell key={vendor.id} className={`px-4 py-3 align-top leading-6 whitespace-normal ${vendor.id === phala?.id ? "bg-muted/40" : "text-muted-foreground"}`}>
+                    <ComparisonCell cell={vendor[key]} linkSource={false} />
                   </TableCell>
                 ))}
               </TableRow>
@@ -323,15 +332,15 @@ export function CompareTeaser() {
         </Table>
         {/* Below md, one list per dimension instead of a table four columns wide. */}
         <dl className="mt-6 divide-y border-y md:hidden">
-          {TEASER.rows.map(({ label, cells }) => (
-            <div key={label} className="py-4">
+          {TEASER.dimensions.map(({ key, label }) => (
+            <div key={key} className="py-4">
               <dt className="font-semibold">{label}</dt>
               <dd>
                 <dl className="mt-2 grid gap-3 text-sm">
-                  {TEASER.columns.map((column, index) => (
-                    <div key={column}>
-                      <dt className="text-muted-foreground">{column}</dt>
-                      <dd>{cells[index]}</dd>
+                  {TEASER.vendors.map((vendor) => (
+                    <div key={vendor.id}>
+                      <dt className="text-muted-foreground">{vendor.name}</dt>
+                      <dd><ComparisonCell cell={vendor[key]} linkSource={false} /></dd>
                     </div>
                   ))}
                 </dl>
@@ -360,7 +369,7 @@ export function Faq() {
                 {question}
                 <ChevronDown {...ICON} className="size-4 shrink-0 text-muted-foreground group-open:rotate-180 motion-safe:transition-transform" />
               </summary>
-              <p className="max-w-prose pb-5 text-sm/6 text-pretty text-muted-foreground">{answer}</p>
+              <p className="max-w-prose pb-5 text-sm/6 text-pretty text-muted-foreground">{unbroken(answer)}</p>
             </details>
           ))}
         </div>

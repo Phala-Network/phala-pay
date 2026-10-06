@@ -238,9 +238,10 @@ jobs:
           version: "0.12.18"
       - name: Install the locked Python environment
         run: make -C sdk/python sync
+      # The page shows integration snippets that its typecheck compiles against @phala/pay-server.
       - name: Build the SDK packages the page depends on
         working-directory: sdk/js
-        run: pnpm --filter @phala/pay build && pnpm --filter @phala/pay-react build
+        run: pnpm --filter @phala/pay build && pnpm --filter @phala/pay-react build && pnpm --filter @phala/pay-server build
       - name: Install the page's locked dependencies
         working-directory: deploy/product/web
         run: pnpm install --frozen-lockfile

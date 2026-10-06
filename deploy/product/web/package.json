@@ -5,7 +5,7 @@
   "packageManager": "pnpm@12.6.0",
   "scripts": {
     "build": "vite build && vite build --config vite.ssr.config.ts && node scripts/prerender.ts",
-    "build:cloudflare": "(cd ../../../sdk/js && npx -y pnpm@12.6.0 install --frozen-lockfile --ignore-scripts && npx -y pnpm@12.6.0 -r --filter '@phala/pay-react...' run build) && npx -y pnpm@12.6.0 install --frozen-lockfile && npx -y pnpm@12.6.0 run build",
+    "build:cloudflare": "(cd ../../../sdk/js && npx -y pnpm@12.6.0 install --frozen-lockfile --ignore-scripts && npx -y pnpm@12.6.0 -r --filter '@phala/pay-react...' --filter '@phala/pay-server' run build) && npx -y pnpm@12.6.0 install --frozen-lockfile && npx -y pnpm@12.6.0 run build",
     "build:cloudflare:preview": "CLOUDFLARE_PREVIEW_BUILD=true npm run build:cloudflare",
     "deploy": "cf deploy --prebuilt",
     "deploy:preview": "cf previews deploy --prebuilt",
@@ -38,6 +38,7 @@
     "@axe-core/playwright": "^4.13.0",
     "@cloudflare/vite-plugin": "2.0.0-beta.sha-ad79608dd",
     "@eslint/js": "^10.0.1",
+    "@phala/pay-server": "file:../../../sdk/js-server",
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.19.0",

@@ -6,36 +6,6 @@ export const HERO_META = "Pre-1.0 · Not yet audited";
 export const HOME_TITLE = "Phala Pay: self-hosted, non-custodial crypto payments";
 export const HOME_DESCRIPTION = "Open-source payments API for ERC-20 tokens on Ethereum and Base. Deposits can only reach your treasury. No per-payment fee.";
 
-// The hero's integration, as sdk/js-server/README.md and docs/integration.md#quickstart write it: the server
-// creates a quote (amount in US cents) and returns only its checkout params to the signed-in browser,
-// which spreads them into <Checkout>. The account is credited from the signed webhook.
-export const HERO_CODE = [
-  {
-    label: "Your server",
-    file: "top-up.ts",
-    code: `import { PhalaPay } from "@phala/pay-server";
-
-const pay = PhalaPay.fromEnv();
-const quote = await pay.quotes.create({
-  client_reference_id: team.id,
-  amount: 2500, // US cents
-  currency: "usd",
-  chain_id: 8453, // Base
-  asset: "usdc",
-}, { idempotencyKey: order.id });
-return pay.checkoutParams(quote);`,
-  },
-  {
-    label: "Your page",
-    file: "TopUp.tsx",
-    code: `import { Checkout } from "@phala/pay-react";
-import "@phala/pay-react/styles.css";
-
-<Checkout {...checkout} onSuccess={refreshBalance} />`,
-  },
-] as const;
-export const HERO_CODE_NOTE = { before: "Credit the account when the signed ", code: "deposit.credited", after: " webhook arrives." };
-
 export const DEMO_TITLE = "Try it on testnet";
 export const DEMO_LEAD = "Top up a sample product's balance with test tokens on Sepolia or Base Sepolia, and watch its backend follow the payment. No real money moves.";
 

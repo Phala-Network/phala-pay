@@ -1,5 +1,6 @@
 import { Moon, Sun } from "lucide-react";
 import { useSyncExternalStore } from "react";
+import { useHydrated } from "./islands.js";
 
 export type Theme = "light" | "dark";
 
@@ -32,11 +33,13 @@ export const ICON_BUTTON =
 
 /**
  * A toggle for the dark theme. Its icon follows the theme class the head script sets, so it is right
- * before hydration; its pressed state follows the theme store once hydrated.
+ * before hydration. Static HTML cannot know the visitor's theme, so the button states no pressed
+ * state until it hydrates (and works); from then on it follows the theme store.
  */
 export function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }) {
+  const hydrated = useHydrated();
   return (
-    <button type="button" className={ICON_BUTTON} aria-label="Dark theme" aria-pressed={theme === "dark"}
+    <button type="button" className={ICON_BUTTON} aria-label="Dark theme" aria-pressed={hydrated ? theme === "dark" : undefined}
       onClick={() => onChange(theme === "dark" ? "light" : "dark")}>
       <Sun aria-hidden="true" strokeWidth={1.75} className="hidden dark:block" />
       <Moon aria-hidden="true" strokeWidth={1.75} className="dark:hidden" />

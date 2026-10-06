@@ -222,6 +222,9 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))
+      '@phala/pay-server':
+        specifier: file:../../../sdk/js-server
+        version: file:../../../sdk/js-server(typescript@6.0.3)(zod@3.25.76)
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
@@ -996,6 +999,10 @@ packages:
     peerDependencies:
       react: ^18.2.0 || ^19.0.0
       viem: ^2.21.0
+
+  '@phala/pay-server@file:../../../sdk/js-server':
+    resolution: {directory: ../../../sdk/js-server, type: directory}
+    engines: {node: '>=20.3'}
 
   '@phala/pay@file:../../../sdk/js':
     resolution: {directory: ../../../sdk/js, type: directory}
@@ -3687,6 +3694,14 @@ packages:
       typescript:
         optional: true
 
+  viem@2.57.3:
+    resolution: {integrity: sha512-441q6Z42ZU7+mTJrYAjQsBpVWK76nyGQcKOCGT6hp+tBpw1XsnTIgKaqZFLTaW5xmBN1ummEFgzFWmR05FISTg==}
+    peerDependencies:
+      typescript: '>=5.0.4'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   vite@8.3.1:
     resolution: {integrity: sha512-/bvH9E9tmCXRGp2uXY3WbOldqpTwFkbha/8ANaEQ6VkxhH60KyqLwgZq6lG2y+4uT55x9+9eUHMpQ7uGnOCKjA==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -4482,6 +4497,15 @@ snapshots:
       viem: 2.56.9(typescript@6.0.3)(zod@3.25.76)
     transitivePeerDependencies:
       - typescript
+
+  '@phala/pay-server@file:../../../sdk/js-server(typescript@6.0.3)(zod@3.25.76)':
+    dependencies:
+      viem: 2.57.3(typescript@6.0.3)(zod@3.25.76)
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
 
   '@phala/pay@file:../../../sdk/js(typescript@6.0.3)(viem@2.56.9(typescript@6.0.3)(zod@3.25.76))':
     dependencies:
@@ -7197,6 +7221,23 @@ snapshots:
   vary@1.1.2: {}
 
   viem@2.56.9(typescript@6.0.3)(zod@3.25.76):
+    dependencies:
+      '@noble/curves': 1.9.1
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.2.3(typescript@6.0.3)(zod@3.25.76)
+      isows: 1.0.7(ws@8.21.0)
+      ox: 0.14.45(typescript@6.0.3)(zod@3.25.76)
+      ws: 8.21.0
+    optionalDependencies:
+      typescript: 6.0.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+      - zod
+
+  viem@2.57.3(typescript@6.0.3)(zod@3.25.76):
     dependencies:
       '@noble/curves': 1.9.1
       '@noble/hashes': 1.8.0

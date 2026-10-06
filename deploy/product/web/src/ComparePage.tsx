@@ -1,32 +1,9 @@
-import { COMPARE_ACCESSED, competitors, dimensions, phalaPay, sources, type Cell } from "./content/compare.js";
+import { ComparisonCell } from "./ComparisonCell.js";
+import { COMPARE_ACCESSED, competitors, dimensions, phalaPay, sources } from "./content/compare.js";
 import { CONTAINER, H2, LINKS } from "./Site.js";
 
 const vendors = [phalaPay, ...competitors];
 const SECTION = "mt-16 scroll-mt-20";
-
-/** A cell's text, "(partial)" where the vendor states it only in part, and its source's number. */
-export function ComparisonCell({ cell }: { cell: Cell }) {
-  if (cell.status === "not-stated") return <span aria-describedby="not-stated-note">—</span>;
-  const sourceNumber = sources.findIndex(({ url }) => url === cell.source) + 1;
-  return (
-    <>
-      {cell.text}
-      {/* No-break spaces keep the note and the source number on the text's last line. */}
-      {cell.status === "partially" && <span className="text-muted-foreground">{"\u00a0"}(partial)</span>}
-      {sourceNumber > 0 && "\u00a0"}
-      {sourceNumber > 0 && (
-        <sup>
-          {/* Padding widens the target to about 24px without raising the line: an inline box's
-              padding takes clicks but no layout. */}
-          <a href={`#source-${sourceNumber}`} aria-label={`Source ${sourceNumber}`}
-            className="rounded-sm px-1 py-1.5 text-xs text-muted-foreground tabular-nums underline-offset-2 hover:text-foreground hover:underline">
-            {sourceNumber}
-          </a>
-        </sup>
-      )}
-    </>
-  );
-}
 
 /**
  * From md, a table whose first column stays put while the rest scrolls; it needs 64rem, so from
@@ -60,7 +37,7 @@ function ComparisonTable() {
                 </th>
                 {vendors.map((vendor) => (
                   <td key={vendor.id} className={`border-b px-4 py-3 align-top leading-6 ${highlight(vendor.id)}`}>
-                    <ComparisonCell cell={vendor[key]} />
+                    <ComparisonCell cell={vendor[key]} linkSource />
                   </td>
                 ))}
               </tr>
@@ -82,7 +59,7 @@ function ComparisonList() {
             {vendors.map((vendor) => (
               <div key={vendor.id}>
                 <dt className="font-medium">{vendor.name}</dt>
-                <dd className="mt-1 leading-6 text-muted-foreground"><ComparisonCell cell={vendor[key]} /></dd>
+                <dd className="mt-1 leading-6 text-muted-foreground"><ComparisonCell cell={vendor[key]} linkSource /></dd>
               </div>
             ))}
           </dl>
