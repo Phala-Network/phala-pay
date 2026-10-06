@@ -14,6 +14,7 @@ import type {
 import { Detail, Details, Empty, ExplorerLink, InfoTip, Subsection } from "./common.js";
 import { assetOf, networkOf } from "./chains.js";
 import { approx, clock, dollars, duration, rate, short, signedDollars, time, tokens } from "./format.js";
+import { QueryState, type QueryView } from "./queryView.js";
 import { useNetworks } from "./queries.js";
 
 // Each step's title, what it waits for, and the time it usually takes: the hints are expectations,
@@ -84,7 +85,8 @@ const PREVIEW: StepKey[] = ["quote_created", "sent", "received", "credited", "we
  * The payment's steps as a compact live log: one line per step, with its status and its real
  * time; each line opens to what it waits for and its data.
  */
-export function EventStream({ timeline, loading, error }: { timeline: Timeline | null; loading: string | null; error: string | null }) {
+export function EventStream({ timeline: timelineView, loading }: { timeline: QueryView<Timeline>; loading: string | null }) {
+  const timeline = timelineView.data ?? null;
   const networks = useNetworks().data;
   // The payment's own chain and token, for its amounts and links.
   const chainId = timeline?.deposit?.chain_id ?? timeline?.quote?.chain_id;
@@ -112,8 +114,8 @@ export function EventStream({ timeline, loading, error }: { timeline: Timeline |
     );
   }
   if (timeline === null) {
-    if (error !== null) {
-      return <p className="px-2 text-sm text-muted-foreground" role="status">{error}</p>;
+    if (timelineView.error !== null) {
+      return <QueryState view={timelineView} className="px-2 text-sm" />;
     }
     return (
       <ol className="flex flex-col" aria-label={`Loading ${short(loading)}`} aria-busy="true">

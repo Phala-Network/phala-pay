@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { ApiError, isTerminalApiError } from "./api.js";
+import { ApiError } from "./api.js";
 import { networkOf } from "./chains.js";
 import { short } from "./format.js";
 import { useNetworks } from "./queries.js";
@@ -221,18 +221,6 @@ export function describe(error: unknown): string {
     return error.code === "rate_limited" ? "too many requests, try again in a minute" : error.code;
   }
   return "network error";
-}
-
-/** A query failure shown only before there is data; never expose the API's internal error. */
-export function queryErrorMessage(error: unknown, subject: string): string {
-  return isTerminalApiError(error)
-    ? `${subject} unavailable for this request.`
-    : `${subject} unavailable right now; retrying…`;
-}
-
-/** Cached data remains visible when a permanent refusal stops its updates. */
-export function UpdatesPaused() {
-  return <p className="text-xs text-muted-foreground" role="status">Updates paused.</p>;
 }
 
 export function errorMessage(error: unknown, fallback: string): string {

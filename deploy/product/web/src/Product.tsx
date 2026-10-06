@@ -17,7 +17,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
 import { TokenIcon, assetOf, networkOf, tokenFullName } from "./chains.js";
-import { PRIMARY_BUTTON, ExplorerLink, InfoTip, UpdatesPaused, describe, loadSdk } from "./common.js";
+import { PRIMARY_BUTTON, ExplorerLink, InfoTip, describe, loadSdk } from "./common.js";
+import { QueryState, type QueryView } from "./queryView.js";
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
 import { atomicAmount, dollars, percent, presetDollars, rate, signedDollars, tokenName } from "./format.js";
 import { FundWallet, TestTokens, type Need } from "./Funding.js";
@@ -47,12 +48,8 @@ const METHODS: { id: Method; label: string }[] = [
  * Only customer-facing UI belongs here; what the backend sees is in ./Backend.
  */
 export function Product({
-  account,
-  accountError,
-  accountPaused,
-  networks,
-  networksError,
-  networksPaused,
+  account: accountView,
+  networks: networksView,
   method,
   onMethodChange,
   session,
@@ -63,12 +60,8 @@ export function Product({
   onAddress,
   appearance,
 }: {
-  account: Account | null;
-  accountError: string | null;
-  accountPaused: boolean;
-  networks: Network[] | undefined;
-  networksError: string | null;
-  networksPaused: boolean;
+  account: QueryView<Account>;
+  networks: QueryView<Network[]>;
   method: Method;
   onMethodChange: (method: Method) => void;
   session: CreatedQuote | null;
@@ -79,6 +72,8 @@ export function Product({
   onAddress: (created: DepositAddressResponse) => void;
   appearance: Appearance;
 }) {
+  const account = accountView.data ?? null;
+  const networks = networksView.data;
   // The network, then the token, the customer pays with, for either method: the first offered
   // until they choose; a network's first token when they change the network.
   const [choice, setChoice] = useState<{ chainId: number | null; asset: string | null }>({
@@ -99,9 +94,7 @@ export function Product({
   }
   const picker = (
     <PaymentOptions
-      networks={networks}
-      networksError={networksError}
-      networksPaused={networksPaused}
+      networks={networksView}
       network={network}
       asset={asset}
       onNetworkChange={(chainId) => setChoice({ chainId, asset: null })}
@@ -159,21 +152,19 @@ export function Product({
                 data-testid="balance"
               >
                 {account === null
-                  ? accountError === null ? <Skeleton className="h-9 w-32" /> : <span className="text-sm font-normal text-muted-foreground">Unavailable</span>
+                  ? accountView.error === null ? <Skeleton className="h-9 w-32" /> : <span className="text-sm font-normal text-muted-foreground">Unavailable</span>
                   : dollars(account.balance)}
               </div>
-              {accountPaused && <UpdatesPaused />}
+              {accountView.data !== undefined && <QueryState view={accountView} />}
             </div>
           </div>
-          {accountError !== null && (
-            <p className="text-sm text-muted-foreground" role="status">{accountError}</p>
-          )}
+          {accountView.data === undefined && <QueryState view={accountView} className="text-sm" />}
           <Separator />
           <section aria-labelledby="pay-title" className="flex flex-col gap-4">
             <h3 id="pay-title" className="text-base font-semibold">
               Add credits
             </h3>
-            {(account !== null || accountError === null) && (
+            {(account !== null || accountView.error === null) && (
               <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
                 <TabsList aria-label="Payment method" className="w-full">
                   {METHODS.map(({ id, label }) => (
@@ -321,26 +312,23 @@ function CheckoutSkeleton() {
  * the customer sees what they pay with (a test token, on a testnet) before paying.
  */
 function PaymentOptions({
-  networks,
-  networksError,
-  networksPaused,
+  networks: networksView,
   network,
   asset,
   onNetworkChange,
   onAssetChange,
 }: {
-  networks: Network[] | undefined;
-  networksError: string | null;
-  networksPaused: boolean;
+  networks: QueryView<Network[]>;
   network: Network | undefined;
   asset: Asset | undefined;
   onNetworkChange: (chainId: number) => void;
   onAssetChange: (asset: string) => void;
 }) {
   const id = useId();
+  const networks = networksView.data;
   if (networks === undefined) {
-    if (networksError !== null) {
-      return <p className="text-sm text-muted-foreground" role="status">{networksError}</p>;
+    if (networksView.error !== null) {
+      return <QueryState view={networksView} className="text-sm" />;
     }
     return (
       <div className="space-y-6" aria-hidden="true">
@@ -353,7 +341,7 @@ function PaymentOptions({
     return (
       <>
         <p className="text-sm text-muted-foreground">No network accepts payments right now.</p>
-        {networksPaused && <UpdatesPaused />}
+        <QueryState view={networksView} />
       </>
     );
   }
@@ -392,7 +380,7 @@ function PaymentOptions({
           ))}
         </RadioGroup>
       </div>
-      {networksPaused && <UpdatesPaused />}
+      <QueryState view={networksView} />
     </>
   );
 }
