@@ -167,11 +167,12 @@ impl ConfiguredQuoteProvider {
             tokio::select! {
                 () = cancellation.cancelled() => return,
                 _ = tick.tick() => {
+                    let arrived = tokio::time::Instant::now();
                     for route in routes.routes() {
                         if let Some(runtime) = self.runtimes.get(&(route.route.clone(), route.version)) {
                             tokio::select! {
                                 () = cancellation.cancelled() => return,
-                                () = runtime.sample_twaps(route) => {}
+                                () = runtime.sample_twaps(route, arrived) => {}
                             }
                         }
                     }

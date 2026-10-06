@@ -91,16 +91,23 @@ impl SharedSource {
         }
     }
     async fn quote_shared(&self) -> Result<(PriceQuote, Option<u64>), PriceError> {
-        self.quote_with_reuse(self.reuse).await
+        self.quote_with_reuse(self.reuse, tokio::time::Instant::now())
+            .await
     }
     async fn quote_shared_fresh(&self) -> Result<(PriceQuote, Option<u64>), PriceError> {
-        self.quote_with_reuse(Duration::ZERO).await
+        self.quote_shared_since(tokio::time::Instant::now()).await
+    }
+    async fn quote_shared_since(
+        &self,
+        arrived: tokio::time::Instant,
+    ) -> Result<(PriceQuote, Option<u64>), PriceError> {
+        self.quote_with_reuse(Duration::ZERO, arrived).await
     }
     async fn quote_with_reuse(
         &self,
         reuse: Duration,
+        arrived: tokio::time::Instant,
     ) -> Result<(PriceQuote, Option<u64>), PriceError> {
-        let arrived = tokio::time::Instant::now();
         let mut slot = self.slot.lock().await;
         if let Some(cached) = slot.as_ref() {
             let coalesced = cached.completed_at >= arrived;
@@ -340,11 +347,13 @@ impl PricingRuntime {
         })
     }
     /// Accumulate TWAP history even when no merchant requests a quote.
-    pub async fn sample_twaps(&self, route: &RouteFile) {
+    pub async fn sample_twaps(&self, route: &RouteFile, arrived: tokio::time::Instant) {
         for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
             for entry in entries.iter().filter(|e| e.company == "uniswap-v2-onchain") {
                 let mut audit = Audit::default();
-                if let Err(failure) = observe(entry, route, role, &mut audit, false).await {
+                if let Err(failure) =
+                    observe(entry, route, role, &mut audit, true, Some(arrived)).await
+                {
                     price_metrics::failure(route, &failure);
                 }
             }
@@ -479,7 +488,7 @@ impl PricingRuntime {
                     .as_ref()
                     .is_none_or(|asset| asset == &route.asset.symbol)
             }) {
-                let quote = observe(entry, route, "sources", &mut audit, fresh_only).await?;
+                let quote = observe(entry, route, "sources", &mut audit, fresh_only, None).await?;
                 if let Some(quote) = quote {
                     observed.push((
                         quote.valuation,
@@ -620,7 +629,7 @@ async fn first<'a>(
     fresh_only: bool,
 ) -> Result<Option<(&'a Entry, PriceQuote)>, PricingFailure> {
     for (index, entry) in entries.iter().enumerate() {
-        if let Some(observation) = observe(entry, route, role, audit, fresh_only).await? {
+        if let Some(observation) = observe(entry, route, role, audit, fresh_only, None).await? {
             if index > 0 {
                 price_metrics::failover(route, role, entry.source_id, entry.company);
             }
@@ -635,9 +644,12 @@ async fn observe(
     role: &str,
     audit: &mut Audit,
     fresh_only: bool,
+    arrived: Option<tokio::time::Instant>,
 ) -> Result<Option<PriceQuote>, PricingFailure> {
     let result = tokio::time::timeout(Duration::from_secs(30), async {
-        if fresh_only {
+        if let Some(arrived) = arrived {
+            entry.source.quote_shared_since(arrived).await
+        } else if fresh_only {
             entry.source.quote_shared_fresh().await
         } else {
             entry.source.quote_shared().await
@@ -1436,19 +1448,19 @@ mod tests {
                 entry.source = Arc::new(shared(inner.clone()));
                 entry.max_age_s = Some(1);
                 let mut audit = Audit::default();
-                observe(&entry, &route(), "primary", &mut audit, false)
+                observe(&entry, &route(), "primary", &mut audit, false, None)
                     .await
                     .unwrap();
                 assert!(audit.observations[0].get("cached").is_none());
                 tokio::time::advance(Duration::from_millis(500)).await;
-                observe(&entry, &route(), "primary", &mut audit, false)
+                observe(&entry, &route(), "primary", &mut audit, false, None)
                     .await
                     .unwrap();
                 assert_eq!(audit.observations[1]["cached"], json!({"age_ms":500}));
                 GOLDEN_NOW
                     .scope(1002, async {
                         assert!(
-                            observe(&entry, &route(), "primary", &mut audit, false)
+                            observe(&entry, &route(), "primary", &mut audit, false, None)
                                 .await
                                 .unwrap()
                                 .is_none()
@@ -1619,11 +1631,54 @@ mod tests {
         let b = make_runtime();
         let routes = pha_routes();
         for expected in 1..=3 {
-            a.sample_twaps(&routes[0]).await;
-            b.sample_twaps(&routes[1]).await;
+            let arrived = tokio::time::Instant::now();
+            a.sample_twaps(&routes[0], arrived).await;
+            b.sample_twaps(&routes[1], arrived).await;
             assert_eq!(inner.calls(), expected);
             tokio::time::advance(Duration::from_secs(60)).await;
         }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn sampler_does_not_reuse_a_quote_completed_before_the_tick() {
+        struct SampledSource {
+            last_recorded: tokio::sync::Mutex<tokio::time::Instant>,
+            calls: std::sync::atomic::AtomicUsize,
+            records: std::sync::atomic::AtomicUsize,
+        }
+        #[async_trait]
+        impl PriceSource for SampledSource {
+            async fn observe(&self) -> Result<Observation, PriceError> {
+                use std::sync::atomic::Ordering;
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let mut recorded = self.last_recorded.lock().await;
+                if recorded.elapsed() >= Duration::from_secs(60) {
+                    *recorded = tokio::time::Instant::now();
+                    self.records.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(Observation {
+                    source: SourceId::new("sampled"),
+                    price: ScaledPrice::new(10_000_000, 8).unwrap(),
+                    observed_at: validation_time().unwrap(),
+                })
+            }
+        }
+        let inner = Arc::new(SampledSource {
+            last_recorded: tokio::sync::Mutex::new(tokio::time::Instant::now()),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            records: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut runtime = runtime();
+        runtime.primary[0].source = Arc::new(shared(inner.clone()));
+        runtime.primary[0].company = "uniswap-v2-onchain";
+        tokio::time::advance(Duration::from_secs(59)).await;
+        runtime.fetch(&route()).await.unwrap();
+        assert_eq!(inner.records.load(std::sync::atomic::Ordering::SeqCst), 0);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        runtime
+            .sample_twaps(&route(), tokio::time::Instant::now())
+            .await;
+        assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(inner.records.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
     #[tokio::test(start_paused = true)]
     async fn quote_pricing_budget_maps_to_pricing_unavailable() {
