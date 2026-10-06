@@ -1,7 +1,7 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { defineConfig } from "vite";
 import { ROOT_MARKER } from "./src/content/template.ts";
 import { renderPage } from "./scripts/prerender-page.ts";
@@ -20,7 +20,7 @@ export default defineConfig({
     async transformIndexHtml(html, context) {
       if (context.server === undefined) return html;
       const { render } = await context.server.ssrLoadModule("/src/entry-server.tsx") as typeof import("./src/entry-server.js");
-      const page = context.filename === resolve(import.meta.dirname, "compare.html") ? "compare" : "home";
+      const page = basename(context.filename) === "compare.html" ? "compare" : "home";
       return renderPage(html, render(page), ROOT_MARKER);
     },
   }],
