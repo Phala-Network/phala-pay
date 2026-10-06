@@ -401,11 +401,6 @@ async fn issuable_chains(
         return Err(ApiError::paused("new addresses are paused"));
     }
     let mut connection = state.pool.acquire().await?;
-    if payment_config::recording_held(&mut connection).await? {
-        return Err(ApiError::paused(
-            "recording is held for the operator's cutover; retry later",
-        ));
-    }
     let scope = Scope::new(account.id, customer.livemode);
     let effective = payment_config::load_effective(&mut connection, &state.routes, scope).await?;
     drop(connection);

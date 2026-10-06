@@ -950,7 +950,7 @@ when the service or host itself is down.
    observability files. Expand the CVM disk/filesystem before headroom is exhausted; estimate
    time to full using WAL growth as well as table growth. Verify actual expansion and new samples.
 2. At critical, escalate immediately. If expansion cannot complete safely, use the established
-   maintenance/recording hold and stop API writes and workers in a controlled incident procedure.
+   instance maintenance pause and stop API writes and workers in a controlled incident procedure.
    Preserve DB and backup continuity. Inspect PostgreSQL archiver errors, credentials, object-store
    availability and backup lag; restore archiving before resuming writes.
 3. Never delete undelivered events, financial/audit records, `pg_wal` files, `.ready` markers or

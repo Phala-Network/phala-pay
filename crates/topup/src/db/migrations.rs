@@ -93,7 +93,7 @@ pub(crate) async fn locked_connection(
     pool: &PgPool,
 ) -> Result<PoolConnection<Postgres>, MigrateError> {
     let mut connection = pool.acquire().await?;
-    // Retain the repository's migration lock through the cutover and concurrent index phases.
+    // Retain the repository's migration lock through schema and concurrent index migrations.
     // Cancellation closes the session rather than returning a migration lock to the pool.
     connection.close_on_drop();
     // A blocking pg_advisory_lock query holds an old snapshot that concurrent expression-index

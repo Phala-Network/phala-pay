@@ -17,10 +17,10 @@ const ALLOWED_RPO_SECONDS: i32 = RPO_SECONDS;
 /// Source-side failure point recorded outside the PostgreSQL volume being restored.
 #[derive(Clone, Debug)]
 pub struct RestoreExpectations {
-    /// Externally recorded failure instant (legacy field name). `None` when
+    /// Externally recorded failure instant. `None` when
     /// the check runs at boot without one: the report then leaves the RPO comparison against the
     /// operator's external anchor to the operator (`rpo_basis` `unanchored`).
-    pub expected_heartbeat_at: Option<DateTime<Utc>>,
+    pub failure_at: Option<DateTime<Utc>>,
     /// Source WAL location logged with that heartbeat; `None` is a declared incident exception.
     pub expected_lsn: Option<String>,
 }
@@ -51,8 +51,8 @@ pub struct RestoreReport {
     /// on the heartbeat timestamp alone, or `unanchored` when no source heartbeat was supplied and
     /// the operator compares `restored_heartbeat_at` with their own external anchor.
     pub rpo_basis: &'static str,
-    /// Externally recorded last committed source heartbeat, when one was supplied.
-    pub expected_heartbeat_at: Option<DateTime<Utc>>,
+    /// Externally recorded failure instant, when one was supplied.
+    pub failure_at: Option<DateTime<Utc>>,
     /// Newest heartbeat present after restore.
     pub restored_heartbeat_at: DateTime<Utc>,
     /// Age of the newest restored committed heartbeat at the recorded failure instant.
@@ -140,9 +140,9 @@ pub async fn check(
     let restored_heartbeat_at: DateTime<Utc> = heartbeat
         .try_get("recorded_at")
         .map_err(|_| "restore heartbeat timestamp is invalid".to_owned())?;
-    let measured_rpo_seconds = expectations.expected_heartbeat_at.map(|expected| {
+    let measured_rpo_seconds = expectations.failure_at.map(|failure| {
         // Round upward so a loss of 60.1 seconds cannot pass a 60-second target.
-        (expected
+        (failure
             .signed_duration_since(restored_heartbeat_at)
             .num_milliseconds()
             .max(0)
@@ -212,15 +212,12 @@ pub async fn check(
         latest_applied_lsn,
         expected_lsn,
         wal_bytes_behind,
-        rpo_basis: match (
-            expectations.expected_heartbeat_at,
-            &expectations.expected_lsn,
-        ) {
+        rpo_basis: match (expectations.failure_at, &expectations.expected_lsn) {
             (None, _) => "unanchored",
             (Some(_), Some(_)) => "heartbeat_and_lsn",
             (Some(_), None) => "heartbeat_only",
         },
-        expected_heartbeat_at: expectations.expected_heartbeat_at,
+        failure_at: expectations.failure_at,
         restored_heartbeat_at,
         measured_rpo_seconds,
         allowed_rpo_seconds: ALLOWED_RPO_SECONDS,

@@ -294,7 +294,7 @@ payment_settings_state  account_id, livemode, status (unconfigured|configured|he
               current_revision_id, held_by (restore id)    PRIMARY KEY (account_id, livemode)
               -- one per account and mode, created with the account (unconfigured)
 payment_settings_cutover  confirmation_policies jsonb, backfilled_at, recording_resumed_at, …
-              -- the 0.6.0 cutover: the backfill and the recording hold (§14)
+              -- historical 0.6.0 cutover state; startup requires completion (§14)
 deposit_addresses  id (da_ + hex), account_id, livemode, customer_id, version,
               status (active|retired), created_at, retired_at, metadata jsonb
               -- one active per customer; versions count from 1 (§9)
@@ -509,8 +509,8 @@ block floor and id; nonfinal reorg replay uses a partial index on chain, epoch a
 expression. Completed evidence stays in the tables but leaves the queue indexes. Concurrent
 migrations replace the older review index after the new one is valid. Normal Deploy retries verify
 and rebuild only matching invalid indexes owned by the pending queue migrations; completed
-unrecorded builds keep their index after exact-definition verification. The payment-settings
-cutover transaction commits before concurrent index work starts. See the
+unrecorded builds keep their index after exact-definition verification. SQLx applies each
+migration with its declared transaction behavior, including concurrent index work. See the
 [query-plan evidence](design/db-api-query-plans.md) for the representative workload and SQLx
 migration behavior.
 
@@ -1159,7 +1159,6 @@ POST   /v1/admin/restore/quotes {account, livemode, id, client_reference_id, cha
 POST   /v1/admin/restore/events {deliveries, reason}   import signed deliveries of deposit events as delivered; their credit stands, a reversed deposit is rebuilt
 POST   /v1/admin/restore/delivered_credits/discard {deposit, reason}   release a deposit whose transfer contradicts its delivered event
 POST   /v1/admin/restore/unfreeze {reason, checklist}   once every chain is rescanned; audited
-POST   /v1/admin/recording/resume {reason}   lifts the 0.6.0 cutover's recording hold (§14)
 ```
 
 **Metadata.** Quotes, deposits, and refunds carry Stripe's
@@ -1683,21 +1682,12 @@ malicious upgrade could cause downtime, read service data, or sign credits no de
 to whatever caps the merchant keeps (§3, §11), but not move funds; the attested compose hash makes
 it detectable.
 
-**The 0.6.0 payment settings cutover** (design payment-settings §10). On an instance with issued
-addresses, `topup migrate --config FILE` (the compose's `migrate` service mounts the attested
-configuration, loaded and validated before anything is migrated) runs a one-time backfill in
-one transaction with the schema change, so a failure leaves the 0.5.0 schema: every account and
-mode gets a `legacy` revision that writes out the 0.5.0 model (every route of the mode accepted at
-its route values, with the account's former confirmation policies), every existing deposit is
-bound to it, and every quote, whatever its status, gets the terms it resolves on its route's
-version in the configuration; then the binding constraints are validated, and recording is held.
-`topup run` refuses to start until the backfill has run. While held, the API serves, issuance
-answers `400 paused`, and no scanner, finality watch, reconciler, or pump runs. The operator has
-each authorized account configured (`POST /v1/payment_settings`, carrying the stricter
-confirmations of its `legacy` revision, `payment_settings.legacy` in `GET
-/v1/admin/accounts/{acct}`), verifies the effective config there, and lifts the hold with `POST /v1/admin/recording/resume`; the
-recorders start from their cursors. A new instance has nothing to bind, so its cutover is complete
-at once.
+**Payment settings upgrades.** An instance whose historical payment-settings cutover is
+incomplete refuses to start with `payment settings cutover is incomplete; upgrade through 0.9.x
+first`. Complete the cutover on 0.9.x before upgrading. New databases complete it in the existing
+migration SQL, and recording starts immediately. Historical `legacy` revisions remain immutable
+and continue to govern the deposits and quotes bound to them.
+
 `GET /v1/attestation?nonce=`, authenticated with an API key, returns the key's account's webhook
 keys in the key's mode (current first, then any rolled key still signing; each `public_key` in
 Standard Webhooks' `whpk_` form, the base64 of the 32 raw bytes `report_data` binds) and the dstack

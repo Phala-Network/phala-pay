@@ -18,11 +18,11 @@ use super::auth::AdminActor;
 use super::error::{ApiError, ErrorResponse};
 use super::extract::{ApiJson, ApiPath};
 use super::models::{
-    AccountLegacyPaymentSettings, AccountLimits, AccountPauseRequest, AccountPaymentSettings,
-    AccountResponse, AdminReasonRequest, AdminTreasuryPauseRequest, ApiKeyObject, Contact,
-    CreateAccountRequest, CustomerPauseRequest, DailyReportResponse, Deposit, IssueApiKeyRequest,
-    NudgeResponse, PauseRequest, PauseResponse, ReconciliationBlockLiftResponse,
-    RoutePauseResponse, Treasury, UpdateAccountRequest,
+    AccountLimits, AccountPauseRequest, AccountPaymentSettings, AccountResponse,
+    AdminReasonRequest, AdminTreasuryPauseRequest, ApiKeyObject, Contact, CreateAccountRequest,
+    CustomerPauseRequest, DailyReportResponse, Deposit, IssueApiKeyRequest, NudgeResponse,
+    PauseRequest, PauseResponse, ReconciliationBlockLiftResponse, RoutePauseResponse, Treasury,
+    UpdateAccountRequest,
 };
 use super::repository::{self, IssuedAccount};
 
@@ -722,18 +722,6 @@ async fn account_response(state: &AppState, issued: IssuedAccount) -> ApiResult<
             Scope::new(account.id, true),
         )
         .await?,
-        legacy: AccountLegacyPaymentSettings {
-            live: super::payment_settings::legacy_object(
-                &mut connection,
-                Scope::new(account.id, true),
-            )
-            .await?,
-            test: super::payment_settings::legacy_object(
-                &mut connection,
-                Scope::new(account.id, false),
-            )
-            .await?,
-        },
     };
     Ok(AccountResponse {
         id: account.public_id,

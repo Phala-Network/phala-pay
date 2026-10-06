@@ -153,7 +153,7 @@ single route files (`examples/`, the sandbox template).
 | Command | Config and flags |
 |---|---|
 | `topup run` | `--config FILE [--bind] [--webhook-proxy URL] [--read-only [--public-origin URL] [--restore-report FILE]]`; `--public-origin` and `--restore-report` require `--read-only` |
-| `topup restore-check` | `--config FILE [--report FILE] [--expected-heartbeat-at … [--expected-lsn …]]` |
+| `topup restore-check` | `--config FILE [--report FILE] [--failure-at … [--expected-lsn …]]` |
 | `topup reconcile` | `--config FILE` |
 | `topup config check`, `config show` | `FILE [--secrets]` (`check` only) |
 | `topup migrate`, `restore-check` | `DATABASE_URL`, refused unless the login owns the database (or is a superuser) |

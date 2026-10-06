@@ -747,9 +747,6 @@ pub(super) fn map_error(error: RateLockError) -> ApiError {
         RateLockError::TreasuryNotSet => ApiError::treasury_not_set(),
         RateLockError::AssetNotAccepted => ApiError::asset_not_accepted(Some("asset")),
         RateLockError::SettingsUnconfirmed => ApiError::payment_settings_unconfirmed(),
-        RateLockError::RecordingHeld => {
-            ApiError::paused("recording is held for the operator's cutover; retry later")
-        }
         RateLockError::SettingsChanged => ApiError::database_busy(),
         error @ (RateLockError::ExposureCap { .. } | RateLockError::QuoteCountCap(_)) => {
             ApiError::exposure_cap(error.to_string())

@@ -1,38 +1,6 @@
 {
   "components": {
     "schemas": {
-      "AccountLegacyPaymentSettings": {
-        "description": "An account's `legacy` revision in each mode; `null` for an account created after the cutover.",
-        "properties": {
-          "live": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/LegacyPaymentSettings",
-                "description": "Live mode's."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "test": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/LegacyPaymentSettings",
-                "description": "Test mode's."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "live",
-          "test"
-        ],
-        "type": "object"
-      },
       "AccountLimits": {
         "description": "An account's effective caps in each mode: the operator's values over the defaults.",
         "properties": {
@@ -83,10 +51,6 @@
       "AccountPaymentSettings": {
         "description": "An account's payment settings in each mode, as the operator sees them.",
         "properties": {
-          "legacy": {
-            "$ref": "#/components/schemas/AccountLegacyPaymentSettings",
-            "description": "The 0.5.0 model the 0.6.0 cutover bound the account's earlier deposits and quotes to, in\neach mode (docs/design/payment-settings.md §10). Its chains' `confirmations` are the\naccount's former confirmation policies, to carry into its payment settings."
-          },
           "live": {
             "$ref": "#/components/schemas/PaymentSettingsObject",
             "description": "Live mode's."
@@ -98,8 +62,7 @@
         },
         "required": [
           "live",
-          "test",
-          "legacy"
+          "test"
         ],
         "type": "object"
       },
@@ -153,10 +116,6 @@
           "object": "account",
           "paused_scopes": [],
           "payment_settings": {
-            "legacy": {
-              "live": null,
-              "test": null
-            },
             "live": {
               "available": [
                 {
@@ -2229,27 +2188,6 @@
         ],
         "type": "object"
       },
-      "LegacyPaymentSettings": {
-        "description": "A `legacy` revision: never current, it governs only what the cutover bound to it.",
-        "properties": {
-          "chains": {
-            "description": "Every route of the mode accepted at its 0.5.0 values, with the former confirmation\npolicies.",
-            "items": {
-              "$ref": "#/components/schemas/PaymentSettingsChain"
-            },
-            "type": "array"
-          },
-          "revision": {
-            "description": "The revision, `psrev_…`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "revision",
-          "chains"
-        ],
-        "type": "object"
-      },
       "Limits": {
         "description": "The caps of one account in one mode.",
         "properties": {
@@ -3087,31 +3025,6 @@
         "required": [
           "at",
           "failed_checks"
-        ],
-        "type": "object"
-      },
-      "RecordingObject": {
-        "description": "Whether recording is held for the 0.6.0 cutover.",
-        "example": {
-          "held": false,
-          "object": "recording"
-        },
-        "properties": {
-          "held": {
-            "description": "Whether recording is held.",
-            "type": "boolean"
-          },
-          "object": {
-            "description": "Always `recording`.",
-            "enum": [
-              "recording"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "object",
-          "held"
         ],
         "type": "object"
       },
@@ -7463,180 +7376,6 @@
             "http_message_signature": []
           }
         ],
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/v1/admin/recording/resume": {
-      "post": {
-        "operationId": "resume_recording",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AdminReasonRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RecordingObject"
-                }
-              }
-            },
-            "description": "OK: recording runs, whether it was held or not",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad Request",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Unauthorized",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "`idempotency_key_in_use`: a request with this `Idempotency-Key` is still running; retry with the same key",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "`unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Optional: minimum seconds to wait before retrying; sent for database admission failures and service_restoring, and may be absent for other unavailable errors",
-                "required": false,
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "http_message_signature": []
-          }
-        ],
-        "summary": "Lifts the 0.6.0 cutover's recording hold (docs/design/payment-settings.md §10), once every\nauthorized account is configured and its effective config verified: the scanners, finality\nwatch, reconciler, and pumps start within seconds, from their cursors. Audited.",
         "tags": [
           "admin"
         ]

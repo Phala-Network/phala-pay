@@ -19,7 +19,7 @@ is in [design/deploy-config.md](design/deploy-config.md).
 | Command | Purpose |
 |---|---|
 | `topup run --config FILE` | The service: the HTTP API and every worker loop. |
-| `topup migrate [--config FILE]` | Applies migrations as the database owner. `--config` also binds existing deposits and quotes during the payment settings cutover. |
+| `topup migrate` | Applies migrations as the database owner. Incomplete payment settings cutovers must be completed on 0.9.x before upgrading. |
 | `topup config check [--secrets] FILE`, `topup config show FILE` | Validates a configuration file without any secret; prints it resolved, as JSON with every route default written out and each keyed provider's URL still carrying its `{key}`. `--secrets` also checks each provider's sealed key (`TOPUP_RPC_<ID>_KEY`) against its URL and prints no value. |
 | `topup route validate FILE`, `topup route show FILE` | The same for one route file (`examples/`, the sandbox template). `--template` permits the zero factory and implementation placeholders of a deployment template. |
 | `topup rpc check --config FILE` | Probes RPC members with their sealed credentials; prints validated member ids. |

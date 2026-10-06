@@ -143,6 +143,7 @@ fn restore_check_reports_failures() {
         .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
         .args(["restore-check", "--config", config.path(), "--report"])
         .arg(&report)
+        .args(["--failure-at", "2026-10-06T00:00:00Z"])
         .env_remove("DATABASE_URL")
         .output()
         .expect("topup process should start");
@@ -159,7 +160,7 @@ fn restore_check_reports_failures() {
 }
 
 #[test]
-fn restore_check_needs_a_heartbeat_anchor_for_an_lsn() {
+fn restore_check_needs_a_failure_instant_for_an_lsn() {
     let output = topup(&[
         "restore-check",
         "--expected-lsn",
@@ -168,7 +169,7 @@ fn restore_check_needs_a_heartbeat_anchor_for_an_lsn() {
         "unused.yaml",
     ]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--expected-heartbeat-at"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--failure-at"));
 }
 
 /// `config check` and `config show` need no secret; `--secrets` checks each key against its URL

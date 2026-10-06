@@ -255,9 +255,6 @@ pub enum RateLockError {
     /// The account's payment settings are held after a restore until it reconfirms them.
     #[error("the account's payment settings await reconfirmation")]
     SettingsUnconfirmed,
-    /// Recording is held for the cutover, so a payment would not be seen.
-    #[error("recording is held")]
-    RecordingHeld,
     /// The account's payment settings changed between pricing and creation; retry.
     #[error("the account's payment settings changed")]
     SettingsChanged,
@@ -382,9 +379,6 @@ pub async fn price(
     }
     let scope = Scope::new(account.id, customer.livemode);
     let mut connection = pool.acquire().await?;
-    if payment_config::recording_held(&mut connection).await? {
-        return Err(RateLockError::RecordingHeld);
-    }
     // The account's terms on the route (docs/design/payment-settings.md §6); `create_in` checks
     // that the revision is still current when it creates the quote.
     let settings = payment_config::load(&mut connection, scope).await?;

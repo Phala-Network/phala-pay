@@ -114,6 +114,238 @@ async fn run_refuses_to_start_when_the_contracts_differ_from_the_route_or_build(
     Ok(())
 }
 
+/// Both service modes reject a cutover that must still be completed by 0.9.x.
+#[tokio::test]
+async fn run_refuses_an_incomplete_payment_settings_cutover() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            sqlx::query("UPDATE payment_settings_cutover SET recording_resumed_at = NULL")
+                .execute(&database.owner_pool)
+                .await?;
+            let route = FIXTURE.lines().map(|line| format!("    {line}")).collect::<Vec<_>>().join("\n");
+            let config = format!(
+                "environment: staging\npublic_origin: http://127.0.0.1:8080\nadmin_key:\n  id: admin/v1\n  \
+                 public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n{rpc}\nroutes:\n  -\n{route}\n",
+                rpc = include_str!("fixtures/rpc-groups.yaml")
+            );
+            // backfilled_at remains set: completing the backfill alone is insufficient.
+            for read_only in [false, true] {
+                let mut service = StartupService::start(
+                    &config,
+                    &database.app_url,
+                    None,
+                    read_only,
+                    Some("test-sealed-0123456789"),
+                )?;
+                let status = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+                    loop {
+                        if let Some(status) = service.child.try_wait()? {
+                            return anyhow::Ok(status);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .context("incomplete cutover did not refuse startup")??;
+                let logs = service.logs()?;
+                ensure!(!status.success(), "{logs}");
+                ensure!(logs.contains("payment settings cutover is incomplete; upgrade through 0.9.x first"), "{logs}");
+                ensure!(!logs.contains("deposit pump started"), "{logs}");
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+/// A migrated database starts the pumps and advances its scanner without an operator action.
+#[tokio::test]
+async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let Some(anvil) = Anvil::start_if_available(&[]).await? else {
+                return Ok(());
+            };
+            let factory = forge_create(
+                &anvil.rpc_url,
+                "src/ForwarderFactory.sol:ForwarderFactory",
+                &[],
+            )?;
+            let token = forge_create(&anvil.rpc_url, "test/mocks/MockTokens.sol:MockERC20", &[])?;
+            let oracle = forge_create(
+                &anvil.rpc_url,
+                "test/mocks/MockSanctionsOracle.sol:MockSanctionsOracle",
+                &[],
+            )?;
+            cast(&["rpc", "anvil_mine", "0x80", "--rpc-url", &anvil.rpc_url])?;
+            let config = config_yaml(&anvil, factory, TREASURY)
+                .replace("chain_id: 1", "chain_id: 31337")
+                .replace("livemode: true", "livemode: false")
+                .replace(
+                    "0x6c5bA91642F10282b576d91922Ae6448C9d52f4E",
+                    &format!("{token:#x}"),
+                )
+                .replace(
+                    "0x40C57923924B5c5c5455c48D93317139ADDaC8fb",
+                    &format!("{oracle:#x}"),
+                );
+            // The guest-agent stub uses the same documented /GetKey contract as dstack_domains.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let endpoint = format!("http://{}", listener.local_addr()?);
+            let guest = axum::Router::new().route(
+                "/GetKey",
+                axum::routing::post(|| async {
+                    axum::Json(
+                        serde_json::json!({"key": hex::encode([1; 32]), "signature_chain": []}),
+                    )
+                }),
+            );
+            let guest_task = tokio::spawn(async move { axum::serve(listener, guest).await });
+            let result = async {
+                let mut service = StartupService::start(
+                    &config,
+                    &database.app_url,
+                    Some(&endpoint),
+                    false,
+                    None,
+                )?;
+                tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    loop {
+                        let logs = service.logs()?;
+                        ensure!(
+                            service.child.try_wait()?.is_none(),
+                            "service exited: {logs}"
+                        );
+                        if logs.contains("deposit pump started") {
+                            return anyhow::Ok(());
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .with_context(|| {
+                    format!(
+                        "recording did not start: {}",
+                        service.logs().unwrap_or_default()
+                    )
+                })??;
+                let before: i64 =
+                    sqlx::query_scalar("SELECT scanned_block FROM cursors WHERE chain_id = 31337")
+                        .fetch_one(&database.app_pool)
+                        .await?;
+                cast(&["rpc", "anvil_mine", "0x80", "--rpc-url", &anvil.rpc_url])?;
+                tokio::time::timeout(std::time::Duration::from_secs(20), async {
+                    loop {
+                        let scanned: i64 = sqlx::query_scalar(
+                            "SELECT scanned_block FROM cursors WHERE chain_id = 31337",
+                        )
+                        .fetch_one(&database.app_pool)
+                        .await?;
+                        if scanned > before {
+                            return anyhow::Ok(());
+                        }
+                        ensure!(
+                            service.child.try_wait()?.is_none(),
+                            "service exited: {}",
+                            service.logs()?
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .with_context(|| {
+                    format!(
+                        "scanner did not advance: {}",
+                        service.logs().unwrap_or_default()
+                    )
+                })??;
+                Ok(())
+            }
+            .await;
+            guest_task.abort();
+            let _ = guest_task.await;
+            result
+        })
+    })
+    .await
+}
+
+/// Owns one service process and its temporary files, including cleanup on assertion failure.
+struct StartupService {
+    child: std::process::Child,
+    config: std::path::PathBuf,
+    log: std::path::PathBuf,
+}
+
+impl StartupService {
+    fn start(
+        config: &str,
+        database_url: &str,
+        endpoint: Option<&str>,
+        read_only: bool,
+        rpc_key: Option<&str>,
+    ) -> Result<Self> {
+        let prefix = std::env::temp_dir().join(format!("topup-startup-{}", uuid::Uuid::new_v4()));
+        let config_path = prefix.with_extension("yaml");
+        let log = prefix.with_extension("log");
+        let result = (|| {
+            std::fs::write(&config_path, config)?;
+            let output = std::fs::File::create(&log)?;
+            let mut command = Command::new(env!("CARGO_BIN_EXE_topup"));
+            command
+                .args(["run", "--config"])
+                .arg(&config_path)
+                .args([
+                    "--bind",
+                    "127.0.0.1:0",
+                    "--head-poll-interval-s",
+                    "1",
+                    "--finalized-poll-interval-s",
+                    "1",
+                ])
+                .env_clear()
+                .env("DATABASE_URL", database_url)
+                .stdout(output.try_clone()?)
+                .stderr(output);
+            if read_only {
+                command.arg("--read-only");
+            }
+            if let Some(endpoint) = endpoint {
+                command.env("DSTACK_SIMULATOR_ENDPOINT", endpoint);
+            }
+            if let Some(key) = rpc_key {
+                command.env("TOPUP_RPC_ALCHEMY_KEY", key);
+            }
+            command.spawn().context("start service")
+        })();
+        match result {
+            Ok(child) => Ok(Self {
+                child,
+                config: config_path,
+                log,
+            }),
+            Err(error) => {
+                let _ = std::fs::remove_file(config_path);
+                let _ = std::fs::remove_file(log);
+                Err(error)
+            }
+        }
+    }
+
+    fn logs(&self) -> Result<String> {
+        std::fs::read_to_string(&self.log).context("read startup logs")
+    }
+}
+
+impl Drop for StartupService {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.config);
+        let _ = std::fs::remove_file(&self.log);
+    }
+}
+
 fn route_set(route: &RouteFile) -> Result<topup::routes::RouteSet> {
     topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)
 }

@@ -195,7 +195,6 @@ pub(super) fn schema(name: &str) -> Option<Value> {
                 "assets": [{"asset": "PHA", "quote_spread_bps": 100}, {"asset": "USDT"}],
             }],
         }),
-        "RecordingObject" => json!({"object": "recording", "held": false}),
         "AccountSelfPauseRequest" => json!({"scopes": ["quotes"]}),
         "RollWebhookKeyRequest" => json!({"expires_in": 172_800}),
         "AttestationResponse" => json!({
@@ -292,8 +291,6 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "payment_settings": {
                 "live": unconfigured_settings(true),
                 "test": payment_settings(),
-                // An account created after the 0.6.0 cutover has no `legacy` revision.
-                "legacy": {"live": null, "test": null},
             },
             "created": CREATED - 2_592_000,
             "api_keys": [first_key()],

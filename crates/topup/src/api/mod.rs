@@ -441,7 +441,6 @@ fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(restore::import_events))
         .routes(routes!(restore::discard_delivered_credit))
         .routes(routes!(restore::unfreeze))
-        .routes(routes!(payment_settings::resume_recording))
 }
 
 /// utoipa's merchant and admin documents, before [`openapi`] finishes them.

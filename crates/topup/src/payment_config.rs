@@ -16,18 +16,16 @@
 //! `FOR UPDATE`, so a hold lift binds every deposit recorded while held.
 
 use std::collections::BTreeMap;
-use std::str::FromStr;
 
 use alloy_primitives::Address;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{Connection as _, PgConnection, PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use topup_core::money::{AtomicAmount, Bps};
 use topup_core::route::{Confirmations, RouteFile};
 use topup_core::screening::Bounds;
 use uuid::Uuid;
 
-use crate::audit::Actor;
 use crate::routes::RouteSet;
 use crate::tenancy::Scope;
 
@@ -436,25 +434,6 @@ pub async fn load_for_share(
     scope: Scope,
 ) -> Result<Settings, sqlx::Error> {
     read_settings(connection, scope, "FOR SHARE").await
-}
-
-/// The scope's `legacy` revision, the 0.5.0 model the cutover bound its earlier deposits and
-/// quotes to (design §10): its id and document, or `None` for an account created after it.
-pub async fn legacy(
-    connection: &mut PgConnection,
-    scope: Scope,
-) -> Result<Option<(Uuid, Document)>, sqlx::Error> {
-    let row: Option<(Uuid, serde_json::Value)> = sqlx::query_as(
-        "SELECT id, document FROM payment_settings_revisions \
-         WHERE account_id = $1 AND livemode = $2 AND kind = 'legacy' \
-         ORDER BY created_at, id LIMIT 1",
-    )
-    .bind(scope.account_id())
-    .bind(scope.livemode())
-    .fetch_optional(connection)
-    .await?;
-    row.map(|(id, document)| Ok((id, parse_document(document)?)))
-        .transpose()
 }
 
 /// The barrier every recorder of a deposit takes before its insert (design §7): the state row of
@@ -878,282 +857,13 @@ pub async fn report_invalid(pool: &PgPool, routes: &RouteSet) -> Result<(), sqlx
     Ok(())
 }
 
-/// Whether recording is held for the 0.6.0 cutover (design §10): no scanner, finality watch,
-/// reconciler, or pump runs, and issuance answers `paused`, until the operator resumes it.
-pub async fn recording_held(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT recording_resumed_at IS NULL FROM payment_settings_cutover")
-        .fetch_one(connection)
-        .await
-}
-
-/// Whether the cutover backfill has run.
-pub async fn backfilled(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT backfilled_at IS NOT NULL FROM payment_settings_cutover")
-        .fetch_one(connection)
-        .await
-}
-
-/// Resumes recording after the cutover; `false` when it was not held. Audited.
-pub async fn resume_recording(
-    pool: &PgPool,
-    actor: &Actor,
-    reason: &str,
-) -> Result<bool, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    let resumed = sqlx::query(
-        "UPDATE payment_settings_cutover \
-         SET recording_resumed_at = now(), resumed_by = $1, resume_reason = $2 \
-         WHERE recording_resumed_at IS NULL AND backfilled_at IS NOT NULL",
+/// Whether an existing payment-settings cutover still requires an upgrade through 0.9.x.
+pub async fn cutover_incomplete(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM payment_settings_cutover WHERE recording_resumed_at IS NULL)",
     )
-    .bind(actor.to_string())
-    .bind(reason)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected()
-        > 0;
-    if resumed {
-        crate::audit::insert(
-            &mut *transaction,
-            &crate::audit::Entry {
-                account_id: None,
-                actor,
-                action: "recording.resume",
-                subject: "recording",
-                reason,
-            },
-        )
-        .await?;
-    }
-    transaction.commit().await?;
-    Ok(resumed)
-}
-
-/// Why the cutover backfill failed.
-#[derive(Debug, thiserror::Error)]
-pub enum BackfillError {
-    /// A quote names a route the configuration does not load.
-    #[error(
-        "quotes of route `{0}` exist, but the configuration has no current version of it; keep \
-         every quoted route in the configuration through the cutover"
-    )]
-    RouteMissing(String),
-    /// The 0.5.0 model's terms of a route are not usable.
-    #[error("route `{route}`: {reason}")]
-    InvalidTerms {
-        /// The route.
-        route: String,
-        /// Why.
-        reason: &'static str,
-    },
-    /// A stored row is invalid.
-    #[error("{0}")]
-    Invalid(String),
-    /// The instance has rows to bind, and no configuration was given to bind them with.
-    #[error(
-        "the 0.6.0 payment settings cutover must bind the existing deposits and quotes: run \
-         `topup migrate --config FILE` with the service configuration"
-    )]
-    ConfigRequired,
-    /// A migration failed.
-    #[error("{0}")]
-    Migrate(#[from] sqlx::migrate::MigrateError),
-    /// PostgreSQL failed.
-    #[error("{0}")]
-    Database(#[from] sqlx::Error),
-}
-
-/// What the backfill did.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Backfill {
-    /// Accounts and modes given a `legacy` revision.
-    pub legacy_revisions: u64,
-    /// Deposits bound to one.
-    pub deposits: u64,
-    /// Quotes given terms.
-    pub quotes: u64,
-}
-
-/// Applies the 0.6.0 cutover schema and its backfill atomically as the database owner, then
-/// applies later migrations through SQLx on a connection outside that transaction. Concurrent
-/// index migrations cannot run in the cutover's outer transaction. `None` when already backfilled.
-pub async fn migrate(
-    pool: &PgPool,
-    routes: Option<&RouteSet>,
-) -> Result<Option<Backfill>, BackfillError> {
-    let mut connection = crate::db::migrations::locked_connection(pool).await?;
-    let result = async {
-        let mut transaction = connection.begin().await?;
-        // Keep the cutover's transaction lock while the same named session lock covers the whole run.
-        sqlx::query(
-            "SELECT pg_advisory_xact_lock(hashtextextended('payment-settings-migration', 0))",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        crate::db::migrations::unlocked_migrator()
-            .run_to(20261024000000, &mut *transaction)
-            .await?;
-        let report = if backfilled(&mut transaction).await? {
-            None
-        } else {
-            let routes = routes.ok_or(BackfillError::ConfigRequired)?;
-            backfill_in(&mut transaction, routes).await?
-        };
-        transaction.commit().await?;
-        crate::db::migrations::run_in(&mut connection).await?;
-        Ok::<_, BackfillError>(report)
-    }
-    .await;
-    let finish = crate::db::migrations::finish(connection).await;
-    let report = result?;
-    finish?;
-    Ok(report)
-}
-
-/// The one-time cutover backfill within the migration transaction (design §10): legacy revisions,
-/// deposit bindings, quote terms, and constraint validation. `None` if already backfilled.
-async fn backfill_in(
-    transaction: &mut PgConnection,
-    routes: &RouteSet,
-) -> Result<Option<Backfill>, BackfillError> {
-    let (policies, done): (serde_json::Value, bool) = sqlx::query_as(
-        "SELECT confirmation_policies, backfilled_at IS NOT NULL \
-         FROM payment_settings_cutover FOR UPDATE",
-    )
-    .fetch_one(&mut *transaction)
-    .await?;
-    if done {
-        return Ok(None);
-    }
-    let mut required = BTreeMap::<(Uuid, u64), Confirmations>::new();
-    for policy in policies.as_array().into_iter().flatten() {
-        let invalid = || BackfillError::Invalid(format!("confirmation policy {policy}"));
-        let account = policy["account_id"]
-            .as_str()
-            .and_then(|id| Uuid::from_str(id).ok())
-            .ok_or_else(invalid)?;
-        let chain_id = policy["chain_id"].as_u64().ok_or_else(invalid)?;
-        let value = policy["required"]
-            .as_str()
-            .and_then(Confirmations::parse_policy)
-            .ok_or_else(invalid)?;
-        required.insert((account, chain_id), value);
-    }
-    let accounts: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM accounts ORDER BY id")
-        .fetch_all(&mut *transaction)
-        .await?;
-    let mut report = Backfill::default();
-    for account in accounts {
-        for livemode in [false, true] {
-            let document = legacy_document(routes, livemode, |chain_id| {
-                required.get(&(account, chain_id)).copied()
-            });
-            let revision = Uuid::new_v4();
-            sqlx::query(
-                "INSERT INTO payment_settings_revisions \
-                     (id, account_id, livemode, kind, document, created_by) \
-                 VALUES ($1, $2, $3, 'legacy', $4, 'system')",
-            )
-            .bind(revision)
-            .bind(account)
-            .bind(livemode)
-            .bind(sqlx::types::Json(&document))
-            .execute(&mut *transaction)
-            .await?;
-            report.legacy_revisions += 1;
-            report.deposits += sqlx::query(
-                "UPDATE deposits SET settings_revision_id = $3 \
-                 WHERE account_id = $1 AND livemode = $2 \
-                   AND settings_revision_id IS NULL AND settings_hold_id IS NULL",
-            )
-            .bind(account)
-            .bind(livemode)
-            .bind(revision)
-            .execute(&mut *transaction)
-            .await?
-            .rows_affected();
-            let quoted: Vec<String> = sqlx::query_scalar(
-                "SELECT DISTINCT route FROM quotes \
-                 WHERE account_id = $1 AND livemode = $2 AND terms IS NULL",
-            )
-            .bind(account)
-            .bind(livemode)
-            .fetch_all(&mut *transaction)
-            .await?;
-            for name in quoted {
-                let route = routes
-                    .current_in(livemode)
-                    .find(|route| route.route == name)
-                    .ok_or_else(|| BackfillError::RouteMissing(name.clone()))?;
-                let terms = match resolve(route, &document) {
-                    Resolution::Accepted(terms) => terms,
-                    Resolution::Disabled(reason) => {
-                        return Err(BackfillError::InvalidTerms {
-                            route: name,
-                            reason,
-                        });
-                    }
-                    Resolution::NotAccepted => {
-                        return Err(BackfillError::RouteMissing(name));
-                    }
-                };
-                report.quotes += sqlx::query(
-                    "UPDATE quotes SET route_version = $4, settings_revision_id = $5, terms = $6 \
-                     WHERE account_id = $1 AND livemode = $2 AND route = $3 AND terms IS NULL",
-                )
-                .bind(account)
-                .bind(livemode)
-                .bind(&name)
-                .bind(
-                    i64::try_from(route.version)
-                        .map_err(|_| BackfillError::Invalid("route version".to_owned()))?,
-                )
-                .bind(revision)
-                .bind(sqlx::types::Json(terms))
-                .execute(&mut *transaction)
-                .await?
-                .rows_affected();
-            }
-        }
-    }
-    sqlx::query("ALTER TABLE deposits VALIDATE CONSTRAINT deposits_settings_binding_check")
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query("ALTER TABLE quotes VALIDATE CONSTRAINT quotes_terms_check")
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query("UPDATE payment_settings_cutover SET backfilled_at = now()")
-        .execute(&mut *transaction)
-        .await?;
-    Ok(Some(report))
-}
-
-/// The 0.5.0 model of one account and mode, written out: every current route of the mode
-/// accepted at its route values, and each chain's confirmation policy.
-fn legacy_document(
-    routes: &RouteSet,
-    livemode: bool,
-    required: impl Fn(u64) -> Option<Confirmations>,
-) -> Document {
-    let mut document = Document::accepting_all(routes, livemode);
-    for chain in &mut document.chains {
-        chain.confirmations = required(chain.chain_id);
-        for asset in &mut chain.assets {
-            let Some(route) = routes.current_in(livemode).find(|route| {
-                route.chain.chain_id == chain.chain_id && route.asset.symbol == asset.asset
-            }) else {
-                continue;
-            };
-            let defaults = Terms::defaults(route);
-            asset.quote_ttl_seconds = Some(defaults.quote_ttl_seconds);
-            asset.quote_spread_bps = Some(defaults.quote_spread_bps);
-            asset.quote_tolerance_bps = Some(defaults.quote_tolerance_bps);
-            asset.min_amount = Some(defaults.min_amount);
-            asset.min_deposit_atomic = Some(defaults.min_deposit_atomic);
-            asset.max_deposit_atomic = Some(defaults.max_deposit_atomic);
-            asset.min_refund_atomic = Some(defaults.min_refund_atomic);
-        }
-    }
-    document
+    .fetch_one(connection)
+    .await
 }
 
 #[cfg(test)]

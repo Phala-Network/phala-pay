@@ -48,7 +48,7 @@ sed 's/^environment: production.*/environment: local/' \
     "$previous_config" >"$tmp/previous.yaml"
 stage_start current-migrate 180
 DATABASE_URL="postgres://postgres:smoke@127.0.0.1:$port/topup" \
-    stage_call 180 "$current" migrate --config "$root/deploy/environments/example/topup/topup.yaml"
+    stage_call 180 "$current" migrate
 # Reject an unmarked future migration, then allow the same exact checksum at this binary's floor.
 psql_owner() { docker exec "$name-db" psql -U postgres -d topup -X -v ON_ERROR_STOP=1 "$@"; }
 stage_start compatibility-checks 180
