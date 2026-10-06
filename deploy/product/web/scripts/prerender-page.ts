@@ -1,3 +1,5 @@
+import { injectThemeScript } from "../src/content/theme-script.ts";
+
 export interface PageMetadata { title: string; description: string; url: string; keywords?: string }
 const ROOT_MARKER = '<div id="root"></div>';
 
@@ -24,5 +26,5 @@ export function renderPage(template: string, content: string, metadata: PageMeta
   }
   const json = JSON.stringify(graph).replaceAll("<", "\\u003c");
   html = html.replace("</head>", () => `<script type="application/ld+json">${json}</script>\n</head>`);
-  return html;
+  return injectThemeScript(html);
 }

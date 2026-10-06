@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { COMPARE_ACCESSED, COMPARE_DESCRIPTION, COMPARE_KEYWORDS, COMPARE_TITLE } from "../src/content/compare.ts";
 import { FAQ, HOME_DESCRIPTION, HOME_TITLE } from "../src/content/site.ts";
+import { THEME_SCRIPT } from "../src/content/theme-script.ts";
 import { renderPage } from "./prerender-page.ts";
 
 const web = resolve(import.meta.dirname, "..");
@@ -12,6 +14,10 @@ const origin = "https://pay.phala.com";
 const repo = "https://github.com/Phala-Network/phala-pay";
 
 async function prerender() {
+  const headers = await readFile(resolve(assets, "_headers"), "utf8");
+  const themeHash = createHash("sha256").update(THEME_SCRIPT).digest("base64");
+  const scriptPolicy = /script-src ([^;]+)/.exec(headers)?.[1];
+  if (!scriptPolicy?.split(/\s+/).includes(`'sha256-${themeHash}'`)) throw new Error("Theme bootstrap CSP hash is stale");
   const { render } = await import(pathToFileURL(resolve(web, ".prerender/entry-server.js")).href) as typeof import("../src/entry-server.js");
   // The web shell has no release version; use the lockstep service/SDK package version.
   const pkg: unknown = JSON.parse(await readFile(resolve(web, "../../../sdk/js/package.json"), "utf8"));

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { THEME_SCRIPT } from "../src/content/theme-script.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -29,4 +31,16 @@ await test("page metadata and JSON-LD are escaped without changing Vite's client
   const parsed: unknown = JSON.parse(json);
   assert.deepEqual(parsed, { description: value });
   assert.ok(!json.includes("<"));
+});
+
+await test("theme bootstrap is synchronous and authorized by the exact CSP hash", () => {
+  const html = renderPage(template, "<h1>Page</h1>", metadata, {});
+  const scripts = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)]
+    .filter((match) => !match[1]?.includes("src=") && !match[1]?.includes("application/ld+json"));
+  assert.equal(scripts.length, 1);
+  assert.equal(scripts[0]?.[2], THEME_SCRIPT);
+  assert.ok(html.indexOf(`<script>${THEME_SCRIPT}</script>`) < html.indexOf("</head>"));
+  const headers = readFileSync(new URL("../public/_headers", import.meta.url), "utf8");
+  const hash = createHash("sha256").update(THEME_SCRIPT).digest("base64");
+  assert.ok(/script-src ([^;]+)/.exec(headers)?.[1]?.split(/\s+/).includes(`'sha256-${hash}'`));
 });

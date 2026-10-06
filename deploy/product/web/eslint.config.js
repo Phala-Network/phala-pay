@@ -17,6 +17,5 @@ export default tseslint.config(
       "@typescript-eslint/no-confusing-void-expression": ["error", { ignoreArrowShorthand: true }],
     },
   },
-  { files: ["eslint.config.js", "public/theme.js"], ...tseslint.configs.disableTypeChecked },
-  { files: ["public/theme.js"], languageOptions: { globals: { window: "readonly", document: "readonly", localStorage: "readonly" } } },
+  { files: ["eslint.config.js"], ...tseslint.configs.disableTypeChecked },
 );
