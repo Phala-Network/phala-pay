@@ -9,6 +9,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -646,6 +647,54 @@ def test_an_expired_quote_without_payment_fails_at_the_transfer(
     steps = _steps(console, cookie)
     assert steps["sent"] == "failed"
     assert steps["received"] == "upcoming"
+
+
+@pytest.mark.parametrize(
+    ("event_type", "status"), [("quote.canceled", "canceled"), ("quote.expired", "expired")]
+)
+def test_account_quote_status_comes_from_quote_webhook(
+    demo: tuple[DemoConsole, Service], event_type: str, status: str
+) -> None:
+    console, service = demo
+    cookie = _account(console)
+    _create_quote(console, cookie)
+    customer = _customer(cookie)
+    quote = {**service.quote, "client_reference_id": customer, "status": status}
+    key = Ed25519PrivateKey.generate()
+    fulfillment = Fulfillment(
+        console.config, console.ledger, lambda: PinnedKeys(False, [key.public_key()])
+    )
+    event_id = "evt_" + uuid.uuid4().hex
+    body = json.dumps(
+        {
+            "id": event_id,
+            "object": "event",
+            "account": ACCOUNT,
+            "livemode": False,
+            "type": event_type,
+            "created": NOW,
+            "actor": "system",
+            "request": None,
+            "data": {"object": quote},
+        }
+    ).encode()
+    assert (
+        fulfillment.handle(sign_webhook(key, event_id, int(time.time()), body), body).status
+        == HTTPStatus.NO_CONTENT
+    )
+    _, account = _get(console, cookie, "account")
+    assert account["payments"][0]["status"] == status
+
+
+def test_account_quote_without_webhook_falls_back_to_expiry(
+    demo: tuple[DemoConsole, Service], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    console, _ = demo
+    cookie = _account(console)
+    quote = _create_quote(console, cookie)
+    monkeypatch.setattr(console, "_clock", lambda: quote["expires_at"] + 1)
+    _, account = _get(console, cookie, "account")
+    assert account["payments"][0]["status"] == "expired"
 
 
 def test_a_rejected_deposit_fails_at_the_credit(demo: tuple[DemoConsole, Service]) -> None:

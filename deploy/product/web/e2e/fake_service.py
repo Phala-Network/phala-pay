@@ -802,6 +802,7 @@ class FakeTopup:
             quote["status"] = status
             if status == "expired":
                 quote["expires_at"] = int(time.time())
+            self.emit(f"quote.{status}", self.quote_view(quote))
             return self.quote_view(quote)
 
     def reverse(self, deposit_id: str) -> dict[str, Any]:

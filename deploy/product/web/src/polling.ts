@@ -25,5 +25,7 @@ export const TERMINAL_QUOTE_STATUSES: ReadonlySet<NonNullable<Timeline["quote"]>
 export const TERMINAL_REFUND_STATUSES: ReadonlySet<Refund["status"]> = new Set(["succeeded", "failed", "canceled"]);
 export const TERMINAL_ACCOUNT_STATUSES: ReadonlySet<PaymentRow["status"]> = new Set([
   ...TERMINAL_DEPOSIT_STATUSES,
+  "complete",
   "expired",
+  "canceled",
 ]);

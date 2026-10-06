@@ -137,10 +137,12 @@ export function Empty({ children }: { children: ReactNode }) {
 
 const TONES: Record<string, StatusTone> = {
   credited: "success",
+  complete: "success",
   succeeded: "success",
   swept: "success",
   rejected: "danger",
   expired: "danger",
+  canceled: "danger",
   reversed: "danger",
   failed: "danger",
 };

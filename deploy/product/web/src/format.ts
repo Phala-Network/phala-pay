@@ -100,6 +100,7 @@ export function duration(seconds: number): string {
 export function statusLabel(status: string): string {
   const labels: Record<string, string> = {
     awaiting_payment: "Awaiting payment",
+    complete: "Complete",
     expired: "Expired",
     pending: "Pending",
     credited: "Credited",
