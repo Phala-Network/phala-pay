@@ -250,7 +250,7 @@ async fn restore_check_without_a_source_lsn_flags_heartbeat_only_rpo() -> Result
             let heartbeat = heartbeat::record(&context.app_pool).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore::RestoreExpectations {
-                expected_heartbeat_at: Some(heartbeat.recorded_at),
+                failure_at: Some(heartbeat.recorded_at),
                 expected_lsn: None,
             };
             let report = restore::check(&context.owner_pool, &expectations, &reconciler)
@@ -258,6 +258,9 @@ async fn restore_check_without_a_source_lsn_flags_heartbeat_only_rpo() -> Result
                 .map_err(anyhow::Error::msg)?;
             ensure!(report.status == "incomplete");
             ensure!(report.rpo_basis == "heartbeat_only");
+            let encoded = serde_json::to_value(&report)?;
+            ensure!(encoded["failure_at"] == serde_json::to_value(heartbeat.recorded_at)?);
+            ensure!(report.failure_at == Some(heartbeat.recorded_at));
             ensure!(report.expected_lsn.is_none());
             ensure!(report.wal_bytes_behind.is_none());
             Ok(())
@@ -273,7 +276,7 @@ async fn restore_check_at_boot_reports_an_unanchored_rpo() -> Result<()> {
             let heartbeat = heartbeat::record(&context.app_pool).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore::RestoreExpectations {
-                expected_heartbeat_at: None,
+                failure_at: None,
                 expected_lsn: None,
             };
             let report = restore::check(&context.owner_pool, &expectations, &reconciler)
@@ -1265,10 +1268,10 @@ async fn insert_numbered_deposit(pool: &PgPool, seed: &Seed, number: u8) -> Resu
     Ok(id)
 }
 
-/// Failure point exactly as an operator reads it from the last heartbeat log line.
+/// A failure instant coinciding with the sampled source heartbeat.
 fn restore_expectations(heartbeat: &heartbeat::Heartbeat) -> restore::RestoreExpectations {
     restore::RestoreExpectations {
-        expected_heartbeat_at: Some(heartbeat.recorded_at),
+        failure_at: Some(heartbeat.recorded_at),
         expected_lsn: Some(heartbeat.wal_lsn.clone()),
     }
 }
@@ -1376,9 +1379,7 @@ async fn restore_check_counts_failure_time_and_does_not_grant_sampling_tolerance
             let heartbeat = heartbeat::record(&context.app_pool).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore::RestoreExpectations {
-                expected_heartbeat_at: Some(
-                    heartbeat.recorded_at + chrono::TimeDelta::milliseconds(60_100),
-                ),
+                failure_at: Some(heartbeat.recorded_at + chrono::TimeDelta::milliseconds(60_100)),
                 expected_lsn: None,
             };
             let report = restore::check(&context.owner_pool, &expectations, &reconciler)

@@ -935,31 +935,6 @@ pub struct AccountPaymentSettings {
     pub live: PaymentSettingsObject,
     /// Test mode's.
     pub test: PaymentSettingsObject,
-    /// The 0.5.0 model the 0.6.0 cutover bound the account's earlier deposits and quotes to, in
-    /// each mode (docs/design/payment-settings.md §10). Its chains' `confirmations` are the
-    /// account's former confirmation policies, to carry into its payment settings.
-    pub legacy: AccountLegacyPaymentSettings,
-}
-
-/// An account's `legacy` revision in each mode; `null` for an account created after the cutover.
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct AccountLegacyPaymentSettings {
-    /// Live mode's.
-    #[schema(required = true)]
-    pub live: Option<LegacyPaymentSettings>,
-    /// Test mode's.
-    #[schema(required = true)]
-    pub test: Option<LegacyPaymentSettings>,
-}
-
-/// A `legacy` revision: never current, it governs only what the cutover bound to it.
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct LegacyPaymentSettings {
-    /// The revision, `psrev_…`.
-    pub revision: String,
-    /// Every route of the mode accepted at its 0.5.0 values, with the former confirmation
-    /// policies.
-    pub chains: Vec<PaymentSettingsChain>,
 }
 
 /// An account as the operator sees it.
@@ -1221,15 +1196,6 @@ where
     T: Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
-}
-
-/// Whether recording is held for the 0.6.0 cutover.
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct RecordingObject {
-    /// Always `recording`.
-    pub object: String,
-    /// Whether recording is held.
-    pub held: bool,
 }
 
 /// `POST /v1/account/pause` and `POST /v1/account/resume` body.

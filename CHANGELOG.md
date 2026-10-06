@@ -14,7 +14,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the admin endpoint `POST /v1/admin/recording/resume` and the account's
+  `payment_settings.legacy` field. Recording starts immediately after migrations; an incomplete
+  payment-settings cutover refuses startup and must be completed on 0.9.x before upgrading.
+  Historical `legacy` revisions and their deposit bindings remain supported.
+
 ### Changed
+
+- **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the
+  restore report's `expected_heartbeat_at` JSON field is now `failure_at`. Both refer to the
+  externally recorded failure instant.
 
 - Request deadline errors now say "the request did not complete within its deadline; retry"
   instead of blaming the database, with `503 unavailable` and `Retry-After: 2`.

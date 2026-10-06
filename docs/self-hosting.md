@@ -472,16 +472,10 @@ read the old app's backups, so never delete the app, and give a new app a new pr
   to an earlier release, and a schema is never rolled back ([Deploy](../deploy/README.md#deploy)).
   Tell merchants the new compose hash. The OS image is fixed; moving to dstack 0.6 changes every
   derived key ([OS image](../deploy/README.md#os-image)).
-- **The 0.6.0 upgrade** is a cutover ([architecture §14](architecture.md#14-configuration-and-deployment),
-  [design §10](design/payment-settings.md#10-migration-and-cutover)). First move every route
-  file's `quote:` and `limits:` to `merchant:`, keeping every quoted route. Deploy `upgrade` stops
-  the 0.5.0 recorders, and the `migrate` service binds every existing deposit and quote to each
-  account's `legacy` revision, the 0.5.0 model, in the transaction of the schema change. The service then starts with recording held:
-  issuance answers `400 paused`. Have each account send `POST /v1/payment_settings` per mode it
-  uses, with its secret key and the stricter `confirmations` its `legacy` revision shows
-  (`payment_settings.legacy` in `GET /v1/admin/accounts/{acct}`). Verify each account's settings
-  there and `GET /v1/config` with its key, check that no `TopupPaymentSettingsInvalid` is raised,
-  then resume with `POST /v1/admin/recording/resume {reason}`.
+- **Payment settings upgrades.** Complete any unfinished payment-settings cutover on 0.9.x
+  before upgrading. Startup refuses an incomplete cutover with `payment settings cutover is
+  incomplete; upgrade through 0.9.x first`. New databases start recording immediately after
+  migrations; historical `legacy` revisions still govern the deposits bound to them.
 - **Operations.** A production CVM has no SSH, logs, or database access: you work through Sentry,
   the admin API (daily report, deposit view, pauses, metrics), and the chain. Every alert names its
   runbook ([runbooks](../deploy/runbooks/README.md#alert-and-symptom-index)); RPC usage and cost

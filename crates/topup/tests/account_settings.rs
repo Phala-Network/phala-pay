@@ -315,187 +315,76 @@ async fn the_account_has_no_confirmation_policies_any_more() -> Result<()> {
     .await
 }
 
-/// The 0.6.0 cutover (docs/design/payment-settings.md §10) on a database with 0.5.0 rows: the
-/// backfill writes each account's 0.5.0 model out as a `legacy` revision, with its former
-/// confirmation policy, and binds every deposit and quote to it; recording stays held until the
-/// operator resumes it once the account is configured.
+/// Historical legacy revisions continue to govern bound deposits after the account changes.
 #[tokio::test]
-async fn the_cutover_binds_the_0_5_0_rows_and_holds_recording_until_resumed() -> Result<()> {
+async fn legacy_revisions_keep_the_terms_of_their_bound_deposits() -> Result<()> {
     with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
-            let owner = &database.owner_pool;
-            // The 0.5.0 rows are written as the owner, and the service's pool is used only once
-            // the schema is migrated again, so no statement it prepared predates the migration.
-            let (account, live_key) = Fixture::seed_account(owner).await?;
-            // The onboarding record the operator's view shows, as `POST /v1/admin/accounts` keeps.
-            sqlx::query(
-                "UPDATE accounts SET contact = $2, due_diligence = $3 WHERE id = $1",
-            )
-            .bind(account.id)
-            .bind(json!({"name": "Merchant", "email": "security@merchant.example"}))
-            .bind(json!({"reference": "DD-1", "reviewed_at": "2026-10-01", "reviewed_by": "ops"}))
-            .execute(owner)
-            .await?;
-            let routes = Fixture::routes()?;
-            let route = routes
+            let fixture = Fixture::new(pool).await?;
+            sqlx::query("UPDATE accounts SET contact = $2, due_diligence = $3 WHERE id = $1")
+                .bind(fixture.account.id)
+                .bind(json!({"name": "Merchant", "email": "security@merchant.example"}))
+                .bind(
+                    json!({"reference": "DD-1", "reviewed_at": "2026-10-01", "reviewed_by": "ops"}),
+                )
+                .execute(&database.owner_pool)
+                .await?;
+            let route = fixture
+                .routes
                 .current_in(true)
                 .next()
-                .context("live route")?
-                .clone();
-            let customer = seed::create_customer(
-                owner,
-                &seed::NewCustomer {
-                    id: uuid::Uuid::new_v4(),
-                    account_id: account.id,
-                    livemode: true,
-                    client_reference_id: "team-42".to_owned(),
-                    paused_scopes: Vec::new(),
-                },
-            )
-            .await?;
-            let address = seed::insert_address(
-                owner,
-                &seed::NewAddress {
-                    id: uuid::Uuid::new_v4(),
-                    customer_id: customer.id,
-                    chain_id: 1,
-                    route: route.route.clone(),
-                    salt: alloy_primitives::B256::repeat_byte(7),
-                    address: alloy_primitives::Address::repeat_byte(7),
-                },
-            )
-            .await?;
-            let tx_hash = alloy_primitives::B256::repeat_byte(8);
-            ensure!(
-                topup::db::insert_deposit(
-                    owner,
-                    &topup::db::NewDeposit {
-                        chain_id: 1,
-                        tx_hash,
-                        receipt_log_index: 0,
-                        log_index: 0,
-                        block_number: 100,
-                        block_hash: alloy_primitives::B256::repeat_byte(9),
-                        block_time: chrono::Utc::now(),
-                        address_id: address.id,
-                        route: Some(route.route.clone()),
-                        route_version: Some(route.version),
-                        asset_contract: route.asset.contract,
-                        from_address: alloy_primitives::Address::repeat_byte(10),
-                        amount_atomic: topup_core::money::AtomicAmount::new(
-                            alloy_primitives::U256::from(1_000_u64),
-                        ),
-                        state: topup_core::deposit::DepositState::Detected,
-                        reason: None,
-                        next_attempt_at: chrono::Utc::now(),
-                        tx_from: alloy_primitives::Address::repeat_byte(10),
-                        tx_nonce: 0,
-                        is_final: false,
-                    },
-                )
-                .await?
-            );
-            let deposit = topup_core::identity::deposit_id(1, tx_hash, 0);
-
-            // The database as 0.5.0 left it, with the account's confirmation policy.
-            topup::db::MIGRATOR.undo(owner, 20_261_023_000_000).await?;
+                .context("live route")?;
+            let (_, deposit) = seed_payment(pool, fixture.account.id, route, 0x35).await?;
+            let mut document =
+                topup::payment_config::Document::accepting_all(&fixture.routes, true);
+            document
+                .chains
+                .first_mut()
+                .context("accepted chain")?
+                .confirmations = Some(topup_core::route::Confirmations::Depth(12));
+            let legacy = uuid::Uuid::new_v4();
             sqlx::query(
-                "INSERT INTO confirmation_policies (account_id, chain_id, required) \
-                 VALUES ($1, 1, '12')",
+                "INSERT INTO payment_settings_revisions \
+                 (id, account_id, livemode, kind, document, created_by) \
+                 VALUES ($1, $2, true, 'legacy', $3, 'system')",
             )
-            .bind(account.id)
-            .execute(owner)
+            .bind(legacy)
+            .bind(fixture.account.id)
+            .bind(sqlx::types::Json(&document))
+            .execute(&database.owner_pool)
             .await?;
-            topup::db::migrate(owner).await?;
-            let fixture = Fixture::for_account(pool, account, live_key, routes)?;
+            sqlx::query("UPDATE deposits SET settings_revision_id = $2 WHERE id = $1")
+                .bind(deposit)
+                .bind(legacy)
+                .execute(&database.owner_pool)
+                .await?;
+            fixture.accept_the_live_route().await?;
             let mut connection = pool.acquire().await?;
-            ensure!(!topup::payment_config::backfilled(&mut connection).await?);
-            ensure!(topup::payment_config::recording_held(&mut connection).await?);
-
-            let report = topup::payment_config::migrate(owner, Some(&fixture.routes))
-                .await?
-                .context("the backfill runs once")?;
+            let binding = topup::payment_config::deposit_binding(&mut connection, deposit).await?;
             ensure!(
-                report
-                    == topup::payment_config::Backfill {
-                        legacy_revisions: 2,
-                        deposits: 1,
-                        quotes: 1,
-                    },
-                "{report:?}"
+                binding
+                    == topup::payment_config::Binding::Revision {
+                        id: legacy,
+                        document
+                    }
             );
-            ensure!(topup::payment_config::migrate(owner, Some(&fixture.routes)).await?.is_none());
-            let validated: bool = sqlx::query_scalar(
-                "SELECT bool_and(convalidated) FROM pg_constraint WHERE conname IN \
-                 ('deposits_settings_binding_check', 'quotes_terms_check')",
-            )
-            .fetch_one(owner)
-            .await?;
-            ensure!(validated);
-
-            // The deposit and the quote are bound to the legacy revision: the 0.5.0 model with
-            // the account's policy, never current.
-            let scope = topup::tenancy::Scope::new(fixture.account.id, true);
-            let (legacy, document) = topup::payment_config::legacy(&mut connection, scope)
-                .await?
-                .context("a legacy revision")?;
-            let bound: Option<uuid::Uuid> =
-                sqlx::query_scalar("SELECT settings_revision_id FROM deposits WHERE id = $1")
-                    .bind(deposit)
-                    .fetch_one(pool)
-                    .await?;
-            ensure!(bound == Some(legacy));
-            let terms: Value = sqlx::query_scalar(
-                "SELECT terms FROM quotes WHERE id = (SELECT quote_id FROM addresses WHERE id = $1)",
-            )
-            .bind(address.id)
-            .fetch_one(pool)
-            .await?;
-            let resolved = topup::payment_config::resolve(&route, &document)
-                .terms()
-                .context("the legacy model accepts the route")?;
-            ensure!(resolved.confirmations == topup_core::route::Confirmations::Depth(12));
-            ensure!(terms == serde_json::to_value(resolved)?, "{terms}");
-
-            // The operator reads the legacy revision to configure the account, which starts
-            // unconfigured.
+            let terms =
+                topup::payment_config::deposit_terms(&mut connection, &fixture.routes, deposit)
+                    .await?
+                    .context("the legacy revision accepts the deposit")?;
+            ensure!(terms.confirmations == topup_core::route::Confirmations::Depth(12));
             let path = format!("/v1/admin/accounts/{}", fixture.account.public_id);
             let (status, account) = fixture.admin(Method::GET, &path, Value::Null).await?;
             ensure!(status == StatusCode::OK, "{account}");
-            let settings = &account["payment_settings"];
-            ensure!(settings["live"]["status"] == "unconfigured", "{settings}");
+            let settings = account["payment_settings"]
+                .as_object()
+                .context("payment settings")?;
             ensure!(
-                settings["legacy"]["live"]["revision"]
-                    == format!("psrev_{}", legacy.simple()),
-                "{settings}"
+                settings.len() == 2
+                    && settings.contains_key("live")
+                    && settings.contains_key("test")
             );
-            ensure!(settings["legacy"]["live"]["chains"][0]["confirmations"] == "12");
-            ensure!(settings["legacy"]["test"]["chains"][0]["confirmations"].is_null());
-
-            // Configured, the account still issues nothing until recording resumes.
-            let (status, configured) = fixture
-                .post(
-                    "/v1/payment_settings",
-                    json!({"chains": [{"chain_id": 1, "confirmations": "12",
-                                       "assets": [{"asset": "pha"}]}]}),
-                )
-                .await?;
-            ensure!(status == StatusCode::OK, "{configured}");
-            let new_address = json!({"client_reference_id": "team-43"});
-            let (status, held) = fixture.post("/v1/deposit_addresses", new_address.clone()).await?;
-            ensure!(status == StatusCode::BAD_REQUEST && held["error"]["code"] == "paused");
-            let (status, resumed) = fixture
-                .admin(
-                    Method::POST,
-                    "/v1/admin/recording/resume",
-                    json!({"reason": "every account configured and verified"}),
-                )
-                .await?;
-            ensure!(status == StatusCode::OK, "{resumed}");
-            ensure!(!topup::payment_config::recording_held(&mut connection).await?);
-            let (status, issued) = fixture.post("/v1/deposit_addresses", new_address).await?;
-            ensure!(status == StatusCode::OK, "{issued}");
             Ok(())
         })
     })
@@ -738,199 +627,6 @@ async fn the_operator_tightens_the_floor_and_a_bound_in_a_new_route_version() ->
                 refused["error"]["param"] == "chains[0][confirmations]",
                 "{refused}"
             );
-            Ok(())
-        })
-    })
-    .await
-}
-
-fn cutover_test_config() -> Result<std::path::PathBuf> {
-    let config = std::env::temp_dir().join(format!(
-        "topup-cutover-{}.yaml",
-        uuid::Uuid::new_v4().simple()
-    ));
-    let routes = include_str!("fixtures/phala-cloud-pha.yaml")
-        .lines()
-        .map(|line| format!("    {line}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(
-        &config,
-        format!(
-            "environment: staging\npublic_origin: https://topup.example\nadmin_key:\n  \
-             id: admin/v1\n  public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n\
-{rpc}\nroutes:\n  -\n{routes}\n",
-            rpc = include_str!("fixtures/rpc-groups.yaml")
-        ),
-    )?;
-    Ok(config)
-}
-
-#[tokio::test]
-async fn concurrent_migrates_wait_for_the_backfill_and_outer_commit() -> Result<()> {
-    with_database(|database| Box::pin(async move {
-        let owner = &database.owner_pool;
-        let (account, _) = Fixture::seed_account(owner).await?;
-        let route = live_route(1, "2", "")?;
-        seed_payment(owner, account.id, &route, 0x34).await?;
-        topup::db::MIGRATOR.undo(owner, 20_261_023_000_000).await?;
-        // Install a test-only gate in the old schema. It blocks legacy inserts, after SQLx
-        // has applied the DDL, without blocking the test connection's schema inspection.
-        sqlx::raw_sql(r#"
-            CREATE FUNCTION test_pause_backfill() RETURNS trigger LANGUAGE plpgsql AS $$
-            BEGIN
-                IF NEW.kind = 'legacy' THEN
-                    PERFORM pg_advisory_xact_lock(hashtextextended('test-payment-settings-backfill', 0));
-                END IF;
-                RETURN NEW;
-            END $$;
-            CREATE FUNCTION test_install_backfill_gate() RETURNS event_trigger LANGUAGE plpgsql AS $$
-            DECLARE command record;
-            BEGIN
-                FOR command IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
-                    IF command.object_identity = 'public.payment_settings_revisions'
-                       AND NOT EXISTS (SELECT FROM pg_trigger WHERE tgname = 'test_backfill_gate') THEN
-                        EXECUTE 'CREATE TRIGGER test_backfill_gate BEFORE INSERT ON payment_settings_revisions
-                                 FOR EACH ROW EXECUTE FUNCTION test_pause_backfill()';
-                    END IF;
-                END LOOP;
-            END $$;
-            CREATE EVENT TRIGGER test_install_backfill_gate ON ddl_command_end
-                WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION test_install_backfill_gate();
-        "#).execute(owner).await?;
-        let config = cutover_test_config()?;
-        let result = async {
-            let mut gate = owner.begin().await?;
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('test-payment-settings-backfill', 0))")
-                .execute(&mut *gate).await?;
-            let migrate = || {
-                let url = database.owner_url.clone();
-                let config = config.clone();
-                tokio::task::spawn_blocking(move || {
-                    std::process::Command::new(env!("CARGO_BIN_EXE_topup"))
-                        .args(["migrate", "--config"]).arg(config)
-                        .env("DATABASE_URL", url).output()
-                })
-            };
-            let first = migrate();
-            wait_for_migrate_waiters(owner, "%INSERT INTO payment_settings_revisions%", 1).await?;
-            let second = migrate();
-            wait_for_migrate_waiters(owner, "%", 2).await?;
-            gate.commit().await?;
-            for output in [first, second] {
-                let output = tokio::time::timeout(std::time::Duration::from_secs(10), output).await???;
-                ensure!(output.status.success(), "{}{}",
-                    String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-            }
-            let legacy: i64 = sqlx::query_scalar("SELECT count(*) FROM payment_settings_revisions WHERE account_id = $1 AND kind = 'legacy'")
-                .bind(account.id).fetch_one(owner).await?;
-            ensure!(legacy == 2);
-            let valid: bool = sqlx::query_scalar("SELECT bool_and(convalidated) FROM pg_constraint WHERE conname IN ('deposits_settings_binding_check', 'quotes_terms_check')")
-                .fetch_one(owner).await?;
-            ensure!(valid);
-            anyhow::Ok(())
-        }.await;
-        let cleanup = std::fs::remove_file(config).context("remove migration test config");
-        result.and(cleanup)
-    })).await
-}
-
-async fn wait_for_migrate_waiters(pool: &sqlx::PgPool, pattern: &str, count: i64) -> Result<()> {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() \
-                 AND (wait_event_type = 'Lock' OR (state = 'idle' AND query LIKE '%pg_try_advisory_lock%')) AND query LIKE $1",
-            )
-            .bind(pattern)
-            .fetch_one(pool)
-            .await?;
-            if waiting >= count {
-                return anyhow::Ok(());
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .context("migration did not reach the expected lock")?
-}
-
-/// `topup migrate --config` applies the schema, the cutover backfill, and its validation in one
-/// transaction: a backfill that fails leaves the database as 0.5.0 left it (design §10).
-#[tokio::test]
-async fn a_failed_cutover_backfill_leaves_the_schema_unmigrated() -> Result<()> {
-    with_database(|database| {
-        Box::pin(async move {
-            let owner = &database.owner_pool;
-            let (account, _) = Fixture::seed_account(owner).await?;
-            let route = live_route(1, "2", "")?;
-            let (address_id, _) = seed_payment(owner, account.id, &route, 0x33).await?;
-            topup::db::MIGRATOR.undo(owner, 20_261_023_000_000).await?;
-            // A quote of a route the 0.6.0 configuration no longer loads.
-            sqlx::query(
-                "UPDATE quotes SET route = 'retired-route' \
-                 WHERE id = (SELECT quote_id FROM addresses WHERE id = $1)",
-            )
-            .bind(address_id)
-            .execute(owner)
-            .await?;
-            let config = cutover_test_config()?;
-            let migrate = || {
-                std::process::Command::new(env!("CARGO_BIN_EXE_topup"))
-                    .args(["migrate", "--config"])
-                    .arg(&config)
-                    .env("DATABASE_URL", &database.owner_url)
-                    .output()
-            };
-            // Invalid configuration must fail before the schema changes at all.
-            let valid_config = std::fs::read_to_string(&config)?;
-            std::fs::write(&config, "environment: invalid\n")?;
-            let invalid = migrate()?;
-            std::fs::write(&config, valid_config)?;
-            ensure!(!invalid.status.success());
-            let policies: bool =
-                sqlx::query_scalar("SELECT to_regclass('confirmation_policies') IS NOT NULL")
-                    .fetch_one(owner)
-                    .await?;
-            ensure!(policies, "invalid configuration changed the schema");
-            let output = migrate()?;
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            ensure!(!output.status.success(), "{text}");
-            ensure!(text.contains("retired-route"), "{text}");
-            let (policies, migrated): (bool, i64) = sqlx::query_as(
-                "SELECT to_regclass('confirmation_policies') IS NOT NULL, \
-                        (SELECT count(*) FROM _sqlx_migrations WHERE version = 20261024000000)",
-            )
-            .fetch_one(owner)
-            .await?;
-            ensure!(
-                policies && migrated == 0,
-                "the failed cutover left a migrated schema"
-            );
-
-            // With the route kept, the cutover completes.
-            sqlx::query("UPDATE quotes SET route = $1 WHERE route = 'retired-route'")
-                .bind(&route.route)
-                .execute(owner)
-                .await?;
-            let output = migrate()?;
-            std::fs::remove_file(&config)?;
-            ensure!(
-                output.status.success(),
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let backfilled: bool = sqlx::query_scalar(
-                "SELECT backfilled_at IS NOT NULL FROM payment_settings_cutover",
-            )
-            .fetch_one(owner)
-            .await?;
-            ensure!(backfilled);
             Ok(())
         })
     })

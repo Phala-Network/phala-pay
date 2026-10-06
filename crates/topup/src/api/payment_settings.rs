@@ -1,7 +1,6 @@
 //! The account's payment settings (`GET` and `POST /v1/payment_settings`, design
 //! docs/design/payment-settings.md): a singleton per account and mode, as Stripe's Tax Settings,
-//! choosing from the operator's catalog within its bounds. The cutover's recording hold is lifted
-//! with `POST /v1/admin/recording/resume`.
+//! choosing from the operator's catalog within its bounds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
@@ -23,15 +22,14 @@ use crate::routes::RouteSet;
 use crate::tenancy::Scope;
 
 use super::AppState;
-use super::auth::{AdminActor, Merchant};
+use super::auth::Merchant;
 use super::error::{ApiError, ErrorResponse};
 use super::extract::ApiJson;
-use super::handlers::validate_reason;
 use super::idempotency::Idempotent;
 use super::models::{
-    AdminReasonRequest, AvailableAsset, AvailableChain, AvailableConfirmations, BoundsAtomic,
-    BoundsU64, LegacyPaymentSettings, PaymentSettingsAsset, PaymentSettingsChain,
-    PaymentSettingsObject, RecordingObject, UpdatePaymentSettingsRequest,
+    AvailableAsset, AvailableChain, AvailableConfirmations, BoundsAtomic, BoundsU64,
+    PaymentSettingsAsset, PaymentSettingsChain, PaymentSettingsObject,
+    UpdatePaymentSettingsRequest,
 };
 
 /// Public id prefix of a payment settings revision.
@@ -472,19 +470,6 @@ pub(crate) async fn payment_settings_object(
     })
 }
 
-/// The scope's `legacy` revision as the operator sees it, if the cutover wrote one.
-pub(crate) async fn legacy_object(
-    connection: &mut PgConnection,
-    scope: Scope,
-) -> Result<Option<LegacyPaymentSettings>, ApiError> {
-    Ok(payment_config::legacy(connection, scope)
-        .await?
-        .map(|(revision, document)| LegacyPaymentSettings {
-            revision: crate::ids::format(REVISION, revision),
-            chains: chains_object(&document),
-        }))
-}
-
 fn chains_object(document: &Document) -> Vec<PaymentSettingsChain> {
     document
         .chains
@@ -552,32 +537,4 @@ fn available_asset(route: &RouteFile, document: &Document) -> AvailableAsset {
         max_deposit_atomic: atomic(bounds.max_deposit_atomic),
         min_refund_atomic: atomic(bounds.min_refund_atomic),
     }
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/admin/recording/resume",
-    request_body = AdminReasonRequest,
-    responses(
-        (status = 200, description = "OK: recording runs, whether it was held or not", body = RecordingObject),
-        (status = 400, description = "Bad Request", body = ErrorResponse),
-        (status = 401, description = "Unauthorized", body = ErrorResponse)
-    ),
-    security(("http_message_signature" = [])),
-    tag = "admin"
-)]
-/// Lifts the 0.6.0 cutover's recording hold (docs/design/payment-settings.md §10), once every
-/// authorized account is configured and its effective config verified: the scanners, finality
-/// watch, reconciler, and pumps start within seconds, from their cursors. Audited.
-pub(crate) async fn resume_recording(
-    State(state): State<AppState>,
-    AdminActor(actor): AdminActor,
-    ApiJson(request): ApiJson<AdminReasonRequest>,
-) -> Result<Json<RecordingObject>, ApiError> {
-    validate_reason(&request.reason)?;
-    payment_config::resume_recording(&state.pool, &actor, &request.reason).await?;
-    Ok(Json(RecordingObject {
-        object: "recording".to_owned(),
-        held: payment_config::recording_held(&mut *state.pool.acquire().await?).await?,
-    }))
 }

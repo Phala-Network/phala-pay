@@ -455,7 +455,7 @@ seconds and requires the batch 2 owner to set this argument. The monitor will co
 RPO degradation until that cadence is corrected. Overrides that increase upload retry budgets
 must also budget their latency. A boot-time unanchored report does not prove RPO; compare its
 newest restored commit with the externally recorded failure instant, never merely with the last
-source heartbeat. `--expected-heartbeat-at` retains its legacy name but takes that failure instant.
+source heartbeat. `--failure-at` takes that failure instant; the report records it as `failure_at`.
 
 The local drill starts disposable Anvil chains for every configured route, with Sepolia and Base
 Sepolia chain IDs, canonical factories and Multicall3, and local token/oracle fixtures. A/B groups

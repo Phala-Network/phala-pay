@@ -76,7 +76,7 @@ async fn maintenance_keys_are_scoped_audited_and_replay_protected() -> Result<()
                 ensure!(count == denied, "every refused route must be audited");
             }
         }
-        ensure!(denied >= 30, "must exercise the entire admin surface");
+        ensure!(denied >= 29, "must exercise the entire admin surface");
         // A rotated maintenance key can clear the deployment's lease.
         ensure!(app.clone().oneshot(signed_request(Method::POST, "/v1/admin/instance/resume",
             serde_json::to_vec(&json!({"owner":"deploy-scoped", "reason":"healthy"}))?, "maintenance/v2", &rotated, now)).await?.status() == StatusCode::OK);

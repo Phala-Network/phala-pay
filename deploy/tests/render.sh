@@ -52,7 +52,7 @@ jq -j '.configs | to_entries[] | select(.key | startswith("postgres_init_")) | .
     { echo "the init script is not the committed one" >&2; exit 1; }
 
 # A changed topup.yaml changes the definition of exactly the services that mount it: the service,
-# and migrate, whose cutover backfill reads the routes (docs/design/payment-settings.md §10).
+# and migrate, which validates the service configuration before applying migrations.
 cp -r "$staging" "$tmp/changed"
 sed -i 's|id: admin/staging-v1|id: admin/staging-v2|' "$tmp/changed/topup.yaml"
 render "${gateway[@]}" "$tmp/changed" >"$tmp/changed.yml"
