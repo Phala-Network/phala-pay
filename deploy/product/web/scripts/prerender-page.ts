@@ -1,30 +1,11 @@
-import { injectThemeScript } from "../src/content/theme-script.ts";
-
-export interface PageMetadata { title: string; description: string; url: string; keywords?: string }
 const ROOT_MARKER = '<div id="root"></div>';
+export const HEAD_MARKER = "<!--app-head-->";
 
-function escapeAttribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-/** Preserve Vite's entry assets while replacing content and search metadata. */
-export function renderPage(template: string, content: string, metadata: PageMetadata, graph: Record<string, unknown>): string {
+/** Vite SSR's exact placeholders preserve the client entry and generated asset links. */
+export function renderPage(template: string, rendered: { head: string; html: string }): string {
   if (!template.includes(ROOT_MARKER)) throw new Error("Missing root marker in HTML template");
-  if (/\sstyle\s*=/i.test(content)) throw new Error("Inline style violates the CSP");
-  const title = escapeAttribute(metadata.title);
-  const description = escapeAttribute(metadata.description);
-  const url = escapeAttribute(metadata.url);
-  let html = template.replace(ROOT_MARKER, () => `<div id="root">${content}</div>`)
-    .replace(/<title>[^<]*<\/title>/, () => `<title>${title}</title>`)
-    .replace(/(<meta\s+(?:name|property)="(?:description|og:description|twitter:description)"\s+content=")[^"]*("\s*\/>)/g, (_match, prefix: string, suffix: string) => `${prefix}${description}${suffix}`)
-    .replace(/(<meta\s+(?:name|property)="(?:og:title|twitter:title)"\s+content=")[^"]*("\s*\/>)/g, (_match, prefix: string, suffix: string) => `${prefix}${title}${suffix}`)
-    .replace(/(<link\s+rel="canonical"\s+href=")[^"]*("\s*\/>)/, (_match, prefix: string, suffix: string) => `${prefix}${url}${suffix}`)
-    .replace(/(<meta\s+property="og:url"\s+content=")[^"]*("\s*\/>)/, (_match, prefix: string, suffix: string) => `${prefix}${url}${suffix}`);
-  if (metadata.keywords !== undefined) {
-    const keywords = escapeAttribute(metadata.keywords);
-    html = html.replace(/(<meta\s+name="keywords"\s+content=")[^"]*("\s*\/>)/, (_match, prefix: string, suffix: string) => `${prefix}${keywords}${suffix}`);
-  }
-  const json = JSON.stringify(graph).replaceAll("<", "\\u003c");
-  html = html.replace("</head>", () => `<script type="application/ld+json">${json}</script>\n</head>`);
-  return injectThemeScript(html);
+  if (!template.includes(HEAD_MARKER)) throw new Error("Missing head marker in HTML template");
+  if (/\sstyle\s*=/i.test(rendered.html)) throw new Error("Inline style violates the CSP");
+  return template.replace(HEAD_MARKER, () => rendered.head)
+    .replace(ROOT_MARKER, () => `<div id="root">${rendered.html}</div>`);
 }

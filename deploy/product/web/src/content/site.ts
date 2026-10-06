@@ -13,3 +13,5 @@ export const FAQ = [
   { question: "What is the security model?", answer: "The service runs in an Intel TDX confidential VM whose attestation you can verify. Payments are confirmed by two independent RPC providers, and payers are screened against sanctions lists. Phala Pay is pre-1.0 and has not had a third-party security audit." },
   { question: "Do I need KYC or a merchant account?", answer: "Phala Pay has no signup and does not onboard you. You run the instance and decide your own compliance obligations; it screens payers against sanctions lists and leaves KYC to you." },
 ];
+
+export const HOME_KEYWORDS = "non-custodial crypto payment gateway, self-hosted crypto payments, accept USDC payments API, crypto top-up API";

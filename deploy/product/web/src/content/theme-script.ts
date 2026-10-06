@@ -9,9 +9,3 @@ export const THEME_SCRIPT = `(() => {
   const dark = stored === "dark" || (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.classList.toggle("dark", dark);
 })();`;
-export const THEME_MARKER = "<!-- theme-bootstrap -->";
-
-export function injectThemeScript(html: string): string {
-  if (!html.includes(THEME_MARKER)) throw new Error("Missing theme bootstrap marker");
-  return html.replace(THEME_MARKER, () => `<script>${THEME_SCRIPT}</script>`);
-}

@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
-import { injectThemeScript } from "./src/content/theme-script.ts";
+import { renderPage } from "./scripts/prerender-page.ts";
 
 // The website, pay.phala.com: static pages at `/` and `/compare` with their assets in `assets/`, served by Cloudflare
 // (cloudflare.config.ts, with the headers of public/_headers). The Cloudflare plugin writes the
@@ -20,7 +20,7 @@ export default defineConfig({
       if (context.server === undefined) return html;
       const { render } = await context.server.ssrLoadModule("/src/entry-server.tsx") as typeof import("./src/entry-server.js");
       const page = context.filename === resolve(import.meta.dirname, "compare.html") ? "compare" : "home";
-      return injectThemeScript(html.replace('<div id="root"></div>', () => `<div id="root">${render(page)}</div>`));
+      return renderPage(html, render(page));
     },
   }],
   resolve: { alias: { "@": resolve(import.meta.dirname, "src") } },

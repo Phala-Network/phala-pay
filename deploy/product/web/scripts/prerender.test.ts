@@ -2,23 +2,30 @@ import { createHash } from "node:crypto";
 import { THEME_SCRIPT } from "../src/content/theme-script.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
-import { renderPage } from "./prerender-page.ts";
+import test, { after } from "node:test";
+import { createServer } from "vite";
+import { pageMetadata, structuredData } from "../src/content/head.ts";
+import { HEAD_MARKER, renderPage } from "./prerender-page.ts";
 
 const template = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const server = await createServer({ configFile: new URL("../vite.ssr.config.ts", import.meta.url).pathname, server: { middlewareMode: true, watch: null } });
+after(() => server.close());
+const { renderHead } = await server.ssrLoadModule("/src/Head.tsx") as typeof import("../src/Head.js");
 const metadata = { title: 'Tokens & "treasury"', description: "A < B", keywords: "gateways & tokens", url: "https://pay.phala.com/compare" };
 
-await test("missing mount marker fails the build instead of publishing an empty shell", () => {
-  assert.throws(() => renderPage(template.replace('<div id="root"></div>', ""), "<h1>Page</h1>", metadata, {}), /Missing root marker/);
+await test("missing mount or head marker fails the build instead of publishing an empty shell", () => {
+  const rendered = { head: "<title>Page</title>", html: "<h1>Page</h1>" };
+  assert.throws(() => renderPage(template.replace('<div id="root"></div>', ""), rendered), /Missing root marker/);
+  assert.throws(() => renderPage(template.replace(HEAD_MARKER, ""), rendered), /Missing head marker/);
 });
 
 await test("prerender rejects styles that the production CSP would block", () => {
-  assert.throws(() => renderPage(template, '<h1 style="color:red">Page</h1>', metadata, {}), /Inline style/);
+  assert.throws(() => renderPage(template, { head: "", html: '<h1 style="color:red">Page</h1>' }), /Inline style/);
 });
 
-await test("page metadata and JSON-LD are escaped without changing Vite's client entry", () => {
+await test("React escapes metadata and JSON-LD without changing Vite's client entry", () => {
   const value = '</script><script src="evil"></script>';
-  const html = renderPage(template, "<h1>Page</h1>", metadata, { description: value });
+  const html = renderPage(template, { head: renderHead(metadata, { description: value }), html: "<h1>Page</h1>" });
   assert.ok(html.includes('<div id="root"><h1>Page</h1></div>'));
   assert.ok(html.includes("<title>Tokens &amp; &quot;treasury&quot;</title>"));
   assert.ok(html.includes('href="https://pay.phala.com/compare"'));
@@ -34,7 +41,7 @@ await test("page metadata and JSON-LD are escaped without changing Vite's client
 });
 
 await test("theme bootstrap is synchronous and authorized by the exact CSP hash", () => {
-  const html = renderPage(template, "<h1>Page</h1>", metadata, {});
+  const html = renderPage(template, { head: renderHead(metadata, {}), html: "<h1>Page</h1>" });
   assert.equal(executableInlineScriptTags(html).length, 1);
   assert.ok(html.includes(`<script>${THEME_SCRIPT}</script>`));
   assert.ok(html.indexOf(`<script>${THEME_SCRIPT}</script>`) < html.indexOf("</head>"));
@@ -66,4 +73,14 @@ await test("script detection counts uppercase and multiline tags with spaced att
     '<ScRiPt\n  defer\n>',
     '<script type="module">',
   ]);
+});
+
+await test("home and comparison head tags use their own content metadata", () => {
+  for (const page of ["home", "compare"] as const) {
+    const metadata = pageMetadata(page);
+    const head = renderHead(metadata, structuredData(page));
+    assert.ok(head.includes(`<title>${metadata.title}</title>`));
+    assert.ok(head.includes(`href="${metadata.url}"`));
+    assert.ok(head.includes(`content="${metadata.keywords}"`));
+  }
 });
