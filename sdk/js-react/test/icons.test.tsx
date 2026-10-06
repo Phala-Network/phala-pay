@@ -61,8 +61,8 @@ describe("React icons", () => {
       <AssetIcon asset="USDC" decorative={false} size={20} />
       <AssetIcon asset="xyz" decorative={false} />
       <AssetIcon asset="" decorative={false} /></>);
-    expect(screen.getByRole("img", { name: "Base Sepolia" }).querySelector("svg")?.getAttribute("width")).toBe("16");
-    expect(screen.getByRole("img", { name: "USDC" }).querySelector("svg")?.getAttribute("height")).toBe("20");
+    expect(screen.getByRole("img", { name: "Base Sepolia" }).getAttribute("width")).toBe("16");
+    expect(screen.getByRole("img", { name: "USDC" }).getAttribute("height")).toBe("20");
     expect(screen.getByRole("img", { name: "Chain 999" }).textContent).toBe("C");
     expect(screen.getByRole("img", { name: "XYZ" }).textContent).toBe("X");
     expect(screen.getByRole("img", { name: "Unknown asset" }).textContent).toBe("?");

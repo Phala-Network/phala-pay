@@ -14,11 +14,12 @@ const walletClient =
     : undefined;
 
 const appearance = { theme: params.get("theme") === "dark" ? "dark" as const : "light" as const };
-const className = params.has("frameless") ? "host-frameless" : "";
 
 const address = "0x1111111111111111111111111111111111111111";
 const token = "0x2222222222222222222222222222222222222222";
-const networks = [11155111, 84532].map((chain_id) => ({
+// `?networks=1` shows a single network, without the network choice.
+const chains = params.get("networks") === "1" ? [11155111] : [11155111, 84532];
+const networks = chains.map((chain_id) => ({
   chain_id,
   address,
   assets: ["pha", "usdc"].map((asset) => ({
@@ -35,7 +36,7 @@ function App() {
     <main>
       {params.has("deposit") ? (
         <DepositAddress
-          depositAddress={{ address, networks }} appearance={appearance} className={className}
+          depositAddress={{ address, networks }} appearance={appearance}
           {...(params.has("client_secret") ? { clientSecret: params.get("client_secret") ?? "" } : {})}
           {...(params.has("api_base") ? { apiBase: params.get("api_base") ?? "" } : {})}
         />
@@ -45,7 +46,6 @@ function App() {
           expectedAddress={params.get("expected_address") ?? ""}
           apiBase={params.get("api_base") ?? ""}
           appearance={appearance}
-          className={className}
           pollInterval={500}
           walletClient={walletClient}
           onSuccess={() => setEvents((e) => [...e, "success"])}

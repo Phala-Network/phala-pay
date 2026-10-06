@@ -13,7 +13,7 @@ import {
   type DepositAddressNetwork,
 } from "../../js/src/index.js";
 import { DepositAddress } from "../src/index.js";
-import { ADDRESS, TOKEN } from "./fixtures.js";
+import { ADDRESS, TOKEN, shownValue } from "./fixtures.js";
 
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const OTHER = `0x${"2".repeat(40)}`;
@@ -107,8 +107,8 @@ describe("DepositAddress", () => {
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for PHA on Sepolia");
     expect(qr().querySelector("path")?.getAttribute("d")).toMatch(/^M\d+ \d+h1v1h-1z/);
     expect(screen.getByText("Sepolia (chain ID 11155111)")).toBeDefined();
-    expect(screen.getByText(ADDRESS)).toBeDefined();
-    expect(screen.getByText(TOKEN)).toBeDefined();
+    expect(screen.getByText(shownValue(ADDRESS))).toBeDefined();
+    expect(screen.getByText(shownValue(TOKEN))).toBeDefined();
     expect(screen.getByRole("button", { name: "Copy Deposit address" })).toBeDefined();
     expect(screen.getByText(/Send PHA on Sepolia/)).toBeDefined();
     // Without the address's public view it knows no network's credit time, and names none.
@@ -117,7 +117,7 @@ describe("DepositAddress", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "USDC" }));
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for USDC on Sepolia");
-    expect(screen.getByText(USDC)).toBeDefined();
+    expect(screen.getByText(shownValue(USDC))).toBeDefined();
 
     fireEvent.click(screen.getByRole("radio", { name: "Base Sepolia" }));
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
@@ -140,7 +140,7 @@ describe("DepositAddress", () => {
       />,
     );
     expect(screen.getByText(/varies by network/)).toBeDefined();
-    expect(screen.getByText(OTHER)).toBeDefined();
+    expect(screen.getByText(shownValue(OTHER))).toBeDefined();
   });
 
   it("refuses details whose payment URI pays another address", () => {
@@ -412,14 +412,14 @@ describe("DepositAddress payments", () => {
     expect(microtask).toHaveBeenCalledTimes(1);
     expect(() => microtask.mock.calls[0]?.[0]()).toThrow(error);
     expect(screen.getByText("1.5 PHA received on Sepolia, 1 confirmation")).toBeDefined();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("");
     served = view([payment({ status: "credited" })]);
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(onChange).toHaveBeenCalledTimes(2);
     expect(microtask).toHaveBeenCalledTimes(2);
     expect(screen.getByText("1.5 PHA on Sepolia credited")).toBeDefined();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 
   it("removes its visibilitychange listener on unmount", async () => {
@@ -486,7 +486,7 @@ describe("DepositAddress payments", () => {
     expect(screen.getByRole("list", { name: "Payments" }).textContent).toBe(payments);
     online = true;
     await act(() => vi.advanceTimersByTimeAsync(30000));
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("");
     unmount();
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -505,7 +505,7 @@ describe("DepositAddress payments", () => {
       <DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />,
     );
     await act(() => vi.advanceTimersByTimeAsync(0));
-    return container.querySelector(".pp-message")?.textContent ?? "";
+    return [...container.querySelectorAll(".pp-message")].at(-1)?.textContent ?? "";
   }
 
   function payment(overrides: Record<string, unknown> = {}) {

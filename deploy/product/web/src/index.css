@@ -162,38 +162,19 @@
   }
 }
 
-/* The SDK's components (@phala/pay-react) bring their own unlayered stylesheet, which Tailwind's
-   layered utilities cannot override: inside the product they drop their own frame, and their
-   focus ring takes the page's. */
-.product-app .pp-root {
-  max-width: none;
-  padding: 0;
-  border: 0;
-}
-/* Its test-mode note reads as the line around it. */
-.product-app .pp-badge {
-  font-weight: inherit;
-}
-/* Its field labels and copy buttons take the page's secondary size. */
-.product-app .pp-field dt,
-.product-app .pp-copy {
-  font-size: var(--text-xs);
-}
-.product-app .pp-root button:focus-visible,
-.product-app .pp-root a:focus-visible {
-  outline-color: var(--ring);
-}
-
+/* The SDK's components (@phala/pay-react) take the page's tokens. */
 .pp-root[data-theme] {
-  --pp-color-primary: var(--primary);
-  --pp-accessible-color-on-color-primary: var(--primary-foreground);
-  --pp-color-background: var(--card);
+  --pp-color-surface: var(--muted);
   --pp-color-text: var(--card-foreground);
-  --pp-color-text-secondary: var(--muted-foreground);
+  --pp-color-text-muted: var(--muted-foreground);
   --pp-color-border: var(--border);
-  --pp-color-danger: var(--destructive);
+  --pp-color-primary: var(--primary);
+  --pp-color-primary-foreground: var(--primary-foreground);
+  --pp-color-focus: var(--ring);
   --pp-color-success: var(--success);
-  --pp-border-radius: var(--radius);
-  --pp-font-family: inherit;
+  --pp-color-danger: var(--destructive);
+  /* --pp-color-warning keeps the SDK default: --warning is not yet safe as text color. */
+  --pp-font-family-mono: var(--font-mono);
+  --pp-radius: var(--radius);
 }
 .github-icon { mask: url("./icons/github.svg") center / contain no-repeat; }

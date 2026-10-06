@@ -23,7 +23,8 @@ import {
 } from "@phala/pay";
 import type { Appearance } from "./appearance.js";
 import { AssetIcon, NetworkIcon } from "./Icons.js";
-import { Field } from "./Field.js";
+import { CopyButton, Field } from "./Field.js";
+import { ExternalGlyph, ToneGlyph } from "./Glyphs.js";
 import { QrCode } from "./QrCode.js";
 import { useCheckout } from "./useCheckout.js";
 
@@ -130,18 +131,27 @@ export function Checkout({
       className={className === undefined ? "pp-root" : `pp-root ${className}`}
       data-theme={appearance?.theme ?? "light"}
     >
+      {status === "loading" && (
+        <div className="pp-skeleton" aria-hidden="true">
+          <span className="pp-skeleton__line" />
+          <span className="pp-skeleton__line" />
+        </div>
+      )}
       {quote !== null && (
-        <>
-          <p className="pp-amount">
-            <AssetIcon asset={quote.asset} size={20} />{" "}
+        <div className="pp-summary">
+          <p className="pp-summary__amount">
+            <AssetIcon asset={quote.asset} size={20} />
             {formatTokenAmount(quote)} {quote.asset.toUpperCase()}
           </p>
-          <p className="pp-subtitle">
-            {formatAmount(quote)} top-up · <NetworkIcon chainId={quote.chain_id} size={16} />{" "}
-            {networkName(quote.chain_id)}
-            {!quote.livemode && <span className="pp-badge"> · Test mode</span>}
+          <p className="pp-summary__meta">
+            {formatAmount(quote)} top-up ·{" "}
+            <span className="pp-summary__network">
+              <NetworkIcon chainId={quote.chain_id} size={16} />
+              {networkName(quote.chain_id)}
+            </span>
+            {!quote.livemode && <> · <span className="pp-summary__test-mode">Test mode</span></>}
           </p>
-        </>
+        </div>
       )}
       <StatusLine status={status} quote={quote} now={now} error={error} reconnecting={reconnecting ?? false} />
       {txHash !== null && quote !== null && <Transaction hash={txHash} chainId={quote.chain_id} />}
@@ -174,7 +184,7 @@ function StatusLine({
   error: CheckoutState["error"];
   reconnecting: boolean;
 }) {
-  const tone =
+  const tone: "neutral" | "success" | "danger" =
     status === "credited"
       ? "success"
       : ["rejected", "reversed", "expired", "canceled", "error"].includes(status)
@@ -182,12 +192,17 @@ function StatusLine({
         : "neutral";
   return (
     <div className="pp-status" data-tone={tone}>
-      <span role="status" aria-live="polite">
+      <span className="pp-status__icon">
+        <ToneGlyph tone={tone} />
+      </span>
+      <span className="pp-status__text" role="status" aria-live="polite">
         {statusMessage(status, quote, error?.code)}
-        {(reconnecting || error !== null) && status !== "error" ? " (reconnecting…)" : ""}
+        {(reconnecting || error !== null) && status !== "error" && (
+          <span className="pp-status__note"> (reconnecting…)</span>
+        )}
       </span>
       {status === "waiting" && quote !== null && (
-        <span className="pp-countdown" aria-label="Time left to pay">
+        <span className="pp-status__countdown" role="timer" aria-label="Time left to pay">
           {formatCountdown(quote.expires_at, now)}
         </span>
       )}
@@ -255,14 +270,18 @@ function Transaction({ hash, chainId }: { hash: Hash; chainId: number }) {
   const url = transactionUrl(chainId, hash);
   return (
     <p className="pp-tx">
-      Transaction sent:{" "}
-      {url === undefined ? (
-        <span className="pp-value">{hash}</span>
-      ) : (
-        <a className="pp-value" href={url} target="_blank" rel="noreferrer">
-          {hash}
-        </a>
-      )}
+      <span className="pp-tx__text">
+        Transaction sent:{" "}
+        {url === undefined ? (
+          <span className="pp-tx__hash">{hash}</span>
+        ) : (
+          <a className="pp-tx__hash" href={url} target="_blank" rel="noreferrer">
+            {hash}
+            <ExternalGlyph />
+          </a>
+        )}
+      </span>
+      <CopyButton value={hash} label="transaction hash" />
     </p>
   );
 }
@@ -326,7 +345,7 @@ function PaymentOptions({
             }}
             type="button"
             role="tab"
-            className="pp-tab"
+            className="pp-tabs__tab"
             id={`${id}-tab-${m.id}`}
             aria-label={m.id === "wallet" ? "Browser wallet" : m.id === "manual" ? "Manual transfer" : m.label}
             aria-selected={method === m.id}
@@ -339,6 +358,7 @@ function PaymentOptions({
         ))}
       </div>
       <div
+        className="pp-tabs__panel"
         role="tabpanel"
         id={`${id}-panel-${method}`}
         aria-labelledby={`${id}-tab-${method}`}
@@ -355,9 +375,9 @@ function PaymentOptions({
           />
         )}
         {method === "qr" && (
-          <div className="pp-qr-panel">
+          <div className="pp-qr">
             <QrCode value={quote.payment_uri} label={`Payment request for ${amount}`} />
-            <p className="pp-message">
+            <p className="pp-qr__caption">
               Scan with your wallet app and check it shows {amount} on {networkName(quote.chain_id)}.
             </p>
           </div>
@@ -428,9 +448,9 @@ function WalletPanel({
           onClick={() => void pay(choice)}
           aria-label={walletClient === undefined ? `${buttonText} (${choice.name})` : buttonText}
         >
-          {choice.icon !== "" && <img src={choice.icon} alt="" />}
+          {choice.icon !== "" && <img className="pp-button__icon" src={choice.icon} alt="" />}
           <span>{buttonText}</span>
-          {walletClient === undefined && <span className="pp-wallet-name">{choice.name}</span>}
+          {walletClient === undefined && <span className="pp-button__detail">{choice.name}</span>}
         </button>
       ))}
       <p

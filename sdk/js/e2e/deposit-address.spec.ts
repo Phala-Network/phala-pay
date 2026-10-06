@@ -31,7 +31,7 @@ test("retains deposit selections and payments through a three-minute network out
   // Fire the pending poll once, then let its real network response settle without
   // advancing the request timeout while Chromium is still processing the response.
   await page.clock.fastForward(30000);
-  await expect(page.getByRole("status")).toHaveCount(0);
+  await expect(page.getByRole("status")).toHaveText("");
 });
 
 test("deposit network and token radio groups work by keyboard and pass axe", async ({ page }) => {

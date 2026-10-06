@@ -4,7 +4,7 @@ import { createWalletClient, custom, encodeFunctionResult, erc20Abi } from "viem
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Checkout } from "../src/index.js";
 import type { CheckoutState, ClientQuote, EthereumProvider, WalletError } from "../../js/src/index.js";
-import { ADDRESS, API_BASE, CLIENT_SECRET, TOKEN, quote } from "./fixtures.js";
+import { ADDRESS, API_BASE, CLIENT_SECRET, TOKEN, quote, shownValue } from "./fixtures.js";
 
 const NOW = (quote().expires_at - 14 * 60 - 32) * 1000;
 let served: ClientQuote;
@@ -128,12 +128,13 @@ describe("Checkout", () => {
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "QR code" }));
     const qr = within(screen.getByRole("tabpanel")).getByRole("img");
     expect(qr.getAttribute("aria-label")).toBe("Payment request for 100.502512562814070352 PHA");
-    expect(qr.querySelector("path")?.getAttribute("d")).toMatch(/^M\d+ \d+h1v1h-1z/);
+    // The finder pattern starts after a quiet zone of four modules.
+    expect(qr.querySelector("path")?.getAttribute("d")).toMatch(/^M4 4h1v1h-1z/);
 
     await user.keyboard("{End}");
     const manual = screen.getByRole("tabpanel");
-    expect(within(manual).getByText(ADDRESS)).toBeDefined();
-    expect(within(manual).getByText(TOKEN)).toBeDefined();
+    expect(within(manual).getByText(shownValue(ADDRESS))).toBeDefined();
+    expect(within(manual).getByText(shownValue(TOKEN))).toBeDefined();
     expect(within(manual).getByText("Sepolia (chain ID 11155111)")).toBeDefined();
   });
 
@@ -161,6 +162,9 @@ describe("Checkout", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     await renderCheckout();
     await user.click(screen.getByRole("tab", { name: "Manual transfer" }));
+    // In full, in groups of four after 0x, which copy without spaces.
+    const groups = screen.getByText(shownValue(ADDRESS)).querySelectorAll(".pp-field__group");
+    expect([...groups].map((group) => group.textContent)).toEqual(["0x1111", ...Array<string>(9).fill("1111")]);
     await user.click(screen.getByRole("button", { name: "Copy Send to address" }));
     await user.click(screen.getByRole("button", { name: "Copy Exact amount" }));
     expect(writeText.mock.calls).toEqual([[ADDRESS], ["100.502512562814070352"]]);
@@ -231,7 +235,7 @@ describe("Checkout", () => {
     vi.setSystemTime(quote().expires_at * 1000);
     await poll();
     expect(screen.getByRole("status").textContent).toMatch(/expired. Do not send funds/);
-    expect(screen.queryByText(ADDRESS)).toBeNull();
+    expect(screen.queryByText(shownValue(ADDRESS))).toBeNull();
     expect(onExpire).toHaveBeenCalledTimes(1);
   });
 

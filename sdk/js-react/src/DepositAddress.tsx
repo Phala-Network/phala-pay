@@ -83,23 +83,24 @@ export function DepositAddress({
       className={className === undefined ? "pp-root" : `pp-root ${className}`}
       data-theme={appearance?.theme ?? "light"}
     >
-      <p className="pp-subtitle">
+      <p className="pp-intro">
         {depositAddress.address === null
           ? "Reusable deposit address; varies by network"
           : "One reusable address for supported tokens and networks"}
       </p>
       {networks.length > 1 && (
         <fieldset className="pp-choices">
-          <legend>Network</legend>
+          <legend className="pp-choices__legend">Network</legend>
           {networks.map((each) => (
-            <label key={each.chain_id}>
+            <label className="pp-choices__option" key={each.chain_id}>
               <input
+                className="pp-choices__input"
                 type="radio"
                 name={`${id}-network`}
                 checked={each.chain_id === network.chain_id}
                 onChange={() => setSelectedChain(each.chain_id)}
               />
-              <NetworkIcon chainId={each.chain_id} size={16} />{" "}
+              <NetworkIcon chainId={each.chain_id} size={16} />
               {networkName(each.chain_id)}
             </label>
           ))}
@@ -107,22 +108,23 @@ export function DepositAddress({
       )}
       {network.assets.length > 1 && (
         <fieldset className="pp-choices">
-          <legend>Token</legend>
+          <legend className="pp-choices__legend">Token</legend>
           {network.assets.map((each) => (
-            <label key={each.asset}>
+            <label className="pp-choices__option" key={each.asset}>
               <input
+                className="pp-choices__input"
                 type="radio"
                 name={`${id}-token`}
                 checked={each.asset === token.asset}
                 onChange={() => setSelectedAsset(each.asset)}
               />
-              <AssetIcon asset={each.asset} size={16} />{" "}
+              <AssetIcon asset={each.asset} size={16} />
               {each.asset.toUpperCase()}
             </label>
           ))}
         </fieldset>
       )}
-      <div className="pp-qr-panel">
+      <div className="pp-qr">
         <QrCode value={token.payment_uri} label={`Deposit address for ${symbol} on ${name}`} />
       </div>
       <dl className="pp-fields">
@@ -130,11 +132,16 @@ export function DepositAddress({
         <Field label={`Token (${symbol}) contract`} value={contract} copy />
         <Field label="Deposit address" value={to} copy />
       </dl>
-      {reconnecting && <p className="pp-message" role="status">Reconnecting…</p>}
+      <p className="pp-message" role="status">{reconnecting ? "Reconnecting…" : ""}</p>
       {payments.length > 0 && (
         <ul className="pp-payments" aria-live="polite" aria-label="Payments">
           {payments.map((payment) => (
-            <li key={`${payment.chain_id}:${payment.tx_hash}:${payment.created}`}>
+            <li
+              className="pp-payments__item"
+              key={`${payment.chain_id}:${payment.tx_hash}:${payment.created}`}
+              data-tone={paymentTone(payment)}
+            >
+              <span className="pp-payments__dot" aria-hidden="true" />
               {paymentMessage(payment)}
             </li>
           ))}
@@ -274,6 +281,10 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
       ? formatWait(only)
       : list.format([...names].map(([seconds, on]) => `${formatWait(seconds)} on ${list.format(on)}`));
   return `Any amount is credited at the market rate on arrival, usually in ${usually}.`;
+}
+
+function paymentTone({ status }: DepositAddressPayment): "neutral" | "success" | "danger" {
+  return status === "credited" ? "success" : status === "rejected" || status === "reversed" ? "danger" : "neutral";
 }
 
 function paymentMessage(payment: DepositAddressPayment): string {
