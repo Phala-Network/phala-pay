@@ -90,6 +90,21 @@ impl SharedSource {
             company,
         }
     }
+    fn get_or_build(
+        sources: &mut BTreeMap<String, Arc<Self>>,
+        key: String,
+        reuse: Duration,
+        source_id: &'static str,
+        company: &'static str,
+        build: impl FnOnce() -> Result<Arc<dyn PriceSource>, String>,
+    ) -> Result<Arc<Self>, String> {
+        if let Some(source) = sources.get(&key) {
+            return Ok(source.clone());
+        }
+        let source = Arc::new(Self::new(build()?, reuse, source_id, company));
+        sources.insert(key, source.clone());
+        Ok(source)
+    }
     async fn quote_shared(&self) -> Result<(PriceQuote, Option<u64>), PriceError> {
         self.quote_with_reuse(self.reuse, tokio::time::Instant::now())
             .await
@@ -220,65 +235,74 @@ impl PricingRuntime {
                         Source::UniswapV2Twap { .. } => "uniswap_v2_twap",
                         _ => s.company(),
                     };
-                    let (key, reuse) = match s {
+                    let source = match s {
                         Source::Coinmetrics { .. } => {
                             return Err("restricted legacy source requires migration".into());
                         }
-                        Source::Kraken { symbol, .. } => {
-                            (format!("kraken|{symbol}"), Duration::ZERO)
-                        }
-                        Source::Binance { symbol, .. } => {
-                            (format!("binance|{symbol}"), Duration::ZERO)
-                        }
+                        Source::Kraken { symbol, .. } => SharedSource::get_or_build(
+                            sources,
+                            format!("kraken|{symbol}"),
+                            Duration::ZERO,
+                            source_id,
+                            s.company(),
+                            || {
+                                Ok(Arc::new(
+                                    Kraken::new(symbol.clone()).map_err(|e| e.to_string())?,
+                                ))
+                            },
+                        )?,
+                        Source::Binance { symbol, .. } => SharedSource::get_or_build(
+                            sources,
+                            format!("binance|{symbol}"),
+                            Duration::ZERO,
+                            source_id,
+                            s.company(),
+                            || {
+                                Ok(Arc::new(
+                                    Binance::new(symbol.clone()).map_err(|e| e.to_string())?,
+                                ))
+                            },
+                        )?,
                         Source::UniswapV2Twap { twap, .. } => {
                             let (a, b, _) = price_pair(route, s)?;
                             let policy = serde_json::to_string(twap)
                                 .map_err(|_| "price source encoding failed")?;
-                            (format!("uniswap_v2_twap|{a}|{b}|{policy}"), SOURCE_REUSE)
+                            SharedSource::get_or_build(
+                                sources,
+                                format!("uniswap_v2_twap|{a}|{b}|{policy}"),
+                                SOURCE_REUSE,
+                                source_id,
+                                s.company(),
+                                || {
+                                    Ok(Arc::new(
+                                        UniswapV2::new(
+                                            routes.resolved_price_group(&a)?,
+                                            routes.resolved_price_group(&b)?,
+                                            twap.clone(),
+                                            Arc::new(crate::db::pricing::TwapStore(pool.clone())),
+                                        )
+                                        .map_err(|e| e.to_string())?,
+                                    ))
+                                },
+                            )?
                         }
-                        Source::Chainlink { feed, .. } => {
+                        Source::Chainlink { feed: name, .. } => {
                             let (a, b, chain) = price_pair(route, s)?;
-                            (format!("chainlink|{feed}|{chain}|{a}|{b}"), SOURCE_REUSE)
-                        }
-                    };
-                    let source = if let Some(source) = sources.get(&key) {
-                        source.clone()
-                    } else {
-                        let inner: Arc<dyn PriceSource> = match s {
-                            Source::Coinmetrics { .. } => {
-                                return Err("restricted legacy source requires migration".into());
-                            }
-                            Source::Kraken { symbol, .. } => {
-                                Arc::new(Kraken::new(symbol.clone()).map_err(|e| e.to_string())?)
-                            }
-                            Source::Binance { symbol, .. } => {
-                                Arc::new(Binance::new(symbol.clone()).map_err(|e| e.to_string())?)
-                            }
-                            Source::UniswapV2Twap { twap, .. } => {
-                                let (a, b, _) = price_pair(route, s)?;
-                                Arc::new(
-                                    UniswapV2::new(
+                            SharedSource::get_or_build(
+                                sources,
+                                format!("chainlink|{name}|{chain}|{a}|{b}"),
+                                SOURCE_REUSE,
+                                source_id,
+                                s.company(),
+                                || {
+                                    Ok(Arc::new(Chainlink::new(
                                         routes.resolved_price_group(&a)?,
                                         routes.resolved_price_group(&b)?,
-                                        twap.clone(),
-                                        Arc::new(crate::db::pricing::TwapStore(pool.clone())),
-                                    )
-                                    .map_err(|e| e.to_string())?,
-                                )
-                            }
-                            Source::Chainlink { feed: name, .. } => {
-                                let (a, b, chain) = price_pair(route, s)?;
-                                Arc::new(Chainlink::new(
-                                    routes.resolved_price_group(&a)?,
-                                    routes.resolved_price_group(&b)?,
-                                    feed(name, chain).ok_or("unsupported feed")?,
-                                ))
-                            }
-                        };
-                        let source =
-                            Arc::new(SharedSource::new(inner, reuse, source_id, s.company()));
-                        sources.insert(key, source.clone());
-                        source
+                                        feed(name, chain).ok_or("unsupported feed")?,
+                                    )))
+                                },
+                            )?
+                        }
                     };
                     let max_age_s = match s {
                         Source::UniswapV2Twap { twap, .. } => Some(twap.max_sample_age_s),
