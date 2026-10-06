@@ -201,7 +201,8 @@ impl<T: Clone + Send + Sync + 'static> Coalesced<T> {
                 self.company,
                 if coalesced { "coalesced" } else { "miss" },
             );
-            // Joined callers inherit the leader's fetch deadline; fail closed rather than extending it.
+            // Joined callers inherit the leader's fetch deadline; fail closed rather than
+            // extending it.
             let cached = tokio::time::timeout_at(deadline, waiter.flight.clone())
                 .await
                 .map_err(|_| PriceError::Timeout)?
@@ -2238,6 +2239,35 @@ mod tests {
             .unwrap();
             assert!(!Arc::ptr_eq(&a, &b), "{kind} symbol");
         }
+        let mut a = route();
+        a.route = "symbol-a".into();
+        a.asset.symbol = "usdt".into();
+        a.pricing.mode = PricingMode::Stablecoin;
+        a.pricing.primary.clear();
+        a.pricing.check.clear();
+        a.pricing.fx.clear();
+        a.pricing.sources = vec![
+            Source::Kraken {
+                symbol: "USDCUSD".into(),
+                company: "kraken".into(),
+            },
+            Source::Kraken {
+                symbol: "USDTUSD".into(),
+                company: "kraken".into(),
+            },
+        ];
+        let mut b = a.clone();
+        b.route = "symbol-b".into();
+        b.asset.contract = alloy_primitives::Address::repeat_byte(2);
+        b.pricing.sources.swap(0, 1);
+        let routes = RouteSet::with_groups(vec![a.clone(), b.clone()], clients.clone()).unwrap();
+        let runtimes = PricingRuntime::build_all(&routes, pool.clone()).unwrap();
+        let a = &runtimes[&(a.route.clone(), a.version)];
+        let b = &runtimes[&(b.route.clone(), b.version)];
+        assert!(
+            !Arc::ptr_eq(&a.sources[0].source, &b.sources[0].source),
+            "configured symbol"
+        );
         for (label, grace_s, group_a) in [("grace", 3601, "a"), ("group_a", 3600, "c")] {
             let [mut a, mut b] = pha_routes();
             for (index, route) in [&mut a, &mut b].into_iter().enumerate() {
