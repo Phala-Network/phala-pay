@@ -122,7 +122,7 @@ impl GroupPolicy {
     }
 }
 /// Sanitized typed classification. No raw response message is formatted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, thiserror::Error)]
 pub enum Failure {
     /// Connection or HTTP 408 timeout.
     #[error("RPC transport failure")]
@@ -676,7 +676,7 @@ impl RpcGroup {
     }
     /// Feeds every failed attempt back into selection.
     pub fn failed(&self, index: usize, error: Failure) {
-        metrics::event(self, index, error.code(), 1);
+        metrics::event(self, index, metrics::EventKind::Failure(error), 1);
         if let Some(h) = self
             .health
             .lock()
@@ -831,7 +831,7 @@ impl RpcGroup {
         metrics::event(
             self,
             index,
-            "budget_wait",
+            metrics::EventKind::BudgetWait,
             u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX),
         );
         admission.map_err(|_| Failure::Deadline)?;
@@ -1141,6 +1141,7 @@ impl RpcGroup {
                 .await?;
         }
         heads.insert(tag.to_owned(), head.clone());
+        metrics::event(self, index, metrics::EventKind::HeadPerformed, 1);
         Ok((head, value))
     }
     /// Saves an A/B-agreed cursor hash anchor before issuing addresses or scanning past it.

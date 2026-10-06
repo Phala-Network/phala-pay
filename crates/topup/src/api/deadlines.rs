@@ -23,9 +23,13 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) async fn request_deadline(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
     match tokio::time::timeout(REQUEST_TIMEOUT, next.run(request)).await {
         Ok(response) => response,
-        Err(_) => super::error::ApiError::database_busy().into_response(),
+        Err(_) => {
+            crate::observability::metrics::request_deadline_exceeded(method.as_str());
+            super::error::ApiError::request_deadline_exceeded().into_response()
+        }
     }
 }
 
@@ -141,6 +145,7 @@ mod tests {
                 }),
             )
             .layer(axum::middleware::from_fn(request_deadline));
+        let before = crate::observability::metrics::request_deadline_observations("POST");
         let response = app
             .oneshot(Request::post("/").body(axum::body::Body::empty()).unwrap())
             .await
@@ -149,6 +154,25 @@ mod tests {
             response.status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
+        assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "2");
+        let body = axum::body::to_bytes(response.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "unavailable");
+        assert_eq!(
+            body["error"]["message"],
+            "the request did not complete within its deadline; retry"
+        );
+        assert_eq!(
+            crate::observability::metrics::request_deadline_observations("POST"),
+            before + 1
+        );
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let metrics = crate::observability::metrics::render(&pool).unwrap();
+        assert!(metrics.contains("topup_api_request_deadline_exceeded_total{method=\"POST\"}"));
     }
 
     #[tokio::test(start_paused = true)]

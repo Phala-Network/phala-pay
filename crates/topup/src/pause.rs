@@ -209,6 +209,17 @@ pub(crate) struct InstancePause {
     lease: tokio::sync::Mutex<InstanceLease>,
 }
 
+/// Instance pause failures mapped at the API boundary.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PauseError {
+    #[error("invalid pause duration")]
+    InvalidDuration,
+    #[error("instance pause audit deadline expired; commit outcome is unknown")]
+    AuditOutcomeUnknown,
+    #[error("{0}")]
+    Database(#[from] sqlx::Error),
+}
+
 struct InstanceLease {
     owner: String,
     deadline: tokio::time::Instant,
@@ -275,13 +286,12 @@ impl InstancePause {
         duration: i64,
         actor: &Actor,
         reason: &str,
-    ) -> Result<bool, sqlx::Error> {
+    ) -> Result<bool, PauseError> {
         let mut lease = self.lease.lock().await;
         if lease.deadline > tokio::time::Instant::now() && lease.owner != owner {
             return Ok(false);
         }
-        let seconds = u64::try_from(duration)
-            .map_err(|_| sqlx::Error::Protocol("invalid pause duration".to_owned()))?;
+        let seconds = u64::try_from(duration).map_err(|_| PauseError::InvalidDuration)?;
         // Admission shares this lock with mutations. Bound audit persistence so a stalled
         // database cannot prevent requests from observing lease expiry indefinitely.
         let record = async {
@@ -299,9 +309,11 @@ impl InstancePause {
             .await?;
             tx.commit().await
         };
+        // The audit commit may already have landed when this deadline expires. Its outcome is
+        // unknown, so this must not be classified as a pool acquisition timeout.
         tokio::time::timeout(std::time::Duration::from_secs(5), record)
             .await
-            .map_err(|_| sqlx::Error::PoolTimedOut)??;
+            .map_err(|_| PauseError::AuditOutcomeUnknown)??;
         *lease = InstanceLease {
             owner: owner.to_owned(),
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(seconds),
@@ -315,6 +327,7 @@ impl InstancePause {
 #[cfg(test)]
 mod instance_tests {
     use super::*;
+    use axum::response::IntoResponse;
 
     #[tokio::test(start_paused = true)]
     async fn startup_pause_expires_without_a_health_probe_or_worker() {
@@ -342,7 +355,26 @@ mod instance_tests {
                 "test upgrade",
             )
             .await;
-        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(matches!(error, PauseError::AuditOutcomeUnknown));
+        let error = crate::api::error::ApiError::from(error);
+        assert_eq!(error.code(), "internal_error");
+        let response = error.into_response();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(
+            response
+                .extensions()
+                .get::<crate::api::error::NotExecuted>()
+                .is_none()
+        );
+        assert!(
+            !response
+                .headers()
+                .contains_key(axum::http::header::RETRY_AFTER)
+        );
         assert!(started.elapsed() <= std::time::Duration::from_secs(5));
         assert!(!pause.mutations_paused().await);
         pool.close().await;

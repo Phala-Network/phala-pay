@@ -14,6 +14,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed
+
+- Request deadline errors now say "the request did not complete within its deadline; retry"
+  instead of blaming the database, with `503 unavailable` and `Retry-After: 2`.
+
 ### Fixed
 
 - `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
@@ -22,6 +27,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - List endpoints for quotes, refunds, and forwarders use account-scoped indexes, and refunds load
   in one query; they scanned whole tables as history grew. Heartbeat reads use a timestamp index
   while preserving timestamp ordering.
+- Database pool acquisition timeouts and closed pools now return `503 unavailable` instead of
+  `500 internal_error`, allowing retries without saving an idempotency response.
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 

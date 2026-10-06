@@ -242,6 +242,68 @@ async fn cooldown_requires_repeated_success_and_redirect_quarantine_is_permanent
     assert!(!group.probe_due(0));
 }
 #[tokio::test]
+async fn head_validation_metrics_never_count_as_failures() {
+    let (url, task) = server(Router::new().route(
+        "/",
+        post(|| async { Json(json!({"jsonrpc":"2.0","id":1,"result":header("0x64".into())})) }),
+    ))
+    .await;
+    let group = RpcGroup::new(
+        "head-validation-metrics-test".into(),
+        1,
+        GroupPolicy::default(),
+        vec![Member {
+            id: "one".into(),
+            company: "company".into(),
+            endpoint: Redacted::parse(&url).unwrap(),
+            account: "account".into(),
+            key: "key".into(),
+            priority: 0,
+            weight: 1,
+        }],
+        budgets(),
+    )
+    .unwrap();
+    group
+        .head(0, "latest", Instant::now() + Duration::from_secs(2))
+        .await
+        .unwrap();
+    task.abort();
+    group.failed(0, Failure::Server);
+    let families = metrics::events().unwrap();
+    let samples = |name: &str| {
+        families
+            .iter()
+            .filter(|family| family.name() == name)
+            .flat_map(|family| family.get_metric())
+            .filter(|sample| {
+                sample.get_label().iter().any(|label| {
+                    label.name() == "group" && label.value() == "head-validation-metrics-test"
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let heads = samples("topup_rpc_head_validations_total");
+    assert_eq!(heads.len(), 1);
+    assert!(
+        heads[0]
+            .get_label()
+            .iter()
+            .any(|label| label.name() == "result" && label.value() == "performed")
+    );
+    assert_eq!(heads[0].get_counter().get_value(), 1.0);
+    let failures = samples("topup_rpc_member_failures_total");
+    assert_eq!(failures.len(), 1);
+    assert!(
+        failures[0]
+            .get_label()
+            .iter()
+            .any(|label| label.name() == "class" && label.value() == "server")
+    );
+    assert_eq!(failures[0].get_counter().get_value(), 1.0);
+}
+
+#[tokio::test]
 async fn serving_metrics_follow_account_pause_without_changing_selection() {
     let group = group("http://127.0.0.1:1");
     group.verified(0, true);
