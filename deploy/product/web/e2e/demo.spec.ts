@@ -17,6 +17,7 @@ import {
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
 import type { Timeline } from "../src/api.js";
+import { EXPIRED_QUOTE_INTERVAL_MS, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
 
 declare global {
   interface Window {
@@ -334,11 +335,7 @@ async function declareRefund(scenes: Locator, amount: string): Promise<Locator> 
 
 test("query outages show retrying states, recover, and preserve the last account data", async ({ page }) => {
   let available = false;
-  let accountReads = 0;
   await page.route("**/api/{account,assets,trust}", async (route) => {
-    if (route.request().url().endsWith("/account")) {
-      accountReads += 1;
-    }
     if (available) {
       await route.continue();
     } else {
@@ -358,14 +355,18 @@ test("query outages show retrying states, recover, and preserve the last account
   await expect(trust).toContainText("Networks are unavailable right now; retrying…");
 
   available = true;
-  await expect(product.getByTestId("balance")).toHaveText("$0.00", { timeout: 25_000 });
-  await expect(product.getByLabel("Network", { exact: true })).toBeEnabled({ timeout: 25_000 });
-  await expect(trust).toContainText("Attestation verified", { timeout: 25_000 });
+  const recovered = page.waitForResponse((response) => response.url().endsWith("/api/account") && response.status() === 200);
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await recovered;
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  await expect(product.getByLabel("Network", { exact: true })).toBeEnabled();
+  await expect(trust).toContainText("Attestation verified");
   await expect(trust).not.toContainText("retrying…");
 
-  const reads = accountReads;
   available = false;
-  await expect.poll(() => accountReads, { timeout: 25_000 }).toBeGreaterThan(reads);
+  const unavailable = page.waitForResponse((response) => response.url().endsWith("/api/account") && response.status() === 503);
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await unavailable;
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
   await expect(product).not.toContainText("Account is unavailable");
 });
@@ -390,19 +391,13 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
   await expect(scenes.getByTestId("stream-status")).toHaveText("Unavailable");
   await expect(scenes.getByRole("list", { name: /^Loading/ })).toHaveCount(0);
   const reads = timelineReads;
-  await page.clock.runFor(30_000);
+  await page.clock.runFor(3 * TIMELINE_INTERVAL_MS);
   expect(timelineReads).toBe(reads);
 });
 
 test("a refused timeline keeps its cached data and shows paused updates", async ({ page }) => {
   let missing = false;
   let reads = 0;
-  let refused = false;
-  page.on("response", (response) => {
-    if (new URL(response.url()).pathname.startsWith("/api/quotes/") && response.status() === 404) {
-      refused = true;
-    }
-  });
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
     reads += 1;
@@ -424,16 +419,15 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
   missing = true;
-  // Checkout's onChange can leave a successful read in flight, whose completion restarts the
-  // interval during runFor. Advance until a polling response actually refuses the timeline.
-  await expect.poll(async () => {
-    await page.clock.runFor(10_000);
-    return refused;
-  }).toBe(true);
+  const response = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith("/api/quotes/") && response.status() === 404,
+  );
+  await page.clock.runFor(TIMELINE_INTERVAL_MS);
+  await response;
   await expect(scenes.getByText("Updates paused.", { exact: true })).toBeVisible();
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
   const paused = reads;
-  await page.clock.runFor(30_000);
+  await page.clock.runFor(3 * TIMELINE_INTERVAL_MS);
   expect(reads).toBe(paused);
 });
 
@@ -470,14 +464,17 @@ for (const sent of [false, true]) {
     await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     const initial = reads;
-    await page.clock.runFor(10_000);
+    const request = page.waitForRequest("**/api/quotes/*");
+    const response = page.waitForResponse(async (response) => response.request() === await request);
     if (sent) {
-      expect(reads).toBeGreaterThan(initial);
+      await page.clock.runFor(TIMELINE_ACTIVE_INTERVAL_MS);
     } else {
+      await page.clock.runFor(TIMELINE_INTERVAL_MS);
       expect(reads).toBe(initial);
-      await page.clock.runFor(30_000);
-      expect(reads).toBeGreaterThan(initial);
+      await page.clock.runFor(EXPIRED_QUOTE_INTERVAL_MS - TIMELINE_INTERVAL_MS);
     }
+    await response;
+    expect(reads).toBeGreaterThan(initial);
   });
 }
 
@@ -513,11 +510,14 @@ test("a swept payment keeps polling until its webhook arrives", async ({ page })
   await expect(scenes.getByTestId("stream-status")).toHaveText("Live");
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
   delivered = true;
-  await page.clock.runFor(10_000);
+  const request = page.waitForRequest("**/api/quotes/*");
+  const response = page.waitForResponse(async (response) => response.request() === await request);
+  await page.clock.runFor(TIMELINE_INTERVAL_MS);
+  await response;
   await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "complete");
   await expect(scenes.getByTestId("stream-status")).toHaveText("Done");
   const stopped = reads;
-  await page.clock.runFor(30_000);
+  await page.clock.runFor(3 * TIMELINE_INTERVAL_MS);
   expect(reads).toBe(stopped);
 });
 
