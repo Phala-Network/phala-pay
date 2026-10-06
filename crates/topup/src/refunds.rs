@@ -17,15 +17,16 @@
 //! transaction; or with `transaction_not_found` when neither provider has returned the transaction
 //! for [`NOT_FOUND_AFTER`] since it was attached. The merchant then requests a new refund.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use alloy::sol;
 use alloy_primitives::{Address, B256, U256};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
+use moka::future::Cache;
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgConnection, PgPool};
 use tokio_util::sync::CancellationToken;
@@ -291,30 +292,36 @@ impl DestinationScreener for OracleDestinationScreener {
     }
 }
 
+// Ten minutes is well below the daily treasury re-screen baseline; fund-moving paths stay fresh.
+const CLEAR_VERDICT_TTL: Duration = Duration::from_secs(10 * 60);
+// Bound memory to 10,000 clear destinations while letting Moka evict entries individually.
+const CLEAR_VERDICT_CAPACITY: u64 = 10_000;
+
 /// Caches clear sweepable treasury destinations so interactive API paths do not queue on RPC
 /// budgets: a clear destination is reused for 10 minutes, while refund, deposit, and treasury
 /// screening paths call [`DestinationScreener::screen`] and remain fresh.
 pub struct CachedDestinationScreener {
     inner: Arc<dyn DestinationScreener>,
-    entries: Mutex<HashMap<(u64, Address, Address), Instant>>,
-    ttl: Duration,
+    entries: Cache<(u64, Address, Address), ()>,
 }
 
 impl CachedDestinationScreener {
     /// Wraps `inner` with the production ten-minute clear-verdict cache.
     #[must_use]
     pub fn new(inner: Arc<dyn DestinationScreener>) -> Self {
-        Self::with_ttl(inner, Duration::from_secs(10 * 60))
+        Self::with_ttl(inner, CLEAR_VERDICT_TTL)
     }
 
-    /// Wraps `inner` with a cache using `ttl`; intended for deterministic tests as well as the
+    /// Wraps `inner` with a cache using `ttl`; intended for short-lived tests as well as the
     /// production constructor.
     #[must_use]
     pub fn with_ttl(inner: Arc<dyn DestinationScreener>, ttl: Duration) -> Self {
         Self {
             inner,
-            entries: Mutex::new(HashMap::new()),
-            ttl,
+            entries: Cache::builder()
+                .time_to_live(ttl)
+                .max_capacity(CLEAR_VERDICT_CAPACITY)
+                .build(),
         }
     }
 }
@@ -325,13 +332,12 @@ impl DestinationScreener for CachedDestinationScreener {
         let verdict = self.inner.screen(route, destination).await;
         if verdict == DestinationScreening::Sanctioned {
             self.entries
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&(
+                .invalidate(&(
                     route.chain.chain_id,
                     route.screening.sanctions_oracle,
                     destination,
-                ));
+                ))
+                .await;
         }
         verdict
     }
@@ -342,26 +348,21 @@ impl DestinationScreener for CachedDestinationScreener {
             route.screening.sanctions_oracle,
             destination,
         );
+        // Moka shares Err(verdict) with concurrent waiters without caching it; Option would
+        // lose the distinction between sanctioned and unavailable screening.
+        match self
+            .entries
+            .try_get_with(key, async {
+                match self.inner.screen(route, destination).await {
+                    DestinationScreening::Clear => Ok(()),
+                    verdict => Err(verdict),
+                }
+            })
+            .await
         {
-            let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
-            if entries
-                .get(&key)
-                .is_some_and(|inserted| inserted.elapsed() < self.ttl)
-            {
-                return DestinationScreening::Clear;
-            }
+            Ok(()) => DestinationScreening::Clear,
+            Err(verdict) => *verdict,
         }
-        let verdict = self.inner.screen(route, destination).await;
-        if verdict == DestinationScreening::Clear {
-            let now = Instant::now();
-            let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
-            entries.retain(|_, inserted| now.duration_since(*inserted) < self.ttl);
-            if entries.len() >= 10_000 {
-                entries.clear();
-            }
-            entries.insert(key, now);
-        }
-        verdict
     }
 }
 
@@ -1103,6 +1104,104 @@ mod tests {
             assert_eq!(cached.screen_cached(&route, destination).await, verdict);
             assert_eq!(calls.load(Ordering::Relaxed), 2);
         }
+    }
+
+    async fn assert_concurrent_misses(verdict: DestinationScreening) {
+        struct GatedScreener {
+            calls: Arc<AtomicUsize>,
+            release: Arc<tokio::sync::Semaphore>,
+            verdict: DestinationScreening,
+        }
+
+        #[async_trait]
+        impl DestinationScreener for GatedScreener {
+            async fn screen(
+                &self,
+                _route: &RouteFile,
+                _destination: Address,
+            ) -> DestinationScreening {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                let _permit = self.release.acquire().await.expect("gate remains open");
+                self.verdict
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let cached = CachedDestinationScreener::new(Arc::new(GatedScreener {
+            calls: Arc::clone(&calls),
+            release: Arc::clone(&release),
+            verdict,
+        }));
+        let route = route();
+        let destination = Address::repeat_byte(6);
+        let mut requests: Vec<_> = (0..8)
+            .map(|_| Box::pin(cached.screen_cached(&route, destination)))
+            .collect();
+
+        // Poll every request while the initializer is blocked so all are concurrent misses.
+        for request in &mut requests {
+            assert!(futures_util::poll!(request.as_mut()).is_pending());
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        release.add_permits(1);
+        let results = tokio::time::timeout(
+            Duration::from_secs(1),
+            futures_util::future::join_all(requests),
+        )
+        .await
+        .expect("all waiters complete");
+        assert_eq!(results, vec![verdict; 8]);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        assert_eq!(cached.screen_cached(&route, destination).await, verdict);
+        let expected_calls = if verdict == DestinationScreening::Clear {
+            1
+        } else {
+            2
+        };
+        assert_eq!(calls.load(Ordering::Relaxed), expected_calls);
+    }
+
+    #[tokio::test]
+    async fn concurrent_clear_misses_screen_once() {
+        assert_concurrent_misses(DestinationScreening::Clear).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_unavailable_misses_share_verdict_without_caching() {
+        assert_concurrent_misses(DestinationScreening::Unavailable).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_sanctioned_misses_share_verdict_without_caching() {
+        assert_concurrent_misses(DestinationScreening::Sanctioned).await;
+    }
+
+    #[tokio::test]
+    async fn clear_verdict_expires_after_positive_ttl() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(CountingScreener {
+            calls: Arc::clone(&calls),
+            verdict: DestinationScreening::Clear,
+        });
+        let ttl = Duration::from_millis(1);
+        let cached = CachedDestinationScreener::with_ttl(inner, ttl);
+        let route = route();
+        let destination = Address::repeat_byte(7);
+
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        // Moka's mock clock is private and its std::time::Instant ignores Tokio's paused clock.
+        tokio::time::sleep(ttl).await;
+        assert_eq!(
+            cached.screen_cached(&route, destination).await,
+            DestinationScreening::Clear
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]
