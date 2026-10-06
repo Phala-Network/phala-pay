@@ -21,7 +21,7 @@ async function prerender() {
     const template = await readFile(file, "utf8");
     await writeFile(file, renderPage(template, render(page), ROOT_MARKER));
   }
-  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${Object.values(PAGES).map(({ path, lastmod }) => `  <url><loc>${origin}${path}</loc><lastmod>${lastmod}</lastmod></url>`).join("\n")}\n</urlset>\n`;
+  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${Object.values(PAGES).flatMap(({ path, lastmod }) => path === null ? [] : [`  <url><loc>${origin}${path}</loc><lastmod>${lastmod}</lastmod></url>`]).join("\n")}\n</urlset>\n`;
   await writeFile(resolve(assets, "sitemap.xml"), sitemap);
 }
 

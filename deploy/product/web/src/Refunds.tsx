@@ -26,7 +26,7 @@ import {
   useMediaQuery,
   wallet,
 } from "./common.js";
-import { short, statusLabel, tokens } from "./format.js";
+import { statusLabel, tokens } from "./format.js";
 import { useCancelRefund, useCreateRefund, useMarkRefundPaid, useNetworks } from "./queries.js";
 
 /**
@@ -215,7 +215,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
         >
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
             <span className="font-medium tabular-nums">{tokens(refund.amount_atomic, symbol, decimals)}</span>
-            <span className="font-mono text-[13px] text-muted-foreground">{short(refund.id)}</span>
+            <Hash value={refund.id} />
           </span>
           <StatusBadge tone={statusTone(refund.status)}>{statusLabel(refund.status)}</StatusBadge>
           <ChevronDown

@@ -2,10 +2,7 @@ import { PhalaPay } from "@phala/pay-server";
 
 const pay = PhalaPay.fromEnv();
 
-export async function createTopUp(
-  team: string,
-  order: string,
-) {
+export async function createTopUp(team: string, order: string) {
   const quote = await pay.quotes.create({
     client_reference_id: team,
     amount: 2500, // US cents

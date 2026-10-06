@@ -1,19 +1,19 @@
 import type { CheckoutStatus } from "@phala/pay";
 import type { Appearance } from "@phala/pay-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react";
+import { CircleAlert, CircleCheck, Info } from "lucide-react";
 import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChoiceCard } from "@/components/ui/choice-card";
 import { Field, FieldLabel } from "@/components/ui/field";
-import { Hash } from "@/components/ui/hash";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
@@ -25,6 +25,12 @@ import { atomicAmount, dollars, percent, presetDollars, signedDollars, tokenName
 import { FundWallet, TestTokens, type Need } from "./Funding.js";
 import { keys, useCreateQuote } from "./queries.js";
 import type { PaidWith } from "./testTokens.js";
+
+/**
+ * The payment form's fields: from sm, each label beside its control, as a settings form sets them,
+ * so the form takes a row per field; on a phone, the label above.
+ */
+const ROW = "sm:grid sm:grid-cols-[4.5rem_minmax(0,1fr)] sm:items-center sm:gap-x-3";
 
 const Checkout = lazy(() => loadSdk().then((sdk) => ({ default: sdk.Checkout })));
 
@@ -96,40 +102,37 @@ export function Product({
     />
   );
   return (
-    <Card role="region" aria-labelledby="product-title">
-      <CardHeader>
+    <Card role="region" aria-labelledby="product-title" className="flex-1">
+      {/* One row: whose page this is (with the testnet mark while the network is a testnet), and
+          the balance the payment moves. */}
+      <CardHeader className="items-center py-3 sm:py-3">
         <div className="min-w-0">
-          <CardTitle id="product-title">Customer view</CardTitle>
-          <CardDescription className="mt-1">Acme Cloud · Billing</CardDescription>
-        </div>
-        {account !== null && (
-          <div className="flex min-w-0 items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Workspace</span>
-            <Hash value={account.account_id} copyLabel="Copy workspace id" />
+          <div className="flex items-center gap-2">
+            <CardTitle id="product-title">Customer view</CardTitle>
+            {(network?.testnet ?? true) && (
+              <StatusBadge tone="warning" data-testid="testnet-notice">
+                Testnet
+              </StatusBadge>
+            )}
           </div>
-        )}
-      </CardHeader>
-      {(network?.testnet ?? true) && (
-        <p data-testid="testnet-notice" className="flex items-start gap-2 border-b bg-warning-muted px-4 py-2.5 text-sm sm:px-6">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-          Testnet demo: test tokens only.
-        </p>
-      )}
-      <CardContent className="flex flex-col gap-6">
-        <div className="flex flex-col gap-1">
-          <p id="balance-title" className="text-sm text-muted-foreground">
-            Account balance
+          <CardDescription className="mt-0.5">Acme Cloud · Billing</CardDescription>
+        </div>
+        <div className="text-right">
+          <p id="balance-title" className="text-xs text-muted-foreground">
+            Balance
           </p>
           <div
-            className="text-3xl font-semibold tracking-tight tabular-nums"
+            className="text-2xl font-semibold tracking-tight tabular-nums"
             aria-live="polite"
             aria-labelledby="balance-title"
             data-testid="balance"
           >
-            {account !== null ? dollars(account.balance) : unavailable ? "—" : <Skeleton className="h-9 w-32" />}
+            {account !== null ? dollars(account.balance) : unavailable ? "—" : <Skeleton className="ml-auto h-8 w-24" />}
           </div>
-          {accountView.data !== undefined && <QueryState view={accountView} />}
         </div>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-4 py-4 sm:py-4">
+        {accountView.data !== undefined && <QueryState view={accountView} />}
         {unavailable ? (
           <Alert variant="destructive">
             <CircleAlert aria-hidden="true" />
@@ -137,8 +140,8 @@ export function Product({
             <AlertDescription>{accountView.error}</AlertDescription>
           </Alert>
         ) : (
-          <section aria-labelledby="pay-title" className="flex flex-col gap-4 border-t pt-6">
-            <h4 id="pay-title" className="text-base font-semibold">
+          <section aria-labelledby="pay-title" className="flex flex-col">
+            <h4 id="pay-title" className="sr-only">
               Add credits
             </h4>
             <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
@@ -149,7 +152,7 @@ export function Product({
                   </TabsTrigger>
                 ))}
               </TabsList>
-              <TabsContent value="quote" className="pt-4">
+              <TabsContent value="quote" className="pt-3">
                 {session === null || account === null ? (
                   <AmountPicker
                     account={account}
@@ -171,7 +174,7 @@ export function Product({
                   />
                 )}
               </TabsContent>
-              <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-4">
+              <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-3">
                 {account === null ? (
                   <CheckoutSkeleton />
                 ) : (
@@ -193,7 +196,7 @@ export function Product({
         )}
       </CardContent>
       {network?.testnet === true && (
-        <CardFooter>
+        <CardFooter className="py-3 sm:py-3">
           <TestTokens key={network.chain_id} network={network} need={need} />
         </CardFooter>
       )}
@@ -246,7 +249,7 @@ function PaymentOptions({
   }
   return (
     <>
-      <Field>
+      <Field className={ROW}>
         <FieldLabel htmlFor={`${id}-network`}>Network</FieldLabel>
         {network === undefined ? (
           <Skeleton className="h-11 sm:h-10" />
@@ -273,14 +276,14 @@ function PaymentOptions({
           </div>
         )}
       </Field>
-      <Field>
+      <Field className={cn(ROW, "sm:items-start [&>[data-slot=field-label]]:sm:mt-4")}>
         <FieldLabel id={`${id}-token`} asChild>
           <span>Token</span>
         </FieldLabel>
         {network === undefined || asset === undefined ? (
           <div className="grid gap-2">
-            <Skeleton className="h-15" />
-            <Skeleton className="h-15" />
+            <Skeleton className="h-13" />
+            <Skeleton className="h-13" />
           </div>
         ) : (
           // Keyed by network: each network lists its own tokens.
@@ -303,29 +306,29 @@ function PaymentOptions({
 }
 
 /**
- * A token: its mark, symbol, and name; on the right its price terms, with the demo merchant's bonus
- * under them, which never shrink; then its radio.
+ * A token, in two lines that every token shares: its symbol and its price terms, then its name and
+ * the demo merchant's bonus; its mark before them and its radio after.
  */
 function TokenOption({ id, asset, testnet }: { id: string; asset: Asset; testnet: boolean }) {
   return (
-    <ChoiceCard htmlFor={id} data-testid="token-option" className="min-h-15">
-      <TokenIcon asset={asset.asset} className="size-6" />
-      <span className="flex min-w-0 flex-1 flex-col">
+    <ChoiceCard htmlFor={id} data-testid="token-option" className="min-h-13 py-2 leading-5">
+      <TokenIcon asset={asset.asset} className="size-5" />
+      <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] gap-x-3">
         <span className="font-medium">{asset.symbol}</span>
-        <span className="text-pretty text-muted-foreground">
-          {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
-        </span>
-      </span>
-      {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
-          locks (the locked-rate line). */}
-      <span className="flex shrink-0 flex-col items-end text-right">
-        <span className="tabular-nums" data-testid="token-price">
+        {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
+            locks (the locked-rate line). */}
+        <span className="text-right tabular-nums" data-testid="token-price">
           {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
         </span>
-        {asset.bonus_bps > 0 && (
-          <span className="text-success" data-testid="token-bonus">
+        <span className="truncate text-muted-foreground">
+          {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
+        </span>
+        {asset.bonus_bps > 0 ? (
+          <span className="text-right text-success" data-testid="token-bonus">
             +{percent(asset.bonus_bps)} bonus
           </span>
+        ) : (
+          <span />
         )}
       </span>
       <RadioGroupItem value={asset.asset} id={id} aria-label={tokenName(asset.symbol, testnet)} />
@@ -381,8 +384,8 @@ function AmountPicker({
   const minutes = Math.round((asset?.quote_ttl_seconds ?? 900) / 60);
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-5">
-      <Field>
+    <form onSubmit={submit} className="flex flex-col gap-3">
+      <Field className={ROW}>
         <FieldLabel id={`${id}-amount-label`} asChild>
           <span>Amount</span>
         </FieldLabel>
@@ -400,8 +403,10 @@ function AmountPicker({
         </SegmentedControl>
       </Field>
       {preset === "custom" && (
-        <Field>
-          <FieldLabel htmlFor={`${id}-amount`}>Custom amount (USD)</FieldLabel>
+        <Field className={ROW}>
+          <FieldLabel htmlFor={`${id}-amount`}>
+            Custom<span className="sr-only"> amount (USD)</span>
+          </FieldLabel>
           <InputGroup className={TOUCH}>
             <InputGroupAddon>
               <InputGroupText>$</InputGroupText>
@@ -419,13 +424,12 @@ function AmountPicker({
         </Field>
       )}
       {picker}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2 pt-1">
         <Button type="submit" size="lg" className="w-full" disabled={quote.isPending || !ready || asset === undefined}>
           {quote.isPending ? "Creating quote…" : "Pay with crypto"}
         </Button>
         <p className="text-sm text-pretty text-muted-foreground">
-          The price is locked for {minutes} minutes. Another amount, or a late payment, is credited at the market
-          rate.
+          Price locked for {minutes} minutes; other amounts at the market rate.
         </p>
       </div>
       {error !== null && (
@@ -469,16 +473,21 @@ function QuoteCheckout({
   const bps = token?.bonus_bps ?? 0;
   const symbol = session.asset.toUpperCase();
   return (
-    <div className="flex flex-col gap-4">
-      {PAYABLE.has(status) && bps > 0 && (
-        <Alert>
-          <Info aria-hidden="true" />
-          <AlertDescription>
-            Paying in {symbol} earns a +{percent(bps)} bonus: this demo merchant's promotion, not a Phala Pay
-            feature.
-          </AlertDescription>
-        </Alert>
-      )}
+    <div className="flex flex-col gap-3">
+      {/* One row above the checkout: the demo merchant's bonus, while payable, and the way out. */}
+      <div className="flex items-center gap-3">
+        {PAYABLE.has(status) && bps > 0 && (
+          <p className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+            <Info className="size-4 shrink-0" aria-hidden="true" />
+            <span>
+              <span className="text-success">+{percent(bps)} {symbol} bonus</span>, the demo merchant's promotion
+            </span>
+          </p>
+        )}
+        <Button type="button" variant="ghost" size="sm" className={cn("-mr-3 ml-auto shrink-0", TOUCH)} onClick={onNewTopUp}>
+          Start a new top-up
+        </Button>
+      </div>
       {status === "credited" ? (
         <Credited session={session} account={account} bps={bps} />
       ) : (
@@ -500,11 +509,6 @@ function QuoteCheckout({
       {short !== null && status === "waiting" && network !== undefined && token !== undefined && (
         <FundWallet network={network} token={token} needed={BigInt(session.amount_atomic)} wallet={short} />
       )}
-      <div className="flex justify-end">
-        <Button type="button" variant="ghost" className={TOUCH} onClick={onNewTopUp}>
-          Start a new top-up
-        </Button>
-      </div>
     </div>
   );
 }

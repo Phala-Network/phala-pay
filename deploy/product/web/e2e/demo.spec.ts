@@ -376,8 +376,9 @@ async function expectAccessible(page: Page, state: string): Promise<void> {
   for (const width of [viewport.width, 390]) {
     await page.setViewportSize({ width, height: viewport.height });
     for (let pass = 0; pass < 2; pass++) {
-      // Colours are read once the theme's colour transitions have settled.
-      await page.waitForFunction(() => !document.getAnimations().some((animation) => animation instanceof CSSTransition));
+      // Colours are read once the theme's colour transitions have settled. Polled on a timer, not
+      // on animation frames, which axe's helper page can hold back.
+      await page.waitForFunction(() => !document.getAnimations().some((animation) => animation instanceof CSSTransition), undefined, { polling: 100 });
       const theme = (await page.locator("html").getAttribute("class"))?.includes("dark") ? "dark" : "light";
       const { violations } = await new AxeBuilder({ page }).analyze();
       const serious = violations
@@ -734,7 +735,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   );
   await expectMetadata(page);
   const product = page.getByRole("region", { name: "Customer view" });
-  await expect(product.getByTestId("testnet-notice")).toHaveText("Testnet demo: test tokens only.");
+  await expect(product.getByTestId("testnet-notice")).toHaveText("Testnet");
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const preview = scenes.getByRole("list", { name: "The steps of a payment" });
   await expect(preview).toBeVisible();
@@ -779,7 +780,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   const created = await openStep(timeline, "quote_created");
   await expect(created).toContainText("1 PHA = $0.25");
   await expect(created).toContainText("80 PHA");
-  const order = (await scenes.getByTestId("meta-order").locator("[title]").getAttribute("title"))?.match(/^order_[0-9a-f]{12}$/)?.[0];
+  const order = (await scenes.getByTestId("meta-order").locator("[data-value]").getAttribute("data-value"))?.match(/^order_[0-9a-f]{12}$/)?.[0];
   expect(order).toBeDefined();
   // Nothing of the backend shows in the product.
   await expect(product).not.toContainText("order_");
@@ -899,19 +900,19 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
 
   // A quote that ends unpaid, expired or canceled, says so; another top-up starts from the button.
   await page.setViewportSize({ width: 1360, height: 1000 });
-  // The quote the backend follows, its id the title of the header's Quote.
-  const followed = scenes.getByTestId("meta-selected").locator('[title^="qt_"]');
+  // The quote the backend follows, its id in full in the header's Quote.
+  const followed = scenes.getByTestId("meta-selected").locator('[data-value^="qt_"]');
   for (const [end, message] of [
     ["expire", "Quote expired"],
     ["cancel", "Quote canceled"],
   ] as const) {
-    const before = await followed.getAttribute("title");
+    const before = await followed.getAttribute("data-value");
     await product.getByRole("button", { name: "Start a new top-up" }).click();
     await product.getByText("$5", { exact: true }).click();
     await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
-    await expect(followed).not.toHaveAttribute("title", before ?? "");
+    await expect(followed).not.toHaveAttribute("data-value", before ?? "");
     await expect(summary).toContainText("20 PHA");
-    const quote = (await followed.getAttribute("title")) ?? "";
+    const quote = (await followed.getAttribute("data-value")) ?? "";
     const ended = await fetch(`${env("SERVICE_URL")}/_test/quotes/${quote}/${end}`, { method: "POST" });
     expect(ended.status).toBe(200);
     await expect(product.getByRole("status").first()).toContainText(message, { timeout: 10_000 });
@@ -1376,9 +1377,11 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
-    // A phone reads one list per dimension; from md, the table, all six vendors at 1280px.
+    // A phone reads one provider at a time, each with its ten values; from md, the table, all six
+    // vendors at 1280px.
     await expect(staticPage.getByRole("table")).toBeHidden();
-    await expect(staticPage.getByRole("heading", { level: 3, name: "Custody" })).toBeVisible();
+    await expect(staticPage.getByRole("heading", { level: 3, name: "BTCPay Server", exact: true })).toBeVisible();
+    await expect(staticPage.getByRole("region", { name: "BTCPay Server" }).getByRole("term")).toHaveCount(10);
     await staticPage.setViewportSize({ width: 1280, height: 900 });
     await expect(staticPage.getByRole("table")).toBeVisible();
     const scroller = staticPage.getByRole("region", { name: "Comparison table" });
@@ -1511,6 +1514,72 @@ test("home and comparison hydrate in either theme without CSP violations or Reac
       } finally {
         await context.close();
       }
+    }
+  }
+});
+
+test("sweeps from the last good data show their balances and age, without sweep actions; an unavailable group says so", async ({ page }) => {
+  const problems = await watchConsole(page);
+  const asOf = Math.floor(Date.now() / 1000) - 12;
+  // The product serves its last good data when a refresh fails: stale, with no flush to sign.
+  await page.route(`${env("API_URL")}/api/sweeps`, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { groups?: Record<string, unknown>[] };
+    // Only a successful listing is rewritten (one before the demo account exists is refused).
+    if (!response.ok() || body.groups === undefined) return route.fulfill({ response });
+    const [first, second, ...rest] = body.groups;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    const groups = [
+      { ...first, unswept_atomic: "80000000000000000000", final_unswept_atomic: "80000000000000000000", sweepable_forwarders: 1, stale: true, as_of: asOf, flush: [], safe_batch: null },
+      { ...second, unavailable: true, stale: false },
+      ...rest,
+    ];
+    await route.fulfill({ response, json: { ...body, groups } });
+  });
+  await page.goto(env("SITE_URL"));
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  const panel = await openTab(scenes, "Sweeps");
+  const [stale, unavailable] = [panel.getByTestId("sweep-group").nth(0), panel.getByTestId("sweep-group").nth(1)];
+  // The listing is read once the demo account exists.
+  await expect(stale).toHaveAttribute("data-stale", "true", { timeout: 15_000 });
+  await expect(stale.getByTestId("unswept")).toContainText("80");
+  await expect(stale.getByTestId("sweep-stale")).toHaveText(/^Updated \d+\u00a0s ago; refreshing$/);
+  await expect(stale.getByRole("button", { name: "Sweep from wallet" })).toHaveCount(0);
+  await expect(stale.getByRole("button", { name: "Safe batch" })).toHaveCount(0);
+  await expect(unavailable.getByTestId("sweep-unavailable")).toHaveText("Temporarily unavailable; retrying");
+  await expect(unavailable.getByTestId("unswept")).toHaveCount(0);
+  // The treasury is shown in full, grouped in fours, never shortened.
+  const treasury = panel.getByTestId("treasury");
+  await expect(treasury.locator("[data-value]")).toHaveAttribute("data-value", new RegExp(`^${env("TREASURY")}$`, "i"));
+  expect((await treasury.innerText()).replace(/\s/g, "").toLowerCase()).toContain(env("TREASURY").toLowerCase());
+  await expectAccessible(page, "sweeps from the last good data");
+  expect(problems).toEqual([]);
+});
+
+test("every page fits every width in either theme, with no serious accessibility violation", async ({ browser }) => {
+  for (const colorScheme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ colorScheme });
+    try {
+      const page = await context.newPage();
+      for (const path of ["", "compare", "no-such-page/deeper"]) {
+        const response = await page.goto(new URL(path, env("SITE_URL")).href);
+        expect(response?.status(), path).toBe(path.startsWith("no-such-page") ? 404 : 200);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+        for (const width of [1440, 1024, 768, 390]) {
+          await page.setViewportSize({ width, height: 900 });
+          const [scrollWidth, clientWidth] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+          expect(scrollWidth, `/${path} at ${width}px, ${colorScheme}`).toBe(clientWidth);
+          const { violations } = await new AxeBuilder({ page }).analyze();
+          const serious = violations
+            .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
+            .map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(" ")).join(", ")}`);
+          expect(serious, `/${path} at ${width}px, ${colorScheme}`).toEqual([]);
+        }
+      }
+    } finally {
+      await context.close();
     }
   }
 });

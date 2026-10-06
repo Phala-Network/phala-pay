@@ -132,8 +132,9 @@ export function useDepositAddress(enabled: boolean) {
   });
 }
 
-export function useSweeps() {
-  return useQuery({ queryKey: keys.sweeps, queryFn: ({ signal }) => getSweeps(signal), refetchInterval: SWEEPS_INTERVAL_MS });
+/** The account's sweeps, read once its demo account exists (the API knows the visitor by its cookie). */
+export function useSweeps(enabled: boolean) {
+  return useQuery({ queryKey: keys.sweeps, queryFn: ({ signal }) => getSweeps(signal), refetchInterval: SWEEPS_INTERVAL_MS, enabled });
 }
 
 export function useCreateQuote() {

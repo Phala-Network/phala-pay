@@ -4,18 +4,37 @@ export const HERO_SUBHEAD = "Self-host an open-source payments API. Customers pa
 // README.md: pre-1.0, no third-party security audit.
 export const HERO_META = "Pre-1.0 · Not yet audited";
 export const HOME_TITLE = "Phala Pay: self-hosted, non-custodial crypto payments";
+export const NOT_FOUND_TITLE = "Page not found | Phala Pay";
 export const HOME_DESCRIPTION = "Open-source payments API for ERC-20 tokens on Ethereum and Base. Deposits can only reach your treasury. No per-payment fee.";
 
-export const DEMO_TITLE = "Try it on testnet";
-export const DEMO_LEAD = "Top up a sample product's balance with test tokens on Sepolia or Base Sepolia, and watch its backend follow the payment. No real money moves.";
+// Facts: docs/architecture.md ("No fee"); docs/overview.md (about 7 s on Base and 30 s on Ethereum
+// after payment); LICENSE.
+export const HERO_FACTS = [
+  { value: "0%", label: "fee per payment" },
+  { value: "~7 s", label: "to credit on Base; ~30 s on Ethereum" },
+  { value: "Apache-2.0", label: "open source" },
+];
 
+export const DEMO_TITLE = "Try it on testnet";
+export const DEMO_STATUS = "Live on Sepolia and Base Sepolia";
+export const DEMO_LEAD = "Top up a sample product with test tokens and watch its backend follow the payment.";
+
+// Each step with what the integration writes for it: the API call (crates/topup/openapi.json), the
+// React component (sdk/js-react), and the webhook event (docs/integration.md).
 export const STEPS = [
-  { title: "Create a quote or deposit address", text: "Your backend calls the API with its key. Each address is a contract that can only pay your treasury." },
-  { title: "Your customer pays", text: "USDC, USDT, or other ERC-20 tokens from any wallet: connect, scan a QR code, or send manually." },
-  { title: "Credit the account", text: "A signed webhook arrives in seconds. Sweep to your treasury whenever you choose." },
+  { title: "Create a quote or deposit address", text: "Your backend calls the API with its key. Each address is a contract that can only pay your treasury.", code: "POST /v1/quotes" },
+  { title: "Your customer pays", text: "USDC, USDT, or other ERC-20 tokens from any wallet: connect, scan a QR code, or send manually.", code: "<Checkout />" },
+  { title: "Credit the account", text: "A signed webhook arrives in seconds. Sweep to your treasury whenever you choose.", code: "deposit.credited" },
 ];
 
 export const PROPERTIES_LEAD = "Top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute.";
+// The path of a payment, as docs/overview.md and docs/integration.md §1.6 describe it.
+export const CUSTODY_PATH = [
+  { name: "Customer", detail: "Any wallet" },
+  { name: "Deposit address", detail: "A contract fixed to your treasury" },
+  { name: "Your treasury", detail: "An address or Safe you control" },
+];
+export const CUSTODY_LINKS = ["pays", "sweeps only to"];
 // Facts: README.md; docs/overview.md; docs/architecture.md §§1, 8; docs/integration.md §§1.6, 5.
 export const PROPERTIES = [
   { title: "No custodian", text: "Deposit addresses are contracts that can only pay your treasury. You set the treasury with a signed message; the operator cannot change it." },
@@ -43,3 +62,6 @@ export const HOME_KEYWORDS = "non-custodial crypto payment gateway, self-hosted 
 
 // Update when landing copy changes; independent of checkout history and build time.
 export const SITE_UPDATED = "2026-10-06";
+
+// docs/self-hosting.md, "One-command deploy": the latest release, through public/_redirects.
+export const DEPLOY_COMMAND = "curl -fsSL https://pay.phala.com/deploy.sh | bash";

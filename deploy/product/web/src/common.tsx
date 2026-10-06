@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, type LucideIcon } from "lucide-react";
 import { useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { Hash } from "@/components/ui/hash";
 import type { StatusTone } from "@/components/ui/status-badge";
@@ -130,9 +130,27 @@ export function Disclosure({ summary, children }: { summary: ReactNode; children
   );
 }
 
-/** A panel's message while it has nothing to show: one line of text, one per panel. */
+/** A part's message while it has nothing to show: one line of text. */
 export function Empty({ children }: { children: ReactNode }) {
   return <p className="text-sm text-pretty text-muted-foreground">{children}</p>;
+}
+
+/**
+ * A whole panel with nothing to show yet: centred in the space the panel has, its icon, what will
+ * appear, and how to make it appear.
+ */
+export function EmptyState({ icon: Icon, title, children }: { icon: LucideIcon; title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+      <span className="flex size-10 items-center justify-center rounded-full border bg-muted/60 text-muted-foreground">
+        <Icon className="size-5" strokeWidth={1.75} aria-hidden="true" />
+      </span>
+      <div className="flex max-w-xs flex-col gap-1">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-sm text-pretty text-muted-foreground">{children}</p>
+      </div>
+    </div>
+  );
 }
 
 const TONES: Record<string, StatusTone> = {

@@ -1,4 +1,4 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Eye, ReceiptText, Undo2, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, DepositAddressResponse, Network, PaymentRow, Selection, Timeline, Trust } from "./api.js";
-import { DataItem, DataList, Empty, ExplorerLink, LINK, Subsection, TABLE, TOUCH, statusTone, useMediaQuery } from "./common.js";
+import { DataItem, DataList, Empty, EmptyState, ExplorerLink, LINK, Subsection, TABLE, TOUCH, statusTone, useMediaQuery } from "./common.js";
 import { Refunds } from "./Refunds.js";
 import { assetOf, networkOf } from "./chains.js";
 import { day, dollars, price, signedDollars, statusLabel, time, tokenName, tokens } from "./format.js";
@@ -50,14 +50,16 @@ export function Backend({
   const deposit = timeline?.deposit ?? null;
   const status = selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done";
   return (
-    <Card role="complementary" aria-label="Your backend">
-      <CardHeader>
-        <div className="min-w-0">
+    // From lg, as tall as the customer's view beside it (the column's height), its body scrolling
+    // inside: long content (the ledger, refunds) never makes the demo taller.
+    <Card role="complementary" aria-label="Your backend" className="flex-1 lg:absolute lg:inset-0 lg:overflow-hidden">
+      <CardHeader className="items-center gap-y-1 py-3 sm:py-3">
+        <div className="flex min-w-0 items-baseline gap-x-3">
           <CardTitle>Your backend</CardTitle>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             <span
               className={cn(
-                "mr-2 inline-block size-1.5 rounded-full align-middle",
+                "mr-1.5 inline-block size-1.5 rounded-full align-middle",
                 status === "Live" ? "bg-success" : status === "Unavailable" ? "bg-destructive" : "bg-muted-foreground",
               )}
               aria-hidden="true"
@@ -65,76 +67,81 @@ export function Backend({
             <span className="text-foreground" data-testid="stream-status">
               {status}
             </span>
-            {selected === null
-              ? " · pay in the customer view to follow a payment"
-              : ` · following a ${selected.kind === "quote" ? "quote" : "deposit"}`}
+            {selected === null ? "" : ` · ${selected.kind === "quote" ? "quote" : "deposit"}`}
           </p>
         </div>
-        {selected !== null && (
-          <dl className="flex flex-wrap items-center gap-x-4 gap-y-3 text-sm">
-            {order !== undefined && <MetaItem label="Order" value={order} testId="meta-order" />}
+        <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+          {account !== null && selected === null && <MetaItem label="Workspace" value={account.account_id} testId="meta-workspace" />}
+          {selected !== null && order !== undefined && <MetaItem label="Order" value={order} testId="meta-order" />}
+          {selected !== null && (
             <MetaItem label={selected.kind === "quote" ? "Quote" : "Deposit"} value={selected.id} testId="meta-selected" />
-          </dl>
-        )}
+          )}
+        </dl>
       </CardHeader>
-      <div className="px-4 py-4 sm:px-6" aria-live="off">
-        <EventStream timeline={timelineView} loading={selected?.id ?? null} />
-        {timelineView.data !== undefined && <QueryState view={timelineView} />}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="px-4 py-2 sm:px-6" aria-live="off">
+          <EventStream timeline={timelineView} loading={selected?.id ?? null} />
+          {timelineView.data !== undefined && <QueryState view={timelineView} />}
+        </div>
+        <Tabs defaultValue="credits" className="flex-1 gap-0 border-t">
+          <TabsList
+            variant="line"
+            aria-label="Backend"
+            // Should the tabs ever overflow, the row scrolls, each tab snapping to its start clear of the
+            // row's padding. It stays in view while the panel below it scrolls.
+            className="sticky top-0 z-10 h-auto w-full snap-x scroll-px-2 justify-start gap-2 overflow-x-auto overflow-y-hidden bg-card px-2 sm:scroll-px-4 sm:px-4"
+          >
+            <Tab value="credits" count={account?.payments.length}>
+              Credits
+            </Tab>
+            <Tab value="refunds" count={timeline?.refunds.length}>
+              Refunds
+            </Tab>
+            <Tab value="sweeps">Sweeps</Tab>
+            <Tab value="api" count={timeline === null ? undefined : timeline.api.length + timeline.events.length}>
+              API
+            </Tab>
+            <Tab value="trust">Trust</Tab>
+          </TabsList>
+          <TabsContent value="credits" className="flex flex-col gap-3 px-4 py-4 sm:px-6">
+            {addressView.data === undefined && <QueryState view={addressView} />}
+            {accountView.error === null && (
+              <CreditsTab account={account} selected={selected} address={addressView} networks={networks} onSelect={onSelect} />
+            )}
+            <QueryState view={accountView} />
+          </TabsContent>
+          <TabsContent value="refunds" className="flex flex-col px-4 py-4 sm:px-6">
+            {timeline === null || deposit === null || account === null ? (
+              <EmptyState icon={Undo2} title="No deposit to refund">
+                A credited payment can be refunded from the treasury once final.
+              </EmptyState>
+            ) : (
+              <div className="flex flex-col gap-8">
+                {timeline.ledger !== null && <LedgerPanel ledger={timeline.ledger} />}
+                <Refunds timeline={timeline} deposit={deposit} />
+              </div>
+            )}
+          </TabsContent>
+          <TabsContent value="sweeps" className="flex flex-col px-4 py-4 sm:px-6">
+            <Sweeps ready={account !== null} />
+          </TabsContent>
+          <TabsContent value="api" className="flex flex-col px-4 py-4 sm:px-6">
+            {timeline === null ? (
+              <EmptyState icon={Webhook} title="No requests yet">
+                The signed webhooks and the API calls of a payment show here.
+              </EmptyState>
+            ) : (
+              <div className="flex flex-col gap-8">
+                <EventsLog events={timeline.events} />
+                <Requests exchanges={timeline.api} title="API requests" id="api-title" />
+              </div>
+            )}
+          </TabsContent>
+          <TabsContent value="trust" className="px-4 py-4 sm:px-6">
+            <TrustDetails trust={trustView} networks={networksView} />
+          </TabsContent>
+        </Tabs>
       </div>
-      <Tabs defaultValue="credits" className="gap-0 border-t">
-        <TabsList
-          variant="line"
-          aria-label="Backend"
-          // Should the tabs ever overflow, the row scrolls, each tab snapping to its start clear of the
-          // row's padding.
-          className="h-auto w-full snap-x scroll-px-2 justify-start gap-2 overflow-x-auto overflow-y-hidden px-2 sm:scroll-px-4 sm:px-4"
-        >
-          <Tab value="credits" count={account?.payments.length}>
-            Credits
-          </Tab>
-          <Tab value="refunds" count={timeline?.refunds.length}>
-            Refunds
-          </Tab>
-          <Tab value="sweeps">Sweeps</Tab>
-          <Tab value="api" count={timeline === null ? undefined : timeline.api.length + timeline.events.length}>
-            API
-          </Tab>
-          <Tab value="trust">Trust</Tab>
-        </TabsList>
-        <TabsContent value="credits" className="flex flex-col gap-3 px-4 py-6 sm:px-6">
-          {addressView.data === undefined && <QueryState view={addressView} />}
-          {accountView.error === null && (
-            <CreditsTab account={account} selected={selected} address={addressView} networks={networks} onSelect={onSelect} />
-          )}
-          <QueryState view={accountView} />
-        </TabsContent>
-        <TabsContent value="refunds" className="px-4 py-6 sm:px-6">
-          {timeline === null || deposit === null || account === null ? (
-            <Empty>Follow a payment with a deposit to see its ledger and refunds.</Empty>
-          ) : (
-            <div className="flex flex-col gap-8">
-              {timeline.ledger !== null && <LedgerPanel ledger={timeline.ledger} />}
-              <Refunds timeline={timeline} deposit={deposit} />
-            </div>
-          )}
-        </TabsContent>
-        <TabsContent value="sweeps" className="px-4 py-6 sm:px-6">
-          <Sweeps />
-        </TabsContent>
-        <TabsContent value="api" className="px-4 py-6 sm:px-6">
-          {timeline === null ? (
-            <Empty>Follow a payment to see its webhooks and the product's API requests.</Empty>
-          ) : (
-            <div className="flex flex-col gap-8">
-              <EventsLog events={timeline.events} />
-              <Requests exchanges={timeline.api} title="API requests" id="api-title" />
-            </div>
-          )}
-        </TabsContent>
-        <TabsContent value="trust" className="px-4 py-6 sm:px-6">
-          <TrustDetails trust={trustView} networks={networksView} />
-        </TabsContent>
-      </Tabs>
     </Card>
   );
 }
@@ -166,12 +173,13 @@ function Tab({ value, count, children }: { value: string; count?: number | undef
 
 /**
  * Shows a payment in the timeline above; the shown one's row (marked `aria-current`) says
- * "Viewing" instead, in the button's place.
+ * "Viewing" instead, in the button's place and at its size, as the button's selected state.
  */
 function ViewButton({ selected, id, onClick }: { selected: boolean; id: string; onClick: () => void }) {
   if (selected) {
     return (
-      <span className={cn("inline-flex h-8 items-center px-3 text-sm font-medium text-muted-foreground", TOUCH)}>
+      <span className={cn("inline-flex h-8 items-center gap-1.5 rounded-md bg-muted px-3 text-sm font-medium", TOUCH)}>
+        <Eye className="size-4 text-muted-foreground" aria-hidden="true" />
         Viewing
       </span>
     );
@@ -203,7 +211,11 @@ function CreditsTab({
     return <Empty>Loading…</Empty>;
   }
   if (account.payments.length === 0 && account.ledger.length === 0 && address === null) {
-    return <Empty>No credits yet. Pay with crypto in the customer view to follow a payment here.</Empty>;
+    return (
+      <EmptyState icon={ReceiptText} title="No payments yet">
+        Pay in the customer view; each payment shows here with its status and credit.
+      </EmptyState>
+    );
   }
   const payments = account.payments.map((row) => {
     const network = networkOf(networks, row.chain_id);
@@ -225,7 +237,9 @@ function CreditsTab({
             <Table className={cn(TABLE, "[&_tr>*:first-child]:pl-3")}>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead scope="col">Payment</TableHead>
+                  {/* The payment takes the row's free width; the other columns, and the action at
+                      the end, keep to their content beside it. */}
+                  <TableHead scope="col" className="w-full">Payment</TableHead>
                   <TableHead scope="col">Status</TableHead>
                   <TableHead scope="col" className="text-right">
                     Credited
@@ -315,41 +329,26 @@ function CreditsTab({
             <code className="font-mono text-[13px]">deposit.credited</code> and takes the same share back when a
             refund or reversal nets the credit down.
           </p>
-          <Table className={TABLE}>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead scope="col" className="hidden md:table-cell">
-                  When
-                </TableHead>
-                <TableHead scope="col" className="hidden md:table-cell">
-                  Deposit
-                </TableHead>
-                <TableHead scope="col">Type</TableHead>
-                <TableHead scope="col">Event</TableHead>
-                <TableHead scope="col" className="text-right">
-                  Amount
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody className="tabular-nums">
-              {account.ledger.map((line) => (
-                <TableRow key={`${line.deposit}-${line.kind}-${line.reason}-${line.at}`} data-testid="ledger-line" data-kind={line.kind}>
-                  <TableCell className="hidden text-muted-foreground md:table-cell" title={time(line.at)}>
-                    {day(line.at)}
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    <Hash value={line.deposit} />
-                  </TableCell>
-                  <TableCell>{line.kind === "bonus" ? "Bonus" : "Credit"}</TableCell>
-                  {/* Event names in mono; a bonus grant's label is prose. */}
-                  <TableCell className={cn("whitespace-normal", line.reason.startsWith("deposit.") && "font-mono text-[13px]")}>
-                    {line.reason}
-                  </TableCell>
-                  <TableCell className="text-right">{signedDollars(line.amount)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          {/* Each line: what moved the balance and by how much; under it, when and for which deposit. */}
+          <ul className="flex flex-col divide-y border-y text-sm" aria-label="Balance lines">
+            {account.ledger.map((line) => (
+              <li key={`${line.deposit}-${line.kind}-${line.reason}-${line.at}`} data-testid="ledger-line" data-kind={line.kind}
+                className="flex flex-col gap-1 py-3">
+                <p className="flex items-baseline justify-between gap-4">
+                  <span>
+                    <span className="font-medium">{line.kind === "bonus" ? "Bonus" : "Credit"}</span>
+                    <span className="text-muted-foreground"> · </span>
+                    {/* Event names in mono; a bonus grant's label is prose. */}
+                    <span className={cn(line.reason.startsWith("deposit.") && "font-mono text-[13px]")}>{line.reason}</span>
+                  </span>
+                  <span className="font-medium tabular-nums">{signedDollars(line.amount)}</span>
+                </p>
+                <p className="text-muted-foreground">
+                  <span className="tabular-nums" title={time(line.at)}>{day(line.at)}</span> · <Hash value={line.deposit} />
+                </p>
+              </li>
+            ))}
+          </ul>
         </Subsection>
       )}
       {address !== null && (

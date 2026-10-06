@@ -12,8 +12,8 @@ export function renderHead(metadata: PageMetadata, graph: Record<string, unknown
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{metadata.title}</title>
     <meta name="description" content={metadata.description} />
-    <meta name="keywords" content={metadata.keywords} />
-    <link rel="canonical" href={metadata.url} />
+    {metadata.keywords !== null && <meta name="keywords" content={metadata.keywords} />}
+    {metadata.url === null ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={metadata.url} />}
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafafa" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a" />
@@ -25,7 +25,7 @@ export function renderHead(metadata: PageMetadata, graph: Record<string, unknown
     <meta property="og:site_name" content="Phala Pay" />
     <meta property="og:title" content={metadata.title} />
     <meta property="og:description" content={metadata.description} />
-    <meta property="og:url" content={metadata.url} />
+    {metadata.url !== null && <meta property="og:url" content={metadata.url} />}
     <meta property="og:image" content={image} />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />

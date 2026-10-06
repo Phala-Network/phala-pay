@@ -34,7 +34,9 @@ The logo is the green dot: a lime square in a near-black tile.
 - **Clear space and size.** Keep 8 units of the mark's grid clear around the mark or lockup. Use the
   mark at 16 px or larger, and the lockup with a mark of 24 px or larger.
 
-The site draws the same SVG inline (`Lockup` in `src/Site.tsx`), 32 px high.
+The site's header and footer draw the mark inline at 24 px (`Lockup` in `src/Site.tsx`) beside the name
+set in the site's typeface (Geist, semibold), as a product name sits beside its mark in an
+interface; the lettered lockup stays for the link preview and these files.
 
 ## Lettering
 

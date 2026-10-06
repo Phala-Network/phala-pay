@@ -16,7 +16,7 @@ import type {
 } from "./api.js";
 import { DataItem, DataList, Empty, ExplorerLink, Subsection, TABLE } from "./common.js";
 import { assetOf, networkOf } from "./chains.js";
-import { approx, clock, dollars, duration, minusDollars, rate, short, signedDollars, time, tokens } from "./format.js";
+import { approx, clock, dollars, duration, minusDollars, rate, signedDollars, time, tokens } from "./format.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { useNetworks } from "./queries.js";
 
@@ -75,7 +75,7 @@ const STEP_COPY: Record<StepKey, { title: string; hint: string; failed?: string;
 
 // A step's line in columns: its dot, its title with the opener, and its time on the right: the
 // time since sending for the steps after it, else the time it happened; for a step yet to happen,
-// how long it usually takes. Each line is a 44px target.
+// how long it usually takes. Each line is a 44px target on touch layouts, 32px from lg.
 const STEP_GRID = "grid grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3";
 
 // A quote's steps, shown before there is a payment to follow.
@@ -101,16 +101,11 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
   };
   if (loading === null) {
     return (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-pretty text-muted-foreground">
-          Each step of a payment, as your backend receives it, with real times from the chain and the service.
-        </p>
-        <ol className="flex flex-col" aria-label="The steps of a payment">
-          {PREVIEW.map((key) => (
-            <StreamStep key={key} step={{ key, state: "upcoming", at: null, details: [] }} sent={null} token={token} />
-          ))}
-        </ol>
-      </div>
+      <ol className="flex flex-col" aria-label="The steps of a payment">
+        {PREVIEW.map((key) => (
+          <StreamStep key={key} step={{ key, state: "upcoming", at: null, details: [] }} sent={null} token={token} />
+        ))}
+      </ol>
     );
   }
   if (timeline === null) {
@@ -118,9 +113,9 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
       return <QueryState view={timelineView} />;
     }
     return (
-      <ol className="flex flex-col" aria-label={`Loading ${short(loading)}`} aria-busy="true">
+      <ol className="flex flex-col" aria-label={`Loading ${loading}`} aria-busy="true">
         {PREVIEW.map((key) => (
-          <li key={key} className={cn(STEP_GRID, "h-11 px-2")}>
+          <li key={key} className={cn(STEP_GRID, "h-11 px-2 lg:h-8")}>
             <span className="size-2.5 justify-self-center rounded-full bg-muted motion-safe:animate-pulse" />
             <span className="h-2.5 w-40 rounded-full bg-muted motion-safe:animate-pulse" />
           </li>
@@ -203,7 +198,7 @@ function StreamStep({
     // The rail from this step's dot to the next one's, through the dots' centres (8px of padding
     // and half a dot in), past this step's opened details.
     <li
-      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden"
+      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden lg:before:top-6 lg:before:-bottom-2"
       data-step={step.key}
       data-state={step.state}
       aria-current={step.state === "current" ? "step" : undefined}
@@ -212,7 +207,7 @@ function StreamStep({
         <CollapsibleTrigger
           className={cn(
             STEP_GRID,
-            "group/trigger min-h-11 w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 motion-reduce:transition-none",
+            "group/trigger min-h-11 w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 motion-reduce:transition-none lg:min-h-8 lg:py-1",
           )}
         >
           <StepDot state={step.state} />

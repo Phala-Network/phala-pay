@@ -2,7 +2,6 @@ import type { Appearance } from "@phala/pay-react";
 import "@phala/pay-react/styles.css";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import type { CreatedQuote, DepositAddressResponse, Selection } from "./api.js";
 import { Backend } from "./Backend.js";
 import { queryView } from "./queryView.js";
@@ -83,11 +82,11 @@ function DemoContent({ theme }: { theme: Theme }) {
   };
 
   return (
-    <TooltipProvider delayDuration={150}>
-      {/* Two sibling cards at their natural heights: the customer's view, then (beside it from lg)
-          what the backend sees. */}
-      <div className="grid items-start gap-6 lg:grid-cols-12">
-        <div className="min-w-0 lg:col-span-5">
+    <>
+      {/* Two sibling cards: the customer's view, then (beside it from lg, the two as tall as the
+          taller) what the backend sees. */}
+      <div className="grid gap-6 lg:grid-cols-12">
+        <div className="flex min-w-0 flex-col lg:col-span-5">
           <Product
             account={views.account}
             networks={views.networks}
@@ -105,7 +104,8 @@ function DemoContent({ theme }: { theme: Theme }) {
             appearance={appearance}
           />
         </div>
-        <div className="min-w-0 lg:col-span-7">
+        {/* From lg the customer's view sets the row's height; the backend fills it (Backend). */}
+        <div className="relative flex min-w-0 flex-col lg:col-span-7">
           <Backend
             account={views.account}
             selected={selected}
@@ -117,6 +117,6 @@ function DemoContent({ theme }: { theme: Theme }) {
           />
         </div>
       </div>
-    </TooltipProvider>
+    </>
   );
 }

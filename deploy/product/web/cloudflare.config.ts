@@ -11,9 +11,10 @@ export default defineConfig(({ isPreview }) => ({
     name: "phala-pay-web",
     compatibilityDate: "2026-09-26",
     assets: {
-      // Static pages at `/` and `/compare` with their assets: unmatched paths return a real 404,
-      // instead of a page fallback (which "single-page-application" would serve).
-      notFoundHandling: "none",
+      // Static pages with their assets: an unmatched path returns a 404 status with the site's own
+      // 404 page (404.html, prerendered), instead of a page fallback (which
+      // "single-page-application" would serve).
+      notFoundHandling: "404-page",
     },
     // Production only: a Preview cannot have custom domains.
     ...(isPreview ? {} : { domains: ["pay.phala.com"] }),

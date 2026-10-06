@@ -4,6 +4,32 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * The type scale: Tailwind's defaults for text (xs 12, sm 14, base 16, lg 18, xl 20, 2xl 24), and
+ * five steps for headings and the hero, each with its own line height and tracking. Pages use only
+ * these: display (the one H1 of the home page), title (every H2 and every other page's H1),
+ * heading (H3), lead (a section's introduction), and the defaults below.
+ */
+@theme {
+    --text-display: 3.5rem;
+    --text-display--line-height: 1.04;
+    --text-display--letter-spacing: -0.04em;
+    --text-display-sm: 2.5rem;
+    --text-display-sm--line-height: 1.08;
+    --text-display-sm--letter-spacing: -0.035em;
+    --text-title: 2.25rem;
+    --text-title--line-height: 1.1;
+    --text-title--letter-spacing: -0.03em;
+    --text-title-sm: 1.75rem;
+    --text-title-sm--line-height: 1.15;
+    --text-title-sm--letter-spacing: -0.025em;
+    --text-heading: 1.125rem;
+    --text-heading--line-height: 1.45;
+    --text-heading--letter-spacing: -0.01em;
+    --text-lead: 1.125rem;
+    --text-lead--line-height: 1.65;
+}
+
 @theme inline {
     /* Geist and Geist Mono, bundled with the page's assets (the CSP's font-src 'self'): hashes and
        addresses are as wide on every platform. */
@@ -20,10 +46,13 @@
     --color-ring: var(--ring);
     --color-input: var(--input);
     --color-border: var(--border);
+    --color-border-strong: var(--border-strong);
     --color-destructive: var(--destructive);
     --color-accent: var(--accent);
+    --color-body-foreground: var(--body-foreground);
     --color-muted-foreground: var(--muted-foreground);
     --color-muted: var(--muted);
+    --color-surface: var(--surface);
     --color-primary-foreground: var(--primary-foreground);
     --color-primary: var(--primary);
     --color-popover-foreground: var(--popover-foreground);
@@ -32,25 +61,36 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    --color-code: var(--code);
+    --color-code-foreground: var(--code-foreground);
+    --color-code-muted: var(--code-muted);
+    --color-code-border: var(--code-border);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-xl: calc(var(--radius) * 1.5);
 }
 
+/*
+ * Three text colours, each at WCAG AA or better on the page, surfaces, and cards: foreground for
+ * headings and values, body-foreground for running text, muted-foreground for labels and meta.
+ */
 :root {
-    --background: oklch(0.985 0 0);
-    --foreground: oklch(0.145 0 0);
+    --background: oklch(1 0 0);
+    /* A full-width band set apart from the page (the demo's stage). */
+    --surface: oklch(0.982 0 0);
+    --foreground: oklch(0.17 0 0);
+    --body-foreground: oklch(0.38 0 0);
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
+    --card-foreground: oklch(0.17 0 0);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.17 0 0);
+    --primary: oklch(0.2 0 0);
     --primary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.53 0 0);
-    --accent: oklch(0.97 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
+    --muted: oklch(0.965 0 0);
+    --muted-foreground: oklch(0.5 0 0);
+    --accent: oklch(0.965 0 0);
+    --destructive: oklch(0.55 0.22 27);
     /* Success holds 4.5:1 as text on the page and on its muted surface; warning, for icons and
        status dots only, 3:1. */
     --success: oklch(0.48 0.14 150);
@@ -60,46 +100,71 @@
     --success-muted: oklch(0.982 0.018 155.826);
     --warning-muted: oklch(0.987 0.022 95.277);
     --destructive-muted: oklch(0.971 0.013 17.38);
-    /* Dividers and card edges. A form control's edge is --input, at 3:1 or more against the page
-       (3.22:1), cards (3.36:1), and muted surfaces (3.08:1), as WCAG 1.4.11 asks of the boundary
-       that identifies a control. */
-    --border: oklch(0.922 0 0);
+    /* Dividers and card edges; border-strong for edges that must read on the surface band. A form
+       control's edge is --input, at 3:1 or more against the page, cards, and muted surfaces, as
+       WCAG 1.4.11 asks of the boundary that identifies a control. */
+    --border: oklch(0.92 0 0);
+    --border-strong: oklch(0.87 0 0);
     --input: oklch(0.64 0 0);
     /* Keyboard focus: Phala's lime darkened to an olive, over 6:1 against the page, cards, and
        muted surfaces. Always opaque. */
     --focus: oklch(0.45 0.13 128);
     --ring: var(--focus);
-    /* Phala's lime: an accent only (the logo, the current step, highlights), never focus. */
+    /* Phala's lime: an accent only (the logo, the live dot, the current step, highlights), never
+       focus and never a fill behind text. */
     --brand: oklch(0.93 0.19 124);
     --brand-foreground: oklch(0.2 0.02 125);
+    /* Code: one dark window in either theme, so the page has one syntax palette. */
+    --code: oklch(0.2 0 0);
+    --code-foreground: oklch(0.93 0 0);
+    --code-muted: oklch(0.7 0 0);
+    --code-border: oklch(1 0 0 / 8%);
     --radius: 0.5rem;
 }
 
 .dark {
     --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
+    --surface: oklch(0.168 0 0);
+    --foreground: oklch(0.97 0 0);
+    --body-foreground: oklch(0.82 0 0);
+    --card: oklch(0.195 0 0);
+    --card-foreground: oklch(0.97 0 0);
     --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
+    --popover-foreground: oklch(0.97 0 0);
+    --primary: oklch(0.96 0 0);
+    --primary-foreground: oklch(0.17 0 0);
+    --muted: oklch(0.255 0 0);
+    --muted-foreground: oklch(0.7 0 0);
+    --accent: oklch(0.255 0 0);
     --destructive: oklch(0.704 0.191 22.216);
     --success: oklch(0.792 0.209 151.711);
     --warning: oklch(0.828 0.189 84.429);
     --success-muted: oklch(0.266 0.035 152.934);
     --warning-muted: oklch(0.279 0.04 45.635);
     --destructive-muted: oklch(0.258 0.04 26.042);
-    --border: oklch(1 0 0 / 10%);
+    --border: oklch(1 0 0 / 9%);
+    --border-strong: oklch(1 0 0 / 14%);
     /* 3.14:1 against the page and muted surfaces, 3.23:1 against cards. */
     --input: oklch(1 0 0 / 35%);
     /* Phala's lime itself: over 12:1 against the dark page and its surfaces. */
     --focus: oklch(0.93 0.19 124);
     --ring: var(--focus);
+    --code: oklch(0.19 0 0);
+    --code-border: oklch(1 0 0 / 10%);
 }
+
+/*
+ * Syntax colours, for the classes the build-time highlighter gives tokens (scripts/highlight.ts):
+ * restrained hues at 4.5:1 or more on --code, the brand's lime only for strings.
+ */
+.tok-keyword, .tok-string-expression { color: oklch(0.8 0.09 300); }
+.tok-string { color: oklch(0.89 0.14 124); }
+.tok-comment { color: var(--code-muted); }
+.tok-constant { color: oklch(0.83 0.11 70); }
+.tok-function { color: oklch(0.82 0.09 235); }
+.tok-parameter { color: oklch(0.87 0.05 30); }
+.tok-punctuation { color: oklch(0.78 0 0); }
+.tok-link { color: oklch(0.82 0.09 235); text-decoration: underline; }
 
 @layer base {
   * {
