@@ -10,6 +10,7 @@ const NOW = (quote().expires_at - 14 * 60 - 32) * 1000;
 let served: ClientQuote;
 
 beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
   vi.useFakeTimers({ now: NOW, shouldAdvanceTime: true });
   served = quote();
   vi.stubGlobal("fetch", () => Promise.resolve(Response.json(served)));
@@ -17,6 +18,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -79,6 +81,17 @@ function browserWallet(hash: string, balance = 10n ** 30n) {
 async function poll() {
   await act(() => vi.advanceTimersByTimeAsync(1000));
 }
+
+it("surfaces the existing error message and stops after three non-retryable 4xx responses", async () => {
+  const fetch = vi.fn(() => Promise.resolve(new Response("{}", { status: 401 })));
+  vi.stubGlobal("fetch", fetch);
+  render(<Checkout clientSecret={CLIENT_SECRET} expectedAddress={ADDRESS} apiBase={API_BASE} pollInterval={1000} />);
+  await act(() => vi.advanceTimersByTimeAsync(6000));
+  expect(screen.getByText("This payment link is not valid. Start a new top-up.")).toBeDefined();
+  expect(fetch).toHaveBeenCalledTimes(3);
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  expect(fetch).toHaveBeenCalledTimes(3);
+});
 
 describe("Checkout", () => {
   it("aborts a hung status read on unmount", () => {

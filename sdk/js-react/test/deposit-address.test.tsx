@@ -1,11 +1,13 @@
 import axe from "axe-core";
+import { StrictMode } from "react";
 import { userEvent } from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   depositAddressIdFromClientSecret,
   depositAddressTransfer,
   parseClientDepositAddress,
+  type ClientDepositAddress,
   type DepositAddressAsset,
   type DepositAddressDetails,
   type DepositAddressNetwork,
@@ -40,7 +42,13 @@ function details(overrides: Partial<DepositAddressDetails> = {}): DepositAddress
   };
 }
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("depositAddressTransfer", () => {
   it("reads one token's transfer request, which names no amount", () => {
@@ -171,6 +179,295 @@ describe("DepositAddress payments", () => {
       payments,
     };
   }
+
+  it.each([[0, 800], [1, 1200]])("jitters payment reads with random sample %s", async (sample, delay) => {
+    vi.useFakeTimers();
+    vi.mocked(Math.random).mockReturnValue(sample);
+    const fetch = vi.fn(() => Promise.resolve(Response.json(view([]))));
+    vi.stubGlobal("fetch", fetch);
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} />);
+    await act(() => vi.advanceTimersByTimeAsync(delay - 1));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("jitters failed-read backoff", async () => {
+    vi.useFakeTimers();
+    vi.mocked(Math.random).mockReturnValue(0);
+    const fetch = vi.fn(() => Promise.resolve(new Response("offline", { status: 503 })));
+    vi.stubGlobal("fetch", fetch);
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} />);
+    await act(() => vi.advanceTimersByTimeAsync(1599));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("makes no requests while hidden and reads immediately on visibility regain", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const fetch = vi.fn(() => Promise.resolve(Response.json(view([]))));
+    vi.stubGlobal("fetch", fetch);
+    const { unmount } = render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetch).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue("hidden");
+    fireEvent(document, new Event("visibilitychange"));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue("visible");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    unmount();
+    document.dispatchEvent(new Event("visibilitychange"));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a single polling loop when visibility changes during a request", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let respond: ((response: Response) => void) | undefined;
+    const fetch = vi.fn<() => Promise<Response>>()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { respond = resolve; }))
+      .mockImplementation(() => Promise.resolve(Response.json(view([]))));
+    vi.stubGlobal("fetch", fetch);
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} />);
+    visibility.mockReturnValue("hidden");
+    fireEvent(document, new Event("visibilitychange"));
+    visibility.mockReturnValue("visible");
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent(document, new Event("visibilitychange"));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      respond?.(Response.json(view([])));
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(fetch).toHaveBeenCalledTimes(5);
+  });
+
+  it("uses a 15-second interval only after ten minutes without a view change", async () => {
+    vi.useFakeTimers();
+    let served = view([]);
+    const fetch = vi.fn(() => Promise.resolve(Response.json(served)));
+    vi.stubGlobal("fetch", fetch);
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />);
+    await act(() => vi.advanceTimersByTimeAsync(600_000));
+    expect(fetch).toHaveBeenCalledTimes(201);
+    await act(() => vi.advanceTimersByTimeAsync(14_999));
+    expect(fetch).toHaveBeenCalledTimes(201);
+    served = view([payment()]);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetch).toHaveBeenCalledTimes(202);
+    await act(() => vi.advanceTimersByTimeAsync(2999));
+    expect(fetch).toHaveBeenCalledTimes(202);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetch).toHaveBeenCalledTimes(203);
+  });
+
+  it("keeps a 30-second interval after ten idle minutes instead of speeding up", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(() => Promise.resolve(Response.json(view([]))));
+    vi.stubGlobal("fetch", fetch);
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={30000} />);
+    await act(() => vi.advanceTimersByTimeAsync(600_000));
+    expect(fetch).toHaveBeenCalledTimes(21);
+    await act(() => vi.advanceTimersByTimeAsync(29_999));
+    expect(fetch).toHaveBeenCalledTimes(21);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetch).toHaveBeenCalledTimes(22);
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetch).toHaveBeenCalledTimes(23);
+  });
+
+  it("restarts the ten-minute idle window when any observed view field changes", async () => {
+    vi.useFakeTimers();
+    let served = view([], [clientNetwork(11155111)]);
+    const fetch = vi.fn(() => Promise.resolve(Response.json(served)));
+    vi.stubGlobal("fetch", fetch);
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />);
+    await act(() => vi.advanceTimersByTimeAsync(597_000));
+    served = view([], [clientNetwork(11155111, 60)]);
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    const reads = fetch.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(6000));
+    expect(fetch).toHaveBeenCalledTimes(reads + 2);
+    await act(() => vi.advanceTimersByTimeAsync(594_000));
+    const idleReads = fetch.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(14_999));
+    expect(fetch).toHaveBeenCalledTimes(idleReads);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetch).toHaveBeenCalledTimes(idleReads + 1);
+  });
+
+  it("returns to normal polling on visibility regain even if the view stays the same", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const fetch = vi.fn(() => Promise.resolve(Response.json(view([]))));
+    vi.stubGlobal("fetch", fetch);
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />);
+    await act(() => vi.advanceTimersByTimeAsync(600_000));
+    const reads = fetch.mock.calls.length;
+    visibility.mockReturnValue("hidden");
+    fireEvent(document, new Event("visibilitychange"));
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(fetch).toHaveBeenCalledTimes(reads);
+    visibility.mockReturnValue("visible");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fetch).toHaveBeenCalledTimes(reads + 1);
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(fetch).toHaveBeenCalledTimes(reads + 2);
+  });
+
+  it("notifies once per observed view change and uses the latest callback without restarting polling", async () => {
+    vi.useFakeTimers();
+    let served = view([]);
+    let online = true;
+    const fetch = vi.fn(() => online ? Promise.resolve(Response.json(served)) : Promise.reject(new TypeError("offline")));
+    vi.stubGlobal("fetch", fetch);
+    const onChange = vi.fn();
+    const props = { depositAddress: details(), clientSecret: SECRET, apiBase: "https://pay.example", pollInterval: 1000 };
+    const { rerender } = render(<DepositAddress {...props} onChange={onChange} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(parseClientDepositAddress(served));
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    served = view([payment()]);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith(parseClientDepositAddress(served));
+    const latest = vi.fn();
+    const reads = fetch.mock.calls.length;
+    rerender(<DepositAddress {...props} onChange={latest} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(fetch).toHaveBeenCalledTimes(reads);
+    expect(latest).not.toHaveBeenCalled();
+    served = view([payment({ confirmations: 2 })]);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(latest).toHaveBeenCalledExactlyOnceWith(parseClientDepositAddress(served));
+    online = false;
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    online = true;
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(latest).toHaveBeenCalledTimes(1);
+    served = view([payment({ status: "credited", confirmations: null })]);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(latest).toHaveBeenCalledTimes(2);
+    expect(latest).toHaveBeenLastCalledWith(parseClientDepositAddress(served));
+  });
+
+  it("does not re-notify identical content when pollInterval changes", async () => {
+    vi.useFakeTimers();
+    let served = view([]);
+    const fetch = vi.fn(() => Promise.resolve(Response.json(served)));
+    vi.stubGlobal("fetch", fetch);
+    const onChange = vi.fn();
+    const props = { depositAddress: details(), clientSecret: SECRET, apiBase: "https://pay.example", onChange };
+    const { rerender } = render(<DepositAddress {...props} pollInterval={1000} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(parseClientDepositAddress(served));
+    rerender(<DepositAddress {...props} pollInterval={30000} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    served = view([payment()]);
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith(parseClientDepositAddress(served));
+  });
+
+  it("rethrows callback errors in a microtask while continuing to poll", async () => {
+    vi.useFakeTimers();
+    let served = view([payment()]);
+    const fetch = vi.fn(() => Promise.resolve(Response.json(served)));
+    vi.stubGlobal("fetch", fetch);
+    const originalMicrotask = globalThis.queueMicrotask;
+    const microtask = vi.fn<typeof queueMicrotask>(() => {
+      vi.stubGlobal("queueMicrotask", originalMicrotask);
+    });
+    const error = new Error("consumer callback failed");
+    const onChange = vi.fn(() => {
+      vi.stubGlobal("queueMicrotask", microtask);
+      throw error;
+    });
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} onChange={onChange} />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(microtask).toHaveBeenCalledTimes(1);
+    expect(() => microtask.mock.calls[0]?.[0]()).toThrow(error);
+    expect(screen.getByText("1.5 PHA received on Sepolia, 1 confirmation")).toBeDefined();
+    expect(screen.queryByRole("status")).toBeNull();
+    served = view([payment({ status: "credited" })]);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(microtask).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("1.5 PHA on Sepolia credited")).toBeDefined();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("removes its visibilitychange listener on unmount", async () => {
+    vi.useFakeTimers();
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    const fetch = vi.fn(() => Promise.resolve(Response.json(view([]))));
+    vi.stubGlobal("fetch", fetch);
+    const { unmount } = render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(add).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    const registration = add.mock.calls.find(([type]) => type === "visibilitychange");
+    unmount();
+    expect(remove).toHaveBeenCalledWith("visibilitychange", registration?.[1]);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies the first successful view only once under StrictMode", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", () => Promise.resolve(Response.json(view([]))));
+    const onChange = vi.fn();
+    render(
+      <StrictMode>
+        <DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} onChange={onChange} />
+      </StrictMode>,
+    );
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(parseClientDepositAddress(view([])));
+  });
+
+  it("does not report an observed view without client credentials", () => {
+    const onChange = vi.fn();
+    render(<DepositAddress depositAddress={details()} onChange={onChange} />);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("notifies every observed change when React batches several polling updates", async () => {
+    vi.useFakeTimers();
+    const served = [view([]), view([payment()]), view([payment({ confirmations: 2 })]), view([payment({ status: "credited" })])];
+    let reads = 0;
+    vi.stubGlobal("fetch", () => Promise.resolve(Response.json(served[Math.min(reads++, served.length - 1)])));
+    const onChange = vi.fn<(state: ClientDepositAddress) => void>();
+    render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} onChange={onChange} />);
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(onChange.mock.calls.map(([state]) => state)).toEqual(served.map(parseClientDepositAddress));
+  });
 
   it("keeps payments and selections during a three-minute outage, then resumes", async () => {
     vi.useFakeTimers();

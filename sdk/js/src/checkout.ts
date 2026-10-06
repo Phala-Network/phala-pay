@@ -61,6 +61,9 @@ export class CheckoutError extends Error {
   }
 }
 
+// Response classification stays internal; consumers keep the existing CheckoutError contract.
+const nonRetryableClientErrors = new WeakSet<CheckoutError>();
+
 /**
  * The error of a failed read of a public view, with the response's `Request-Id` and, on `429`,
  * its `Retry-After`.
@@ -85,17 +88,32 @@ export function responseError(response: Response, notFound: string): CheckoutErr
       ...(Number.isFinite(seconds) && seconds > 0 ? { retryAfter: seconds } : {}),
     });
   }
-  return new CheckoutError(
+  const error = new CheckoutError(
     "api_error",
     `the payment service answered ${response.status}`,
     requestId,
   );
+  if (response.status >= 400 && response.status < 500 && response.status !== 408) {
+    nonRetryableClientErrors.add(error);
+  }
+  return error;
 }
 
-/** The delay before the next read after `failures` failed ones, at least what `error` asks. */
-export function pollDelay(interval: number, failures: number, error: CheckoutError | null): number {
+/**
+ * The next read's delay with uniform ±20% jitter capped at MAX_BACKOFF after jitter.
+ * Retry-After remains a minimum, even when it asks for longer than the backoff cap.
+ * `random` defaults to Math.random and can be injected for deterministic tests.
+ */
+export function pollDelay(
+  interval: number,
+  failures: number,
+  error: CheckoutError | null,
+  random: () => number = Math.random,
+): number {
   const backoff = failures === 0 ? interval : Math.min(interval * 2 ** failures, MAX_BACKOFF);
-  return Math.max(backoff, (error?.retryAfter ?? 0) * 1000);
+  const retryAfter = (error?.retryAfter ?? 0) * 1000;
+  const jittered = Math.max(backoff, retryAfter) * (0.8 + 0.4 * random());
+  return Math.max(Math.min(jittered, MAX_BACKOFF), retryAfter);
 }
 
 export interface CheckoutState {
@@ -229,10 +247,12 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
   const now = options.now ?? Date.now;
   const interval = options.pollInterval ?? DEFAULT_POLL_INTERVAL;
   const listeners = new Set<(state: CheckoutState) => void>();
+  const visibilityDocument = typeof document === "undefined" ? undefined : document;
 
   let state: CheckoutState = { status: "loading", quote: null, error: null };
   let timer: ReturnType<typeof setTimeout> | undefined;
   let failures = 0;
+  let clientFailures = 0;
   let lastFailure: CheckoutError | null = null;
   let destroyed = false;
   let inFlight: Promise<void> | undefined;
@@ -273,6 +293,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
         return;
       }
       failures = 0;
+      clientFailures = 0;
       lastFailure = null;
       setState({ status: checkoutStatus(quote, now() / 1000), quote, error: null });
     } catch (cause) {
@@ -284,12 +305,15 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
           ? cause
           : new CheckoutError("network_error", "could not reach the payment service", { cause });
       failures += 1;
+      clientFailures = nonRetryableClientErrors.has(error) ? clientFailures + 1 : 0;
       lastFailure = error;
       const quote = state.quote;
       if (error.code === "address_mismatch") {
         // Fail closed: forget the quote, so nothing about its address is shown.
         setState({ status: "error", quote: null, error });
       } else if (error.code === "invalid_client_secret") {
+        setState({ status: "error", quote, error });
+      } else if (clientFailures >= 3) {
         setState({ status: "error", quote, error });
       } else if (error.code === "network_error" || error.code === "service_unavailable") {
         // Do not infer expiry or discard the payer's view while chain progress is unknown.
@@ -315,16 +339,35 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
   }
 
   function schedule(): void {
-    if (finished()) {
+    clearTimeout(timer);
+    if (finished() || visibilityDocument?.visibilityState === "hidden") {
       return;
     }
     const delay = pollDelay(interval, failures, lastFailure);
     timer = setTimeout(() => {
-      void refresh().then(schedule);
+      if (!finished() && visibilityDocument?.visibilityState !== "hidden") {
+        void refresh().then(schedule);
+      }
     }, delay);
   }
 
-  void refresh().then(schedule);
+  function visibilityChanged(): void {
+    clearTimeout(timer);
+    if (visibilityDocument?.visibilityState !== "hidden" && !finished()) {
+      void refresh().then(schedule);
+    }
+  }
+
+  function stopPolling(): void {
+    clearTimeout(timer);
+    visibilityDocument?.removeEventListener("visibilitychange", visibilityChanged);
+  }
+
+  visibilityDocument?.addEventListener("visibilitychange", visibilityChanged);
+  signal.addEventListener("abort", stopPolling, { once: true });
+  if (visibilityDocument?.visibilityState !== "hidden") {
+    void refresh().then(schedule);
+  }
 
   return {
     getState: () => state,
@@ -338,7 +381,7 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
     destroy() {
       destroyed = true;
       controller.abort();
-      clearTimeout(timer);
+      stopPolling();
       listeners.clear();
     },
   };

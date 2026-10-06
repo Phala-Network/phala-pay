@@ -20,6 +20,23 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
   seconds per chain and could time out.
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Added
+
+- `<DepositAddress onChange(state)>` receives the public view after the first successful read
+  and then once per content change, so integrators can update their UI without additional polling.
+
+#### Changed
+
+- Checkout and React deposit-address polling use uniform ±20% jitter, pause in hidden tabs, and
+  read immediately on visibility regain. `Retry-After` remains a minimum delay.
+- `<DepositAddress>` uses an idle base interval of `max(pollInterval, 15000)` after ten minutes
+  without an observed change;
+  any view change or visibility regain restores the normal interval and resets the idle window.
+- Checkout stops after three consecutive non-terminal 4xx responses other than 408/429 and
+  surfaces its existing error state. 404 still stops immediately as `invalid_client_secret`.
+
 ## [0.9.2] - 2026-10-05
 
 ### Fixed

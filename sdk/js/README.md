@@ -57,7 +57,7 @@ connects a wallet with wagmi, RainbowKit, ConnectKit, or AppKit, pass it in inst
 3. Credit the account when your webhook endpoint receives `deposit.credited`. `onSuccess` is for the
    UI only: the browser is not a trusted source of payment.
 
-The component reads `GET /v1/quotes/{id}?client_secret=…` every three seconds. That endpoint is
+The component reads `GET /v1/quotes/{id}?client_secret=…` about every three seconds. That endpoint is
 public (`Access-Control-Allow-Origin: *`) and shows only what the payer needs: the amount, the
 token, the chain, the deposit address, the EIP-681 payment request, the expiry, and the payment
 status. Keep the client secret out of logs and URLs you share; anyone holding it can see that view.
@@ -65,6 +65,17 @@ status. Keep the client secret out of logs and URLs you share; anyone holding it
 address, the checkout shows "This payment address could not be verified" and nothing to pay (a
 compromised service cannot make the page show its own address). A test-mode quote says "Test
 mode".
+
+Checkout and React deposit-address polling apply uniform ±20% jitter to normal intervals and
+failure backoff, while respecting `Retry-After`. Hidden tabs pause polling and read immediately
+when visible again. Jittered delays are capped at 30 seconds; a longer `Retry-After` remains
+a minimum. The checkout core also works without `document`. `pollInterval` sets the
+normal polling interval. Explicit `checkout.refresh()` still reads immediately while hidden,
+including the post-broadcast refresh used by `<Checkout>`.
+`pollInterval` is in milliseconds (default 3000). Other than 408/429, non-terminal 4xx responses
+stop checkout polling after three consecutive occurrences and surface the existing `error`
+state. Success or another kind of failure resets that count. An unknown client secret (404)
+still stops immediately.
 
 ### Statuses
 
@@ -78,7 +89,7 @@ mode".
 | `rejected` | Will not be credited; the payer contacts support |
 | `reversed` | A reorganization before finality replaced the credited payment |
 | `expired`, `canceled` | The address is hidden; `onExpire` is called once |
-| `error` | Invalid client secret or address mismatch; nothing to pay |
+| `error` | Invalid client secret, address mismatch, or three consecutive non-retryable 4xx; nothing to pay |
 
 `onChange(state)` is called once per status change with `{ status, quote, error }`, like Stripe
 Elements' `onChange`, for example to hide your own "new payment" control while a payment is
@@ -157,11 +168,21 @@ import { DepositAddress } from "@phala/pay-react";
 />;
 ```
 
-With `clientSecret` and `apiBase` it reads the address's public view every three seconds and lists
+With `clientSecret` and `apiBase` it reads the address's public view about every three seconds and lists
 its payments of the last 24 hours: "1.5 PHA received on Sepolia, 1 confirmation" within about a
 block of the transfer, then "credited" (or rejected or reversed). Display only. It also states each
 network's typical credit time from the view's `typical_credit_seconds` ("usually in about 30 seconds
 on Sepolia and about 7 seconds on Base Sepolia"); until the view is loaded it names no time.
+
+After ten minutes without a change in the public view, `<DepositAddress>` uses a base interval
+of `max(pollInterval, 15000)` milliseconds, with the same jitter and failure backoff, so a longer
+configured interval stays unchanged. Any view change or visibility regain resets
+the idle window and restores `pollInterval`. Optional `onChange(state)` receives the existing
+`ClientDepositAddress` public view after the first successful read and then once per content change,
+including payment confirmations and network credit times. Unlike `<Checkout onChange>`, it does
+not report loading. Unchanged polls, callback replacements,
+and reconnecting alone do not trigger it. Use it to update your page without additional polling;
+fulfil from the `deposit.credited` webhook.
 
 `depositAddressTransfer(network, asset)` reads and checks one token's amount-less EIP-681
 `payment_uri` without React.

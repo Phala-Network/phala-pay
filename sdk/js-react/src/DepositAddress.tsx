@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { formatUnits } from "viem";
 import { networkName } from "@phala/pay";
 import {
@@ -34,6 +34,10 @@ export interface DepositAddressProps {
   apiBase?: string;
   /** Milliseconds between payment reads; default 3000. */
   pollInterval?: number;
+  /** Called after the first successful read and once per public-view content change.
+   * Unlike Checkout's `onChange`, this does not report loading.
+   * Display only; credit from your `deposit.credited` webhook. */
+  onChange?: (state: ClientDepositAddress) => void;
   appearance?: Appearance;
   className?: string;
 }
@@ -52,12 +56,13 @@ export function DepositAddress({
   clientSecret,
   apiBase,
   pollInterval,
+  onChange,
   appearance,
   className,
 }: DepositAddressProps) {
   const { networks } = depositAddress;
   const id = useId();
-  const { view, reconnecting } = useClientView(clientSecret, apiBase, pollInterval ?? 3000);
+  const { view, reconnecting } = useClientView(clientSecret, apiBase, pollInterval ?? 3000, onChange);
   const payments = view?.payments ?? [];
   const [selectedChain, setSelectedChain] = useState(chainId ?? networks[0]?.chain_id);
   const [selectedAsset, setSelectedAsset] = useState(asset);
@@ -148,8 +153,14 @@ function useClientView(
   clientSecret: string | undefined,
   apiBase: string | undefined,
   interval: number,
+  onChange: DepositAddressProps["onChange"],
 ): { view: ClientDepositAddress | null; reconnecting: boolean } {
+  const callback = useRef(onChange);
+  useEffect(() => {
+    callback.current = onChange;
+  });
   const key = clientSecret === undefined || apiBase === undefined ? "" : `${apiBase} ${clientSecret}`;
+  const lastView = useRef<{ key: string; serialized: string } | null>(null);
   const [current, setCurrent] = useState<{ key: string; view: ClientDepositAddress | null; reconnecting: boolean }>({
     key: "",
     view: null,
@@ -163,18 +174,37 @@ function useClientView(
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
+    let inFlight = false;
+    let finished = false;
+    let lastChanged = Date.now();
+    const visibilityDocument = typeof document === "undefined" ? undefined : document;
+    const hidden = () => visibilityDocument?.visibilityState === "hidden";
     const load = async () => {
+      if (controller.signal.aborted || finished || inFlight || hidden()) {
+        return;
+      }
+      clearTimeout(timer);
+      inFlight = true;
       let failure: CheckoutError | null = null;
+      let changedView: ClientDepositAddress | undefined;
       try {
         const view = await retrieveDepositAddress({ clientSecret, apiBase, signal: controller.signal });
         failures = 0;
         if (!stopped) {
+          const serialized = JSON.stringify(view);
+          const previous = lastView.current;
+          if (previous === null || previous.key !== key || previous.serialized !== serialized) {
+            lastView.current = { key, serialized };
+            lastChanged = Date.now();
+            changedView = view;
+          }
           setCurrent({ key, view, reconnecting: false });
         }
       } catch (error) {
         failures += 1;
         // A secret that is not valid will not become valid: stop, keep showing the address.
         if (error instanceof CheckoutError && error.code === "invalid_client_secret") {
+          finished = true;
           if (!stopped) setCurrent((previous) => ({ ...previous, reconnecting: false }));
           return;
         }
@@ -184,16 +214,37 @@ function useClientView(
             key, view: previous.key === key ? previous.view : null, reconnecting: true,
           }));
         }
+      } finally {
+        inFlight = false;
       }
-      if (!stopped) {
-        timer = setTimeout(() => void load(), pollDelay(interval, failures, failure));
+      if (!stopped && !hidden()) {
+        const nextInterval = Date.now() - lastChanged >= 600_000 ? Math.max(interval, 15_000) : interval;
+        timer = setTimeout(() => void load(), pollDelay(nextInterval, failures, failure));
+      }
+      // Notify every observed change, even when React batches multiple polling updates.
+      // Consumer callbacks run outside the request catch so they cannot become network errors.
+      if (!stopped && changedView !== undefined) {
+        try {
+          callback.current?.(changedView);
+        } catch (error) {
+          queueMicrotask(() => { throw error; });
+        }
       }
     };
+    const visibilityChanged = () => {
+      clearTimeout(timer);
+      if (visibilityDocument?.visibilityState !== "hidden") {
+        lastChanged = Date.now();
+        void load();
+      }
+    };
+    visibilityDocument?.addEventListener("visibilitychange", visibilityChanged);
     void load();
     return () => {
       stopped = true;
       controller.abort();
       clearTimeout(timer);
+      visibilityDocument?.removeEventListener("visibilitychange", visibilityChanged);
     };
   }, [key, clientSecret, apiBase, interval]);
   // Another address starts without the previous one's view.
