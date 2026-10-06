@@ -1529,6 +1529,137 @@ async fn refund_idempotency_keys_replay_and_refuse_other_parameters() -> Result<
     result.and(cleanup)
 }
 
+/// Batched refund pages preserve both cursor directions and filters, with the same objects
+/// returned by individual reads, including when creation timestamps tie.
+#[tokio::test]
+async fn refund_lists_page_with_stripe_cursors_and_match_individual_reads() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let pool = &database.app_pool;
+            let admin_key = SigningKey::from_bytes(&[49; 32]);
+            let app = test_router(pool, &admin_key);
+            let merchant = Merchant::seed(pool, &app, "refund-pages").await?;
+            let first = seed_rejected_deposit(pool, merchant.account.id, "first", 100).await?;
+            let second = seed_rejected_deposit(pool, merchant.account.id, "second", 100).await?;
+            let base = Utc::now() - Duration::hours(1);
+            let mut refunds = Vec::new();
+            for number in 1..=12 {
+                for deposit in [first, second] {
+                    let id = merchant.refund(deposit, &number.to_string()).await?;
+                    let refund_status = if number % 2 == 0 {
+                        "pending"
+                    } else {
+                        let (status, canceled) = merchant
+                            .post(&format!("/v1/refunds/{id}/cancel"), Vec::new())
+                            .await?;
+                        ensure!(status == StatusCode::OK, "{canceled}");
+                        "canceled"
+                    };
+                    let created_at = base + Duration::seconds(number / 2);
+                    let uuid = topup::ids::parse(topup::ids::REFUND, &id).context("refund id")?;
+                    sqlx::query("UPDATE refunds SET created_at = $2, metadata = $3 WHERE id = $1")
+                        .bind(uuid)
+                        .bind(created_at)
+                        .bind(json!({"number": number.to_string(), "deposit": deposit.to_string()}))
+                        .execute(pool)
+                        .await?;
+                    let (status, object) = merchant
+                        .call(Method::GET, &format!("/v1/refunds/{id}"), Vec::new())
+                        .await?;
+                    ensure!(status == StatusCode::OK, "{object}");
+                    ensure!(object["status"] == refund_status, "{object}");
+                    refunds.push((created_at, uuid, deposit, refund_status, object));
+                }
+            }
+            refunds.sort_by_key(|refund| std::cmp::Reverse((refund.0, refund.1)));
+
+            for deposit in [None, Some(first), Some(second)] {
+                for refund_status in [None, Some("pending"), Some("canceled")] {
+                    let expected: Vec<Value> = refunds
+                        .iter()
+                        .filter(|(_, _, row_deposit, row_status, _)| {
+                            deposit.is_none_or(|deposit| deposit == *row_deposit)
+                                && refund_status.is_none_or(|status| status == *row_status)
+                        })
+                        .map(|(_, _, _, _, object)| object.clone())
+                        .collect();
+                    let pages = expected.len().div_ceil(2);
+                    ensure!(pages >= 3);
+                    let mut query = "limit=2".to_owned();
+                    if let Some(deposit) = deposit {
+                        query.push_str(&format!("&deposit=dep_{}", deposit.simple()));
+                    }
+                    if let Some(status) = refund_status {
+                        query.push_str(&format!("&status={status}"));
+                    }
+                    // Each scenario gets a fresh request limiter so elapsed time does not
+                    // determine whether the pagination checks reach the API.
+                    let merchant = Merchant {
+                        app: test_router(pool, &admin_key),
+                        ..merchant.clone()
+                    };
+                    let mut cursor = None;
+                    let mut forward = Vec::new();
+                    let mut last_page = Vec::new();
+                    for page_number in 0..pages {
+                        let mut path = format!("/v1/refunds?{query}");
+                        if let Some(id) = &cursor {
+                            path.push_str(&format!("&starting_after={id}"));
+                        }
+                        let (status, page) = merchant.call(Method::GET, &path, Vec::new()).await?;
+                        ensure!(status == StatusCode::OK, "{path}: {page}");
+                        ensure!(page["object"] == "list" && page["url"] == "/v1/refunds");
+                        ensure!(
+                            page["has_more"] == (page_number + 1 < pages),
+                            "{path}: {page}"
+                        );
+                        let data = page["data"].as_array().context("refund page data")?;
+                        ensure!(data.len() == 2, "{path}: {page}");
+                        cursor = Some(
+                            data.last().context("last refund")?["id"]
+                                .as_str()
+                                .context("refund id")?
+                                .to_owned(),
+                        );
+                        forward.extend(data.iter().cloned());
+                        last_page = data.clone();
+                    }
+                    ensure!(
+                        forward == expected,
+                        "forward order or GET objects differ: {query}"
+                    );
+
+                    // Walk from the final forward page back to the newest page. Each
+                    // ending_before page stays newest first and is prepended to the result.
+                    let mut backward = last_page;
+                    for page_number in 1..pages {
+                        let cursor = backward.first().context("first refund")?["id"]
+                            .as_str()
+                            .context("refund id")?;
+                        let path = format!("/v1/refunds?{query}&ending_before={cursor}");
+                        let (status, page) = merchant.call(Method::GET, &path, Vec::new()).await?;
+                        ensure!(status == StatusCode::OK, "{path}: {page}");
+                        ensure!(
+                            page["has_more"] == (page_number + 1 < pages),
+                            "{path}: {page}"
+                        );
+                        let mut data = page["data"].as_array().context("refund page data")?.clone();
+                        ensure!(data.len() == 2, "{path}: {page}");
+                        data.extend(backward);
+                        backward = data;
+                    }
+                    ensure!(
+                        backward == expected,
+                        "backward order or GET objects differ: {query}"
+                    );
+                }
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
 #[tokio::test]
 async fn deposit_lists_page_with_stripe_cursors() -> Result<()> {
     let Some(database) = TestDatabase::create().await? else {

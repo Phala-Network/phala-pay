@@ -11,7 +11,7 @@ struct QueueIndex {
     drop_sql: &'static str,
 }
 
-const QUEUE_INDEXES: [QueueIndex; 7] = [
+const QUEUE_INDEXES: [QueueIndex; 11] = [
     QueueIndex {
         version: 20261028000000,
         name: "rpc_window_reviews_due_idx",
@@ -53,6 +53,30 @@ const QUEUE_INDEXES: [QueueIndex; 7] = [
         name: "deposits_flush_page_idx",
         definition: "CREATE INDEX deposits_flush_page_idx ON public.deposits USING btree (id) WHERE ((state = 'credited'::text) AND (final_at IS NOT NULL))",
         drop_sql: "DROP INDEX CONCURRENTLY public.deposits_flush_page_idx",
+    },
+    QueueIndex {
+        version: 20261029040000,
+        name: "quotes_scope_created_idx",
+        definition: "CREATE INDEX quotes_scope_created_idx ON public.quotes USING btree (account_id, livemode, created_at, id)",
+        drop_sql: "DROP INDEX CONCURRENTLY public.quotes_scope_created_idx",
+    },
+    QueueIndex {
+        version: 20261029040001,
+        name: "refunds_scope_created_idx",
+        definition: "CREATE INDEX refunds_scope_created_idx ON public.refunds USING btree (account_id, livemode, created_at, id)",
+        drop_sql: "DROP INDEX CONCURRENTLY public.refunds_scope_created_idx",
+    },
+    QueueIndex {
+        version: 20261029040002,
+        name: "addresses_scope_page_idx",
+        definition: "CREATE INDEX addresses_scope_page_idx ON public.addresses USING btree (account_id, livemode, id)",
+        drop_sql: "DROP INDEX CONCURRENTLY public.addresses_scope_page_idx",
+    },
+    QueueIndex {
+        version: 20261029040003,
+        name: "heartbeat_recorded_at_idx",
+        definition: "CREATE INDEX heartbeat_recorded_at_idx ON public.heartbeat USING btree (recorded_at)",
+        drop_sql: "DROP INDEX CONCURRENTLY public.heartbeat_recorded_at_idx",
     },
 ];
 
@@ -197,7 +221,7 @@ async fn recover_queue_indexes(connection: &mut PgConnection) -> Result<(), Migr
 // Schema capability of the first release implementing this protocol. Future expand-only releases
 // keep the immediately previous release's maximum migration here. A breaking release raises it
 // to its own maximum and declares "no rollback; restore required" in CHANGELOG.
-const COMPATIBILITY_FLOOR: i64 = 20261028000002;
+const COMPATIBILITY_FLOOR: i64 = 20261029030005;
 
 async fn validate_compatibility(connection: &mut PgConnection) -> Result<(), MigrateError> {
     let exists: bool =
