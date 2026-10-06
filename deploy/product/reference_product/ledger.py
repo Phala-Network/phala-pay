@@ -253,6 +253,7 @@ class Delivery:
 # How far each deposit status is along the deposit's life; a snapshot never moves it back.
 STATUS_RANK = {"pending": 0, "credited": 1, "rejected": 1, "reversed": 2}
 QUOTE_STATUSES = frozenset({"open", "complete", "expired", "canceled"})
+QUOTE_STATUS_RANK = {"open": 0, "expired": 1, "complete": 2, "canceled": 2}
 TERMINAL_QUOTE_STATUSES = frozenset({"complete", "expired", "canceled"})
 
 
@@ -388,9 +389,11 @@ class ProductLedger:
         current = db.execute(
             "SELECT status FROM quote_statuses WHERE quote_id = ?", (quote_id,)
         ).fetchone()
-        # A quote's terminal state cannot be undone by a stale open object fetched while a
-        # webhook is being delivered. Terminal-to-terminal updates are retained in receive order.
-        if current is not None and current[0] in TERMINAL_QUOTE_STATUSES and status == "open":
+        # Quote state only moves forward; complete and canceled share the terminal rank.
+        if (
+            current is not None
+            and QUOTE_STATUS_RANK.get(current[0], -1) >= QUOTE_STATUS_RANK[status]
+        ):
             return
         db.execute(
             "INSERT INTO quote_statuses (quote_id, status) VALUES (?, ?) "
@@ -565,6 +568,8 @@ class ProductLedger:
     def _record_quote_webhook_status(
         cls, db: sqlite3.Connection, event_type: str, data: Mapping[str, Any]
     ) -> None:
+        if not event_type.startswith("quote."):
+            return
         obj = data.get("object")
         if not isinstance(obj, Mapping):
             return
@@ -576,8 +581,7 @@ class ProductLedger:
             status = "canceled"
         elif event_type == "quote.expired":
             status = "expired"
-        if event_type.startswith("quote."):
-            cls._record_quote_status(db, quote_id, status)
+        cls._record_quote_status(db, quote_id, status)
 
     @staticmethod
     def _record_event_refs(db: sqlite3.Connection, event_id: str, data: object) -> None:

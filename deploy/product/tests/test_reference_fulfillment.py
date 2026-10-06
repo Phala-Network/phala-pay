@@ -1249,6 +1249,37 @@ def test_quote_status_migration_backfills_and_is_idempotent(tmp_path: Path) -> N
             ledger._connection.close()
 
 
+def test_quote_statuses_are_monotonic_and_duplicate_deliveries_are_idempotent() -> None:
+    ledger = ProductLedger()
+    complete_id = "qt_" + "01" * 16
+    expired_id = "qt_" + "02" * 16
+    equal_rank_id = "qt_" + "03" * 16
+    ledger.record_quote_status({"id": complete_id, "status": "complete"})
+    ledger.record_quote_status({"id": complete_id, "status": "expired"})
+    ledger.record_quote_status({"id": expired_id, "status": "expired"})
+    ledger.record_quote_status({"id": expired_id, "status": "complete"})
+    ledger.record_quote_status({"id": equal_rank_id, "status": "complete"})
+    ledger.record_quote_status({"id": equal_rank_id, "status": "canceled"})
+    with ledger.transaction() as db:
+        assert db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (complete_id,)
+        ).fetchone() == ("complete",)
+        assert db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (expired_id,)
+        ).fetchone() == ("complete",)
+        assert db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (equal_rank_id,)
+        ).fetchone() == ("complete",)
+    fulfillment = _fulfillment(ledger=ledger)
+    delivery = _delivery("quote.expired", {"id": complete_id})
+    assert fulfillment.handle(*delivery).status == 204
+    assert fulfillment.handle(*delivery).status == 204
+    with ledger.transaction() as db:
+        assert db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (complete_id,)
+        ).fetchone() == ("complete",)
+
+
 def test_ledger_rejects_future_schema_without_changing_it(tmp_path: Path) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:

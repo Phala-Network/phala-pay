@@ -77,7 +77,7 @@ from topup_sdk.errors import ResponseValidationError, TransportError
 
 from .cache import CachedFailureError, Failure, SingleFlightTTL
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
-from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
+from .ledger import ORDER_FLOW_CODE, TERMINAL_QUOTE_STATUSES, DepositView, ProductLedger
 from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
 
 # Only these failures have a public demo response. Other SDK errors reach the server logger.
@@ -443,7 +443,7 @@ class DemoConsole:
                 continue
             status = (
                 quote_status
-                if quote_status in {"complete", "expired", "canceled"}
+                if quote_status in TERMINAL_QUOTE_STATUSES
                 else "expired"
                 if now >= expires_at
                 else "awaiting_payment"
