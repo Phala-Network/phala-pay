@@ -29,6 +29,8 @@ type ApiResult<T> = Result<T, ApiError>;
 
 const DEFAULT_LIMIT: i64 = 10;
 const MAX_LIMIT: i64 = 100;
+// Bound screening to stay within each provider's RPC rate budget.
+const SWEEPABLE_SCREENING_CONCURRENCY: usize = 4;
 
 /// Starts a query with `held`: per forwarder of the scope and token, every deposit not reversed
 /// minus the finalized sweeps (`unswept`), the same over final deposits (`final_unswept`), and
@@ -494,7 +496,10 @@ async fn sweepable_treasuries(
         let address = EvmAddress::from_str(&treasury).map_err(|_| ApiError::internal())?;
         checks.push(async move { (treasury, screening.screen_cached(route, address).await) });
     }
-    let results = stream::iter(checks).buffered(4).collect::<Vec<_>>().await;
+    let results = stream::iter(checks)
+        .buffered(SWEEPABLE_SCREENING_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
     let mut clear = Vec::new();
     for (treasury, verdict) in results {
         match verdict {
