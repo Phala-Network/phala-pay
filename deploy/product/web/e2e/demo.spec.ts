@@ -1032,9 +1032,24 @@ test("home and comparison hydrate in either theme without CSP violations or Reac
         await page.getByRole("button", { name: `Switch to ${next} theme` }).click();
         await expect(page.locator("html")).toHaveClass(next === "dark" ? /dark/ : /^$/);
         await page.setViewportSize({ width: 390, height: 844 });
-        await page.getByRole("button", { name: "Menu", exact: true }).click();
-        await expect(page.getByRole("navigation", { name: "Menu" })).toBeVisible();
+        const toggle = page.getByRole("button", { name: "Menu", exact: true });
+        await expect(toggle).toHaveAttribute("aria-expanded", "false");
+        await toggle.click();
+        await expect(toggle).toHaveAttribute("aria-expanded", "true");
+        const menu = page.getByRole("navigation", { name: "Menu" });
+        await expect(menu).toBeVisible();
+        const panelId = await toggle.getAttribute("aria-controls");
+        expect(await menu.evaluate((node) => node.parentElement?.id)).toBe(panelId);
+        await expect(page.locator("body")).not.toHaveAttribute("data-scroll-locked");
+        await menu.getByRole("link", { name: "Demo", exact: true }).focus();
         await page.keyboard.press("Escape");
+        await expect(menu).toBeHidden();
+        await expect(toggle).toHaveAttribute("aria-expanded", "false");
+        await expect(toggle).toBeFocused();
+        await toggle.click();
+        await menu.getByRole("link", { name: path === "" ? "Demo" : "Compare", exact: true }).click();
+        await expect(toggle).toHaveAttribute("aria-expanded", "false");
+        await expect(menu).toBeHidden();
         expect(problems).toEqual([]);
       } finally {
         await context.close();

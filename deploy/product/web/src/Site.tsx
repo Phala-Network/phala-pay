@@ -1,7 +1,7 @@
-import { BookOpen, Braces, Cpu, Menu, Rocket, Clock, Coins, Wallet, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { BookOpen, Braces, Cpu, Menu, X, Rocket, Clock, Coins, Wallet, type LucideIcon } from "lucide-react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { FAQ, HERO_SUBHEAD, TAGLINE } from "./content/site.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 
@@ -41,6 +41,10 @@ const NAV = [
 ];
 
 export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuId = useId();
+  const menuToggle = useRef<HTMLButtonElement>(null);
+
   return (
     <header className="sticky top-0 z-50 border-b bg-background">
       <div className={`${CONTAINER} flex h-14 items-center justify-between gap-4`}>
@@ -57,27 +61,45 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
             <span aria-hidden="true" className="github-icon inline-block size-4 shrink-0 bg-current" />
           </a>
           <ThemeToggle theme={theme} onChange={onThemeChange} />
-          <Sheet>
-            <SheetTrigger asChild>
-              <button type="button" className={`${ICON_BUTTON} md:hidden`} aria-label="Menu">
+          <Collapsible
+            open={menuOpen}
+            onOpenChange={setMenuOpen}
+            className="relative md:hidden"
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && menuOpen) {
+                event.preventDefault();
+                setMenuOpen(false);
+                menuToggle.current?.focus();
+              }
+            }}
+          >
+            <CollapsibleTrigger asChild aria-controls={menuId}>
+              <button ref={menuToggle} type="button" className={ICON_BUTTON} aria-label="Menu">
                 <Menu aria-hidden="true" />
               </button>
-            </SheetTrigger>
-            <SheetContent side="right" className="w-72">
-              <SheetHeader>
-                <SheetTitle>Phala Pay</SheetTitle>
-              </SheetHeader>
+            </CollapsibleTrigger>
+            {/* Native disclosure content avoids CollapsibleContent's measured inline styles. */}
+            <div id={menuId} hidden={!menuOpen} data-state={menuOpen ? "open" : "closed"}
+              className="absolute top-full right-0 w-72 border bg-popover pb-4 text-popover-foreground shadow-lg">
+              <div className="flex items-center justify-between p-4">
+                <p className="text-base font-medium text-foreground">Phala Pay</p>
+                <button type="button" className={ICON_BUTTON} aria-label="Close menu" onClick={() => {
+                  setMenuOpen(false);
+                  menuToggle.current?.focus();
+                }}>
+                  <X aria-hidden="true" />
+                </button>
+              </div>
               <nav aria-label="Menu" className="flex flex-col gap-1 px-4">
                 {NAV.map(({ href, label }) => (
-                  <SheetClose asChild key={label}>
-                    <a className="rounded-md px-2 py-2 text-sm font-medium hover:bg-accent" href={href}>
-                      {label}
-                    </a>
-                  </SheetClose>
+                  <a key={label} className="rounded-md px-2 py-2 text-sm font-medium hover:bg-accent"
+                    href={href} onClick={() => setMenuOpen(false)}>
+                    {label}
+                  </a>
                 ))}
               </nav>
-            </SheetContent>
-          </Sheet>
+            </div>
+          </Collapsible>
         </nav>
       </div>
     </header>
