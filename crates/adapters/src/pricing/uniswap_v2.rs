@@ -418,6 +418,7 @@ impl UniswapV2 {
                 observed_at: UnixSeconds::new(end.timestamp),
             },
             agreement_price,
+            spread_bps: None,
             evidence,
             reuse_until: Some(UnixSeconds::new(
                 block.timestamp.saturating_add(self.policy.max_sample_age_s),

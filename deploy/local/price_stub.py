@@ -8,7 +8,7 @@ import sys
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         if self.path.startswith("/0/public/Ticker"):
-            body = b'{"error":[],"result":{"PHAUSD":{"c":["2.00000000"]}}}'
+            body = b'{"error":[],"result":{"PHAUSD":{"a":["2.00000000"],"b":["2.00000000"],"c":["2.00000000"]}}}'
         elif self.path.startswith("/api/v3/ticker/price"):
             body = b'{"symbol":"PHAUSDT","price":"2.00000000"}'
         else:

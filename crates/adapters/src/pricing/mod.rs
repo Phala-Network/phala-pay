@@ -52,6 +52,8 @@ pub struct PriceQuote {
     pub valuation: Observation,
     /// Current market price used for agreement with an independent company.
     pub agreement_price: topup_core::money::ScaledPrice,
+    /// Order-book spread relative to mid, rounded up to whole basis points when available.
+    pub spread_bps: Option<u64>,
     /// Latest Unix timestamp at which this observation may be reused; never serialized.
     pub reuse_until: Option<topup_core::valuation::UnixSeconds>,
     /// Sanitized source-specific audit evidence.
@@ -68,6 +70,7 @@ pub trait PriceSource: Send + Sync {
         let valuation = self.observe().await?;
         Ok(PriceQuote {
             agreement_price: valuation.price,
+            spread_bps: None,
             valuation,
             evidence: serde_json::Value::Null,
             reuse_until: None,

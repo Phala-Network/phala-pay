@@ -893,6 +893,15 @@ async fn observe(
             now,
         ) {
             Err(PriceError::Stale)
+        } else if role == "check"
+            && quote
+                .spread_bps
+                .is_some_and(|spread| spread > u64::from(route.pricing.max_deviation_bps.value()))
+        {
+            Err(PriceError::Feed {
+                class: "wide_spread",
+                evidence: quote.evidence,
+            })
         } else {
             Ok((quote, age_ms))
         }
@@ -1231,6 +1240,8 @@ mod tests {
         price: u64,
         age: u64,
         error: Option<PriceError>,
+        spread_bps: Option<u64>,
+        evidence: Value,
     }
     #[async_trait]
     impl PriceSource for Fixture {
@@ -1246,6 +1257,16 @@ mod tests {
                 ),
             })
         }
+        async fn quote(&self) -> Result<PriceQuote, PriceError> {
+            let valuation = self.observe().await?;
+            Ok(PriceQuote {
+                agreement_price: valuation.price,
+                valuation,
+                spread_bps: self.spread_bps,
+                evidence: self.evidence.clone(),
+                reuse_until: None,
+            })
+        }
     }
     fn entry(id: &'static str, price: u64, age: u64, error: Option<PriceError>) -> Entry {
         Entry {
@@ -1255,6 +1276,8 @@ mod tests {
                     price,
                     age,
                     error,
+                    spread_bps: None,
+                    evidence: Value::Null,
                 }),
                 Duration::ZERO,
                 id,
@@ -1285,6 +1308,93 @@ mod tests {
     fn route() -> RouteFile {
         serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml")).unwrap()
     }
+
+    fn kraken_book(price: u64, spread_bps: u64, bid: &str, ask: &str) -> Entry {
+        let mut entry = entry("kraken", price, 0, None);
+        entry.usdt_quoted = false;
+        entry.source = Arc::new(SharedSource::new(
+            Arc::new(Fixture {
+                id: "kraken",
+                price,
+                age: 0,
+                error: None,
+                spread_bps: Some(spread_bps),
+                evidence: json!({"bid":bid,"ask":ask,"last":"0.07183","spread_bps":spread_bps}),
+            }),
+            Duration::ZERO,
+            "kraken",
+            "kraken",
+        ));
+        entry
+    }
+
+    #[tokio::test]
+    async fn kraken_mid_accepts_incident_market_and_rejects_two_percent_deviation() {
+        GOLDEN_NOW
+            .scope(1_700_000_000, async {
+                let mut r = runtime();
+                r.primary = vec![entry("uniswap_v2_twap", 7_279_000, 0, None)];
+                r.check = vec![kraken_book(7_289_000, 22, "0.07281", "0.07297")];
+                let quote = r.fetch(&route(), test_deadline()).await.unwrap();
+                assert_eq!(quote.price.value(), 7_279_000);
+                let observations = [
+                    golden_observation("primary", "uniswap_v2_twap", "7279000"),
+                    r#"{"age_s":0,"agreement_price_scaled":"7289000","company":"kraken","data":{"ask":"0.07297","bid":"0.07281","last":"0.07183","spread_bps":22},"descriptor":null,"observed_at":1700000000,"price_scaled":"7289000","role":"check","source":"kraken"}"#.into(),
+                    golden_observation("fx", "chainlink", "100000000"),
+                ];
+                assert_eq!(
+                    serde_json::to_vec(&quote.evidence).unwrap(),
+                    golden_audit("volatile", "accepted", &observations).as_bytes()
+                );
+
+                r.check = vec![kraken_book(7_424_580, 0, "0.07424580", "0.07424580")];
+                assert_eq!(
+                    r.fetch(&route(), test_deadline()).await.err().unwrap().code,
+                    "divergent"
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn wide_kraken_spread_is_unavailable_and_can_fail_over_without_disagreement() {
+        let mut route = route();
+        route.route = "kraken-wide-spread-fixture".into();
+        route.pricing.max_deviation_bps = topup_core::money::Bps::new(100).unwrap();
+        let mut r = runtime();
+        r.primary = vec![entry("uniswap_v2_twap", 10_000_000, 0, None)];
+        r.check = vec![kraken_book(10_200_000, 101, "0.1014849", "0.1025151")];
+        let failure = r.fetch(&route, test_deadline()).await.err().unwrap();
+        assert_eq!(failure.code, "source_failure");
+        assert_eq!(failure.evidence["observations"][1]["error"], "wide_spread");
+        assert_eq!(
+            failure.evidence["observations"][1]["data"]["spread_bps"],
+            101
+        );
+
+        r.check.push(entry("fallback", 10_000_000, 0, None));
+        let quote = r.fetch(&route, test_deadline()).await.unwrap();
+        assert_eq!(quote.evidence["decision"], "accepted");
+        assert_eq!(quote.evidence["observations"][1]["error"], "wide_spread");
+        assert_eq!(quote.evidence["observations"][2]["source"], "fallback");
+
+        let metrics = price_metrics::collect().unwrap();
+        let disagreements = metrics
+            .iter()
+            .find(|family| family.name() == "price_disagreement_total")
+            .unwrap();
+        assert!(disagreements.get_metric().iter().all(|metric| {
+            !metric
+                .get_label()
+                .iter()
+                .any(|label| label.name() == "route" && label.value() == route.route)
+                || metric.get_counter().get_value() == 0.0
+        }));
+
+        r.check = vec![kraken_book(10_000_000, 100, "0.0995", "0.1005")];
+        assert!(r.fetch(&route, test_deadline()).await.is_ok());
+    }
+
     struct TwapFixture {
         spot_units: u64,
     }
@@ -1327,6 +1437,7 @@ mod tests {
                     observed_at: UnixSeconds::new(now),
                 },
                 agreement_price: usd_price(spot, eth)?,
+                spread_bps: None,
                 evidence: json!({"twap_usd_scaled":usd_price(ratio, eth)?.value().to_string()}),
                 reuse_until: None,
             })
@@ -1594,6 +1705,7 @@ mod tests {
             let valuation = self.observe().await?;
             Ok(PriceQuote {
                 agreement_price: valuation.price,
+                spread_bps: None,
                 valuation,
                 evidence: Value::Null,
                 reuse_until: self.reuse_until,
@@ -1897,6 +2009,7 @@ mod tests {
                     async fn quote(&self) -> Result<PriceQuote, PriceError> {
                         Ok(PriceQuote {
                             agreement_price: ScaledPrice::new(10_000_000, 8).unwrap(),
+                            spread_bps: None,
                             valuation: self.observe().await?,
                             evidence: Value::Null,
                             reuse_until: Some(UnixSeconds::new(1000)),
