@@ -2482,7 +2482,7 @@ mod tests {
         let provider: Arc<dyn crate::locks::QuoteProvider> = Arc::new(Stalled);
         let started = tokio::time::Instant::now();
         assert!(matches!(
-            crate::locks::quote_with_budget(&provider, &route()).await,
+            crate::locks::quote_with_budget(&provider, &route(), test_deadline()).await,
             Err(crate::locks::RateLockError::PricingUnavailable)
         ));
         assert_eq!(started.elapsed(), Duration::from_secs(15));
@@ -2538,7 +2538,12 @@ mod tests {
         });
         let started = tokio::time::Instant::now();
         assert!(matches!(
-            crate::locks::quote_with_budget(&provider, &route()).await,
+            crate::locks::quote_with_budget(
+                &provider,
+                &route(),
+                tokio::time::Instant::now() + crate::locks::QUOTE_PRICING_BUDGET
+            )
+            .await,
             Err(crate::locks::RateLockError::PricingUnavailable)
         ));
         let deadline = started + crate::locks::QUOTE_PRICING_BUDGET;
