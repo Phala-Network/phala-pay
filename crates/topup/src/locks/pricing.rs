@@ -894,7 +894,6 @@ async fn observe(
         ) {
             Err(PriceError::Stale)
         } else if role == "check"
-            && entry.source_id == "kraken"
             && quote
                 .spread_bps
                 .is_some_and(|spread| spread > u64::from(route.pricing.max_deviation_bps.value()))
