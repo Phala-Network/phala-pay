@@ -23,7 +23,7 @@ function setTheme(next: Theme) {
 
 /** One theme store shared by the header and demo islands. The head script initializes it. */
 export function useTheme(): [Theme, (theme: Theme) => void] {
-  return [useSyncExternalStore(subscribe, currentTheme), setTheme];
+  return [useSyncExternalStore(subscribe, currentTheme, () => "light" as const), setTheme];
 }
 
 /** The header's icon buttons: one hover and fill in either theme. */

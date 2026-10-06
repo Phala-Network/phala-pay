@@ -1002,9 +1002,13 @@ test("loading home islands preserves the original prerendered hero", async ({ pa
     const hero = page.locator("#hero-title");
     await expect(hero).toBeVisible();
     const original = await hero.elementHandle();
+    const originalHeader = await page.getByRole("banner").elementHandle();
+    const originalFooter = await page.getByRole("contentinfo").elementHandle();
     releaseEntry?.();
     await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
     expect(await original.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalHeader.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalFooter.evaluate((node) => node.isConnected)).toBe(true);
     await page.getByRole("button", { name: "Switch to dark theme" }).click();
     await expect(page.locator("html")).toHaveClass(/dark/);
     await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();

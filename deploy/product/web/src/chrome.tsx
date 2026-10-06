@@ -1,17 +1,13 @@
 import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
-import { SiteFooter, SiteHeader } from "./Site.js";
-import { useTheme } from "./theme.js";
-
-function Header() {
-  const [theme, setTheme] = useTheme();
-  return <SiteHeader theme={theme} onThemeChange={setTheme} />;
-}
+import { hydrateRoot } from "react-dom/client";
+import { SiteFooter } from "./Site.js";
+import { Header } from "./Header.js";
+import { ISLAND_PREFIXES } from "./islands.js";
 
 /** Mount shared interactions without replacing the static page body. */
 export function mountChrome() {
   const header = document.getElementById("site-header");
   const footer = document.getElementById("site-footer");
-  if (header !== null) createRoot(header).render(<StrictMode><Header /></StrictMode>);
-  if (footer !== null) createRoot(footer).render(<StrictMode><SiteFooter /></StrictMode>);
+  if (header !== null) hydrateRoot(header, <StrictMode><Header /></StrictMode>, { identifierPrefix: ISLAND_PREFIXES.header });
+  if (footer !== null) hydrateRoot(footer, <StrictMode><SiteFooter /></StrictMode>, { identifierPrefix: ISLAND_PREFIXES.footer });
 }
