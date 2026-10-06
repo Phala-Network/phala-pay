@@ -60,9 +60,7 @@ impl<'de> Deserialize<'de> for AtomicAmount {
 }
 
 /// An amount in the destination product's minor unit.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct MinorAmount(u64);
 
