@@ -99,9 +99,11 @@ QUOTE_TERMS = {
 
 
 def _create_ledger_schema(db: sqlite3.Connection, *, version: int) -> None:
-    for statements in MIGRATIONS[:version]:
+    for statements, backfill in MIGRATIONS[:version]:
         for statement in statements:
             db.execute(statement)
+        if backfill is not None:
+            backfill(db)
 
 
 def _fulfillment(
