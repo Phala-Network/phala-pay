@@ -106,6 +106,7 @@ MAX_AMOUNT = 100_000
 # The forwarders one flush call may name (topup_sdk.sweeps.MAX_SALTS_PER_FLUSH).
 MAX_SWEEP_FORWARDERS = 200
 SWEEPS_WAIT_SECONDS = 8
+SWEEP_GROUP_MAX_STALE_SECONDS = 600
 EXPLORERS = {
     1: "https://etherscan.io",
     8453: "https://basescan.org",
@@ -144,6 +145,13 @@ class Response:
     status: HTTPStatus
     body: bytes = b""
     headers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _LastGoodSweepGroup:
+    value: dict[str, Any]
+    stored_at: float
+    as_of: int
 
 
 class RateLimiter:
@@ -238,6 +246,7 @@ class DemoConsole:
         self._writes = RateLimiter(60, 60, clock)
         self._reads = RateLimiter(120, 60, clock)
         self._refresh_workers = ThreadPoolExecutor(max_workers=1, thread_name_prefix="demo-refresh")
+        self._last_good_sweep_groups: dict[tuple[int, str], _LastGoodSweepGroup] = {}
         self._trust_cache = SingleFlightTTL[dict[str, Any]](
             clock=clock,
             ttl=300,
@@ -918,12 +927,48 @@ class DemoConsole:
             "treasury": treasury,
         }
         try:
-            return self._sweep_group_data(static, service, unswept, now)
+            value = {**self._sweep_group_data(static, service, unswept, now), "stale": False}
+            key = (chain_id, token.lower())
+            with self._lock:
+                self._last_good_sweep_groups[key] = _LastGoodSweepGroup(
+                    value=value,
+                    stored_at=time.monotonic(),
+                    as_of=int(now),
+                )
+            return value
         except (ApiError, TransportError, ResponseValidationError) as error:
-            LOG.warning("sweep group unavailable for chain %s asset %s: %s", chain_id, token, error)
+            status_code = getattr(error, "status_code", None)
+            error_code = getattr(error, "code", None)
+            request_id = getattr(error, "request_id", None)
+            LOG.warning(
+                "sweep group failed: chain_id=%s token=%s error_class=%s http_status=%s "
+                "error_code=%s request_id=%s",
+                chain_id,
+                static["symbol"],
+                type(error).__name__,
+                status_code,
+                error_code,
+                request_id,
+            )
+            key = (chain_id, token.lower())
+            with self._lock:
+                last_good = self._last_good_sweep_groups.get(key)
+            if (
+                last_good is not None
+                and time.monotonic() - last_good.stored_at <= SWEEP_GROUP_MAX_STALE_SECONDS
+            ):
+                return {
+                    **last_good.value,
+                    "unavailable": False,
+                    "stale": True,
+                    "as_of": last_good.as_of,
+                    "flush": [],
+                    "safe_batch": None,
+                }
             return {
                 **static,
                 "unavailable": True,
+                "stale": False,
                 "unswept_atomic": "0",
                 "final_unswept_atomic": "0",
                 "sweepable_forwarders": 0,
