@@ -1719,6 +1719,51 @@ async fn isolated_copy_starts_with_empty_memo() {
 }
 
 #[tokio::test]
+async fn direct_head_validation_error_clears_memo_and_pinned_read_revalidates() {
+    for error in [Failure::Stale, Failure::Persistence, Failure::Fork] {
+        let fixture = PinnedReadFixture::new(&format!("pinned-direct-head-{error:?}"), 0, 1).await;
+        let store = Arc::new(PinnedReadStore::default());
+        fixture.group.set_store(store.clone());
+        let deadline = || Instant::now() + Duration::from_secs(2);
+        fixture.group.head(0, "latest", deadline()).await.unwrap();
+        assert!(fixture.group.validated_at_least(0, 100));
+
+        match error {
+            Failure::Stale => fixture.number.store(99, Ordering::SeqCst),
+            Failure::Persistence => store.reject_accept.store(true, Ordering::SeqCst),
+            Failure::Fork => store.frozen.store(true, Ordering::SeqCst),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            fixture.group.head(0, "latest", deadline()).await,
+            Err(error)
+        );
+        assert!(!fixture.group.validated_at_least(0, 0), "{error:?}");
+        assert_eq!(
+            fixture.group.eligible(),
+            1,
+            "direct head failure only clears the memo"
+        );
+
+        fixture.number.store(100, Ordering::SeqCst);
+        store.reject_accept.store(false, Ordering::SeqCst);
+        store.frozen.store(false, Ordering::SeqCst);
+        let before = fixture.latest_sends();
+        fixture
+            .request("eth_call", json!([{}, "0x64"]))
+            .await
+            .unwrap();
+        assert_eq!(fixture.latest_sends(), before + 1, "{error:?}");
+        assert!(fixture.group.validated_at_least(0, 100));
+        let requests = fixture.requests.lock().unwrap();
+        let prefix = &requests[requests.len() - 2];
+        assert_eq!(prefix["method"], "eth_getBlockByNumber");
+        assert_eq!(prefix["params"][0], "latest");
+        assert_eq!(requests.last().unwrap()["method"], "eth_call");
+    }
+}
+
+#[tokio::test]
 async fn unaccepted_head_never_populates_memo() {
     let fixture = PinnedReadFixture::new("pinned-acceptance-test", 0, 1).await;
     let store = Arc::new(PinnedReadStore::default());

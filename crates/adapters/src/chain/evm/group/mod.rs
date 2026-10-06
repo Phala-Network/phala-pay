@@ -1105,6 +1105,17 @@ impl RpcGroup {
         tag: &str,
         deadline: Instant,
     ) -> Result<(HeadAnchor, Value), Failure> {
+        // Direct head readers do not always route errors through failed().
+        self.validate_head_reply(index, tag, deadline)
+            .await
+            .inspect_err(|_| self.clear_validated(index))
+    }
+    async fn validate_head_reply(
+        &self,
+        index: usize,
+        tag: &str,
+        deadline: Instant,
+    ) -> Result<(HeadAnchor, Value), Failure> {
         let value=self.send(index,&json!({"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":[tag,false]}),deadline).await?;
         validate_typed("eth_getBlockByNumber", &value)?;
         let head = HeadAnchor::parse(value.get("result").ok_or(Failure::Malformed)?)?;
