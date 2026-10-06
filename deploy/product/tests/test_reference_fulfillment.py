@@ -33,7 +33,7 @@ from reference_product.config import (
     ProductConfig,
 )
 from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys, TransientError
-from reference_product.ledger import BASE_SCHEMA, SCHEMA, SCHEMA_VERSION, Delivery, ProductLedger
+from reference_product.ledger import MIGRATIONS, SCHEMA_VERSION, Delivery, ProductLedger
 from reference_product.restore_records import export_restore_records
 from reference_product.server import (
     AccountApi,
@@ -95,6 +95,12 @@ QUOTE_TERMS = {
     "min_refund_atomic": "1",
     "confirmations": "2",
 }
+
+
+def _create_ledger_schema(db: sqlite3.Connection, *, version: int) -> None:
+    for statements in MIGRATIONS[:version]:
+        for statement in statements:
+            db.execute(statement)
 
 
 def _fulfillment(
@@ -936,8 +942,7 @@ def test_event_references_upgrade_once_and_deduplicate_matches(tmp_path: Path) -
     path = tmp_path / "ledger.sqlite"
     data = {"object": {"id": "dep_test", "quote": "qt_test", "client_reference_id": TEAM}}
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA)
-        db.execute("DROP TABLE event_refs")
+        _create_ledger_schema(db, version=1)
         db.execute(
             "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("evt_test", "deposit.credited", json.dumps(data), 1, b"{}", "1", "signature"),
@@ -1044,8 +1049,7 @@ def test_webhook_key_fetch_failures_are_negative_cached(
 def test_event_reference_backfill_tolerates_non_object_data(tmp_path: Path) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA)
-        db.execute("DROP TABLE event_refs")
+        _create_ledger_schema(db, version=1)
         values: tuple[Any, ...] = (None, [], "text", 1)
         for index, value in enumerate(values):
             db.execute(
@@ -1066,8 +1070,7 @@ def test_event_reference_backfill_rolls_back_non_sql_errors(
 ) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA)
-        db.execute("DROP TABLE event_refs")
+        _create_ledger_schema(db, version=1)
         db.execute(
             "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("evt_test", "test", "invalid JSON", 1, b"{}", "1", "signature"),
@@ -1089,8 +1092,7 @@ def test_concurrent_event_reference_backfills_are_idempotent(
     path = tmp_path / "ledger.sqlite"
     data = {"id": "dep_test", "client_reference_id": TEAM}
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA)
-        db.execute("DROP TABLE event_refs")
+        _create_ledger_schema(db, version=1)
         db.execute(
             "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("evt_test", "test", json.dumps(data), 1, b"{}", "1", "signature"),
@@ -1156,7 +1158,7 @@ def test_ledger_migrations_upgrade_legacy_and_versioned_schemas(
 ) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:
-        db.executescript(BASE_SCHEMA)
+        _create_ledger_schema(db, version=1)
         if version == 1:
             db.execute("PRAGMA user_version = 1")
     ledger = ProductLedger(str(path))

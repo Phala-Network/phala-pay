@@ -198,9 +198,6 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     ),
 )
 SCHEMA_VERSION = len(MIGRATIONS)
-# Legacy fixture exports; production executes the migration statements directly.
-BASE_SCHEMA = "\n".join(MIGRATIONS[0])
-SCHEMA = "\n".join(statement for migration in MIGRATIONS for statement in migration)
 
 
 @dataclass(frozen=True)
