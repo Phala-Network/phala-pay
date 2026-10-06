@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use tokio::time::{sleep, timeout};
+use tokio::time::{Instant, sleep, timeout_at};
 use tokio_util::sync::CancellationToken;
 use topup_core::deposit::{
     DepositState, RetryError, StepOutcome, TransitionKind, WaitReason, next,
@@ -29,6 +29,15 @@ use crate::jitter::{JitterSource, OsJitter};
 use crate::routes::RouteSet;
 
 pub use age::{AgeAlertConfig, AgeAlertConfigError, AgeAlerter};
+
+/// Total step budget, including chain checks and pricing; shorter than the five-minute lease.
+pub const STEP_TIMEOUT: Duration = Duration::from_secs(240);
+tokio::task_local! {
+    static STEP_DEADLINE: Instant;
+}
+pub(crate) fn current_step_deadline() -> Option<Instant> {
+    STEP_DEADLINE.try_with(|deadline| *deadline).ok()
+}
 
 const LEASE_DURATION: Duration = Duration::from_secs(5 * 60);
 /// Wait while a provider has not finalized the deposit block yet: about one slot, so a deposit
@@ -148,7 +157,7 @@ pub struct PumpConfig {
 impl Default for PumpConfig {
     fn default() -> Self {
         Self {
-            step_timeout: Duration::from_secs(4 * 60),
+            step_timeout: STEP_TIMEOUT,
             wait_interval: Duration::from_secs(60),
             idle_poll_interval: Duration::from_millis(250),
         }
@@ -446,7 +455,9 @@ impl Pump {
         };
 
         let span = crate::observability::deposit_step_span(deposit);
-        match timeout(self.config.step_timeout, step.run(deposit))
+        let deadline = Instant::now() + self.config.step_timeout;
+        match STEP_DEADLINE
+            .scope(deadline, timeout_at(deadline, step.run(deposit)))
             .instrument(span)
             .await
         {

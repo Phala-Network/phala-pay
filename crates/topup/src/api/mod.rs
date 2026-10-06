@@ -60,6 +60,7 @@ pub use attestation::{
 pub use auth::VerificationKey;
 pub use client_limit::ClientReadLimiter;
 pub use deadlines::DeadlineListener;
+pub(crate) use deadlines::current_request_deadline;
 pub use idempotency::IdempotencyKeyPruner;
 pub(crate) use keys::api_key_object;
 pub use rate_limit::{ApiRateLimiter, RateLimits};

@@ -139,8 +139,12 @@ pub fn quote_id(id: Uuid) -> String {
 /// A validated quote source used by rate-lock creation.
 #[async_trait]
 pub trait QuoteProvider: Send + Sync {
-    /// Fetches and validates the current spot price for the selected route.
-    async fn quote(&self, route: &RouteFile) -> Result<ValidatedQuote, Value>;
+    /// Fetches and validates the spot price within the caller's absolute deadline.
+    async fn quote(
+        &self,
+        route: &RouteFile,
+        deadline: tokio::time::Instant,
+    ) -> Result<ValidatedQuote, Value>;
 }
 
 /// Production quote provider configured from attested route files.
@@ -184,12 +188,16 @@ impl ConfiguredQuoteProvider {
 
 #[async_trait]
 impl QuoteProvider for ConfiguredQuoteProvider {
-    async fn quote(&self, route: &RouteFile) -> Result<ValidatedQuote, Value> {
+    async fn quote(
+        &self,
+        route: &RouteFile,
+        deadline: tokio::time::Instant,
+    ) -> Result<ValidatedQuote, Value> {
         let runtime = self
             .runtimes
             .get(&(route.route.clone(), route.version))
             .ok_or_else(|| Value::from(PricingFailure::new("missing_route_runtime")))?;
-        runtime.fetch(route).await.map_err(Value::from)
+        runtime.fetch(route, deadline).await.map_err(Value::from)
     }
 }
 
@@ -214,7 +222,11 @@ pub struct UnavailableQuoteProvider;
 
 #[async_trait]
 impl QuoteProvider for UnavailableQuoteProvider {
-    async fn quote(&self, _route: &RouteFile) -> Result<ValidatedQuote, Value> {
+    async fn quote(
+        &self,
+        _route: &RouteFile,
+        _deadline: tokio::time::Instant,
+    ) -> Result<ValidatedQuote, Value> {
         Err(PricingFailure::new("unavailable").into())
     }
 }
@@ -398,23 +410,29 @@ pub async fn price(
     })
 }
 
-const QUOTE_PRICING_BUDGET: Duration = Duration::from_secs(15);
+// Reserve roughly ten seconds for database work within the request budget (D3).
+pub(crate) const QUOTE_PRICING_BUDGET: Duration = Duration::from_secs(15);
 
-async fn quote_with_budget(
+pub(crate) async fn quote_with_budget(
     quotes: &Arc<dyn QuoteProvider>,
     route: &RouteFile,
 ) -> Result<ValidatedQuote, RateLockError> {
-    tokio::time::timeout(QUOTE_PRICING_BUDGET, quotes.quote(route))
-        .await
-        .map_err(|_| {
-            tracing::warn!(route = %route.route, "rate-lock pricing budget exceeded");
-            crate::observability::price_metrics::quote_budget_exceeded(route);
-            RateLockError::PricingUnavailable
-        })?
-        .map_err(|evidence| {
+    let budget_deadline = tokio::time::Instant::now() + QUOTE_PRICING_BUDGET;
+    let deadline = crate::api::current_request_deadline()
+        .map_or(budget_deadline, |request| request.min(budget_deadline));
+    match tokio::time::timeout_at(deadline, quotes.quote(route, deadline)).await {
+        Err(_) => Err(quote_budget_exceeded(route)),
+        Ok(Err(_)) if tokio::time::Instant::now() >= deadline => Err(quote_budget_exceeded(route)),
+        Ok(result) => result.map_err(|evidence| {
             tracing::warn!(route = %route.route, quote = %evidence, "rate-lock price validation failed");
             RateLockError::PricingUnavailable
-        })
+        }),
+    }
+}
+fn quote_budget_exceeded(route: &RouteFile) -> RateLockError {
+    tracing::warn!(route = %route.route, "rate-lock pricing budget exceeded");
+    crate::observability::price_metrics::quote_budget_exceeded(route);
+    RateLockError::PricingUnavailable
 }
 
 /// Creates the lock `priced` for `customer` of `account` in `transaction`, with its

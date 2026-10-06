@@ -217,7 +217,7 @@ impl ConfirmStep {
         }
     }
 
-    async fn execute(&self, deposit: &Deposit) -> StepResult {
+    async fn execute(&self, deposit: &Deposit, deadline: tokio::time::Instant) -> StepResult {
         let context = match self
             .context_lookup
             .load(deposit.address_id, deposit.id)
@@ -450,7 +450,7 @@ impl ConfirmStep {
         };
 
         let valuation_at = Utc::now();
-        let quote = match runtime.pricing.fetch_fresh(&runtime.route).await {
+        let quote = match runtime.pricing.fetch_fresh(&runtime.route, deadline).await {
             Ok(quote) => quote,
             Err(evidence) => {
                 return retry(RetryError::PriceUnavailable, evidence.into(), effects);
@@ -592,7 +592,9 @@ fn carried_forward(
 #[async_trait]
 impl Step for ConfirmStep {
     async fn run(&self, deposit: &Deposit) -> StepResult {
-        self.execute(deposit).await
+        let deadline = crate::pump::current_step_deadline()
+            .unwrap_or_else(|| tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT);
+        self.execute(deposit, deadline).await
     }
 }
 
@@ -1087,6 +1089,10 @@ mod tests {
     use super::*;
     use topup_core::deposit::DepositState;
 
+    fn test_deadline() -> tokio::time::Instant {
+        tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT
+    }
+
     #[derive(Clone)]
     struct MockChain {
         head: Result<u64, ChainError>,
@@ -1303,7 +1309,11 @@ mod tests {
                 now_seconds(),
             ))))),
         ));
-        runtime.pricing.fetch(&runtime.route).await.unwrap();
+        runtime
+            .pricing
+            .fetch(&runtime.route, test_deadline())
+            .await
+            .unwrap();
         assert_eq!(primary.0.load(std::sync::atomic::Ordering::SeqCst), 1);
         tokio::time::advance(Duration::from_millis(1)).await;
         let result = confirm.run(&deposit).await;
@@ -1752,7 +1762,7 @@ mod tests {
         };
         let quote = runtime
             .pricing
-            .fetch(&runtime.route)
+            .fetch(&runtime.route, test_deadline())
             .await
             .expect("slow quote remains fresh");
         assert_eq!(quote.price.value(), 10_000_000);

@@ -1568,7 +1568,11 @@ struct FixedQuote;
 
 #[async_trait]
 impl QuoteProvider for FixedQuote {
-    async fn quote(&self, _route: &RouteFile) -> Result<ValidatedQuote, Value> {
+    async fn quote(
+        &self,
+        _route: &RouteFile,
+        _deadline: tokio::time::Instant,
+    ) -> Result<ValidatedQuote, Value> {
         Ok(ValidatedQuote {
             price: ScaledPrice::new(100_000_000, PRICE_SCALE).map_err(|_| json!("price"))?,
             evidence: json!({"mode": "spot"}),

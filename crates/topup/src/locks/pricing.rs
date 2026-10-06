@@ -66,7 +66,10 @@ fn fresh(bound: u64, observed_at: UnixSeconds, now: UnixSeconds) -> bool {
         .checked_sub(observed_at.value())
         .is_some_and(|age| age <= bound)
 }
+// One Ethereum slot; each cached use still checks the source freshness limits.
 const SOURCE_REUSE: Duration = Duration::from_secs(12);
+// Bound an individual source on long-running confirm steps, capped by its caller deadline.
+const SOURCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct Cached<T> {
     value: T,
@@ -120,6 +123,7 @@ impl<T: Clone + Send + Sync + 'static> Coalesced<T> {
         &self,
         reuse: Duration,
         arrived: tokio::time::Instant,
+        deadline: tokio::time::Instant,
         reusable: impl Fn(&T) -> bool,
         fetch: impl Fn() -> BoxFuture<'static, Result<T, PriceError>>,
     ) -> Result<(T, Option<u64>), PriceError> {
@@ -183,10 +187,9 @@ impl<T: Clone + Send + Sync + 'static> Coalesced<T> {
                 self.company,
                 if coalesced { "coalesced" } else { "miss" },
             );
-            let cached = waiter
-                .flight
-                .clone()
+            let cached = tokio::time::timeout_at(deadline, waiter.flight.clone())
                 .await
+                .map_err(|_| PriceError::Timeout)?
                 .map_err(|error| (*error).clone())?;
             if coalesced && !reusable(&cached.value) {
                 continue;
@@ -234,29 +237,39 @@ impl SharedSource {
         sources.insert(key, source.clone());
         Ok(source)
     }
-    async fn quote_shared(&self) -> Result<(PriceQuote, Option<u64>), PriceError> {
-        self.quote_with_reuse(self.reuse, tokio::time::Instant::now())
+    async fn quote_shared(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<(PriceQuote, Option<u64>), PriceError> {
+        self.quote_with_reuse(self.reuse, tokio::time::Instant::now(), deadline)
             .await
     }
-    async fn quote_shared_fresh(&self) -> Result<(PriceQuote, Option<u64>), PriceError> {
-        self.quote_shared_since(tokio::time::Instant::now()).await
+    async fn quote_shared_fresh(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<(PriceQuote, Option<u64>), PriceError> {
+        self.quote_shared_since(tokio::time::Instant::now(), deadline)
+            .await
     }
     async fn quote_shared_since(
         &self,
         arrived: tokio::time::Instant,
+        deadline: tokio::time::Instant,
     ) -> Result<(PriceQuote, Option<u64>), PriceError> {
-        self.quote_with_reuse(Duration::ZERO, arrived).await
+        self.quote_with_reuse(Duration::ZERO, arrived, deadline)
+            .await
     }
     async fn quote_with_reuse(
         &self,
         reuse: Duration,
         arrived: tokio::time::Instant,
+        deadline: tokio::time::Instant,
     ) -> Result<(PriceQuote, Option<u64>), PriceError> {
         self.coalesced
-            .get(reuse, arrived, reusable, || {
+            .get(reuse, arrived, deadline, reusable, || {
                 let inner = self.inner.clone();
                 async move {
-                    tokio::time::timeout(Duration::from_secs(30), inner.quote())
+                    tokio::time::timeout_at(deadline, inner.quote())
                         .await
                         .map_err(|_| PriceError::Timeout)?
                 }
@@ -276,16 +289,22 @@ struct SharedSequencer {
     coalesced: Coalesced<Value>,
 }
 impl SharedSequencer {
-    async fn evidence(&self) -> Result<Value, PriceError> {
+    async fn evidence(&self, deadline: tokio::time::Instant) -> Result<Value, PriceError> {
         self.coalesced
             .get(
                 Duration::ZERO,
                 tokio::time::Instant::now(),
+                deadline,
                 |_| true,
                 || {
                     let inner = self.inner.clone();
                     let grace_s = self.grace_s;
-                    async move { inner.sequencer(grace_s).await }.boxed()
+                    async move {
+                        tokio::time::timeout_at(deadline, inner.sequencer(grace_s))
+                            .await
+                            .map_err(|_| PriceError::Timeout)?
+                    }
+                    .boxed()
                 },
             )
             .await
@@ -552,8 +571,16 @@ impl PricingRuntime {
         for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
             for entry in entries.iter().filter(|e| e.company == "uniswap-v2-onchain") {
                 let mut audit = Audit::default();
-                if let Err(failure) =
-                    observe(entry, route, role, &mut audit, true, Some(arrived)).await
+                if let Err(failure) = observe(
+                    entry,
+                    route,
+                    role,
+                    &mut audit,
+                    true,
+                    Some(arrived),
+                    arrived + SOURCE_TIMEOUT,
+                )
+                .await
                 {
                     price_metrics::failure(route, &failure);
                 }
@@ -612,19 +639,28 @@ impl PricingRuntime {
         runtime
     }
     /// Fetches every stablecoin source or the first healthy source in each volatile role.
-    pub async fn fetch(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
-        self.fetch_with_reuse(route, false).await
+    pub async fn fetch(
+        &self,
+        route: &RouteFile,
+        deadline: tokio::time::Instant,
+    ) -> Result<ValidatedQuote, PricingFailure> {
+        self.fetch_with_reuse(route, false, deadline).await
     }
     /// Crediting fetches fresh evidence, sharing only fetches completed after arrival.
-    pub async fn fetch_fresh(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
-        self.fetch_with_reuse(route, true).await
+    pub async fn fetch_fresh(
+        &self,
+        route: &RouteFile,
+        deadline: tokio::time::Instant,
+    ) -> Result<ValidatedQuote, PricingFailure> {
+        self.fetch_with_reuse(route, true, deadline).await
     }
     async fn fetch_with_reuse(
         &self,
         route: &RouteFile,
         fresh_only: bool,
+        deadline: tokio::time::Instant,
     ) -> Result<ValidatedQuote, PricingFailure> {
-        let result = self.fetch_inner(route, fresh_only).await;
+        let result = self.fetch_inner(route, fresh_only, deadline).await;
         if let Err(evidence) = &result {
             price_metrics::failure(route, evidence);
         }
@@ -646,13 +682,17 @@ impl PricingRuntime {
         &self,
         route: &RouteFile,
         fresh_only: bool,
+        deadline: tokio::time::Instant,
     ) -> Result<ValidatedQuote, PricingFailure> {
         let mut audit = Audit {
             mode: Some(route.pricing.mode),
             ..Audit::default()
         };
         if let Some(sequencer) = &self.sequencer {
-            match sequencer.evidence().await {
+            match sequencer
+                .evidence(deadline.min(tokio::time::Instant::now() + SOURCE_TIMEOUT))
+                .await
+            {
                 Ok(evidence) => audit.sequencer = Some(evidence),
                 Err(error) => {
                     let code = error_code(&error);
@@ -689,7 +729,10 @@ impl PricingRuntime {
                     .as_ref()
                     .is_none_or(|asset| asset == &route.asset.symbol)
             }) {
-                let quote = observe(entry, route, "sources", &mut audit, fresh_only, None).await?;
+                let quote = observe(
+                    entry, route, "sources", &mut audit, fresh_only, None, deadline,
+                )
+                .await?;
                 if let Some(quote) = quote {
                     observed.push((
                         quote.valuation,
@@ -730,9 +773,16 @@ impl PricingRuntime {
             let mut ca = Audit::default();
             let mut fa = Audit::default();
             let (primary, check, fx) = tokio::join!(
-                first(&self.primary, route, "primary", &mut pa, fresh_only),
-                first(&self.check, route, "check", &mut ca, fresh_only),
-                first(&self.fx, route, "fx", &mut fa, fresh_only)
+                first(
+                    &self.primary,
+                    route,
+                    "primary",
+                    &mut pa,
+                    fresh_only,
+                    deadline
+                ),
+                first(&self.check, route, "check", &mut ca, fresh_only, deadline),
+                first(&self.fx, route, "fx", &mut fa, fresh_only, deadline)
             );
             audit.observations.extend(
                 pa.observations
@@ -828,9 +878,12 @@ async fn first<'a>(
     role: &str,
     audit: &mut Audit,
     fresh_only: bool,
+    deadline: tokio::time::Instant,
 ) -> Result<Option<(&'a Entry, PriceQuote)>, PricingFailure> {
     for (index, entry) in entries.iter().enumerate() {
-        if let Some(observation) = observe(entry, route, role, audit, fresh_only, None).await? {
+        if let Some(observation) =
+            observe(entry, route, role, audit, fresh_only, None, deadline).await?
+        {
             if index > 0 {
                 price_metrics::failover(route, role, entry.source_id, entry.company);
             }
@@ -846,13 +899,15 @@ async fn observe(
     audit: &mut Audit,
     fresh_only: bool,
     arrived: Option<tokio::time::Instant>,
+    deadline: tokio::time::Instant,
 ) -> Result<Option<PriceQuote>, PricingFailure> {
+    let deadline = deadline.min(tokio::time::Instant::now() + SOURCE_TIMEOUT);
     let result = if let Some(arrived) = arrived {
-        entry.source.quote_shared_since(arrived).await
+        entry.source.quote_shared_since(arrived, deadline).await
     } else if fresh_only {
-        entry.source.quote_shared_fresh().await
+        entry.source.quote_shared_fresh(deadline).await
     } else {
-        entry.source.quote_shared().await
+        entry.source.quote_shared(deadline).await
     };
     let cached_age_ms = result.as_ref().ok().and_then(|(_, age_ms)| *age_ms);
     let now = validation_time()?;
@@ -957,6 +1012,10 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use topup_core::valuation::SourceId;
+
+    fn test_deadline() -> tokio::time::Instant {
+        tokio::time::Instant::now() + Duration::from_secs(60)
+    }
     tokio::task_local! {
         pub(super) static GOLDEN_NOW: u64;
     }
@@ -991,7 +1050,7 @@ mod tests {
             golden_observation("check", "binance", "10000000"),
             golden_observation("fx", "chainlink", "100000000"),
         ];
-        let quote = runtime().fetch(&route).await.ok().unwrap();
+        let quote = runtime().fetch(&route, test_deadline()).await.ok().unwrap();
         assert_eq!(
             serde_json::to_vec(&quote.evidence).unwrap(),
             golden_audit("volatile", "accepted", &volatile).as_bytes()
@@ -1002,7 +1061,10 @@ mod tests {
         let mut divergent = volatile.clone();
         divergent[0] = golden_observation("primary", "kraken", "20000000");
         assert_eq!(
-            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
+            serde_json::to_vec(&Value::from(
+                r.fetch(&route, test_deadline()).await.err().unwrap()
+            ))
+            .unwrap(),
             golden_failure(
                 "divergent",
                 &golden_audit("volatile", "divergent", &divergent)
@@ -1014,7 +1076,10 @@ mod tests {
         let mut stale = volatile.clone();
         stale[0] = r#"{"company":"kraken","data":null,"descriptor":null,"error":"stale","role":"primary","source":"kraken"}"#.into();
         assert_eq!(
-            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
+            serde_json::to_vec(&Value::from(
+                r.fetch(&route, test_deadline()).await.err().unwrap()
+            ))
+            .unwrap(),
             golden_failure("stale", &golden_audit("volatile", "stale", &stale)).as_bytes()
         );
 
@@ -1046,7 +1111,10 @@ mod tests {
                 r#"{{"company":"uniswap-v2-onchain","data":{{"window_s":1800}},"descriptor":null,"error":"{code}","role":"primary","source":"uniswap_v2_twap"}}"#
             );
             assert_eq!(
-                serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
+                serde_json::to_vec(&Value::from(
+                    r.fetch(&route, test_deadline()).await.err().unwrap()
+                ))
+                .unwrap(),
                 golden_failure(code, &golden_audit("volatile", code, &refused)).as_bytes(),
                 "{code}"
             );
@@ -1062,7 +1130,7 @@ mod tests {
             golden_observation("sources", "healthy", "100000000"),
             golden_observation("sources", "chainlink", "100000000"),
         ];
-        let quote = r.fetch(&route).await.ok().unwrap();
+        let quote = r.fetch(&route, test_deadline()).await.ok().unwrap();
         assert_eq!(
             serde_json::to_vec(&quote.evidence).unwrap(),
             golden_audit("stablecoin", "accepted", &stable).as_bytes()
@@ -1070,7 +1138,10 @@ mod tests {
         r.sources[1] = entry("chainlink", 98_000_000, 0, None);
         stable[1] = golden_observation("sources", "chainlink", "98000000");
         assert_eq!(
-            serde_json::to_vec(&Value::from(r.fetch(&route).await.err().unwrap())).unwrap(),
+            serde_json::to_vec(&Value::from(
+                r.fetch(&route, test_deadline()).await.err().unwrap()
+            ))
+            .unwrap(),
             golden_failure("depeg", &golden_audit("stablecoin", "depeg", &stable)).as_bytes()
         );
     }
@@ -1118,7 +1189,11 @@ mod tests {
             &mut BTreeMap::new(),
         )
         .unwrap();
-        let error = runtime.fx[0].source.quote_shared().await.unwrap_err();
+        let error = runtime.fx[0]
+            .source
+            .quote_shared(test_deadline())
+            .await
+            .unwrap_err();
         let PriceError::Feed { class, evidence } = error else {
             panic!("expected A/B disagreement, got {error:?}");
         };
@@ -1324,7 +1399,7 @@ mod tests {
             };
             r.check = vec![entry("kraken", kraken * 100_000_000, 0, None)];
             r.check[0].usdt_quoted = false;
-            let result = r.fetch(&route).await;
+            let result = r.fetch(&route, test_deadline()).await;
             if let Some(code) = refusal {
                 assert_eq!(result.err().unwrap().code, code, "{scenario}");
             } else {
@@ -1353,7 +1428,7 @@ mod tests {
         r.check = vec![entry("kraken", 10_000_000, 0, None)];
         r.check[0].usdt_quoted = false;
         assert!(
-            r.fetch(&route()).await.is_ok(),
+            r.fetch(&route(), test_deadline()).await.is_ok(),
             "TWAP sample age is distinct from the 90-second ticker age"
         );
         for code in [
@@ -1375,7 +1450,7 @@ mod tests {
                 }),
             );
             r.primary.push(entry("fallback", 10_000_000, 0, None));
-            let failure = r.fetch(&route()).await.err().unwrap();
+            let failure = r.fetch(&route(), test_deadline()).await.err().unwrap();
             assert_eq!(failure.code, code);
             assert!(
                 failure.evidence["observations"]
@@ -1404,10 +1479,10 @@ mod tests {
                     "check" => r.check = vec![broken],
                     _ => r.fx = vec![broken],
                 }
-                assert!(r.fetch(&route()).await.is_err(), "{role}");
+                assert!(r.fetch(&route(), test_deadline()).await.is_err(), "{role}");
             }
         }
-        assert!(runtime().fetch(&route()).await.is_ok());
+        assert!(runtime().fetch(&route(), test_deadline()).await.is_ok());
     }
     #[tokio::test]
     async fn failover_only_on_unavailability_not_disagreement_or_depeg() {
@@ -1416,13 +1491,22 @@ mod tests {
             0,
             entry("offline", 10_000_000, 0, Some(PriceError::HttpStatus(503))),
         );
-        assert!(r.fetch(&route()).await.is_ok());
+        assert!(r.fetch(&route(), test_deadline()).await.is_ok());
         r.primary[0] = entry("offline", 10_000_000, 0, Some(PriceError::Disagreement));
-        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "divergent");
+        assert_eq!(
+            r.fetch(&route(), test_deadline()).await.err().unwrap().code,
+            "divergent"
+        );
         r.primary[0] = entry("offline", 20_000_000, 0, None);
-        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "divergent");
+        assert_eq!(
+            r.fetch(&route(), test_deadline()).await.err().unwrap().code,
+            "divergent"
+        );
         r.fx.insert(0, entry("depeg", 90_000_000, 0, None));
-        assert_eq!(r.fetch(&route()).await.err().unwrap().code, "fx_depeg");
+        assert_eq!(
+            r.fetch(&route(), test_deadline()).await.err().unwrap().code,
+            "fx_depeg"
+        );
     }
     #[tokio::test]
     async fn usd_check_is_not_multiplied_by_usdt_fx() {
@@ -1431,12 +1515,18 @@ mod tests {
         r.fx[0] = entry("chainlink", 100_500_000, 0, None);
         let mut route = route();
         route.pricing.max_deviation_bps = topup_core::money::Bps::new(0).unwrap();
-        assert!(r.fetch(&route).await.is_ok());
+        assert!(r.fetch(&route, test_deadline()).await.is_ok());
         r.check[0].usdt_quoted = true;
-        assert_eq!(r.fetch(&route).await.err().unwrap().code, "divergent");
+        assert_eq!(
+            r.fetch(&route, test_deadline()).await.err().unwrap().code,
+            "divergent"
+        );
         r.check[0].usdt_quoted = false;
         r.fx[0] = entry("chainlink", 90_000_000, 0, None);
-        assert_eq!(r.fetch(&route).await.err().unwrap().code, "fx_depeg");
+        assert_eq!(
+            r.fetch(&route, test_deadline()).await.err().unwrap().code,
+            "fx_depeg"
+        );
     }
     #[tokio::test]
     async fn stablecoin_any_fresh_depeg_overrides_all_healthy_sources() {
@@ -1448,14 +1538,22 @@ mod tests {
                 entry("healthy", 100_000_000, 0, None),
                 entry(id, 98_000_000, 0, None),
             ];
-            assert_eq!(r.fetch(&route).await.err().unwrap().code, "depeg");
+            assert_eq!(
+                r.fetch(&route, test_deadline()).await.err().unwrap().code,
+                "depeg"
+            );
             r.sources[1] = entry(id, 98_000_000, 1000, None);
             assert_eq!(
-                r.fetch(&route).await.ok().unwrap().price.value(),
+                r.fetch(&route, test_deadline())
+                    .await
+                    .ok()
+                    .unwrap()
+                    .price
+                    .value(),
                 100_000_000
             );
             r.sources[0] = entry("healthy", 100_000_000, 1000, None);
-            assert!(r.fetch(&route).await.is_err());
+            assert!(r.fetch(&route, test_deadline()).await.is_err());
         }
     }
     #[tokio::test]
@@ -1466,7 +1564,7 @@ mod tests {
         let mut cl = entry("chainlink", 100_000_000, 3600, None);
         cl.max_age_s = Some(82860);
         r.sources = vec![cl];
-        assert!(r.fetch(&route).await.is_ok());
+        assert!(r.fetch(&route, test_deadline()).await.is_ok());
     }
     #[tokio::test]
     async fn another_stablecoin_cannot_authorize_credit_for_a_missing_asset_price() {
@@ -1479,7 +1577,7 @@ mod tests {
         let mut usdt = entry("chainlink", 100_000_000, 0, None);
         usdt.asset = Some("usdt".into());
         r.sources = vec![usdc, usdt];
-        assert!(r.fetch(&route).await.is_err());
+        assert!(r.fetch(&route, test_deadline()).await.is_err());
     }
     struct CountingSource {
         calls: std::sync::atomic::AtomicUsize,
@@ -1541,10 +1639,13 @@ mod tests {
         });
         let mut runtime = runtime();
         runtime.primary[0].source = Arc::new(shared(inner.clone()));
-        runtime.fetch(&route()).await.unwrap();
+        runtime.fetch(&route(), test_deadline()).await.unwrap();
         assert_eq!(inner.calls(), 1);
         tokio::time::advance(Duration::from_millis(1)).await;
-        let quote = runtime.fetch_fresh(&route()).await.unwrap();
+        let quote = runtime
+            .fetch_fresh(&route(), test_deadline())
+            .await
+            .unwrap();
         assert_eq!(
             inner.calls(),
             2,
@@ -1562,8 +1663,10 @@ mod tests {
     async fn shared_source_coalesces_concurrent_quotes() {
         let inner = CountingSource::new(Duration::from_millis(10));
         let source = shared(inner.clone());
-        let results =
-            futures_util::future::join_all((0..10).map(|_| source.quote_shared_fresh())).await;
+        let results = futures_util::future::join_all(
+            (0..10).map(|_| source.quote_shared_fresh(test_deadline())),
+        )
+        .await;
         assert_eq!(inner.calls(), 1);
         assert_eq!(
             results
@@ -1579,7 +1682,9 @@ mod tests {
         let inner = CountingSource::new(Duration::from_millis(10));
         inner.fail.store(true, std::sync::atomic::Ordering::SeqCst);
         let source = shared(inner.clone());
-        let results = futures_util::future::join_all((0..10).map(|_| source.quote_shared())).await;
+        let results =
+            futures_util::future::join_all((0..10).map(|_| source.quote_shared(test_deadline())))
+                .await;
         assert!(
             results
                 .iter()
@@ -1588,17 +1693,27 @@ mod tests {
         assert_eq!(inner.calls(), 1);
         assert!(source.coalesced.state.lock().unwrap().cached.is_none());
         inner.fail.store(false, std::sync::atomic::Ordering::SeqCst);
-        assert!(source.quote_shared().await.unwrap().1.is_none());
+        assert!(
+            source
+                .quote_shared(test_deadline())
+                .await
+                .unwrap()
+                .1
+                .is_none()
+        );
         assert_eq!(inner.calls(), 2);
     }
     #[tokio::test(start_paused = true)]
     async fn dropping_the_first_awaiter_does_not_cancel_other_waiters() {
         let inner = CountingSource::new(Duration::from_secs(20));
         let source = shared(inner.clone());
-        let first = tokio::time::timeout(Duration::from_secs(15), source.quote_shared());
+        let first = tokio::time::timeout(
+            Duration::from_secs(15),
+            source.quote_shared(test_deadline()),
+        );
         let other = async {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            source.quote_shared().await
+            source.quote_shared(test_deadline()).await
         };
         let (first, other) = tokio::join!(first, other);
         assert!(first.is_err());
@@ -1610,14 +1725,38 @@ mod tests {
     async fn shared_source_reuses_within_ttl_and_refetches_after() {
         let inner = CountingSource::new(Duration::from_millis(1));
         let source = shared(inner.clone());
-        assert!(source.quote_shared().await.unwrap().1.is_none());
+        assert!(
+            source
+                .quote_shared(test_deadline())
+                .await
+                .unwrap()
+                .1
+                .is_none()
+        );
         tokio::time::advance(Duration::from_secs(12)).await;
-        assert_eq!(source.quote_shared().await.unwrap().1, Some(12_000));
+        assert_eq!(
+            source.quote_shared(test_deadline()).await.unwrap().1,
+            Some(12_000)
+        );
         tokio::time::advance(Duration::from_millis(1)).await;
-        assert!(source.quote_shared().await.unwrap().1.is_none());
+        assert!(
+            source
+                .quote_shared(test_deadline())
+                .await
+                .unwrap()
+                .1
+                .is_none()
+        );
         assert_eq!(inner.calls(), 2);
         tokio::time::advance(Duration::from_millis(1)).await;
-        assert!(source.quote_shared_fresh().await.unwrap().1.is_none());
+        assert!(
+            source
+                .quote_shared_fresh(test_deadline())
+                .await
+                .unwrap()
+                .1
+                .is_none()
+        );
         assert_eq!(
             inner.calls(),
             3,
@@ -1628,14 +1767,21 @@ mod tests {
     async fn shared_source_never_caches_errors() {
         let inner = CountingSource::new(Duration::from_millis(1));
         let source = shared(inner.clone());
-        source.quote_shared().await.unwrap();
+        source.quote_shared(test_deadline()).await.unwrap();
         tokio::time::advance(Duration::from_secs(13)).await;
         inner.fail.store(true, std::sync::atomic::Ordering::SeqCst);
-        assert!(source.quote_shared().await.is_err());
+        assert!(source.quote_shared(test_deadline()).await.is_err());
         assert!(source.coalesced.state.lock().unwrap().cached.is_none());
-        assert!(source.quote_shared().await.is_err());
+        assert!(source.quote_shared(test_deadline()).await.is_err());
         inner.fail.store(false, std::sync::atomic::Ordering::SeqCst);
-        assert!(source.quote_shared().await.unwrap().1.is_none());
+        assert!(
+            source
+                .quote_shared(test_deadline())
+                .await
+                .unwrap()
+                .1
+                .is_none()
+        );
         assert_eq!(inner.calls(), 4);
     }
     #[tokio::test(start_paused = true)]
@@ -1649,16 +1795,30 @@ mod tests {
                         .unwrap()
                 });
                 let source = shared(inner.clone());
-                source.quote_shared().await.unwrap();
+                source.quote_shared(test_deadline()).await.unwrap();
                 tokio::time::advance(Duration::from_millis(1)).await;
                 GOLDEN_NOW
                     .scope(1001, async {
-                        assert!(source.quote_shared().await.unwrap().1.is_some());
+                        assert!(
+                            source
+                                .quote_shared(test_deadline())
+                                .await
+                                .unwrap()
+                                .1
+                                .is_some()
+                        );
                     })
                     .await;
                 GOLDEN_NOW
                     .scope(1002, async {
-                        assert!(source.quote_shared().await.unwrap().1.is_none());
+                        assert!(
+                            source
+                                .quote_shared(test_deadline())
+                                .await
+                                .unwrap()
+                                .1
+                                .is_none()
+                        );
                     })
                     .await;
                 assert_eq!(inner.calls(), 2);
@@ -1674,22 +1834,46 @@ mod tests {
                 entry.source = Arc::new(shared(inner.clone()));
                 entry.max_age_s = Some(1);
                 let mut audit = Audit::default();
-                observe(&entry, &route(), "primary", &mut audit, false, None)
-                    .await
-                    .unwrap();
+                observe(
+                    &entry,
+                    &route(),
+                    "primary",
+                    &mut audit,
+                    false,
+                    None,
+                    test_deadline(),
+                )
+                .await
+                .unwrap();
                 assert!(audit.observations[0].get("cached").is_none());
                 tokio::time::advance(Duration::from_millis(500)).await;
-                observe(&entry, &route(), "primary", &mut audit, false, None)
-                    .await
-                    .unwrap();
+                observe(
+                    &entry,
+                    &route(),
+                    "primary",
+                    &mut audit,
+                    false,
+                    None,
+                    test_deadline(),
+                )
+                .await
+                .unwrap();
                 assert_eq!(audit.observations[1]["cached"], json!({"age_ms":500}));
                 GOLDEN_NOW
                     .scope(1002, async {
                         assert!(
-                            observe(&entry, &route(), "primary", &mut audit, false, None)
-                                .await
-                                .unwrap()
-                                .is_none()
+                            observe(
+                                &entry,
+                                &route(),
+                                "primary",
+                                &mut audit,
+                                false,
+                                None,
+                                test_deadline()
+                            )
+                            .await
+                            .unwrap()
+                            .is_none()
                         );
                         assert_eq!(audit.observations[2]["error"], "stale");
                         assert_eq!(audit.observations[2]["cached"], json!({"age_ms": 500}));
@@ -1704,11 +1888,21 @@ mod tests {
         let inner = CountingSource::new(Duration::from_secs(20));
         let source = shared(inner.clone());
         assert!(
-            tokio::time::timeout(Duration::from_secs(15), source.quote_shared())
-                .await
-                .is_err()
+            tokio::time::timeout(
+                Duration::from_secs(15),
+                source.quote_shared(test_deadline())
+            )
+            .await
+            .is_err()
         );
-        assert!(source.quote_shared_fresh().await.unwrap().1.is_none());
+        assert!(
+            source
+                .quote_shared_fresh(test_deadline())
+                .await
+                .unwrap()
+                .1
+                .is_none()
+        );
         assert_eq!(inner.calls(), 2);
     }
     #[tokio::test(start_paused = true)]
@@ -1733,17 +1927,42 @@ mod tests {
         let mut leader_audit = Audit::default();
         let mut waiter_audit = Audit::default();
         let route = route();
-        let leader = observe(&entry, &route, "primary", &mut leader_audit, true, None);
+        let leader = observe(
+            &entry,
+            &route,
+            "primary",
+            &mut leader_audit,
+            true,
+            None,
+            test_deadline(),
+        );
         let waiter = async {
             tokio::time::sleep(Duration::from_secs(1)).await;
             assert!(
-                observe(&entry, &route, "primary", &mut waiter_audit, true, None)
-                    .await
-                    .unwrap()
-                    .is_none()
+                observe(
+                    &entry,
+                    &route,
+                    "primary",
+                    &mut waiter_audit,
+                    true,
+                    None,
+                    test_deadline()
+                )
+                .await
+                .unwrap()
+                .is_none()
             );
             // All current waiters receive the timeout; this independent call starts a retry.
-            observe(&entry, &route, "primary", &mut waiter_audit, true, None).await
+            observe(
+                &entry,
+                &route,
+                "primary",
+                &mut waiter_audit,
+                true,
+                None,
+                test_deadline(),
+            )
+            .await
         };
         let (leader, waiter) = tokio::join!(leader, waiter);
         assert!(leader.unwrap().is_none());
@@ -2044,7 +2263,7 @@ mod tests {
         runtime.primary[0].source = Arc::new(shared(inner.clone()));
         runtime.primary[0].company = "uniswap-v2-onchain";
         tokio::time::advance(Duration::from_secs(59)).await;
-        runtime.fetch(&route()).await.unwrap();
+        runtime.fetch(&route(), test_deadline()).await.unwrap();
         assert_eq!(inner.records.load(std::sync::atomic::Ordering::SeqCst), 0);
         tokio::time::advance(Duration::from_secs(1)).await;
         runtime
@@ -2058,7 +2277,11 @@ mod tests {
         struct Stalled;
         #[async_trait]
         impl crate::locks::QuoteProvider for Stalled {
-            async fn quote(&self, _: &RouteFile) -> Result<ValidatedQuote, Value> {
+            async fn quote(
+                &self,
+                _: &RouteFile,
+                _deadline: tokio::time::Instant,
+            ) -> Result<ValidatedQuote, Value> {
                 std::future::pending().await
             }
         }
@@ -2071,6 +2294,74 @@ mod tests {
         assert_eq!(started.elapsed(), Duration::from_secs(15));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn quote_deadline_caps_the_underlying_source_fetch() {
+        struct DroppedAt(Arc<Mutex<Option<tokio::time::Instant>>>);
+        impl Drop for DroppedAt {
+            fn drop(&mut self) {
+                *self.0.lock().unwrap() = Some(tokio::time::Instant::now());
+            }
+        }
+        struct SlowSource(Arc<Mutex<Option<tokio::time::Instant>>>);
+        #[async_trait]
+        impl PriceSource for SlowSource {
+            async fn observe(&self) -> Result<Observation, PriceError> {
+                let _dropped = DroppedAt(self.0.clone());
+                tokio::time::sleep(Duration::from_secs(20)).await;
+                Ok(Observation {
+                    source: SourceId::new("slow"),
+                    price: ScaledPrice::new(10_000_000, 8).unwrap(),
+                    observed_at: validation_time().unwrap(),
+                })
+            }
+        }
+        struct Quote {
+            runtime: Arc<PricingRuntime>,
+            deadline: Arc<Mutex<Option<tokio::time::Instant>>>,
+        }
+        #[async_trait]
+        impl crate::locks::QuoteProvider for Quote {
+            async fn quote(
+                &self,
+                route: &RouteFile,
+                deadline: tokio::time::Instant,
+            ) -> Result<ValidatedQuote, Value> {
+                *self.deadline.lock().unwrap() = Some(deadline);
+                self.runtime
+                    .fetch(route, deadline)
+                    .await
+                    .map_err(Value::from)
+            }
+        }
+        let dropped = Arc::new(Mutex::new(None));
+        let passed = Arc::new(Mutex::new(None));
+        let mut runtime = runtime();
+        runtime.primary[0].source = Arc::new(shared(Arc::new(SlowSource(dropped.clone()))));
+        let runtime = Arc::new(runtime);
+        let provider: Arc<dyn crate::locks::QuoteProvider> = Arc::new(Quote {
+            runtime: runtime.clone(),
+            deadline: passed.clone(),
+        });
+        let started = tokio::time::Instant::now();
+        assert!(matches!(
+            crate::locks::quote_with_budget(&provider, &route()).await,
+            Err(crate::locks::RateLockError::PricingUnavailable)
+        ));
+        let deadline = started + crate::locks::QUOTE_PRICING_BUDGET;
+        assert_eq!(*passed.lock().unwrap(), Some(deadline));
+        assert_eq!(*dropped.lock().unwrap(), Some(deadline));
+        assert_eq!(started.elapsed(), crate::locks::QUOTE_PRICING_BUDGET);
+        assert!(
+            runtime.primary[0]
+                .source
+                .coalesced
+                .state
+                .lock()
+                .unwrap()
+                .in_flight
+                .is_none()
+        );
+    }
     struct CountingStore {
         history: tokio::sync::Mutex<Vec<topup_adapters::pricing::uniswap_v2::Sample>>,
         records: std::sync::atomic::AtomicUsize,
@@ -2205,7 +2496,7 @@ mod tests {
         cold.check[0].usdt_quoted = false;
         sends.store(0, Ordering::SeqCst);
         store.records.store(0, Ordering::SeqCst);
-        cold.fetch(&route()).await.unwrap();
+        cold.fetch(&route(), test_deadline()).await.unwrap();
         let cold_sends = sends.load(Ordering::SeqCst);
         assert!(
             cold_sends > 0,
@@ -2236,14 +2527,18 @@ mod tests {
         };
         let runtimes = [make_runtime(), make_runtime()];
         let routes = pha_routes();
-        let results =
-            futures_util::future::join_all((0..10).map(|i| runtimes[i % 2].fetch(&routes[i % 2])))
-                .await;
+        let results = futures_util::future::join_all(
+            (0..10).map(|i| runtimes[i % 2].fetch(&routes[i % 2], test_deadline())),
+        )
+        .await;
         assert!(results.iter().all(Result::is_ok));
         assert_eq!(store.records.load(Ordering::SeqCst), 1);
         assert_eq!(market.calls(), 1, "CEX only coalesces concurrent fetches");
         assert_eq!(sends.load(Ordering::SeqCst), cold_sends);
-        let quote = runtimes[1].fetch(&routes[1]).await.unwrap();
+        let quote = runtimes[1]
+            .fetch(&routes[1], test_deadline())
+            .await
+            .unwrap();
         assert_eq!(
             sends.load(Ordering::SeqCst),
             cold_sends,
@@ -2315,22 +2610,24 @@ mod tests {
             grace_s: 3600,
             coalesced: Coalesced::new("sequencer", "chainlink"),
         };
-        let results = futures_util::future::join_all((0..10).map(|_| sequencer.evidence())).await;
+        let results =
+            futures_util::future::join_all((0..10).map(|_| sequencer.evidence(test_deadline())))
+                .await;
         assert!(results.iter().all(Result::is_ok));
         let one_fetch = sends.load(Ordering::SeqCst);
         assert!(one_fetch > 0, "sequencer evidence must actually be fetched");
-        sequencer.evidence().await.unwrap();
+        sequencer.evidence(test_deadline()).await.unwrap();
         assert_eq!(
             sends.load(Ordering::SeqCst),
             2 * one_fetch,
             "sequencer must fetch again after completion"
         );
         down.store(true, Ordering::SeqCst);
-        assert!(sequencer.evidence().await.is_err());
+        assert!(sequencer.evidence(test_deadline()).await.is_err());
         assert!(sequencer.coalesced.state.lock().unwrap().cached.is_none());
-        assert!(sequencer.evidence().await.is_err());
+        assert!(sequencer.evidence(test_deadline()).await.is_err());
         down.store(false, Ordering::SeqCst);
-        sequencer.evidence().await.unwrap();
+        sequencer.evidence(test_deadline()).await.unwrap();
         assert_eq!(sends.load(Ordering::SeqCst), 5 * one_fetch);
     }
 }

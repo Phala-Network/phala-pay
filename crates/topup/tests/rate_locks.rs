@@ -46,7 +46,11 @@ struct FixedQuote;
 
 #[async_trait]
 impl QuoteProvider for FixedQuote {
-    async fn quote(&self, _route: &RouteFile) -> Result<ValidatedQuote, Value> {
+    async fn quote(
+        &self,
+        _route: &RouteFile,
+        _deadline: tokio::time::Instant,
+    ) -> Result<ValidatedQuote, Value> {
         Ok(ValidatedQuote {
             price: ScaledPrice::new(100_000_000, PRICE_SCALE).expect("fixed quote"),
             evidence: json!({
@@ -90,9 +94,13 @@ async fn concurrent_quotes_share_one_price_fetch() -> Result<()> {
             }
             #[async_trait]
             impl QuoteProvider for SimultaneousQuotes {
-                async fn quote(&self, route: &RouteFile) -> Result<ValidatedQuote, Value> {
+                async fn quote(
+                    &self,
+                    route: &RouteFile,
+                    _deadline: tokio::time::Instant,
+                ) -> Result<ValidatedQuote, Value> {
                     self.gate.wait().await;
-                    self.provider.quote(route).await
+                    self.provider.quote(route, _deadline).await
                 }
             }
             let (account, _) = seed_product(&database.app_pool, "coalesced-quotes").await?;
@@ -220,12 +228,16 @@ struct FirstQuoteWaits {
 
 #[async_trait]
 impl QuoteProvider for FirstQuoteWaits {
-    async fn quote(&self, route: &RouteFile) -> Result<ValidatedQuote, Value> {
+    async fn quote(
+        &self,
+        route: &RouteFile,
+        _deadline: tokio::time::Instant,
+    ) -> Result<ValidatedQuote, Value> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             self.entered.notify_one();
             self.release.notified().await;
         }
-        FixedQuote.quote(route).await
+        FixedQuote.quote(route, _deadline).await
     }
 }
 
@@ -1164,7 +1176,11 @@ async fn usd_stated_amount_rounds_token_amount_up() -> Result<()> {
 
         #[async_trait]
         impl QuoteProvider for ThreeDollarQuote {
-            async fn quote(&self, _route: &RouteFile) -> Result<ValidatedQuote, Value> {
+            async fn quote(
+                &self,
+                _route: &RouteFile,
+                _deadline: tokio::time::Instant,
+            ) -> Result<ValidatedQuote, Value> {
                 Ok(ValidatedQuote {
                     price: ScaledPrice::new(300_000_000, PRICE_SCALE).expect("fixed quote"),
                     evidence: json!({"mode": "test"}),
@@ -1209,7 +1225,11 @@ async fn quoted_amount_rounds_up_to_the_routes_amount_decimals() -> Result<()> {
 
         #[async_trait]
         impl QuoteProvider for CentsPriceQuote {
-            async fn quote(&self, _route: &RouteFile) -> Result<ValidatedQuote, Value> {
+            async fn quote(
+                &self,
+                _route: &RouteFile,
+                _deadline: tokio::time::Instant,
+            ) -> Result<ValidatedQuote, Value> {
                 Ok(ValidatedQuote {
                     // $0.0365 per token.
                     price: ScaledPrice::new(3_650_000, PRICE_SCALE).expect("fixed quote"),
@@ -1597,9 +1617,13 @@ async fn rate_limited_creation_does_not_fetch_a_price() -> Result<()> {
 
         #[async_trait]
         impl QuoteProvider for CountingQuote {
-            async fn quote(&self, route: &RouteFile) -> Result<ValidatedQuote, Value> {
+            async fn quote(
+                &self,
+                route: &RouteFile,
+                _deadline: tokio::time::Instant,
+            ) -> Result<ValidatedQuote, Value> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                FixedQuote.quote(route).await
+                FixedQuote.quote(route, _deadline).await
             }
         }
 
