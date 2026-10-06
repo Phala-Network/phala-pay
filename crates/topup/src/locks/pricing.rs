@@ -129,7 +129,9 @@ impl SharedSource {
         price_metrics::cache(self.source_id, self.company, "miss");
         // Clear before awaiting so a cancelled leader leaves no reusable result behind.
         *slot = None;
-        let quote = self.inner.quote().await?;
+        let quote = tokio::time::timeout(Duration::from_secs(30), self.inner.quote())
+            .await
+            .map_err(|_| PriceError::Timeout)??;
         *slot = Some(Cached {
             quote: quote.clone(),
             completed_at: tokio::time::Instant::now(),
@@ -646,19 +648,12 @@ async fn observe(
     fresh_only: bool,
     arrived: Option<tokio::time::Instant>,
 ) -> Result<Option<PriceQuote>, PricingFailure> {
-    let result = tokio::time::timeout(Duration::from_secs(30), async {
-        if let Some(arrived) = arrived {
-            entry.source.quote_shared_since(arrived).await
-        } else if fresh_only {
-            entry.source.quote_shared_fresh().await
-        } else {
-            entry.source.quote_shared().await
-        }
-    })
-    .await;
-    let result = match result {
-        Ok(r) => r,
-        Err(_) => Err(PriceError::Timeout),
+    let result = if let Some(arrived) = arrived {
+        entry.source.quote_shared_since(arrived).await
+    } else if fresh_only {
+        entry.source.quote_shared_fresh().await
+    } else {
+        entry.source.quote_shared().await
     };
     let cached_age_ms = result.as_ref().ok().and_then(|(_, age_ms)| *age_ms);
     let now = validation_time()?;
@@ -1484,6 +1479,40 @@ mod tests {
         );
         assert!(source.quote_shared_fresh().await.unwrap().1.is_none());
         assert_eq!(inner.calls(), 2);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn observe_timeout_excludes_waiting_for_the_source_lock() {
+        struct SlowLeader(std::sync::atomic::AtomicUsize);
+        #[async_trait]
+        impl PriceSource for SlowLeader {
+            async fn observe(&self) -> Result<Observation, PriceError> {
+                let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_secs(if call == 0 { 31 } else { 5 })).await;
+                Ok(Observation {
+                    source: SourceId::new("slow"),
+                    price: ScaledPrice::new(10_000_000, 8).unwrap(),
+                    observed_at: validation_time().unwrap(),
+                })
+            }
+        }
+        let inner = Arc::new(SlowLeader(std::sync::atomic::AtomicUsize::new(0)));
+        let mut entry = entry("slow", 10_000_000, 0, None);
+        entry.source = Arc::new(shared(inner.clone()));
+        let started = tokio::time::Instant::now();
+        let mut leader_audit = Audit::default();
+        let mut waiter_audit = Audit::default();
+        let route = route();
+        let leader = observe(&entry, &route, "primary", &mut leader_audit, true, None);
+        let waiter = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            observe(&entry, &route, "primary", &mut waiter_audit, true, None).await
+        };
+        let (leader, waiter) = tokio::join!(leader, waiter);
+        assert!(leader.unwrap().is_none());
+        assert_eq!(leader_audit.observations[0]["error"], "timeout");
+        assert!(waiter.unwrap().is_some());
+        assert_eq!(inner.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(started.elapsed(), Duration::from_secs(35));
     }
     fn pha_routes() -> [RouteFile; 2] {
         let mut a = route();
