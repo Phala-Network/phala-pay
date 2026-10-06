@@ -622,12 +622,12 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
             Every address pays only the merchant's treasury, fixed in the address. Phala Pay holds no funds and sends
             no transactions: the merchant sweeps and refunds itself.
           </p>
-          {networksView.error !== null ? <QueryState view={networksView} /> : (
+          {networksView.error === null && (
             <p className="text-muted-foreground">
               {networks === undefined ? "Networks: loading…" : `Networks: ${networks.map((each) => each.name).join(", ")}`}
             </p>
           )}
-          {networksView.data !== undefined && <QueryState view={networksView} />}
+          <QueryState view={networksView} />
         </TrustItem>
       </div>
       {trustView.data !== undefined && <QueryState view={trustView} />}
