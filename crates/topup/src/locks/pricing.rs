@@ -5,11 +5,15 @@ use crate::{
     rpc_groups::{BASE_CHAIN_ID, price_group, price_pair},
 };
 use chrono::Utc;
+use futures_util::{
+    FutureExt,
+    future::{BoxFuture, Shared},
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 use topup_adapters::pricing::{
@@ -67,13 +71,37 @@ const SOURCE_REUSE: Duration = Duration::from_secs(12);
 struct SharedSource {
     inner: Arc<dyn PriceSource>,
     reuse: Duration,
-    slot: tokio::sync::Mutex<Option<Cached>>,
+    slot: Arc<Mutex<SourceState>>,
     source_id: &'static str,
     company: &'static str,
 }
 struct Cached {
     quote: PriceQuote,
     completed_at: tokio::time::Instant,
+}
+type SourceFlight = Shared<BoxFuture<'static, Result<Arc<Cached>, Arc<PriceError>>>>;
+#[derive(Default)]
+struct SourceState {
+    cached: Option<Arc<Cached>>,
+    in_flight: Option<SourceFlight>,
+}
+struct SourceWaiter<'a> {
+    state: &'a Mutex<SourceState>,
+    flight: SourceFlight,
+}
+impl Drop for SourceWaiter<'_> {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        // Clones are created only under this mutex. At two references only the slot and this
+        // last waiter remain; removing the slot drops the abandoned fetch and its transaction.
+        if state
+            .in_flight
+            .as_ref()
+            .is_some_and(|flight| flight.ptr_eq(&self.flight) && flight.strong_count() == Some(2))
+        {
+            state.in_flight = None;
+        }
+    }
 }
 impl SharedSource {
     fn new(
@@ -85,7 +113,7 @@ impl SharedSource {
         Self {
             inner,
             reuse,
-            slot: tokio::sync::Mutex::new(None),
+            slot: Arc::new(Mutex::new(SourceState::default())),
             source_id,
             company,
         }
@@ -123,36 +151,90 @@ impl SharedSource {
         reuse: Duration,
         arrived: tokio::time::Instant,
     ) -> Result<(PriceQuote, Option<u64>), PriceError> {
-        let mut slot = self.slot.lock().await;
-        if let Some(cached) = slot.as_ref() {
-            let coalesced = cached.completed_at >= arrived;
-            if (coalesced || cached.completed_at.elapsed() <= reuse)
-                && cached.quote.reuse_until.is_none_or(|until| {
-                    validation_time().is_ok_and(|now| now.value() <= until.value())
-                })
-            {
-                price_metrics::cache(
-                    self.source_id,
-                    self.company,
-                    if coalesced { "coalesced" } else { "hit" },
-                );
-                let age_ms =
-                    u64::try_from(cached.completed_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-                return Ok((cached.quote.clone(), Some(age_ms)));
+        loop {
+            let (waiter, coalesced) = {
+                let mut state = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some(cached) = state.cached.as_ref() {
+                    let coalesced = cached.completed_at >= arrived;
+                    if (coalesced || cached.completed_at.elapsed() <= reuse)
+                        && reusable(&cached.quote)
+                    {
+                        price_metrics::cache(
+                            self.source_id,
+                            self.company,
+                            if coalesced { "coalesced" } else { "hit" },
+                        );
+                        return Ok((cached.quote.clone(), Some(cache_age(cached.completed_at))));
+                    }
+                }
+                let (flight, coalesced) = if let Some(flight) = &state.in_flight {
+                    (flight.clone(), true)
+                } else {
+                    state.cached = None;
+                    let weak_state = Arc::downgrade(&self.slot);
+                    let inner = self.inner.clone();
+                    // Shared is driven by its live awaiters, without a detached task. Dropping
+                    // one awaiter leaves the others driving this generation; dropping all of
+                    // them cancels it through SourceWaiter, so the next caller starts fresh.
+                    let flight = async move {
+                        let result = tokio::time::timeout(Duration::from_secs(30), inner.quote())
+                            .await
+                            .map_err(|_| PriceError::Timeout)
+                            .and_then(|quote| quote)
+                            .map(|quote| {
+                                Arc::new(Cached {
+                                    quote,
+                                    completed_at: tokio::time::Instant::now(),
+                                })
+                            })
+                            .map_err(Arc::new);
+                        if let Some(state) = weak_state.upgrade() {
+                            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                            state.cached = result.as_ref().ok().cloned();
+                            state.in_flight = None;
+                        }
+                        result
+                    }
+                    .boxed()
+                    .shared();
+                    state.in_flight = Some(flight.clone());
+                    (flight, false)
+                };
+                (
+                    SourceWaiter {
+                        state: &self.slot,
+                        flight,
+                    },
+                    coalesced,
+                )
+            };
+            price_metrics::cache(
+                self.source_id,
+                self.company,
+                if coalesced { "coalesced" } else { "miss" },
+            );
+            let cached = waiter
+                .flight
+                .clone()
+                .await
+                .map_err(|error| (*error).clone())?;
+            if coalesced && !reusable(&cached.quote) {
+                continue;
             }
+            return Ok((
+                cached.quote.clone(),
+                coalesced.then(|| cache_age(cached.completed_at)),
+            ));
         }
-        price_metrics::cache(self.source_id, self.company, "miss");
-        // Clear before awaiting so a cancelled leader leaves no reusable result behind.
-        *slot = None;
-        let quote = tokio::time::timeout(Duration::from_secs(30), self.inner.quote())
-            .await
-            .map_err(|_| PriceError::Timeout)??;
-        *slot = Some(Cached {
-            quote: quote.clone(),
-            completed_at: tokio::time::Instant::now(),
-        });
-        Ok((quote, None))
     }
+}
+fn reusable(quote: &PriceQuote) -> bool {
+    quote
+        .reuse_until
+        .is_none_or(|until| validation_time().is_ok_and(|now| now.value() <= until.value()))
+}
+fn cache_age(completed_at: tokio::time::Instant) -> u64 {
+    u64::try_from(completed_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 struct SharedSequencer {
     inner: Chainlink,
@@ -1400,6 +1482,38 @@ mod tests {
         assert!(results.iter().all(Result::is_ok));
     }
     #[tokio::test(start_paused = true)]
+    async fn concurrent_waiters_share_errors_but_the_next_call_refetches() {
+        let inner = CountingSource::new(Duration::from_millis(10));
+        inner.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        let source = shared(inner.clone());
+        let results = futures_util::future::join_all((0..10).map(|_| source.quote_shared())).await;
+        assert!(
+            results
+                .iter()
+                .all(|r| matches!(r, Err(PriceError::Timeout)))
+        );
+        assert_eq!(inner.calls(), 1);
+        assert!(source.slot.lock().unwrap().cached.is_none());
+        inner.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(source.quote_shared().await.unwrap().1.is_none());
+        assert_eq!(inner.calls(), 2);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn dropping_the_first_awaiter_does_not_cancel_other_waiters() {
+        let inner = CountingSource::new(Duration::from_secs(20));
+        let source = shared(inner.clone());
+        let first = tokio::time::timeout(Duration::from_secs(15), source.quote_shared());
+        let other = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            source.quote_shared().await
+        };
+        let (first, other) = tokio::join!(first, other);
+        assert!(first.is_err());
+        assert!(other.unwrap().1.is_some());
+        assert_eq!(inner.calls(), 1);
+        assert!(source.slot.lock().unwrap().in_flight.is_none());
+    }
+    #[tokio::test(start_paused = true)]
     async fn shared_source_reuses_within_ttl_and_refetches_after() {
         let inner = CountingSource::new(Duration::from_millis(1));
         let source = shared(inner.clone());
@@ -1425,7 +1539,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(13)).await;
         inner.fail.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(source.quote_shared().await.is_err());
-        assert!(source.slot.lock().await.is_none());
+        assert!(source.slot.lock().unwrap().cached.is_none());
         assert!(source.quote_shared().await.is_err());
         inner.fail.store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(source.quote_shared().await.unwrap().1.is_none());
@@ -1529,6 +1643,13 @@ mod tests {
         let leader = observe(&entry, &route, "primary", &mut leader_audit, true, None);
         let waiter = async {
             tokio::time::sleep(Duration::from_secs(1)).await;
+            assert!(
+                observe(&entry, &route, "primary", &mut waiter_audit, true, None)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            // All current waiters receive the timeout; this independent call starts a retry.
             observe(&entry, &route, "primary", &mut waiter_audit, true, None).await
         };
         let (leader, waiter) = tokio::join!(leader, waiter);
@@ -1997,8 +2118,8 @@ mod tests {
             cold_sends > 0,
             "the cold quote must actually fetch RPC evidence"
         );
-        *primary.slot.lock().await = None;
-        *fx.slot.lock().await = None;
+        primary.slot.lock().unwrap().cached = None;
+        fx.slot.lock().unwrap().cached = None;
         sends.store(0, Ordering::SeqCst);
         store.records.store(0, Ordering::SeqCst);
         let market = Arc::new(CountingSource {
