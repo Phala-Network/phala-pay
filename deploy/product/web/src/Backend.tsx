@@ -1,6 +1,5 @@
 import { Cpu, ReceiptText, ShieldCheck, Terminal, Wallet } from "lucide-react";
 import { Fragment, type ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Empty as EmptyState,
@@ -9,12 +8,14 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { CopyButton } from "@/components/ui/hash";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, DepositAddressResponse, Network, Selection, Timeline, Trust } from "./api.js";
-import { CopyButton, Detail, Details, Empty, ExplorerLink, InfoTip, LINK, StatusBadge, Subsection } from "./common.js";
+import { Detail, Details, Empty, ExplorerLink, InfoTip, LINK, Subsection, statusTone } from "./common.js";
 import { AreaLabel } from "./Product.js";
 import { Refunds } from "./Refunds.js";
 import { assetOf, networkOf } from "./chains.js";
@@ -85,13 +86,9 @@ export function Backend({
             <Terminal className="size-3.5 text-muted-foreground" aria-hidden="true" />
             Event stream
           </h2>
-          <Badge variant="outline" className="gap-1.5 font-normal text-muted-foreground" data-testid="stream-status">
-            <span className="relative flex size-2" aria-hidden="true">
-              {live && <span className="absolute inset-0 rounded-full bg-success/60 motion-safe:animate-ping" />}
-              <span className={cn("relative size-2 rounded-full", live ? "bg-success" : "bg-muted-foreground/50")} />
-            </span>
+          <StatusBadge tone={live ? "success" : "neutral"} data-testid="stream-status">
             {selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done"}
-          </Badge>
+          </StatusBadge>
           {selected !== null && (
             <dl className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
               {order !== undefined && <MetaItem label="Order" value={order} testId="meta-order" />}
@@ -113,7 +110,7 @@ export function Backend({
               aria-label="Backend"
               // Where the tabs overflow a narrow console, the next one peeks in, faded but still
               // legible at the row's right edge, so the row reads as scrollable.
-              className="h-11! w-full justify-start gap-2.5 overflow-x-auto rounded-none border-b px-3 py-0 @max-md/console:mask-r-from-[calc(100%-2rem)] @max-md/console:mask-r-to-[calc(100%+1rem)] @md/console:gap-5 @md/console:px-5"
+              className="w-full justify-start gap-2.5 overflow-x-auto px-3 @max-md/console:mask-r-from-[calc(100%-2rem)] @max-md/console:mask-r-to-[calc(100%+1rem)] @md/console:gap-5 @md/console:px-5"
             >
               <Tab value="credits" count={account?.payments.length}>
                 Credits
@@ -188,7 +185,7 @@ function MetaItem({ label, value, testId }: { label: string; value: string; test
 
 function Tab({ value, count, children }: { value: string; count?: number | undefined; children: ReactNode }) {
   return (
-    <TabsTrigger value={value} className="h-full flex-none px-0 text-sm after:bottom-[-1px]!">
+    <TabsTrigger value={value} className="flex-none">
       {children}
       {count !== undefined && count > 0 && (
         <span className="rounded-full bg-card px-1.5 font-mono text-xs text-muted-foreground tabular-nums dark:bg-muted">
@@ -208,7 +205,7 @@ function ViewButton({ selected, id, onClick }: { selected: boolean; id: string; 
     <Button
       type="button"
       variant="link"
-      size="xs"
+      size="sm"
       className="h-auto px-0 text-xs"
       onClick={onClick}
       aria-label={`View ${id}`}
@@ -238,7 +235,7 @@ function CreditsTab({
     return (
       <EmptyState className="p-4">
         <EmptyHeader>
-          <EmptyMedia variant="icon" className="text-muted-foreground">
+          <EmptyMedia className="text-muted-foreground">
             <ReceiptText aria-hidden="true" />
           </EmptyMedia>
           <EmptyTitle>No credits yet</EmptyTitle>
@@ -305,9 +302,9 @@ function CreditsTab({
                     </TableCell>
                     <TableCell className={STACKED.status}>
                       <div className="flex max-w-40 flex-wrap gap-1">
-                        <StatusBadge status={row.status}>{statusLabel(row.status)}</StatusBadge>
-                        {row.final && <Badge variant="outline">final</Badge>}
-                        {row.swept && <StatusBadge status="swept">swept</StatusBadge>}
+                        <StatusBadge tone={statusTone(row.status)}>{statusLabel(row.status)}</StatusBadge>
+                        {row.final && <StatusBadge>final</StatusBadge>}
+                        {row.swept && <StatusBadge tone={statusTone("swept")}>swept</StatusBadge>}
                       </div>
                       {row.tx_hash !== null && (
                         <div className="mt-1">
@@ -383,7 +380,7 @@ function CreditsTab({
                     </TableCell>
                     <TableCell>
                       <span className="flex flex-wrap items-center gap-1.5">
-                        {line.kind === "bonus" && <Badge variant="outline">Bonus</Badge>}
+                        {line.kind === "bonus" && <StatusBadge>Bonus</StatusBadge>}
                         {/* Event names in mono; a bonus grant's label is prose. */}
                         <span className={cn("text-muted-foreground", line.reason.startsWith("deposit.") && "font-mono")}>
                           {line.reason}
@@ -439,16 +436,17 @@ function AddressView({
       id="address-title"
       aside={
         address.verified ? (
-          <Badge className="bg-success/15 text-success" data-testid="deposit-address-verified">
-            <ShieldCheck aria-hidden="true" />
-            Verified
-            <InfoTip label="About the address check" className="text-success">
+          <>
+            <StatusBadge tone="success" data-testid="deposit-address-verified">
+              Verified
+            </StatusBadge>
+            <InfoTip label="About the address check">
               The product's SDK recomputed {view.address === null ? "every network's address" : "this address"} from
               its pinned account, factory, implementation, and treasury before showing it.
             </InfoTip>
-          </Badge>
+          </>
         ) : (
-          <Badge variant="destructive">Not verified</Badge>
+          <StatusBadge tone="danger">Not verified</StatusBadge>
         )
       }
     >
@@ -568,7 +566,7 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
       <div className="flex flex-wrap items-center gap-3">
         <h3 className="text-sm font-medium">Why you can trust Phala Pay</h3>
         {attestation?.binding_verified === true && (
-          <Badge className="bg-success/15 text-success">Attestation verified</Badge>
+          <StatusBadge tone="success">Attestation verified</StatusBadge>
         )}
         <span className="ml-auto flex gap-4">
           <a className={LINK} href={trust?.verify_docs} target="_blank" rel="noreferrer">

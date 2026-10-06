@@ -1,4 +1,5 @@
 import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import { StrictMode } from "react";
 import { hydrateRoot } from "react-dom/client";
 import { mountChrome } from "./chrome.js";

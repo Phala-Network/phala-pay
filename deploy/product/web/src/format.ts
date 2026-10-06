@@ -33,8 +33,14 @@ export function atomicAmount(amount: string, decimals: number): bigint | null {
   }
 }
 
+/**
+ * The page's one truncation of a hash, an address, or an id: its first 6 and last 4 characters,
+ * besides its type prefix (`0x`, `qt_`, …), `0x1a2b3c…7e8f`. Its full value goes beside it (a
+ * tooltip or title).
+ */
 export function short(value: string): string {
-  return value.length > 18 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value;
+  const prefix = /^(?:0x|[a-z]+_)/.exec(value)?.[0].length ?? 0;
+  return value.length > prefix + 11 ? `${value.slice(0, prefix + 6)}…${value.slice(-4)}` : value;
 }
 
 export function time(seconds: number): string {

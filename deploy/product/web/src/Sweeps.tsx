@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { CodeBlock } from "@/components/ui/code-block";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { FlushCall, SweepGroup } from "./api.js";
 import { ChainIcon, TokenIcon } from "./chains.js";
@@ -93,9 +94,7 @@ function SweepSection({ group }: { group: SweepGroup }) {
           ) : (
             <div className="flex flex-col gap-3">
               <Disclosure summary={`The flush the SDK built (${group.flush.length} call${group.flush.length === 1 ? "" : "s"})`}>
-                <pre className="max-h-60 overflow-auto rounded-lg bg-card p-3 dark:bg-muted font-mono text-xs leading-relaxed">
-                  {JSON.stringify(group.flush, null, 2)}
-                </pre>
+                <CodeBlock value={JSON.stringify(group.flush, null, 2)} label="flush" />
               </Disclosure>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" disabled={send.isPending} onClick={() => send.mutate(flush)}>
@@ -103,7 +102,7 @@ function SweepSection({ group }: { group: SweepGroup }) {
                 </Button>
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="secondary"
                   onClick={() => downloadJson(`phala-pay-sweep-${group.chain_id}-${group.asset}.json`, group.safe_batch)}
                 >
                   Download Safe Transaction Builder batch

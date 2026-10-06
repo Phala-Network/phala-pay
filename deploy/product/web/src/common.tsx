@@ -1,12 +1,11 @@
-import { Check, ChevronRight, Copy, Info } from "lucide-react";
-import { useState, type ComponentProps, type ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
+import { ChevronRight, Info } from "lucide-react";
+import type { ComponentProps, ReactNode } from "react";
+import { Hash } from "@/components/ui/hash";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { StatusTone } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
 import { ApiError } from "./api.js";
 import { networkOf } from "./chains.js";
-import { short } from "./format.js";
 import { useNetworks } from "./queries.js";
 
 /** An inline text link, in the page's text colour. */
@@ -25,12 +24,6 @@ export function loadSdk() {
   return import("@phala/pay-react");
 }
 
-/**
- * A form's main action: the page's one primary (`bg-primary`), full width. Phala's lime is only an
- * accent: the current step, focus, and highlights.
- */
-export const PRIMARY_BUTTON = "h-11 w-full rounded-lg font-semibold";
-
 /** GitHub's mark (./icons/github.svg), in the text colour. */
 export function GitHubIcon({ className }: { className?: string }) {
   return (
@@ -41,32 +34,9 @@ export function GitHubIcon({ className }: { className?: string }) {
   );
 }
 
-/** Copies `value`, confirming with a tick for a moment. */
-export function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      aria-label={copied ? "Copied" : label}
-      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-      onClick={() => {
-        navigator.clipboard.writeText(value).then(
-          () => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          },
-          () => undefined,
-        );
-      }}
-    >
-      {copied ? <Check className="size-3" aria-hidden="true" /> : <Copy className="size-3" aria-hidden="true" />}
-    </button>
-  );
-}
-
 /**
- * A transaction or address, middle-truncated (`short`), linked to its chain's explorer, with the
- * full value in a tooltip; with `copy`, a copy button beside it.
+ * A transaction or address, as a `Hash` linked to its chain's explorer; with `copy`, a copy button
+ * beside it.
  */
 export function ExplorerLink({
   chainId,
@@ -80,27 +50,12 @@ export function ExplorerLink({
   copy?: boolean;
 }) {
   const explorer = networkOf(useNetworks().data, chainId)?.explorer ?? null;
-  const link = (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {explorer === null ? (
-          <span className="font-mono text-xs">{short(value)}</span>
-        ) : (
-          <a className={cn("font-mono text-xs", LINK)} href={`${explorer}/${kind}/${value}`} target="_blank" rel="noreferrer">
-            {short(value)}
-          </a>
-        )}
-      </TooltipTrigger>
-      <TooltipContent className="font-mono break-all">{value}</TooltipContent>
-    </Tooltip>
-  );
-  return copy ? (
-    <span className="inline-flex items-center gap-1">
-      {link}
-      <CopyButton value={value} label={`Copy ${kind === "tx" ? "transaction hash" : "address"}`} />
-    </span>
-  ) : (
-    link
+  return (
+    <Hash
+      value={value}
+      href={explorer === null ? undefined : `${explorer}/${kind}/${value}`}
+      copyLabel={copy ? `Copy ${kind === "tx" ? "transaction hash" : "address"}` : undefined}
+    />
   );
 }
 
@@ -116,7 +71,7 @@ export function InfoTip({ label, children, className }: { label: string; childre
           type="button"
           aria-label={label}
           className={cn(
-            "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground",
+            "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors focus-visible:outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground",
             className,
           )}
         >
@@ -139,7 +94,7 @@ export function Details({ className, ...props }: ComponentProps<"dl">) {
 export function Detail({ label, className, ...props }: ComponentProps<"dd"> & { label: ReactNode }) {
   return (
     <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-3 sm:grid-cols-[minmax(0,9rem)_minmax(0,1fr)]">
-      <dt className="text-muted-foreground">{label}</dt>
+      <dt className="font-sans text-muted-foreground">{label}</dt>
       <dd className={cn("wrap-anywhere", className)} {...props} />
     </div>
   );
@@ -176,7 +131,7 @@ export function Subsection({
 export function Disclosure({ summary, children }: { summary: ReactNode; children: ReactNode }) {
   return (
     <details className="group/disclosure text-xs">
-      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-sm font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <ChevronRight
           className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/disclosure:rotate-90 motion-reduce:transition-none"
           aria-hidden="true"
@@ -193,7 +148,7 @@ export function Empty({ children }: { children: ReactNode }) {
   return <p className="text-sm text-pretty text-muted-foreground">{children}</p>;
 }
 
-const TONES: Record<string, "success" | "danger"> = {
+const TONES: Record<string, StatusTone> = {
   credited: "success",
   succeeded: "success",
   swept: "success",
@@ -203,17 +158,9 @@ const TONES: Record<string, "success" | "danger"> = {
   failed: "danger",
 };
 
-/** A payment's or refund's status: success and failure in their colours, anything else neutral. */
-export function StatusBadge({ status, children }: { status: string; children: ReactNode }) {
-  const tone = TONES[status];
-  return (
-    <Badge
-      variant={tone === "danger" ? "destructive" : "secondary"}
-      className={tone === "success" ? "bg-success/15 text-success" : undefined}
-    >
-      {children}
-    </Badge>
-  );
+/** A payment's or refund's status as a `StatusBadge` tone: success, failure, or else neutral. */
+export function statusTone(status: string): StatusTone {
+  return TONES[status] ?? "neutral";
 }
 
 export function describe(error: unknown): string {

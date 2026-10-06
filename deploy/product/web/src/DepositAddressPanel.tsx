@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { Account, Asset, DepositAddressResponse, Network } from "./api.js";
-import { PRIMARY_BUTTON, ExplorerLink, InfoTip, describe, errorMessage, isShortOfTokens, loadSdk, wallet } from "./common.js";
+import { ExplorerLink, InfoTip, describe, errorMessage, isShortOfTokens, loadSdk, wallet } from "./common.js";
 import { assetOf, networkOf } from "./chains.js";
 import { atomicAmount, dollars, price, signedDollars, statusLabel, tokenName, tokens } from "./format.js";
 import { FundWallet } from "./Funding.js";
@@ -57,7 +57,7 @@ export function DepositAddressPanel({
           <Button
             type="button"
             size="lg"
-            className={PRIMARY_BUTTON}
+            className="w-full"
             onClick={() => {
               loadSdk().catch(() => undefined);
               show.mutate(undefined, { onSuccess: onCreated });
@@ -235,7 +235,7 @@ function PayFromWallet({
       <div className="flex gap-2">
         <Input
           id={id}
-          className="h-10 tabular-nums"
+          className="tabular-nums"
           inputMode="decimal"
           value={amount}
           // Fixed while the wallet confirms the transfer: the transfer is for this amount.
@@ -246,7 +246,7 @@ function PayFromWallet({
             send.reset();
           }}
         />
-        <Button type="submit" variant="outline" size="lg" className="h-10" disabled={send.isPending || to === ""}>
+        <Button type="submit" variant="secondary" disabled={send.isPending || to === ""}>
           {send.isPending ? "Confirm in your wallet…" : "Send"}
         </Button>
       </div>
