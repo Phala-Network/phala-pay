@@ -2,7 +2,7 @@
 use crate::{
     observability::price_metrics,
     routes::RouteSet,
-    rpc_groups::{BASE_CHAIN_ID, price_group, price_pair},
+    rpc_groups::{BASE_CHAIN_ID, price_pair},
 };
 use chrono::Utc;
 use futures_util::{
@@ -352,9 +352,8 @@ enum SourceKey {
     Sequencer {
         feed: String,
         chain_id: u64,
-        group_a: String,
-        group_b: String,
-        alias_chain: Option<u64>,
+        group_a: usize,
+        group_b: usize,
         grace_s: u64,
     },
 }
@@ -528,26 +527,22 @@ impl PricingRuntime {
             .sequencer_uptime
             .as_ref()
             .map(|s| -> Result<_, String> {
-                let alias_chain = matches!(s.rpc_group.as_str(), "a" | "b")
-                    .then_some(route.chain.chain_id)
-                    .or_else(|| {
-                        matches!(s.rpc_group_b.as_str(), "a" | "b").then_some(route.chain.chain_id)
-                    });
+                let a = routes.price_group(route, &s.rpc_group)?;
+                let b = routes.price_group(route, &s.rpc_group_b)?;
                 let key = SourceKey::Sequencer {
                     feed: s.feed.clone(),
                     chain_id: BASE_CHAIN_ID,
-                    group_a: price_group(route, &s.rpc_group)?.to_owned(),
-                    group_b: price_group(route, &s.rpc_group_b)?.to_owned(),
+                    group_a: Arc::as_ptr(&a) as usize,
+                    group_b: Arc::as_ptr(&b) as usize,
                     grace_s: s.grace_s,
-                    alias_chain,
                 };
                 if let Some(sequencer) = sequencers.get(&key) {
                     return Ok(sequencer.clone());
                 }
                 let sequencer = Arc::new(SharedSequencer {
                     inner: Arc::new(Chainlink::new(
-                        routes.price_group(route, &s.rpc_group)?,
-                        routes.price_group(route, &s.rpc_group_b)?,
+                        a,
+                        b,
                         feed(&s.feed, BASE_CHAIN_ID).ok_or("unsupported sequencer feed")?,
                     )),
                     grace_s: s.grace_s,
