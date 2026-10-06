@@ -184,6 +184,9 @@ admin key still works, but stays with the operator and is never a deployment sec
 Environment access and deployment branches as for the Cloud key. Key material is temporary, never part of
 the uploaded deployment record, and is deleted after each signed request.
 
+The pause and resume helper retries transport errors and HTTP 408, 429, 500, 502, 503, and 504 responses;
+each attempt is signed fresh, delays are at least 1 second, and the operation is bounded by a 60-second deadline.
+
 Generate an independent key per Environment on the owner's machine using the installed Python
 SDK CLI. Convert its seed to the PEM the workflow helper accepts:
 
