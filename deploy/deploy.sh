@@ -69,7 +69,7 @@ repository=Phala-Network/phala-pay
 release=latest
 # The Python SDK whose topup-sdk keygen generates an admin key: the release's own version, which
 # scripts/version.sh sets. A pre-release publishes no SDK, so its run needs TOPUP_ADMIN_PUBLIC_KEY.
-sdk=phala-pay==0.9.3rc1
+sdk=phala-pay==0.10.0rc1
 
 say() {
     printf '%s\n' "$*" >&2
