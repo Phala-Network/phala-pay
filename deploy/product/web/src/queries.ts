@@ -98,6 +98,9 @@ export function useTimeline(selection: Selection | null) {
       if (timeline?.refunds.some((refund) => !TERMINAL_REFUND_STATUSES.has(refund.status))) {
         return TIMELINE_ACTIVE_INTERVAL_MS;
       }
+      if (timeline?.deposit?.status === "reversed") {
+        return false;
+      }
       if (timeline?.deposit?.status === "credited" && timeline.deposit.swept) {
         return timeline.steps.some((step) => step.key === "webhook_received" && step.state === "current")
           ? TIMELINE_INTERVAL_MS : false;
