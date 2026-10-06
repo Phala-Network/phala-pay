@@ -1620,6 +1620,7 @@ examples = [
     { name = "fastapi" },
 ]
 product = [
+    { name = "anyio" },
     { name = "granian" },
     { name = "starlette" },
     { name = "web3" },
@@ -1650,6 +1651,7 @@ dev = [
 ]
 examples = [{ name = "fastapi", specifier = "==0.142.2" }]
 product = [
+    { name = "anyio", specifier = "==4.15.1" },
     { name = "granian", specifier = "==2.8.4" },
     { name = "starlette", specifier = "==1.7.0" },
     { name = "web3", specifier = "==8.0.0" },

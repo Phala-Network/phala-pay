@@ -413,7 +413,8 @@ def test_outbound_calls_reuse_one_connection() -> None:
             for path in ("first", "second"):
                 assert client.get(f"http://127.0.0.1:{upstream.server_port}/{path}").text == "ok"
         assert len(connections) == 1
-        assert not transport._thread.is_alive()
+        with pytest.raises(RuntimeError, match="transport is closed"):
+            transport.handle_request(httpx.Request("GET", "http://test/"))
         transport.close()
     finally:
         transport.close()

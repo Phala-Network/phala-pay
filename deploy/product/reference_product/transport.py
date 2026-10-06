@@ -8,6 +8,7 @@ import time
 from contextvars import ContextVar
 
 import httpx
+from anyio.from_thread import start_blocking_portal
 
 OPERATION_TIMEOUT_SECONDS = 25
 operation_deadline: ContextVar[float | None] = ContextVar("operation_deadline", default=None)
@@ -24,33 +25,16 @@ class DeadlineTransport(httpx.BaseTransport):
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._closed = False
-        self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._run, name="product-http", daemon=True)
-        self._thread.start()
+        self._portal_context = start_blocking_portal(backend="asyncio", name="product-http")
+        self._portal = self._portal_context.__enter__()
         try:
-            self._client = asyncio.run_coroutine_threadsafe(
-                self._open_client(), self._loop
-            ).result()
+            self._client = self._portal.call(self._open_client)
         except BaseException:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            self._thread.join()
+            self._portal_context.__exit__(None, None, None)
             raise
 
     async def _open_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(follow_redirects=False)
-
-    def _run(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        try:
-            self._loop.run_forever()
-        finally:
-            pending = asyncio.all_tasks(self._loop)
-            for task in pending:
-                task.cancel()
-            if pending:
-                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
-            self._loop.close()
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         request = httpx.Request(
@@ -84,7 +68,7 @@ class DeadlineTransport(httpx.BaseTransport):
         with self._lock:
             if self._closed:
                 raise RuntimeError("product transport is closed")
-            future = asyncio.run_coroutine_threadsafe(exchange(), self._loop)
+            future = self._portal.start_task_soon(exchange)
         try:
             return future.result(timeout=max(0, deadline - time.monotonic()))
         except TimeoutError as error:
@@ -99,7 +83,6 @@ class DeadlineTransport(httpx.BaseTransport):
                 return
             self._closed = True
             try:
-                asyncio.run_coroutine_threadsafe(self._client.aclose(), self._loop).result()
+                self._portal.call(self._client.aclose)
             finally:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-                self._thread.join()
+                self._portal_context.__exit__(None, None, None)
