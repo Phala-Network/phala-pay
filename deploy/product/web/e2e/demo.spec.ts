@@ -397,6 +397,12 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
 test("a refused timeline keeps its cached data and shows paused updates", async ({ page }) => {
   let missing = false;
   let reads = 0;
+  let refused = false;
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname.startsWith("/api/quotes/") && response.status() === 404) {
+      refused = true;
+    }
+  });
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
     reads += 1;
@@ -418,7 +424,12 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
   missing = true;
-  await page.clock.runFor(10_000);
+  // Checkout's onChange can leave a successful read in flight, whose completion restarts the
+  // interval during runFor. Advance until a polling response actually refuses the timeline.
+  await expect.poll(async () => {
+    await page.clock.runFor(10_000);
+    return refused;
+  }).toBe(true);
   await expect(scenes.getByText("Updates paused.", { exact: true })).toBeVisible();
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
   const paused = reads;
