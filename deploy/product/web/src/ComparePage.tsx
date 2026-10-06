@@ -47,7 +47,7 @@ export function ComparePage() {
       <div className="mt-12 grid gap-8 lg:grid-cols-3">
         <section aria-labelledby="hosted-title">
           <h2 id="hosted-title" className="text-xl font-semibold tracking-tight">Where hosted processors fit better</h2>
-          <p className="mt-3 text-sm leading-6 text-muted-foreground">Nothing to run; a fee per payment; they onboard you.</p>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">Nothing to run; a fee per payment; they onboard you. They operate the payment infrastructure for you; settlement and payout options vary by provider.</p>
         </section>
         <section aria-labelledby="btcpay-title">
           <h2 id="btcpay-title" className="text-xl font-semibold tracking-tight">Where BTCPay Server fits better</h2>
