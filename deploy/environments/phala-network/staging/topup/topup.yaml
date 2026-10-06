@@ -36,6 +36,7 @@ rpc_companies:
     # Sentio's public testnet RPCs; reviewed against sentio.xyz and its official docs.
     domains:
     - sentio.xyz
+# Interactive reserves keep tokens available for API requests (quotes, screening), so background scanning cannot starve them; values are per budget burst.
 rpc_budgets:
   drpc-account:
     requests_per_second: 5
@@ -43,18 +44,21 @@ rpc_budgets:
   tenderly-account:
     requests_per_second: 10
     burst: 10
+    interactive_reserve: 3
   provider-a-key:
     requests_per_second: 10
     burst: 5
   publicnode-account:
     requests_per_second: 10
     burst: 10
+    interactive_reserve: 2
   provider-b-key:
     requests_per_second: 10
     burst: 5
   base-sepolia-a-key:
     requests_per_second: 10
     burst: 5
+    interactive_reserve: 2
   base-sepolia-b-key:
     requests_per_second: 10
     burst: 5
@@ -76,9 +80,11 @@ rpc_budgets:
   price-mainnet-a-key:
     requests_per_second: 5
     burst: 2
+    interactive_reserve: 1
   price-mainnet-b-key:
     requests_per_second: 5
     burst: 2
+    interactive_reserve: 1
   price-mainnet-mevblocker-key:
     requests_per_second: 5
     burst: 2
@@ -94,9 +100,11 @@ rpc_budgets:
   price-base-mainnet-a-key:
     requests_per_second: 5
     burst: 2
+    interactive_reserve: 1
   price-base-mainnet-b-key:
     requests_per_second: 5
     burst: 2
+    interactive_reserve: 1
   price-base-mainnet-sentio-key:
     requests_per_second: 5
     burst: 2
