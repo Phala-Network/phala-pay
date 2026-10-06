@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from contextlib import ExitStack
 from contextvars import ContextVar
 
 import httpx
@@ -25,12 +26,14 @@ class DeadlineTransport(httpx.BaseTransport):
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._closed = False
-        self._portal_context = start_blocking_portal(backend="asyncio", name="product-http")
-        self._portal = self._portal_context.__enter__()
+        self._resources = ExitStack()
+        self._portal = self._resources.enter_context(
+            start_blocking_portal(backend="asyncio", name="product-http")
+        )
         try:
             self._client = self._portal.call(self._open_client)
         except BaseException:
-            self._portal_context.__exit__(None, None, None)
+            self._resources.close()
             raise
 
     async def _open_client(self) -> httpx.AsyncClient:
@@ -85,4 +88,4 @@ class DeadlineTransport(httpx.BaseTransport):
             try:
                 self._portal.call(self._client.aclose)
             finally:
-                self._portal_context.__exit__(None, None, None)
+                self._resources.close()
