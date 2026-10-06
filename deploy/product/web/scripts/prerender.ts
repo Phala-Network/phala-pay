@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { COMPARE_ACCESSED, COMPARE_DESCRIPTION, COMPARE_TITLE } from "../src/content/compare.ts";
+import { COMPARE_ACCESSED, COMPARE_DESCRIPTION, COMPARE_KEYWORDS, COMPARE_TITLE } from "../src/content/compare.ts";
 import { FAQ, HOME_DESCRIPTION, HOME_TITLE } from "../src/content/site.ts";
 import { renderPage } from "./prerender-page.ts";
 
@@ -30,7 +30,7 @@ async function prerender() {
     const file = resolve(assets, page === "home" ? "index.html" : "compare.html");
     const template = await readFile(file, "utf8");
     const home = page === "home";
-    const metadata = { title: home ? HOME_TITLE : COMPARE_TITLE, description: home ? HOME_DESCRIPTION : COMPARE_DESCRIPTION, url: home ? `${origin}/` : `${origin}/compare` };
+    const metadata = { ...(home ? {} : { keywords: COMPARE_KEYWORDS }), title: home ? HOME_TITLE : COMPARE_TITLE, description: home ? HOME_DESCRIPTION : COMPARE_DESCRIPTION, url: home ? `${origin}/` : `${origin}/compare` };
     const graph = { "@context": "https://schema.org", "@graph": home ? [
       organization, website,
       {

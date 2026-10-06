@@ -114,5 +114,7 @@ const archived = new Set([
   "https://www.coinbase.com/blog/introducing-a-powerful-suite-of-business-payment-tools-on-coinbase-business",
 ]);
 export const sources = [...new Set([phalaPay, ...competitors].flatMap((vendor) => dimensions.map(({ key }) => vendor[key].source)))].map((url) => ({ url, archived: archived.has(url) }));
-export const COMPARE_TITLE = "Crypto payment gateways compared for tokens | Phala Pay";
+export const COMPARE_TITLE = "Crypto payment gateways compared | Phala Pay";
 export const COMPARE_DESCRIPTION = "How Phala Pay compares with Stripe, Coinbase Business, BTCPay Server, NOWPayments, and MoonPay Commerce on custody, fees, chains, speed, and refunds.";
+
+export const COMPARE_KEYWORDS = "crypto payment gateway comparison, self-hosted crypto payments, Stripe stablecoin payments, Coinbase Business, BTCPay Server, NOWPayments, MoonPay Commerce";

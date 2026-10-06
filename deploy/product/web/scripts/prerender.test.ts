@@ -4,7 +4,7 @@ import test from "node:test";
 import { renderPage } from "./prerender-page.ts";
 
 const template = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-const metadata = { title: 'Tokens & "treasury"', description: "A < B", url: "https://pay.phala.com/compare" };
+const metadata = { title: 'Tokens & "treasury"', description: "A < B", keywords: "gateways & tokens", url: "https://pay.phala.com/compare" };
 
 await test("missing mount marker fails the build instead of publishing an empty shell", () => {
   assert.throws(() => renderPage(template.replace('<div id="root"></div>', ""), "<h1>Page</h1>", metadata, {}), /Missing root marker/);
@@ -23,6 +23,7 @@ await test("page metadata and JSON-LD are escaped without changing Vite's client
   assert.ok(html.includes('name="twitter:description" content="A &lt; B"'));
   assert.ok(html.includes('property="og:title" content="Tokens &amp; &quot;treasury&quot;"'));
   assert.ok(html.includes('src="./src/main.tsx"'));
+  assert.ok(html.includes('name="keywords" content="gateways &amp; tokens"'));
   const json = /<script type="application\/ld\+json">(.*?)<\/script>/.exec(html)?.[1];
   assert.ok(json);
   const parsed: unknown = JSON.parse(json);
