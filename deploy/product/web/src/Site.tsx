@@ -158,7 +158,7 @@ export function Properties() {
     <section aria-labelledby="properties-title" className="border-t bg-muted/30">
       <div className={`${CONTAINER} py-16`}>
         <h2 id="properties-title" className="text-2xl font-semibold tracking-tight">
-          Built for platforms that sell credits
+          Built for apps and platforms
         </h2>
         <p className="mt-2 max-w-2xl leading-6 text-muted-foreground">
           Top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute.
