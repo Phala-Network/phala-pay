@@ -55,6 +55,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Checkout stops after three consecutive non-terminal 4xx responses other than 408/429 and
   surfaces its existing error state. 404 still stops immediately as `invalid_client_secret`.
 
+### Python SDK (`phala-pay`)
+
+#### Removed
+
+- **Breaking:** the legacy `PhalaPay` constructor (deprecated in 0.9.2); use pins or
+  `PhalaPay.from_env()`.
+- **Breaking:** `phala_pay` no longer exports the `TopupError` alias; use `PhalaPayError`.
+  The low-level `topup_sdk.TopupError` remains available.
+
 ## [0.9.2] - 2026-10-05
 
 ### Fixed

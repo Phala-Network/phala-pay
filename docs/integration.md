@@ -115,8 +115,8 @@ factory and implementation of the attested deployment (§5.5), and **your own tr
 chain**, as you proved it. The SDKs derive each address from these pins, never from the
 response's `treasury`: a compromised service could return an attacker's treasury together with the
 valid `CREATE2` address of that treasury, which a check over the response's own treasury would
-pass. In live mode the check fails closed without every pin (`AddressMismatchError`); test mode
-falls back to the response's treasury with a warning.
+pass. Pins-based clients fail closed without every pin (`AddressMismatchError`). The low-level
+Python `TopupClient` permits a test-mode fallback to the response's treasury with a warning.
 
 **1. Backend: create a quote, return its client secret.** Only the create response carries
 `client_secret`; repeating the call with the same `idempotency_key` within 24 hours returns the
@@ -126,11 +126,10 @@ same response, secret included, which is how a reloaded page resumes.
 from phala_pay import PhalaPay
 
 # PHALA_PAY_API_KEY is your server's restricted key, "ppay_rk_test_…" or "ppay_rk_live_…" (§5.4).
-# ACCOUNT, FORWARDER (factory, implementation of the attested deployment, §5.5), and TREASURIES
-# ({chain_id: your treasury}) are your pins: every quote's address is recomputed from them before
-# it is returned, and one you cannot derive raises.
-pay = PhalaPay(api_base=PHALA_PAY_API_BASE, api_key=PHALA_PAY_API_KEY, account=ACCOUNT,
-               forwarder=FORWARDER, treasuries=TREASURIES)
+# PHALA_PAY_PINS encodes your service origin, account, attested forwarder and webhook keys,
+# and your own treasury on each chain (§5.3, §5.5). Every quote's address is recomputed from these
+# pins before it is returned, and one you cannot derive raises.
+pay = PhalaPay.from_env()
 
 @app.post("/topups")
 def create_topup(body: TopupRequest, team: Team = Depends(current_team)) -> dict[str, str]:
@@ -343,10 +342,10 @@ Semantics (spread, tolerance, expiry by finalized chain time, exposure caps) are
 **Recompute every address before you show it.** A quote's address salt is
 `keccak256(abi.encode(account, client_reference_id, "quote", quote_id))` with `account` your
 `acct_` id, and the address is the factory's `CREATE2` clone of the implementation over **your
-pinned treasury** of the quote's chain and that salt. `PhalaPay(account=…, forwarder=(factory,
-implementation), treasuries={chain_id: treasury})` recomputes every quote from those pins and
-raises `AddressMismatchError` when the quote names another treasury or shows another address, so
-a user never pays an address you did not derive; in live mode it raises without every pin. A Node
+pinned treasury** of the quote's chain and that salt. `PhalaPay(api_key, pins=pins)` recomputes
+every quote from those pins and raises `AddressMismatchError` when the quote names another
+treasury, shows another address, or has no pinned treasury for its chain, so a user never pays an
+address you did not derive. A Node
 backend does the same with `verifyQuoteAddress(pins, quote)` from `@phala/pay-server`, which
 returns the address. Pass the recomputed address to the page as `<Checkout expectedAddress>`,
 which fails closed on any other. You need no address records of your own to credit:
@@ -562,7 +561,7 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   `keccak256(abi.encode(account, livemode, client_reference_id, "deposit_address", version))`
   with the types `(string, bool, string, string, uint256)` (no chain, no asset), and each
   network's address is the factory's `CREATE2` for that network's `treasury` and the salt.
-  `PhalaPay(account=…, forwarder=(factory, implementation), treasuries=…)` checks every network
+  `PhalaPay(api_key, pins=pins)` checks every network
   of an active address over your pinned treasury of its chain and raises `AddressMismatchError`
   (`verifyDepositAddress(pins, address)` in `@phala/pay-server`);
   `topup_sdk.deposit_address(...)` recomputes any version offline.
@@ -1268,7 +1267,7 @@ backend, run on Phala's staging, the model for fulfillment, holds, and refunds.
       (§2.6, Delivery health).
 - [ ] Your pins configured in your server (Quickstart): `account`, `forwarder`, and your own
       live treasury of every chain you accept; every address recomputed from them before display
-      (`PhalaPay(account=…, forwarder=…, treasuries=…)`, or `verifyQuoteAddress` in Node) and
+      (`PhalaPay(api_key, pins=pins)`, or `verifyQuoteAddress` in Node) and
       passed as `<Checkout expectedAddress>`; the `client_secret` handed only to the paying
       customer's page and never logged.
 - [ ] A sweep path (§1.7): `flush_transactions` from an EOA, or a `safe_batch` file for the
@@ -1453,21 +1452,11 @@ response's `Retry-After` seconds, with backoff.
 ```python
 from phala_pay import PhalaPay
 
-# Your pins (Quickstart): your account id; the forwarder factory and implementation, pinned from
-# the attested deployment like your webhook keys (§5.3); and your own treasury per chain, as you
-# proved it. Every quote and deposit address is recomputed from them before it is returned; in
-# live mode a missing pin fails closed.
-forwarder = (
-    "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747",  # factory, the same on every chain
-    "0x49F2F1F1a25269Ea0C6FF2AB1C7B09dCBE9c5bA9",  # implementation (deploy/CONTRACTS.md)
-)
-with PhalaPay(
-    "https://api.phala-pay.example",  # your operator's service URL
-    PHALA_PAY_API_KEY,
-    account="acct_…",
-    forwarder=forwarder,
-    treasuries={11155111: MY_SEPOLIA_TREASURY},  # the address you proved (§1.6)
-) as pay:
+# Set PHALA_PAY_API_KEY and PHALA_PAY_PINS in your server's environment.
+# Pins (Quickstart) bind your service origin, account, attested forwarder and webhook keys
+# (§5.3, §5.5), and your own treasury per chain (§1.6). Every quote and deposit address is
+# recomputed from them before it is returned; a missing pin fails closed.
+with PhalaPay.from_env() as pay:
     config = pay.config.retrieve()
     quote = pay.quotes.create(client_reference_id="team-42", amount=2500, chain_id=11155111,
                               asset="pha")
@@ -1480,7 +1469,7 @@ request raises `ApiError` with `status_code`, `code`, `param`, `doc_url`, `reque
 `429`, `retry_after`.
 
 Your account id, `acct_…` (`GET /v1/account`), is the first input of every quote's address salt;
-pin it as `account=` (required in live mode; in test mode the client reads it once).
+include it in your pins for both live and test mode.
 
 ### 5.6 Idempotency and retries
 

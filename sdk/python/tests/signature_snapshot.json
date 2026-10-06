@@ -59,7 +59,7 @@
   "PhalaPay": {
     "__enter__": "(self)",
     "__exit__": "(self, *_)",
-    "__init__": "(self, api_key, *legacy, pins=None, api_base=None, timeout=15.0, max_attempts=4, request_deadline=None, upgrade_tolerance=False, transport=None, **legacy_kwargs)",
+    "__init__": "(self, api_key, *, pins, api_base=None, timeout=15.0, max_attempts=4, request_deadline=None, upgrade_tolerance=False, transport=None)",
     "checkout_params": "(self, quote)",
     "close": "(self)",
     "export_account": "(self, directory)",

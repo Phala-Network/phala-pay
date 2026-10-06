@@ -1,11 +1,10 @@
 """Public errors share the transport's exception hierarchy."""
 
-from topup_sdk.errors import ConfigurationError, ResponseValidationError, TopupError, TransportError
+from topup_sdk.errors import ConfigurationError, ResponseValidationError, TransportError
+from topup_sdk.errors import TopupError as PhalaPayError
 
-PhalaPayError = TopupError
 
-
-class LedgerSnapshotError(TopupError):
+class LedgerSnapshotError(PhalaPayError):
     pass
 
 
