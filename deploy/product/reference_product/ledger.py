@@ -16,7 +16,7 @@ from typing import Any
 ORDER_FLOW_CODE = "crypto-top-up"
 ORDER_PROVIDER = "crypto_topup"
 
-SCHEMA = """
+BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS teams (
     id TEXT PRIMARY KEY,
     suspended INTEGER NOT NULL DEFAULT 0
@@ -93,11 +93,6 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     webhook_timestamp TEXT NOT NULL,
     webhook_signature TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS event_refs (
-    ref TEXT NOT NULL,
-    event_id TEXT NOT NULL REFERENCES webhook_events (id),
-    PRIMARY KEY (ref, event_id)
-);
 -- Each quote and deposit address the product created, as the service returned it, its
 -- `client_secret` included: the merchant's records a service restore re-issues them from
 -- (deploy/runbooks/restore.md, step 4). A client secret is a capability: the ledger file is
@@ -143,6 +138,30 @@ CREATE TABLE IF NOT EXISTS demo_refunds (
     created INTEGER NOT NULL
 );
 """
+
+
+EVENT_REFS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS event_refs (
+    ref TEXT NOT NULL,
+    event_id TEXT NOT NULL REFERENCES webhook_events (id),
+    PRIMARY KEY (ref, event_id)
+);
+"""
+# Kept as a complete schema for offline tools and legacy fixtures.
+SCHEMA = BASE_SCHEMA + EVENT_REFS_SCHEMA
+SCHEMA_VERSION = 2
+
+
+def _execute_schema(db: sqlite3.Connection, schema: str) -> None:
+    """Execute complete SQL statements without executescript's implicit COMMIT."""
+    statement = ""
+    for line in schema.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            db.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise ValueError("incomplete ledger migration statement")
 
 
 @dataclass(frozen=True)
@@ -219,27 +238,26 @@ class ProductLedger:
             os.chmod(path, 0o600)
         self._connection = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._connection.execute("PRAGMA foreign_keys = ON")
-        self._create()
-
-    def _create(self) -> None:
-        """Creates the tables the ledger lacks, in one transaction."""
-        db = self._connection
         try:
-            backfill = (
-                db.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'event_refs'"
-                ).fetchone()
-                is None
-            )
-            db.executescript("BEGIN IMMEDIATE;" + SCHEMA)
-            if backfill:
+            self._migrate()
+        except BaseException:
+            self._connection.close()
+            raise
+
+    def _migrate(self) -> None:
+        """Upgrade unversioned and versioned ledgers atomically, under SQLite's write lock."""
+        with self.transaction() as db:
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise ValueError("ledger schema is newer than this product")
+            if version < 1:
+                _execute_schema(db, BASE_SCHEMA)
+                db.execute("PRAGMA user_version = 1")
+            if version < 2:
+                _execute_schema(db, EVENT_REFS_SCHEMA)
                 for event_id, data in db.execute("SELECT id, data FROM webhook_events"):
                     self._record_event_refs(db, event_id, json.loads(data))
-            db.execute("COMMIT")
-        except BaseException:
-            if db.in_transaction:
-                db.execute("ROLLBACK")
-            raise
+                db.execute("PRAGMA user_version = 2")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

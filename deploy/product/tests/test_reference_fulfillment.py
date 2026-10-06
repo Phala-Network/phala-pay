@@ -33,7 +33,7 @@ from reference_product.config import (
     ProductConfig,
 )
 from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys, TransientError
-from reference_product.ledger import SCHEMA, Delivery, ProductLedger
+from reference_product.ledger import BASE_SCHEMA, SCHEMA, SCHEMA_VERSION, Delivery, ProductLedger
 from reference_product.restore_records import export_restore_records
 from reference_product.server import (
     AccountApi,
@@ -951,6 +951,7 @@ def test_event_references_upgrade_once_and_deduplicate_matches(tmp_path: Path) -
             assert ledger.events_for({"other-team"}) == []
             with ledger.transaction() as db:
                 assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 3
+                assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         finally:
             ledger._connection.close()
 
@@ -1062,7 +1063,6 @@ def test_event_reference_backfill_tolerates_non_object_data(tmp_path: Path) -> N
 
 def test_event_reference_backfill_rolls_back_non_sql_errors(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:
@@ -1072,26 +1072,14 @@ def test_event_reference_backfill_rolls_back_non_sql_errors(
             "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("evt_test", "test", "invalid JSON", 1, b"{}", "1", "signature"),
         )
-    connect = sqlite3.connect
-    connections: list[sqlite3.Connection] = []
-
-    def capture(database: str, **kwargs: Any) -> sqlite3.Connection:
-        connection: sqlite3.Connection = connect(database, **kwargs)
-        connections.append(connection)
-        return connection
-
-    monkeypatch.setattr(sqlite3, "connect", capture)
     with pytest.raises(json.JSONDecodeError):
         ProductLedger(str(path))
-    [connection] = connections
-    try:
-        assert not connection.in_transaction
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
         assert (
             connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'event_refs'").fetchone()
             is None
         )
-    finally:
-        connection.close()
 
 
 def test_concurrent_event_reference_backfills_are_idempotent(
@@ -1110,15 +1098,10 @@ def test_concurrent_event_reference_backfills_are_idempotent(
     barrier = threading.Barrier(2)
     connect = sqlite3.connect
 
-    class RacingConnection(sqlite3.Connection):
-        def execute(self, sql: str, parameters: Any = (), /) -> sqlite3.Cursor:
-            cursor = super().execute(sql, parameters)
-            if sql.startswith("SELECT 1 FROM sqlite_master WHERE type = 'table'"):
-                barrier.wait(timeout=3)
-            return cursor
-
     def race(database: str, **kwargs: Any) -> sqlite3.Connection:
-        return connect(database, factory=RacingConnection, **kwargs)
+        connection: sqlite3.Connection = connect(database, **kwargs)
+        barrier.wait(timeout=3)
+        return connection
 
     monkeypatch.setattr(sqlite3, "connect", race)
     ledgers: list[ProductLedger] = []
@@ -1165,3 +1148,32 @@ def test_account_api_isolates_sdk_service_failures(
         assert "private service detail" not in caplog.text
     finally:
         api.close()
+
+
+@pytest.mark.parametrize("version", [0, 1])
+def test_ledger_migrations_upgrade_legacy_and_versioned_schemas(
+    tmp_path: Path, version: int
+) -> None:
+    path = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(path) as db:
+        db.executescript(BASE_SCHEMA)
+        if version == 1:
+            db.execute("PRAGMA user_version = 1")
+    ledger = ProductLedger(str(path))
+    try:
+        with ledger.transaction() as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+            assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 0
+    finally:
+        ledger._connection.close()
+
+
+def test_ledger_rejects_future_schema_without_changing_it(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA user_version = 3")
+    with pytest.raises(ValueError, match="schema is newer"):
+        ProductLedger(str(path))
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute("SELECT name FROM sqlite_master").fetchall() == []
