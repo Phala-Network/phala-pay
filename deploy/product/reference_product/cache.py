@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -172,36 +171,3 @@ class SingleFlightTTL[T]:
             pending = self._future
         if pending is not None:
             wait([pending])
-
-
-class ExpiringLRU[K, V]:
-    """Small OrderedDict LRU: successful values persist, negative entries have a TTL.
-
-    cachetools is not installed in the locked product environment. Callers serialize
-    access with their existing lock; expiry is checked on lookup, without a full scan.
-    """
-
-    def __init__(self, maxsize: int, clock: Callable[[], float]) -> None:
-        self._entries: OrderedDict[K, tuple[float | None, V]] = OrderedDict()
-        self._maxsize = maxsize
-        self._clock = clock
-
-    def get(self, key: K) -> tuple[V] | None:
-        entry = self._entries.get(key)
-        if entry is None:
-            return None
-        expires, value = entry
-        if expires is not None and self._clock() >= expires:
-            del self._entries[key]
-            return None
-        self._entries.move_to_end(key)
-        return (value,)
-
-    def put(self, key: K, value: V, *, ttl: float | None = None) -> None:
-        self._entries[key] = (None if ttl is None else self._clock() + ttl, value)
-        self._entries.move_to_end(key)
-        if len(self._entries) > self._maxsize:
-            self._entries.popitem(last=False)
-
-    def __len__(self) -> int:
-        return len(self._entries)

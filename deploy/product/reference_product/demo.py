@@ -60,6 +60,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from cachetools import TLRUCache
 
 from topup_client.models import AttestationResponse, DepositAddress, Payment
 from topup_sdk import (
@@ -75,7 +76,7 @@ from topup_sdk import (
 from topup_sdk.addresses import same_address
 from topup_sdk.errors import ResponseValidationError, TransportError
 
-from .cache import CachedFailureError, ExpiringLRU, Failure, SingleFlightTTL
+from .cache import CachedFailureError, Failure, SingleFlightTTL
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
 from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
 from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
@@ -253,7 +254,9 @@ class DemoConsole:
             cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError),
             inclusive=True,
         )
-        self._block_times = ExpiringLRU[tuple[int, str], tuple[int, int] | None](1024, clock)
+        self._block_times = TLRUCache[tuple[int, str], tuple[int, int] | None](
+            maxsize=1024, ttu=_block_time_expiry, timer=clock
+        )
         self._chain_ids = set(config.treasuries())
 
     # Routing ------------------------------------------------------------------------------------
@@ -688,9 +691,12 @@ class DemoConsole:
         """The block and time of the transaction's block, from the product's RPC of its chain."""
         key = (chain_id, tx_hash)
         with self._lock:
-            entry = self._block_times.get(key)
-            if entry is not None:
-                return self._block_time_view(tx_hash, entry[0])
+            try:
+                cached = self._block_times[key]
+            except KeyError:
+                pass
+            else:
+                return self._block_time_view(tx_hash, cached)
         value = None
         try:
             receipt = self._rpc(chain_id, "eth_getTransactionReceipt", tx_hash)
@@ -700,7 +706,7 @@ class DemoConsole:
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             LOG.warning("demo: block time lookup failed", exc_info=True)
         with self._lock:
-            self._block_times.put(key, value, ttl=30 if value is None else None)
+            self._block_times[key] = value
         return self._block_time_view(tx_hash, value)
 
     @staticmethod
@@ -1509,6 +1515,10 @@ def _redact_key(authorization: str) -> str:
 
 def _take[T](items: Iterator[T], limit: int) -> Iterator[T]:
     return islice(items, limit)
+
+
+def _block_time_expiry(key: tuple[int, str], value: tuple[int, int] | None, now: float) -> float:
+    return float("inf") if value is not None else now + 30
 
 
 def _failure_value(error: Exception) -> Failure:
