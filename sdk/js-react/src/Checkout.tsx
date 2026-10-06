@@ -23,7 +23,8 @@ import {
 } from "@phala/pay";
 import type { Appearance } from "./appearance.js";
 import { AssetIcon, NetworkIcon } from "./Icons.js";
-import { Field } from "./Field.js";
+import { CopyButton, Field } from "./Field.js";
+import { ExternalGlyph, ToneGlyph } from "./Glyphs.js";
 import { QrCode } from "./QrCode.js";
 import { useCheckout } from "./useCheckout.js";
 
@@ -130,16 +131,25 @@ export function Checkout({
       className={className === undefined ? "pp-root" : `pp-root ${className}`}
       data-theme={appearance?.theme ?? "light"}
     >
+      {status === "loading" && (
+        <div className="pp-skeleton" aria-hidden="true">
+          <span />
+          <span />
+        </div>
+      )}
       {quote !== null && (
         <>
           <p className="pp-amount">
-            <AssetIcon asset={quote.asset} size={20} />{" "}
+            <AssetIcon asset={quote.asset} size={20} />
             {formatTokenAmount(quote)} {quote.asset.toUpperCase()}
           </p>
           <p className="pp-subtitle">
-            {formatAmount(quote)} top-up · <NetworkIcon chainId={quote.chain_id} size={16} />{" "}
-            {networkName(quote.chain_id)}
-            {!quote.livemode && <span className="pp-badge"> · Test mode</span>}
+            {formatAmount(quote)} top-up ·{" "}
+            <span className="pp-with-icon">
+              <NetworkIcon chainId={quote.chain_id} size={16} />
+              {networkName(quote.chain_id)}
+            </span>
+            {!quote.livemode && <> · <span className="pp-badge">Test mode</span></>}
           </p>
         </>
       )}
@@ -174,7 +184,7 @@ function StatusLine({
   error: CheckoutState["error"];
   reconnecting: boolean;
 }) {
-  const tone =
+  const tone: "neutral" | "success" | "danger" =
     status === "credited"
       ? "success"
       : ["rejected", "reversed", "expired", "canceled", "error"].includes(status)
@@ -182,9 +192,14 @@ function StatusLine({
         : "neutral";
   return (
     <div className="pp-status" data-tone={tone}>
+      <span className="pp-status-icon">
+        <ToneGlyph tone={tone} />
+      </span>
       <span role="status" aria-live="polite">
         {statusMessage(status, quote, error?.code)}
-        {(reconnecting || error !== null) && status !== "error" ? " (reconnecting…)" : ""}
+        {(reconnecting || error !== null) && status !== "error" && (
+          <span className="pp-reconnecting"> (reconnecting…)</span>
+        )}
       </span>
       {status === "waiting" && quote !== null && (
         <span className="pp-countdown" aria-label="Time left to pay">
@@ -255,14 +270,18 @@ function Transaction({ hash, chainId }: { hash: Hash; chainId: number }) {
   const url = transactionUrl(chainId, hash);
   return (
     <p className="pp-tx">
-      Transaction sent:{" "}
-      {url === undefined ? (
-        <span className="pp-value">{hash}</span>
-      ) : (
-        <a className="pp-value" href={url} target="_blank" rel="noreferrer">
-          {hash}
-        </a>
-      )}
+      <span>
+        Transaction sent:{" "}
+        {url === undefined ? (
+          <span className="pp-value">{hash}</span>
+        ) : (
+          <a className="pp-value" href={url} target="_blank" rel="noreferrer">
+            {hash}
+            <ExternalGlyph />
+          </a>
+        )}
+      </span>
+      <CopyButton value={hash} label="transaction hash" />
     </p>
   );
 }

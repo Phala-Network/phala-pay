@@ -410,10 +410,17 @@ import "./pay-theme.css";
   --pp-accessible-color-on-color-primary: var(--app-color-on-primary);
   --pp-color-background: var(--app-color-background);
   --pp-color-text: var(--app-color-text);
+  --pp-color-focus: var(--app-color-focus-ring);
+  --pp-font-size: 1em;
 }
 ```
 
-When you do not map your own tokens, `appearance.theme: "dark"` selects the built-in dark palette.
+The components take your page's font; `--pp-font-size: 1em` also takes its text size. Map
+`--pp-color-focus` to your focus ring color, distinct from the primary color, so that a keyboard
+user can tell the focused choice from the selected one.
+
+When you do not map your own tokens, `appearance.theme: "dark"` selects the built-in neutral dark
+palette.
 See [Appearance](../sdk/js/README.md#appearance) for every token and selector precedence.
 
 ### 1.3 Payment outcomes

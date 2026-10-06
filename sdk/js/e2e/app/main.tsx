@@ -18,7 +18,9 @@ const className = params.has("frameless") ? "host-frameless" : "";
 
 const address = "0x1111111111111111111111111111111111111111";
 const token = "0x2222222222222222222222222222222222222222";
-const networks = [11155111, 84532].map((chain_id) => ({
+// `?networks=1` shows a single network, without the network choice.
+const chains = params.get("networks") === "1" ? [11155111] : [11155111, 84532];
+const networks = chains.map((chain_id) => ({
   chain_id,
   address,
   assets: ["pha", "usdc"].map((asset) => ({

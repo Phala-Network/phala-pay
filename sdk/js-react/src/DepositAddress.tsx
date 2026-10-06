@@ -99,8 +99,8 @@ export function DepositAddress({
                 checked={each.chain_id === network.chain_id}
                 onChange={() => setSelectedChain(each.chain_id)}
               />
-              <NetworkIcon chainId={each.chain_id} size={16} />{" "}
-              {networkName(each.chain_id)}
+              <NetworkIcon chainId={each.chain_id} size={16} />
+              <span>{networkName(each.chain_id)}</span>
             </label>
           ))}
         </fieldset>
@@ -116,8 +116,8 @@ export function DepositAddress({
                 checked={each.asset === token.asset}
                 onChange={() => setSelectedAsset(each.asset)}
               />
-              <AssetIcon asset={each.asset} size={16} />{" "}
-              {each.asset.toUpperCase()}
+              <AssetIcon asset={each.asset} size={16} />
+              <span>{each.asset.toUpperCase()}</span>
             </label>
           ))}
         </fieldset>
@@ -134,7 +134,8 @@ export function DepositAddress({
       {payments.length > 0 && (
         <ul className="pp-payments" aria-live="polite" aria-label="Payments">
           {payments.map((payment) => (
-            <li key={`${payment.chain_id}:${payment.tx_hash}:${payment.created}`}>
+            <li key={`${payment.chain_id}:${payment.tx_hash}:${payment.created}`} data-tone={paymentTone(payment)}>
+              <span className="pp-payment-dot" aria-hidden="true" />
               {paymentMessage(payment)}
             </li>
           ))}
@@ -274,6 +275,10 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
       ? formatWait(only)
       : list.format([...names].map(([seconds, on]) => `${formatWait(seconds)} on ${list.format(on)}`));
   return `Any amount is credited at the market rate on arrival, usually in ${usually}.`;
+}
+
+function paymentTone({ status }: DepositAddressPayment): "neutral" | "success" | "danger" {
+  return status === "credited" ? "success" : status === "rejected" || status === "reversed" ? "danger" : "neutral";
 }
 
 function paymentMessage(payment: DepositAddressPayment): string {

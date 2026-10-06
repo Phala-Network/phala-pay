@@ -7,10 +7,10 @@ export interface QrCodeProps {
   size?: number;
 }
 
-/** A QR code as an SVG path, one unit per module. */
+/** A QR code as an SVG path, one unit per module, with ISO/IEC 18004's quiet zone of four modules. */
 export function QrCode({ value, label, size = 208 }: QrCodeProps) {
   const { path, width } = useMemo(() => {
-    const { data, size: modules } = encode(value, { ecc: "M", border: 2 });
+    const { data, size: modules } = encode(value, { ecc: "M", border: 4 });
     let d = "";
     data.forEach((row, y) => {
       row.forEach((dark, x) => {
