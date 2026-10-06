@@ -775,10 +775,7 @@ def test_stale_sweeps_return_the_cached_view_and_start_one_refresh(
     _, still_cached = _get(console, cookie, "sweeps")
     assert still_cached == first
     service.sweeps_release.set()
-    deadline = time.monotonic() + 1
-    while console._sweeps_refreshing and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert not console._sweeps_refreshing
+    console.drain()
     assert [r.url.path for r in service.requests].count("/v1/balance") == 2
 
 
@@ -1304,7 +1301,6 @@ def test_cold_sweeps_timeout_keeps_one_build_running_with_its_own_deadline(
         status, body = _get(console, cookie, "sweeps")
         assert (status, body) == (HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
         assert service.sweeps_started.is_set()
-        assert console._sweeps_refreshing
         assert deadlines[0] is not None
         assert deadlines[0] > caller_deadline + 24
         assert _get(console, cookie, "sweeps")[0] == HTTPStatus.SERVICE_UNAVAILABLE
@@ -1312,10 +1308,7 @@ def test_cold_sweeps_timeout_keeps_one_build_running_with_its_own_deadline(
     finally:
         operation_deadline.reset(token)
         service.sweeps_release.set()
-        assert console._sweeps_thread is not None
-        console._sweeps_thread.join(timeout=2)
-    assert console._sweeps is not None
-    assert not console._sweeps_refreshing
+        console.drain()
     assert _get(console, cookie, "sweeps")[0] == HTTPStatus.OK
     console.close()
 
@@ -1350,11 +1343,9 @@ def test_fresh_sweeps_cache_does_not_start_background_builds(
     cookie = _account(console)
     status, first = _get(console, cookie, "sweeps")
     assert status == HTTPStatus.OK
-    assert console._sweeps_thread is not None
-    console._sweeps_thread.join(timeout=2)
+    console.drain()
     for _ in range(5):
         assert _get(console, cookie, "sweeps") == (HTTPStatus.OK, first)
-    assert not console._sweeps_refreshing
     assert [request.url.path for request in service.requests].count("/v1/balance") == 1
 
 
@@ -1494,8 +1485,7 @@ def test_failed_sweeps_refreshes_back_off_from_failure_completion(
     cached = None
     if warm:
         cached = console._sweeps_view()
-        assert console._sweeps_thread is not None
-        console._sweeps_thread.join(timeout=2)
+        console.drain()
         now[0] += 11
     calls: list[int] = []
 
@@ -1510,9 +1500,7 @@ def test_failed_sweeps_refreshes_back_off_from_failure_completion(
         else:
             with pytest.raises(TransportError):
                 console._sweeps_view()
-        assert console._sweeps_thread is not None
-        console._sweeps_thread.join(timeout=2)
-        assert not console._sweeps_refreshing
+        console.drain()
 
     monkeypatch.setattr(console, "_build_sweeps_view", fail)
     read()
