@@ -1,4 +1,4 @@
-import { errors, expect, test, type Locator, type Page } from "@playwright/test";
+import { errors, expect, test as base, type Locator, type Page, type Request } from "@playwright/test";
 import {
   createPublicClient,
   createTestClient,
@@ -37,6 +37,30 @@ function env(name: string): string {
   return value;
 }
 
+// Track in-flight reads from before navigation so the assertion can finish them before its window.
+const test = base.extend<{ timelineRequests: Set<Request> }>({
+  timelineRequests: async ({ page }, runTest) => {
+    const requests = new Set<Request>();
+    const timelineUrl = new URLPattern(`${env("API_URL")}/api/quotes/*`);
+    const record = (request: Request) => {
+      if (timelineUrl.test(request.url())) {
+        requests.add(request);
+      }
+    };
+    const finished = (request: Request) => requests.delete(request);
+    page.on("request", record);
+    page.on("requestfinished", finished);
+    page.on("requestfailed", finished);
+    try {
+      await runTest(requests);
+    } finally {
+      page.off("request", record);
+      page.off("requestfinished", finished);
+      page.off("requestfailed", finished);
+    }
+  },
+});
+
 /** Finish the visible page's initial timeline refresh before observing its polling interval. */
 async function refetchTimeline(page: Page) {
   const response = page.waitForResponse("**/api/quotes/*");
@@ -46,12 +70,21 @@ async function refetchTimeline(page: Page) {
   return current;
 }
 
-/** Observe a bounded response window, including responses delivered after the clock advance. */
-async function expectNoTimelineResponse(page: Page, windowMs: number) {
-  const response = page.waitForResponse("**/api/quotes/*", { timeout: windowMs });
+/** Finish existing reads, then observe whether a new request is issued during the window. */
+async function expectNoTimelineRequests(page: Page, requests: Set<Request>, windowMs: number) {
+  while (requests.size > 0) {
+    await Promise.all([...requests].map(async (request) => {
+      const response = await request.response();
+      if (response !== null) {
+        await response.finished();
+      }
+      requests.delete(request);
+    }));
+  }
+  const issued = page.waitForRequest("**/api/quotes/*", { timeout: windowMs });
   await Promise.all([
     page.clock.runFor(windowMs),
-    expect(response).rejects.toThrow(errors.TimeoutError),
+    expect(issued).rejects.toThrow(errors.TimeoutError),
   ]);
 }
 
@@ -397,7 +430,7 @@ test("query outages show retrying states, recover, and preserve the last account
   await expect(product).not.toContainText("Account is unavailable");
 });
 
-test("a missing timeline shows a terminal message and stops polling", async ({ page }) => {
+test("a missing timeline shows a terminal message and stops polling", async ({ page, timelineRequests }) => {
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
     await route.fulfill({
@@ -415,10 +448,10 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
   await expect(scenes.getByTestId("stream-status")).toHaveText("Unavailable");
   await expect(scenes.getByRole("list", { name: /^Loading/ })).toHaveCount(0);
   expect((await refetchTimeline(page)).status()).toBe(404);
-  await expectNoTimelineResponse(page, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
 });
 
-test("a refused timeline keeps its cached data and shows paused updates", async ({ page }) => {
+test("a refused timeline keeps its cached data and shows paused updates", async ({ page, timelineRequests }) => {
   let missing = false;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
@@ -449,11 +482,11 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
   await refused.finished();
   await expect(scenes.getByText("Updates paused.", { exact: true })).toBeVisible();
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
-  await expectNoTimelineResponse(page, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
 });
 
 for (const sent of [false, true]) {
-  test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page }) => {
+  test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page, timelineRequests }) => {
     await page.clock.install();
     await page.route("**/api/quotes/*", async (route) => {
       const timeline: Timeline = {
@@ -484,7 +517,7 @@ for (const sent of [false, true]) {
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     expect((await refetchTimeline(page)).status()).toBe(200);
     if (!sent) {
-      await expectNoTimelineResponse(page, TIMELINE_INTERVAL_MS);
+      await expectNoTimelineRequests(page, timelineRequests, TIMELINE_INTERVAL_MS);
     }
     const response = page.waitForResponse("**/api/quotes/*");
     await page.clock.runFor(sent ? TIMELINE_ACTIVE_INTERVAL_MS : EXPIRED_QUOTE_INTERVAL_MS - TIMELINE_INTERVAL_MS);
@@ -494,7 +527,7 @@ for (const sent of [false, true]) {
   });
 }
 
-test("a swept payment keeps polling until its webhook arrives", async ({ page }) => {
+test("a swept payment keeps polling until its webhook arrives", async ({ page, timelineRequests }) => {
   let delivered = false;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
@@ -532,11 +565,11 @@ test("a swept payment keeps polling until its webhook arrives", async ({ page })
   await update.finished();
   await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "complete");
   await expect(scenes.getByTestId("stream-status")).toHaveText("Done");
-  await expectNoTimelineResponse(page, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
 });
 
 for (const status of ["reversed", "rejected"] as const) {
-  test(`a ${status} deposit ${status === "reversed" ? "stops" : "continues"} timeline polling`, async ({ page }) => {
+  test(`a ${status} deposit ${status === "reversed" ? "stops" : "continues"} timeline polling`, async ({ page, timelineRequests }) => {
     await page.clock.install();
     await page.route("**/api/quotes/*", async (route) => {
       const timeline: Timeline = {
@@ -564,7 +597,7 @@ for (const status of ["reversed", "rejected"] as const) {
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     expect((await refetchTimeline(page)).status()).toBe(200);
     if (status === "reversed") {
-      await expectNoTimelineResponse(page, 3 * TIMELINE_INTERVAL_MS);
+      await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
     } else {
       const response = page.waitForResponse("**/api/quotes/*");
       await page.clock.runFor(TIMELINE_INTERVAL_MS);
