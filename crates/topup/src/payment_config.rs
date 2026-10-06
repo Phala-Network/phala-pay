@@ -859,13 +859,6 @@ pub async fn report_invalid(pool: &PgPool, routes: &RouteSet) -> Result<(), sqlx
 
 /// Whether an existing payment-settings cutover still requires an upgrade through 0.9.x.
 pub async fn cutover_incomplete(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
-    let exists: bool =
-        sqlx::query_scalar("SELECT to_regclass('public.payment_settings_cutover') IS NOT NULL")
-            .fetch_one(&mut *connection)
-            .await?;
-    if !exists {
-        return Ok(false);
-    }
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM payment_settings_cutover WHERE recording_resumed_at IS NULL)",
     )

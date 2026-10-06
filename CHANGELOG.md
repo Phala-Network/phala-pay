@@ -14,19 +14,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
-### Removed
-
-- **Breaking:** the admin endpoint `POST /v1/admin/recording/resume` and the account's
-  `payment_settings.legacy` field. Recording starts immediately after migrations; an incomplete
-  payment-settings cutover refuses startup and must be completed on 0.9.x before upgrading.
-  Historical `legacy` revisions and their deposit bindings remain supported.
-
 ### Changed
 
 - **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the
   restore report's `expected_heartbeat_at` JSON field is now `failure_at`. Both refer to the
   externally recorded failure instant.
-
 - Request deadline errors now say "the request did not complete within its deadline; retry"
   instead of blaming the database, with `503 unavailable` and `Retry-After: 2`.
 - Price adapters are shared across routes and coalesce concurrent fetches. Quotes may reuse
@@ -50,6 +42,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Removed
 
+- **Breaking:** the admin endpoint `POST /v1/admin/recording/resume` and the account's
+  `payment_settings.legacy` field. Recording starts immediately after migrations; an incomplete
+  payment-settings cutover refuses startup and must be completed on 0.9.x before upgrading.
+  Historical `legacy` revisions and their deposit bindings remain supported.
+- **Breaking:** `topup migrate` no longer accepts `--config`; configuration validation uses
+  `topup config check`. Migration refuses databases that require the old cutover before applying
+  any migrations. Complete the cutover on 0.9.x first.
 - **Breaking:** the reusable Deploy workflow no longer accepts bootstrap_maintenance; upgrades from 0.8.x are unsupported.
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)

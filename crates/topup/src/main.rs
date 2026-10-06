@@ -43,13 +43,6 @@ struct Cli {
     command: TopupCommand,
 }
 
-#[derive(Args)]
-struct MigrateArgs {
-    /// Validate the service configuration before applying migrations.
-    #[arg(long)]
-    config: Option<PathBuf>,
-}
-
 #[derive(Subcommand)]
 enum TopupCommand {
     /// Send one synthetic business alert to staging Sentry; requires SENTRY_DSN.
@@ -61,7 +54,7 @@ enum TopupCommand {
     },
     Run(RunArgs),
     /// Apply the database migrations as the database owner.
-    Migrate(MigrateArgs),
+    Migrate,
     Route {
         #[command(subcommand)]
         command: RouteCommand,
@@ -388,7 +381,7 @@ async fn main() -> ExitCode {
         TopupCommand::Config {
             command: ConfigCommand::Show { file },
         } => return show_config(&file),
-        TopupCommand::Migrate(args) => migrate(&args).await,
+        TopupCommand::Migrate => migrate().await,
         TopupCommand::Route {
             command: RouteCommand::Validate { template, file },
         } => return validate_route(&file, template),
@@ -1600,13 +1593,44 @@ fn spawn_signer() -> std::io::Result<SignerHandle> {
     SignerHandle::spawn(DstackSigner::new(), SIGNER_QUEUE, SIGNER_TIMEOUT)
 }
 
-async fn migrate(args: &MigrateArgs) -> anyhow::Result<ExitCode> {
-    if let Some(config) = &args.config {
-        load_config(config)?;
+/// Refuses old or unfinished cutovers before the migration runner can change the database.
+async fn check_payment_settings_migration(pool: &PgPool) -> anyhow::Result<()> {
+    let mut connection = pool.acquire().await?;
+    let (has_migrations, has_cutover): (bool, bool) = sqlx::query_as(
+        "SELECT to_regclass('public._sqlx_migrations') IS NOT NULL, \
+                to_regclass('public.payment_settings_cutover') IS NOT NULL",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .context("failed to read the database migration tables")?;
+    if has_migrations {
+        let needs_cutover: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM _sqlx_migrations WHERE success) \
+                    AND NOT EXISTS (SELECT 1 FROM _sqlx_migrations \
+                                    WHERE version = 20261024000000 AND success)",
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .context("failed to read the payment settings migration status")?;
+        if needs_cutover {
+            bail!("payment settings cutover is incomplete; upgrade through 0.9.x first");
+        }
     }
+    if has_cutover
+        && topup::payment_config::cutover_incomplete(&mut connection)
+            .await
+            .context("failed to read the payment settings cutover")?
+    {
+        bail!("payment settings cutover is incomplete; upgrade through 0.9.x first");
+    }
+    Ok(())
+}
+
+async fn migrate() -> anyhow::Result<ExitCode> {
     let pool = connect_owner("migrate", 1)
         .await
         .context("failed to connect to database")?;
+    check_payment_settings_migration(&pool).await?;
     topup::db::migrate(&pool)
         .await
         .context("failed to apply database migrations")?;

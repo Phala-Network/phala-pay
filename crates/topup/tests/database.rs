@@ -29,6 +29,14 @@ use uuid::Uuid;
 use support::seed::{self, NewAccount, NewAddress, NewCustomer};
 use support::with_database;
 
+fn migrate(url: &str) -> Result<std::process::Output> {
+    Command::new(env!("CARGO_BIN_EXE_topup"))
+        .arg("migrate")
+        .env("DATABASE_URL", url)
+        .output()
+        .context("run topup migrate")
+}
+
 #[tokio::test]
 async fn migrations_apply_from_scratch_and_are_idempotent() -> Result<()> {
     with_database(|context| {
@@ -36,13 +44,6 @@ async fn migrations_apply_from_scratch_and_are_idempotent() -> Result<()> {
             assert_session_budgets(&context.owner_pool, ("5min", "30s", "5min")).await?;
             assert_session_budgets(&context.app_pool, ("30s", "5s", "1min")).await?;
             db::migrate(&context.owner_pool).await?;
-            let migrate = |url: &str| {
-                Command::new(env!("CARGO_BIN_EXE_topup"))
-                    .arg("migrate")
-                    .env("DATABASE_URL", url)
-                    .output()
-                    .context("run topup migrate")
-            };
             let output = migrate(&context.owner_url)?;
             ensure!(
                 output.status.success(),
@@ -56,6 +57,116 @@ async fn migrations_apply_from_scratch_and_are_idempotent() -> Result<()> {
             ensure!(
                 !output.status.success() && text.contains("migrate requires the database owner"),
                 "migrate must refuse the application login: {text}"
+            );
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn migrate_refuses_a_pre_cutover_database_without_changing_it() -> Result<()> {
+    with_database(|context| {
+        Box::pin(async move {
+            let pool = &context.owner_pool;
+            let issued = seed_account(pool, 90).await?;
+            // The historical down migrations reproduce the schema an older image left behind,
+            // including its issued address and quote, without changing migration history.
+            db::MIGRATOR.undo(pool, 20261023000000).await?;
+            let before: Value = sqlx::query_scalar(
+                "SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM _sqlx_migrations m",
+            )
+            .fetch_one(pool)
+            .await?;
+            let address_before: Value =
+                sqlx::query_scalar("SELECT to_jsonb(a) FROM addresses a WHERE id = $1")
+                    .bind(issued.address_id)
+                    .fetch_one(pool)
+                    .await?;
+            let output = migrate(&context.owner_url)?;
+            ensure!(!output.status.success());
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            ensure!(
+                text.contains(
+                    "payment settings cutover is incomplete; upgrade through 0.9.x first"
+                ),
+                "{text}"
+            );
+            let after: Value = sqlx::query_scalar(
+                "SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM _sqlx_migrations m",
+            )
+            .fetch_one(pool)
+            .await?;
+            ensure!(after == before, "migrate changed the migration records");
+            let address_after: Value =
+                sqlx::query_scalar("SELECT to_jsonb(a) FROM addresses a WHERE id = $1")
+                    .bind(issued.address_id)
+                    .fetch_one(pool)
+                    .await?;
+            ensure!(
+                address_after == address_before,
+                "migrate changed the issued address"
+            );
+            let has_cutover: bool = sqlx::query_scalar(
+                "SELECT to_regclass('public.payment_settings_cutover') IS NOT NULL",
+            )
+            .fetch_one(pool)
+            .await?;
+            ensure!(!has_cutover, "migrate applied the cutover migration");
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn migrate_refuses_an_unfinished_cutover_before_applying_later_migrations() -> Result<()> {
+    with_database(|context| {
+        Box::pin(async move {
+            let pool = &context.owner_pool;
+            db::MIGRATOR.undo(pool, 20261024000000).await?;
+            sqlx::query("UPDATE payment_settings_cutover SET recording_resumed_at = NULL")
+                .execute(pool)
+                .await?;
+            let before: Value = sqlx::query_scalar(
+                "SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM _sqlx_migrations m",
+            )
+            .fetch_one(pool)
+            .await?;
+            let cutover_before: Value =
+                sqlx::query_scalar("SELECT to_jsonb(c) FROM payment_settings_cutover c")
+                    .fetch_one(pool)
+                    .await?;
+            let output = migrate(&context.owner_url)?;
+            ensure!(!output.status.success());
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            ensure!(
+                text.contains(
+                    "payment settings cutover is incomplete; upgrade through 0.9.x first"
+                ),
+                "{text}"
+            );
+            let after: Value = sqlx::query_scalar(
+                "SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM _sqlx_migrations m",
+            )
+            .fetch_one(pool)
+            .await?;
+            ensure!(after == before, "migrate applied later migrations");
+            let cutover_after: Value =
+                sqlx::query_scalar("SELECT to_jsonb(c) FROM payment_settings_cutover c")
+                    .fetch_one(pool)
+                    .await?;
+            ensure!(
+                cutover_after == cutover_before,
+                "migrate changed the unfinished cutover"
             );
             Ok(())
         })

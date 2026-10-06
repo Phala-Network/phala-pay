@@ -51,15 +51,14 @@ jq -j '.configs | to_entries[] | select(.key | startswith("postgres_init_")) | .
     "$tmp/service.json" | cmp -s - <(sed 's/[$]/&&/g' "$root/deploy/postgres-init/10-topup-role.sh") ||
     { echo "the init script is not the committed one" >&2; exit 1; }
 
-# A changed topup.yaml changes the definition of exactly the services that mount it: the service,
-# and migrate, which validates the service configuration before applying migrations.
+# A changed topup.yaml changes only the service that mounts it.
 cp -r "$staging" "$tmp/changed"
 sed -i 's|id: admin/staging-v1|id: admin/staging-v2|' "$tmp/changed/topup.yaml"
 render "${gateway[@]}" "$tmp/changed" >"$tmp/changed.yml"
 changed=$({ diff <("$compose" -f "$tmp/service.yml" config --hash '*') \
     <("$compose" -f "$tmp/changed.yml" config --hash '*') || true; } | awk '/^>/ { print $2 }' |
     tr '\n' ' ')
-[[ "$changed" == "migrate topup " ]] || { echo "a changed topup.yaml changed: $changed" >&2; exit 1; }
+[[ "$changed" == "topup " ]] || { echo "a changed topup.yaml changed: $changed" >&2; exit 1; }
 
 # The inputs: formats, and each only in its variant.
 images phala-pay:latest >"$tmp/bare.json"

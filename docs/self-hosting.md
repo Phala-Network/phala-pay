@@ -473,8 +473,9 @@ read the old app's backups, so never delete the app, and give a new app a new pr
   Tell merchants the new compose hash. The OS image is fixed; moving to dstack 0.6 changes every
   derived key ([OS image](../deploy/README.md#os-image)).
 - **Payment settings upgrades.** Complete any unfinished payment-settings cutover on 0.9.x
-  before upgrading. Startup refuses an incomplete cutover with `payment settings cutover is
-  incomplete; upgrade through 0.9.x first`. New databases start recording immediately after
+  before upgrading. Migration and startup refuse an incomplete cutover with `payment settings
+  cutover is incomplete; upgrade through 0.9.x first`. Migration also refuses databases predating
+  the cutover before applying any migrations. New databases start recording immediately after
   migrations; historical `legacy` revisions still govern the deposits bound to them.
 - **Operations.** A production CVM has no SSH, logs, or database access: you work through Sentry,
   the admin API (daily report, deposit view, pauses, metrics), and the chain. Every alert names its
