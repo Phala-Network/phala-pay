@@ -2,7 +2,7 @@
 
 > Self-hosted, open-source, non-custodial crypto payments API for ERC-20 tokens on Ethereum and Base.
 
-Phala Pay accepts ERC-20 tokens on Ethereum and Base: stablecoins such as USDC and USDT, and volatile tokens priced on-chain, such as PHA via TWAP, valued in USD at confirmation. A live (production) route needs commercially licensed price sources; USDC and USDT are ready today, other tokens depend on their price feeds.
+Phala Pay accepts ERC-20 tokens on Ethereum and Base: stablecoins such as USDC and USDT, and volatile tokens priced on-chain, such as PHA via TWAP, valued in USD at the quoted price (or, for deposit addresses and mismatched payments, at the price when confirmed). A live (production) route needs commercially licensed price sources. USDC and USDT have commercially licensed price sources; other tokens depend on theirs.
 
 The software is free under Apache-2.0 and takes no per-payment fee. Operators pay for their own Phala Cloud instance, two RPC providers per chain, backup storage, and sweep gas. Payers pay network fees.
 
