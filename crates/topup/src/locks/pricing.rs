@@ -374,6 +374,28 @@ impl PricingRuntime {
             stuck_since: std::sync::Mutex::new(None),
         }
     }
+    #[cfg(test)]
+    pub(crate) fn injected_onchain(
+        primary: Arc<dyn PriceSource>,
+        check: Option<Arc<dyn PriceSource>>,
+        fx: Option<Arc<dyn PriceSource>>,
+    ) -> Self {
+        let mut runtime = Self::injected(primary, check, fx);
+        for entry in runtime
+            .primary
+            .iter_mut()
+            .chain(&mut runtime.check)
+            .chain(&mut runtime.fx)
+        {
+            entry.source = Arc::new(SharedSource::new(
+                entry.source.inner.clone(),
+                SOURCE_REUSE,
+                entry.source_id,
+                entry.company,
+            ));
+        }
+        runtime
+    }
     /// Fetches every stablecoin source or the first healthy source in each volatile role.
     pub async fn fetch(&self, route: &RouteFile) -> Result<ValidatedQuote, PricingFailure> {
         self.fetch_with_reuse(route, false).await
@@ -1297,6 +1319,33 @@ mod tests {
     }
     fn shared(inner: Arc<dyn PriceSource>) -> SharedSource {
         SharedSource::new(inner, SOURCE_REUSE, "counted", "counted")
+    }
+    #[tokio::test(start_paused = true)]
+    async fn fetch_fresh_does_not_reuse_a_warmed_quote() {
+        let inner = Arc::new(CountingSource {
+            price: 10_000_000,
+            ..Arc::try_unwrap(CountingSource::new(Duration::from_millis(1)))
+                .ok()
+                .unwrap()
+        });
+        let mut runtime = runtime();
+        runtime.primary[0].source = Arc::new(shared(inner.clone()));
+        runtime.fetch(&route()).await.unwrap();
+        assert_eq!(inner.calls(), 1);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let quote = runtime.fetch_fresh(&route()).await.unwrap();
+        assert_eq!(
+            inner.calls(),
+            2,
+            "fresh valuation must bypass the quote TTL"
+        );
+        assert!(
+            quote.evidence["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o.get("cached").is_none())
+        );
     }
     #[tokio::test(start_paused = true)]
     async fn shared_source_coalesces_concurrent_quotes() {

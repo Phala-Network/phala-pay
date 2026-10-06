@@ -1217,7 +1217,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn confirm_evidence_records_cache_provenance_on_hit() {
+    async fn confirm_evidence_records_coalesced_fetch_provenance() {
         let deposit = deposit(1_000);
         let log = transfer(&deposit);
         let mut confirm = step(
@@ -1268,6 +1268,56 @@ mod tests {
                 .iter()
                 .all(|o| o.get("cached").is_none())
         );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn confirm_does_not_reuse_a_warmed_quote() {
+        struct CountedPrice(std::sync::atomic::AtomicUsize);
+        #[async_trait]
+        impl PriceSource for CountedPrice {
+            async fn observe(&self) -> Result<Observation, PriceError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(observation("primary", 10_000_000, now_seconds()))
+            }
+        }
+        let deposit = deposit(1_000);
+        let log = transfer(&deposit);
+        let mut confirm = step(
+            route(PricingMode::Spot),
+            chain(100, vec![log.clone()]),
+            chain(100, vec![log]),
+            prices(now_seconds()),
+            context(None),
+        );
+        let primary = Arc::new(CountedPrice(std::sync::atomic::AtomicUsize::new(0)));
+        let runtime = confirm.routes.values_mut().next().unwrap();
+        runtime.pricing = Arc::new(PricingRuntime::injected_onchain(
+            primary.clone(),
+            Some(Arc::new(MockPrice(Ok(observation(
+                "check",
+                10_000_000,
+                now_seconds(),
+            ))))),
+            Some(Arc::new(MockPrice(Ok(observation(
+                "fx",
+                100_000_000,
+                now_seconds(),
+            ))))),
+        ));
+        runtime.pricing.fetch(&runtime.route).await.unwrap();
+        assert_eq!(primary.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let result = confirm.run(&deposit).await;
+        assert_eq!(result.outcome, StepOutcome::Advance);
+        assert_eq!(primary.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let observations = &result.effects.valuation.as_ref().unwrap().quote["observations"];
+        assert!(
+            observations
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o.get("cached").is_none())
+        );
+        assert_eq!(result.evidence["quote"]["observations"], *observations);
     }
     #[tokio::test]
     async fn provider_disagreement_retries() {
