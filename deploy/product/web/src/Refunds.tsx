@@ -1,14 +1,16 @@
 import { useMutation } from "@tanstack/react-query";
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, CircleCheck } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { isAddress, isHash, parseUnits } from "viem";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Hash } from "@/components/ui/hash";
 import { Input } from "@/components/ui/input";
+import { StatusBadge } from "@/components/ui/status-badge";
 import type { Deposit, Refund, Timeline } from "./api.js";
 import { assetOf, networkOf } from "./chains.js";
-import { Detail, Details, ExplorerLink, InfoTip, StatusBadge, Subsection, describe, errorMessage, wallet } from "./common.js";
+import { Detail, Details, ExplorerLink, InfoTip, Subsection, describe, errorMessage, statusTone, wallet } from "./common.js";
 import { statusLabel, tokens } from "./format.js";
 import { useCancelRefund, useCreateRefund, useMarkRefundPaid, useNetworks } from "./queries.js";
 
@@ -123,13 +125,13 @@ function RefundForm({ deposit, token }: { deposit: Deposit; token: RefundToken }
         <FieldLabel htmlFor={destinationId}>Destination address (the payer's, by default)</FieldLabel>
         <Input
           id={destinationId}
-          className="font-mono text-xs md:text-xs"
+          className="font-mono"
           spellCheck={false}
           value={destination}
           onChange={(event) => setDestination(event.target.value)}
         />
       </Field>
-      <Button type="submit" variant="outline" className="justify-self-start sm:col-span-2" disabled={create.isPending}>
+      <Button type="submit" variant="secondary" className="justify-self-start sm:col-span-2" disabled={create.isPending}>
         {create.isPending ? "Declaring…" : "Declare refund"}
       </Button>
       {error !== null && (
@@ -186,10 +188,8 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
       data-status={refund.status}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-muted-foreground" title={refund.id}>
-          {refund.id.slice(0, 11)}…
-        </span>
-        <StatusBadge status={refund.status}>{statusLabel(refund.status)}</StatusBadge>
+        <Hash value={refund.id} className="text-muted-foreground" />
+        <StatusBadge tone={statusTone(refund.status)}>{statusLabel(refund.status)}</StatusBadge>
       </div>
       <p>
         {tokens(refund.amount_atomic, symbol, decimals)} to{" "}
@@ -224,7 +224,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
               <FieldLabel htmlFor={hashId}>Transaction hash of the payment</FieldLabel>
               <Input
                 id={hashId}
-                className="font-mono text-xs md:text-xs"
+                className="font-mono"
                 spellCheck={false}
                 placeholder="0x…"
                 value={hash}
@@ -243,7 +243,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
               />
             </Field>
             <div className="flex flex-wrap gap-2">
-              <Button type="submit" variant="outline" disabled={pending}>
+              <Button type="submit" variant="secondary" disabled={pending}>
                 {mark.isPending ? "Submitting…" : "Mark paid"}
               </Button>
               <Button type="button" variant="ghost" disabled={pending} onClick={() => cancel.mutate(refund.id)}>
@@ -273,16 +273,26 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
         </p>
       )}
       {refund.status === "succeeded" && (
-        <p className="text-success" role="status">
-          Succeeded: the service verified the treasury's transfer at finality and sent{" "}
-          <code>deposit.refunded</code>, which took the refunded share back from the balance.
-        </p>
+        <Alert variant="success" role="status">
+          <CircleCheck aria-hidden="true" />
+          <AlertTitle>Succeeded</AlertTitle>
+          <AlertDescription>
+            The service verified the treasury's transfer at finality and sent <code>deposit.refunded</code>, which took
+            the refunded share back from the balance.
+          </AlertDescription>
+        </Alert>
       )}
       {refund.status === "failed" && (
-        <p className="text-destructive" role="status">
-          Failed: <code>{refund.failure_reason}</code>. {refund.failure_explanation} Its reservation of the
-          deposit is released; declare a new refund and pay it from the treasury.
-        </p>
+        <Alert variant="destructive" role="status">
+          <CircleAlert aria-hidden="true" />
+          <AlertTitle>
+            Failed: <code>{refund.failure_reason}</code>
+          </AlertTitle>
+          <AlertDescription>
+            {refund.failure_explanation} Its reservation of the deposit is released; declare a new refund and pay it from
+            the treasury.
+          </AlertDescription>
+        </Alert>
       )}
       {refund.status === "canceled" && <p className="text-muted-foreground">Canceled before any payment was attached.</p>}
       {error !== null && <ErrorAlert text={error} />}
@@ -295,7 +305,7 @@ function ErrorAlert({ text }: { text: string }) {
   return (
     <Alert variant="destructive">
       <CircleAlert aria-hidden="true" />
-      <AlertDescription className="text-xs">{text}</AlertDescription>
+      <AlertDescription>{text}</AlertDescription>
     </Alert>
   );
 }

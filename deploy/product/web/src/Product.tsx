@@ -1,41 +1,35 @@
 import type { CheckoutStatus } from "@phala/pay";
 import type { Appearance } from "@phala/pay-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, CircleAlert, Cloud, CircleCheck, Copy, FlaskConical, Gift, Lock } from "lucide-react";
+import { Check, CircleAlert, Cloud, CircleCheck, Copy, Gift, Lock } from "lucide-react";
 import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { ChoiceCard } from "@/components/ui/choice-card";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
 import { TokenIcon, assetOf, networkOf, tokenFullName } from "./chains.js";
-import { PRIMARY_BUTTON, ExplorerLink, InfoTip, describe, loadSdk } from "./common.js";
+import { ExplorerLink, InfoTip, describe, loadSdk } from "./common.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
 import { atomicAmount, dollars, percent, presetDollars, rate, signedDollars, tokenName } from "./format.js";
 import { FundWallet, TestTokens, type Need } from "./Funding.js";
 import { keys, useCreateQuote } from "./queries.js";
 import type { PaidWith } from "./testTokens.js";
-import { cn } from "@/lib/utils";
 
 const Checkout = lazy(() => loadSdk().then((sdk) => ({ default: sdk.Checkout })));
 
 export type Method = "quote" | "address";
-
-/**
- * A choice card's selected state, the same for every single choice (amounts, tokens): the primary
- * border and ring, with the choice's radio filled.
- */
-const CHOICE =
-  "cursor-pointer has-data-checked:border-primary! has-data-checked:bg-transparent! has-data-checked:ring-1 has-data-checked:ring-primary";
 
 const METHODS: { id: Method; label: string }[] = [
   { id: "quote", label: "Exact amount" },
@@ -247,11 +241,8 @@ function TestnetBadge({ network }: { network: string }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" data-testid="testnet-badge" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <Badge variant="outline" className="gap-1 border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300">
-            <FlaskConical aria-hidden="true" />
-            Testnet
-          </Badge>
+        <button type="button" data-testid="testnet-badge" className="rounded-full">
+          <StatusBadge tone="warning">Testnet</StatusBadge>
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" collisionPadding={12} className="w-64 p-3 text-xs leading-relaxed text-pretty text-muted-foreground">
@@ -349,19 +340,18 @@ function PaymentOptions({
     <>
       <div className="space-y-2">
         <Label htmlFor={`${id}-network`}>Network</Label>
-        <select
+        <NativeSelect
           id={`${id}-network`}
-          className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           value={network.chain_id}
           onChange={(event) => onNetworkChange(Number(event.target.value))}
           data-testid="network-select"
         >
           {networks.map((each) => (
-            <option key={each.chain_id} value={each.chain_id}>
+            <NativeSelectOption key={each.chain_id} value={each.chain_id}>
               {each.name}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </div>
       <div className="space-y-2">
         <Label id={`${id}-token`} asChild>
@@ -392,30 +382,28 @@ function PaymentOptions({
  */
 function TokenOption({ id, asset, testnet }: { id: string; asset: Asset; testnet: boolean }) {
   return (
-    <FieldLabel htmlFor={id} data-testid="token-option" className={cn("w-full min-w-0", CHOICE)}>
-      <Field orientation="horizontal" className="h-full min-w-0 items-center! gap-3 px-3! py-2.5!">
-        <TokenIcon asset={asset.asset} />
-        <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
-            {asset.symbol}
-            {asset.bonus_bps > 0 && (
-              <Badge className="bg-success/12 text-success" data-testid="token-bonus">
-                <Gift aria-hidden="true" />+{percent(asset.bonus_bps)} bonus
-              </Badge>
-            )}
-          </span>
-          <span className="text-xs font-normal text-pretty text-muted-foreground">
-            {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
-          </span>
+    <ChoiceCard htmlFor={id} data-testid="token-option">
+      <TokenIcon asset={asset.asset} />
+      <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
+          {asset.symbol}
+          {asset.bonus_bps > 0 && (
+            <StatusBadge tone="success" data-testid="token-bonus">
+              +{percent(asset.bonus_bps)} bonus
+            </StatusBadge>
+          )}
         </span>
-        {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
-            locks (the locked-rate line). */}
-        <span className="shrink-0 text-sm font-normal tabular-nums" data-testid="token-price">
-          {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
+        <span className="text-xs font-normal text-pretty text-muted-foreground">
+          {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
         </span>
-        <RadioGroupItem value={asset.asset} id={id} aria-label={tokenName(asset.symbol, testnet)} />
-      </Field>
-    </FieldLabel>
+      </span>
+      {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
+          locks (the locked-rate line). */}
+      <span className="shrink-0 text-sm font-normal tabular-nums" data-testid="token-price">
+        {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
+      </span>
+      <RadioGroupItem value={asset.asset} id={id} aria-label={tokenName(asset.symbol, testnet)} />
+    </ChoiceCard>
   );
 }
 
@@ -469,29 +457,22 @@ function AmountPicker({
         <Label id={`${id}-amount-label`} asChild>
           <span>Amount</span>
         </Label>
-        {/* Four across where each has room for its label (a full-width product), else two by two. */}
-        <div className="@container">
-          <RadioGroup
-            value={String(preset)}
-            onValueChange={(value) => setPreset(value === "custom" ? "custom" : Number(value))}
-            aria-labelledby={`${id}-amount-label`}
-            className="grid-cols-2 gap-2 @md:grid-cols-4"
-          >
-            {options.map((option) => (
-              <FieldLabel key={option.value} htmlFor={`${id}-${option.value}`} className={CHOICE}>
-                <Field orientation="horizontal" className="h-10 gap-2 px-3! py-0!">
-                  <RadioGroupItem value={option.value} id={`${id}-${option.value}`} aria-label={option.label} />
-                  <span className="text-sm font-medium tabular-nums">{option.label}</span>
-                </Field>
-              </FieldLabel>
-            ))}
-          </RadioGroup>
-        </div>
+        <SegmentedControl
+          value={String(preset)}
+          onValueChange={(value) => setPreset(value === "custom" ? "custom" : Number(value))}
+          aria-labelledby={`${id}-amount-label`}
+        >
+          {options.map((option) => (
+            <SegmentedControlItem key={option.value} value={option.value} className="tabular-nums">
+              {option.label}
+            </SegmentedControlItem>
+          ))}
+        </SegmentedControl>
       </div>
       {preset === "custom" && (
         <div className="space-y-2">
           <Label htmlFor={`${id}-amount`}>Custom amount (USD)</Label>
-          <InputGroup className="h-10">
+          <InputGroup>
             <InputGroupAddon>
               <InputGroupText>$</InputGroupText>
             </InputGroupAddon>
@@ -511,7 +492,7 @@ function AmountPicker({
         <Button
           type="submit"
           size="lg"
-          className={PRIMARY_BUTTON}
+          className="w-full"
           disabled={quote.isPending || account === null || asset === undefined}
         >
           {quote.isPending ? "Creating quote…" : "Pay with crypto"}
@@ -604,7 +585,7 @@ function QuoteCheckout({
       {short !== null && status === "waiting" && network !== undefined && token !== undefined && (
         <FundWallet network={network} token={token} needed={BigInt(session.amount_atomic)} wallet={short} />
       )}
-      <Button type="button" variant="outline" className="w-full" onClick={onNewTopUp}>
+      <Button type="button" variant="secondary" className="w-full" onClick={onNewTopUp}>
         Add more credits
       </Button>
     </div>
@@ -620,10 +601,10 @@ function Credited({ session, account, bps }: { session: CreatedQuote; account: A
   const bonus = row?.bonus ?? 0;
   const symbol = session.asset.toUpperCase();
   return (
-    <Alert data-testid="payment-credited" role="status">
-      <CircleCheck className="text-success!" aria-hidden="true" />
+    <Alert variant="success" data-testid="payment-credited" role="status">
+      <CircleCheck aria-hidden="true" />
       <AlertTitle>Payment credited</AlertTitle>
-      <AlertDescription className="text-foreground">
+      <AlertDescription>
         <dl className="mt-1 grid w-full gap-1.5 tabular-nums">
           <div className="flex justify-between gap-3">
             <dt>Credit</dt>

@@ -1,4 +1,5 @@
 import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
+import { CodeBlock } from "@/components/ui/code-block";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
@@ -422,9 +423,11 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
                   </code>
                   <span className={exchange.status < 400 ? "text-success" : "text-destructive"}>{exchange.status}</span>
                 </summary>
-                <pre className="max-h-80 overflow-auto border-t bg-card p-3 dark:bg-muted font-mono text-xs leading-relaxed">
-                  {JSON.stringify({ request: exchange.request, response: exchange.response }, null, 2)}
-                </pre>
+                <CodeBlock
+                  value={JSON.stringify({ request: exchange.request, response: exchange.response }, null, 2)}
+                  label="request and response"
+                  className="max-h-80 rounded-none border-x-0 border-b-0"
+                />
               </details>
             </li>
           ))}

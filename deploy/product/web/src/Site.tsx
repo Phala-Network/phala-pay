@@ -135,9 +135,6 @@ function Lockup() {
   );
 }
 
-// The hero's two calls to action: one height, whatever their variant.
-const HERO_BUTTON = "h-10 px-4";
-
 // The headline, with the fact behind each of its words (docs/architecture.md §8, the typical credit
 // at depth 2, `typical_credit_seconds`; README.md), and the way to run it: self-hosting on Phala Cloud.
 export function Hero() {
@@ -153,13 +150,13 @@ export function Hero() {
           {HERO_SUBHEAD}
         </p>
         <div className="flex flex-wrap items-center gap-3 pt-2 xl:pt-0">
-          <Button asChild size="lg" className={HERO_BUTTON}>
+          <Button asChild size="lg">
             <a href={LINKS.deploy}>
               <Rocket aria-hidden="true" />
               Start a testnet instance
             </a>
           </Button>
-          <Button asChild size="lg" variant="outline" className={HERO_BUTTON}>
+          <Button asChild size="lg" variant="secondary">
             <a href={LINKS.docs}>
               <BookOpen aria-hidden="true" />
               Read the docs
@@ -338,7 +335,7 @@ export function ClosingCta() {
         <h2 id="closing-title" className="text-2xl font-semibold tracking-tight">Run your own payment rail</h2>
         <div className="mt-6 flex flex-wrap gap-3">
           <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
-          <Button asChild size="lg" variant="outline"><a href={LINKS.repo}>View on GitHub</a></Button>
+          <Button asChild size="lg" variant="secondary"><a href={LINKS.repo}>View on GitHub</a></Button>
         </div>
       </div>
     </section>

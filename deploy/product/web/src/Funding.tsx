@@ -14,7 +14,7 @@ import type { PaidWith } from "./testTokens.js";
  * A row of the test tokens card, the same for its action and its links: the token's mark and what
  * the row does, and at its end the kind of action (the wallet, or a link out).
  */
-const TOKEN_ROW = "h-9 w-full justify-between";
+const TOKEN_ROW = "w-full justify-between";
 
 // The mint's whole tokens: 1,000 test PHA (about $75 at staging's rate) unless a payment needs
 // more, then that payment's amount, rounded up to a whole hundred tokens.
@@ -60,7 +60,7 @@ function useMint(network: Network, need: Need | null, using?: PaidWith) {
 /** A faucet, off the page: its mark and name, and the external-link icon at the row's end. */
 function FaucetLink({ href, icon, title, children }: { href: string; icon: ReactNode; title?: string; children: ReactNode }) {
   return (
-    <Button asChild variant="outline" className={TOKEN_ROW}>
+    <Button asChild variant="secondary" className={TOKEN_ROW}>
       <a href={href} target="_blank" rel="noreferrer" title={title}>
         <span className="flex items-center gap-2">
           {icon}
@@ -75,7 +75,7 @@ function FaucetLink({ href, icon, title, children }: { href: string; icon: React
 /** The mint button: the token's mark and the amount, marked with the wallet that mints it. */
 function MintButton({ token, label, mint }: { token: Asset } & ReturnType<typeof useMint>) {
   return (
-    <Button type="button" variant="outline" className={TOKEN_ROW} onClick={() => mint.mutate(token)} disabled={mint.isPending}>
+    <Button type="button" variant="secondary" className={TOKEN_ROW} onClick={() => mint.mutate(token)} disabled={mint.isPending}>
       <span className="flex items-center gap-2">
         <TokenIcon asset={token.asset} className="size-4" />
         {mint.isPending && mint.variables.asset === token.asset ? "Confirm in your wallet…" : label(token)}
@@ -164,7 +164,7 @@ export function FundWallet({
     return null;
   }
   return (
-    <Alert data-testid="fund-wallet">
+    <Alert variant="warning" data-testid="fund-wallet">
       <Wallet aria-hidden="true" />
       <AlertTitle>Not enough {name} in your wallet</AlertTitle>
       <AlertDescription>

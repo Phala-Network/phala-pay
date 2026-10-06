@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { errors, expect, test as base, type Locator, type Page, type Request } from "@playwright/test";
 import {
   createPublicClient,
@@ -303,6 +304,24 @@ async function watchConsole(page: Page): Promise<string[]> {
     });
   });
   return problems;
+}
+
+/**
+ * Checks the page with axe in the theme it is in, then in the other (switched with the header's
+ * toggle, and back): no serious or critical violation in either.
+ */
+async function expectAccessible(page: Page, state: string): Promise<void> {
+  for (let pass = 0; pass < 2; pass++) {
+    // Colours are read once the theme's colour transitions have settled.
+    await page.waitForFunction(() => !document.getAnimations().some((animation) => animation instanceof CSSTransition));
+    const theme = (await page.locator("html").getAttribute("class"))?.includes("dark") ? "dark" : "light";
+    const { violations } = await new AxeBuilder({ page }).analyze();
+    const serious = violations
+      .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
+      .map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(" ")).join(", ")}`);
+    expect(serious, `${state}, ${theme} theme`).toEqual([]);
+    await page.getByRole("button", { name: /^Switch to (dark|light) theme$/ }).click();
+  }
 }
 
 /**
@@ -652,11 +671,12 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(preview).toBeVisible();
   // The credit's expected time is the chain's typical_credit_seconds, from GET /v1/config.
   await expect(step(preview, "credited")).toContainText("usually ~30\u00a0s");
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  await expectAccessible(page, "home and the demo's initial state");
   const trust = await openTab(scenes, "Trust");
   await expect(trust).toContainText("Attestation verified");
   await expect(trust).toContainText("Verified");
   await expect(trust).toContainText("e2e0000000000000000000000000000000000001");
-  await expect(product.getByTestId("balance")).toHaveText("$0.00");
   const [cookie] = await context.cookies();
   expect(cookie).toMatchObject({ name: "demo_account", path: "/", httpOnly: true, sameSite: "Lax" });
 
@@ -682,6 +702,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(rate).toContainText("1 PHA = $0.25");
   await expect(product.getByLabel("Time left to pay")).toHaveText(/^1[45]:\d\d$/);
   await expect(product.getByText(/\d+:\d\d$/)).toHaveCount(1);
+  await expectAccessible(page, "a quote awaiting payment");
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
   await expect(step(timeline, "sent")).toHaveAttribute("data-state", "current");
@@ -769,6 +790,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   const canceled = await declareRefund(scenes, "20");
   await canceled.getByRole("button", { name: "Cancel refund" }).click();
   await expect(canceled).toHaveAttribute("data-status", "canceled");
+  await expectAccessible(page, "refunds that succeeded, failed, and were canceled");
   await openTab(scenes, "API");
   const events = scenes.getByTestId("webhook-event");
   for (const type of ["refund.created", "refund.updated", "refund.failed", "deposit.refunded"]) {
