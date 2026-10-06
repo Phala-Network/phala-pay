@@ -217,7 +217,7 @@ impl ConfirmStep {
         }
     }
 
-    async fn execute(&self, deposit: &Deposit) -> StepResult {
+    async fn execute(&self, deposit: &Deposit, deadline: tokio::time::Instant) -> StepResult {
         let context = match self
             .context_lookup
             .load(deposit.address_id, deposit.id)
@@ -450,7 +450,7 @@ impl ConfirmStep {
         };
 
         let valuation_at = Utc::now();
-        let quote = match runtime.pricing.fetch(&runtime.route).await {
+        let quote = match runtime.pricing.fetch_fresh(&runtime.route, deadline).await {
             Ok(quote) => quote,
             Err(evidence) => {
                 return retry(RetryError::PriceUnavailable, evidence.into(), effects);
@@ -592,7 +592,18 @@ fn carried_forward(
 #[async_trait]
 impl Step for ConfirmStep {
     async fn run(&self, deposit: &Deposit) -> StepResult {
-        self.execute(deposit).await
+        self.execute(
+            deposit,
+            tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT,
+        )
+        .await
+    }
+    async fn run_with_deadline(
+        &self,
+        deposit: &Deposit,
+        deadline: tokio::time::Instant,
+    ) -> StepResult {
+        self.execute(deposit, deadline).await
     }
 }
 
@@ -1087,6 +1098,10 @@ mod tests {
     use super::*;
     use topup_core::deposit::DepositState;
 
+    fn test_deadline() -> tokio::time::Instant {
+        tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT
+    }
+
     #[derive(Clone)]
     struct MockChain {
         head: Result<u64, ChainError>,
@@ -1216,6 +1231,113 @@ mod tests {
         assert!(Arc::ptr_eq(&runtime, &confirm.routes[&key].pricing));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn confirm_evidence_records_coalesced_fetch_provenance() {
+        let deposit = deposit(1_000);
+        let log = transfer(&deposit);
+        let mut confirm = step(
+            route(PricingMode::Spot),
+            chain(100, vec![log.clone()]),
+            chain(100, vec![log]),
+            prices(now_seconds()),
+            context(None),
+        );
+        let runtime = confirm.routes.values_mut().next().unwrap();
+        runtime.pricing = Arc::new(PricingRuntime::injected(
+            Arc::new(DelayedPrice {
+                source: "primary",
+                value: 10_000_000,
+                delay: Duration::from_millis(10),
+            }),
+            Some(Arc::new(DelayedPrice {
+                source: "check",
+                value: 10_000_000,
+                delay: Duration::from_millis(10),
+            })),
+            Some(Arc::new(DelayedPrice {
+                source: "fx",
+                value: 100_000_000,
+                delay: Duration::from_millis(10),
+            })),
+        ));
+        // Both confirm callers arrive before the shared fetch completes (D1).
+        let (a, b) = tokio::join!(confirm.run(&deposit), confirm.run(&deposit));
+        assert_eq!(a.outcome, StepOutcome::Advance);
+        assert_eq!(b.outcome, StepOutcome::Advance);
+        let observations = &b.effects.valuation.as_ref().unwrap().quote["observations"];
+        assert!(
+            observations
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o.get("cached").is_some())
+        );
+        assert_eq!(b.evidence["quote"]["observations"], *observations);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let fresh = confirm.run(&deposit).await;
+        assert_eq!(fresh.outcome, StepOutcome::Advance);
+        assert!(
+            fresh.effects.valuation.unwrap().quote["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o.get("cached").is_none())
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn confirm_does_not_reuse_a_warmed_quote() {
+        struct CountedPrice(std::sync::atomic::AtomicUsize);
+        #[async_trait]
+        impl PriceSource for CountedPrice {
+            async fn observe(&self) -> Result<Observation, PriceError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(observation("primary", 10_000_000, now_seconds()))
+            }
+        }
+        let deposit = deposit(1_000);
+        let log = transfer(&deposit);
+        let mut confirm = step(
+            route(PricingMode::Spot),
+            chain(100, vec![log.clone()]),
+            chain(100, vec![log]),
+            prices(now_seconds()),
+            context(None),
+        );
+        let primary = Arc::new(CountedPrice(std::sync::atomic::AtomicUsize::new(0)));
+        let runtime = confirm.routes.values_mut().next().unwrap();
+        runtime.pricing = Arc::new(PricingRuntime::injected_onchain(
+            primary.clone(),
+            Some(Arc::new(MockPrice(Ok(observation(
+                "check",
+                10_000_000,
+                now_seconds(),
+            ))))),
+            Some(Arc::new(MockPrice(Ok(observation(
+                "fx",
+                100_000_000,
+                now_seconds(),
+            ))))),
+        ));
+        runtime
+            .pricing
+            .fetch(&runtime.route, test_deadline())
+            .await
+            .unwrap();
+        assert_eq!(primary.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let result = confirm.run(&deposit).await;
+        assert_eq!(result.outcome, StepOutcome::Advance);
+        assert_eq!(primary.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let observations = &result.effects.valuation.as_ref().unwrap().quote["observations"];
+        assert!(
+            observations
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o.get("cached").is_none())
+        );
+        assert_eq!(result.evidence["quote"]["observations"], *observations);
+    }
     #[tokio::test]
     async fn provider_disagreement_retries() {
         let deposit = deposit(1_000);
@@ -1649,7 +1771,7 @@ mod tests {
         };
         let quote = runtime
             .pricing
-            .fetch(&runtime.route)
+            .fetch(&runtime.route, test_deadline())
             .await
             .expect("slow quote remains fresh");
         assert_eq!(quote.price.value(), 10_000_000);

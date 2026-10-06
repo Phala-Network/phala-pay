@@ -222,8 +222,6 @@ struct RunArgs {
 
 /// Concurrent deposit pumps in one service process.
 const PUMPS: usize = 1;
-/// Maximum duration of one step; shorter than the five-minute lease.
-const STEP_TIMEOUT: Duration = Duration::from_secs(240);
 /// Interval between deposit state-age scans.
 const AGE_ALERT_INTERVAL: Duration = Duration::from_secs(60);
 /// Interval between prunings of the idempotency keys older than 24 hours.
@@ -691,7 +689,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let age_config =
         AgeAlertConfig::from_routes(routes.routes()).context("invalid age alert configuration")?;
     let pump_config = PumpConfig {
-        step_timeout: STEP_TIMEOUT,
+        step_timeout: topup::pump::STEP_TIMEOUT,
         wait_interval: Duration::from_secs(args.wait_interval_s),
         ..PumpConfig::default()
     };

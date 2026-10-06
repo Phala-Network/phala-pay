@@ -219,6 +219,11 @@ impl PriceSource for Chainlink {
             agreement_price: o.price,
             valuation: o,
             evidence: round_evidence(&r, self.feed),
+            reuse_until: Some(UnixSeconds::new(
+                r.updated_at
+                    .saturating_add(self.feed.heartbeat_s)
+                    .saturating_add(self.feed.margin_s),
+            )),
         })
     }
 }

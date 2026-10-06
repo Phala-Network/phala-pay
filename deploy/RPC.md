@@ -4,6 +4,9 @@ The attested topup image contains the group clients; the inline `topup.yaml` con
 member, reviewed company identity, quota scope and bounded policy. Keys exist only in the sealed
 `TOPUP_RPC_*_KEY` variables explicitly named by members. Declare those variables for both topup
 and restore-check in the environment's compose overlay. No RPC sidecar or cache is deployed.
+Quotes may reuse an on-chain price observation from the same adapter in process for up to 12 s,
+with source freshness limits checked on every use. Crediting (confirm) always fetches fresh;
+confirm, CEX prices and sequencer uptime only coalesce concurrent fetches.
 
 ## Configuration and acceptance
 

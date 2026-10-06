@@ -16,15 +16,18 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Instant, Sleep};
 
 pub(super) const BODY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+// Bound the complete HTTP request, including work before pricing.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 // A hard lifetime also bounds trickled headers (and HTTP/2 streams). Clients reconnect after
 // this finite keep-alive budget; activity cannot extend it indefinitely.
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub(super) async fn request_deadline(request: Request, next: Next) -> Response {
+pub(super) async fn request_deadline(mut request: Request, next: Next) -> Response {
     let method = request.method().clone();
-    match tokio::time::timeout(REQUEST_TIMEOUT, next.run(request)).await {
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    request.extensions_mut().insert(deadline);
+    match tokio::time::timeout_at(deadline, next.run(request)).await {
         Ok(response) => response,
         Err(_) => {
             crate::observability::metrics::request_deadline_exceeded(method.as_str());
@@ -175,6 +178,58 @@ mod tests {
         assert!(metrics.contains("topup_api_request_deadline_exceeded_total{method=\"POST\"}"));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn quote_pricing_inherits_the_earlier_request_deadline() {
+        use std::sync::{Arc, Mutex};
+        struct Stalled(Arc<Mutex<Option<Instant>>>);
+        #[async_trait::async_trait]
+        impl crate::locks::QuoteProvider for Stalled {
+            async fn quote(
+                &self,
+                _: &topup_core::route::RouteFile,
+                deadline: Instant,
+            ) -> Result<crate::locks::pricing::ValidatedQuote, serde_json::Value> {
+                *self.0.lock().unwrap() = Some(deadline);
+                std::future::pending().await
+            }
+        }
+        let passed = Arc::new(Mutex::new(None));
+        let provider: Arc<dyn crate::locks::QuoteProvider> = Arc::new(Stalled(passed.clone()));
+        let started = Instant::now();
+        let expected_deadline = started + REQUEST_TIMEOUT;
+        let app = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::post(move || {
+                    let provider = provider.clone();
+                    async move {
+                        // Database and authentication work has already consumed most of the request.
+                        tokio::time::sleep(Duration::from_secs(20)).await;
+                        let route = serde_saphyr::from_str(include_str!(
+                            "../../tests/fixtures/phala-cloud-pha.yaml"
+                        ))
+                        .unwrap();
+                        match crate::locks::quote_with_budget(&provider, &route, expected_deadline)
+                            .await
+                        {
+                            Ok(_) => axum::http::StatusCode::NO_CONTENT,
+                            Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        }
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(request_deadline));
+        let response = app
+            .oneshot(Request::post("/").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(*passed.lock().unwrap(), Some(started + REQUEST_TIMEOUT));
+        assert_eq!(started.elapsed(), REQUEST_TIMEOUT);
+    }
     #[tokio::test(start_paused = true)]
     async fn idle_and_trickled_headers_have_finite_transport_budgets() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
