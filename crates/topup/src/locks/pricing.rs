@@ -1690,6 +1690,39 @@ mod tests {
         assert_eq!(inner.calls(), 2);
     }
     #[tokio::test(start_paused = true)]
+    async fn waiters_arriving_during_a_fetch_share_its_failure_without_serial_retries() {
+        let inner = CountingSource::new(SOURCE_TIMEOUT);
+        inner.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        let source = shared(inner.clone());
+        let started = tokio::time::Instant::now();
+        let results = futures_util::future::join_all((0..10).map(|i| {
+            let source = &source;
+            async move {
+                tokio::time::sleep(Duration::from_secs(i)).await;
+                source.quote_shared(test_deadline()).await
+            }
+        }))
+        .await;
+        assert!(
+            results
+                .iter()
+                .all(|r| matches!(r, Err(PriceError::Timeout)))
+        );
+        assert_eq!(inner.calls(), 1);
+        assert_eq!(started.elapsed(), SOURCE_TIMEOUT);
+        assert!(source.coalesced.state.lock().unwrap().cached.is_none());
+        inner.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            source
+                .quote_shared(test_deadline())
+                .await
+                .unwrap()
+                .1
+                .is_none()
+        );
+        assert_eq!(inner.calls(), 2);
+    }
+    #[tokio::test(start_paused = true)]
     async fn dropping_the_first_awaiter_does_not_cancel_other_waiters() {
         let inner = CountingSource::new(Duration::from_secs(20));
         let source = shared(inner.clone());
