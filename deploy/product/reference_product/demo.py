@@ -220,6 +220,7 @@ class DemoConsole:
         recorder: ApiRecorder | None = None,
         http: httpx.Client | None = None,
         clock: Callable[[], float] = time.time,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.config = config
         self.ledger = ledger
@@ -235,6 +236,7 @@ class DemoConsole:
             timeout=5, follow_redirects=False, transport=DeadlineTransport()
         )
         self._clock = clock
+        self._monotonic = monotonic
         self._client: TopupClient | None = None
         self._sweeps_client: TopupClient | None = None
         self._lock = threading.Lock()
@@ -932,7 +934,7 @@ class DemoConsole:
             with self._lock:
                 self._last_good_sweep_groups[key] = _LastGoodSweepGroup(
                     value=value,
-                    stored_at=time.monotonic(),
+                    stored_at=self._monotonic(),
                     as_of=int(now),
                 )
             return value
@@ -955,7 +957,7 @@ class DemoConsole:
                 last_good = self._last_good_sweep_groups.get(key)
             if (
                 last_good is not None
-                and time.monotonic() - last_good.stored_at <= SWEEP_GROUP_MAX_STALE_SECONDS
+                and self._monotonic() - last_good.stored_at <= SWEEP_GROUP_MAX_STALE_SECONDS
             ):
                 return {
                     **last_good.value,

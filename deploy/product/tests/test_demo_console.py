@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from http import HTTPStatus
@@ -251,7 +251,7 @@ class Service:
         self.wrong_address: str | None = None
         self.customer = "acct"
         self.requests: list[httpx.Request] = []
-        self.fail_sweeps: set[str] = set()
+        self.fail_sweeps: set[str | tuple[int, str]] = set()
         self.sweeps_block = False
         self.sweeps_started = threading.Event()
         self.sweeps_release = threading.Event()
@@ -353,7 +353,11 @@ class Service:
             forwarder = request.url.params.get("forwarder")
             if forwarder is not None and not re.fullmatch(r"fwd_[0-9a-f]{32}", forwarder):
                 return _error(400, "invalid_forwarder")
-            if request.url.params.get("token", "").lower() in self.fail_sweeps:
+            chain_id = request.url.params.get("chain_id")
+            token = request.url.params.get("token", "").lower()
+            if token in self.fail_sweeps or (
+                chain_id is not None and (int(chain_id), token) in self.fail_sweeps
+            ):
                 return _error(503, "screening_unavailable")
             sweeps = self.sweeps
             if forwarder is not None:
@@ -394,6 +398,7 @@ class DemoFactory(Protocol):
         *,
         transport: httpx.BaseTransport | None = None,
         rpc_transport: httpx.BaseTransport | None = None,
+        monotonic: Callable[[], float] | None = None,
     ) -> DemoConsole: ...
 
 
@@ -416,6 +421,7 @@ def demo_factory(tmp_path: Path, clock: Clock, service: Service) -> Iterator[Dem
         *,
         transport: httpx.BaseTransport | None = None,
         rpc_transport: httpx.BaseTransport | None = None,
+        monotonic: Callable[[], float] | None = None,
     ) -> DemoConsole:
         console = DemoConsole(
             replace(CONFIG, api_key_file=str(tmp_path / "product.key")),
@@ -423,6 +429,7 @@ def demo_factory(tmp_path: Path, clock: Clock, service: Service) -> Iterator[Dem
             recorder=ApiRecorder(transport or httpx.MockTransport(service)),
             http=httpx.Client(transport=rpc_transport or httpx.MockTransport(_rpc)),
             clock=clock,
+            monotonic=time.monotonic if monotonic is None else monotonic,
         )
         consoles.append(console)
         return console
@@ -916,18 +923,17 @@ def test_first_unavailable_sweep_group_has_no_last_good_view(
 
 
 def test_old_last_good_sweep_group_becomes_unavailable(
-    demo: tuple[DemoConsole, Service],
+    demo_factory: DemoFactory,
     clock: Clock,
-    monkeypatch: pytest.MonkeyPatch,
+    service: Service,
 ) -> None:
-    console, service = demo
-    monotonic = 1000.0
-    monkeypatch.setattr(time, "monotonic", lambda: monotonic)
+    monotonic_now = [1000.0]
+    console = demo_factory(monotonic=lambda: monotonic_now[0])
     cookie = _account(console)
     assert _get(console, cookie, "sweeps")[0] == HTTPStatus.OK
     service.fail_sweeps.add(TOKEN.lower())
     clock.now += 11
-    monotonic += demo_module.SWEEP_GROUP_MAX_STALE_SECONDS + 1
+    monotonic_now[0] += demo_module.SWEEP_GROUP_MAX_STALE_SECONDS + 1
     _get(console, cookie, "sweeps")
     console.drain()
     status, view = _get(console, cookie, "sweeps")
@@ -979,10 +985,10 @@ def test_sweep_group_failure_is_scoped_to_chain_and_token(
     clock: Clock,
 ) -> None:
     console, service = demo
-    service.assets.append(_config_asset("pha", 84532, BASE_TOKEN))
+    service.assets.append(_config_asset("pha", 84532, TOKEN))
     cookie = _account(console)
     _, first = _get(console, cookie, "sweeps")
-    service.fail_sweeps.add(TOKEN.lower())
+    service.fail_sweeps.add((11155111, TOKEN.lower()))
     clock.now += 11
     _get(console, cookie, "sweeps")
     console.drain()
