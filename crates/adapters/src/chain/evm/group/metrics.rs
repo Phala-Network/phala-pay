@@ -72,6 +72,7 @@ pub(super) enum EventKind {
     Failure(Failure),
     BudgetWait,
     HeadPerformed,
+    HeadSkipped,
 }
 
 type EventKey = (String, u64, String, EventKind);
@@ -118,6 +119,9 @@ pub fn events() -> Result<Vec<MetricFamily>, prometheus::Error> {
                 .inc_by(std::time::Duration::from_nanos(*value).as_secs_f64()),
             EventKind::HeadPerformed => heads
                 .with_label_values(&[group, &chain, member, "performed"])
+                .inc_by(*value),
+            EventKind::HeadSkipped => heads
+                .with_label_values(&[group, &chain, member, "skipped_pinned"])
                 .inc_by(*value),
             EventKind::Failure(error) => failures
                 .with_label_values(&[group, &chain, member, error.code()])

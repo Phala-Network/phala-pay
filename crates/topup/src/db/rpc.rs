@@ -89,6 +89,64 @@ impl WatermarkStore for RpcState {
         })
         .transpose()
     }
+    async fn head_state(
+        &self,
+        chain: u64,
+        group: &str,
+        tag: &str,
+    ) -> Result<(Option<HeadAnchor>, Option<HeadAnchor>), Failure> {
+        let chain = i64::try_from(chain).map_err(|_| Failure::Persistence)?;
+        // One snapshot preserves load's absent-state defaults, freeze gate and epoch filter.
+        // LEFT JOIN retains the gate even when neither watermark exists.
+        let rows = sqlx::query(
+            "SELECT COALESCE(state.frozen,false) AS frozen, w.tag, w.number, w.hash, w.parent_hash
+             FROM (SELECT $1::bigint AS chain_id) AS requested
+             LEFT JOIN rpc_chain_state AS state ON state.chain_id=requested.chain_id
+             LEFT JOIN rpc_watermarks AS w
+               ON w.chain_id=requested.chain_id AND w.group_id=$2
+              AND w.tag IN ($3,'cursor') AND w.epoch=COALESCE(state.epoch,0)",
+        )
+        .bind(chain)
+        .bind(group)
+        .bind(tag)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| Failure::Persistence)?;
+        let mut head = None;
+        let mut cursor = None;
+        for row in rows {
+            if row
+                .try_get::<bool, _>("frozen")
+                .map_err(|_| Failure::Persistence)?
+            {
+                return Err(Failure::Fork);
+            }
+            let Some(row_tag) = row
+                .try_get::<Option<String>, _>("tag")
+                .map_err(|_| Failure::Persistence)?
+            else {
+                continue;
+            };
+            let anchor = HeadAnchor {
+                number: u64::try_from(
+                    row.try_get::<i64, _>("number")
+                        .map_err(|_| Failure::Persistence)?,
+                )
+                .map_err(|_| Failure::Persistence)?,
+                hash: row.try_get("hash").map_err(|_| Failure::Persistence)?,
+                parent_hash: row
+                    .try_get("parent_hash")
+                    .map_err(|_| Failure::Persistence)?,
+            };
+            if row_tag == tag {
+                head = Some(anchor.clone());
+            }
+            if row_tag == "cursor" {
+                cursor = Some(anchor);
+            }
+        }
+        Ok((head, cursor))
+    }
     async fn accept(
         &self,
         chain: u64,

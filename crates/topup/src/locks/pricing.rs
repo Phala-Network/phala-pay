@@ -2634,6 +2634,190 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn pha_quote_send_counts_with_stationary_head() {
+        let [_, sepolia] = pha_routes();
+        let mut base = sepolia.clone();
+        base.chain.chain_id = 84532;
+        base.route = "phala-cloud-base-sepolia-pha-usd".into();
+        let mut measured = Vec::new();
+        for (route, expected) in [(sepolia, 36), (base, 46)] {
+            use alloy_primitives::{B256, U256};
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use topup_adapters::pricing::uniswap_v2::{
+                PHA, PairState, Sample, WETH, counterfactual,
+            };
+            let now = validation_time().unwrap().value();
+            let hash = B256::repeat_byte(1);
+            let mut state = PairState {
+                token0: PHA,
+                token1: WETH,
+                reserve0: U256::from(100_000_000_000_000_000_000_000_u128),
+                reserve1: U256::from(100_000_000_000_000_000_000_u128),
+                timestamp_last: u32::try_from(now).unwrap(),
+                cumulative0: U256::ZERO,
+                cumulative1: U256::ZERO,
+            };
+            let spot = counterfactual(
+                &state,
+                topup_adapters::pricing::chainlink::PriceBlock {
+                    number: 98,
+                    hash,
+                    timestamp: now,
+                },
+            )
+            .unwrap()
+            .0
+            .spot;
+            state.cumulative0 = spot * U256::from(1800);
+            let history = (0..30_u64)
+                .map(|i| Sample {
+                    block: 67 + i,
+                    hash,
+                    timestamp: now - 1800 + i * 60,
+                    spot,
+                    cumulative: spot * U256::from(i * 60),
+                })
+                .collect();
+            let store = Arc::new(CountingStore {
+                history: tokio::sync::Mutex::new(history),
+                records: AtomicUsize::new(0),
+            });
+            let sends = Arc::new(AtomicUsize::new(0));
+            let a = topup_adapters::pricing::test_rpc::uniswap_v2(
+                "a",
+                (100, hash),
+                state.clone(),
+                200_000_000_000,
+                now,
+                sends.clone(),
+            )
+            .await;
+            let b = topup_adapters::pricing::test_rpc::uniswap_v2(
+                "b",
+                (100, hash),
+                state,
+                200_000_000_000,
+                now,
+                sends.clone(),
+            )
+            .await;
+            let primary = Arc::new(SharedSource::new(
+                Arc::new(
+                    UniswapV2::new(
+                        a.client.clone(),
+                        b.client.clone(),
+                        topup_core::price::TwapConfig::default(),
+                        store.clone(),
+                    )
+                    .unwrap(),
+                ),
+                SOURCE_REUSE,
+                "uniswap_v2_twap",
+                "uniswap-v2-onchain",
+            ));
+            let fx = Arc::new(SharedSource::new(
+                Arc::new(Chainlink::new(
+                    a.client.clone(),
+                    b.client.clone(),
+                    feed("USDT_USD", 1).unwrap(),
+                )),
+                SOURCE_REUSE,
+                "chainlink",
+                "chainlink",
+            ));
+            let make_runtime = || {
+                let mut r = runtime();
+                r.primary[0].source = primary.clone();
+                r.primary[0].company = "uniswap-v2-onchain";
+                r.primary[0].max_age_s = Some(180);
+                r.check = vec![entry("kraken", 1, 0, None)];
+                r.check[0].usdt_quoted = false;
+                r.fx[0].source = fx.clone();
+                r
+            };
+            let price = topup_adapters::pricing::uniswap_v2::usd_price(
+                spot,
+                ScaledPrice::new(200_000_000_000, 8).unwrap(),
+            )
+            .unwrap()
+            .value();
+            let mut cold = make_runtime();
+            cold.check[0] = entry("kraken", price, 0, None);
+            cold.check[0].usdt_quoted = false;
+            sends.store(0, Ordering::SeqCst);
+            store.records.store(0, Ordering::SeqCst);
+
+            let mut sequencer_fixtures = Vec::new();
+            if route.chain.chain_id == 84532 {
+                use alloy::sol_types::SolCall;
+                use alloy_primitives::I256;
+                use topup_adapters::pricing::{
+                    chainlink::{decimalsCall, latestRoundDataCall, latestRoundDataReturn},
+                    test_rpc,
+                };
+                let fixture = |id: &'static str| {
+                    let sends = sends.clone();
+                    test_rpc::rpc(id, move |request| {
+                        sends.fetch_add(1, Ordering::SeqCst);
+                        if request["method"] == "eth_getBlockByNumber" {
+                            let mut head = serde_json::to_value(alloy::rpc::types::Block::<
+                                alloy::rpc::types::Transaction,
+                            >::default(
+                            ))
+                            .unwrap();
+                            head["number"] = if request["params"][0] == "latest" {
+                                json!("0x64")
+                            } else {
+                                request["params"][0].clone()
+                            };
+                            head["hash"] = json!(B256::repeat_byte(1));
+                            head["parentHash"] = json!(B256::repeat_byte(2));
+                            return head;
+                        }
+                        let input = request["params"][0]["input"]
+                            .as_str()
+                            .or_else(|| request["params"][0]["data"].as_str())
+                            .unwrap();
+                        let bytes = if input.starts_with("0x313ce567") {
+                            decimalsCall::abi_encode_returns(&0)
+                        } else {
+                            latestRoundDataCall::abi_encode_returns(&latestRoundDataReturn {
+                                roundId: alloy_primitives::Uint::<80, 2>::from(20),
+                                answer: I256::ZERO,
+                                startedAt: U256::from(now - 7200),
+                                updatedAt: U256::from(now),
+                                answeredInRound: alloy_primitives::Uint::<80, 2>::from(20),
+                            })
+                        };
+                        json!(format!("0x{}", hex::encode(bytes)))
+                    })
+                };
+                let a = fixture("sequencer-a").await;
+                let b = fixture("sequencer-b").await;
+                cold.sequencer = Some(Arc::new(SharedSequencer {
+                    inner: Arc::new(Chainlink::new(
+                        a.client.clone(),
+                        b.client.clone(),
+                        feed("BASE_SEQUENCER_UPTIME", BASE_CHAIN_ID).unwrap(),
+                    )),
+                    grace_s: 3600,
+                    coalesced: Coalesced::new("sequencer", "chainlink"),
+                }));
+                sequencer_fixtures.extend([a, b]);
+            }
+            cold.fetch(&route, test_deadline()).await.unwrap();
+            let count = sends.load(Ordering::SeqCst);
+            println!(
+                "PHA quote chain {} stationary-head sends: {count}",
+                route.chain.chain_id
+            );
+            measured.push((count, expected));
+        }
+        for (count, expected) in measured {
+            assert_eq!(count, expected);
+        }
+    }
+    #[tokio::test]
     async fn concurrent_pha_quotes_send_only_one_cold_fetch_and_cached_quote_sends_zero() {
         use alloy_primitives::{B256, U256};
         use std::sync::atomic::{AtomicUsize, Ordering};

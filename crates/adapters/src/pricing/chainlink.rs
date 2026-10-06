@@ -232,6 +232,22 @@ impl PriceSource for Chainlink {
 mod tests {
     use super::super::test_rpc::chainlink as rpc;
     use super::*;
+    #[tokio::test]
+    async fn round_send_count_with_stationary_head() {
+        use std::sync::atomic::Ordering;
+        let now = unix_now().unwrap().value();
+        let a = rpc("round-count-a", 100_000_000, 20, 20, now, false).await;
+        let b = rpc("round-count-b", 100_000_000, 20, 20, now, false).await;
+        let reader = Chainlink::new(
+            a.client.clone(),
+            b.client.clone(),
+            topup_core::price::feed("USDC_USD", 1).unwrap(),
+        );
+        reader.round().await.unwrap();
+        let sends = a.sends.load(Ordering::SeqCst) + b.sends.load(Ordering::SeqCst);
+        println!("Chainlink::round stationary-head sends: {sends}");
+        assert_eq!(sends, 10);
+    }
     fn round() -> Round {
         Round {
             id: 20,

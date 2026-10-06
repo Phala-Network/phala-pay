@@ -374,6 +374,17 @@ pub trait WatermarkStore: Send + Sync {
     /// Loads the persisted high watermark.
     async fn load(&self, chain: u64, group: &str, tag: &str)
     -> Result<Option<HeadAnchor>, Failure>;
+    /// Loads a head watermark and the cursor floor, preserving `load` semantics.
+    async fn head_state(
+        &self,
+        chain: u64,
+        group: &str,
+        tag: &str,
+    ) -> Result<(Option<HeadAnchor>, Option<HeadAnchor>), Failure> {
+        let head = self.load(chain, group, tag).await?;
+        let cursor = self.load(chain, group, "cursor").await?;
+        Ok((head, cursor))
+    }
     /// Persists an accepted head before any caller can publish it.
     async fn accept(
         &self,
@@ -435,6 +446,7 @@ pub struct RpcGroup {
     budgets: Arc<Budgets>,
     http: reqwest::Client,
     health: Mutex<Vec<Health>>,
+    validated: Mutex<Vec<Option<u64>>>,
     heads: tokio::sync::Mutex<BTreeMap<String, HeadAnchor>>,
     probe_blocks: tokio::sync::Mutex<BTreeMap<u64, String>>,
     store: RwLock<Option<Arc<dyn WatermarkStore>>>,
@@ -458,6 +470,7 @@ impl RpcGroup {
     ) -> Result<Arc<Self>, Failure> {
         policy.validate().map_err(|_| Failure::Request)?;
         let health = members.iter().map(|_| Health::default()).collect();
+        let validated = vec![None; members.len()];
         let group = Arc::new(Self {
             id,
             chain,
@@ -467,6 +480,7 @@ impl RpcGroup {
             probe_deadline: None,
             http: transport::client()?,
             health: Mutex::new(health),
+            validated: Mutex::new(validated),
             heads: tokio::sync::Mutex::new(BTreeMap::new()),
             probe_blocks: tokio::sync::Mutex::new(BTreeMap::new()),
             store: RwLock::new(None),
@@ -494,6 +508,7 @@ impl RpcGroup {
             budgets: self.budgets.clone(),
             http: self.http.clone(),
             health: Mutex::new(self.members.iter().map(|_| Health::default()).collect()),
+            validated: Mutex::new(vec![None; self.members.len()]),
             heads: tokio::sync::Mutex::new(BTreeMap::new()),
             probe_blocks: tokio::sync::Mutex::new(BTreeMap::new()),
             store: RwLock::new(None),
@@ -564,6 +579,9 @@ impl RpcGroup {
     }
     /// Sets the result of full startup/capability probes.
     pub fn verified(&self, index: usize, ok: bool) {
+        if !ok {
+            self.clear_validated(index);
+        }
         if let Some(h) = self
             .health
             .lock()
@@ -575,6 +593,33 @@ impl RpcGroup {
                 h.quarantined = false;
             }
             h.failures = 0;
+        }
+    }
+    fn validated_at_least(&self, index: usize, number: u64) -> bool {
+        self.validated
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(index)
+            .is_some_and(|head| head.is_some_and(|head| head >= number))
+    }
+    fn remember_validated(&self, index: usize, number: u64) {
+        if let Some(head) = self
+            .validated
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(index)
+        {
+            *head = Some(head.map_or(number, |previous| previous.max(number)));
+        }
+    }
+    fn clear_validated(&self, index: usize) {
+        if let Some(head) = self
+            .validated
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(index)
+        {
+            *head = None;
         }
     }
     /// Shared durable safety store, for stopped-service cursor anchoring.
@@ -676,6 +721,7 @@ impl RpcGroup {
     }
     /// Feeds every failed attempt back into selection.
     pub fn failed(&self, index: usize, error: Failure) {
+        self.clear_validated(index);
         metrics::event(self, index, metrics::EventKind::Failure(error), 1);
         if let Some(h) = self
             .health
@@ -1069,13 +1115,16 @@ impl RpcGroup {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        if let Some(store) = &store
-            && let Some(previous) = store.load(self.chain, &self.id, tag).await?
-        {
+        let (previous, cursor) = if let Some(store) = &store {
+            store.head_state(self.chain, &self.id, tag).await?
+        } else {
+            (None, None)
+        };
+        if let Some(previous) = previous {
             heads.insert(tag.to_owned(), previous);
         }
         if let Some(store) = &store
-            && let Some(cursor) = store.load(self.chain, &self.id, "cursor").await?
+            && let Some(cursor) = cursor
         {
             if head.number < cursor.number {
                 return Err(Failure::Stale);
@@ -1094,9 +1143,10 @@ impl RpcGroup {
                 let regression = previous.number.saturating_sub(head.number);
                 if regression <= self.policy.head_regression_tolerance {
                     tracing::debug!(group=%self.id, member=%self.members.get(index).map(|m|m.id.as_str()).unwrap_or("unknown"), probe=tag, previous_height=previous.number, height=head.number, regression, tolerance=self.policy.head_regression_tolerance, "tolerating small RPC head regression for pinned read");
-                    // Keep the accepted watermark as the member's reported head. Price readers
-                    // pin below the A/B minimum and re-read that explicit block, so a short
-                    // load-balanced backend lag cannot quarantine this read-only member.
+                    // Keep the accepted watermark, but memoize only the height this member
+                    // actually reported. A different member's higher watermark is no evidence
+                    // that this member can serve that block.
+                    self.remember_validated(index, head.number);
                     return Ok((previous.clone(), value));
                 }
                 tracing::warn!(group=%self.id, member=%self.members.get(index).map(|m|m.id.as_str()).unwrap_or("unknown"), probe=tag, previous_height=previous.number, height=head.number, class="stale", "RPC head regressed");
@@ -1140,6 +1190,7 @@ impl RpcGroup {
                 .accept(self.chain, &self.id, tag, &member.id, &head)
                 .await?;
         }
+        self.remember_validated(index, head.number);
         heads.insert(tag.to_owned(), head.clone());
         metrics::event(self, index, metrics::EventKind::HeadPerformed, 1);
         Ok((head, value))
@@ -1288,6 +1339,30 @@ impl Policy<Operation, Value, Failure> for RetryPolicy {
         Some(request.clone())
     }
 }
+/// Only numeric block selectors establish the floor for a memoized member head.
+fn explicit_block(method: &str, request: &Value) -> Option<u64> {
+    let block = match method {
+        "eth_call" | "eth_getCode" | "eth_getTransactionCount" | "eth_getBalance" => {
+            let block = request.get("params")?.get(1)?;
+            if block.is_object() {
+                if block.get("blockHash").is_some() {
+                    return None;
+                }
+                block.get("blockNumber")?
+            } else {
+                block
+            }
+        }
+        "eth_getBlockByNumber" => request.get("params")?.get(0)?,
+        _ => return None,
+    };
+    let digits = block.as_str()?.strip_prefix("0x")?;
+    if digits.is_empty() || !digits.bytes().all(|digit| digit.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(digits, 16).ok()
+}
+
 #[derive(Clone)]
 struct Attempt(Arc<RpcGroup>);
 impl Service<Operation> for Attempt {
@@ -1334,16 +1409,27 @@ impl Service<Operation> for Attempt {
             } else {
                 async {
                     if method != "eth_chainId" {
-                        let head = group.head(index, "latest", request.deadline).await?;
-                        let needed = request
-                            .value
-                            .get("params")
-                            .and_then(|p| p.get(1))
-                            .and_then(Value::as_str)
-                            .and_then(|s| s.strip_prefix("0x"))
-                            .and_then(|s| u64::from_str_radix(s, 16).ok());
-                        if needed.is_some_and(|n| n > head.number) {
-                            return Err(Failure::Stale);
+                        if explicit_block(method, &request.value)
+                            .is_some_and(|number| group.validated_at_least(index, number))
+                        {
+                            // This member already reported and accepted a head covering the
+                            // explicit block: its watermark and needed-height checks are met.
+                            // Explicit heads still check canonicality/reorgs and persist heads
+                            // in scanner loops and pricing's agreed_block. A/B hash confirmation
+                            // is unchanged, and send_once still checks the durable frozen gate.
+                            metrics::event(&group, index, metrics::EventKind::HeadSkipped, 1);
+                        } else {
+                            let head = group.head(index, "latest", request.deadline).await?;
+                            let needed = request
+                                .value
+                                .get("params")
+                                .and_then(|p| p.get(1))
+                                .and_then(Value::as_str)
+                                .and_then(|s| s.strip_prefix("0x"))
+                                .and_then(|s| u64::from_str_radix(s, 16).ok());
+                            if needed.is_some_and(|n| n > head.number) {
+                                return Err(Failure::Stale);
+                            }
                         }
                     }
                     if method == "eth_getLogs" {
