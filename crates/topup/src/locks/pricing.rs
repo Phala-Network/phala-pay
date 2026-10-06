@@ -1586,6 +1586,112 @@ mod tests {
         assert_ne!(a.primary[0].descriptor, b.primary[0].descriptor);
     }
     #[tokio::test]
+    async fn different_adapter_identities_do_not_share_sources() {
+        let now = validation_time().unwrap().value();
+        let a_rpc =
+            topup_adapters::pricing::test_rpc::chainlink("a", 100_000_000, 20, 20, now, false)
+                .await;
+        let b_rpc =
+            topup_adapters::pricing::test_rpc::chainlink("b", 100_000_000, 20, 20, now, false)
+                .await;
+        let c_rpc =
+            topup_adapters::pricing::test_rpc::chainlink("c", 100_000_000, 20, 20, now, false)
+                .await;
+        let clients = BTreeMap::from([
+            ("a".into(), a_rpc.client.clone()),
+            ("b".into(), b_rpc.client.clone()),
+            ("c".into(), c_rpc.client.clone()),
+        ]);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/shared-pricing")
+            .unwrap();
+        for case in ["policy", "group_a", "group_b", "swapped"] {
+            let [a, mut b] = pha_routes();
+            if let Source::UniswapV2Twap {
+                rpc_group,
+                rpc_group_b,
+                twap,
+                ..
+            } = &mut b.pricing.primary[0]
+            {
+                match case {
+                    "policy" => twap.window_s = 3600,
+                    "group_a" => *rpc_group = "c".into(),
+                    "group_b" => *rpc_group_b = "c".into(),
+                    _ => std::mem::swap(rpc_group, rpc_group_b),
+                }
+            }
+            if case != "policy"
+                && let Source::Chainlink {
+                    rpc_group,
+                    rpc_group_b,
+                    ..
+                } = &mut b.pricing.fx[0]
+            {
+                match case {
+                    "group_a" => *rpc_group = "c".into(),
+                    "group_b" => *rpc_group_b = Some("c".into()),
+                    _ => {
+                        *rpc_group = "b".into();
+                        *rpc_group_b = Some("a".into());
+                    }
+                }
+            }
+            let routes =
+                RouteSet::with_groups(vec![a.clone(), b.clone()], clients.clone()).unwrap();
+            let runtimes = PricingRuntime::build_all(&routes, pool.clone()).unwrap();
+            let a = &runtimes[&(a.route.clone(), a.version)];
+            let b = &runtimes[&(b.route.clone(), b.version)];
+            assert!(
+                !Arc::ptr_eq(&a.primary[0].source, &b.primary[0].source),
+                "{case}"
+            );
+            if case != "policy" {
+                assert!(!Arc::ptr_eq(&a.fx[0].source, &b.fx[0].source), "{case}");
+            }
+        }
+        let mut a = route();
+        a.chain.chain_id = 1;
+        a.chain.rpc_providers = vec!["a".into(), "b".into()];
+        a.asset.symbol = "usdt".into();
+        a.pricing.mode = PricingMode::Stablecoin;
+        a.pricing.primary.clear();
+        a.pricing.check.clear();
+        a.pricing.fx.clear();
+        a.pricing.sources = ["USDC_USD", "USDT_USD"]
+            .map(|name| Source::Chainlink {
+                feed: name.into(),
+                chain_id: 1,
+                rpc_group: "a".into(),
+                rpc_group_b: Some("b".into()),
+                observation_chain_id: None,
+            })
+            .to_vec();
+        let mut b = a.clone();
+        b.version += 1;
+        if let Source::Chainlink {
+            chain_id,
+            observation_chain_id,
+            ..
+        } = &mut b.pricing.sources[1]
+        {
+            *chain_id = 8453;
+            *observation_chain_id = Some(1);
+        }
+        let routes = RouteSet::with_groups(vec![a.clone(), b.clone()], clients).unwrap();
+        let runtimes = PricingRuntime::build_all(&routes, pool).unwrap();
+        let a = &runtimes[&(a.route.clone(), a.version)];
+        let b = &runtimes[&(b.route.clone(), b.version)];
+        assert!(
+            !Arc::ptr_eq(&a.sources[0].source, &a.sources[1].source),
+            "different feed"
+        );
+        assert!(
+            !Arc::ptr_eq(&a.sources[1].source, &b.sources[1].source),
+            "different feed chain"
+        );
+    }
+    #[tokio::test]
     async fn sequencer_aliases_do_not_share_clients_across_chains() {
         let [mut a, mut b] = pha_routes();
         a.chain.chain_id = 8453;
