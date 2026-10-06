@@ -16,14 +16,15 @@ import secrets
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass, field
 from functools import partial
 from http import HTTPStatus
 from itertools import islice
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import anyio
 import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from granian import Granian
@@ -77,6 +78,12 @@ ACCOUNT_REF = re.compile(r"[A-Za-z0-9._-]{1,64}")
 RESTORE_RECORDS = "restore-records"
 
 
+@dataclass
+class _PendingResponse:
+    done: anyio.Event = field(default_factory=anyio.Event)
+    response: HttpResponse | None = None
+
+
 class ProductServer:
     """Serves `POST /webhooks`, `GET /healthz`, and, given an `AccountApi`, `/accounts`, and,
     given a `DemoConsole`, the demo's API for the website: `/api/`. It serves no web page."""
@@ -92,15 +99,13 @@ class ProductServer:
         self.demo = demo
         config = fulfillment.config
         base_path = urlsplit(config.public_url).path.rstrip("/")
-        self._workers = ThreadPoolExecutor(max_workers=16, thread_name_prefix="product")
-        # Keep timed-out synchronous work admitted until it actually finishes. A client timeout
-        # cannot stop a Python thread or undo a mutation, and must not admit unlimited new work.
-        self._capacity = threading.BoundedSemaphore(16)
-        self._webhook_workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="webhook")
-        self._webhook_capacity = threading.BoundedSemaphore(4)
+        self._capacity = anyio.CapacityLimiter(16)
+        self._webhook_capacity = anyio.CapacityLimiter(4)
+        self._admission = anyio.Lock()
+        self._requests: anyio.abc.TaskGroup | None = None
 
         def dispatch(
-            method: str, target: str, headers: dict[str, str], body: bytes
+            method: str, target: str, headers: dict[str, str], body: bytes, webhook: bool
         ) -> HttpResponse:
             timeout = (
                 DEMO_TIMEOUT_SECONDS
@@ -108,7 +113,7 @@ class ProductServer:
                 else OPERATION_TIMEOUT_SECONDS
             )
             operation_deadline.set(time.monotonic() + timeout)
-            if method == "POST" and urlsplit(target).path == base_path + "/webhooks":
+            if webhook:
                 answer = self.fulfillment.handle(headers, body)
             elif method == "GET" and urlsplit(target).path == base_path + "/healthz":
                 answer = Answer(HTTPStatus.OK, {"status": "ok"})
@@ -129,9 +134,41 @@ class ProductServer:
             headers = self.demo.cors(request.headers.get("origin")) if self.demo is not None else {}
             return JSONResponse({"code": status.name.lower()}, status_code=status, headers=headers)
 
-        async def endpoint(request: Request) -> HttpResponse:
+        async def run_handler(
+            request: Request,
+            target: str,
+            body: bytes,
+            webhook: bool,
+            pending: _PendingResponse,
+            *,
+            task_status: anyio.abc.TaskStatus[None] = anyio.TASK_STATUS_IGNORED,
+        ) -> None:
+            started = anyio.Event()
+
+            def handle() -> HttpResponse:
+                # Acknowledge admission only after run_sync holds the selected limiter.
+                anyio.from_thread.run_sync(started.set)
+                return dispatch(request.method, target, dict(request.headers), body, webhook)
+
+            async def execute() -> None:
+                try:
+                    limiter = self._webhook_capacity if webhook else self._capacity
+                    pending.response = await anyio.to_thread.run_sync(handle, limiter=limiter)
+                except Exception:
+                    LOG.exception("product request failed")
+                    pending.response = error(request, HTTPStatus.INTERNAL_SERVER_ERROR)
+                finally:
+                    started.set()
+                    pending.done.set()
+
+            async with anyio.create_task_group() as worker:
+                worker.start_soon(execute)
+                await started.wait()
+                task_status.started()
+
+        async def endpoint(request: Request, *, webhook: bool = False) -> HttpResponse:
             try:
-                async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+                with anyio.fail_after(REQUEST_TIMEOUT_SECONDS):
                     # The HTTP/1 parser rejects malformed wire framing. Also validate ASGI requests,
                     # and bound streamed/chunked bodies regardless of Content-Length.
                     lengths = request.headers.getlist("content-length")
@@ -153,27 +190,21 @@ class ProductServer:
                     target = request.scope["raw_path"].decode("ascii")
                     if request.url.query:
                         target += "?" + request.url.query
-                    webhook = (
-                        request.method == "POST"
-                        and urlsplit(target).path == base_path + "/webhooks"
-                    )
                     capacity = self._webhook_capacity if webhook else self._capacity
-                    workers = self._webhook_workers if webhook else self._workers
-                    if not capacity.acquire(blocking=False):
-                        return error(request, HTTPStatus.SERVICE_UNAVAILABLE)
-                    try:
-                        future = workers.submit(
-                            dispatch,
-                            request.method,
-                            target,
-                            dict(request.headers),
-                            bytes(body),
+                    pending = _PendingResponse()
+                    async with self._admission:
+                        if capacity.available_tokens == 0:
+                            return error(request, HTTPStatus.SERVICE_UNAVAILABLE)
+                        if self._requests is None:
+                            raise RuntimeError("product server lifespan is not running")
+                        await self._requests.start(
+                            run_handler, request, target, bytes(body), webhook, pending
                         )
-                    except RuntimeError:
-                        capacity.release()
-                        raise
-                    future.add_done_callback(lambda _: capacity.release())
-                    return await asyncio.wrap_future(future)
+                    # The lifespan owns the worker. Cancelling this wait cannot release its
+                    # limiter token or cancel a mutation; shutdown drains the task group.
+                    await pending.done.wait()
+                    assert pending.response is not None
+                    return pending.response
             except TimeoutError:
                 return error(request, HTTPStatus.REQUEST_TIMEOUT)
             except ClientDisconnect:
@@ -182,21 +213,34 @@ class ProductServer:
                 LOG.exception("product request failed")
                 return error(request, HTTPStatus.INTERNAL_SERVER_ERROR)
 
+        async def webhook_endpoint(request: Request) -> HttpResponse:
+            # Starlette matches decoded paths; keep the previous raw-path HTTP contract.
+            webhook = request.method == "POST" and request.scope["raw_path"] == (
+                base_path + "/webhooks"
+            ).encode("ascii")
+            return await endpoint(request, webhook=webhook)
+
         self._ready = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
 
         @asynccontextmanager
         async def lifespan(_: Starlette) -> AsyncIterator[None]:
-            self._ready.set()
             try:
-                yield
+                async with anyio.create_task_group() as requests:
+                    self._requests = requests
+                    self._ready.set()
+                    yield
             finally:
-                # Drain actual work, not merely cancelled asyncio wrappers. The production
-                # supervisor kills the worker at 35s if noncooperative sync code cannot drain.
-                await asyncio.to_thread(self.close)
+                self._requests = None
+                await anyio.to_thread.run_sync(self.close)
 
         self.app = Starlette(
-            routes=[Route("/{path:path}", endpoint, methods=["GET", "POST", "OPTIONS"])],
+            routes=[
+                Route(
+                    base_path + "/webhooks", webhook_endpoint, methods=["GET", "POST", "OPTIONS"]
+                ),
+                Route("/{path:path}", endpoint, methods=["GET", "POST", "OPTIONS"]),
+            ],
             lifespan=lifespan,
         )
         self._server = EmbeddedServer(
@@ -225,8 +269,6 @@ class ProductServer:
         return self
 
     def close(self) -> None:
-        self._workers.shutdown(wait=True, cancel_futures=True)
-        self._webhook_workers.shutdown(wait=True, cancel_futures=True)
         if self.accounts is not None:
             self.accounts.close()
         if self.demo is not None:

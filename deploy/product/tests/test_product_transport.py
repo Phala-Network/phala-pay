@@ -112,16 +112,21 @@ def test_timed_out_workers_remain_bounded(
     product: ProductServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(transport, "REQUEST_TIMEOUT_SECONDS", 0.02)
-    product._webhook_capacity = threading.BoundedSemaphore(1)
     done = threading.Event()
-    cast(Mock, product.fulfillment.handle).side_effect = lambda *_: (done.wait(2), Answer(200))[1]
-    try:
-        with TestClient(product.app) as client:
-            assert client.post("/topup/webhooks", content=b"{}").status_code == 408
+
+    def handle(*_: object) -> Answer:
+        assert done.wait(5)
+        return Answer(200)
+
+    cast(Mock, product.fulfillment.handle).side_effect = handle
+    with TestClient(product.app) as client:
+        try:
+            for _ in range(4):
+                assert client.post("/topup/webhooks", content=b"{}").status_code == 408
             assert client.post("/topup/webhooks", content=b"{}").status_code == 503
-            assert cast(Mock, product.fulfillment.handle).call_count == 1
-    finally:
-        done.set()
+            assert cast(Mock, product.fulfillment.handle).call_count == 4
+        finally:
+            done.set()
 
 
 @pytest.mark.parametrize("length", ["-1", "invalid"])
@@ -236,6 +241,7 @@ def test_shutdown_drains_trickling_sync_network_work(
     monkeypatch.setattr(transport, "OPERATION_TIMEOUT_SECONDS", 0.4)
     entered = threading.Event()
     disconnected = threading.Event()
+    completed = threading.Event()
 
     class Upstream(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -259,9 +265,12 @@ def test_shutdown_drains_trickling_sync_network_work(
     upstream_thread.start()
 
     def handle(*_: object) -> Answer:
-        with httpx.Client(transport=DeadlineTransport(), timeout=5) as client:
-            client.get(f"http://127.0.0.1:{upstream.server_port}/")
-        return Answer(200)
+        try:
+            with httpx.Client(transport=DeadlineTransport(), timeout=5) as client:
+                client.get(f"http://127.0.0.1:{upstream.server_port}/")
+            return Answer(200)
+        finally:
+            completed.set()
 
     cast(Mock, product.fulfillment.handle).side_effect = handle
     try:
@@ -277,7 +286,7 @@ def test_shutdown_drains_trickling_sync_network_work(
             product.__exit__()
             assert time.monotonic() - started < 2
             assert disconnected.wait(2)
-            assert all(not thread.is_alive() for thread in product._workers._threads)
+            assert completed.is_set()
     finally:
         product.__exit__()
         upstream.shutdown()
@@ -480,19 +489,29 @@ def test_pooled_transport_keeps_concurrent_callers_deadlines_independent(
 
 
 def test_webhooks_have_reserved_workers_and_slots(product: ProductServer) -> None:
-    done = threading.Event()
-    for _ in range(16):
-        assert product._capacity.acquire(blocking=False)
-        product._workers.submit(done.wait, 5)
-    try:
-        with TestClient(product.app) as client:
+    demo = Mock(spec=DemoConsole)
+    demo.handles.side_effect = lambda target: target.startswith("/topup/api/")
+    demo.cors.return_value = {}
+    started = threading.Barrier(17)
+    release = threading.Event()
+
+    def handle(*_: object) -> DemoResponse:
+        started.wait(timeout=5)
+        assert release.wait(5)
+        return DemoResponse(HTTPStatus.OK, b"{}")
+
+    demo.handle.side_effect = handle
+    product.demo = cast(DemoConsole, demo)
+    with TestClient(product.app) as client, ThreadPoolExecutor(max_workers=16) as workers:
+        futures = [workers.submit(client.get, "/topup/api/assets") for _ in range(16)]
+        try:
+            started.wait(timeout=5)
             assert client.get("/topup/healthz").status_code == 503
             assert client.post("/topup/webhooks", content=b"{}").status_code == 200
-        cast(Mock, product.fulfillment.handle).assert_called_once()
-    finally:
-        done.set()
-        for _ in range(16):
-            product._capacity.release()
+            cast(Mock, product.fulfillment.handle).assert_called_once()
+        finally:
+            release.set()
+        assert [future.result(timeout=5).status_code for future in futures] == [200] * 16
 
 
 def test_demo_gets_have_eight_second_operation_deadlines(product: ProductServer) -> None:
@@ -516,13 +535,24 @@ def test_demo_gets_have_eight_second_operation_deadlines(product: ProductServer)
 
 
 def test_worker_selection_uses_the_dispatchers_raw_path(product: ProductServer) -> None:
-    for _ in range(4):
-        assert product._webhook_capacity.acquire(blocking=False)
-    try:
-        with TestClient(product.app) as client:
+    started = threading.Barrier(5)
+    release = threading.Event()
+
+    def handle(*_: object) -> Answer:
+        started.wait(timeout=5)
+        assert release.wait(5)
+        return Answer(200)
+
+    cast(Mock, product.fulfillment.handle).side_effect = handle
+    with TestClient(product.app) as client, ThreadPoolExecutor(max_workers=4) as workers:
+        futures = [workers.submit(client.post, "/topup/webhooks", content=b"{}") for _ in range(4)]
+        try:
+            started.wait(timeout=5)
             assert client.post("/topup/%77ebhooks", content=b"{}").status_code == 404
             assert client.post("/topup/webhooks", content=b"{}").status_code == 503
-        cast(Mock, product.fulfillment.handle).assert_not_called()
-    finally:
-        for _ in range(4):
-            product._webhook_capacity.release()
+            assert client.get("/topup/webhooks").status_code == 404
+            assert client.options("/topup/webhooks").status_code == 404
+            assert cast(Mock, product.fulfillment.handle).call_count == 4
+        finally:
+            release.set()
+        assert [future.result(timeout=5).status_code for future in futures] == [200] * 4
