@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS orders (
 -- Phala Cloud's partial unique index; the key is also looked up across teams before insert.
 CREATE UNIQUE INDEX IF NOT EXISTS orders_crypto_topup_provider_order
     ON orders (team_id, provider_order_id) WHERE order_flow_code = 'crypto-top-up';
+CREATE INDEX IF NOT EXISTS orders_flow_provider_order
+    ON orders (order_flow_code, provider_order_id);
+CREATE INDEX IF NOT EXISTS orders_team ON orders (team_id);
 CREATE TABLE IF NOT EXISTS credit_transactions (
     id TEXT PRIMARY KEY,
     team_id TEXT NOT NULL REFERENCES teams (id),
@@ -73,6 +76,10 @@ CREATE TABLE IF NOT EXISTS bonus_credits (
     reason TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE INDEX IF NOT EXISTS credit_adjustments_order ON credit_adjustments (order_id);
+CREATE INDEX IF NOT EXISTS credit_adjustments_team ON credit_adjustments (team_id);
+CREATE INDEX IF NOT EXISTS bonus_credits_order ON bonus_credits (order_id);
+CREATE INDEX IF NOT EXISTS bonus_credits_team ON bonus_credits (team_id);
 -- The webhook inbox: every verified delivery once, by its `webhook-id` (the event's `evt_` id),
 -- committed with its ledger effect. `data` is the event's parsed `data`, for the product's own
 -- reads; `body` and the three Standard Webhooks headers are the delivery exactly as received, the
@@ -85,6 +92,11 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     body BLOB NOT NULL,
     webhook_timestamp TEXT NOT NULL,
     webhook_signature TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS event_refs (
+    ref TEXT NOT NULL,
+    event_id TEXT NOT NULL REFERENCES webhook_events (id),
+    PRIMARY KEY (ref, event_id)
 );
 -- Each quote and deposit address the product created, as the service returned it, its
 -- `client_secret` included: the merchant's records a service restore re-issues them from
@@ -213,8 +225,18 @@ class ProductLedger:
         """Creates the tables the ledger lacks, in one transaction."""
         db = self._connection
         try:
-            db.executescript("BEGIN IMMEDIATE;" + SCHEMA + "COMMIT;")
-        except sqlite3.Error:
+            backfill = (
+                db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'event_refs'"
+                ).fetchone()
+                is None
+            )
+            db.executescript("BEGIN IMMEDIATE;" + SCHEMA)
+            if backfill:
+                for event_id, data in db.execute("SELECT id, data FROM webhook_events"):
+                    self._record_event_refs(db, event_id, json.loads(data))
+            db.execute("COMMIT")
+        except BaseException:
             if db.in_transaction:
                 db.execute("ROLLBACK")
             raise
@@ -414,7 +436,40 @@ class ProductLedger:
                 delivery.webhook_signature,
             ),
         )
+        self._record_event_refs(db, delivery.webhook_id, data)
         self.events_changed.notify_all()
+
+    @staticmethod
+    def _record_event_refs(db: sqlite3.Connection, event_id: str, data: object) -> None:
+        if not isinstance(data, Mapping):
+            return
+        inner = data.get("object")
+        sources = [data, inner] if isinstance(inner, dict) else [data]
+        refs = {
+            value
+            for source in sources
+            for key in ("deposit_id", "id", "quote", "deposit", "client_reference_id")
+            if isinstance(value := source.get(key), str)
+        }
+        db.executemany(
+            "INSERT OR IGNORE INTO event_refs (ref, event_id) VALUES (?, ?)",
+            [(ref, event_id) for ref in refs],
+        )
+
+    @staticmethod
+    def event_rows(db: sqlite3.Connection, refs: set[str]) -> list[Any]:
+        return db.execute(
+            "SELECT id, type, data, received_at FROM webhook_events "
+            "WHERE id IN (SELECT event_id FROM event_refs "
+            "WHERE ref IN (SELECT value FROM json_each(?))) ORDER BY received_at",
+            (json.dumps(sorted(refs)),),
+        ).fetchall()
+
+    def events_for(self, refs: set[str]) -> list[dict[str, Any]]:
+        """Stored events naming these object ids or workspace references, oldest first."""
+        with self._lock:
+            rows = self.event_rows(self._connection, refs)
+        return [{"type": row[1], "data": json.loads(row[2])} for row in rows]
 
     def deliveries(self, event_types: Sequence[str]) -> list[tuple[Delivery, float]]:
         """The inbox's deliveries of `event_types` with their raw evidence and when each was

@@ -6,19 +6,24 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import threading
 import time
 import uuid
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from reference_product import server
 from reference_product.__main__ import write_records
 from reference_product.config import (
     DRIVER_KEYID,
@@ -27,12 +32,19 @@ from reference_product.config import (
     MissingProductKeyError,
     ProductConfig,
 )
-from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys
-from reference_product.ledger import Delivery, ProductLedger
+from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys, TransientError
+from reference_product.ledger import SCHEMA, Delivery, ProductLedger
 from reference_product.restore_records import export_restore_records
-from reference_product.server import AccountApi, ProductServer, _make_product, pin_webhook_keys
+from reference_product.server import (
+    AccountApi,
+    ProductServer,
+    WebhookKeys,
+    _make_product,
+    pin_webhook_keys,
+)
 from topup_sdk import (
     RequestSigner,
+    TopupClient,
     credited_event_id,
     load_public_key,
     sign_webhook,
@@ -546,7 +558,10 @@ def test_account_api_requires_the_driver_key_and_valid_refs(
 
 def test_the_account_view_lists_the_workspaces_quote_events() -> None:
     class Service:
-        def list_deposits(self, *, client_reference_id: str) -> list[SimpleNamespace]:
+        def list_deposits(
+            self, *, client_reference_id: str, page_size: int
+        ) -> list[SimpleNamespace]:
+            assert page_size == 100
             return []
 
     fulfillment = _fulfillment()
@@ -915,3 +930,238 @@ def test_restore_records_over_asgi_preserves_signed_query_and_payload() -> None:
             assert client.get(target).status_code == 401
     finally:
         product.close()
+
+
+def test_event_references_upgrade_once_and_deduplicate_matches(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    data = {"object": {"id": "dep_test", "quote": "qt_test", "client_reference_id": TEAM}}
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA)
+        db.execute("DROP TABLE event_refs")
+        db.execute(
+            "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("evt_test", "deposit.credited", json.dumps(data), 1, b"{}", "1", "signature"),
+        )
+    for _ in range(2):
+        ledger = ProductLedger(str(path))
+        try:
+            assert ledger.events_for({"dep_test", "qt_test", TEAM}) == [
+                {"type": "deposit.credited", "data": data}
+            ]
+            assert ledger.events_for({"other-team"}) == []
+            with ledger.transaction() as db:
+                assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 3
+        finally:
+            ledger._connection.close()
+
+
+def test_event_references_commit_with_the_delivery() -> None:
+    ledger = ProductLedger()
+    delivery = Delivery("evt_test", "1", "signature", b"{}")
+    data = {"id": "re_test", "deposit": "dep_test"}
+
+    def record_and_fail() -> None:
+        with ledger.transaction() as db:
+            ledger.record_delivery(db, delivery, "refund.created", data)
+            raise RuntimeError("rollback")
+
+    with pytest.raises(RuntimeError, match="rollback"):
+        record_and_fail()
+    assert ledger.events_for({"re_test"}) == []
+    with ledger.transaction() as db:
+        ledger.record_delivery(db, delivery, "refund.created", data)
+    assert ledger.events_for({"re_test", "dep_test"}) == [{"type": "refund.created", "data": data}]
+
+
+def test_account_view_bounds_deposits_and_avoids_global_event_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Service:
+        def list_deposits(
+            self, *, client_reference_id: str, page_size: int
+        ) -> Iterator[SimpleNamespace]:
+            assert client_reference_id == TEAM
+            assert page_size == 100
+            for index in range(100):
+                yield SimpleNamespace(id=f"dep_{index}", to_dict=lambda: {"object": "deposit"})
+            raise AssertionError("read beyond the newest 100 deposits")
+
+    fulfillment = _fulfillment()
+    for team in (TEAM, "team-2"):
+        assert (
+            fulfillment.handle(
+                *_delivery("quote.expired", {"id": f"qt_{team}", "client_reference_id": team})
+            ).status
+            == 204
+        )
+    api = AccountApi(CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()))
+    api._client = Service()  # type: ignore[assignment]
+
+    def global_events() -> list[dict[str, Any]]:
+        raise AssertionError("account view must query references")
+
+    monkeypatch.setattr(fulfillment.ledger, "all_events", global_events)
+    view = api._account_view(TEAM)
+    assert len(view["deposits"]) == 100
+    assert [event["data"]["object"]["id"] for event in view["events"]] == [f"qt_{TEAM}"]
+
+
+def test_webhook_key_fetch_failures_are_negative_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    calls: list[float] = []
+    failing = [True]
+    pinned = PinnedKeys(False, [SERVICE_KEY.public_key()])
+
+    def pin(config: ProductConfig, *, wait_s: float = 0) -> PinnedKeys:
+        calls.append(wait_s)
+        if failing[0]:
+            raise TransientError("attestation unavailable")
+        return pinned
+
+    monkeypatch.setattr(server, "pin_webhook_keys", pin)
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    keys = WebhookKeys(CONFIG)
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        futures = [workers.submit(keys) for _ in range(4)]
+        for future in futures:
+            with pytest.raises(TransientError):
+                future.result()
+    assert len(calls) == 1
+    now[0] += 29
+    with pytest.raises(TransientError):
+        keys()
+    assert len(calls) == 1
+    now[0] += 2
+    failing[0] = False
+    assert keys() is pinned
+    assert keys() is pinned
+    assert len(calls) == 2
+
+
+def test_event_reference_backfill_tolerates_non_object_data(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA)
+        db.execute("DROP TABLE event_refs")
+        values: tuple[Any, ...] = (None, [], "text", 1)
+        for index, value in enumerate(values):
+            db.execute(
+                "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (f"evt_{index}", "test", json.dumps(value), 1, b"{}", "1", "signature"),
+            )
+    ledger = ProductLedger(str(path))
+    try:
+        with ledger.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 0
+            assert db.execute("SELECT COUNT(*) FROM webhook_events").fetchone()[0] == 4
+    finally:
+        ledger._connection.close()
+
+
+def test_event_reference_backfill_rolls_back_non_sql_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA)
+        db.execute("DROP TABLE event_refs")
+        db.execute(
+            "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("evt_test", "test", "invalid JSON", 1, b"{}", "1", "signature"),
+        )
+    connect = sqlite3.connect
+    connections: list[sqlite3.Connection] = []
+
+    def capture(database: str, **kwargs: Any) -> sqlite3.Connection:
+        connection: sqlite3.Connection = connect(database, **kwargs)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", capture)
+    with pytest.raises(json.JSONDecodeError):
+        ProductLedger(str(path))
+    [connection] = connections
+    try:
+        assert not connection.in_transaction
+        assert (
+            connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'event_refs'").fetchone()
+            is None
+        )
+    finally:
+        connection.close()
+
+
+def test_concurrent_event_reference_backfills_are_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "ledger.sqlite"
+    data = {"id": "dep_test", "client_reference_id": TEAM}
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA)
+        db.execute("DROP TABLE event_refs")
+        db.execute(
+            "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("evt_test", "test", json.dumps(data), 1, b"{}", "1", "signature"),
+        )
+    barrier = threading.Barrier(2)
+    connect = sqlite3.connect
+
+    class RacingConnection(sqlite3.Connection):
+        def execute(self, sql: str, parameters: Any = (), /) -> sqlite3.Cursor:
+            cursor = super().execute(sql, parameters)
+            if sql.startswith("SELECT 1 FROM sqlite_master WHERE type = 'table'"):
+                barrier.wait(timeout=3)
+            return cursor
+
+    def race(database: str, **kwargs: Any) -> sqlite3.Connection:
+        return connect(database, factory=RacingConnection, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", race)
+    ledgers: list[ProductLedger] = []
+    try:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            futures = [workers.submit(ProductLedger, str(path)) for _ in range(2)]
+            for future in futures:
+                ledgers.append(future.result(timeout=5))
+        for ledger in ledgers:
+            assert ledger.events_for({TEAM}) == [{"type": "test", "data": data}]
+            with ledger.transaction() as db:
+                assert db.execute("SELECT COUNT(*) FROM event_refs").fetchone()[0] == 2
+    finally:
+        for ledger in ledgers:
+            ledger._connection.close()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "network", "malformed"])
+def test_account_api_isolates_sdk_service_failures(
+    failure: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    fulfillment = _fulfillment()
+    api = AccountApi(CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()))
+
+    def service(request: httpx.Request) -> httpx.Response:
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private service detail", request=request)
+        if failure == "network":
+            raise httpx.ConnectError("private service detail", request=request)
+        return httpx.Response(200, json={"private service detail": "invalid list"})
+
+    api._client = TopupClient(
+        "https://service.test",
+        "ppay_rk_test_" + "A" * 43 + "000000",
+        account=CONFIG.account,
+        transport=httpx.MockTransport(service),
+        max_attempts=1,
+    )
+    try:
+        answer = _account_call(api, "GET", f"/accounts/{TEAM}", b"")
+        assert answer.status == (502 if failure == "malformed" else 503)
+        assert answer.body == {"code": "bad_gateway" if failure == "malformed" else "unavailable"}
+        assert "account API" in caplog.text
+        assert "private service detail" not in caplog.text
+    finally:
+        api.close()

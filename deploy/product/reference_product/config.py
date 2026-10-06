@@ -225,7 +225,7 @@ class ProductConfig:
         """The mode of the product's API key, and so of its webhooks."""
         return self.api_key().startswith(("ppay_sk_live_", "ppay_rk_live_"))
 
-    def client(self) -> TopupClient:
+    def client(self, *, transport: DeadlineTransport | None = None) -> TopupClient:
         # Every open quote's and active deposit address's address is recomputed from the pins
         # before it is used; a mismatch raises, as does a chain without a treasury pin.
         return TopupClient(
@@ -236,5 +236,5 @@ class ProductConfig:
             treasuries=self.treasuries(),
             timeout=5,
             max_attempts=1,
-            transport=DeadlineTransport(),
+            transport=transport if transport is not None else DeadlineTransport(),
         )

@@ -13,7 +13,9 @@ import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, suppress
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +30,8 @@ from starlette.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reference_product import server as transport
+from reference_product.demo import DemoConsole
+from reference_product.demo import Response as DemoResponse
 from reference_product.fulfillment import Answer
 from reference_product.server import MAX_BODY_BYTES, ProductServer
 from reference_product.transport import DeadlineTransport, operation_deadline
@@ -47,7 +51,7 @@ def product() -> Iterator[ProductServer]:
     try:
         yield product
     finally:
-        product._workers.shutdown(wait=True, cancel_futures=True)
+        product.close()
 
 
 @pytest.mark.parametrize("length", ["-1", "invalid", "1.5", "+2", "9" * 5000])
@@ -108,7 +112,7 @@ def test_timed_out_workers_remain_bounded(
     product: ProductServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(transport, "REQUEST_TIMEOUT_SECONDS", 0.02)
-    product._capacity = threading.BoundedSemaphore(1)
+    product._webhook_capacity = threading.BoundedSemaphore(1)
     done = threading.Event()
     cast(Mock, product.fulfillment.handle).side_effect = lambda *_: (done.wait(2), Answer(200))[1]
     try:
@@ -382,3 +386,142 @@ def test_outbound_calls_share_total_budget_and_preserve_compressed_body(
         assert calls[0].url.query == b"key=value"
     finally:
         operation_deadline.reset(token)
+
+
+def test_outbound_calls_reuse_one_connection() -> None:
+    connections: set[tuple[str, int]] = set()
+
+    class Upstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self) -> None:
+            connections.add(self.client_address)
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *_: object) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    thread = threading.Thread(target=upstream.serve_forever)
+    thread.start()
+    transport = DeadlineTransport()
+    try:
+        with httpx.Client(transport=transport) as client:
+            for path in ("first", "second"):
+                assert client.get(f"http://127.0.0.1:{upstream.server_port}/{path}").text == "ok"
+        assert len(connections) == 1
+        assert not transport._thread.is_alive()
+        transport.close()
+    finally:
+        transport.close()
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join()
+
+
+def test_expired_outbound_deadline_never_calls_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    async_client = httpx.AsyncClient
+    calls: list[httpx.Request] = []
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200)
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: async_client(transport=httpx.MockTransport(upstream), **kw),
+    )
+    token = operation_deadline.set(time.monotonic() - 1)
+    try:
+        with (
+            httpx.Client(transport=DeadlineTransport()) as client,
+            pytest.raises(httpx.TimeoutException, match="operation deadline"),
+        ):
+            client.get("http://test/")
+        assert not calls
+    finally:
+        operation_deadline.reset(token)
+
+
+def test_pooled_transport_keeps_concurrent_callers_deadlines_independent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async_client = httpx.AsyncClient
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.1)
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: async_client(transport=httpx.MockTransport(upstream), **kw),
+    )
+    with httpx.Client(transport=DeadlineTransport()) as client:
+
+        def call(timeout: float) -> str:
+            token = operation_deadline.set(time.monotonic() + timeout)
+            try:
+                return client.get("http://test/").text
+            finally:
+                operation_deadline.reset(token)
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            short = workers.submit(call, 0.02)
+            long = workers.submit(call, 2)
+            with pytest.raises(httpx.TimeoutException, match="operation deadline"):
+                short.result(timeout=2)
+            assert long.result(timeout=2) == "ok"
+
+
+def test_webhooks_have_reserved_workers_and_slots(product: ProductServer) -> None:
+    done = threading.Event()
+    for _ in range(16):
+        assert product._capacity.acquire(blocking=False)
+        product._workers.submit(done.wait, 5)
+    try:
+        with TestClient(product.app) as client:
+            assert client.get("/topup/healthz").status_code == 503
+            assert client.post("/topup/webhooks", content=b"{}").status_code == 200
+        cast(Mock, product.fulfillment.handle).assert_called_once()
+    finally:
+        done.set()
+        for _ in range(16):
+            product._capacity.release()
+
+
+def test_demo_gets_have_eight_second_operation_deadlines(product: ProductServer) -> None:
+    demo = Mock(spec=DemoConsole)
+    demo.handles.return_value = True
+    remaining: list[float] = []
+
+    def handle(*args: object) -> DemoResponse:
+        deadline = operation_deadline.get()
+        assert deadline is not None
+        remaining.append(deadline - time.monotonic())
+        return DemoResponse(HTTPStatus.OK, b"{}")
+
+    demo.handle.side_effect = handle
+    product.demo = cast(DemoConsole, demo)
+    with TestClient(product.app) as client:
+        assert client.get("/topup/api/assets").status_code == 200
+        assert client.post("/topup/api/quotes", content=b"{}").status_code == 200
+    assert 7.5 < remaining[0] <= 8
+    assert 24.5 < remaining[1] <= 25
+
+
+def test_worker_selection_uses_the_dispatchers_raw_path(product: ProductServer) -> None:
+    for _ in range(4):
+        assert product._webhook_capacity.acquire(blocking=False)
+    try:
+        with TestClient(product.app) as client:
+            assert client.post("/topup/%77ebhooks", content=b"{}").status_code == 404
+            assert client.post("/topup/webhooks", content=b"{}").status_code == 503
+        cast(Mock, product.fulfillment.handle).assert_not_called()
+    finally:
+        for _ in range(4):
+            product._webhook_capacity.release()

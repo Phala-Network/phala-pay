@@ -48,12 +48,15 @@ import secrets
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
+from itertools import islice
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -75,7 +78,7 @@ from topup_sdk.errors import ResponseValidationError, TransportError
 
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
 from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
-from .transport import DeadlineTransport
+from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
 
 LOG = logging.getLogger(__name__)
 
@@ -91,6 +94,7 @@ MIN_AMOUNT = 100
 MAX_AMOUNT = 100_000
 # The forwarders one flush call may name (topup_sdk.sweeps.MAX_SALTS_PER_FLUSH).
 MAX_SWEEP_FORWARDERS = 200
+SWEEPS_WAIT_SECONDS = 8
 EXPLORERS = {
     1: "https://etherscan.io",
     8453: "https://basescan.org",
@@ -207,6 +211,7 @@ class DemoConsole:
         self.web_origin = config.web_origin
         self.secure_cookie = urlsplit(config.public_url).scheme == "https"
         self.recorder = recorder or ApiRecorder()
+        self._owns_recorder = recorder is None
         self._http = http or httpx.Client(
             timeout=5, follow_redirects=False, transport=DeadlineTransport()
         )
@@ -214,6 +219,7 @@ class DemoConsole:
         self._client: TopupClient | None = None
         self._sweeps_client: TopupClient | None = None
         self._lock = threading.Lock()
+        self._cache_changed = threading.Condition(self._lock)
         self._new_accounts = RateLimiter(30, 60, clock)
         self._quotes_per_account = RateLimiter(3, 60, clock)
         self._quotes_per_day = RateLimiter(20, 86_400, clock)
@@ -223,9 +229,24 @@ class DemoConsole:
         self._reads = RateLimiter(120, 60, clock)
         self._trust: tuple[float, dict[str, Any]] | None = None
         self._networks: tuple[float, list[dict[str, Any]]] | None = None
+        self._trust_refreshing = False
+        self._networks_refreshing = False
+        self._trust_expires = 0.0
+        self._networks_expires = 0.0
+        self._trust_error: (
+            Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError] | None
+        ) = None
+        self._networks_error: (
+            Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError] | None
+        ) = None
         self._sweeps: tuple[float, dict[str, Any]] | None = None
         self._sweeps_refreshing = False
-        self._block_times: dict[tuple[int, str], tuple[int, int]] = {}
+        self._sweeps_failed_at: float | None = None
+        self._sweeps_future: Future[dict[str, Any]] | None = None
+        self._sweeps_thread: threading.Thread | None = None
+        self._block_times: OrderedDict[
+            tuple[int, str], tuple[float | None, tuple[int, int] | None]
+        ] = OrderedDict()
         self._chain_ids = set(config.treasuries())
 
     # Routing ------------------------------------------------------------------------------------
@@ -279,6 +300,14 @@ class DemoConsole:
             # The SDK refused an address the product cannot derive from its pins: never shown.
             LOG.error("demo: the service returned an address the pins do not derive")
             return _json(HTTPStatus.BAD_GATEWAY, {"code": "address_not_derivable"})
+        except TransportError:
+            LOG.warning("demo: service transport unavailable")
+            response = _json(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
+            response.headers["retry-after"] = "2"
+            return response
+        except ResponseValidationError:
+            LOG.warning("demo: service response validation failed")
+            return _json(HTTPStatus.BAD_GATEWAY, {"code": "bad_gateway"})
         except (httpx.HTTPError, MissingProductKeyError):
             LOG.warning("demo: service unavailable", exc_info=True)
             return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
@@ -362,7 +391,9 @@ class DemoConsole:
     def _account(self, account: str) -> dict[str, Any]:
         deposits = [
             deposit.to_dict()
-            for deposit in _take(self._service().list_deposits(client_reference_id=account), 50)
+            for deposit in _take(
+                self._service().list_deposits(client_reference_id=account, page_size=50), 50
+            )
         ]
         now = self._clock()
         with self.ledger.transaction() as db:
@@ -519,7 +550,7 @@ class DemoConsole:
             return None
         with self.recorder.capture() as calls:
             quote = self._service().get_quote(quote_id)
-            deposits = list(_take(self._service().list_deposits(quote=quote_id), 10))
+            deposits = list(_take(self._service().list_deposits(quote=quote_id, page_size=10), 10))
             payment = quote.payment.to_dict() if isinstance(quote.payment, Payment) else None
             view = self._payment_view(
                 deposits[0].to_dict() if deposits else None, payment, quote.to_dict()
@@ -610,7 +641,9 @@ class DemoConsole:
         if deposit is not None:
             refunds = [
                 refund.to_dict()
-                for refund in _take(self._service().list_refunds(deposit=deposit["id"]), 20)
+                for refund in _take(
+                    self._service().list_refunds(deposit=deposit["id"], page_size=20), 20
+                )
             ]
             if deposit["swept"]:
                 sweep = self._sweep_of(deposit)
@@ -651,14 +684,10 @@ class DemoConsole:
     def _events(self, keys: set[str]) -> list[dict[str, Any]]:
         """This product's verified webhook events about the quote, the deposit, or its refunds."""
         with self.ledger.transaction() as db:
-            rows = db.execute(
-                "SELECT id, type, data, received_at FROM webhook_events ORDER BY received_at"
-            ).fetchall()
+            rows = ProductLedger.event_rows(db, keys)
         events = []
         for event_id, event_type, data, received_at in rows:
             payload = json.loads(data)
-            if not keys & _event_refs(payload):
-                continue
             events.append(
                 {
                     "id": event_id,
@@ -673,41 +702,85 @@ class DemoConsole:
 
     def _block_time(self, chain_id: int, tx_hash: str) -> dict[str, Any] | None:
         """The block and time of the transaction's block, from the product's RPC of its chain."""
-        cached = self._block_times.get((chain_id, tx_hash))
-        if cached is None:
-            try:
-                receipt = self._rpc(chain_id, "eth_getTransactionReceipt", tx_hash)
-                if not isinstance(receipt, dict):
-                    return None
+        key = (chain_id, tx_hash)
+        with self._lock:
+            entry = self._block_times.get(key)
+            if entry is not None and (entry[0] is None or self._clock() < entry[0]):
+                self._block_times.move_to_end(key)
+                return self._block_time_view(tx_hash, entry[1])
+        value = None
+        try:
+            receipt = self._rpc(chain_id, "eth_getTransactionReceipt", tx_hash)
+            if isinstance(receipt, dict):
                 block = self._rpc(chain_id, "eth_getBlockByNumber", receipt["blockNumber"], False)
-                cached = (int(receipt["blockNumber"], 16), int(block["timestamp"], 16))
-            except (httpx.HTTPError, ValueError, KeyError, TypeError):
-                LOG.warning("demo: block time lookup failed", exc_info=True)
-                return None
-            with self._lock:
-                self._block_times[(chain_id, tx_hash)] = cached
-        return {"tx_hash": tx_hash, "block_number": cached[0], "at": cached[1]}
+                value = (int(receipt["blockNumber"], 16), int(block["timestamp"], 16))
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            LOG.warning("demo: block time lookup failed", exc_info=True)
+        with self._lock:
+            self._block_times[key] = (self._clock() + 30 if value is None else None, value)
+            self._block_times.move_to_end(key)
+            while len(self._block_times) > 1024:
+                self._block_times.popitem(last=False)
+        return self._block_time_view(tx_hash, value)
+
+    @staticmethod
+    def _block_time_view(tx_hash: str, value: tuple[int, int] | None) -> dict[str, Any] | None:
+        return (
+            None
+            if value is None
+            else {"tx_hash": tx_hash, "block_number": value[0], "at": value[1]}
+        )
 
     def _rpc(self, chain_id: int, method: str, *params: Any) -> Any:
         body = self._http.post(
             self.config.chain(chain_id).rpc_url,
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
+            timeout=2,
         ).json()
         return body["result"]
 
     def _sweep_of(self, deposit: dict[str, Any]) -> dict[str, Any] | None:
         """The finalized sweep (`GET /v1/sweeps`) that moved the deposit: the first of its
         forwarder after its block."""
-        sweeps = self._service().list_sweeps(
-            chain_id=deposit["chain_id"], token=deposit["asset_contract"]
+        service = self._service()
+        deposit_address = deposit.get("deposit_address")
+        quote = deposit.get("quote")
+        if isinstance(quote, dict):
+            quote = quote.get("id")
+        forwarder = None
+        if isinstance(deposit_address, str) or isinstance(quote, str):
+            forwarders = service.list_forwarders(
+                chain_id=deposit["chain_id"],
+                deposit_address=deposit_address if isinstance(deposit_address, str) else None,
+                quote=quote
+                if not isinstance(deposit_address, str) and isinstance(quote, str)
+                else None,
+                page_size=100,
+            )
+            matches = [
+                item.id
+                for item in _take(forwarders, 100)
+                if same_address(item.address, deposit["address"])
+            ]
+            if len(matches) == 1:
+                forwarder = matches[0]
+        sweeps = service.list_sweeps(
+            chain_id=deposit["chain_id"],
+            forwarder=forwarder,
+            token=deposit["asset_contract"],
+            page_size=100,
         )
-        found = None
+        candidate = None
+        seen = 0
         for sweep in _take(sweeps, 100):
-            if same_address(sweep.address, deposit["address"]) and (
-                sweep.block_number >= deposit["block_number"]
-            ):
-                found = sweep.to_dict()
-        return found
+            if sweep.block_number < deposit["block_number"]:
+                return candidate
+            seen += 1
+            if same_address(sweep.address, deposit["address"]):
+                candidate = sweep.to_dict()
+        if forwarder is None and seen == 100:
+            return None
+        return candidate
 
     # Refunds ------------------------------------------------------------------------------------
 
@@ -774,43 +847,61 @@ class DemoConsole:
 
     def _sweeps_view(self) -> dict[str, Any]:
         """Per network and token the product offers: the account's unswept balance, the flush
-        the merchant signs, and the finalized sweeps; the same for every visitor, cached for 10
-        seconds."""
+        the merchant signs, and the finalized sweeps; cached views return immediately while
+        one background build refreshes them. Cold readers wait at most eight seconds."""
         now = self._clock()
-        refresh = False
-        synchronous = False
         with self._lock:
-            if self._sweeps is not None:
-                age = now - self._sweeps[0]
-                if age < 10:
-                    return self._sweeps[1]
-                if age >= 60:
-                    self._sweeps_refreshing = True
-                    synchronous = True
-                elif not self._sweeps_refreshing:
-                    self._sweeps_refreshing = True
-                    refresh = True
-                view = self._sweeps[1]
-            else:
-                view = None
-        if synchronous:
-            try:
-                return self._build_sweeps_view(now)
-            finally:
-                with self._lock:
+            view = None if self._sweeps is None else self._sweeps[1]
+            if self._sweeps is not None and now - self._sweeps[0] > 60:
+                view = {**self._sweeps[1], "stale": True}
+            if (
+                not self._sweeps_refreshing
+                and (self._sweeps is None or now - self._sweeps[0] > 10)
+                and (self._sweeps_failed_at is None or now - self._sweeps_failed_at >= 10)
+            ):
+                future: Future[dict[str, Any]] = Future()
+                self._sweeps_future = future
+                self._sweeps_refreshing = True
+                self._sweeps_thread = threading.Thread(
+                    target=self._refresh_sweeps, args=(now, future), daemon=True
+                )
+                try:
+                    self._sweeps_thread.start()
+                except RuntimeError:
                     self._sweeps_refreshing = False
+                    self._sweeps_thread = None
+                    raise
+            pending = self._sweeps_future
         if view is not None:
-            if refresh:
-                threading.Thread(target=self._refresh_sweeps, args=(now,), daemon=True).start()
             return view
-        return self._build_sweeps_view(now)
-
-    def _refresh_sweeps(self, now: float) -> None:
+        deadline = time.monotonic() + SWEEPS_WAIT_SECONDS
+        caller_deadline = operation_deadline.get()
+        if caller_deadline is not None:
+            deadline = min(deadline, caller_deadline)
+        if pending is None:
+            raise TransportError("unavailable")
         try:
-            self._build_sweeps_view(now)
-        except TopupError:
-            LOG.warning("sweeps refresh failed", exc_info=True)
+            return pending.result(timeout=max(0, deadline - time.monotonic()))
+        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+            raise _failure_factory(error)() from None
+        except TimeoutError as error:
+            # Keep the build running under its own budget after this reader stops waiting.
+            raise TransportError("timeout") from error
+
+    def _refresh_sweeps(self, now: float, future: Future[dict[str, Any]]) -> None:
+        token = operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
+        try:
+            view = self._build_sweeps_view(now)
+            with self._lock:
+                self._sweeps_failed_at = None
+            future.set_result(view)
+        except Exception as error:
+            with self._lock:
+                self._sweeps_failed_at = self._clock()
+            LOG.warning("sweeps refresh failed: %s", type(error).__name__)
+            future.set_exception(error)
         finally:
+            operation_deadline.reset(token)
             with self._lock:
                 self._sweeps_refreshing = False
 
@@ -881,13 +972,17 @@ class DemoConsole:
         if amounts["final_amount_atomic"] != "0":
             forwarders = list(
                 _take(
-                    service.list_forwarders(chain_id=chain_id, sweepable=token),
+                    service.list_forwarders(
+                        chain_id=chain_id, sweepable=token, page_size=min(MAX_SWEEP_FORWARDERS, 100)
+                    ),
                     MAX_SWEEP_FORWARDERS,
                 )
             )
         sweeps = [
             sweep.to_dict()
-            for sweep in _take(service.list_sweeps(chain_id=chain_id, token=token), 10)
+            for sweep in _take(
+                service.list_sweeps(chain_id=chain_id, token=token, page_size=10), 10
+            )
         ]
         # Flush only forwarders the pins derive: the service's word decides nothing here.
         derived = [
@@ -934,10 +1029,36 @@ class DemoConsole:
         (`GET /v1/config`) on the configured chains (a quote on any other chain has no treasury to
         recompute its address from), in the config's order, then the service's. A configured
         chain the service does not serve yet is left out."""
-        now = self._clock()
-        with self._lock:
-            if self._networks is not None and now - self._networks[0] < 300:
-                return self._networks[1]
+        with self._cache_changed:
+            while self._networks_refreshing:
+                self._wait_for_cache()
+            if self._clock() < self._networks_expires:
+                if self._networks is not None:
+                    return self._networks[1]
+                if self._networks_error is not None:
+                    raise self._networks_error()
+            self._networks_refreshing = True
+        try:
+            networks = self._fetch_payable_networks(service)
+        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+            with self._cache_changed:
+                self._networks_error = _failure_factory(error)
+                self._networks_expires = self._clock() + 30
+                if self._networks is not None:
+                    return self._networks[1]
+            raise
+        else:
+            with self._cache_changed:
+                self._networks = (self._clock(), networks)
+                self._networks_expires = self._clock() + 300
+                self._networks_error = None
+            return networks
+        finally:
+            with self._cache_changed:
+                self._networks_refreshing = False
+                self._cache_changed.notify_all()
+
+    def _fetch_payable_networks(self, service: TopupClient | None) -> list[dict[str, Any]]:
         offered = (service or self._service()).get_config().assets
         networks = []
         for chain in self.config.chains:
@@ -980,17 +1101,51 @@ class DemoConsole:
                     "assets": assets,
                 }
             )
-        with self._lock:
-            self._networks = (now, networks)
         return networks
 
     # Trust --------------------------------------------------------------------------------------
 
     def _trust_view(self) -> dict[str, Any]:
-        now = self._clock()
-        with self._lock:
-            if self._trust is not None and now - self._trust[0] < 300:
-                return self._trust[1]
+        with self._cache_changed:
+            while self._trust_refreshing:
+                self._wait_for_cache()
+            if self._clock() < self._trust_expires:
+                if self._trust is not None:
+                    return self._trust[1]
+                if self._trust_error is not None:
+                    raise self._trust_error()
+            self._trust_refreshing = True
+        try:
+            view = self._fetch_trust_view()
+        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+            with self._cache_changed:
+                self._trust_error = _failure_factory(error)
+                self._trust_expires = self._clock() + 30
+                if self._trust is not None:
+                    return self._trust[1]
+            raise
+        else:
+            failed = not view["attestation"]["binding_verified"] or view["tls_evidence"] is None
+            with self._cache_changed:
+                self._trust_expires = self._clock() + (30 if failed else 300)
+                self._trust_error = None
+                if failed and self._trust is not None:
+                    return self._trust[1]
+                self._trust = (self._clock(), view)
+            return view
+        finally:
+            with self._cache_changed:
+                self._trust_refreshing = False
+                self._cache_changed.notify_all()
+
+    def _wait_for_cache(self) -> None:
+        deadline = operation_deadline.get()
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            raise TransportError("timeout")
+        self._cache_changed.wait(timeout=remaining)
+
+    def _fetch_trust_view(self) -> dict[str, Any]:
         attestation: dict[str, Any]
         try:
             evidence = self._service().attestation(secrets.token_bytes(32))
@@ -1003,8 +1158,6 @@ class DemoConsole:
             "verify_docs": VERIFY_DOCS,
             "dstack_verifier": "https://github.com/Dstack-TEE/dstack/tree/master/verifier",
         }
-        with self._lock:
-            self._trust = (now, view)
         return view
 
     def _tls_evidence(self) -> dict[str, str] | None:
@@ -1063,11 +1216,21 @@ class DemoConsole:
 
     def close(self) -> None:
         with self._lock:
-            if self._client is not None:
-                self._client.close()
-            if self._sweeps_client is not None:
-                self._sweeps_client.close()
-        self._http.close()
+            refresh = self._sweeps_thread
+        if refresh is not None:
+            refresh.join()
+        with self._lock:
+            try:
+                if self._client is not None:
+                    self._client.close()
+                if self._sweeps_client is not None:
+                    self._sweeps_client.close()
+            finally:
+                try:
+                    if self._owns_recorder:
+                        self.recorder.close()
+                finally:
+                    self._http.close()
 
 
 # Views ------------------------------------------------------------------------------------------
@@ -1419,18 +1582,6 @@ def _attestation_view(evidence: AttestationResponse) -> dict[str, Any]:
     }
 
 
-def _event_refs(payload: dict[str, Any]) -> set[str]:
-    """Deposit, quote, and refund ids an event names, in the flat and the enveloped forms."""
-    inner = payload.get("object")
-    sources = [payload, inner] if isinstance(inner, dict) else [payload]
-    return {
-        value
-        for source in sources
-        for key in ("deposit_id", "id", "quote", "deposit")
-        if isinstance(value := source.get(key), str)
-    }
-
-
 def _exchange(request: httpx.Request, response: httpx.Response) -> dict[str, Any]:
     # An allowlist: the API key never leaves the server, only its mode's prefix is shown.
     headers = {
@@ -1479,10 +1630,37 @@ def _redact_key(authorization: str) -> str:
 
 
 def _take[T](items: Iterator[T], limit: int) -> Iterator[T]:
-    for index, item in enumerate(items):
-        if index >= limit:
-            return
-        yield item
+    return islice(items, limit)
+
+
+def _failure_factory(
+    error: TopupError | httpx.HTTPError | MissingProductKeyError,
+) -> Callable[[], TopupError | httpx.HTTPError | MissingProductKeyError]:
+    """Cache failure details without retaining an exception and its request traceback."""
+    if isinstance(error, ApiError):
+        return partial(
+            ApiError,
+            error.status_code,
+            error.code,
+            error.message,
+            error_type=error.error_type,
+            param=error.param,
+            doc_url=error.doc_url,
+            request_id=error.request_id,
+            retry_after=error.retry_after,
+        )
+    if isinstance(error, TransportError):
+        return partial(TransportError, error.code, str(error))
+    if isinstance(error, ResponseValidationError):
+        return partial(
+            ResponseValidationError,
+            str(error),
+            status_code=error.status_code,
+            request_id=error.request_id,
+        )
+    if isinstance(error, httpx.HTTPError):
+        return partial(httpx.HTTPError, str(error))
+    return partial(type(error), str(error))
 
 
 def _json_body(body: bytes) -> dict[str, Any] | None:

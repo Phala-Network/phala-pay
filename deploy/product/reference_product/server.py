@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from functools import partial
 from http import HTTPStatus
+from itertools import islice
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -46,6 +47,7 @@ from topup_sdk import (
     verify_request,
 )
 from topup_sdk.addresses import forwarder_address, quote_salt
+from topup_sdk.errors import ResponseValidationError, TransportError
 from topup_sdk.ids import DEPOSIT, object_id, parse_id
 
 from .config import (
@@ -58,12 +60,13 @@ from .demo import DemoConsole
 from .fulfillment import Answer, Fulfillment, PinnedKeys, TransientError, parse_decimal
 from .ledger import ProductLedger
 from .restore_records import export_restore_records
-from .transport import OPERATION_TIMEOUT_SECONDS, operation_deadline
+from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
 
 LOG = logging.getLogger(__name__)
 
 MAX_BODY_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30
+DEMO_TIMEOUT_SECONDS = 8
 HEADER_TIMEOUT_MILLISECONDS = 5000
 CONNECTION_LIMIT = 32
 LISTEN_BACKLOG = 128
@@ -93,11 +96,18 @@ class ProductServer:
         # Keep timed-out synchronous work admitted until it actually finishes. A client timeout
         # cannot stop a Python thread or undo a mutation, and must not admit unlimited new work.
         self._capacity = threading.BoundedSemaphore(16)
+        self._webhook_workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="webhook")
+        self._webhook_capacity = threading.BoundedSemaphore(4)
 
         def dispatch(
             method: str, target: str, headers: dict[str, str], body: bytes
         ) -> HttpResponse:
-            operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
+            timeout = (
+                DEMO_TIMEOUT_SECONDS
+                if method == "GET" and self.demo is not None and self.demo.handles(target)
+                else OPERATION_TIMEOUT_SECONDS
+            )
+            operation_deadline.set(time.monotonic() + timeout)
             if method == "POST" and urlsplit(target).path == base_path + "/webhooks":
                 answer = self.fulfillment.handle(headers, body)
             elif method == "GET" and urlsplit(target).path == base_path + "/healthz":
@@ -143,10 +153,16 @@ class ProductServer:
                     target = request.scope["raw_path"].decode("ascii")
                     if request.url.query:
                         target += "?" + request.url.query
-                    if not self._capacity.acquire(blocking=False):
+                    webhook = (
+                        request.method == "POST"
+                        and urlsplit(target).path == base_path + "/webhooks"
+                    )
+                    capacity = self._webhook_capacity if webhook else self._capacity
+                    workers = self._webhook_workers if webhook else self._workers
+                    if not capacity.acquire(blocking=False):
                         return error(request, HTTPStatus.SERVICE_UNAVAILABLE)
                     try:
-                        future = self._workers.submit(
+                        future = workers.submit(
                             dispatch,
                             request.method,
                             target,
@@ -154,9 +170,9 @@ class ProductServer:
                             bytes(body),
                         )
                     except RuntimeError:
-                        self._capacity.release()
+                        capacity.release()
                         raise
-                    future.add_done_callback(lambda _: self._capacity.release())
+                    future.add_done_callback(lambda _: capacity.release())
                     return await asyncio.wrap_future(future)
             except TimeoutError:
                 return error(request, HTTPStatus.REQUEST_TIMEOUT)
@@ -210,6 +226,7 @@ class ProductServer:
 
     def close(self) -> None:
         self._workers.shutdown(wait=True, cancel_futures=True)
+        self._webhook_workers.shutdown(wait=True, cancel_futures=True)
         if self.accounts is not None:
             self.accounts.close()
         if self.demo is not None:
@@ -269,6 +286,7 @@ class AccountApi:
         self.driver_key = driver_key
         self.accounts_path = urlsplit(config.public_url).path.rstrip("/") + "/accounts"
         self._client: TopupClient | None = None
+        self._transport: DeadlineTransport | None = None
         self._client_lock = threading.Lock()
 
     def handles(self, target: str) -> bool:
@@ -369,6 +387,12 @@ class AccountApi:
                 HTTPStatus.BAD_GATEWAY,
                 {"service_status": error.status_code, "service_code": error.code},
             )
+        except TransportError:
+            LOG.warning("service transport unavailable for the account API")
+            return Answer(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
+        except ResponseValidationError:
+            LOG.warning("service response validation failed for the account API")
+            return Answer(HTTPStatus.BAD_GATEWAY, {"code": "bad_gateway"})
         except httpx.HTTPError:
             LOG.warning("service unavailable for the account API")
             return Answer(HTTPStatus.SERVICE_UNAVAILABLE)
@@ -378,7 +402,9 @@ class AccountApi:
         return Answer(HTTPStatus.NOT_FOUND)
 
     def _account_view(self, team: str) -> dict[str, Any]:
-        deposits = list(self._service().list_deposits(client_reference_id=team))
+        deposits = list(
+            islice(self._service().list_deposits(client_reference_id=team, page_size=100), 100)
+        )
         ids = {deposit.id for deposit in deposits}
         return {
             "account_id": team,
@@ -399,7 +425,7 @@ class AccountApi:
             ],
             "events": [
                 event
-                for event in self.ledger.all_events()
+                for event in self.ledger.events_for(ids | {team})
                 if (event["data"].get("object") or {}).get("id") in ids
                 or (event["data"].get("object") or {}).get("client_reference_id") == team
             ],
@@ -408,13 +434,23 @@ class AccountApi:
     def _service(self) -> TopupClient:
         with self._client_lock:
             if self._client is None:
-                self._client = self.config.client()
+                transport = DeadlineTransport()
+                try:
+                    self._client = self.config.client(transport=transport)
+                except BaseException:
+                    transport.close()
+                    raise
+                self._transport = transport
             return self._client
 
     def close(self) -> None:
         with self._client_lock:
-            if self._client is not None:
-                self._client.close()
+            try:
+                if self._client is not None:
+                    self._client.close()
+            finally:
+                if self._transport is not None:
+                    self._transport.close()
 
 
 def _account_ref(value: object) -> str:
@@ -497,11 +533,18 @@ class WebhookKeys:
         self._config = config
         self._lock = threading.Lock()
         self._pinned: PinnedKeys | None = None
+        self._retry_after = 0.0
 
     def __call__(self, *, wait_s: float = 0) -> PinnedKeys:
         with self._lock:
             if self._pinned is None:
-                self._pinned = pin_webhook_keys(self._config, wait_s=wait_s)
+                if time.monotonic() < self._retry_after:
+                    raise TransientError("the service's attestation is unavailable")
+                try:
+                    self._pinned = pin_webhook_keys(self._config, wait_s=wait_s)
+                except TransientError:
+                    self._retry_after = time.monotonic() + 30
+                    raise
             return self._pinned
 
 
