@@ -68,7 +68,6 @@ from topup_sdk import (
     ApiError,
     AttestationError,
     TopupClient,
-    TopupError,
     flush_transactions,
     forwarder_address,
     safe_batch,
@@ -80,6 +79,17 @@ from .cache import CachedFailureError, Failure, SingleFlightTTL
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
 from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
 from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
+
+# Only these failures have a public demo response. Other SDK errors reach the server logger.
+MAPPED_FAILURES: tuple[type[Exception], ...] = (
+    CachedFailureError,
+    ApiError,
+    AddressMismatchError,
+    TransportError,
+    ResponseValidationError,
+    httpx.HTTPError,
+    MissingProductKeyError,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -233,7 +243,7 @@ class DemoConsole:
             ttl=300,
             negative_ttl=30,
             failure=_failure_value,
-            cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError),
+            cache_errors=MAPPED_FAILURES,
             incomplete=lambda view: (
                 not view["attestation"]["binding_verified"] or view["tls_evidence"] is None
             ),
@@ -243,7 +253,7 @@ class DemoConsole:
             ttl=300,
             negative_ttl=30,
             failure=_failure_value,
-            cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError),
+            cache_errors=MAPPED_FAILURES,
         )
         self._sweeps_cache = SingleFlightTTL[dict[str, Any]](
             clock=clock,
@@ -251,7 +261,7 @@ class DemoConsole:
             negative_ttl=10,
             failure=_failure_value,
             executor=self._refresh_workers,
-            cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError),
+            cache_errors=MAPPED_FAILURES,
             inclusive=True,
         )
         self._block_times = TLRUCache[tuple[int, str], tuple[int, int] | None](
@@ -296,7 +306,7 @@ class DemoConsole:
     def _handle_api(self, method: str, name: str, headers: dict[str, str], body: bytes) -> Response:
         try:
             return self._api(method, name, headers, body)
-        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+        except MAPPED_FAILURES as error:
             return _failure_response(_failure_value(error))
 
     def _api(self, method: str, name: str, headers: dict[str, str], body: bytes) -> Response:
@@ -845,7 +855,7 @@ class DemoConsole:
         token = operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
         try:
             return self._build_sweeps_view(self._clock())
-        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+        except MAPPED_FAILURES as error:
             source_type = (
                 error.failure.source_type if isinstance(error, CachedFailureError) else None
             )
@@ -1574,9 +1584,7 @@ def _failure_value(error: Exception) -> Failure:
             log_exc_info=True,
             source_type=source_type,
         )
-    return Failure(
-        HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", None, "request failed"
-    )
+    raise error
 
 
 def _failure_response(failure: Failure) -> Response:

@@ -46,7 +46,7 @@ from topup_sdk import (
     quote_salt,
     sign_webhook,
 )
-from topup_sdk.errors import ResponseValidationError, TransportError
+from topup_sdk.errors import ConfigurationError, ResponseValidationError, TransportError
 
 NOW = 1_790_000_000
 ACCOUNT = "acct_" + "ac" * 16
@@ -1756,3 +1756,46 @@ def test_sweeps_refresh_logging_preserves_cached_sdk_failure_type(
     assert _get(console, cookie, "sweeps") == (503, {"code": "unavailable"})
     assert "sweeps refresh failed: TransportError" in caplog.messages
     assert "demo: service transport unavailable" in caplog.messages
+
+
+@pytest.mark.parametrize("kind", ["api", "trust", "networks", "sweeps"])
+def test_unmapped_sdk_errors_preserve_server_response_and_traceback(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+) -> None:
+    console, _ = demo
+    cookie = _account(console) if kind == "sweeps" else ""
+    calls: list[int] = []
+
+    def fail(*args: Any) -> Any:
+        calls.append(1)
+        raise ConfigurationError("misconfigured service")
+
+    methods = {
+        "api": "_api",
+        "trust": "_fetch_trust_view",
+        "networks": "_fetch_payable_networks",
+        "sweeps": "_build_sweeps_view",
+    }
+    monkeypatch.setattr(console, methods[kind], fail)
+    fulfillment = Mock(spec=Fulfillment)
+    fulfillment.config = console.config
+    path = f"/api/{'assets' if kind in {'api', 'networks'} else kind}"
+    with TestClient(ProductServer(fulfillment, demo=console).app) as client:
+        for _ in range(2):
+            response = client.get(path, headers={"cookie": cookie})
+            assert response.status_code == 500
+            # main 0ef587d6 routes unmapped SDK errors through server.error()/JSONResponse.
+            assert response.content == b'{"code":"internal_server_error"}'
+            assert "cache-control" not in response.headers
+    assert len(calls) == 2
+    records = [record for record in caplog.records if record.name == "reference_product.server"]
+    assert len(records) == 2
+    for record in records:
+        assert record.levelno == logging.ERROR
+        assert record.getMessage() == "product request failed"
+        assert record.exc_info is not None
+        assert record.exc_info[0] is ConfigurationError
+        assert record.exc_info[2] is not None
