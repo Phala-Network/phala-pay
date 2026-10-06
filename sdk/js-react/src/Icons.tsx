@@ -19,16 +19,14 @@ function Icon({ name, label, size = 18, decorative = true }: IconProps & {
 }) {
   const pixels = Number.isFinite(size) && size > 0 ? size : 18;
   return (
-    <span className="pp-icon-label" role={decorative ? undefined : "img"}
-      aria-label={decorative ? undefined : label || "Unknown asset"}>
-      <svg className="pp-icon" xmlns="http://www.w3.org/2000/svg" width={pixels} height={pixels}
-        viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-        {name === undefined ? <>
-          <circle cx="12" cy="12" r="11" fill="currentColor" opacity="0.12" />
-          <text x="12" y="16" textAnchor="middle" fontFamily="sans-serif" fontSize="12" fill="currentColor">{iconMonogram(label)}</text>
-        </> : ICON_PATHS[name]}
-      </svg>
-    </span>
+    <svg className="pp-icon" xmlns="http://www.w3.org/2000/svg" width={pixels} height={pixels}
+      viewBox="0 0 24 24" fill="none" focusable="false" aria-hidden={decorative ? true : undefined}
+      role={decorative ? undefined : "img"} aria-label={decorative ? undefined : label || "Unknown asset"}>
+      {name === undefined ? <>
+        <circle cx="12" cy="12" r="11" fill="currentColor" opacity="0.12" />
+        <text x="12" y="16" textAnchor="middle" fontFamily="sans-serif" fontSize="12" fill="currentColor">{iconMonogram(label)}</text>
+      </> : ICON_PATHS[name]}
+    </svg>
   );
 }
 

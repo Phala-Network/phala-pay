@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import axe from "axe-core";
 import jsqr from "jsqr";
 import type { ClientQuote } from "../src/index.js";
 import { API_BASE, CLIENT_SECRET, quote } from "../test/fixtures.js";
@@ -83,8 +84,7 @@ async function installWallet(page: Page) {
 
 /**
  * Checks the layout every state shares: nothing overflows the page or the component, no inline
- * style, and every control's target is at least 44 × 44 px (the copy button's through its
- * `::before`). Then keeps a screenshot when asked.
+ * style, and every control's target is at least 44 × 44 px. Then keeps a screenshot when asked.
  */
 async function check(page: Page, name: string) {
   await expect(page.locator(".pp-root")).toBeVisible();
@@ -131,7 +131,7 @@ function smallTargets(page: Page): Promise<string[]> {
 
 /** Decodes the QR code from a screenshot of it and `margin` px of the page around it. */
 async function decodeOnPage(page: Page, name: string, margin = 24): Promise<string | undefined> {
-  const qr = page.locator(".pp-qr");
+  const qr = page.locator(".pp-qr__code");
   await qr.scrollIntoViewIfNeeded();
   const box = await qr.boundingBox();
   if (box === null) return undefined;
@@ -240,6 +240,26 @@ for (const width of [390, 1280]) {
   }
 }
 
+for (const theme of ["light", "dark"]) {
+  test(`checkout passes axe in each payment method and once credited, ${theme}`, async ({ page }) => {
+    let served = waiting();
+    await serve(page, () => served);
+    await installWallet(page);
+    await page.goto(checkoutUrl(theme));
+    await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
+    await page.addScriptTag({ content: axe.source });
+    const violations = async () =>
+      (await page.evaluate(() => axe.run(document.querySelector(".pp-root") ?? document))).violations;
+    for (const name of ["Browser wallet", "QR code", "Manual transfer"]) {
+      await page.getByRole("tab", { name }).click();
+      expect(await violations(), name).toEqual([]);
+    }
+    served = waiting({ status: "complete", payment_status: "credited", amount_credited: 2500 });
+    await expect(page.getByRole("status")).toHaveText("Payment credited: $25.00");
+    expect(await violations(), "credited").toEqual([]);
+  });
+}
+
 test("keyboard focus is visible and differs from the selected state", async ({ page }) => {
   await page.goto("/?deposit");
   await expect(page.getByRole("group", { name: "Network" })).toBeVisible();
@@ -265,6 +285,13 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
   const selected = await outline(radio);
   expect(selected.style).toBe("none");
 
+  // In forced colors, the selection keeps a system color of its own.
+  await page.emulateMedia({ forcedColors: "active" });
+  const borders = await page.getByRole("group", { name: "Network" }).getByRole("radio").evaluateAll((radios) =>
+    radios.map((radio) => getComputedStyle(radio).borderTopColor));
+  expect(new Set(borders).size).toBe(2);
+  await page.emulateMedia({ forcedColors: "none" });
+
   const tabs = new URLSearchParams({ client_secret: CLIENT_SECRET, expected_address: ADDRESS, api_base: API_BASE });
   const served = waiting();
   await serve(page, () => served);
@@ -276,4 +303,9 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
   expect(tab.style).toBe("solid");
   expect(tab.width).toBe("2px");
   if (screenshots !== undefined) await page.locator(".pp-root").screenshot({ caret: "initial", path: join(screenshots, "focus-tab.png") });
+
+  // The copy icon stays 16px whatever the text size.
+  await page.getByRole("tab", { name: "Manual transfer" }).click();
+  await page.addStyleTag({ content: ".pp-root[data-theme] { --pp-font-size: 22px; }" });
+  expect(await page.locator(".pp-copy svg").first().boundingBox()).toMatchObject({ width: 16, height: 16 });
 });

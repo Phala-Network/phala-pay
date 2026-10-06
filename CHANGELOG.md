@@ -44,11 +44,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - `CheckoutError.status` exposes the HTTP status when the error came from a response.
 - `<DepositAddress onChange(state)>` receives the public view after the first successful read
   and then once per content change, so integrators can update their UI without additional polling.
-- `@phala/pay-react/styles.css` CSS custom properties, each with a light and dark default:
-  `--pp-color-surface` (status row and loading placeholder), `--pp-color-focus` (keyboard focus
-  ring, distinct from the primary color), `--pp-color-warning` ("Test mode"),
-  `--pp-font-family-mono`, `--pp-font-size` (root text size, default `14px`; `1em` follows the
-  page), and `--pp-control-height` (default `44px`).
 
 #### Changed
 
@@ -59,36 +54,40 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   any view change or visibility regain restores the normal interval and resets the idle window.
 - Checkout stops after three consecutive non-terminal 4xx responses other than 408/429 and
   surfaces its existing error state. 404 still stops immediately as `invalid_client_secret`.
-- `<Checkout>` and `<DepositAddress>` have a neutral default theme: primary `#171717` (dark
-  `#fafafa`, with dark text on it), zinc greys, the page's font instead of the system UI font, line
-  height 1.5, and text sizes relative to `--pp-font-size`. Every `--pp-*` property and `.pp-*`
-  class keeps its meaning, so a page that sets its own colors keeps them. To keep the previous
-  look, set on `.pp-root[data-theme]`: `--pp-color-primary: #0f62fe`,
-  `--pp-color-text: #1a1a1a`, `--pp-color-text-secondary: #5c5f66`, `--pp-color-border: #d9dce1`,
-  `--pp-color-danger: #c62828`, `--pp-color-success: #1b7f3b`, and
-  `--pp-font-family: system-ui, sans-serif` (dark: `#78a9ff` with
-  `--pp-accessible-color-on-color-primary: #ffffff`, `#f4f4f4`, `#a8a8a8`, `#393939`, `#ff8389`,
-  `#42be65`, and background `#161616`). A dark theme that sets only `--pp-color-primary` now needs
-  `--pp-accessible-color-on-color-primary` too, as the default text on it is dark.
-- The status row keeps its text in the body color on a `--pp-color-surface` background; a new
-  `.pp-status-icon` and the row's leading border carry the tone (`data-tone` is unchanged). A
-  reconnecting note is a muted `.pp-reconnecting` inside the same live region. While loading,
-  Checkout shows a `.pp-skeleton` placeholder for the amount.
-- Copy buttons (`.pp-copy`) are 32px icon buttons with a 44px target; their accessible name and
-  live "Copy" / "Copied" / "Copy failed" text are unchanged, now visually hidden. The transaction
-  line gains a copy button for the hash.
-- Receive addresses and token contracts are shown in full in `.pp-group` groups of four
-  characters after `0x`, never shortened; they wrap only between groups and copy without spaces.
-  Tests that find an address with Testing Library's `getByText(address)` need a matcher on the
-  element's `textContent`, as the text is split across groups.
-- `<DepositAddress>` network and token choices are still native radio buttons in a
-  `fieldset.pp-choices`, now drawn as equal-width 44px buttons: the selected one has a 2px primary
-  border and keyboard focus a separate `--pp-color-focus` ring. Payments in `.pp-payments` are
-  rows with a status dot (`li[data-tone]`).
-- Tabs, buttons, copy buttons, and choices have hover, focus, and disabled states, with
-  transitions that stop under `prefers-reduced-motion: reduce`.
-- The QR code has the standard quiet zone of four modules (was two) inside 8px of white and a
-  border, so it scans on a dark page; it is 18px larger.
+- **Breaking:** `<Checkout>` and `<DepositAddress>` are restyled with a neutral default theme
+  (primary `#171717`, dark `#fafafa`; zinc greys; the page's font) and draw no frame, background,
+  or width of their own: place them in your card or dialog, with the theme that matches it. Update
+  your stylesheet:
+  - The theme is these custom properties on `.pp-root[data-theme]`: `--pp-color-surface`,
+    `-text`, `-text-muted`, `-border`, `-primary`, `-primary-foreground`, `-focus`,
+    `-success`, `-warning`, `-danger`; `--pp-font-family`, `--pp-font-family-mono`,
+    `--pp-font-size` (default `14px`; `1em` follows the page); `--pp-radius`; and
+    `--pp-control-height`. Renamed: `--pp-accessible-color-on-color-primary` to
+    `--pp-color-primary-foreground`, `--pp-color-text-secondary` to `--pp-color-text-muted`,
+    `--pp-border-radius` to `--pp-radius`. Removed: `--pp-root-border`, `--pp-root-padding`,
+    `--pp-root-max-width`, `--pp-root-background`, `--pp-color-background`. The focus ring is `--pp-color-focus`, no
+    longer the primary color.
+  - Classes are BEM-style blocks: `.pp-summary` (`__amount`, `__meta`, `__network`,
+    `__test-mode`; were `.pp-amount`, `.pp-subtitle`, `.pp-badge`), `.pp-status` (`__icon`,
+    `__text`, `__note`, `__countdown`; was `.pp-countdown`), `.pp-tabs` (`__tab`, `__panel`; was
+    `.pp-tab`), `.pp-button` (`__icon`, `__detail`; was `.pp-wallet-name`), `.pp-qr`
+    (`__code`, `__caption`; was `.pp-qr-panel` around `svg.pp-qr`), `.pp-field` (`__label`,
+    `__value`, `__text`, `__group`; was `dt`, `dd`, `.pp-value`), `.pp-tx` (`__text`, `__hash`),
+    `.pp-choices` (`__legend`, `__option`, `__input`, `__label`), `.pp-payments` (`__item`,
+    `__dot`), `.pp-intro` (was `.pp-subtitle`), and `.pp-skeleton`. `.pp-root`, `data-theme`,
+    `.pp-fields`, `.pp-notice`, `.pp-message`, `.pp-wallets`, and `.pp-copy` keep their names;
+    `.pp-icon-label` is gone, as `NetworkIcon` and `AssetIcon` render one `svg.pp-icon` (with
+    `role="img"` when not decorative).
+  - The status row's tone (`data-tone`) shows only in its icon, on a neutral surface. Copy
+    buttons are 32px icons with a 44px target, named "Copy …" by `aria-label`; their live region
+    is empty until it announces "Copied" or "Copy failed". The transaction line has a copy button.
+  - Receive addresses and token contracts are shown in full in groups of four characters after
+    `0x`, wrapping only between groups and copying without spaces. Testing Library's
+    `getByText(address)` no longer finds them, as the text is split across groups: match the
+    element's `textContent` instead. Playwright text queries are unaffected.
+  - Deposit network and token choices are native radios drawn as 44px buttons, with focus
+    distinct from selection. The QR code has the standard four-module quiet zone inside 8px of
+    white. Loading shows a placeholder; transitions stop under `prefers-reduced-motion`.
 
 ### Python SDK (`phala-pay`)
 

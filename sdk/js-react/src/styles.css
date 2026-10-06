@@ -1,25 +1,23 @@
+/* Phala Pay components. Theme them with the --pp-* custom properties below, set on
+   `.pp-root[data-theme]` in a stylesheet loaded after this one. The components draw no frame or
+   background: place them in your own card or dialog, which also sets their width; choose the
+   theme that matches its background. */
 .pp-root {
-  --pp-color-primary: #171717;
-  --pp-accessible-color-on-color-primary: #fafafa;
-  --pp-color-background: #ffffff;
   --pp-color-surface: #f4f4f5;
   --pp-color-text: #18181b;
-  --pp-color-text-secondary: #52525b;
+  --pp-color-text-muted: #52525b;
   --pp-color-border: #e4e4e7;
+  --pp-color-primary: #171717;
+  --pp-color-primary-foreground: #fafafa;
   --pp-color-focus: #2563eb;
-  --pp-color-danger: #dc2626;
   --pp-color-success: #15803d;
   --pp-color-warning: #b45309;
+  --pp-color-danger: #dc2626;
   --pp-font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --pp-font-size: 14px;
+  --pp-radius: 8px;
   --pp-control-height: 44px;
-  --pp-border-radius: 8px;
   box-sizing: border-box;
-  max-width: var(--pp-root-max-width, 440px);
-  padding: var(--pp-root-padding, 20px);
-  border: var(--pp-root-border, 1px solid var(--pp-color-border));
-  border-radius: var(--pp-border-radius);
-  background: var(--pp-root-background, var(--pp-color-background));
   color: var(--pp-color-text);
   font-family: var(--pp-font-family, inherit);
   font-size: var(--pp-font-size);
@@ -27,138 +25,146 @@
   line-height: 1.5;
 }
 .pp-root[data-theme="dark"] {
-  --pp-color-primary: #fafafa;
-  --pp-accessible-color-on-color-primary: #18181b;
-  --pp-color-background: #09090b;
   --pp-color-surface: #18181b;
   --pp-color-text: #fafafa;
-  --pp-color-text-secondary: #a1a1aa;
+  --pp-color-text-muted: #a1a1aa;
   --pp-color-border: #27272a;
+  --pp-color-primary: #fafafa;
+  --pp-color-primary-foreground: #18181b;
   --pp-color-focus: #60a5fa;
-  --pp-color-danger: #f87171;
   --pp-color-success: #4ade80;
   --pp-color-warning: #fbbf24;
+  --pp-color-danger: #f87171;
 }
 .pp-root *, .pp-root *::before, .pp-root *::after { box-sizing: inherit; }
 .pp-root > :last-child { margin-bottom: 0; }
-.pp-root button:focus-visible, .pp-root a:focus-visible, .pp-root [role="tabpanel"]:focus-visible {
-  outline: 2px solid var(--pp-color-focus); outline-offset: 2px; }
+.pp-root :focus-visible { outline: 2px solid var(--pp-color-focus); outline-offset: 2px; }
+.pp-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0; }
+.pp-icon { display: inline-block; flex: none; vertical-align: middle; }
 
-/* Summary */
-.pp-amount { display: flex; align-items: center; gap: 0.5em; margin: 0; overflow-wrap: anywhere;
+/* Checkout summary */
+.pp-summary { margin-bottom: 1em; }
+.pp-summary__amount { display: flex; align-items: center; gap: 0.5em; margin: 0; overflow-wrap: anywhere;
   font-size: 1.375em; font-weight: 600; line-height: 1.3; }
-.pp-subtitle { display: flex; flex-wrap: wrap; align-items: center; column-gap: 0.375em;
-  margin: 0.25em 0 1em; color: var(--pp-color-text-secondary); }
-.pp-with-icon { display: inline-flex; align-items: center; gap: 0.375em; }
-.pp-badge { color: var(--pp-color-warning); font-weight: 500; }
+.pp-summary__meta { display: flex; flex-wrap: wrap; align-items: center; column-gap: 0.375em;
+  margin: 0.25em 0 0; color: var(--pp-color-text-muted); }
+.pp-summary__network { display: inline-flex; align-items: center; gap: 0.375em; }
+.pp-summary__test-mode { color: var(--pp-color-warning); font-weight: 500; }
 
-/* Loading */
+/* Loading placeholder for the summary */
 .pp-skeleton { margin-bottom: 1em; }
-.pp-skeleton span { display: block; width: 60%; height: 1.75em; border-radius: 4px;
+.pp-skeleton__line { display: block; width: 60%; height: 1.75em; border-radius: 4px;
   background: var(--pp-color-surface); animation: pp-pulse 1.5s ease-in-out infinite; }
-.pp-skeleton span + span { width: 40%; height: 1em; margin-top: 0.75em; }
+.pp-skeleton__line + .pp-skeleton__line { width: 40%; height: 1em; margin-top: 0.75em; }
 @keyframes pp-pulse { 50% { opacity: 0.5; } }
 
-/* Status: the icon and the leading border carry the tone; the text stays the body color. */
+/* Status: on a neutral surface, the icon alone carries the tone; the text stays the body color. */
 .pp-status { display: flex; gap: 0.625em; align-items: flex-start; margin-bottom: 1em;
-  padding: 0.625em 0.75em; border: 0 solid var(--pp-color-border); border-inline-start-width: 3px;
-  border-radius: var(--pp-border-radius); background: var(--pp-color-surface); }
-.pp-status [role="status"] { flex: 1; min-width: 0; }
-.pp-status-icon { display: flex; flex: none; align-items: center; height: 1.5em;
-  color: var(--pp-color-text-secondary); }
-.pp-status[data-tone="success"] { border-color: var(--pp-color-success); }
-.pp-status[data-tone="success"] .pp-status-icon { color: var(--pp-color-success); }
-.pp-status[data-tone="danger"] { border-color: var(--pp-color-danger); }
-.pp-status[data-tone="danger"] .pp-status-icon { color: var(--pp-color-danger); }
-.pp-reconnecting { color: var(--pp-color-text-secondary); }
-.pp-countdown { font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.pp-notice { margin: 0 0 1em; color: var(--pp-color-text-secondary); }
+  padding: 0.625em 0.75em; border-radius: var(--pp-radius); background: var(--pp-color-surface); }
+.pp-status__icon { display: flex; flex: none; align-items: center; height: 1.5em; color: var(--pp-color-text-muted); }
+.pp-status[data-tone="success"] .pp-status__icon { color: var(--pp-color-success); }
+.pp-status[data-tone="danger"] .pp-status__icon { color: var(--pp-color-danger); }
+.pp-status__text { flex: 1; min-width: 0; }
+.pp-status__note { color: var(--pp-color-text-muted); }
+.pp-status__countdown { font-weight: 500; white-space: nowrap; }
+
+.pp-notice { margin: 0 0 1em; color: var(--pp-color-text-muted); }
 .pp-notice strong { color: var(--pp-color-text); font-weight: 600; }
+
+/* Transaction sent */
+.pp-tx { display: flex; gap: 0.5em; align-items: center; margin: 0 0 1em; font-size: 0.875em; }
+.pp-tx__text { flex: 1; min-width: 0; }
+.pp-tx__hash { font-family: var(--pp-font-family-mono); overflow-wrap: anywhere; }
+a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.pp-tx__external { margin-inline-start: 0.25em; vertical-align: -0.125em; }
 
 /* Payment method tabs */
 .pp-tabs { display: flex; gap: 0.25em; margin-bottom: 1em; border-bottom: 1px solid var(--pp-color-border); }
-.pp-tab { appearance: none; min-height: var(--pp-control-height); margin-bottom: -1px; padding: 0 0.75em;
-  border: 0; border-bottom: 2px solid transparent; background: none; color: var(--pp-color-text-secondary);
-  font: inherit; font-weight: 500; white-space: nowrap; cursor: pointer;
-  transition: color 150ms, border-color 150ms; }
-.pp-tab:hover { color: var(--pp-color-text); border-bottom-color: var(--pp-color-border); }
-.pp-tab[aria-selected="true"] { color: var(--pp-color-text); border-bottom-color: var(--pp-color-primary); }
-.pp-root .pp-tab:focus-visible { outline-offset: -2px; border-radius: 4px; }
+.pp-tabs__tab { min-height: var(--pp-control-height); margin-bottom: -1px; padding: 0 0.75em; appearance: none;
+  border: 0; border-bottom: 2px solid transparent; background: none; color: var(--pp-color-text-muted);
+  font: inherit; font-weight: 500; white-space: nowrap; cursor: pointer; transition: color 150ms, border-color 150ms; }
+.pp-tabs__tab:hover { color: var(--pp-color-text); border-bottom-color: var(--pp-color-border); }
+.pp-tabs__tab[aria-selected="true"] { color: var(--pp-color-text); border-bottom-color: var(--pp-color-primary); }
+.pp-root .pp-tabs__tab:focus-visible { outline-offset: -2px; border-radius: 4px; }
+.pp-root .pp-tabs__panel:focus-visible { outline-offset: 4px; border-radius: 2px; }
 
-/* Wallet */
+/* Wallet buttons */
 .pp-wallets { display: grid; gap: 0.5em; }
 .pp-button { display: flex; gap: 0.625em; align-items: center; justify-content: center; width: 100%;
   min-height: var(--pp-control-height); padding: 0.5em 1em; appearance: none;
-  border: 1px solid var(--pp-color-primary); border-radius: var(--pp-border-radius);
-  background: var(--pp-color-primary); color: var(--pp-accessible-color-on-color-primary);
+  border: 1px solid var(--pp-color-primary); border-radius: var(--pp-radius);
+  background: var(--pp-color-primary); color: var(--pp-color-primary-foreground);
   font: inherit; font-weight: 500; cursor: pointer; transition: background-color 150ms, border-color 150ms; }
 .pp-button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--pp-color-primary) 85%, var(--pp-color-background));
-  background: color-mix(in srgb, var(--pp-color-primary) 85%, var(--pp-color-background)); }
+  border-color: color-mix(in srgb, var(--pp-color-primary) 85%, transparent);
+  background: color-mix(in srgb, var(--pp-color-primary) 85%, transparent); }
 .pp-button:disabled { opacity: 0.5; cursor: not-allowed; }
-.pp-button img { flex: none; width: 20px; height: 20px; }
-.pp-wallet-name { font-weight: 400; opacity: 0.85; }
-.pp-message { margin: 0.5em 0 0; color: var(--pp-color-text-secondary); }
+.pp-button__icon { flex: none; width: 20px; height: 20px; }
+.pp-button__detail { font-weight: 400; opacity: 0.85; }
+
+.pp-message { margin: 0.5em 0 0; color: var(--pp-color-text-muted); }
 .pp-message:empty { display: none; }
 .pp-message[data-tone="danger"] { color: var(--pp-color-danger); }
 
-/* QR code: four quiet modules in the code, then 8px of white, readable on any host. */
-.pp-qr-panel { display: grid; justify-items: center; gap: 0.75em; text-align: center; }
-.pp-qr { display: block; box-sizing: content-box; padding: 8px; border: 1px solid var(--pp-color-border);
-  border-radius: var(--pp-border-radius); background: #ffffff; }
-.pp-qr-panel + .pp-fields { margin-top: 1.25em; }
+/* QR code: four quiet modules in the code, then 8px of white, readable on any page. */
+.pp-qr { display: grid; justify-items: center; gap: 0.75em; text-align: center; }
+.pp-qr__code { display: block; box-sizing: content-box; padding: 8px; border: 1px solid var(--pp-color-border);
+  border-radius: var(--pp-radius); background: #ffffff; }
+.pp-qr__caption { margin: 0; color: var(--pp-color-text-muted); }
+.pp-qr + .pp-fields { margin-top: 1.25em; }
 
-/* Manual transfer fields */
+/* Payment details */
 .pp-fields { display: grid; gap: 1em; margin: 0; }
-.pp-field dt { color: var(--pp-color-text-secondary); font-size: 0.875em; }
-.pp-field dd { display: flex; gap: 0.5em; align-items: center; margin: 0.25em 0 0; }
-.pp-field dd > :first-child { flex: 1; min-width: 0; }
-.pp-value { font-family: var(--pp-font-family-mono); font-size: 0.9375em; word-break: break-all; text-wrap: balance; }
-.pp-group { margin-inline-end: 0.5ch; white-space: nowrap; }
-.pp-group:last-child { margin-inline-end: 0; }
+.pp-field__label { color: var(--pp-color-text-muted); font-size: 0.875em; }
+.pp-field__value { display: flex; gap: 0.5em; align-items: center; margin: 0.25em 0 0; }
+.pp-field__text { flex: 1; min-width: 0; }
+.pp-field__text--mono { font-family: var(--pp-font-family-mono); font-size: 0.9375em; word-break: break-all;
+  text-wrap: balance; }
+.pp-field__group { margin-inline-end: 0.5ch; white-space: nowrap; }
+.pp-field__group:last-child { margin-inline-end: 0; }
+
+/* Copy: a 44px target drawn as a 32px icon button; its block margins keep the row's height. */
 .pp-copy { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center;
-  width: 32px; height: 32px; padding: 0; appearance: none; border: 0; border-radius: 6px; background: none;
-  color: var(--pp-color-text-secondary); font: inherit; font-size: 16px; cursor: pointer;
-  transition: background-color 150ms, color 150ms; }
-.pp-copy::before { content: ""; position: absolute; inset: -6px; }
-.pp-copy:hover { background: var(--pp-color-surface); color: var(--pp-color-text); }
+  width: 44px; height: 44px; margin-block: -6px; padding: 0; appearance: none; border: 0; border-radius: 10px;
+  background: none; color: var(--pp-color-text-muted); cursor: pointer; transition: color 150ms; }
+.pp-copy::before { content: ""; position: absolute; inset: 6px; border-radius: 6px; transition: background-color 150ms; }
+.pp-copy svg { position: relative; inline-size: 16px; block-size: 16px; }
+.pp-copy:hover { color: var(--pp-color-text); }
+.pp-copy:hover::before { background: var(--pp-color-surface); }
+.pp-root .pp-copy:focus-visible { outline-offset: -4px; }
 .pp-copy[data-state="copied"] { color: var(--pp-color-success); }
 .pp-copy[data-state="failed"] { color: var(--pp-color-danger); }
-.pp-tx { display: flex; gap: 0.5em; align-items: center; margin: 0 0 1em; font-size: 0.875em; }
-.pp-tx > :first-child { flex: 1; min-width: 0; }
-.pp-tx a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
-.pp-tx .pp-value { overflow-wrap: anywhere; font-size: 1em; text-wrap: wrap; }
-.pp-external { margin-inline-start: 0.25em; vertical-align: -0.125em; }
 
-/* Deposit address network and token choices: native radios, each label drawn as a button. */
+/* Deposit address */
+.pp-intro { margin: 0 0 1em; color: var(--pp-color-text-muted); }
+
+/* Network and token choices: native radios, each option drawn as a button. The radio covers its
+   option, so that its own border shows the selection and its outline the focus. */
 .pp-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9em), 1fr)); gap: 0.5em;
   min-width: 0; margin: 0 0 1em; padding: 0; border: 0; }
-.pp-choices legend { margin-bottom: 0.375em; padding: 0; font-size: 0.875em; font-weight: 500; }
-.pp-choices label { position: relative; display: flex; align-items: center; justify-content: center; gap: 0.5em;
-  min-height: var(--pp-control-height); padding: 0.5em 0.75em; border-radius: var(--pp-border-radius);
+.pp-choices__legend { margin-bottom: 0.375em; padding: 0; font-size: 0.875em; font-weight: 500; }
+.pp-choices__option { position: relative; display: flex; align-items: center; justify-content: center; gap: 0.5em;
+  min-height: var(--pp-control-height); padding: 0.5em 0.75em; border-radius: var(--pp-radius);
   font-weight: 500; text-align: center; cursor: pointer; }
-.pp-choices input { position: absolute; inset: 0; margin: 0; appearance: none;
+.pp-choices__input { position: absolute; inset: 0; margin: 0; appearance: none;
   border: 1px solid var(--pp-color-border); border-radius: inherit; background: none; cursor: pointer;
   transition: border-color 150ms; }
-.pp-choices input:hover { border-color: var(--pp-color-text-secondary); }
-.pp-choices input:checked { border: 2px solid var(--pp-color-primary); }
-.pp-choices input:focus-visible { outline: 2px solid var(--pp-color-focus); outline-offset: 2px; }
+.pp-choices__input:hover { border-color: var(--pp-color-text-muted); }
+.pp-choices__input:checked { border: 2px solid var(--pp-color-primary); }
 
-/* Deposit payments */
-.pp-payments { list-style: none; margin: 1em 0 0; padding: 0; border-top: 1px solid var(--pp-color-border); }
-.pp-payments li { display: flex; gap: 0.625em; align-items: flex-start; margin: 0; padding: 0.625em 0;
+.pp-payments { margin: 1em 0 0; padding: 0; list-style: none; border-top: 1px solid var(--pp-color-border); }
+.pp-payments__item { display: flex; gap: 0.625em; align-items: flex-start; padding: 0.625em 0;
   border-bottom: 1px solid var(--pp-color-border); }
-.pp-payment-dot { flex: none; width: 0.5em; height: 0.5em; margin-top: 0.5em; border-radius: 50%;
-  background: var(--pp-color-text-secondary); }
-.pp-payments li[data-tone="success"] .pp-payment-dot { background: var(--pp-color-success); }
-.pp-payments li[data-tone="danger"] .pp-payment-dot { background: var(--pp-color-danger); }
+.pp-payments__dot { flex: none; width: 0.5em; height: 0.5em; margin-top: 0.5em; border-radius: 50%;
+  background: var(--pp-color-text-muted); }
+.pp-payments__item[data-tone="success"] .pp-payments__dot { background: var(--pp-color-success); }
+.pp-payments__item[data-tone="danger"] .pp-payments__dot { background: var(--pp-color-danger); }
 
-.pp-icon-label { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; white-space: nowrap; }
-.pp-icon { display: inline-block; flex: none; vertical-align: middle; }
-.pp-visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
-  clip-path: inset(50%); white-space: nowrap; border: 0; }
-
+@media (forced-colors: active) {
+  .pp-choices__input:checked { border-color: Highlight; forced-color-adjust: none; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .pp-skeleton span { animation: none; }
-  .pp-tab, .pp-button, .pp-copy, .pp-choices input { transition: none; }
+  .pp-skeleton__line { animation: none; }
+  .pp-tabs__tab, .pp-button, .pp-copy, .pp-copy::before, .pp-choices__input { transition: none; }
 }

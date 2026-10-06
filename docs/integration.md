@@ -387,8 +387,8 @@ automatically. `onSuccess(quote)` is called once credited; `quote.amount_credite
 credited.
 
 **Theme it.** Import `"@phala/pay-react/styles.css"` once in your application entry point.
-Map your application's light/dark tokens to `--pp-*` properties on `.pp-root` in a stylesheet
-loaded after the SDK's CSS, and omit `appearance` (`pay-theme.css` below):
+Map your application's light/dark tokens to `--pp-*` properties on `.pp-root[data-theme]` in a
+stylesheet loaded after the SDK's CSS, and omit `appearance` (`pay-theme.css` below):
 
 ```tsx
 import "@phala/pay-react/styles.css";
@@ -405,17 +405,18 @@ import "./pay-theme.css";
 ```
 
 ```css
-.pp-root {
-  --pp-color-primary: var(--app-color-primary);
-  --pp-accessible-color-on-color-primary: var(--app-color-on-primary);
-  --pp-color-background: var(--app-color-background);
+.pp-root[data-theme] {
   --pp-color-text: var(--app-color-text);
+  --pp-color-text-muted: var(--app-color-text-muted);
+  --pp-color-primary: var(--app-color-primary);
+  --pp-color-primary-foreground: var(--app-color-on-primary);
   --pp-color-focus: var(--app-color-focus-ring);
   --pp-font-size: 1em;
 }
 ```
 
-The components take your page's font; `--pp-font-size: 1em` also takes its text size. Map
+The components draw no frame or background: place them in your own card or dialog. They take
+your page's font; `--pp-font-size: 1em` also takes its text size. Map
 `--pp-color-focus` to your focus ring color, distinct from the primary color, so that a keyboard
 user can tell the focused choice from the selected one.
 

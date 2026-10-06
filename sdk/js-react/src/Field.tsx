@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from "react";
 import { CheckGlyph, CopyGlyph, CrossGlyph } from "./Glyphs.js";
 
-/** `copy` adds a copy button, copying `value`, or the given string when it differs from it. */
+/** One `dt`/`dd` pair of a `.pp-fields` list; `copy` adds a copy button, copying `value`, or the
+ * given string when it differs from it. A copyable value is monospace. */
 export function Field({
   label,
   value,
@@ -13,12 +14,12 @@ export function Field({
 }) {
   return (
     <div className="pp-field">
-      <dt>{label}</dt>
-      <dd>
-        <span className={copy === false ? undefined : "pp-value"}><Grouped value={value} /></span>
-        {copy !== false && (
-          <CopyButton value={typeof copy === "string" ? copy : value} label={label} />
-        )}
+      <dt className="pp-field__label">{label}</dt>
+      <dd className="pp-field__value">
+        <span className={copy === false ? "pp-field__text" : "pp-field__text pp-field__text--mono"}>
+          <Grouped value={value} />
+        </span>
+        {copy !== false && <CopyButton value={typeof copy === "string" ? copy : value} label={label} />}
       </dd>
     </div>
   );
@@ -40,11 +41,12 @@ function Grouped({ value }: { value: string }) {
   return groups.map((group, index) => (
     <Fragment key={index}>
       {index > 0 && <wbr />}
-      <span className="pp-group">{group}</span>
+      <span className="pp-field__group">{group}</span>
     </Fragment>
   ));
 }
 
+/** An icon button named "Copy <label>"; its live region announces the result. */
 export function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState<boolean | null>(null);
   useEffect(() => {
@@ -69,8 +71,8 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
       data-state={copied === null ? undefined : copied ? "copied" : "failed"}
     >
       {copied === null ? <CopyGlyph /> : copied ? <CheckGlyph /> : <CrossGlyph />}
-      <span className="pp-visually-hidden" aria-live="polite">
-        {copied === null ? "Copy" : copied ? "Copied" : "Copy failed"}
+      <span className="pp-sr-only" aria-live="polite">
+        {copied === null ? "" : copied ? "Copied" : "Copy failed"}
       </span>
     </button>
   );

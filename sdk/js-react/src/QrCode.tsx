@@ -24,7 +24,7 @@ export function QrCode({ value, label, size = 208 }: QrCodeProps) {
 
   return (
     <svg
-      className="pp-qr"
+      className="pp-qr__code"
       role="img"
       aria-label={label}
       width={size}

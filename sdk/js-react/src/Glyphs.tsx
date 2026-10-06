@@ -24,7 +24,7 @@ export function CrossGlyph() {
 }
 
 export function ExternalGlyph() {
-  return <Glyph className="pp-external"><path d="M7 17 17 7M9 7h8v8" /></Glyph>;
+  return <Glyph className="pp-tx__external"><path d="M7 17 17 7M9 7h8v8" /></Glyph>;
 }
 
 /** The status row's tone: a dot while in progress, a check once credited, an alert on failure. */

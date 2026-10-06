@@ -123,6 +123,9 @@ amount, or after expiry, is still credited, at the market price instead of the q
 checkout then says so ("Payment credited: $10.00 of $25.00"), and `onSuccess` receives the quote
 with what was credited as `amount_credited`, beside the quoted `amount`.
 
+Checkout opens the QR code tab when no browser wallet is discovered; the Wallet tab remains
+available.
+
 ### Your own wallet connection
 
 By default the wallet tab lists the browser's wallets. If your page already connects one, pass its
@@ -206,26 +209,27 @@ fulfil from the `deposit.credited` webhook.
 ```
 
 The default theme is neutral, like a form native to your page: a near-black (dark theme:
-near-white) primary color, zinc greys, your page's font, and text sized from one root size.
+near-white) primary color, zinc greys, and your page's font. The components draw no frame or
+background and fill their container's width: place them in your own card or dialog, and pick
+the theme (or map the colors) that suits its background.
 
-| CSS custom property                      | Light default     | Dark default | Use                                                        |
-| ---------------------------------------- | ----------------- | ------------ | ---------------------------------------------------------- |
-| `--pp-color-primary`                     | `#171717`         | `#fafafa`    | Pay button, selected tab and choice                        |
-| `--pp-accessible-color-on-color-primary` | `#fafafa`         | `#18181b`    | Text on the primary background (button)                    |
-| `--pp-color-background`                  | `#ffffff`         | `#09090b`    | Background                                                 |
-| `--pp-color-surface`                     | `#f4f4f5`         | `#18181b`    | Status row, loading placeholder, copy button hover         |
-| `--pp-color-text`                        | `#18181b`         | `#fafafa`    | Text                                                       |
-| `--pp-color-text-secondary`              | `#52525b`         | `#a1a1aa`    | Labels, hints, and the in-progress status icon             |
-| `--pp-color-border`                      | `#e4e4e7`         | `#27272a`    | Borders                                                    |
-| `--pp-color-focus`                       | `#2563eb`         | `#60a5fa`    | Keyboard focus ring                                        |
-| `--pp-color-danger`                      | `#dc2626`         | `#f87171`    | Error, expired, and rejected icon and border; wallet error |
-| `--pp-color-success`                     | `#15803d`         | `#4ade80`    | Credited icon and border                                   |
-| `--pp-color-warning`                     | `#b45309`         | `#fbbf24`    | "Test mode" label                                          |
-| `--pp-font-family`                       | inherited         | inherited    | Font; by default the page's own                            |
-| `--pp-font-family-mono`                  | `ui-monospace, …` | same         | Addresses, amounts to copy, transaction hashes             |
-| `--pp-font-size`                         | `14px`            | `14px`       | Root text size; the other text sizes are relative to it    |
-| `--pp-control-height`                    | `44px`            | `44px`       | Minimum height of the pay button, tabs, and choices        |
-| `--pp-border-radius`                     | `8px`             | `8px`        | Corner radius                                              |
+| CSS custom property             | Light default     | Dark default | Use                                                 |
+| ------------------------------- | ----------------- | ------------ | --------------------------------------------------- |
+| `--pp-color-surface`            | `#f4f4f5`         | `#18181b`    | Status row, loading placeholder, copy button hover  |
+| `--pp-color-text`               | `#18181b`         | `#fafafa`    | Text                                                |
+| `--pp-color-text-muted`         | `#52525b`         | `#a1a1aa`    | Labels, hints, in-progress status icon              |
+| `--pp-color-border`             | `#e4e4e7`         | `#27272a`    | Borders and dividers                                |
+| `--pp-color-primary`            | `#171717`         | `#fafafa`    | Pay button, selected tab and choice                 |
+| `--pp-color-primary-foreground` | `#fafafa`         | `#18181b`    | Text on the primary color                           |
+| `--pp-color-focus`              | `#2563eb`         | `#60a5fa`    | Keyboard focus ring                                 |
+| `--pp-color-success`            | `#15803d`         | `#4ade80`    | Credited icon                                       |
+| `--pp-color-warning`            | `#b45309`         | `#fbbf24`    | "Test mode"                                         |
+| `--pp-color-danger`             | `#dc2626`         | `#f87171`    | Failure icon, wallet errors                         |
+| `--pp-font-family`              | inherited         | inherited    | Font                                                |
+| `--pp-font-family-mono`         | `ui-monospace, …` | same         | Addresses, amounts to copy, hashes                  |
+| `--pp-font-size`                | `14px`            | `14px`       | Root text size; other text sizes are relative to it |
+| `--pp-radius`                   | `8px`             | `8px`        | Corner radius of controls and the status row        |
+| `--pp-control-height`           | `44px`            | `44px`       | Minimum height of the pay button, tabs, and choices |
 
 Import the static stylesheet once in your application entry point:
 
@@ -233,40 +237,35 @@ Import the static stylesheet once in your application entry point:
 import "@phala/pay-react/styles.css";
 ```
 
-Set these CSS custom properties in your own stylesheet, after the SDK stylesheet, using a
-selector such as `.pp-root[data-theme]`. For a light primary color, set a dark
-`--pp-accessible-color-on-color-primary` so the button label stays readable. Set
-`--pp-font-size: 1em` to follow your page's text size. Keep `--pp-color-focus` distinct from
-`--pp-color-primary`, with at least 3:1 contrast to the background: it is how a keyboard user
-tells the focused choice from the selected one.
-
-For a frameless host dialog, set `--pp-root-border: 0`, `--pp-root-padding: 0`,
-`--pp-root-max-width: none`, and `--pp-root-background: transparent` on the component or its
-ancestor. Defaults remain `1px solid var(--pp-color-border)`, `20px`, `440px`, and
-`var(--pp-color-background)`. Checkout opens QR code when no browser wallet is discovered;
-the Wallet tab remains available.
+Set these CSS custom properties in your own stylesheet, after the SDK stylesheet, on
+`.pp-root[data-theme]`; they are the supported way to theme the components. Pair a light primary
+color with a dark `--pp-color-primary-foreground`. Set `--pp-font-size: 1em` to follow your
+page's text size. Keep `--pp-color-focus` distinct from `--pp-color-primary`, with at least 3:1
+contrast to the background: it is how a keyboard user tells the focused choice from the selected
+one.
 
 ```css
 .pp-root[data-theme] {
   --pp-color-primary: #cdfa50;
-  --pp-accessible-color-on-color-primary: #161616;
+  --pp-color-primary-foreground: #161616;
   --pp-color-focus: #2563eb;
-  --pp-border-radius: 12px;
+  --pp-radius: 12px;
 }
 ```
 
-To map your own light/dark tokens on `.pp-root`, omit `appearance.theme` and load your mapping
-after the SDK stylesheet. Passing `theme: "dark"` sets `data-theme="dark"`, whose SDK selector
-`.pp-root[data-theme="dark"]` overrides a plain `.pp-root` mapping. If you also pass the dark
-theme, target `.pp-root[data-theme="dark"]` (or `.pp-root[data-theme]`) in your mapping.
+To map your own light/dark tokens, omit `appearance.theme` and load your mapping after the SDK
+stylesheet. Passing `theme: "dark"` sets `data-theme="dark"`, whose SDK selector
+`.pp-root[data-theme="dark"]` overrides a plain `.pp-root` mapping, so target
+`.pp-root[data-theme]` in your mapping.
 
 The components show a payer's receive address and token contract in full, in groups of four
 characters after `0x` (`0x5290 8400 0985 …`), never shortened, so that a payer can compare it
 group by group with what their wallet shows; selecting and copying it gives the address without
 spaces. The QR code keeps the standard quiet zone of four modules inside 8px of white, so it scans
-on a dark page too. The status row's text stays the body color; its icon and leading border carry
-the tone. Transitions and the loading placeholder's pulse stop under
-`prefers-reduced-motion: reduce`.
+on a dark page too. The status row's text stays the body color on a neutral surface; its icon
+carries the tone. Transitions and the loading placeholder's pulse stop under
+`prefers-reduced-motion: reduce`, and the selected choice keeps a system color in forced-colors
+mode.
 
 ### Content Security Policy
 

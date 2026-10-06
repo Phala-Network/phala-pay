@@ -163,7 +163,7 @@ describe("Checkout", () => {
     await renderCheckout();
     await user.click(screen.getByRole("tab", { name: "Manual transfer" }));
     // In full, in groups of four after 0x, which copy without spaces.
-    const groups = screen.getByText(shownValue(ADDRESS)).querySelectorAll(".pp-group");
+    const groups = screen.getByText(shownValue(ADDRESS)).querySelectorAll(".pp-field__group");
     expect([...groups].map((group) => group.textContent)).toEqual(["0x1111", ...Array<string>(9).fill("1111")]);
     await user.click(screen.getByRole("button", { name: "Copy Send to address" }));
     await user.click(screen.getByRole("button", { name: "Copy Exact amount" }));

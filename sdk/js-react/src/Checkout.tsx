@@ -133,25 +133,25 @@ export function Checkout({
     >
       {status === "loading" && (
         <div className="pp-skeleton" aria-hidden="true">
-          <span />
-          <span />
+          <span className="pp-skeleton__line" />
+          <span className="pp-skeleton__line" />
         </div>
       )}
       {quote !== null && (
-        <>
-          <p className="pp-amount">
+        <div className="pp-summary">
+          <p className="pp-summary__amount">
             <AssetIcon asset={quote.asset} size={20} />
             {formatTokenAmount(quote)} {quote.asset.toUpperCase()}
           </p>
-          <p className="pp-subtitle">
+          <p className="pp-summary__meta">
             {formatAmount(quote)} top-up ·{" "}
-            <span className="pp-with-icon">
+            <span className="pp-summary__network">
               <NetworkIcon chainId={quote.chain_id} size={16} />
               {networkName(quote.chain_id)}
             </span>
-            {!quote.livemode && <> · <span className="pp-badge">Test mode</span></>}
+            {!quote.livemode && <> · <span className="pp-summary__test-mode">Test mode</span></>}
           </p>
-        </>
+        </div>
       )}
       <StatusLine status={status} quote={quote} now={now} error={error} reconnecting={reconnecting ?? false} />
       {txHash !== null && quote !== null && <Transaction hash={txHash} chainId={quote.chain_id} />}
@@ -192,17 +192,17 @@ function StatusLine({
         : "neutral";
   return (
     <div className="pp-status" data-tone={tone}>
-      <span className="pp-status-icon">
+      <span className="pp-status__icon">
         <ToneGlyph tone={tone} />
       </span>
-      <span role="status" aria-live="polite">
+      <span className="pp-status__text" role="status" aria-live="polite">
         {statusMessage(status, quote, error?.code)}
         {(reconnecting || error !== null) && status !== "error" && (
-          <span className="pp-reconnecting"> (reconnecting…)</span>
+          <span className="pp-status__note"> (reconnecting…)</span>
         )}
       </span>
       {status === "waiting" && quote !== null && (
-        <span className="pp-countdown" aria-label="Time left to pay">
+        <span className="pp-status__countdown" aria-label="Time left to pay">
           {formatCountdown(quote.expires_at, now)}
         </span>
       )}
@@ -270,12 +270,12 @@ function Transaction({ hash, chainId }: { hash: Hash; chainId: number }) {
   const url = transactionUrl(chainId, hash);
   return (
     <p className="pp-tx">
-      <span>
+      <span className="pp-tx__text">
         Transaction sent:{" "}
         {url === undefined ? (
-          <span className="pp-value">{hash}</span>
+          <span className="pp-tx__hash">{hash}</span>
         ) : (
-          <a className="pp-value" href={url} target="_blank" rel="noreferrer">
+          <a className="pp-tx__hash" href={url} target="_blank" rel="noreferrer">
             {hash}
             <ExternalGlyph />
           </a>
@@ -345,7 +345,7 @@ function PaymentOptions({
             }}
             type="button"
             role="tab"
-            className="pp-tab"
+            className="pp-tabs__tab"
             id={`${id}-tab-${m.id}`}
             aria-label={m.id === "wallet" ? "Browser wallet" : m.id === "manual" ? "Manual transfer" : m.label}
             aria-selected={method === m.id}
@@ -358,6 +358,7 @@ function PaymentOptions({
         ))}
       </div>
       <div
+        className="pp-tabs__panel"
         role="tabpanel"
         id={`${id}-panel-${method}`}
         aria-labelledby={`${id}-tab-${method}`}
@@ -374,9 +375,9 @@ function PaymentOptions({
           />
         )}
         {method === "qr" && (
-          <div className="pp-qr-panel">
+          <div className="pp-qr">
             <QrCode value={quote.payment_uri} label={`Payment request for ${amount}`} />
-            <p className="pp-message">
+            <p className="pp-qr__caption">
               Scan with your wallet app and check it shows {amount} on {networkName(quote.chain_id)}.
             </p>
           </div>
@@ -447,9 +448,9 @@ function WalletPanel({
           onClick={() => void pay(choice)}
           aria-label={walletClient === undefined ? `${buttonText} (${choice.name})` : buttonText}
         >
-          {choice.icon !== "" && <img src={choice.icon} alt="" />}
+          {choice.icon !== "" && <img className="pp-button__icon" src={choice.icon} alt="" />}
           <span>{buttonText}</span>
-          {walletClient === undefined && <span className="pp-wallet-name">{choice.name}</span>}
+          {walletClient === undefined && <span className="pp-button__detail">{choice.name}</span>}
         </button>
       ))}
       <p

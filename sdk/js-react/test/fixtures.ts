@@ -60,5 +60,5 @@ export function fakeFetch(...responses: (ClientQuote | number | Error | (() => R
 /** Matches the element showing `value`, a hex value shown in groups of four characters. */
 export function shownValue(value: string) {
   return (_: string, element: Element | null) =>
-    element?.classList.contains("pp-value") === true && element.textContent === value;
+    element?.classList.contains("pp-field__text") === true && element.textContent === value;
 }
