@@ -1,13 +1,16 @@
-import { BookOpen, Braces, Cpu, Menu, Rocket, Server, Wallet, type LucideIcon } from "lucide-react";
+import { BookOpen, Braces, Cpu, Menu, X, Rocket, Clock, Coins, Wallet, type LucideIcon } from "lucide-react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { GitHubIcon } from "./common.js";
+import { useHydrated } from "./islands.js";
+import { FAQ, HERO_SUBHEAD, TAGLINE } from "./content/site.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 
-const REPO = "https://github.com/Phala-Network/phala-pay";
-const LINKS = {
+export const REPO = "https://github.com/Phala-Network/phala-pay";
+export const LINKS = {
   repo: REPO,
-  docs: `${REPO}/blob/main/docs/integration.md`,
+  docs: `${REPO}#documentation`,
+  overview: `${REPO}/blob/main/docs/overview.md`,
+  integration: `${REPO}/blob/main/docs/integration.md`,
   selfHosting: `${REPO}/blob/main/docs/self-hosting.md`,
   // The guide's one-command deploy to your own Phala Cloud workspace, beside its other two paths.
   deploy: `${REPO}/blob/main/docs/self-hosting.md#one-command-deploy`,
@@ -20,44 +23,33 @@ const LINKS = {
 /** The page's width. */
 export const CONTAINER = "mx-auto w-full max-w-[84rem] px-5 sm:px-8 2xl:max-w-[92rem]";
 
-// The headline, as index.html's title, description, and link preview (brand/og-image.svg) carry it.
-const TAGLINE = "Fast, secure, non-custodial crypto payments";
-
-// README.md; docs/self-hosting.md; docs/architecture.md §1; docs/integration.md §5.
+// Facts: README.md; docs/overview.md; docs/architecture.md §§1, 8; docs/integration.md §§1.6, 5.
 const PROPERTIES: { icon: LucideIcon; title: string; text: string }[] = [
-  {
-    icon: Wallet,
-    title: "Non-custodial",
-    text: "Addresses can only pay your treasury; the service holds no funds and sends no transactions.",
-  },
-  {
-    icon: Server,
-    title: "Self-hosted",
-    text: "Open source under Apache-2.0: you run your own instance, for your own merchants.",
-  },
-  {
-    icon: Cpu,
-    title: "Runs in a TEE",
-    text: "A dstack confidential VM, with an attestation you can verify before you trust it.",
-  },
-  {
-    icon: Braces,
-    title: "Stripe-shaped API",
-    text: "API keys, Idempotency-Key, metadata, Stripe's Event object, and Standard Webhooks.",
-  },
+  { icon: Wallet, title: "No custodian", text: "Deposit addresses are contracts that can only pay your treasury. You set the treasury with a signed message; the operator cannot change it." },
+  { icon: Coins, title: "No per-payment fee", text: "The software takes no cut. You pay for your own hosting, RPC providers, and the gas to sweep." },
+  { icon: Clock, title: "Credited in seconds", text: "About 7 s on Base and 30 s on Ethereum after payment, double-checked by a second RPC provider and watched to finality." },
+  { icon: Cpu, title: "Verify what runs", text: "It runs in an Intel TDX confidential VM. Check its attestation and pin its webhook signing key from it." },
+  { icon: Braces, title: "Stripe-style API", text: "Quotes, deposit addresses, test and live modes, idempotency keys, signed webhooks. SDKs for React, Node.js, and Python." },
 ];
 
 const NAV = [
+  { href: "/#demo", label: "Demo" },
+  { href: "/compare", label: "Compare" },
   { href: LINKS.docs, label: "Docs" },
   { href: LINKS.reference, label: "API reference" },
   { href: LINKS.selfHosting, label: "Self-hosting" },
 ];
 
 export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuId = useId();
+  const hydrated = useHydrated();
+  const menuToggle = useRef<HTMLButtonElement>(null);
+
   return (
     <header className="sticky top-0 z-50 border-b bg-background">
       <div className={`${CONTAINER} flex h-14 items-center justify-between gap-4`}>
-        <a href="#top" className="flex rounded-md">
+        <a href="/" className="flex rounded-md">
           <Lockup />
         </a>
         <nav aria-label="Site" className="-mr-3 flex items-center gap-1 text-muted-foreground">
@@ -67,30 +59,44 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
             </Button>
           ))}
           <a href={LINKS.repo} aria-label="GitHub" className={ICON_BUTTON}>
-            <GitHubIcon />
+            <span aria-hidden="true" className="github-icon inline-block size-4 shrink-0 bg-current" />
           </a>
           <ThemeToggle theme={theme} onChange={onThemeChange} />
-          <Sheet>
-            <SheetTrigger asChild>
-              <button type="button" className={`${ICON_BUTTON} md:hidden`} aria-label="Menu">
-                <Menu aria-hidden="true" />
-              </button>
-            </SheetTrigger>
-            <SheetContent side="right" className="w-72">
-              <SheetHeader>
-                <SheetTitle>Phala Pay</SheetTitle>
-              </SheetHeader>
+          {hydrated && <div
+            className="relative md:hidden"
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && menuOpen) {
+                event.preventDefault();
+                setMenuOpen(false);
+                menuToggle.current?.focus();
+              }
+            }}
+          >
+            <button ref={menuToggle} type="button" className={ICON_BUTTON} aria-label="Menu"
+              aria-expanded={menuOpen} aria-controls={menuId} onClick={() => setMenuOpen((open) => !open)}>
+              <Menu aria-hidden="true" />
+            </button>
+            <div id={menuId} hidden={!menuOpen}
+              className="absolute top-full right-0 w-72 border bg-popover pb-4 text-popover-foreground shadow-lg">
+              <div className="flex items-center justify-between p-4">
+                <p className="text-base font-medium text-foreground">Phala Pay</p>
+                <button type="button" className={ICON_BUTTON} aria-label="Close menu" onClick={() => {
+                  setMenuOpen(false);
+                  menuToggle.current?.focus();
+                }}>
+                  <X aria-hidden="true" />
+                </button>
+              </div>
               <nav aria-label="Menu" className="flex flex-col gap-1 px-4">
                 {NAV.map(({ href, label }) => (
-                  <SheetClose asChild key={label}>
-                    <a className="rounded-md px-2 py-2 text-sm font-medium hover:bg-accent" href={href}>
-                      {label}
-                    </a>
-                  </SheetClose>
+                  <a key={label} className="rounded-md px-2 py-2 text-sm font-medium hover:bg-accent"
+                    href={href} onClick={() => setMenuOpen(false)}>
+                    {label}
+                  </a>
                 ))}
               </nav>
-            </SheetContent>
-          </Sheet>
+            </div>
+          </div>}
         </nav>
       </div>
     </header>
@@ -144,31 +150,23 @@ export function Hero() {
           {TAGLINE}
         </h1>
         <p className="max-w-2xl text-base text-pretty text-muted-foreground sm:text-lg">
-          {/* Each sentence starts a line, and is one where the paragraph is wide; its clauses kept
-              whole so it wraps only between them (checked at 360 and 390 px). */}
-          <span className="block">
-            Credited at two confirmations, <span className="whitespace-nowrap">about 30&nbsp;s on Ethereum</span>,{" "}
-            <span className="whitespace-nowrap">in a TEE you can verify</span>.
-          </span>
-          <span className="block">
-            <span className="whitespace-nowrap">Addresses can only pay your treasury</span>,{" "}
-            <span className="whitespace-nowrap">and the API follows Stripe's</span>.
-          </span>
+          {HERO_SUBHEAD}
         </p>
         <div className="flex flex-wrap items-center gap-3 pt-2 xl:pt-0">
           <Button asChild size="lg" className={HERO_BUTTON}>
             <a href={LINKS.deploy}>
               <Rocket aria-hidden="true" />
-              Deploy on Phala Cloud
+              Start a testnet instance
             </a>
           </Button>
           <Button asChild size="lg" variant="outline" className={HERO_BUTTON}>
             <a href={LINKS.docs}>
               <BookOpen aria-hidden="true" />
-              Docs
+              Read the docs
             </a>
           </Button>
         </div>
+        <p className="text-sm text-muted-foreground xl:col-span-2">Pre-1.0 · Not yet independently audited · The demo runs on testnets with test tokens</p>
       </div>
     </section>
   );
@@ -179,12 +177,12 @@ export function Properties() {
     <section aria-labelledby="properties-title" className="border-t bg-muted/30">
       <div className={`${CONTAINER} py-16`}>
         <h2 id="properties-title" className="text-2xl font-semibold tracking-tight">
-          Payments you can verify
+          Built for apps and platforms
         </h2>
         <p className="mt-2 max-w-2xl leading-6 text-muted-foreground">
-          The service never holds funds, and you can check what it runs before you trust it.
+          Top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute.
         </p>
-        <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {PROPERTIES.map(({ icon: Icon, title, text }) => (
             <li key={title} className="rounded-xl border bg-card p-6 text-card-foreground">
               <span className="flex size-9 items-center justify-center rounded-lg border bg-background" aria-hidden="true">
@@ -204,7 +202,9 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
   {
     title: "Product",
     links: [
-      { href: "#demo", label: "Live demo" },
+      { href: "/#demo", label: "Demo" },
+      { href: "/compare", label: "Compare" },
+      { href: LINKS.overview, label: "How it works" },
       { href: LINKS.selfHosting, label: "Self-hosting" },
       { href: LINKS.security, label: "Security" },
     ],
@@ -212,9 +212,13 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
   {
     title: "Developers",
     links: [
-      { href: LINKS.docs, label: "Integration guide" },
+      { href: LINKS.docs, label: "Documentation" },
+      { href: LINKS.integration, label: "Integration guide" },
       { href: LINKS.reference, label: "API reference" },
       { href: LINKS.npm, label: "npm @phala/pay-react" },
+      { href: "https://www.npmjs.com/package/@phala/pay", label: "npm @phala/pay" },
+      { href: "https://www.npmjs.com/package/@phala/pay-server", label: "npm @phala/pay-server" },
+      { href: "https://pypi.org/project/phala-pay/", label: "PyPI phala-pay" },
     ],
   },
   {
@@ -236,7 +240,7 @@ export function SiteFooter() {
         </div>
         {FOOTER.map((column) => (
           <nav key={column.title} aria-label={column.title}>
-            <h2 className="font-medium">{column.title}</h2>
+            <p className="font-medium">{column.title}</p>
             <ul className="mt-3 flex flex-col gap-2">
               {column.links.map(({ href, label }) => (
                 <li key={label}>
@@ -254,9 +258,103 @@ export function SiteFooter() {
           className={`${CONTAINER} flex flex-col gap-2 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between`}
         >
           <p>© 2026 Phala Network</p>
-          <p>The demo above runs on testnets with test tokens; no real money moves.</p>
+          <p>The live demo runs on testnets with test tokens; no real money moves.</p>
         </div>
       </div>
     </footer>
   );
+}
+
+export function HowItWorks() {
+  const steps = [
+    ["Create a quote or deposit address", "Your backend calls the API with its key. Each address is a contract that can only pay your treasury."],
+    ["Your customer pays", "USDC, USDT, or other ERC-20 tokens from any wallet: connect, scan a QR code, or send manually."],
+    ["Credit the account", "A signed webhook arrives in seconds. Sweep to your treasury whenever you choose."],
+  ];
+  return (
+    <section aria-labelledby="how-title" className="border-t">
+      <div className={`${CONTAINER} py-16`}>
+        <h2 id="how-title" className="text-2xl font-semibold tracking-tight">How it works</h2>
+        <ol className="mt-8 grid gap-6 md:grid-cols-3">
+          {steps.map(([title, text], index) => (
+            <li key={title} className="rounded-xl border bg-card p-6">
+              <span className="text-sm font-medium text-muted-foreground">{index + 1}</span>
+              <h3 className="mt-3 font-semibold">{title}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{text}</p>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+export function CompareTeaser() {
+  const cards = [
+    ["Hosted processors (Stripe, Coinbase Business, NOWPayments, MoonPay Commerce)", "Nothing to run; a fee per payment; they onboard you."],
+    ["BTCPay Server", "Self-hosted and free; built for Bitcoin."],
+    ["Phala Pay", "Self-hosted and free; built for ERC-20 tokens on Ethereum and Base, with verifiable attestation."],
+  ];
+  return (
+    <section aria-labelledby="compare-title" className="border-t">
+      <div className={`${CONTAINER} py-16`}>
+        <h2 id="compare-title" className="text-2xl font-semibold tracking-tight">How Phala Pay compares</h2>
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          {cards.map(([title, text]) => (
+            <a href="/compare" key={title} className="rounded-xl border bg-card p-6 transition-colors hover:bg-accent">
+              <h3 className="font-semibold">{title}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{text}</p>
+            </a>
+          ))}
+        </div>
+        <a href="/compare" className="mt-6 inline-block font-medium underline underline-offset-4">See the full comparison →</a>
+      </div>
+    </section>
+  );
+}
+
+export function Faq() {
+  return (
+    <section aria-labelledby="faq-title" className="border-t bg-muted/30">
+      <div className={`${CONTAINER} py-16`}>
+        <h2 id="faq-title" className="text-2xl font-semibold tracking-tight">Frequently asked questions</h2>
+        <div className="mt-8 grid gap-x-12 gap-y-8 md:grid-cols-2">
+          {FAQ.map(({ question, answer }) => (
+            <div key={question}>
+              <h3 className="font-semibold">{question}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{answer}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function ClosingCta() {
+  return (
+    <section aria-labelledby="closing-title" className="border-t">
+      <div className={`${CONTAINER} py-16`}>
+        <h2 id="closing-title" className="text-2xl font-semibold tracking-tight">Run your own payment rail</h2>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
+          <Button asChild size="lg" variant="outline"><a href={LINKS.repo}>View on GitHub</a></Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** The same reserved space is used before the demo chunk loads and in static HTML. */
+export function DemoSection({ children }: { children?: ReactNode }) {
+  return (
+    <section id="demo" aria-labelledby="demo-title" className={`${CONTAINER} min-h-[80rem] scroll-mt-24 pb-16 lg:min-h-[56rem] lg:pb-20`}>
+      <h2 id="demo-title" className="mb-8 text-2xl font-semibold tracking-tight">Live demo (testnet)</h2>
+      <div id="demo-root">{children ?? <DemoPlaceholder />}</div>
+    </section>
+  );
+}
+
+export function DemoPlaceholder() {
+  return <p className="text-sm leading-6 text-muted-foreground">The demo runs on testnets with test tokens.</p>;
 }

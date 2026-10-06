@@ -1,27 +1,29 @@
 import { Moon, Sun } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type Theme = "light" | "dark";
 
-/** The visitor's theme: stored, else the system's; `dark` on `<html>`. */
+const listeners = new Set<() => void>();
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+function currentTheme(): Theme {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+function setTheme(next: Theme) {
+  document.documentElement.classList.toggle("dark", next === "dark");
+  try {
+    localStorage.setItem("demo-theme", next);
+  } catch {
+    // Theme changes still work for this visit when persistence is unavailable.
+  }
+  for (const listener of listeners) listener();
+}
+
+/** One theme store shared by the header and demo islands. The head script initializes it. */
 export function useTheme(): [Theme, (theme: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem("demo-theme");
-    if (stored === "light" || stored === "dark") {
-      return stored;
-    }
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  });
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-  }, [theme]);
-  return [
-    theme,
-    (next) => {
-      localStorage.setItem("demo-theme", next);
-      setTheme(next);
-    },
-  ];
+  return [useSyncExternalStore(subscribe, currentTheme, () => "light" as const), setTheme];
 }
 
 /** The header's icon buttons: one hover and fill in either theme. */
@@ -31,8 +33,11 @@ export const ICON_BUTTON =
 export function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }) {
   const next = theme === "dark" ? "light" : "dark";
   return (
-    <button type="button" className={ICON_BUTTON} onClick={() => onChange(next)} aria-label={`Switch to ${next} theme`}>
-      {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+    <button type="button" className={ICON_BUTTON} onClick={() => onChange(next)}>
+      <Sun aria-hidden="true" className="hidden dark:block" />
+      <Moon aria-hidden="true" className="dark:hidden" />
+      <span className="sr-only hidden dark:block">Switch to light theme</span>
+      <span className="sr-only dark:hidden">Switch to dark theme</span>
     </button>
   );
 }

@@ -5,14 +5,17 @@
 # address views (pay-api-staging.phala.com), and sends the visitor's wallet requests through the
 # wallet's provider (no network access). Its typeface is bundled with its assets; its web app
 # manifest is its own. Radix ScrollArea injects a fixed scrollbar rule; the sole style hash
-# permits that exact dependency stylesheet. SDK and application CSS are static assets.
+# permits that exact dependency stylesheet. The script hash permits only the theme bootstrap. SDK and application CSS are static assets.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'sha256-vGQdhYJbTuF+M8iCn1IZCHpdkiICocWHDq4qnQF4Rjw='; font-src 'self'; img-src 'self' data:; connect-src 'self' https://pay-demo-api.phala.com https://pay-api-staging.phala.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'sha256-mVtueoQ5GQcZDX7xIyJPGoyXjAeMO5ZvH1gjKzMcCLU='; style-src 'self' 'sha256-vGQdhYJbTuF+M8iCn1IZCHpdkiICocWHDq4qnQF4Rjw='; font-src 'self'; img-src 'self' data:; connect-src 'self' https://pay-demo-api.phala.com https://pay-api-staging.phala.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
 
 # The page may change; its assets are named by content hash and never do.
 /
+  Cache-Control: no-cache
+
+/compare
   Cache-Control: no-cache
 
 /assets/*
@@ -44,3 +47,6 @@
 # Branch Previews and production version URLs on workers.dev stay out of search results.
 https://:version.:subdomain.workers.dev/*
   X-Robots-Tag: noindex
+
+/llms.txt
+  Cache-Control: public, max-age=86400

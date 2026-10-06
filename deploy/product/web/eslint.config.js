@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   // src/components/ui is shadcn/ui's generated code, kept as its CLI writes it (still type-checked).
-  { ignores: [".cloudflare", "node_modules", "test-results", "playwright-report", "src/components/ui"] },
+  { ignores: [".cloudflare", ".prerender", "node_modules", "test-results", "playwright-report", "src/components/ui"] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   reactHooks.configs.flat.recommended,
@@ -13,6 +13,11 @@ export default tseslint.config(
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
     },
     rules: {
+      // Core ESLint's JSX AST selector enforces the same constraint as forbid-dom-props.
+      "no-restricted-syntax": ["error", {
+        selector: 'JSXAttribute[name.name="style"]',
+        message: "Inline style props violate the CSP. Use CSS classes instead.",
+      }],
       "@typescript-eslint/restrict-template-expressions": ["error", { allowNumber: true }],
       "@typescript-eslint/no-confusing-void-expression": ["error", { ignoreArrowShorthand: true }],
     },

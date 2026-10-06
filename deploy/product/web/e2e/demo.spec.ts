@@ -256,11 +256,11 @@ async function watchConsole(page: Page): Promise<string[]> {
  * The page's metadata for search results and link previews, and the files it links, served from
  * the page's origin.
  */
-async function expectMetadata(page: Page, headline: string): Promise<void> {
+async function expectMetadata(page: Page): Promise<void> {
   const origin = "https://pay.phala.com/";
   const head = page.locator("head");
   const content = (selector: string) => head.locator(selector).getAttribute("content");
-  await expect(page).toHaveTitle(`Phala Pay — ${headline}`);
+  await expect(page).toHaveTitle("Phala Pay: self-hosted, non-custodial crypto payments");
   const description = await content('meta[name="description"]');
   expect(description?.length).toBeLessThanOrEqual(160);
   await expect(head.locator('link[rel="canonical"]')).toHaveAttribute("href", origin);
@@ -268,7 +268,7 @@ async function expectMetadata(page: Page, headline: string): Promise<void> {
     "(prefers-color-scheme: light)",
     "(prefers-color-scheme: dark)",
   ]);
-  expect(await content('meta[property="og:title"]')).toBe(`Phala Pay — ${headline}`);
+  expect(await content('meta[property="og:title"]')).toBe("Phala Pay: self-hosted, non-custodial crypto payments");
   expect(await content('meta[property="og:description"]')).toBe(description);
   expect(await content('meta[property="og:url"]')).toBe(origin);
   expect(await content('meta[property="og:image"]')).toBe(`${origin}og-image.png`);
@@ -276,7 +276,10 @@ async function expectMetadata(page: Page, headline: string): Promise<void> {
   expect(await content('meta[property="og:image:height"]')).toBe("630");
   expect(await content('meta[name="twitter:card"]')).toBe("summary_large_image");
   const structured = await head.locator('script[type="application/ld+json"]').textContent();
-  expect(JSON.parse(structured ?? "null")).toMatchObject({ "@type": "WebSite", url: origin });
+  expect(JSON.parse(structured ?? "null")).toMatchObject({
+    "@context": "https://schema.org",
+    "@graph": expect.arrayContaining([expect.objectContaining({ "@type": "WebSite", url: origin })]),
+  });
   const links = await head
     .locator('link[rel="icon"], link[rel="apple-touch-icon"], link[rel="manifest"]')
     .evaluateAll((tags) => tags.map((tag) => (tag instanceof HTMLLinkElement ? tag.href : "")));
@@ -341,10 +344,10 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
 
   // The headline, its call to deploy, the product (marked as a testnet demo) beside its backend
   // (the attestation in the backend's Trust tab), and a fresh demo account.
-  const headline = "Fast, secure, non-custodial crypto payments";
+  const headline = "Crypto payments, without a custodian";
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(headline);
   const hero = page.getByRole("region", { name: headline });
-  await expect(hero.getByRole("link", { name: "Deploy on Phala Cloud" })).toHaveAttribute(
+  await expect(hero.getByRole("link", { name: "Start a testnet instance" })).toHaveAttribute(
     "href",
     "https://github.com/Phala-Network/phala-pay/blob/main/docs/self-hosting.md#one-command-deploy",
   );
@@ -358,15 +361,15 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
     expect(redirect.status(), path).toBe(302);
     expect(redirect.headers()["location"], path).toBe(location);
   }
-  await expect(hero.getByRole("link", { name: "Docs" })).toHaveAttribute(
+  await expect(hero.getByRole("link", { name: "Read the docs" })).toHaveAttribute(
     "href",
-    "https://github.com/Phala-Network/phala-pay/blob/main/docs/integration.md",
+    "https://github.com/Phala-Network/phala-pay#documentation",
   );
   await expect(page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Self-hosting" })).toHaveAttribute(
     "href",
     "https://github.com/Phala-Network/phala-pay/blob/main/docs/self-hosting.md",
   );
-  await expectMetadata(page, headline);
+  await expectMetadata(page);
   const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
   await expect(product.getByTestId("testnet-badge")).toHaveText("Testnet");
   const scenes = page.getByRole("complementary", { name: "Your backend" });
@@ -453,7 +456,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   // only reach the treasury), indexed by the service once final.
   const sweeps = (await openTab(scenes, "Sweeps")).getByRole("region", { name: "PHA on Sepolia testnet" });
   await expect(sweeps.getByTestId("unswept")).toContainText("80 PHA in 1 forwarder", { timeout: 30_000 });
-  await sweeps.getByRole("button", { name: "Sign the flush from my wallet" }).click();
+  await sweeps.getByRole("button", { name: "Sweep to treasury from my wallet" }).click();
   await expect(sweeps.getByTestId("flush-status")).toContainText("Flush sent: 0x");
   await expectComplete(timeline, ["swept"]);
   expect(await tokenBalance(env("TREASURY"))).toBe(parseEther("80"));
@@ -949,4 +952,114 @@ test("refuses another browser's payments and refunds, and rate-limits quote crea
   expect(statuses).toEqual([404, 404, 404, 404]);
   await first.close();
   await second.close();
+});
+
+
+test("prerendered marketing works without JavaScript; comparison chrome stays interactive", async ({ browser, page }) => {
+  const staticContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  try {
+    const staticPage = await staticContext.newPage();
+    const home = await staticPage.goto(env("SITE_URL"));
+    expect(home?.status()).toBe(200);
+    await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("Crypto payments, without a custodian");
+    await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(6);
+    await expect(staticPage.getByRole("heading", { name: "Which chains and tokens are supported?" })).toBeVisible();
+    await expectMetadata(staticPage);
+    await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
+    await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
+    await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Demo", exact: true })).toHaveAttribute("href", "/#demo");
+    const homeHtml = await home?.text();
+    expect(homeHtml).not.toContain('style="');
+    const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
+    expect(compare?.status()).toBe(200);
+    await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
+    await expect(staticPage.getByRole("table")).toBeVisible();
+    await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
+    await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
+    await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Demo", exact: true })).toHaveAttribute("href", "/#demo");
+    await expect(staticPage.getByText("Partially stated by the vendor; see source.", { exact: false })).toBeVisible();
+    const alias = await page.request.get(new URL("compare.html", env("SITE_URL")).href, { maxRedirects: 0 });
+    expect(alias.status()).toBe(307);
+    expect(alias.headers()["location"]).toBe("/compare");
+  } finally {
+    await staticContext.close();
+  }
+  await page.goto(new URL("compare", env("SITE_URL")).href);
+  await page.getByRole("button", { name: "Switch to dark theme" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Menu", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "Menu" }).getByRole("link", { name: "Demo" })).toHaveAttribute("href", "/#demo");
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect.poll(async () => (await page.getByRole("banner").boundingBox())?.y).toBe(0);
+});
+
+
+test("loading home islands preserves the original prerendered hero", async ({ page }) => {
+  let releaseEntry: (() => void) | undefined;
+  const entryReady = new Promise<void>((resolve) => { releaseEntry = resolve; });
+  await page.route("**/assets/home-*.js", async (route) => {
+    await entryReady;
+    await route.continue();
+  });
+  try {
+    await page.goto(env("SITE_URL"), { waitUntil: "commit" });
+    const hero = page.locator("#hero-title");
+    await expect(hero).toBeVisible();
+    const original = await hero.elementHandle();
+    const originalHeader = await page.getByRole("banner").elementHandle();
+    const originalFooter = await page.getByRole("contentinfo").elementHandle();
+    releaseEntry?.();
+    await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+    expect(await original.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalHeader.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalFooter.evaluate((node) => node.isConnected)).toBe(true);
+    await page.getByRole("button", { name: "Switch to dark theme" }).click();
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+  } finally {
+    releaseEntry?.();
+  }
+});
+
+
+test("home and comparison hydrate in either theme without CSP violations or React errors", async ({ browser }) => {
+  for (const colorScheme of ["light", "dark"] as const) {
+    for (const path of ["", "compare"]) {
+      const context = await browser.newContext({ colorScheme });
+      try {
+        const page = await context.newPage();
+        const problems = await watchConsole(page);
+        await page.goto(new URL(path, env("SITE_URL")).href);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        if (path === "") await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+        const next = colorScheme === "dark" ? "light" : "dark";
+        await page.getByRole("button", { name: `Switch to ${next} theme` }).click();
+        await expect(page.locator("html")).toHaveClass(next === "dark" ? /dark/ : /^$/);
+        await page.setViewportSize({ width: 390, height: 844 });
+        const toggle = page.getByRole("button", { name: "Menu", exact: true });
+        await expect(toggle).toHaveAttribute("aria-expanded", "false");
+        await toggle.click();
+        await expect(toggle).toHaveAttribute("aria-expanded", "true");
+        const menu = page.getByRole("navigation", { name: "Menu" });
+        await expect(menu).toBeVisible();
+        const panelId = await toggle.getAttribute("aria-controls");
+        expect(await menu.evaluate((node) => node.parentElement?.id)).toBe(panelId);
+        await expect(page.locator("body")).not.toHaveAttribute("data-scroll-locked");
+        await menu.getByRole("link", { name: "Demo", exact: true }).focus();
+        await page.keyboard.press("Escape");
+        await expect(menu).toBeHidden();
+        await expect(toggle).toHaveAttribute("aria-expanded", "false");
+        await expect(toggle).toBeFocused();
+        await toggle.click();
+        await menu.getByRole("link", { name: path === "" ? "Demo" : "Compare", exact: true }).click();
+        await expect(toggle).toHaveAttribute("aria-expanded", "false");
+        await expect(menu).toBeHidden();
+        expect(problems).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    }
+  }
 });

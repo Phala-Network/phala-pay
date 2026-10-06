@@ -53,7 +53,7 @@ const STEP_COPY: Record<StepKey, { title: string; hint: string; failed?: string;
     usually: "~15 min",
     title: "Final",
     hint:
-      "About 15 minutes on Ethereum. Until then a reorg that replaces the transaction reverses the " +
+      "About 15 minutes on Ethereum mainnet; this demo runs on testnets. Until then a reorg that replaces the transaction reverses the " +
       "credit; only a final deposit can be refunded. The time shown is the deposit's final_at.",
   },
   reversed: {
