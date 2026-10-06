@@ -17,9 +17,9 @@ from phala_pay import (
     ApiError,
     ConfigurationError,
     PhalaPay,
+    PhalaPayError,
     Quote,
     ResponseValidationError,
-    TopupError,
     TransportError,
 )
 from topup_client.types import Unset
@@ -283,7 +283,7 @@ def test_network_failures_retry_then_raise_public_transport_error_without_cause(
     ):
         client.quotes.retrieve(QUOTE_ID)
     assert raised.value.code == ("timeout" if failure is httpx.ReadTimeout else "network")
-    assert isinstance(raised.value, TopupError)
+    assert isinstance(raised.value, PhalaPayError)
     assert raised.value.__cause__ is None
     assert raised.value.__context__ is None
     assert len(requests) == 2

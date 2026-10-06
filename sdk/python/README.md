@@ -92,7 +92,7 @@ an event your own request caused names it in `event.request` (`id`, `idempotency
 | `pay.webhook_endpoints.create(url=, enabled_events=)` / `.list()` / `.retrieve(id)` / `.update(id, …)` / `.delete(id)` / `.test(id)` | `/v1/webhook_endpoints` |
 | `pay.events.list(type=, types=, delivery_success=, created_gt=, …)` / `.retrieve(id)` / `.resend(id, webhook_endpoint=)` | `/v1/events` |
 | `pay.export_account(directory)` | every list, written as JSON files |
-| `pay.webhooks.construct_event(payload, headers, public_key, expected_account, expected_livemode=)` (also `phala_pay.Webhook`, no client needed) | verifies a webhook delivery |
+| `pay.webhooks.construct_event(payload, headers)` (pins bind the keys, account, and mode; `phala_pay.Webhook` accepts explicit keys, account, and mode without a client) | verifies a webhook delivery |
 
 Every request sends the API key as `Authorization: Bearer …`: a restricted key, `ppay_rk_…`, for
 production servers (`pay.api_keys.create(permissions=[...])`, which never manages keys,
@@ -219,7 +219,6 @@ retries. Keep the application's request budget long enough, or run this work asy
 worker thread. On exhaustion, preserve the order's explicit key for a later retry.
 
 Pins require a canonical origin and valid API key checksum. A normalized override must match pins;
-HTTP is limited to test loopback. Legacy `PhalaPay(api_base, api_key, account=..., forwarder=...,
-treasuries=...)` remains available with its existing test-mode warnings; it cannot be mixed with
-`pins` and cannot create a trusted checkout handoff. The pins-based API never discovers trust from
-the service or legacy environment variables.
+HTTP is limited to test loopback. `PhalaPay` requires pins and never discovers trust from the
+service. Use `PhalaPay(api_key, pins=pins)` or `PhalaPay.from_env()` with `PHALA_PAY_API_KEY` and
+`PHALA_PAY_PINS`.

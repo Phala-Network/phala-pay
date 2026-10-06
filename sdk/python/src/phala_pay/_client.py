@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import math
 import os
-import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypedDict, Unpack, cast
+from typing import Any, TypedDict, Unpack
 from weakref import ReferenceType, ref
 
 import httpx
@@ -33,7 +32,7 @@ from topup_client.models import (
 from topup_client.types import UNSET, Unset
 from topup_sdk import TopupClient, export_account, sign_treasury_challenge
 from topup_sdk._origin import normalize_origin
-from topup_sdk.client import LIVE_KEY_PREFIXES, Metadata, _paginate
+from topup_sdk.client import Metadata, _paginate
 
 from ._errors import ConfigurationError, ResponseValidationError
 from ._pins import Pins, PinsError, key_livemode, parse_pins
@@ -82,9 +81,7 @@ class PhalaPay:
 
     Every quote and deposit address is recomputed from your pins before it is returned. The
     service's treasury is never trusted, and an address you cannot derive raises
-    `AddressMismatchError` (fail closed). The legacy constructor is deprecated and will be
-    removed in 0.10.0; its test-mode unpinned treasury fallback still emits
-    `UnpinnedTreasuryWarning`.
+    `AddressMismatchError` (fail closed).
 
     Requests that fail with a transport error, `429` (after its `Retry-After`), or `5xx` are
     retried with backoff; `POST`s reuse one `Idempotency-Key` across retries, so a retry never
@@ -93,70 +90,36 @@ class PhalaPay:
     `code`, `param`, `doc_url`, and `request_id`.
     """
 
-    def __init__(  # noqa: PLR0912, PLR0915
+    def __init__(
         self,
         api_key: str,
-        *legacy: object,
-        pins: Pins | str | None = None,
+        *,
+        pins: Pins | str,
         api_base: str | None = None,
         timeout: float = 15.0,
         max_attempts: int = 4,
         request_deadline: float | None = None,
         upgrade_tolerance: bool = False,
         transport: httpx.BaseTransport | None = None,
-        **legacy_kwargs: object,
     ) -> None:
-        if legacy or legacy_kwargs:
-            warnings.warn(
-                "The legacy PhalaPay constructor is deprecated and will be removed in 0.10.0; "
-                "use pins or PhalaPay.from_env().",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if pins is not None:
-                raise ConfigurationError(
-                    "pins cannot be combined with legacy constructor arguments"
-                )
-            if legacy:
-                if len(legacy) != 1 or not isinstance(legacy[0], str):
-                    raise ConfigurationError("legacy constructor requires api_base and api_key")
-                api_key, api_base = legacy[0], api_key
-            if api_base is None:
-                raise ConfigurationError("legacy constructor requires api_base")
-            forwarder = legacy_kwargs.pop("forwarder", None)
-            treasuries = legacy_kwargs.pop("treasuries", None)
-            account = legacy_kwargs.pop("account", None)
-            if legacy_kwargs:
-                raise ConfigurationError("unknown constructor argument")
-            if api_key.startswith(LIVE_KEY_PREFIXES) and not (account and forwarder and treasuries):
-                raise ConfigurationError(
-                    "live mode requires pinned account, forwarder and treasuries"
-                )
-            self._pins = None
-        else:
-            if pins is None:
-                raise ConfigurationError("pins is required")
-            try:
-                self._pins = parse_pins(pins) if isinstance(pins, str) else pins
-            except (PinsError, ValueError) as error:
-                raise ConfigurationError("invalid pins") from error
-            if not isinstance(self._pins, Pins):
-                raise ConfigurationError("invalid pins")
-            if self._pins.livemode != key_livemode(api_key):
-                raise ConfigurationError("API key mode does not match pins")
-            if api_base is None:
-                api_base = self._pins.api_base
-            elif normalize_origin(api_base, test=not self._pins.livemode) != self._pins.api_base:
-                raise ConfigurationError("api_base does not match pins")
-            forwarder = (self._pins.factory, self._pins.implementation)
-            treasuries = self._pins.treasuries
-            account = self._pins.account
+        try:
+            self._pins: Pins = parse_pins(pins) if isinstance(pins, str) else pins
+        except (PinsError, ValueError) as error:
+            raise ConfigurationError("invalid pins") from error
+        if not isinstance(self._pins, Pins):
+            raise ConfigurationError("invalid pins")
+        if self._pins.livemode != key_livemode(api_key):
+            raise ConfigurationError("API key mode does not match pins")
+        if api_base is None:
+            api_base = self._pins.api_base
+        elif normalize_origin(api_base, test=not self._pins.livemode) != self._pins.api_base:
+            raise ConfigurationError("api_base does not match pins")
         self._client = TopupClient(
             api_base,
             api_key,
-            account=cast(str | None, account),
-            forwarder=cast(tuple[str, str] | None, forwarder),
-            treasuries=cast(Mapping[int, str] | None, treasuries),
+            account=self._pins.account,
+            forwarder=(self._pins.factory, self._pins.implementation),
+            treasuries=self._pins.treasuries,
             timeout=timeout,
             max_attempts=max_attempts,
             request_deadline=request_deadline,
@@ -178,8 +141,7 @@ class PhalaPay:
         self.api_keys = ApiKeys(self._client)
         self.webhook_endpoints = WebhookEndpoints(self._client)
         self.events = Events(self._client)
-        # narrow to _BoundWebhook when the legacy constructor is removed in 0.10.0
-        self.webhooks: Any = _BoundWebhook(self._pins) if self._pins else Webhook
+        self.webhooks: _BoundWebhook = _BoundWebhook(self._pins)
 
     @classmethod
     def from_env(
@@ -198,8 +160,6 @@ class PhalaPay:
 
     @property
     def pins(self) -> Pins:
-        if self._pins is None:
-            raise ConfigurationError("pins unavailable on legacy client")
         return self._pins
 
     @property
@@ -216,7 +176,6 @@ class PhalaPay:
             or issued is None
             or issued[0]() is not quote
             or issued[1] != quote.client_secret
-            or self._pins is None
         ):
             raise ResponseValidationError(
                 "quote must be an open quote created by this client with a client secret"

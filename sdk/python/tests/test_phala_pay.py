@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -27,11 +28,11 @@ from topup_sdk import deposit_address, load_webhook_public_key, sign_webhook
 from ._support import (
     ACCOUNT,
     ADDRESS,
-    API_KEY,
     DEPOSIT_ADDRESS_ID,
     EVENT_ID,
     FACTORY,
     IMPLEMENTATION,
+    KEY,
     QUOTE_ID,
     REFUND_ID,
     SERVICE_KEY,
@@ -42,6 +43,7 @@ from ._support import (
     _deposit_address,
     _network,
     _quote,
+    pins,
 )
 
 # Resources ---------------------------------------------------------------------------------------
@@ -49,21 +51,17 @@ from ._support import (
 
 def _client(handler: httpx.MockTransport) -> PhalaPay:
     return PhalaPay(
-        "https://service.test",
-        API_KEY,
-        account=ACCOUNT,
-        forwarder=(FACTORY, IMPLEMENTATION),
-        treasuries={11155111: TREASURY},
+        KEY,
+        pins=pins(),
         transport=handler,
     )
 
 
-@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_quotes_create_returns_the_client_secret_to_a_request_with_the_key() -> None:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["authorization"] == f"Bearer {API_KEY}"
+        assert request.headers["authorization"] == f"Bearer {KEY}"
         assert request.headers["idempotency-key"]
         seen.append(request)
         return httpx.Response(200, json=_quote(client_secret=f"{QUOTE_ID}_secret_{'ab' * 24}"))
@@ -81,7 +79,6 @@ def test_quotes_create_returns_the_client_secret_to_a_request_with_the_key() -> 
     assert json.loads(seen[0].content)["client_reference_id"] == "team-42"
 
 
-@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_metadata_is_sent_on_create_and_merged_by_update() -> None:
     seen: list[httpx.Request] = []
     refund: dict[str, object] = {
@@ -143,7 +140,6 @@ def test_metadata_is_sent_on_create_and_merged_by_update() -> None:
     ]
 
 
-@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_deposits_list_follows_every_page() -> None:
     pages = {None: [_deposit(3), _deposit(2)], "dep_" + f"{2:032x}": [_deposit(1)]}
 
@@ -160,7 +156,6 @@ def test_deposits_list_follows_every_page() -> None:
     assert [d.log_index for d in deposits] == [3, 2, 1]
 
 
-@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_deposit_addresses_create_rotate_and_list_check_every_active_address() -> None:
     seen: list[httpx.Request] = []
 
@@ -193,11 +188,8 @@ def test_deposit_addresses_create_rotate_and_list_check_every_active_address() -
         )
 
     with PhalaPay(
-        "https://service.test",
-        API_KEY,
-        account=ACCOUNT,
-        forwarder=(FACTORY, IMPLEMENTATION),
-        treasuries={11155111: TREASURY, 84532: TREASURY},
+        KEY,
+        pins=pins(),
         transport=httpx.MockTransport(handler),
     ) as client:
         created = client.deposit_addresses.create(
@@ -236,7 +228,6 @@ def _derived(treasury: str) -> str:
     )
 
 
-@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 @pytest.mark.parametrize(
     ("network", "treasuries"),
     [
@@ -252,7 +243,7 @@ def _derived(treasury: str) -> str:
     ],
 )
 def test_a_deposit_address_the_account_cannot_derive_is_refused(
-    network: dict[str, object], treasuries: dict[int, str] | None
+    network: dict[str, object], treasuries: dict[int, str]
 ) -> None:
     body = _deposit_address()
     networks = body["networks"]
@@ -265,11 +256,8 @@ def test_a_deposit_address_the_account_cannot_derive_is_refused(
 
     with (
         PhalaPay(
-            "https://service.test",
-            API_KEY,
-            account=ACCOUNT,
-            forwarder=(FACTORY, IMPLEMENTATION),
-            treasuries=treasuries,
+            KEY,
+            pins=replace(pins(), treasuries=treasuries),
             transport=httpx.MockTransport(handler),
         ) as client,
         pytest.raises(AddressMismatchError, match="chain 84532"),
@@ -277,10 +265,9 @@ def test_a_deposit_address_the_account_cannot_derive_is_refused(
         client.deposit_addresses.retrieve(DEPOSIT_ADDRESS_ID)
 
 
-@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
 def test_the_key_must_be_an_api_key() -> None:
-    with pytest.raises(ValueError, match="secret key"):
-        PhalaPay("https://service.test", "acme/v1", forwarder=(FACTORY, IMPLEMENTATION))
+    with pytest.raises(ValueError, match="invalid API key format"):
+        PhalaPay("acme/v1", pins=pins())
 
 
 # Webhooks ----------------------------------------------------------------------------------------

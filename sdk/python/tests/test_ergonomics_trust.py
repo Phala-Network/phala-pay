@@ -24,7 +24,6 @@ from phala_pay import (
     encode_pins,
     parse_pins,
 )
-from phala_pay._client import _BoundWebhook
 from topup_sdk import sign_webhook
 
 from ._support import (
@@ -235,12 +234,11 @@ def test_api_key_format_checksum_and_mode(live: bool, restricted: bool) -> None:
             PhalaPay(bad, pins=trust)
     with pytest.raises(ConfigurationError, match="mode"):
         PhalaPay(key, pins=replace(trust, livemode=not live))
-    with pytest.raises(ConfigurationError, match="pins is required"):
-        PhalaPay(key)
+    with pytest.raises(TypeError, match="pins"):
+        PhalaPay(key)  # type: ignore[call-arg]
 
 
-@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
-def test_from_env_reads_exactly_two_values_and_never_merges_legacy_trust() -> None:
+def test_from_env_reads_exactly_two_values_and_never_merges_individual_pins() -> None:
     class Env(dict[str, str]):
         def __init__(self) -> None:
             super().__init__(PHALA_PAY_API_KEY=KEY, PHALA_PAY_PINS=encode_pins(pins()))
@@ -261,8 +259,8 @@ def test_from_env_reads_exactly_two_values_and_never_merges_legacy_trust() -> No
     ):
         with pytest.raises(ConfigurationError):
             PhalaPay.from_env(values)
-    with pytest.raises(ConfigurationError):
-        PhalaPay(KEY, pins=pins(), account=ACCOUNT)
+    with pytest.raises(TypeError, match="account"):
+        PhalaPay(KEY, pins=pins(), account=ACCOUNT)  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize("resource", ["quote", "deposit_address", "account"])
@@ -311,23 +309,19 @@ def test_bound_webhook_inclusive_bilateral_window_and_zero_exact_match(
     with pay(lambda _: httpx.Response(200)) as client:
         if accept:
             assert (
-                cast(_BoundWebhook, client.webhooks)
-                .construct_event(body, headers, tolerance=tolerance)
-                .deposit.amount
+                client.webhooks.construct_event(body, headers, tolerance=tolerance).deposit.amount
                 == 2500
             )
         else:
             with pytest.raises(SignatureVerificationError):
-                cast(_BoundWebhook, client.webhooks).construct_event(
-                    body, headers, tolerance=tolerance
-                )
+                client.webhooks.construct_event(body, headers, tolerance=tolerance)
 
 
 @pytest.mark.parametrize("tolerance", [-1, float("nan"), float("inf"), True])
 def test_bound_webhook_invalid_tolerance_is_configuration_error(tolerance: float) -> None:
     body, headers = _delivery()
     with pay(lambda _: httpx.Response(200)) as client, pytest.raises(ConfigurationError):
-        cast(_BoundWebhook, client.webhooks).construct_event(body, headers, tolerance=tolerance)
+        client.webhooks.construct_event(body, headers, tolerance=tolerance)
 
 
 @pytest.mark.parametrize("duplicate", ["webhook-id", "webhook-timestamp", "webhook-signature"])
@@ -338,10 +332,10 @@ def test_bound_webhooks_reject_duplicate_signing_headers(duplicate: str) -> None
         pay(lambda _: httpx.Response(200)) as client,
         pytest.raises(SignatureVerificationError, match="duplicate"),
     ):
-        cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
+        client.webhooks.construct_event(body, headers)
     pairs = [(name, value) for name, value in headers.items()]
     with pay(lambda _: httpx.Response(200)) as client, pytest.raises(SignatureVerificationError):
-        cast(_BoundWebhook, client.webhooks).construct_event(body, httpx.Headers(pairs))
+        client.webhooks.construct_event(body, httpx.Headers(pairs))
 
 
 @pytest.mark.parametrize(
@@ -365,14 +359,14 @@ def test_bound_webhooks_fail_closed_for_invalid_identity_envelope_and_resource(c
     if change == "unsigned":
         headers = {}
     with pay(lambda _: httpx.Response(200)) as client, pytest.raises(SignatureVerificationError):
-        cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
+        client.webhooks.construct_event(body, headers)
 
 
 def test_bound_webhooks_use_only_pins_accept_text_and_unknown_types_stay_raw() -> None:
     for event_type in ("future.created", "deposit.future", "quote.future", "refund.future"):
         body, headers = _delivery(event_type, {"future": 1})
         with pay(lambda _: pytest.fail("webhook verification must not fetch keys")) as client:
-            event = cast(_BoundWebhook, client.webhooks).construct_event(
+            event = client.webhooks.construct_event(
                 body.decode(), {k.upper(): v for k, v in headers.items()}
             )
             assert event.data.object == {"future": 1}
@@ -389,16 +383,13 @@ def test_bound_webhook_rotation_requires_explicit_pins_and_notices_do_not_change
         "account.updated", {"webhook_keys": [{"version": 3, "public_key": "whpk_bad"}]}
     )
     with PhalaPay(KEY, pins=trust) as client:
-        assert (
-            cast(_BoundWebhook, client.webhooks).construct_event(body, headers).type
-            == "account.updated"
-        )
+        assert client.webhooks.construct_event(body, headers).type == "account.updated"
         assert client.pins.webhook_keys == trust.webhook_keys
     with (
         PhalaPay(KEY, pins=replace(trust, webhook_keys=((2, new_key),))) as client,
         pytest.raises(SignatureVerificationError),
     ):
-        cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
+        client.webhooks.construct_event(body, headers)
 
 
 def snapshot(**fields: Any) -> dict[str, Any]:
@@ -510,7 +501,7 @@ def test_ledger_pending_rejected_reversal_and_null_to_valued_rules() -> None:
 def test_webhook_quote_secret_does_not_leak_in_event_repr() -> None:
     body, headers = _delivery("quote.expired", _quote(status="expired", client_secret=SECRET))
     with pay(lambda _: httpx.Response(200)) as client:
-        event = cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
+        event = client.webhooks.construct_event(body, headers)
     assert SECRET not in repr(event)
     assert event.quote.client_secret == SECRET
 
@@ -559,31 +550,16 @@ def test_shared_webhook_vectors_execute_through_bound_client(
         with PhalaPay(valid_key(live=trust.livemode), pins=trust) as client:
             if case["outcome"] == "accept":
                 assert (
-                    cast(_BoundWebhook, client.webhooks)
-                    .construct_event(
+                    client.webhooks.construct_event(
                         case["body"], case["headers"], tolerance=case.get("tolerance", 300)
-                    )
-                    .id
+                    ).id
                     == case["headers"]["webhook-id"]
                 )
             else:
                 with pytest.raises(SignatureVerificationError):
-                    cast(_BoundWebhook, client.webhooks).construct_event(
+                    client.webhooks.construct_event(
                         case["body"], case["headers"], tolerance=case.get("tolerance", 300)
                     )
-
-
-@pytest.mark.filterwarnings("ignore:The legacy PhalaPay constructor:DeprecationWarning")
-@pytest.mark.parametrize("missing", ["account", "forwarder", "treasuries"])
-def test_legacy_live_constructor_requires_all_address_pins_at_construction(missing: str) -> None:
-    arguments: dict[str, Any] = {
-        "account": pins().account,
-        "forwarder": (pins().factory, pins().implementation),
-        "treasuries": dict(pins().treasuries),
-    }
-    del arguments[missing]
-    with pytest.raises(ConfigurationError, match="live mode requires"):
-        PhalaPay("https://service.test", valid_key(live=True), **arguments)
 
 
 @pytest.mark.parametrize("event_type", ["deposit.credited", "quote.expired"])
@@ -595,7 +571,7 @@ def test_bound_webhook_resource_mode_must_match_pins(event_type: str) -> None:
         pay(lambda _: pytest.fail("verification must stay offline")) as client,
         pytest.raises(SignatureVerificationError, match="mode"),
     ):
-        cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
+        client.webhooks.construct_event(body, headers)
 
 
 def test_webhook_request_and_previous_attributes_secret_reprs_are_redacted() -> None:
@@ -606,7 +582,7 @@ def test_webhook_request_and_previous_attributes_secret_reprs_are_redacted() -> 
     body = json.dumps(envelope).encode()
     headers = sign_webhook(SERVICE_KEY, EVENT_ID, int(time.time()), body)
     with pay(lambda _: httpx.Response(200)) as client:
-        event = cast(_BoundWebhook, client.webhooks).construct_event(body, headers)
+        event = client.webhooks.construct_event(body, headers)
     assert event.request.id == KEY
     assert event.request.idempotency_key == SECRET
     assert event.data.previous_attributes == {"client_secret": SECRET, "api_key": KEY}
