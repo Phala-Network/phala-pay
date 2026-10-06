@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   AddressMismatchError,
-  WebhookSignatureError,
+  SignatureVerificationError,
   batchChecksum,
   constructEvent,
   depositAddress,
@@ -18,7 +18,7 @@ import {
   verifyQuoteAddress,
   type AddressPins,
   type BatchFile,
-} from "../src/index.js";
+} from "../src/helpers.js";
 
 // Tests run from sdk/js.
 const repo = (path: string) => resolve(process.cwd(), "../..", path);
@@ -297,7 +297,7 @@ describe("constructEvent", () => {
     );
     await expect(
       constructEvent(RUST_BODY.replace("123", "124"), headers, PUBLIC_KEY, options),
-    ).rejects.toBeInstanceOf(WebhookSignatureError);
+    ).rejects.toBeInstanceOf(SignatureVerificationError);
   });
 
   it("returns the event of the expected account and mode", async () => {

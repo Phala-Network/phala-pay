@@ -29,8 +29,9 @@ Phala Pay has the Python SDK and three lockstep JavaScript packages, all in this
   helpers, payment URIs, icons, formatting, and public types;
 - [sdk/js-react](../sdk/js-react), `@phala/pay-react`: `<Checkout>`, `<DepositAddress>`, hooks,
   icons, and styles for React;
-- [sdk/js-server](../sdk/js-server), `@phala/pay-server`: the merchant client, webhook verification,
-  address recomputation, ledger helpers, and offline `flushTransaction` / `safeBatch` builders.
+- [sdk/js-server](../sdk/js-server), `@phala/pay-server`: the merchant client and API types;
+  `@phala/pay-server/helpers`: offline webhook verification, address recomputation, ledger helpers,
+  and `flushTransaction` / `safeBatch` builders.
 
 Samples below use them; every step is plain HTTP and ed25519, so any backend language can do the
 same.
@@ -188,7 +189,7 @@ async def webhook(request: Request) -> Response:
 ```
 
 A Node backend verifies the same way with `constructEvent(rawBody, headers, WEBHOOK_KEYS,
-{ expectedAccount: ACCOUNT, expectedLivemode: false })` from `@phala/pay-server`.
+{ expectedAccount: ACCOUNT, expectedLivemode: false })` from `@phala/pay-server/helpers`.
 [sdk/examples/fastapi_app.py](../sdk/examples/fastapi_app.py) is this backend in full, with an
 idempotent, snapshot-driven SQLite ledger (`apply_deposit`) and tests of partial refunds,
 reversals, and out-of-order delivery; Phala's staging reference product runs the Phala Pay demo, a
@@ -346,7 +347,7 @@ pinned treasury** of the quote's chain and that salt. `PhalaPay(api_key, pins=pi
 every quote from those pins and raises `AddressMismatchError` when the quote names another
 treasury, shows another address, or has no pinned treasury for its chain, so a user never pays an
 address you did not derive. A Node
-backend does the same with `verifyQuoteAddress(pins, quote)` from `@phala/pay-server`, which
+backend does the same with `verifyQuoteAddress(pins, quote)` from `@phala/pay-server/helpers`, which
 returns the address. Pass the recomputed address to the page as `<Checkout expectedAddress>`,
 which fails closed on any other. You need no address records of your own to credit:
 `deposit.credited` carries the deposit, which names the customer (`client_reference_id`) and the
@@ -563,7 +564,7 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   network's address is the factory's `CREATE2` for that network's `treasury` and the salt.
   `PhalaPay(api_key, pins=pins)` checks every network
   of an active address over your pinned treasury of its chain and raises `AddressMismatchError`
-  (`verifyDepositAddress(pins, address)` in `@phala/pay-server`);
+  (`verifyDepositAddress(pins, address)` in `@phala/pay-server/helpers`);
   `topup_sdk.deposit_address(...)` recomputes any version offline.
 - A network pays the treasury it was issued for, forever. When your treasury on one network
   changes, that network's address changes (the others do not); payments to the old address on
@@ -734,7 +735,7 @@ with the app's own `meta.checksum`, so it imports without a "modified" warning. 
 Safe{Wallet} > Apps > Transaction Builder, drags the file in, and creates the batch; the owners
 sign and execute it as any Safe transaction
 ([Safe help](https://help.safe.global/en/articles/40841-transaction-builder)).
-`@phala/pay-server` has the same `flushTransactions` and `safeBatch` for a Node backend.
+`@phala/pay-server/helpers` has the same `flushTransactions` and `safeBatch` for a Node backend.
 `pay.export_account(directory)` writes every list, `forwarders.json` included, to JSON files.
 
 ### 1.8 Confirmations and pausing

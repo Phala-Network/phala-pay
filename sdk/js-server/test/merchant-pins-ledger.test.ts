@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { PhalaPay } from "../src/index.js";
 import {
-  PhalaPay,
   parsePins,
   encodePins,
   ConfigurationError,
@@ -9,7 +9,7 @@ import {
   balanceDelta,
   depositNetAmount,
   type LedgerSnapshot,
-} from "../src/index.js";
+} from "../src/helpers.js";
 import { apiKey, pins, pinsFixture, fixture } from "./merchant-fixtures.js";
 const wrap = (text: string) => `ppay_pins_v1.${Buffer.from(text).toString("base64url")}`;
 describe("shared pins fixtures", () => {

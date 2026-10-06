@@ -7,7 +7,6 @@
  * yourself before you show it.
  */
 export {
-  WebhookSignatureError,
   constructEvent,
   type ConstructEventOptions,
   type WebhookEvent,

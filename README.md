@@ -101,7 +101,7 @@ The [documentation index](docs/README.md) lists every document.
 |---|---|---|
 | [`@phala/pay`](sdk/js) | `npm install @phala/pay viem` | Framework-free browser checkout, retrieval, wallet, payment URI, icons, formatting, and public types |
 | [`@phala/pay-react`](sdk/js-react) | `npm install @phala/pay-react react react-dom` | React checkout components, hooks, icons, and `@phala/pay-react/styles.css` |
-| [`@phala/pay-server`](sdk/js-server) | `npm install @phala/pay-server` | Merchant client, webhooks, pins, address/ledger helpers, and sweep builders for server runtimes |
+| [`@phala/pay-server`](sdk/js-server) | `npm install @phala/pay-server` | Merchant client and API types; offline webhook, pins, address/ledger helpers, and sweep builders at `@phala/pay-server/helpers` |
 | [`phala-pay`](sdk/python) | `pip install phala-pay` | The Python backend client, webhook verification, and address pinning |
 
 The SDKs share the service's version: pin the one equal to your operator's service version

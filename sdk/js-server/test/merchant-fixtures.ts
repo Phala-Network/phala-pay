@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { parsePins, quoteAddress, type Quote, type Pins } from "../src/index.js";
+import type { Quote } from "../src/index.js";
+import { parsePins, quoteAddress, type Pins } from "../src/helpers.js";
 export const apiKey = "ppay_rk_test_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA3s89I1";
 // Typed fixture loading is the JSON boundary for tests.
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters

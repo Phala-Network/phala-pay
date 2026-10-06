@@ -51,6 +51,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Changed
 
+- **Breaking:** `@phala/pay-server` exports the merchant client and API types, with `Forwarder`
+  naming the API response type instead of contract pins. Replace `ForwarderResponse` imports with
+  `Forwarder`. Offline functions are exported only from `@phala/pay-server/helpers`; move pins,
+  ledger, address, webhook and sweep helper imports to that entry.
 - Checkout and React deposit-address polling use uniform ±20% jitter, pause in hidden tabs, and
   read immediately on visibility regain. `Retry-After` remains a minimum delay.
 - `<DepositAddress>` uses an idle base interval of `max(pollInterval, 15000)` after ten minutes
@@ -58,6 +62,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   any view change or visibility regain restores the normal interval and resets the idle window.
 - Checkout stops after three consecutive non-terminal 4xx responses other than 408/429 and
   surfaces its existing error state. 404 still stops immediately as `invalid_client_secret`.
+
+#### Removed
+
+- **Breaking:** `@phala/pay-server` no longer exports `WebhookSignatureError`; use
+  `SignatureVerificationError`.
 
 ### Python SDK (`phala-pay`)
 

@@ -303,7 +303,9 @@ Install `@phala/pay-react` for `Checkout`, `DepositAddress`, hooks, icons, and s
 npm install @phala/pay-react react react-dom @phala/pay viem
 ```
 
-Import components from `@phala/pay-react` and styles from `@phala/pay-react/styles.css`. The server client and offline helpers are in `@phala/pay-server`; see its [README](../js-server/README.md).
+Import components from `@phala/pay-react` and styles from `@phala/pay-react/styles.css`. Import
+the server client and API types from `@phala/pay-server`, and offline helpers from
+`@phala/pay-server/helpers`; see its [README](../js-server/README.md).
 
 The checkout session retains its last known status and quote during temporary network/5xx outages
 and exposes `reconnecting: true` with no permanent error. Polling resumes with bounded backoff and
