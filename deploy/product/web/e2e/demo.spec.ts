@@ -956,7 +956,7 @@ test("refuses another browser's payments and refunds, and rate-limits quote crea
 
 
 test("prerendered marketing works without JavaScript; comparison chrome stays interactive", async ({ browser, page }) => {
-  const staticContext = await browser.newContext({ javaScriptEnabled: false });
+  const staticContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
   try {
     const staticPage = await staticContext.newPage();
     const home = await staticPage.goto(env("SITE_URL"));
@@ -965,12 +965,18 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(6);
     await expect(staticPage.getByRole("heading", { name: "Which chains and tokens are supported?" })).toBeVisible();
     await expectMetadata(staticPage);
+    await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
+    await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
+    await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Demo", exact: true })).toHaveAttribute("href", "/#demo");
     const homeHtml = await home?.text();
     expect(homeHtml).not.toContain('style="');
     const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
     await expect(staticPage.getByRole("table")).toBeVisible();
+    await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
+    await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
+    await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Demo", exact: true })).toHaveAttribute("href", "/#demo");
     await expect(staticPage.getByText("Partially stated by the vendor; see source.", { exact: false })).toBeVisible();
     const alias = await page.request.get(new URL("compare.html", env("SITE_URL")).href, { maxRedirects: 0 });
     expect(alias.status()).toBe(307);

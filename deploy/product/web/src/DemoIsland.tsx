@@ -1,6 +1,7 @@
-import { Component, lazy, Suspense, useSyncExternalStore, type ReactNode } from "react";
+import { Component, lazy, Suspense, type ReactNode } from "react";
 import { DemoPlaceholder } from "./Site.js";
 import { useTheme } from "./theme.js";
+import { useHydrated } from "./islands.js";
 
 const Demo = lazy(() => import("./Demo.js"));
 
@@ -14,15 +15,10 @@ class DemoBoundary extends Component<{ children: ReactNode }, { failed: boolean 
   }
 }
 
-// The browser environment is stable; React uses the false snapshot during hydration.
-const subscribeToClient = () => () => undefined;
-const clientSnapshot = () => typeof window !== "undefined";
-const serverSnapshot = () => false;
-
 /** The demo is the only interactive island in the home page's main content. */
 export function DemoIsland() {
   const [theme] = useTheme();
-  const isClient = useSyncExternalStore(subscribeToClient, clientSnapshot, serverSnapshot);
+  const isClient = useHydrated();
   if (!isClient) return <DemoPlaceholder />;
   return (
     <DemoBoundary>

@@ -1,7 +1,7 @@
 import { BookOpen, Braces, Cpu, Menu, X, Rocket, Clock, Coins, Wallet, type LucideIcon } from "lucide-react";
 import { useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useHydrated } from "./islands.js";
 import { FAQ, HERO_SUBHEAD, TAGLINE } from "./content/site.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 
@@ -43,6 +43,7 @@ const NAV = [
 export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
+  const hydrated = useHydrated();
   const menuToggle = useRef<HTMLButtonElement>(null);
 
   return (
@@ -61,9 +62,7 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
             <span aria-hidden="true" className="github-icon inline-block size-4 shrink-0 bg-current" />
           </a>
           <ThemeToggle theme={theme} onChange={onThemeChange} />
-          <Collapsible
-            open={menuOpen}
-            onOpenChange={setMenuOpen}
+          {hydrated && <div
             className="relative md:hidden"
             onKeyDown={(event) => {
               if (event.key === "Escape" && menuOpen) {
@@ -73,13 +72,11 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
               }
             }}
           >
-            <CollapsibleTrigger asChild aria-controls={menuId}>
-              <button ref={menuToggle} type="button" className={ICON_BUTTON} aria-label="Menu">
-                <Menu aria-hidden="true" />
-              </button>
-            </CollapsibleTrigger>
-            {/* Native disclosure content avoids CollapsibleContent's measured inline styles. */}
-            <div id={menuId} hidden={!menuOpen} data-state={menuOpen ? "open" : "closed"}
+            <button ref={menuToggle} type="button" className={ICON_BUTTON} aria-label="Menu"
+              aria-expanded={menuOpen} aria-controls={menuId} onClick={() => setMenuOpen((open) => !open)}>
+              <Menu aria-hidden="true" />
+            </button>
+            <div id={menuId} hidden={!menuOpen}
               className="absolute top-full right-0 w-72 border bg-popover pb-4 text-popover-foreground shadow-lg">
               <div className="flex items-center justify-between p-4">
                 <p className="text-base font-medium text-foreground">Phala Pay</p>
@@ -99,7 +96,7 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
                 ))}
               </nav>
             </div>
-          </Collapsible>
+          </div>}
         </nav>
       </div>
     </header>
@@ -205,6 +202,7 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
   {
     title: "Product",
     links: [
+      { href: "/#demo", label: "Demo" },
       { href: "/compare", label: "Compare" },
       { href: LINKS.overview, label: "How it works" },
       { href: LINKS.selfHosting, label: "Self-hosting" },
