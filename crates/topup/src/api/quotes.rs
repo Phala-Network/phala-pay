@@ -160,6 +160,7 @@ pub(super) fn quote_terms(terms: &Terms) -> QuoteTerms {
 pub(crate) async fn create_quote(
     State(state): State<AppState>,
     Extension(merchant): Extension<Merchant>,
+    Extension(deadline): Extension<tokio::time::Instant>,
     idempotent: Idempotent,
     ApiJson(request): ApiJson<CreateQuoteRequest>,
 ) -> ApiResult<Response> {
@@ -211,6 +212,7 @@ pub(crate) async fn create_quote(
         &customer,
         route,
         credit,
+        deadline,
     )
     .await
     .map_err(map_error)?;

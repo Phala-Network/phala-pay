@@ -129,6 +129,7 @@ async fn concurrent_quotes_share_one_price_fetch() -> Result<()> {
                     &customer,
                     &route,
                     MinorAmount::new(100),
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(60),
                 )
             }))
             .await;

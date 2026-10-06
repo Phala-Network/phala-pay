@@ -32,12 +32,6 @@ pub use age::{AgeAlertConfig, AgeAlertConfigError, AgeAlerter};
 
 /// Total step budget, including chain checks and pricing; shorter than the five-minute lease.
 pub const STEP_TIMEOUT: Duration = Duration::from_secs(240);
-tokio::task_local! {
-    static STEP_DEADLINE: Instant;
-}
-pub(crate) fn current_step_deadline() -> Option<Instant> {
-    STEP_DEADLINE.try_with(|deadline| *deadline).ok()
-}
 
 const LEASE_DURATION: Duration = Duration::from_secs(5 * 60);
 /// Wait while a provider has not finalized the deposit block yet: about one slot, so a deposit
@@ -52,6 +46,10 @@ const CONFIRMATION_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 pub trait Step: Send + Sync {
     /// Runs the state-specific operation and returns its atomic persistence result.
     async fn run(&self, deposit: &Deposit) -> StepResult;
+    /// Runs with the pump's absolute step deadline.
+    async fn run_with_deadline(&self, deposit: &Deposit, _deadline: Instant) -> StepResult {
+        self.run(deposit).await
+    }
 }
 
 /// State-machine outcome and the evidence and events committed with it.
@@ -456,8 +454,7 @@ impl Pump {
 
         let span = crate::observability::deposit_step_span(deposit);
         let deadline = Instant::now() + self.config.step_timeout;
-        match STEP_DEADLINE
-            .scope(deadline, timeout_at(deadline, step.run(deposit)))
+        match timeout_at(deadline, step.run_with_deadline(deposit, deadline))
             .instrument(span)
             .await
         {

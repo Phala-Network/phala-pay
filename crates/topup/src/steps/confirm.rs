@@ -592,8 +592,17 @@ fn carried_forward(
 #[async_trait]
 impl Step for ConfirmStep {
     async fn run(&self, deposit: &Deposit) -> StepResult {
-        let deadline = crate::pump::current_step_deadline()
-            .unwrap_or_else(|| tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT);
+        self.execute(
+            deposit,
+            tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT,
+        )
+        .await
+    }
+    async fn run_with_deadline(
+        &self,
+        deposit: &Deposit,
+        deadline: tokio::time::Instant,
+    ) -> StepResult {
         self.execute(deposit, deadline).await
     }
 }

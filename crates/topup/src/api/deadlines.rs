@@ -23,26 +23,17 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 // this finite keep-alive budget; activity cannot extend it indefinitely.
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
-tokio::task_local! {
-    static REQUEST_DEADLINE: Instant;
-}
-pub(crate) fn current_request_deadline() -> Option<Instant> {
-    REQUEST_DEADLINE.try_with(|deadline| *deadline).ok()
-}
-pub(super) async fn request_deadline(request: Request, next: Next) -> Response {
+pub(super) async fn request_deadline(mut request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let deadline = Instant::now() + REQUEST_TIMEOUT;
-    REQUEST_DEADLINE
-        .scope(deadline, async {
-            match tokio::time::timeout_at(deadline, next.run(request)).await {
-                Ok(response) => response,
-                Err(_) => {
-                    crate::observability::metrics::request_deadline_exceeded(method.as_str());
-                    super::error::ApiError::request_deadline_exceeded().into_response()
-                }
-            }
-        })
-        .await
+    request.extensions_mut().insert(deadline);
+    match tokio::time::timeout_at(deadline, next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => {
+            crate::observability::metrics::request_deadline_exceeded(method.as_str());
+            super::error::ApiError::request_deadline_exceeded().into_response()
+        }
+    }
 }
 
 /// API listener with a read-idle deadline and a hard connection/header deadline.
@@ -205,6 +196,7 @@ mod tests {
         let passed = Arc::new(Mutex::new(None));
         let provider: Arc<dyn crate::locks::QuoteProvider> = Arc::new(Stalled(passed.clone()));
         let started = Instant::now();
+        let expected_deadline = started + REQUEST_TIMEOUT;
         let app = axum::Router::new()
             .route(
                 "/",
@@ -217,7 +209,9 @@ mod tests {
                             "../../tests/fixtures/phala-cloud-pha.yaml"
                         ))
                         .unwrap();
-                        match crate::locks::quote_with_budget(&provider, &route).await {
+                        match crate::locks::quote_with_budget(&provider, &route, expected_deadline)
+                            .await
+                        {
                             Ok(_) => axum::http::StatusCode::NO_CONTENT,
                             Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
                         }

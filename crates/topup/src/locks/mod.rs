@@ -320,7 +320,16 @@ pub async fn create(
     credit_minor: MinorAmount,
     metadata: &BTreeMap<String, String>,
 ) -> Result<(RateLock, String), RateLockError> {
-    let priced = price(pool, quotes, account, customer, route, credit_minor).await?;
+    let priced = price(
+        pool,
+        quotes,
+        account,
+        customer,
+        route,
+        credit_minor,
+        tokio::time::Instant::now() + QUOTE_PRICING_BUDGET,
+    )
+    .await?;
     let mut transaction = pool.begin().await?;
     let created = create_in(
         &mut transaction,
@@ -361,6 +370,7 @@ pub async fn price(
     customer: &Customer,
     route: &RouteFile,
     credit_minor: MinorAmount,
+    deadline: tokio::time::Instant,
 ) -> Result<PricedLock, RateLockError> {
     if customer.account_id != account.id {
         return Err(RateLockError::NotFound);
@@ -392,7 +402,7 @@ pub async fn price(
     treasury(&mut connection, scope, route.chain.chain_id).await?;
     drop(connection);
 
-    let quote = quote_with_budget(quotes, route).await?;
+    let quote = quote_with_budget(quotes, route, deadline).await?;
     let locked_price =
         lock_price(quote.price, terms.quote_spread_bps).map_err(|_| RateLockError::Arithmetic)?;
     if locked_price.value() == 0 {
@@ -416,10 +426,10 @@ pub(crate) const QUOTE_PRICING_BUDGET: Duration = Duration::from_secs(15);
 pub(crate) async fn quote_with_budget(
     quotes: &Arc<dyn QuoteProvider>,
     route: &RouteFile,
+    request_deadline: tokio::time::Instant,
 ) -> Result<ValidatedQuote, RateLockError> {
     let budget_deadline = tokio::time::Instant::now() + QUOTE_PRICING_BUDGET;
-    let deadline = crate::api::current_request_deadline()
-        .map_or(budget_deadline, |request| request.min(budget_deadline));
+    let deadline = request_deadline.min(budget_deadline);
     match tokio::time::timeout_at(deadline, quotes.quote(route, deadline)).await {
         Err(_) => Err(quote_budget_exceeded(route)),
         Ok(Err(_)) if tokio::time::Instant::now() >= deadline => Err(quote_budget_exceeded(route)),
