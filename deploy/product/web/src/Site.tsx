@@ -1,8 +1,15 @@
-import { BookOpen, Braces, Cpu, Menu, X, Rocket, Clock, Coins, Wallet, type LucideIcon } from "lucide-react";
-import { useId, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, Menu, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { CodeBlock } from "@/components/ui/code-block";
+import { CopyButton } from "@/components/ui/hash";
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useHydrated } from "./islands.js";
-import { FAQ, HERO_SUBHEAD, TAGLINE } from "./content/site.js";
+import { HOSTED_PROCESSORS, TEASER } from "./content/compare.js";
+import {
+  CLOSING_LEAD, CLOSING_TITLE, DEMO_LEAD, DEMO_TITLE, FAQ, HERO_CODE, HERO_CODE_NOTE, HERO_META, HERO_SUBHEAD,
+  PROPERTIES, PROPERTIES_LEAD, STEPS, TAGLINE,
+} from "./content/site.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 
 export const REPO = "https://github.com/Phala-Network/phala-pay";
@@ -15,90 +22,103 @@ export const LINKS = {
   // The guide's one-command deploy to your own Phala Cloud workspace, beside its other two paths.
   deploy: `${REPO}/blob/main/docs/self-hosting.md#one-command-deploy`,
   reference: "https://phala-network.github.io/phala-pay/",
-  npm: "https://www.npmjs.com/package/@phala/pay-react",
   license: `${REPO}/blob/main/LICENSE`,
   security: `${REPO}/blob/main/SECURITY.md`,
 };
 
-/** The page's width. */
-export const CONTAINER = "mx-auto w-full max-w-[84rem] px-5 sm:px-8 2xl:max-w-[92rem]";
-
-// Facts: README.md; docs/overview.md; docs/architecture.md §§1, 8; docs/integration.md §§1.6, 5.
-const PROPERTIES: { icon: LucideIcon; title: string; text: string }[] = [
-  { icon: Wallet, title: "No custodian", text: "Deposit addresses are contracts that can only pay your treasury. You set the treasury with a signed message; the operator cannot change it." },
-  { icon: Coins, title: "No per-payment fee", text: "The software takes no cut. You pay for your own hosting, RPC providers, and the gas to sweep." },
-  { icon: Clock, title: "Credited in seconds", text: "About 7 s on Base and 30 s on Ethereum after payment, double-checked by a second RPC provider and watched to finality." },
-  { icon: Cpu, title: "Verify what runs", text: "It runs in an Intel TDX confidential VM. Check its attestation and pin its webhook signing key from it." },
-  { icon: Braces, title: "Stripe-style API", text: "Quotes, deposit addresses, test and live modes, idempotency keys, signed webhooks. SDKs for React, Node.js, and Python." },
-];
+/**
+ * The page's width, one for every section and the header and footer, so all share a left edge; text
+ * inside it keeps to a readable measure (max-w-prose and narrower).
+ */
+export const CONTAINER = "mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8";
+export const H2 = "text-2xl font-semibold tracking-tight";
+/** Below the 56px sticky header, with room above the heading scrolled to. */
+const SECTION = "scroll-mt-20 pt-16 md:pt-24";
+const ICON = { "aria-hidden": true, strokeWidth: 1.75 } as const;
 
 const NAV = [
   { href: "/#demo", label: "Demo" },
   { href: "/compare", label: "Compare" },
   { href: LINKS.docs, label: "Docs" },
   { href: LINKS.reference, label: "API reference" },
-  { href: LINKS.selfHosting, label: "Self-hosting" },
 ];
 
 export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
   const hydrated = useHydrated();
+  const header = useRef<HTMLElement>(null);
   const menuToggle = useRef<HTMLButtonElement>(null);
 
+  // The open menu closes on Escape (returning focus to its button) and on a press outside the header.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && header.current?.contains(event.target)) return;
+      setMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setMenuOpen(false);
+      menuToggle.current?.focus();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
   return (
-    <header className="sticky top-0 z-50 border-b bg-background">
-      <div className={`${CONTAINER} flex h-14 items-center justify-between gap-4`}>
-        <a href="/" className="flex rounded-md">
+    <header ref={header} className="sticky top-0 z-50 border-b bg-background">
+      <div className={`${CONTAINER} flex h-14 items-center gap-6`}>
+        <a href="/" className="mr-auto flex rounded-md">
           <Lockup />
         </a>
-        <nav aria-label="Site" className="-mr-3 flex items-center gap-1 text-muted-foreground">
-          {NAV.map(({ href, label }) => (
-            <Button key={label} variant="ghost" asChild className="hidden hover:text-foreground md:inline-flex">
-              <a href={href}>{label}</a>
-            </Button>
-          ))}
+        <nav aria-label="Site" className="hidden md:block">
+          <ul className="flex items-center gap-1">
+            {NAV.map(({ href, label }) => (
+              <li key={label}>
+                <a href={href} className="inline-flex h-8 items-center rounded-md px-3 text-sm text-muted-foreground transition-colors hover:text-foreground">
+                  {label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <div className="flex items-center gap-2">
           <a href={LINKS.repo} aria-label="GitHub" className={ICON_BUTTON}>
             <span aria-hidden="true" className="github-icon inline-block size-4 shrink-0 bg-current" />
           </a>
           <ThemeToggle theme={theme} onChange={onThemeChange} />
-          {hydrated && <div
-            className="relative md:hidden"
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && menuOpen) {
-                event.preventDefault();
-                setMenuOpen(false);
-                menuToggle.current?.focus();
-              }
-            }}
-          >
-            <button ref={menuToggle} type="button" className={ICON_BUTTON} aria-label="Menu"
+          <Button asChild size="sm" className="ml-2 hidden md:inline-flex">
+            <a href={LINKS.selfHosting}>Self-host</a>
+          </Button>
+          {hydrated && (
+            <button ref={menuToggle} type="button" className={`${ICON_BUTTON} md:hidden`} aria-label="Menu"
               aria-expanded={menuOpen} aria-controls={menuId} onClick={() => setMenuOpen((open) => !open)}>
-              <Menu aria-hidden="true" />
+              {menuOpen ? <X {...ICON} /> : <Menu {...ICON} />}
             </button>
-            <div id={menuId} hidden={!menuOpen}
-              className="absolute top-full right-0 w-72 border bg-popover pb-4 text-popover-foreground shadow-lg">
-              <div className="flex items-center justify-between p-4">
-                <p className="text-base font-medium text-foreground">Phala Pay</p>
-                <button type="button" className={ICON_BUTTON} aria-label="Close menu" onClick={() => {
-                  setMenuOpen(false);
-                  menuToggle.current?.focus();
-                }}>
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-              <nav aria-label="Menu" className="flex flex-col gap-1 px-4">
-                {NAV.map(({ href, label }) => (
-                  <a key={label} className="rounded-md px-2 py-2 text-sm font-medium hover:bg-accent"
-                    href={href} onClick={() => setMenuOpen(false)}>
+          )}
+        </div>
+      </div>
+      {hydrated && (
+        <div id={menuId} hidden={!menuOpen} className="absolute inset-x-0 top-full border-b bg-background md:hidden">
+          <nav aria-label="Menu" className={CONTAINER}>
+            <ul className="divide-y">
+              {[...NAV, { href: LINKS.selfHosting, label: "Self-host" }].map(({ href, label }) => (
+                <li key={label}>
+                  <a href={href} className="flex h-12 items-center text-base font-medium" onClick={() => setMenuOpen(false)}>
                     {label}
                   </a>
-                ))}
-              </nav>
-            </div>
-          </div>}
-        </nav>
-      </div>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        </div>
+      )}
     </header>
   );
 }
@@ -136,34 +156,112 @@ function Lockup() {
 }
 
 // The headline, with the fact behind each of its words (docs/architecture.md §8, the typical credit
-// at depth 2, `typical_credit_seconds`; README.md), and the way to run it: self-hosting on Phala Cloud.
+// at depth 2, `typical_credit_seconds`; README.md), the way to run it (self-hosting on Phala Cloud),
+// and beside them, what integrating it takes.
 export function Hero() {
   return (
     <section aria-labelledby="hero-title">
-      {/* From xl, where both sentences fit beside them, the CTAs sit right of the subline, centred on
-          it, under the headline. */}
-      <div className={`${CONTAINER} grid justify-items-start gap-3 py-8 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center xl:gap-x-8`}>
-        <h1 id="hero-title" className="max-w-5xl text-3xl leading-tight font-semibold tracking-tight text-balance sm:text-4xl xl:col-span-2">
-          {TAGLINE}
-        </h1>
-        <p className="max-w-2xl text-base text-pretty text-muted-foreground sm:text-lg">
-          {HERO_SUBHEAD}
-        </p>
-        <div className="flex flex-wrap items-center gap-3 pt-2 xl:pt-0">
-          <Button asChild size="lg">
-            <a href={LINKS.deploy}>
-              <Rocket aria-hidden="true" />
-              Start a testnet instance
-            </a>
-          </Button>
-          <Button asChild size="lg" variant="secondary">
-            <a href={LINKS.docs}>
-              <BookOpen aria-hidden="true" />
-              Read the docs
-            </a>
-          </Button>
+      <div className={`${CONTAINER} grid gap-12 py-12 md:py-20 lg:grid-cols-12 lg:items-center lg:gap-8`}>
+        <div className="lg:col-span-7">
+          <h1 id="hero-title" className="max-w-2xl text-3xl/tight font-semibold tracking-tight text-balance sm:text-4xl/tight">
+            {TAGLINE}
+          </h1>
+          <p className="mt-4 max-w-xl text-lg/8 text-pretty text-muted-foreground">{HERO_SUBHEAD}</p>
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
+            <Button asChild size="lg" variant="secondary"><a href={LINKS.docs}>Read the docs</a></Button>
+          </div>
+          <p className="mt-6 text-sm text-muted-foreground">{HERO_META}</p>
         </div>
-        <p className="text-sm text-muted-foreground xl:col-span-2">Pre-1.0 · Not yet independently audited · The demo runs on testnets with test tokens</p>
+        <div id="hero-code" className="min-w-0 lg:col-span-5">
+          <HeroCode />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The hero's code, an island of its own. Each snippet's copy button sits in its caption, clear of
+ * lines that scroll on a phone, and appears once the island hydrates.
+ */
+export function HeroCode() {
+  const hydrated = useHydrated();
+  return (
+    <div className="grid gap-5">
+      {HERO_CODE.map(({ label, file, code }) => (
+        <figure key={file} className="min-w-0">
+          <figcaption className="mb-2 flex h-8 items-center gap-3 text-sm">
+            <span className="mr-auto font-medium">{label}</span>
+            <span className="font-mono text-xs text-muted-foreground">{file}</span>
+            {hydrated && <CopyButton value={code} label={`Copy ${file}`} />}
+          </figcaption>
+          <CodeBlock value={code} label={file} copyable={false} className="max-h-none pr-3 text-[13px]" />
+        </figure>
+      ))}
+      <p className="text-sm text-muted-foreground">
+        {HERO_CODE_NOTE.before}<code className="font-mono text-[13px]">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The demo, directly below the hero. Until its chunk renders, its placeholder holds the height the
+ * demo's first view measures at each breakpoint, so nothing below it moves when it arrives.
+ */
+export function DemoSection({ children }: { children?: ReactNode }) {
+  return (
+    <section id="demo" aria-labelledby="demo-title" className="scroll-mt-20">
+      <div className={CONTAINER}>
+        <h2 id="demo-title" className={H2}>{DEMO_TITLE}</h2>
+        <p className="mt-2 max-w-prose text-pretty text-muted-foreground">{DEMO_LEAD}</p>
+        <div id="demo-root" className="mt-8">{children ?? <DemoPlaceholder />}</div>
+      </div>
+    </section>
+  );
+}
+
+// The demo's first view (product and backend, the account loaded) measures 1830px tall at 390px wide
+// (1894px at 320), 1672 to 1692px from 640px, and 1025px from 1024px, where its columns sit side by side.
+const DEMO_HEIGHT = "min-h-[114rem] sm:min-h-[105rem] lg:min-h-[64rem]";
+
+/** The demo's space in static HTML and while the page hydrates. */
+export function DemoPlaceholder() {
+  return (
+    <div className={DEMO_HEIGHT}>
+      <noscript>
+        <p className="text-sm text-muted-foreground">The demo needs JavaScript.</p>
+      </noscript>
+    </div>
+  );
+}
+
+/** The demo's space while its chunk loads. */
+export function DemoLoading() {
+  return (
+    <div className={DEMO_HEIGHT}>
+      <p role="status" className="text-sm text-muted-foreground">Loading the demo…</p>
+    </div>
+  );
+}
+
+export function HowItWorks() {
+  return (
+    <section aria-labelledby="how-title" className={SECTION}>
+      <div className={CONTAINER}>
+        <h2 id="how-title" className={H2}>How it works</h2>
+        <ol className="mt-8 grid gap-8 md:grid-cols-3 md:gap-6">
+          {STEPS.map(({ title, text }, index) => (
+            <li key={title} className="border-l pl-5">
+              <span aria-hidden="true" className="font-mono text-sm text-muted-foreground">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <h3 className="mt-2 font-semibold">{title}</h3>
+              <p className="mt-1 max-w-prose text-sm/6 text-pretty text-muted-foreground">{text}</p>
+            </li>
+          ))}
+        </ol>
       </div>
     </section>
   );
@@ -171,25 +269,121 @@ export function Hero() {
 
 export function Properties() {
   return (
-    <section aria-labelledby="properties-title" className="border-t bg-muted/30">
-      <div className={`${CONTAINER} py-16`}>
-        <h2 id="properties-title" className="text-2xl font-semibold tracking-tight">
-          Built for apps and platforms
-        </h2>
-        <p className="mt-2 max-w-2xl leading-6 text-muted-foreground">
-          Top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute.
-        </p>
-        <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {PROPERTIES.map(({ icon: Icon, title, text }) => (
-            <li key={title} className="rounded-xl border bg-card p-6 text-card-foreground">
-              <span className="flex size-9 items-center justify-center rounded-lg border bg-background" aria-hidden="true">
-                <Icon className="size-4" />
-              </span>
-              <h3 className="mt-4 text-sm font-semibold">{title}</h3>
-              <p className="mt-2 text-sm leading-6 text-pretty text-muted-foreground">{text}</p>
-            </li>
+    <section aria-labelledby="properties-title" className={SECTION}>
+      <div className={`${CONTAINER} grid gap-8 lg:grid-cols-12`}>
+        <div className="lg:col-span-4">
+          <div className="lg:sticky lg:top-20">
+            <h2 id="properties-title" className={H2}>Why Phala Pay</h2>
+            <p className="mt-2 max-w-sm text-pretty text-muted-foreground">{PROPERTIES_LEAD}</p>
+          </div>
+        </div>
+        <dl className="divide-y border-y lg:col-span-8">
+          {PROPERTIES.map(({ title, text }) => (
+            <div key={title} className="grid gap-1 py-5 sm:grid-cols-3 sm:gap-6">
+              <dt className="font-semibold">{title}</dt>
+              <dd className="text-sm/6 text-pretty text-muted-foreground sm:col-span-2">{text}</dd>
+            </div>
           ))}
-        </ul>
+        </dl>
+      </div>
+    </section>
+  );
+}
+
+export function CompareTeaser() {
+  return (
+    <section aria-labelledby="compare-title" className={SECTION}>
+      <div className={CONTAINER}>
+        <h2 id="compare-title" className={H2}>How Phala Pay compares</h2>
+        <p className="mt-2 max-w-prose text-pretty text-muted-foreground">
+          Beside hosted processors ({HOSTED_PROCESSORS}) and the self-hosted BTCPay Server.
+        </p>
+        <Table className="mt-8 hidden table-fixed md:table">
+          <TableCaption className="sr-only">Phala Pay, hosted processors, and BTCPay Server on four dimensions.</TableCaption>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead scope="col" className="w-40 pl-0 text-xs text-muted-foreground">Dimension</TableHead>
+              {TEASER.columns.map((column, index) => (
+                <TableHead key={column} scope="col" className={`px-4 ${index === 0 ? "bg-muted/40" : ""}`}>{column}</TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {TEASER.rows.map(({ label, cells }) => (
+              <TableRow key={label}>
+                <TableHead scope="row" className="h-auto py-3 pl-0 align-top">{label}</TableHead>
+                {cells.map((cell, index) => (
+                  <TableCell key={index} className={`px-4 py-3 align-top whitespace-normal ${index === 0 ? "bg-muted/40" : "text-muted-foreground"}`}>
+                    {cell}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {/* Below md, one list per dimension instead of a table four columns wide. */}
+        <dl className="mt-6 divide-y border-y md:hidden">
+          {TEASER.rows.map(({ label, cells }) => (
+            <div key={label} className="py-4">
+              <dt className="font-semibold">{label}</dt>
+              <dd>
+                <dl className="mt-2 grid gap-3 text-sm">
+                  {TEASER.columns.map((column, index) => (
+                    <div key={column}>
+                      <dt className="text-muted-foreground">{column}</dt>
+                      <dd>{cells[index]}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <a href="/compare" className="mt-4 inline-flex min-h-11 items-center text-sm font-medium underline underline-offset-4">
+          Full comparison
+        </a>
+      </div>
+    </section>
+  );
+}
+
+/** Each answer folds under its question, natively: no script, so it works before and without hydration. */
+export function Faq() {
+  return (
+    <section aria-labelledby="faq-title" className={SECTION}>
+      <div className={`${CONTAINER} grid gap-8 lg:grid-cols-12`}>
+        <h2 id="faq-title" className={`${H2} lg:col-span-4`}>Frequently asked questions</h2>
+        <div className="border-t lg:col-span-8">
+          {FAQ.map(({ question, answer }) => (
+            <details key={question} className="group border-b">
+              <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 py-3 font-medium [&::-webkit-details-marker]:hidden">
+                {question}
+                <ChevronDown {...ICON} className="size-4 shrink-0 text-muted-foreground group-open:rotate-180 motion-safe:transition-transform" />
+              </summary>
+              <p className="max-w-prose pb-5 text-sm/6 text-pretty text-muted-foreground">{answer}</p>
+            </details>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function ClosingCta() {
+  return (
+    <section aria-labelledby="closing-title" className={SECTION}>
+      <div className={CONTAINER}>
+        {/* Ruled above; the footer's rule closes it below. */}
+        <div className="flex flex-col gap-6 border-t py-10 md:flex-row md:items-center md:justify-between md:py-12">
+          <div>
+            <h2 id="closing-title" className={H2}>{CLOSING_TITLE}</h2>
+            <p className="mt-2 text-pretty text-muted-foreground">{CLOSING_LEAD}</p>
+          </div>
+          <div className="flex shrink-0 flex-col gap-3 sm:flex-row">
+            <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
+            <Button asChild size="lg" variant="secondary"><a href={LINKS.repo}>View on GitHub</a></Button>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -212,10 +406,15 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
       { href: LINKS.docs, label: "Documentation" },
       { href: LINKS.integration, label: "Integration guide" },
       { href: LINKS.reference, label: "API reference" },
-      { href: LINKS.npm, label: "npm @phala/pay-react" },
-      { href: "https://www.npmjs.com/package/@phala/pay", label: "npm @phala/pay" },
-      { href: "https://www.npmjs.com/package/@phala/pay-server", label: "npm @phala/pay-server" },
-      { href: "https://pypi.org/project/phala-pay/", label: "PyPI phala-pay" },
+    ],
+  },
+  {
+    title: "Packages",
+    links: [
+      { href: "https://www.npmjs.com/package/@phala/pay-react", label: "@phala/pay-react" },
+      { href: "https://www.npmjs.com/package/@phala/pay", label: "@phala/pay" },
+      { href: "https://www.npmjs.com/package/@phala/pay-server", label: "@phala/pay-server" },
+      { href: "https://pypi.org/project/phala-pay/", label: "phala-pay (Python)" },
     ],
   },
   {
@@ -230,128 +429,29 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
 export function SiteFooter() {
   return (
     <footer className="border-t">
-      <div className={`${CONTAINER} grid gap-10 py-16 text-sm sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]`}>
-        <div>
+      <div className={`${CONTAINER} grid gap-10 py-12 text-sm md:py-16 lg:grid-cols-12 lg:gap-8`}>
+        <div className="lg:col-span-4">
           <Lockup />
-          <p className="mt-3 max-w-xs leading-6 text-muted-foreground">{TAGLINE}</p>
+          <p className="mt-4 text-muted-foreground">© 2026 Phala Network</p>
         </div>
-        {FOOTER.map((column) => (
-          <nav key={column.title} aria-label={column.title}>
-            <p className="font-medium">{column.title}</p>
-            <ul className="mt-3 flex flex-col gap-2">
-              {column.links.map(({ href, label }) => (
-                <li key={label}>
-                  <a className="text-muted-foreground transition-colors hover:text-foreground" href={href}>
-                    {label}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </nav>
-        ))}
-      </div>
-      <div className="border-t">
-        <div
-          className={`${CONTAINER} flex flex-col gap-2 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between`}
-        >
-          <p>© 2026 Phala Network</p>
-          <p>The live demo runs on testnets with test tokens; no real money moves.</p>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-4 lg:col-span-8">
+          {FOOTER.map((column) => (
+            <nav key={column.title} aria-label={column.title}>
+              <p className="font-medium">{column.title}</p>
+              {/* Rows 44px tall for touch, 32px from md. */}
+              <ul className="mt-2">
+                {column.links.map(({ href, label }) => (
+                  <li key={label}>
+                    <a className="inline-flex min-h-11 items-center text-muted-foreground transition-colors hover:text-foreground md:min-h-8" href={href}>
+                      {label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          ))}
         </div>
       </div>
     </footer>
   );
-}
-
-export function HowItWorks() {
-  const steps = [
-    ["Create a quote or deposit address", "Your backend calls the API with its key. Each address is a contract that can only pay your treasury."],
-    ["Your customer pays", "USDC, USDT, or other ERC-20 tokens from any wallet: connect, scan a QR code, or send manually."],
-    ["Credit the account", "A signed webhook arrives in seconds. Sweep to your treasury whenever you choose."],
-  ];
-  return (
-    <section aria-labelledby="how-title" className="border-t">
-      <div className={`${CONTAINER} py-16`}>
-        <h2 id="how-title" className="text-2xl font-semibold tracking-tight">How it works</h2>
-        <ol className="mt-8 grid gap-6 md:grid-cols-3">
-          {steps.map(([title, text], index) => (
-            <li key={title} className="rounded-xl border bg-card p-6">
-              <span className="text-sm font-medium text-muted-foreground">{index + 1}</span>
-              <h3 className="mt-3 font-semibold">{title}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{text}</p>
-            </li>
-          ))}
-        </ol>
-      </div>
-    </section>
-  );
-}
-
-export function CompareTeaser() {
-  const cards = [
-    ["Hosted processors (Stripe, Coinbase Business, NOWPayments, MoonPay Commerce)", "Nothing to run; a fee per payment; they onboard you."],
-    ["BTCPay Server", "Self-hosted and free; built for Bitcoin."],
-    ["Phala Pay", "Self-hosted and free; built for ERC-20 tokens on Ethereum and Base, with verifiable attestation."],
-  ];
-  return (
-    <section aria-labelledby="compare-title" className="border-t">
-      <div className={`${CONTAINER} py-16`}>
-        <h2 id="compare-title" className="text-2xl font-semibold tracking-tight">How Phala Pay compares</h2>
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
-          {cards.map(([title, text]) => (
-            <a href="/compare" key={title} className="rounded-xl border bg-card p-6 transition-colors hover:bg-accent">
-              <h3 className="font-semibold">{title}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{text}</p>
-            </a>
-          ))}
-        </div>
-        <a href="/compare" className="mt-6 inline-block font-medium underline underline-offset-4">See the full comparison →</a>
-      </div>
-    </section>
-  );
-}
-
-export function Faq() {
-  return (
-    <section aria-labelledby="faq-title" className="border-t bg-muted/30">
-      <div className={`${CONTAINER} py-16`}>
-        <h2 id="faq-title" className="text-2xl font-semibold tracking-tight">Frequently asked questions</h2>
-        <div className="mt-8 grid gap-x-12 gap-y-8 md:grid-cols-2">
-          {FAQ.map(({ question, answer }) => (
-            <div key={question}>
-              <h3 className="font-semibold">{question}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{answer}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-export function ClosingCta() {
-  return (
-    <section aria-labelledby="closing-title" className="border-t">
-      <div className={`${CONTAINER} py-16`}>
-        <h2 id="closing-title" className="text-2xl font-semibold tracking-tight">Run your own payment rail</h2>
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
-          <Button asChild size="lg" variant="secondary"><a href={LINKS.repo}>View on GitHub</a></Button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/** The same reserved space is used before the demo chunk loads and in static HTML. */
-export function DemoSection({ children }: { children?: ReactNode }) {
-  return (
-    <section id="demo" aria-labelledby="demo-title" className={`${CONTAINER} min-h-[80rem] scroll-mt-24 pb-16 lg:min-h-[56rem] lg:pb-20`}>
-      <h2 id="demo-title" className="mb-8 text-2xl font-semibold tracking-tight">Live demo (testnet)</h2>
-      <div id="demo-root">{children ?? <DemoPlaceholder />}</div>
-    </section>
-  );
-}
-
-export function DemoPlaceholder() {
-  return <p className="text-sm leading-6 text-muted-foreground">The demo runs on testnets with test tokens.</p>;
 }

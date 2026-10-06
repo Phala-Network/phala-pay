@@ -5,16 +5,19 @@ import { CopyButton } from "@/components/ui/hash"
 
 /**
  * Code or data (JSON, calldata) as written: monospaced, at most 240px tall and scrolling beyond
- * (focusable, so the keyboard scrolls it too), with a copy button that stays in its corner.
+ * (focusable, so the keyboard scrolls it too), with a copy button that stays in its corner. A block in
+ * static HTML passes `copyable={false}` until it hydrates, so it shows no button that cannot work.
  */
 function CodeBlock({
   value,
   label,
+  copyable = true,
   className,
 }: {
   value: string
   /** What the block holds: its name, and its copy button's ("Copy {label}"). */
   label: string
+  copyable?: boolean
   className?: string | undefined
 }) {
   return (
@@ -30,7 +33,9 @@ function CodeBlock({
       >
         <code>{value}</code>
       </pre>
-      <CopyButton value={value} label={`Copy ${label}`} className="absolute top-1.5 right-1.5" />
+      {copyable && (
+        <CopyButton value={value} label={`Copy ${label}`} className="absolute top-1.5 right-1.5" />
+      )}
     </div>
   )
 }

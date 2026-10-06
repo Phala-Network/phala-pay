@@ -323,7 +323,7 @@ async function expectAccessible(page: Page, state: string): Promise<void> {
         .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
         .map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(" ")).join(", ")}`);
       expect(serious, `${state}, ${width}px, ${theme} theme`).toEqual([]);
-      await page.getByRole("button", { name: /^Switch to (dark|light) theme$/ }).click();
+      await page.getByRole("button", { name: "Dark theme" }).click();
     }
   }
   await page.setViewportSize(viewport);
@@ -664,7 +664,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
     "href",
     "https://github.com/Phala-Network/phala-pay#documentation",
   );
-  await expect(page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Self-hosting" })).toHaveAttribute(
+  await expect(page.getByRole("banner").getByRole("link", { name: "Self-host", exact: true })).toHaveAttribute(
     "href",
     "https://github.com/Phala-Network/phala-pay/blob/main/docs/self-hosting.md",
   );
@@ -827,7 +827,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(bonuses.filter({ hasText: "deposit.refunded" })).toContainText("−$0.50");
 
   await page.screenshot({ path: testInfo.outputPath("refunds-light.png"), fullPage: true });
-  await page.getByRole("button", { name: "Switch to dark theme" }).click();
+  await page.getByRole("button", { name: "Dark theme" }).click();
   await page.screenshot({ path: testInfo.outputPath("refunds-dark.png"), fullPage: true });
   await page.setViewportSize({ width: 420, height: 900 });
   await page.screenshot({ path: testInfo.outputPath("mobile-dark.png"), fullPage: true });
@@ -1035,9 +1035,9 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   await expect(product.getByTestId("payment-credited")).toContainText("$20.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toContainText("+$2.00", { timeout: 10_000 });
   await expect(product.getByTestId("balance")).toHaveText("$27.00", { timeout: 10_000 });
-  await page.getByRole("button", { name: "Switch to dark theme" }).click();
+  await page.getByRole("button", { name: "Dark theme" }).click();
   await page.screenshot({ path: testInfo.outputPath("base-bonus-dark.png") });
-  await page.getByRole("button", { name: "Switch to light theme" }).click();
+  await page.getByRole("button", { name: "Dark theme" }).click();
 
   // $5 in test USDT on Base Sepolia, minted through the faucet, at $1.00 with no bonus. Its
   // `transfer` returns nothing, as Tether's does on Ethereum, and the checkout pays it all the same.
@@ -1279,7 +1279,12 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     expect(home?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("Crypto payments, without a custodian");
     await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(6);
-    await expect(staticPage.getByRole("heading", { name: "Which chains and tokens are supported?" })).toBeVisible();
+    // The answers fold natively, without script.
+    const question = staticPage.locator("summary", { hasText: "Which chains and tokens are supported?" });
+    const answer = staticPage.getByText("The live demo uses test tokens on Sepolia and Base Sepolia.", { exact: false });
+    await expect(answer).toBeHidden();
+    await question.click();
+    await expect(answer).toBeVisible();
     await expectMetadata(staticPage);
     await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
@@ -1289,7 +1294,14 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
+    // A phone reads one list per dimension; from md, the table, all six vendors at 1280px.
+    await expect(staticPage.getByRole("table")).toBeHidden();
+    await expect(staticPage.getByRole("heading", { level: 3, name: "Custody" })).toBeVisible();
+    await staticPage.setViewportSize({ width: 1280, height: 900 });
     await expect(staticPage.getByRole("table")).toBeVisible();
+    const scroller = staticPage.getByRole("region", { name: "Comparison table" });
+    expect(await scroller.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await staticPage.setViewportSize({ width: 390, height: 844 });
     await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Demo", exact: true })).toHaveAttribute("href", "/#demo");
@@ -1301,7 +1313,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     await staticContext.close();
   }
   await page.goto(new URL("compare", env("SITE_URL")).href);
-  await page.getByRole("button", { name: "Switch to dark theme" }).click();
+  await page.getByRole("button", { name: "Dark theme" }).click();
   await expect(page.locator("html")).toHaveClass(/dark/);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Menu", exact: true }).click();
@@ -1331,7 +1343,7 @@ test("loading home islands preserves the original prerendered hero", async ({ pa
     expect(await original.evaluate((node) => node.isConnected)).toBe(true);
     expect(await originalHeader.evaluate((node) => node.isConnected)).toBe(true);
     expect(await originalFooter.evaluate((node) => node.isConnected)).toBe(true);
-    await page.getByRole("button", { name: "Switch to dark theme" }).click();
+    await page.getByRole("button", { name: "Dark theme" }).click();
     await expect(page.locator("html")).toHaveClass(/dark/);
     await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
   } finally {
@@ -1382,8 +1394,14 @@ test("home and comparison hydrate in either theme without CSP violations or Reac
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
         if (path === "") await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
         const next = colorScheme === "dark" ? "light" : "dark";
-        await page.getByRole("button", { name: `Switch to ${next} theme` }).click();
+        const theme = page.getByRole("button", { name: "Dark theme" });
+        await expect(theme).toHaveAttribute("aria-pressed", String(colorScheme === "dark"));
+        await theme.click();
         await expect(page.locator("html")).toHaveClass(next === "dark" ? /dark/ : /^$/);
+        await expect(theme).toHaveAttribute("aria-pressed", String(next === "dark"));
+        // Nothing scrolls sideways at the narrowest phone width.
+        await page.setViewportSize({ width: 320, height: 640 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
         await page.setViewportSize({ width: 390, height: 844 });
         const toggle = page.getByRole("button", { name: "Menu", exact: true });
         await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -1399,6 +1417,10 @@ test("home and comparison hydrate in either theme without CSP violations or Reac
         await expect(menu).toBeHidden();
         await expect(toggle).toHaveAttribute("aria-expanded", "false");
         await expect(toggle).toBeFocused();
+        // A press outside the header closes it too.
+        await toggle.click();
+        await page.getByRole("heading", { level: 2 }).first().click();
+        await expect(menu).toBeHidden();
         await toggle.click();
         await menu.getByRole("link", { name: path === "" ? "Demo" : "Compare", exact: true }).click();
         await expect(toggle).toHaveAttribute("aria-expanded", "false");

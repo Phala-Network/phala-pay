@@ -1,8 +1,63 @@
 // Approved copy; facts checked against README.md and docs/overview.md, architecture.md, integration.md.
 export const TAGLINE = "Crypto payments, without a custodian";
 export const HERO_SUBHEAD = "Self-host an open-source payments API. Customers pay in USDC, USDT, or other ERC-20 tokens on Ethereum or Base; deposits can only reach your treasury.";
+// README.md: pre-1.0, no third-party security audit.
+export const HERO_META = "Pre-1.0 · Not yet audited";
 export const HOME_TITLE = "Phala Pay: self-hosted, non-custodial crypto payments";
 export const HOME_DESCRIPTION = "Open-source payments API for ERC-20 tokens on Ethereum and Base. Deposits can only reach your treasury. No per-payment fee.";
+
+// The hero's integration, as sdk/js-server/README.md and docs/integration.md#quickstart write it: the server
+// creates a quote (amount in US cents) and returns only its checkout params to the signed-in browser,
+// which spreads them into <Checkout>. The account is credited from the signed webhook.
+export const HERO_CODE = [
+  {
+    label: "Your server",
+    file: "top-up.ts",
+    code: `import { PhalaPay } from "@phala/pay-server";
+
+const pay = PhalaPay.fromEnv();
+const quote = await pay.quotes.create({
+  client_reference_id: team.id,
+  amount: 2500, // US cents
+  currency: "usd",
+  chain_id: 8453, // Base
+  asset: "usdc",
+}, { idempotencyKey: order.id });
+return pay.checkoutParams(quote);`,
+  },
+  {
+    label: "Your page",
+    file: "TopUp.tsx",
+    code: `import { Checkout } from "@phala/pay-react";
+import "@phala/pay-react/styles.css";
+
+<Checkout {...checkout} onSuccess={refreshBalance} />`,
+  },
+] as const;
+export const HERO_CODE_NOTE = { before: "Credit the account when the signed ", code: "deposit.credited", after: " webhook arrives." };
+
+export const DEMO_TITLE = "Try it on testnet";
+export const DEMO_LEAD = "Top up a sample product's balance with test tokens on Sepolia or Base Sepolia, and watch its backend follow the payment. No real money moves.";
+
+export const STEPS = [
+  { title: "Create a quote or deposit address", text: "Your backend calls the API with its key. Each address is a contract that can only pay your treasury." },
+  { title: "Your customer pays", text: "USDC, USDT, or other ERC-20 tokens from any wallet: connect, scan a QR code, or send manually." },
+  { title: "Credit the account", text: "A signed webhook arrives in seconds. Sweep to your treasury whenever you choose." },
+];
+
+export const PROPERTIES_LEAD = "Top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute.";
+// Facts: README.md; docs/overview.md; docs/architecture.md §§1, 8; docs/integration.md §§1.6, 5.
+export const PROPERTIES = [
+  { title: "No custodian", text: "Deposit addresses are contracts that can only pay your treasury. You set the treasury with a signed message; the operator cannot change it." },
+  { title: "No per-payment fee", text: "The software takes no cut. You pay for your own hosting, RPC providers, and the gas to sweep." },
+  { title: "Credited in seconds", text: "About 7 s on Base and 30 s on Ethereum after payment, double-checked by a second RPC provider and watched to finality." },
+  { title: "Verify what runs", text: "It runs in an Intel TDX confidential VM. Check its attestation and pin its webhook signing key from it." },
+  { title: "Stripe-style API", text: "Quotes, deposit addresses, test and live modes, idempotency keys, signed webhooks. SDKs for React, Node.js, and Python." },
+];
+
+export const CLOSING_TITLE = "Run your own payment rail";
+export const CLOSING_LEAD = "Deploy a testnet instance to your Phala Cloud workspace with one command.";
+
 export const FAQ = [
   { question: "What does Phala Pay cost?", answer: "The software is free and open source (Apache-2.0) and takes no fee per payment. You pay for your Phala Cloud instance, two RPC providers per chain, backup storage, and the gas when you sweep. Payers pay their own network fees." },
   { question: "Who holds the money?", answer: "No one but you. Each deposit address is a contract that can only pay your treasury, an address or Safe you prove you control. Phala Pay holds no keys to your funds and sends no transactions." },

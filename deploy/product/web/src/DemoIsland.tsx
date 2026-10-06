@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, type ReactNode } from "react";
-import { DemoPlaceholder } from "./Site.js";
+import { DemoLoading, DemoPlaceholder } from "./Site.js";
 import { useTheme } from "./theme.js";
 import { useHydrated } from "./islands.js";
 
@@ -22,7 +22,7 @@ export function DemoIsland() {
   if (!isClient) return <DemoPlaceholder />;
   return (
     <DemoBoundary>
-      <Suspense fallback={<DemoPlaceholder />}><Demo theme={theme} /></Suspense>
+      <Suspense fallback={<DemoLoading />}><Demo theme={theme} /></Suspense>
     </DemoBoundary>
   );
 }

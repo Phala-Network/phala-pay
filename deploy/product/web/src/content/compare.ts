@@ -113,7 +113,54 @@ const archived = new Set([
   "https://help.coinbase.com/en/transitioning-from-coinbase-commerce-to-coinbase-business",
   "https://www.coinbase.com/blog/introducing-a-powerful-suite-of-business-payment-tools-on-coinbase-business",
 ]);
-export const sources = [...new Set([phalaPay, ...competitors].flatMap((vendor) => dimensions.map(({ key }) => vendor[key].source)))].map((url) => ({ url, archived: archived.has(url) }));
+// Each source's page title, without the site's name that the host beside it already gives; the two
+// pages read via archive snapshot are named by their URLs' slugs.
+const titles: Record<string, string> = {
+  "https://docs.stripe.com/crypto/stablecoin-payments": "Stablecoin payments",
+  "https://stripe.com/pricing": "Pricing & fees",
+  "https://help.coinbase.com/en/transitioning-from-coinbase-commerce-to-coinbase-business": "Transitioning from Coinbase Commerce to Coinbase Business",
+  "https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/overview": "Welcome to Checkout APIs",
+  "https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/migrate-from-commerce/faq": "Checkout APIs: FAQ & resources",
+  "https://www.coinbase.com/blog/introducing-a-powerful-suite-of-business-payment-tools-on-coinbase-business": "Introducing a powerful suite of business payment tools on Coinbase Business",
+  "https://docs.cdp.coinbase.com/api-reference/business-api/rest-api/checkouts-spec.yaml": "Checkouts API specification (OpenAPI)",
+  "https://docs.btcpayserver.org/FAQ/General/": "General FAQ",
+  "https://docs.btcpayserver.org/FAQ/Altcoin/": "Altcoins FAQ",
+  "https://docs.btcpayserver.org/FAQ/Stores/": "Stores FAQ",
+  "https://docs.btcpayserver.org/Refund/": "Refunds",
+  "https://docs.btcpayserver.org/API/Greenfield/v1/": "Greenfield API (v1)",
+  "https://nowpayments.io/blog/how-secure-is-the-nowpayments-custodial-solution": "How secure is the NOWPayments custodial solution?",
+  "https://nowpayments.io/api": "Payments API",
+  "https://nowpayments.io/pricing": "Pricing on crypto payments",
+  "https://nowpayments.io/help/payments/common/refund-policy": "Refund policy",
+  "https://nowpayments.io/help/security/kyc-aml/why-the-kyc-aml": "Why use KYC/AML to accept crypto?",
+  "https://docs.hel.io/docs/faq": "FAQ",
+  "https://docs.hel.io/llms.txt": "Documentation index (llms.txt)",
+  "https://docs.hel.io/docs/pricing-fees": "Fees",
+  "https://docs.hel.io/docs/verification": "Verification",
+  [readme]: "README",
+  [overview]: "How it works",
+  [architecture]: "Architecture",
+  [integration]: "Integration guide",
+};
+export const sources = [...new Set([phalaPay, ...competitors].flatMap((vendor) => dimensions.map(({ key }) => vendor[key].source)))].map((url) => {
+  const title = titles[url];
+  if (title === undefined) throw new Error(`Comparison source without a title: ${url}`);
+  return { url, title, host: new URL(url).host, archived: archived.has(url) };
+});
+
+// The home page's summary of the comparison, from the rows above: hosted processors are Stripe,
+// Coinbase Business, NOWPayments, and MoonPay Commerce; their fees run from 1% to 2% per payment
+// (2% with NOWPayments' auto-conversion), and they custody funds or forward them by provider.
+export const HOSTED_PROCESSORS = "Stripe, Coinbase Business, NOWPayments, and MoonPay Commerce";
+export const TEASER = {
+  columns: ["Phala Pay", "Hosted processors", "BTCPay Server"],
+  rows: [
+    { label: "Custody", cells: ["Non-custodial: contracts that can only pay your treasury", "Varies: some hold funds, some pay your wallet", "Non-custodial: paid to your wallet"] },
+    { label: "Fees", cells: ["No per-payment fee", "1–2% per payment", "No transaction fees"] },
+    { label: "Self-hosted", cells: ["Yes, Apache-2.0", "No", "Yes, MIT"] },
+    { label: "Chains", cells: ["ERC-20 tokens on Ethereum and Base", "Varies by provider", "Bitcoin and Lightning; altcoins via plugins"] },
+  ],
+};
 export const COMPARE_TITLE = "Crypto payment gateways compared | Phala Pay";
 export const COMPARE_DESCRIPTION = "How Phala Pay compares with Stripe, Coinbase Business, BTCPay Server, NOWPayments, and MoonPay Commerce on custody, fees, chains, speed, and refunds.";
 
