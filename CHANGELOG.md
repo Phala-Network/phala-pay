@@ -24,6 +24,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
+- `CheckoutError.status` exposes the HTTP status when the error came from a response.
 - `<DepositAddress onChange(state)>` receives the public view after the first successful read
   and then once per content change, so integrators can update their UI without additional polling.
 

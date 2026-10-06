@@ -95,6 +95,11 @@ still stops immediately.
 Elements' `onChange`, for example to hide your own "new payment" control while a payment is
 `seen` or `confirming`.
 
+`CheckoutError` exposes `code`, `message`, and optional readonly fields `status` (the HTTP status
+when the error came from a response), `requestId` (the response's `Request-Id`), and `retryAfter`
+(seconds to wait before the next read). `status` is `undefined` for network errors and errors
+created without a response.
+
 Before the wallet tab sends a payment, it reads the wallet's token balance; when the wallet holds
 less than the quote, it sends nothing (the transfer would revert and still cost gas) and says how
 much the wallet holds. `onWalletError(error, wallet)` is called with the `WalletError` and the

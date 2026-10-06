@@ -37,6 +37,8 @@ export type CheckoutErrorCode =
   | "api_error";
 
 export interface CheckoutErrorOptions extends ErrorOptions {
+  /** The HTTP status, when the error came from a response. */
+  status?: number;
   /** The failed response's `Request-Id`, `req_…`, to quote to support. */
   requestId?: string;
   /** For `rate_limited`: the seconds the service asked to wait (`Retry-After`). */
@@ -45,6 +47,8 @@ export interface CheckoutErrorOptions extends ErrorOptions {
 
 export class CheckoutError extends Error {
   override readonly name = "CheckoutError";
+  /** The HTTP status, when the error came from a response. */
+  readonly status?: number;
   /** The failed response's `Request-Id`, when the service answered. */
   readonly requestId: string | undefined;
   /** For `rate_limited`: the seconds to wait before the next read. */
@@ -56,47 +60,43 @@ export class CheckoutError extends Error {
     options?: CheckoutErrorOptions,
   ) {
     super(message, options);
+    if (options?.status !== undefined) {
+      this.status = options.status;
+    }
     this.requestId = options?.requestId;
     this.retryAfter = options?.retryAfter;
   }
 }
 
-// Response classification stays internal; consumers keep the existing CheckoutError contract.
-const nonRetryableClientErrors = new WeakSet<CheckoutError>();
-
 /**
- * The error of a failed read of a public view, with the response's `Request-Id` and, on `429`,
- * its `Retry-After`.
+ * The error of a failed read of a public view, with the response's HTTP status, `Request-Id`
+ * and, on `429`, its `Retry-After`.
  */
 export function responseError(response: Response, notFound: string): CheckoutError {
   const header = response.headers.get("request-id");
-  const requestId = header === null ? {} : { requestId: header };
+  const options = { status: response.status, ...(header === null ? {} : { requestId: header }) };
   if (response.status === 404) {
-    return new CheckoutError("invalid_client_secret", notFound, requestId);
+    return new CheckoutError("invalid_client_secret", notFound, options);
   }
   if (response.status >= 500) {
     const seconds = Number(response.headers.get("retry-after"));
     return new CheckoutError("service_unavailable", "the payment service is temporarily unavailable", {
-      ...requestId,
+      ...options,
       ...(Number.isFinite(seconds) && seconds > 0 ? { retryAfter: seconds } : {}),
     });
   }
   if (response.status === 429) {
     const seconds = Number(response.headers.get("retry-after"));
     return new CheckoutError("rate_limited", "too many status requests", {
-      ...requestId,
+      ...options,
       ...(Number.isFinite(seconds) && seconds > 0 ? { retryAfter: seconds } : {}),
     });
   }
-  const error = new CheckoutError(
+  return new CheckoutError(
     "api_error",
     `the payment service answered ${response.status}`,
-    requestId,
+    options,
   );
-  if (response.status >= 400 && response.status < 500 && response.status !== 408) {
-    nonRetryableClientErrors.add(error);
-  }
-  return error;
 }
 
 /**
@@ -198,12 +198,14 @@ export async function retrieveQuote(options: RetrieveQuoteOptions): Promise<Clie
   } catch (cause) {
     throw new CheckoutError("invalid_response", "unexpected response from the payment service", {
       cause,
+      status: response.status,
     });
   }
   if (!isAddressEqual(getAddress(quote.address), expected)) {
     throw new CheckoutError(
       "address_mismatch",
       "the quote's address is not the one the merchant expects",
+      { status: response.status },
     );
   }
   return quote;
@@ -305,7 +307,14 @@ export function createCheckout(options: CheckoutOptions): CheckoutSession {
           ? cause
           : new CheckoutError("network_error", "could not reach the payment service", { cause });
       failures += 1;
-      clientFailures = nonRetryableClientErrors.has(error) ? clientFailures + 1 : 0;
+      clientFailures =
+        error.status !== undefined &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 408 &&
+        error.status !== 429
+          ? clientFailures + 1
+          : 0;
       lastFailure = error;
       const quote = state.quote;
       if (error.code === "address_mismatch") {

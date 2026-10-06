@@ -94,6 +94,7 @@ export async function retrieveDepositAddress(
   } catch (cause) {
     throw new CheckoutError("invalid_response", "unexpected response from the payment service", {
       cause,
+      status: response.status,
     });
   }
 }
