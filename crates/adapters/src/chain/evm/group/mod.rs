@@ -869,9 +869,7 @@ impl RpcGroup {
             store.blocked(self.chain).await?;
         }
         let member = self.members.get(index).ok_or(Failure::Unavailable)?;
-        let priority = budget::RPC_PRIORITY
-            .try_with(|priority| *priority)
-            .unwrap_or(budget::Priority::Background);
+        let priority = budget::Priority::current();
         let waiting = Instant::now();
         let admission = self
             .budgets

@@ -322,18 +322,22 @@ async fn background_admission_preserves_interactive_reserve() {
     }
 }
 
-#[tokio::test]
-async fn interactive_admitted_while_background_saturates() {
-    let budgets = reserved_budgets(20, 4, 1, 0);
-    let background_budgets = budgets.clone();
+async fn saturate_background(
+    budgets: Arc<Budgets>,
+    unreserved: u32,
+) -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::watch::Receiver<()>,
+) {
     let (ready, saturated) = tokio::sync::oneshot::channel();
+    let (sent, admissions) = tokio::sync::watch::channel(());
     let background = tokio::spawn(async move {
-        for _ in 0..3 {
-            background_budgets
+        for _ in 0..unreserved {
+            budgets
                 .admit(
                     "account",
                     "key",
-                    Instant::now() + Duration::from_secs(1),
+                    Instant::now() + Duration::from_secs(10),
                     budget::Priority::Background,
                 )
                 .await
@@ -341,20 +345,28 @@ async fn interactive_admitted_while_background_saturates() {
         }
         ready.send(()).unwrap();
         loop {
-            background_budgets
+            budgets
                 .admit(
                     "account",
                     "key",
-                    Instant::now() + Duration::from_secs(1),
+                    Instant::now() + Duration::from_secs(10),
                     budget::Priority::Background,
                 )
                 .await
                 .unwrap();
+            // Sending does not yield: keep draining until quota admission suspends this task.
+            sent.send(()).unwrap();
         }
     });
     saturated.await.unwrap();
-    // Let the continuous background contender keep the unreserved capacity occupied.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    (background, admissions)
+}
+
+#[tokio::test]
+async fn interactive_admitted_while_background_saturates() {
+    // A missing reserve costs at least the next 200 ms token, exceeding the 100 ms bound.
+    let budgets = reserved_budgets(5, 4, 1, 0);
+    let (background, _admissions) = saturate_background(budgets.clone(), 3).await;
     let waiting = Instant::now();
     let admission = budgets
         .admit(
@@ -459,34 +471,7 @@ async fn priority_task_local_propagates_through_join() {
 async fn interactive_budget_wait_p95_under_saturated_background() {
     for reserve in 1..=3 {
         let budgets = reserved_budgets(10, 4, reserve, 0);
-        let background_budgets = budgets.clone();
-        let (ready, saturated) = tokio::sync::oneshot::channel();
-        let background = tokio::spawn(async move {
-            for _ in 0..(4 - reserve) {
-                background_budgets
-                    .admit(
-                        "account",
-                        "key",
-                        Instant::now() + Duration::from_secs(1),
-                        budget::Priority::Background,
-                    )
-                    .await
-                    .unwrap();
-            }
-            ready.send(()).unwrap();
-            loop {
-                background_budgets
-                    .admit(
-                        "account",
-                        "key",
-                        Instant::now() + Duration::from_secs(1),
-                        budget::Priority::Background,
-                    )
-                    .await
-                    .unwrap();
-            }
-        });
-        saturated.await.unwrap();
+        let (background, mut admissions) = saturate_background(budgets.clone(), 4 - reserve).await;
         let head_budgets = budgets.clone();
         let heads = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(250));
@@ -510,13 +495,20 @@ async fn interactive_budget_wait_p95_under_saturated_background() {
         let measurement = budget::interactive(async {
             for _ in 0..20 {
                 quotes.tick().await;
+                // Observe a fresh background send, after which its task drains all available
+                // unreserved capacity before yielding. This avoids sampling refill boundaries.
+                admissions.borrow_and_update();
+                tokio::time::timeout(Duration::from_secs(2), admissions.changed())
+                    .await
+                    .map_err(|_| "background saturation timeout")?
+                    .map_err(|_| "background task stopped")?;
                 let waiting = Instant::now();
                 budgets
                     .admit(
                         "account",
                         "key",
                         Instant::now() + Duration::from_secs(1),
-                        budget::RPC_PRIORITY.with(|p| *p),
+                        budget::Priority::current(),
                     )
                     .await?;
                 waits.push(waiting.elapsed());
@@ -535,8 +527,9 @@ async fn interactive_budget_wait_p95_under_saturated_background() {
             "interactive budget acceptance: rate=10 burst=4 reserve={reserve} head_offered_rps=4 quotes_rps=4 saturated_background=true samples={} p95={p95:?}",
             waits.len()
         );
+        // At 10 rps a missing reserve costs a 100 ms token; p95 must be below half of that.
         assert!(
-            p95 < Duration::from_millis(200),
+            p95 < Duration::from_millis(50),
             "reserve={reserve}: p95={p95:?}"
         );
     }
@@ -1804,6 +1797,7 @@ impl PinnedReadFixture {
                     budget::BudgetSpec {
                         requests_per_second: 1000,
                         burst: 1000,
+                        interactive_reserve: 0,
                     },
                 ),
                 (
@@ -1811,6 +1805,7 @@ impl PinnedReadFixture {
                     budget::BudgetSpec {
                         requests_per_second: 1000,
                         burst: 1000,
+                        interactive_reserve: 0,
                     },
                 ),
             ]))

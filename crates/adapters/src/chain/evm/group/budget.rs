@@ -37,6 +37,15 @@ pub enum Priority {
     Background,
 }
 
+impl Priority {
+    /// Reads the current task's RPC priority, defaulting to background outside a scope.
+    pub fn current() -> Self {
+        RPC_PRIORITY
+            .try_with(|priority| *priority)
+            .unwrap_or_default()
+    }
+}
+
 tokio::task_local! {
     pub(super) static RPC_PRIORITY: Priority;
 }

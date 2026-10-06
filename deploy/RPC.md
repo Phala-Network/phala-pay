@@ -24,8 +24,9 @@ Each budget accepts `requests_per_second`, `burst`, and optional `interactive_re
 0, strictly less than `burst`). Background sends leave that many burst permits available;
 merchant and admin API requests may consume them. Account and key scopes are still admitted
 atomically, and a zero reserve preserves the existing behavior. Joined pricing and screening
-futures keep the API request's priority; a shared fetch already led by a background task keeps
-its background priority. Monitor `topup_rpc_interactive_budget_wait_seconds_total` alongside the
+futures keep the API request's priority. A fetch coalesced between API and background callers
+sends at the priority of whichever caller is polling it, so the reserve is best-effort for
+coalesced price fetches. Monitor `topup_rpc_interactive_budget_wait_seconds_total` alongside the
 total budget wait counter.
 
 Release the code before adding `interactive_reserve` to an environment's configuration, in a
