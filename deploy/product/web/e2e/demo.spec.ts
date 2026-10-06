@@ -915,6 +915,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
     const ended = await fetch(`${env("SERVICE_URL")}/_test/quotes/${quote}/${end}`, { method: "POST" });
     expect(ended.status).toBe(200);
     await expect(product.getByRole("status").first()).toContainText(message, { timeout: 10_000 });
+    const accountStatus = message.replace("Quote ", "").replace(/^./, (letter) => letter.toUpperCase());
+    await expect(scenes.getByTestId("payment").filter({ hasText: accountStatus }).first()).toBeVisible({ timeout: 10_000 });
   }
   expect(problems).toEqual([]);
 });

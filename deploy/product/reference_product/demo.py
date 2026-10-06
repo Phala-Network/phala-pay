@@ -77,7 +77,7 @@ from topup_sdk.errors import ResponseValidationError, TransportError
 
 from .cache import CachedFailureError, Failure, SingleFlightTTL
 from .config import EVM_ADDRESS, MissingProductKeyError, ProductConfig
-from .ledger import ORDER_FLOW_CODE, DepositView, ProductLedger
+from .ledger import ORDER_FLOW_CODE, TERMINAL_QUOTE_STATUSES, DepositView, ProductLedger
 from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
 
 # Only these failures have a public demo response. Other SDK errors reach the server logger.
@@ -395,8 +395,10 @@ class DemoConsole:
         now = self._clock()
         with self.ledger.transaction() as db:
             quotes = db.execute(
-                "SELECT id, amount, amount_atomic, exchange_rate, asset, chain_id, expires_at, "
-                "created FROM demo_quotes WHERE account = ? ORDER BY created DESC LIMIT 20",
+                "SELECT q.id, q.amount, q.amount_atomic, q.exchange_rate, q.asset, q.chain_id, "
+                "q.expires_at, q.created, s.status "
+                "FROM demo_quotes AS q LEFT JOIN quote_statuses AS s ON s.quote_id = q.id "
+                "WHERE q.account = ? ORDER BY q.created DESC LIMIT 20",
                 (account,),
             ).fetchall()
             address = db.execute(
@@ -426,9 +428,26 @@ class DemoConsole:
             }
             for deposit in deposits
         ]
-        for quote_id, amount, amount_atomic, rate, asset, chain_id, expires_at, created in quotes:
+        for (
+            quote_id,
+            amount,
+            amount_atomic,
+            rate,
+            asset,
+            chain_id,
+            expires_at,
+            created,
+            quote_status,
+        ) in quotes:
             if quote_id in paid_quotes:
                 continue
+            status = (
+                quote_status
+                if quote_status in TERMINAL_QUOTE_STATUSES
+                else "expired"
+                if now >= expires_at
+                else "awaiting_payment"
+            )
             payments.append(
                 {
                     "kind": "quote",
@@ -440,7 +459,7 @@ class DemoConsole:
                     "chain_id": chain_id,
                     "asset": asset,
                     "exchange_rate": rate,
-                    "status": "expired" if now >= expires_at else "awaiting_payment",
+                    "status": status,
                     "final": False,
                     "swept": False,
                     "tx_hash": None,
@@ -547,6 +566,7 @@ class DemoConsole:
             return None
         with self.recorder.capture() as calls:
             quote = self._service().get_quote(quote_id)
+            self.ledger.record_quote_status(quote.to_dict())
             deposits = list(_take(self._service().list_deposits(quote=quote_id, page_size=10), 10))
             payment = quote.payment.to_dict() if isinstance(quote.payment, Payment) else None
             view = self._payment_view(
@@ -619,6 +639,7 @@ class DemoConsole:
             quote = None
             if deposit is not None and isinstance(deposit.get("quote"), str):
                 quote = self._service().get_quote(deposit["quote"]).to_dict()
+                self.ledger.record_quote_status(quote)
             view = self._payment_view(deposit, payment, quote)
         view["api"] = calls
         return view

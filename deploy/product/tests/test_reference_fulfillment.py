@@ -1183,15 +1183,14 @@ def test_account_api_leaves_injected_client_open() -> None:
         fulfillment.ledger._connection.close()
 
 
-@pytest.mark.parametrize("version", [0, 1])
+@pytest.mark.parametrize("version", range(SCHEMA_VERSION))
 def test_ledger_migrations_upgrade_legacy_and_versioned_schemas(
     tmp_path: Path, version: int
 ) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:
-        _create_ledger_schema(db, version=1)
-        if version == 1:
-            db.execute("PRAGMA user_version = 1")
+        _create_ledger_schema(db, version=max(1, version))
+        db.execute(f"PRAGMA user_version = {version}")
     ledger = ProductLedger(str(path))
     try:
         with ledger.transaction() as db:
@@ -1201,12 +1200,92 @@ def test_ledger_migrations_upgrade_legacy_and_versioned_schemas(
         ledger._connection.close()
 
 
+def test_quote_status_migration_backfills_and_is_idempotent(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    quote = _quote()
+    expired_quote_id = "qt_" + "0d" * 16
+    with sqlite3.connect(path) as db:
+        _create_ledger_schema(db, version=2)
+        db.execute("INSERT INTO teams (id) VALUES (?)", (TEAM,))
+        db.execute(
+            "INSERT INTO quote_records (id, team_id, response, recorded_at) VALUES (?, ?, ?, ?)",
+            (quote["id"], TEAM, json.dumps({**quote, "status": "open"}), 1),
+        )
+        db.execute(
+            "INSERT INTO quote_records (id, team_id, response, recorded_at) VALUES (?, ?, ?, ?)",
+            (expired_quote_id, TEAM, json.dumps({**quote, "id": expired_quote_id}), 2),
+        )
+        for event_id, quote_id, event_type, received_at in (
+            ("evt_canceled", quote["id"], "quote.canceled", 3),
+            ("evt_expired", expired_quote_id, "quote.expired", 4),
+        ):
+            db.execute(
+                "INSERT INTO webhook_events "
+                "(id, type, data, received_at, body, webhook_timestamp, webhook_signature) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event_id,
+                    event_type,
+                    json.dumps({"object": {"id": quote_id}}),
+                    received_at,
+                    b"{}",
+                    "1",
+                    "signature",
+                ),
+            )
+        db.execute("PRAGMA user_version = 2")
+    for _ in range(2):
+        ledger = ProductLedger(str(path))
+        try:
+            with ledger.transaction() as db:
+                assert db.execute(
+                    "SELECT status FROM quote_statuses WHERE quote_id = ?", (quote["id"],)
+                ).fetchone() == ("canceled",)
+                assert db.execute(
+                    "SELECT status FROM quote_statuses WHERE quote_id = ?", (expired_quote_id,)
+                ).fetchone() == ("expired",)
+                assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        finally:
+            ledger._connection.close()
+
+
+def test_quote_statuses_are_monotonic_and_duplicate_deliveries_are_idempotent() -> None:
+    ledger = ProductLedger()
+    complete_id = "qt_" + "01" * 16
+    expired_id = "qt_" + "02" * 16
+    equal_rank_id = "qt_" + "03" * 16
+    ledger.record_quote_status({"id": complete_id, "status": "complete"})
+    ledger.record_quote_status({"id": complete_id, "status": "expired"})
+    ledger.record_quote_status({"id": expired_id, "status": "expired"})
+    ledger.record_quote_status({"id": expired_id, "status": "complete"})
+    ledger.record_quote_status({"id": equal_rank_id, "status": "complete"})
+    ledger.record_quote_status({"id": equal_rank_id, "status": "canceled"})
+    with ledger.transaction() as db:
+        assert db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (complete_id,)
+        ).fetchone() == ("complete",)
+        assert db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (expired_id,)
+        ).fetchone() == ("complete",)
+        assert db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (equal_rank_id,)
+        ).fetchone() == ("complete",)
+    fulfillment = _fulfillment(ledger=ledger)
+    delivery = _delivery("quote.expired", {"id": complete_id})
+    assert fulfillment.handle(*delivery).status == 204
+    assert fulfillment.handle(*delivery).status == 204
+    with ledger.transaction() as db:
+        assert db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (complete_id,)
+        ).fetchone() == ("complete",)
+
+
 def test_ledger_rejects_future_schema_without_changing_it(tmp_path: Path) -> None:
     path = tmp_path / "ledger.sqlite"
     with sqlite3.connect(path) as db:
-        db.execute("PRAGMA user_version = 3")
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
     with pytest.raises(ValueError, match="schema is newer"):
         ProductLedger(str(path))
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
         assert db.execute("SELECT name FROM sqlite_master").fetchall() == []

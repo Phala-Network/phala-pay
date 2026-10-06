@@ -22,6 +22,25 @@ def _backfill_event_refs(db: sqlite3.Connection) -> None:
         ProductLedger._record_event_refs(db, event_id, json.loads(data))
 
 
+def _backfill_quote_statuses(db: sqlite3.Connection) -> None:
+    for event_type, data in db.execute(
+        "SELECT type, data FROM webhook_events WHERE type LIKE 'quote.%' ORDER BY received_at, id"
+    ):
+        try:
+            event_data = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(event_data, Mapping):
+            ProductLedger._record_quote_webhook_status(db, event_type, event_data)
+    for quote_id, response in db.execute("SELECT id, response FROM quote_records"):
+        try:
+            quote = json.loads(response)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(quote, Mapping):
+            ProductLedger._record_quote_status(db, quote_id, quote.get("status"))
+
+
 MIGRATIONS: tuple[tuple[tuple[str, ...], Callable[[sqlite3.Connection], None] | None], ...] = (
     (
         (
@@ -202,6 +221,20 @@ MIGRATIONS: tuple[tuple[tuple[str, ...], Callable[[sqlite3.Connection], None] | 
         ),
         _backfill_event_refs,
     ),
+    (
+        (
+            """
+            -- The latest quote state learned from a service response or verified quote webhook.
+            -- Non-terminal `open` remains useful evidence, while the account view still falls
+            -- back to the stored expiry when no terminal state has been learned.
+            CREATE TABLE IF NOT EXISTS quote_statuses (
+                quote_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            """,
+        ),
+        _backfill_quote_statuses,
+    ),
 )
 SCHEMA_VERSION = len(MIGRATIONS)
 
@@ -219,6 +252,9 @@ class Delivery:
 
 # How far each deposit status is along the deposit's life; a snapshot never moves it back.
 STATUS_RANK = {"pending": 0, "credited": 1, "rejected": 1, "reversed": 2}
+QUOTE_STATUSES = frozenset({"open", "complete", "expired", "canceled"})
+QUOTE_STATUS_RANK = {"open": 0, "expired": 1, "complete": 2, "canceled": 2}
+TERMINAL_QUOTE_STATUSES = frozenset({"complete", "expired", "canceled"})
 
 
 @dataclass(frozen=True)
@@ -337,6 +373,33 @@ class ProductLedger:
                 "VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
                 (quote["id"], team_id, json.dumps(quote, sort_keys=True), time.time()),
             )
+            self._record_quote_status(db, quote.get("id"), quote.get("status"))
+
+    def record_quote_status(self, quote: Mapping[str, Any]) -> None:
+        """Records a quote status from a service response already fetched by the product."""
+        with self.transaction() as db:
+            self._record_quote_status(db, quote.get("id"), quote.get("status"))
+
+    @staticmethod
+    def _record_quote_status(db: sqlite3.Connection, quote_id: object, status: object) -> None:
+        if not isinstance(quote_id, str) or not isinstance(status, str):
+            return
+        if status not in QUOTE_STATUSES:
+            return
+        current = db.execute(
+            "SELECT status FROM quote_statuses WHERE quote_id = ?", (quote_id,)
+        ).fetchone()
+        # Quote state only moves forward; complete and canceled share the terminal rank.
+        if (
+            current is not None
+            and QUOTE_STATUS_RANK.get(current[0], -1) >= QUOTE_STATUS_RANK[status]
+        ):
+            return
+        db.execute(
+            "INSERT INTO quote_statuses (quote_id, status) VALUES (?, ?) "
+            "ON CONFLICT (quote_id) DO UPDATE SET status = excluded.status",
+            (quote_id, status),
+        )
 
     def record_deposit_address(self, team_id: str, address: Mapping[str, Any]) -> None:
         """Records a deposit address the service returned for the workspace, as it returned it.
@@ -497,8 +560,28 @@ class ProductLedger:
                 delivery.webhook_signature,
             ),
         )
+        self._record_quote_webhook_status(db, event_type, data)
         self._record_event_refs(db, delivery.webhook_id, data)
         self.events_changed.notify_all()
+
+    @classmethod
+    def _record_quote_webhook_status(
+        cls, db: sqlite3.Connection, event_type: str, data: Mapping[str, Any]
+    ) -> None:
+        if not event_type.startswith("quote."):
+            return
+        obj = data.get("object")
+        if not isinstance(obj, Mapping):
+            return
+        quote_id = obj.get("id")
+        if not isinstance(quote_id, str):
+            return
+        status: object = obj.get("status")
+        if event_type == "quote.canceled":
+            status = "canceled"
+        elif event_type == "quote.expired":
+            status = "expired"
+        cls._record_quote_status(db, quote_id, status)
 
     @staticmethod
     def _record_event_refs(db: sqlite3.Connection, event_id: str, data: object) -> None:

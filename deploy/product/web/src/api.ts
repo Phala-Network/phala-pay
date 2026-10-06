@@ -89,7 +89,7 @@ export interface PaymentRow {
   asset: string | null;
   /** USD per token: the quote's locked price, or the deposit's valuation. */
   exchange_rate: string | null;
-  status: Deposit["status"] | "awaiting_payment" | "expired";
+  status: Deposit["status"] | "awaiting_payment" | "complete" | "expired" | "canceled";
   final: boolean;
   swept: boolean;
   tx_hash: string | null;
