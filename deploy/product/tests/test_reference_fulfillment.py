@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import create_autospec
 
 import httpx
 import pytest
@@ -575,8 +576,10 @@ def test_the_account_view_lists_the_workspaces_quote_events() -> None:
     for team in (TEAM, "team-2"):
         quote = {"id": f"qt_{team}", "client_reference_id": team}
         assert fulfillment.handle(*_delivery("quote.expired", quote)).status == 204
-    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()))
-    api._client = Service()  # type: ignore[assignment]
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    service = Service()
+    client.list_deposits.side_effect = service.list_deposits
+    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()), client=client)
     answer = _account_call(api, "GET", f"/accounts/{TEAM}", b"")
     assert answer.status == 200
     assert answer.body is not None
@@ -602,8 +605,11 @@ def test_refund_requests_only_name_the_workspaces_own_deposits() -> None:
 
     ledger = ProductLedger()
     ledger.add_team(TEAM)
-    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()))
-    api._client = Service()  # type: ignore[assignment]
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    service = Service()
+    client.list_deposits.side_effect = service.list_deposits
+    client.create_refund.side_effect = service.create_refund
+    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()), client=client)
     to = "0x" + "66" * 20
 
     def refund(deposit: str, body: dict[str, Any]) -> Answer:
@@ -1000,8 +1006,12 @@ def test_account_view_bounds_deposits_and_avoids_global_event_reads(
             ).status
             == 204
         )
-    api = AccountApi(CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()))
-    api._client = Service()  # type: ignore[assignment]
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    service = Service()
+    client.list_deposits.side_effect = service.list_deposits
+    api = AccountApi(
+        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
+    )
 
     def global_events() -> list[dict[str, Any]]:
         raise AssertionError("account view must query references")
@@ -1126,7 +1136,6 @@ def test_account_api_isolates_sdk_service_failures(
     failure: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     fulfillment = _fulfillment()
-    api = AccountApi(CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()))
 
     def service(request: httpx.Request) -> httpx.Response:
         if failure == "timeout":
@@ -1135,12 +1144,15 @@ def test_account_api_isolates_sdk_service_failures(
             raise httpx.ConnectError("private service detail", request=request)
         return httpx.Response(200, json={"private service detail": "invalid list"})
 
-    api._client = TopupClient(
+    client = TopupClient(
         "https://service.test",
         "ppay_rk_test_" + "A" * 43 + "000000",
         account=CONFIG.account,
         transport=httpx.MockTransport(service),
         max_attempts=1,
+    )
+    api = AccountApi(
+        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
     )
     try:
         answer = _account_call(api, "GET", f"/accounts/{TEAM}", b"")

@@ -325,12 +325,19 @@ class AccountApi:
     request create nothing new. Registration and reads are idempotent in themselves.
     """
 
-    def __init__(self, config: ProductConfig, ledger: ProductLedger, driver_key: Ed25519PublicKey):
+    def __init__(
+        self,
+        config: ProductConfig,
+        ledger: ProductLedger,
+        driver_key: Ed25519PublicKey,
+        *,
+        client: TopupClient | None = None,
+    ) -> None:
         self.config = config
         self.ledger = ledger
         self.driver_key = driver_key
         self.accounts_path = urlsplit(config.public_url).path.rstrip("/") + "/accounts"
-        self._client: TopupClient | None = None
+        self._client: TopupClient | None = client
         self._transport: DeadlineTransport | None = None
         self._client_lock = threading.Lock()
 
