@@ -61,6 +61,15 @@ operator's Prometheus rules. Existing `topup_rpc_calls_total` counts every real 
 including retries, preflight, head checks and replay; selection and denied admissions cost zero
 sends. Compare rates by account across all member ids and methods, rather than one method alone.
 
+Read head validation is skipped only for an explicit numeric block already covered by the
+same member's previously validated head. Reads without a numeric block, including tags,
+receipts, hash selectors and logs, still validate the head. Explicit head reads continue
+canonical/reorg checks and watermark persistence; A/B hash confirmation is unchanged.
+Every send still checks the durable freeze gate, including block-pinned reads. Member failures
+or failed verification clear this memo; isolated probes start empty.
+`topup_rpc_head_validations_total` reports both paths with `result="performed"` and
+`result="skipped_pinned"`.
+
 A whole group outage pauses evidence and credit. Failover never fills an empty candidate pool.
 Quota-paused members are skipped when a separately budgeted account is healthy.
 Cooldown expiry schedules probes; it does not admit a member. A lagging member cannot answer a

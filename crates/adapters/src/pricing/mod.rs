@@ -189,6 +189,8 @@ pub mod test_rpc {
     pub struct RpcFixture {
         /// Client connected to the fixture server.
         pub client: Arc<EvmClient>,
+        /// Number of actual requests received by the fixture.
+        pub sends: Arc<std::sync::atomic::AtomicUsize>,
         task: tokio::task::JoinHandle<()>,
     }
     impl Drop for RpcFixture {
@@ -203,9 +205,13 @@ pub mod test_rpc {
     ) -> RpcFixture {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
+        let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let received = sends.clone();
         let handler = move |Json(request): Json<Value>| {
             let reply = reply.clone();
+            let received = received.clone();
             async move {
+                received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let id = request["id"].clone();
                 Json(json!({"jsonrpc":"2.0","id":id,"result":reply(request)}))
             }
@@ -252,6 +258,7 @@ pub mod test_rpc {
         group.verified(0, true);
         RpcFixture {
             client: Arc::new(EvmClient::from_group(group, None).unwrap()),
+            sends,
             task,
         }
     }

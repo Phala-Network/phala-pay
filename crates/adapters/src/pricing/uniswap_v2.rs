@@ -804,6 +804,72 @@ mod tests {
         .await
     }
     #[tokio::test]
+    async fn fetch_send_count_with_stationary_head() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let now = unix_now().unwrap().value();
+        let hash = B256::repeat_byte(1);
+        let mut state = PairState {
+            token0: PHA,
+            token1: WETH,
+            reserve0: U256::from(100_000_000_000_000_000_000_000_u128),
+            reserve1: U256::from(100_000_000_000_000_000_000_u128),
+            timestamp_last: u32::try_from(now).unwrap(),
+            cumulative0: U256::ZERO,
+            cumulative1: U256::ZERO,
+        };
+        let spot = counterfactual(
+            &state,
+            PriceBlock {
+                number: 98,
+                hash,
+                timestamp: now,
+            },
+        )
+        .unwrap()
+        .0
+        .spot;
+        state.cumulative0 = spot * U256::from(1800);
+        let history = (0..30_u64)
+            .map(|i| Sample {
+                block: 67 + i,
+                hash,
+                timestamp: now - 1800 + i * 60,
+                spot,
+                cumulative: spot * U256::from(i * 60),
+            })
+            .collect();
+        let sends = Arc::new(AtomicUsize::new(0));
+        let a = test_rpc::uniswap_v2(
+            "fetch-count-a",
+            (100, hash),
+            state.clone(),
+            200_000_000_000,
+            now,
+            sends.clone(),
+        )
+        .await;
+        let b = test_rpc::uniswap_v2(
+            "fetch-count-b",
+            (100, hash),
+            state,
+            200_000_000_000,
+            now,
+            sends.clone(),
+        )
+        .await;
+        let reader = UniswapV2::new(
+            a.client.clone(),
+            b.client.clone(),
+            TwapConfig::default(),
+            Arc::new(Memory(tokio::sync::Mutex::new(history))),
+        )
+        .unwrap();
+        reader.fetch().await.unwrap();
+        let sends = sends.load(Ordering::SeqCst);
+        println!("UniswapV2::fetch stationary-head sends: {sends}");
+        assert_eq!(sends, 26);
+    }
+    #[tokio::test]
     async fn quote_between_samples_ends_at_the_eth_usd_block_without_an_extra_row() {
         let now = unix_now().unwrap().value();
         let hash = B256::repeat_byte(1);

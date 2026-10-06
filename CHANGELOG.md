@@ -19,6 +19,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the
   restore report's `expected_heartbeat_at` JSON field is now `failure_at`. Both refer to the
   externally recorded failure instant.
+- RPC reads pinned to a numeric block skip redundant head validation when the same member's
+  validated head already covers it. Every send retains the durable freeze check; explicit head
+  reads still validate canonicality and persist watermarks. Head state loads use one database
+  statement, and RPC head validation metrics report skipped pinned reads.
 - Request deadline errors now say "the request did not complete within its deadline; retry"
   instead of blaming the database, with `503 unavailable` and `Retry-After: 2`.
 - Price adapters are shared across routes and coalesce concurrent fetches. Quotes may reuse

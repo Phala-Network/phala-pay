@@ -1280,3 +1280,501 @@ async fn probe_rejects_later_numeric_hash_conflicting_with_snapshot_without_retr
     assert_eq!(numeric.load(Ordering::SeqCst), 1);
     task.abort();
 }
+
+#[test]
+fn explicit_block_parses_only_numeric_forms() {
+    for method in [
+        "eth_call",
+        "eth_getCode",
+        "eth_getTransactionCount",
+        "eth_getBalance",
+    ] {
+        for (block, expected) in [
+            (json!("0x0"), Some(0)),
+            (json!("0x64"), Some(100)),
+            (json!("0xABC"), Some(2748)),
+            (json!("0xffffffffffffffff"), Some(u64::MAX)),
+            (json!({"blockNumber":"0x64"}), Some(100)),
+            (
+                json!({"blockNumber":"0x64","requireCanonical":true}),
+                Some(100),
+            ),
+            (json!({"blockHash":format!("0x{}", "11".repeat(32))}), None),
+            (json!({"blockHash":"0x11","blockNumber":"0x64"}), None),
+            (json!({"blockNumber":"latest"}), None),
+            (json!({"blockNumber":100}), None),
+            (json!("latest"), None),
+            (json!("pending"), None),
+            (json!("earliest"), None),
+            (json!("safe"), None),
+            (json!("finalized"), None),
+            (json!("100"), None),
+            (json!("0X64"), None),
+            (json!("0x"), None),
+            (json!("0x+1"), None),
+            (json!("0x-1"), None),
+            (json!("0xgg"), None),
+            (json!("0x10000000000000000"), None),
+            (json!(100), None),
+            (Value::Null, None),
+            (json!({}), None),
+            (json!([]), None),
+        ] {
+            assert_eq!(
+                explicit_block(method, &json!({"params":[{}, block]})),
+                expected,
+                "{method}: {block}"
+            );
+        }
+        for request in [json!({}), json!({"params":[]}), json!({"params":[{}]})] {
+            assert_eq!(explicit_block(method, &request), None);
+        }
+    }
+    for (block, expected) in [
+        (json!("0x64"), Some(100)),
+        (json!("0x0"), Some(0)),
+        (json!("latest"), None),
+        (json!("safe"), None),
+        (json!("finalized"), None),
+        (json!("pending"), None),
+        (json!("earliest"), None),
+        (json!({"blockNumber":"0x64"}), None),
+        (json!("0x"), None),
+        (json!("0x10000000000000000"), None),
+        (json!(100), None),
+        (Value::Null, None),
+    ] {
+        assert_eq!(
+            explicit_block("eth_getBlockByNumber", &json!({"params":[block, false]})),
+            expected
+        );
+    }
+    for method in [
+        "eth_getTransactionReceipt",
+        "eth_getBlockByHash",
+        "eth_getTransactionByHash",
+        "eth_getLogs",
+        "eth_chainId",
+        "unknown",
+    ] {
+        assert_eq!(
+            explicit_block(method, &json!({"params":["0x64", "0x64"]})),
+            None
+        );
+    }
+}
+
+struct PinnedReadFixture {
+    group: Arc<RpcGroup>,
+    number: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<Value>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Drop for PinnedReadFixture {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+impl PinnedReadFixture {
+    async fn new(id: &str, tolerance: u64, members: usize) -> Self {
+        let number = Arc::new(AtomicUsize::new(100));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let height = number.clone();
+        let seen = requests.clone();
+        let (url, task) = server(Router::new().route(
+            "/",
+            post(move |Json(request): Json<Value>| {
+                let height = height.clone();
+                let seen = seen.clone();
+                async move {
+                    seen.lock().unwrap().push(request.clone());
+                    let result = match request["method"].as_str().unwrap() {
+                        "eth_getBlockByNumber" => header(
+                            if request["params"][0].as_str().unwrap().starts_with("0x") {
+                                request["params"][0].as_str().unwrap().to_owned()
+                            } else {
+                                format!("0x{:x}", height.load(Ordering::SeqCst))
+                            },
+                        ),
+                        "eth_getTransactionReceipt" | "eth_getTransactionByHash" => Value::Null,
+                        "eth_getLogs" => json!([]),
+                        "eth_getBalance" | "eth_getTransactionCount" => json!("0x0"),
+                        _ => json!("0x"),
+                    };
+                    Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
+                }
+            }),
+        ))
+        .await;
+        let budgets = Arc::new(
+            Budgets::new(&BTreeMap::from([
+                (
+                    "account".into(),
+                    budget::BudgetSpec {
+                        requests_per_second: 1000,
+                        burst: 1000,
+                    },
+                ),
+                (
+                    "key".into(),
+                    budget::BudgetSpec {
+                        requests_per_second: 1000,
+                        burst: 1000,
+                    },
+                ),
+            ]))
+            .unwrap(),
+        );
+        let group = RpcGroup::new(
+            id.into(),
+            1,
+            GroupPolicy {
+                head_regression_tolerance: tolerance,
+                ..Default::default()
+            },
+            (0..members)
+                .map(|i| Member {
+                    id: format!("member-{i}"),
+                    company: "company".into(),
+                    endpoint: Redacted::parse(&url).unwrap(),
+                    account: "account".into(),
+                    key: "key".into(),
+                    priority: 0,
+                    weight: 1,
+                })
+                .collect(),
+            budgets,
+        )
+        .unwrap();
+        for i in 0..members {
+            group.verified(i, true);
+        }
+        Self {
+            group,
+            number,
+            requests,
+            task,
+        }
+    }
+    async fn request(&self, method: &str, params: Value) -> Result<Value, Failure> {
+        self.group
+            .request(json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+            .await
+    }
+    fn latest_sends(&self) -> usize {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r["method"] == "eth_getBlockByNumber" && r["params"][0] == "latest")
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn block_pinned_call_skips_head_after_member_validated_latest() {
+    let fixture = PinnedReadFixture::new("pinned-skip-test", 0, 1).await;
+    fixture.request("eth_blockNumber", json!([])).await.unwrap();
+    for block in [json!("0x62"), json!("0x64"), json!({"blockNumber":"0x63"})] {
+        fixture
+            .request("eth_call", json!([{}, block]))
+            .await
+            .unwrap();
+    }
+    assert_eq!(fixture.latest_sends(), 1);
+    let families = metrics::events().unwrap();
+    let for_group = |sample: &&prometheus::proto::Metric| {
+        sample
+            .get_label()
+            .iter()
+            .any(|l| l.name() == "group" && l.value() == "pinned-skip-test")
+    };
+    let heads = families
+        .iter()
+        .filter(|f| f.name() == "topup_rpc_head_validations_total")
+        .flat_map(|f| f.get_metric())
+        .filter(for_group)
+        .collect::<Vec<_>>();
+    assert_eq!(heads.len(), 2);
+    let skipped = heads
+        .iter()
+        .find(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.name() == "result" && l.value() == "skipped_pinned")
+        })
+        .unwrap();
+    assert_eq!(skipped.get_counter().get_value(), 3.0);
+    assert_eq!(
+        families
+            .iter()
+            .filter(|f| f.name() == "topup_rpc_member_failures_total")
+            .flat_map(|f| f.get_metric())
+            .filter(for_group)
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn call_above_memo_or_without_block_still_validates_head() {
+    let fixture = PinnedReadFixture::new("pinned-fallback-test", 0, 1).await;
+    fixture.request("eth_blockNumber", json!([])).await.unwrap();
+    fixture
+        .request("eth_call", json!([{}, "latest"]))
+        .await
+        .unwrap();
+    assert_eq!(fixture.latest_sends(), 2);
+    fixture.number.store(101, Ordering::SeqCst);
+    fixture
+        .request("eth_call", json!([{}, "0x65"]))
+        .await
+        .unwrap();
+    assert_eq!(fixture.latest_sends(), 3);
+    fixture
+        .request(
+            "eth_getTransactionReceipt",
+            json!([format!("0x{}", "11".repeat(32))]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fixture.latest_sends(), 4);
+    fixture.request("eth_call", json!([{}])).await.unwrap();
+    assert_eq!(fixture.latest_sends(), 5);
+    fixture
+        .request(
+            "eth_call",
+            json!([{}, {"blockHash":format!("0x{}", "11".repeat(32))}]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fixture.latest_sends(), 6);
+    fixture
+        .request(
+            "eth_getLogs",
+            json!([{"fromBlock":"0x60","toBlock":"0x64"}]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fixture.latest_sends(), 7);
+}
+
+#[tokio::test]
+async fn memo_records_member_reported_head_under_tolerated_regression() {
+    let fixture = PinnedReadFixture::new("pinned-regression-test", 2, 2).await;
+    for tag in ["latest", "safe", "finalized"] {
+        fixture.number.store(100, Ordering::SeqCst);
+        fixture
+            .group
+            .head(0, tag, Instant::now() + Duration::from_secs(2))
+            .await
+            .unwrap();
+        fixture.group.verified(1, false);
+        fixture.group.verified(1, true);
+        fixture.number.store(98, Ordering::SeqCst);
+        assert_eq!(
+            fixture
+                .group
+                .head(1, tag, Instant::now() + Duration::from_secs(2))
+                .await
+                .unwrap()
+                .number,
+            100
+        );
+        assert!(fixture.group.validated_at_least(1, 98));
+        assert!(!fixture.group.validated_at_least(1, 99));
+        assert!(fixture.group.validated_at_least(0, 100));
+    }
+}
+
+#[tokio::test]
+async fn member_failure_and_unverify_clear_memo() {
+    let fixture = PinnedReadFixture::new("pinned-invalidation-test", 0, 2).await;
+    for error in [
+        Failure::Redirect,
+        Failure::Identity,
+        Failure::Request,
+        Failure::Revert,
+        Failure::Capability,
+        Failure::Range,
+        Failure::Body,
+        Failure::Transport,
+        Failure::Throttled,
+        Failure::Server,
+        Failure::Malformed,
+        Failure::Stale,
+        Failure::Fork,
+        Failure::Persistence,
+        Failure::Unavailable,
+        Failure::Deadline,
+        Failure::Unclassified,
+    ] {
+        fixture
+            .group
+            .head(0, "latest", Instant::now() + Duration::from_secs(2))
+            .await
+            .unwrap();
+        fixture
+            .group
+            .head(1, "latest", Instant::now() + Duration::from_secs(2))
+            .await
+            .unwrap();
+        fixture.group.failed(0, error);
+        assert!(!fixture.group.validated_at_least(0, 0), "{error:?}");
+        assert!(
+            fixture.group.validated_at_least(1, 100),
+            "other member memo must survive"
+        );
+    }
+    fixture
+        .group
+        .head(0, "latest", Instant::now() + Duration::from_secs(2))
+        .await
+        .unwrap();
+    fixture.group.verified(0, false);
+    fixture.group.verified(0, true);
+    assert!(!fixture.group.validated_at_least(0, 0));
+    assert!(fixture.group.validated_at_least(1, 100));
+}
+
+#[derive(Default)]
+struct PinnedReadStore {
+    frozen: std::sync::atomic::AtomicBool,
+    reject_accept: std::sync::atomic::AtomicBool,
+    blocked_calls: AtomicUsize,
+}
+#[async_trait]
+impl WatermarkStore for PinnedReadStore {
+    async fn blocked(&self, _: u64) -> Result<(), Failure> {
+        self.blocked_calls.fetch_add(1, Ordering::SeqCst);
+        if self.frozen.load(Ordering::SeqCst) {
+            Err(Failure::Fork)
+        } else {
+            Ok(())
+        }
+    }
+    async fn freeze(&self, _: u64) -> Result<(), Failure> {
+        self.frozen.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn load(&self, _: u64, _: &str, _: &str) -> Result<Option<HeadAnchor>, Failure> {
+        Ok(None)
+    }
+    async fn accept(
+        &self,
+        _: u64,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &HeadAnchor,
+    ) -> Result<(), Failure> {
+        if self.reject_accept.load(Ordering::SeqCst) {
+            Err(Failure::Persistence)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[tokio::test]
+async fn frozen_chain_refuses_block_pinned_call() {
+    let fixture = PinnedReadFixture::new("pinned-frozen-test", 0, 1).await;
+    let store = Arc::new(PinnedReadStore::default());
+    fixture.group.set_store(store.clone());
+    fixture.request("eth_blockNumber", json!([])).await.unwrap();
+    fixture
+        .request("eth_call", json!([{}, "0x64"]))
+        .await
+        .unwrap();
+    assert_eq!(store.blocked_calls.load(Ordering::SeqCst), 2);
+    store.frozen.store(true, Ordering::SeqCst);
+    assert_eq!(
+        fixture.request("eth_call", json!([{}, "0x64"])).await,
+        Err(Failure::Fork)
+    );
+    assert_eq!(store.blocked_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(fixture.latest_sends(), 1);
+    assert_eq!(
+        fixture.requests.lock().unwrap().len(),
+        2,
+        "frozen send must never reach the member"
+    );
+}
+
+#[tokio::test]
+async fn isolated_copy_starts_with_empty_memo() {
+    let fixture = PinnedReadFixture::new("pinned-isolated-test", 0, 1).await;
+    fixture.request("eth_blockNumber", json!([])).await.unwrap();
+    let copy = fixture
+        .group
+        .isolated_copy(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert!(fixture.group.validated_at_least(0, 100));
+    assert!(!copy.validated_at_least(0, 0));
+    copy.verified(0, true);
+    copy.request(json!({"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{},"0x64"]}))
+        .await
+        .unwrap();
+    assert_eq!(fixture.latest_sends(), 2);
+}
+
+#[tokio::test]
+async fn direct_head_validation_error_clears_memo_and_pinned_read_revalidates() {
+    for error in [Failure::Stale, Failure::Persistence, Failure::Fork] {
+        let fixture = PinnedReadFixture::new(&format!("pinned-direct-head-{error:?}"), 0, 1).await;
+        let store = Arc::new(PinnedReadStore::default());
+        fixture.group.set_store(store.clone());
+        let deadline = || Instant::now() + Duration::from_secs(2);
+        fixture.group.head(0, "latest", deadline()).await.unwrap();
+        assert!(fixture.group.validated_at_least(0, 100));
+
+        match error {
+            Failure::Stale => fixture.number.store(99, Ordering::SeqCst),
+            Failure::Persistence => store.reject_accept.store(true, Ordering::SeqCst),
+            Failure::Fork => store.frozen.store(true, Ordering::SeqCst),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            fixture.group.head(0, "latest", deadline()).await,
+            Err(error)
+        );
+        assert!(!fixture.group.validated_at_least(0, 0), "{error:?}");
+        assert_eq!(
+            fixture.group.eligible(),
+            1,
+            "direct head failure only clears the memo"
+        );
+
+        fixture.number.store(100, Ordering::SeqCst);
+        store.reject_accept.store(false, Ordering::SeqCst);
+        store.frozen.store(false, Ordering::SeqCst);
+        let before = fixture.latest_sends();
+        fixture
+            .request("eth_call", json!([{}, "0x64"]))
+            .await
+            .unwrap();
+        assert_eq!(fixture.latest_sends(), before + 1, "{error:?}");
+        assert!(fixture.group.validated_at_least(0, 100));
+        let requests = fixture.requests.lock().unwrap();
+        let prefix = &requests[requests.len() - 2];
+        assert_eq!(prefix["method"], "eth_getBlockByNumber");
+        assert_eq!(prefix["params"][0], "latest");
+        assert_eq!(requests.last().unwrap()["method"], "eth_call");
+    }
+}
+
+#[tokio::test]
+async fn unaccepted_head_never_populates_memo() {
+    let fixture = PinnedReadFixture::new("pinned-acceptance-test", 0, 1).await;
+    let store = Arc::new(PinnedReadStore::default());
+    store.reject_accept.store(true, Ordering::SeqCst);
+    fixture.group.set_store(store);
+    assert_eq!(
+        fixture
+            .group
+            .head(0, "latest", Instant::now() + Duration::from_secs(2))
+            .await,
+        Err(Failure::Persistence)
+    );
+    assert!(!fixture.group.validated_at_least(0, 0));
+}
