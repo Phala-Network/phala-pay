@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 import time
 from contextlib import ExitStack
 from contextvars import ContextVar
 
+import anyio
 import httpx
 from anyio.from_thread import start_blocking_portal
 
@@ -54,7 +54,7 @@ class DeadlineTransport(httpx.BaseTransport):
             raise httpx.TimeoutException("product operation deadline exceeded", request=request)
 
         async def exchange() -> httpx.Response:
-            async with asyncio.timeout(max(0, deadline - time.monotonic())):
+            with anyio.fail_after(max(0, deadline - time.monotonic())):
                 response = await self._client.send(request, stream=True)
                 try:
                     content = b"".join([chunk async for chunk in response.aiter_raw()])
