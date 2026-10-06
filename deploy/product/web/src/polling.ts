@@ -1,0 +1,27 @@
+import type { Deposit, Quote, Refund } from "../../../../sdk/js-server/src/types.js";
+
+// Idle accounts need only occasional balance refreshes.
+export const ACCOUNT_IDLE_INTERVAL_MS = 15_000;
+// Pending payments need prompt account updates without duplicating the active timeline rate.
+export const ACCOUNT_PENDING_INTERVAL_MS = 4000;
+// Transfers and refunds in flight need prompt settlement updates.
+export const TIMELINE_ACTIVE_INTERVAL_MS = 3000;
+// Waiting payments and webhook delivery need a modest background refresh rate.
+export const TIMELINE_INTERVAL_MS = 10_000;
+// Expired quotes can still receive late payments valued at spot.
+export const EXPIRED_QUOTE_INTERVAL_MS = 30_000;
+// Failed configuration reads should recover without repeatedly hitting an unavailable service.
+export const QUERY_RECOVERY_INTERVAL_MS = 15_000;
+// The merchant's sweeps list follows finalized transfers at a modest refresh rate.
+export const SWEEPS_INTERVAL_MS = 10_000;
+// Match the product's five-minute trust/configuration cache.
+export const CONFIG_STALE_TIME_MS = 5 * 60_000;
+
+// The generated API permits new status values; unknown values remain nonterminal.
+export const TERMINAL_DEPOSIT_STATUSES: ReadonlySet<Deposit["status"]> = new Set(["credited", "rejected", "reversed"]);
+export const TERMINAL_QUOTE_STATUSES: ReadonlySet<Quote["status"]> = new Set(["complete", "expired", "canceled"]);
+export const TERMINAL_REFUND_STATUSES: ReadonlySet<Refund["status"]> = new Set(["succeeded", "failed", "canceled"]);
+export const TERMINAL_ACCOUNT_STATUSES: ReadonlySet<Deposit["status"]> = new Set([
+  ...TERMINAL_DEPOSIT_STATUSES,
+  ...TERMINAL_QUOTE_STATUSES,
+]);
