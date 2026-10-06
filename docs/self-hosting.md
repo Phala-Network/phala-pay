@@ -216,9 +216,6 @@ comes from a release.
            type: choice
            options: [provision, upgrade]
            required: true
-         bootstrap_maintenance:
-           type: boolean
-           default: false
    permissions:
      contents: read
      attestations: read
@@ -229,7 +226,6 @@ comes from a release.
          version: v0.9.2
          environment: ${{ inputs.environment }}
          mode: ${{ inputs.mode }}
-         bootstrap_maintenance: ${{ inputs.bootstrap_maintenance }}
          environment_dir: ${{ inputs.environment }}/topup
        # In Phala Pay's organisation, `secrets: inherit` instead.
        secrets:

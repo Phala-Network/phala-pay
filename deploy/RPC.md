@@ -130,8 +130,6 @@ member ids. Keep sealed keys under their explicit existing names. Verify first a
 A/B cursor anchoring, head progression, usage and pending-review metrics in the stopped/local
 rehearsal, then use the normal reviewed deployment process.
 
-Before 0.7.0 writes, rollback restores the old image and old config together. After it accepts
-watermarks or processes deposits, stop writers and restore/reconcile a reviewed snapshot or
-complete an owner-reviewed rescan; 0.6.0 cannot enforce the new persisted safety state. Do not run
-migration down against a live service. Config rollback alone never lowers watermarks or repairs
-address floors. All commands in this runbook are operator procedures, not automatic live actions.
+Do not run migration down against a live service. Config rollback alone never lowers watermarks
+or repairs address floors. All commands in this runbook are operator procedures, not automatic
+live actions.

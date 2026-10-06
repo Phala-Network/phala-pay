@@ -24,10 +24,6 @@ on:
         type: choice
         options: [provision, upgrade]
         required: true
-      bootstrap_maintenance:
-        description: "One-time topup upgrade from a release without the maintenance API (0.8.x → 0.9.x)"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -42,7 +38,6 @@ jobs:
       target: ${{ inputs.target }}
       mode: ${{ inputs.mode }}
       environment_dir: deploy/environments/phala-network/${{ inputs.environment }}/${{ inputs.target }}
-      bootstrap_maintenance: ${{ inputs.bootstrap_maintenance }}
     # The called job's Environment secret (PHALA_CLOUD_API_KEY) resolves only when the caller
     # inherits secrets (actions/runner#4453); this repository holds no other secret.
     secrets: inherit

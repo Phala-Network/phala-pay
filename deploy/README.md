@@ -213,12 +213,7 @@ and single-use replay checks as admin signatures; successful changes record the 
 upgrade, using v1 to drain that upgrade. After health and resume pass, switch the Environment's
 maintenance PEM/key id to v2, verify a signed maintenance operation, then remove v1's public
 entry in another reviewed upgrade using v2. Keep the old credential until the first upgrade's
-cleanup completes. Do not rotate credentials during a running deployment. For first adoption,
-install the public key in the feature rollout allowed by `bootstrap_maintenance` below; a
-pre-feature service cannot recognize the key. Any policy-permitted rollback to a release
-predating `maintenance_keys` also needs that release's compatible config without this field,
-because its strict config parser rejects unknown fields. This does not override the 0.9.0
-declaration: **no rollback to 0.8.3; restore required**, and no rollback to any 0.8.x release.
+cleanup completes. Do not rotate credentials during a running deployment.
 
 New authenticated mutations return `503 service_maintenance`, `Retry-After: 5`, before idempotent
 execution; reads and already admitted requests continue. Scanners and outbox workers continue until the
@@ -242,21 +237,6 @@ keep an incomplete window if recovery was not observed; no observed failure is n
 zero downtime. Staging run 37215125136 took about 160 seconds (upgrade step to service readiness),
 which motivates the SDK's opt-in 300-second budget. This masks transient failures for clients;
 the CVM still restarts and raw HTTP callers must implement retries.
-
-**First rollout:** a running pre-feature release has no instance pause API, so it cannot emit a
-maintenance signal retroactively. Distribute the tolerant JS SDK first. The owner may explicitly
-pass `bootstrap_maintenance: true` to the new reusable workflow for that one upgrade: only an
-HTTP 404 from the old pause path allows bootstrap. A feature-capable service still requires the
-normal signed pause, and missing credentials or any other pause failure aborts before the upgrade
-call. Bootstrap is recorded in the job summary and disabled by default; remove it after rollout.
-When adopting the feature release in a caller workflow, expose this boolean only if the first
-upgrade needs it (the currently pinned Phala caller remains unchanged until release adoption).
-For a policy-permitted rollback to a pre-feature release, the new process has no inherited
-maintenance lease; a resume response may be 404, but normal admission is already open. This
-maintenance compatibility behavior does not authorize rollback to 0.8.3 or any 0.8.x release:
-restore from the pre-upgrade backup as declared in [rollback compatibility](#rollback-compatibility).
-Deadline expiry remains the fallback if the original process is still serving after a failed
-upgrade. No compatibility bypass is automatic.
 
 1. Merge the change to the environment repository's `main`: a setting, or a new `version`.
 2. First deployment: Deploy with `mode: provision`, then set `TOPUP_CVM_ID` (or, for the product,
@@ -928,18 +908,15 @@ and it must have succeeded. Missing metadata, a higher floor or mismatched check
 SQLx continues checking all known migration checksums and dirty state. The application role cannot
 write the ledger. A rollback never lowers existing floors or edits migration history.
 
-0.9.0 is the first compatibility-ledger protocol release. It declares **no rollback to 0.8.3;
-restore required**, and no rollback to any 0.8.x release: follow [RESTORE.md](RESTORE.md) using the
-pre-upgrade backup. Earlier immutable images cannot understand newer migrations; route configuration
-and SDK changes also prevent rollback. CI resolves the latest stable release as N-1 automatically.
+CI resolves the latest stable release as N-1 automatically and requires v0.9.0 or later.
 For any N-1, an exact `no rollback to <N-1 version>; restore required` declaration in
 `### Breaking (operators)` under `## [Unreleased]` or the dated section matching the workspace
 version (including the release PR before tagging)
 selects `declared` mode: CI skips the image smoke and prints the declaration in its job summary.
-For protocol-era N-1, `COMPATIBILITY_FLOOR` must also exceed the value in N-1's tag; CI fails
-if the floor is unchanged or lower. Without a declaration, pre-protocol N-1 fails and protocol-era
-N-1 runs the real image rollback smoke. Breaking migrations raise the floor to the new schema's
-maximum; retain a tested pre-upgrade restore/reconciliation plan and obtain owner acceptance.
+`COMPATIBILITY_FLOOR` must also exceed the value in N-1's tag; CI fails if the floor is unchanged
+or lower. Without a declaration, N-1 runs the real image rollback smoke. Breaking migrations raise
+the floor to the new schema's maximum; retain a tested pre-upgrade restore/reconciliation plan and
+obtain owner acceptance.
 
 Before upgrade, preserve the verified N-1 deploy kit, image digests and configuration and a tested
 pre-upgrade recovery point. To roll back, verify N-1's release again, render its compose/config,
