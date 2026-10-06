@@ -521,8 +521,11 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
             state.clone(),
             auth::ingress_budget,
         ))
+        .layer(middleware::from_fn(interactive_rpc))
         .split_for_parts();
-    let (admin_router, admin_doc) = admin.split_for_parts();
+    let (admin_router, admin_doc) = admin
+        .layer(middleware::from_fn(interactive_rpc))
+        .split_for_parts();
     let docs = ApiDocs {
         merchant: openapi::merchant(&merchant_doc),
         admin: openapi::admin(&admin_doc),
@@ -550,6 +553,10 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
         .with_state(state);
 
     (router, docs)
+}
+
+async fn interactive_rpc(request: Request, next: Next) -> Response {
+    topup_adapters::chain::evm::group::budget::interactive(next.run(request)).await
 }
 
 async fn unrecognized_request() -> Response {

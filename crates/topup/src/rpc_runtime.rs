@@ -1217,6 +1217,7 @@ mod probe_tests {
         let spec = BudgetSpec {
             requests_per_second: rps,
             burst: if rps == 2 { 2 } else { 100 },
+            interactive_reserve: 0,
         };
         let budgets = Arc::new(
             Budgets::new(&BTreeMap::from([

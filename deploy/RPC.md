@@ -20,6 +20,18 @@ Give keyless endpoints explicit synthetic key budgets, shared across their metho
 account scopes across chains/credentials belonging to the same paid account. Never run two
 active replicas with the same budgets: admission is process-local, under the existing lease model.
 
+Each budget accepts `requests_per_second`, `burst`, and optional `interactive_reserve` (default
+0, strictly less than `burst`). Background sends leave that many burst permits available;
+merchant and admin API requests may consume them. Account and key scopes are still admitted
+atomically, and a zero reserve preserves the existing behavior. Joined pricing and screening
+futures keep the API request's priority; a shared fetch already led by a background task keeps
+its background priority. Monitor `topup_rpc_interactive_budget_wait_seconds_total` alongside the
+total budget wait counter.
+
+Release the code before adding `interactive_reserve` to an environment's configuration, in a
+separate adoption PR. Older versions reject the new field; remove it before rolling back to an
+older image.
+
 Every production price group should have at least two members, preferably from separate
 companies, so a transient public-RPC backend lag can fail over within the group. Price probes are
 read-only and pin all calls below the A/B-agreed head. A member may report a latest head up to two

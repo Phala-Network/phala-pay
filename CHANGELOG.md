@@ -14,6 +14,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added
+
+- RPC budgets accept an optional `interactive_reserve` (default 0, below `burst`), preserving
+  capacity for merchant and admin API requests while background work shares account and key
+  limits. `topup_rpc_interactive_budget_wait_seconds_total` reports interactive admission waits.
+  Release the code before adopting the field in configuration; remove it before rollback to
+  older versions.
+
 ### Changed
 
 - **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the

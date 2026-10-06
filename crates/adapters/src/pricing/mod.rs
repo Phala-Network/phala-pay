@@ -227,6 +227,7 @@ pub mod test_rpc {
                     BudgetSpec {
                         requests_per_second: 100,
                         burst: 100,
+                        interactive_reserve: 0,
                     },
                 ),
                 (
@@ -234,6 +235,7 @@ pub mod test_rpc {
                     BudgetSpec {
                         requests_per_second: 100,
                         burst: 100,
+                        interactive_reserve: 0,
                     },
                 ),
             ]))
