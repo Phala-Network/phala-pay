@@ -71,6 +71,7 @@ pub fn collect() -> Result<Vec<MetricFamily>, prometheus::Error> {
 pub(super) enum EventKind {
     Failure(Failure),
     BudgetWait,
+    BudgetWaitInteractive,
     HeadPerformed,
     HeadSkipped,
 }
@@ -109,12 +110,22 @@ pub fn events() -> Result<Vec<MetricFamily>, prometheus::Error> {
         ),
         &["group", "chain_id", "member", "result"],
     )?;
+    let interactive_wait = CounterVec::new(
+        Opts::new(
+            "topup_rpc_interactive_budget_wait_seconds_total",
+            "Time awaiting joint account and key admission for interactive requests.",
+        ),
+        &["group", "chain_id", "member"],
+    )?;
     for ((group, chain, member, kind), value) in
         EVENTS.lock().unwrap_or_else(PoisonError::into_inner).iter()
     {
         let chain = chain.to_string();
         match *kind {
             EventKind::BudgetWait => wait
+                .with_label_values(&[group, &chain, member])
+                .inc_by(std::time::Duration::from_nanos(*value).as_secs_f64()),
+            EventKind::BudgetWaitInteractive => interactive_wait
                 .with_label_values(&[group, &chain, member])
                 .inc_by(std::time::Duration::from_nanos(*value).as_secs_f64()),
             EventKind::HeadPerformed => heads
@@ -132,6 +143,7 @@ pub fn events() -> Result<Vec<MetricFamily>, prometheus::Error> {
         .collect()
         .into_iter()
         .chain(wait.collect())
+        .chain(interactive_wait.collect())
         .chain(heads.collect())
         .collect())
 }

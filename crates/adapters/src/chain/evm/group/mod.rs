@@ -869,17 +869,22 @@ impl RpcGroup {
             store.blocked(self.chain).await?;
         }
         let member = self.members.get(index).ok_or(Failure::Unavailable)?;
+        let priority = budget::Priority::current();
         let waiting = Instant::now();
         let admission = self
             .budgets
-            .admit(&member.account, &member.key, deadline)
+            .admit(&member.account, &member.key, deadline, priority)
             .await;
-        metrics::event(
-            self,
-            index,
-            metrics::EventKind::BudgetWait,
-            u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX),
-        );
+        let wait_ns = u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        metrics::event(self, index, metrics::EventKind::BudgetWait, wait_ns);
+        if priority == budget::Priority::Interactive {
+            metrics::event(
+                self,
+                index,
+                metrics::EventKind::BudgetWaitInteractive,
+                wait_ns,
+            );
+        }
         admission.map_err(|_| Failure::Deadline)?;
         if Instant::now() >= deadline {
             return Err(Failure::Deadline);

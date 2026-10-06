@@ -1,5 +1,6 @@
 //! Atomic two-level admission using governor's GCRA and transactional in-memory state.
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -21,6 +22,38 @@ pub struct BudgetSpec {
     pub requests_per_second: u32,
     /// Maximum burst.
     pub burst: u32,
+    /// Burst capacity kept available for interactive requests (zero disables the reserve).
+    #[serde(default)]
+    pub interactive_reserve: u32,
+}
+
+/// Priority of an RPC send sharing account and credential budgets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Priority {
+    /// API work may use the reserved capacity.
+    Interactive,
+    /// Workers preserve the reserved capacity.
+    #[default]
+    Background,
+}
+
+impl Priority {
+    /// Reads the current task's RPC priority, defaulting to background outside a scope.
+    pub fn current() -> Self {
+        RPC_PRIORITY
+            .try_with(|priority| *priority)
+            .unwrap_or_default()
+    }
+}
+
+tokio::task_local! {
+    pub(super) static RPC_PRIORITY: Priority;
+}
+
+/// Runs a future with interactive RPC priority in the current task, including joined futures.
+/// Spawned tasks do not inherit this scope.
+pub async fn interactive<F: Future>(f: F) -> F::Output {
+    RPC_PRIORITY.scope(Priority::Interactive, f).await
 }
 
 #[derive(Clone, Default)]
@@ -42,6 +75,7 @@ struct Budget {
     state: State,
     paused: Instant,
     rate: u32,
+    reserve: u32,
 }
 
 /// Process-wide registry; no limiter can be mutated outside its admission transaction.
@@ -54,6 +88,9 @@ impl Budgets {
             let rate =
                 NonZeroU32::new(spec.requests_per_second).ok_or("RPC rate must be positive")?;
             let burst = NonZeroU32::new(spec.burst).ok_or("RPC burst must be positive")?;
+            if spec.interactive_reserve >= spec.burst {
+                return Err("RPC interactive reserve must be below burst");
+            }
             let state = State::default();
             budgets.insert(
                 id.clone(),
@@ -66,6 +103,7 @@ impl Budgets {
                     state,
                     paused: Instant::now(),
                     rate: spec.requests_per_second,
+                    reserve: spec.interactive_reserve,
                 },
             );
         }
@@ -78,6 +116,7 @@ impl Budgets {
         account: &str,
         key: &str,
         deadline: Instant,
+        priority: Priority,
     ) -> Result<(), &'static str> {
         loop {
             let wake = {
@@ -99,15 +138,41 @@ impl Budgets {
                 }
                 if wake <= Instant::now() {
                     let mut denied = false;
-                    for id in &ids {
-                        let b = budgets.get(*id).ok_or("unknown RPC budget")?;
-                        if let Err(until) = b.limiter.check() {
-                            denied = true;
-                            wake = wake.max(
-                                Instant::now()
-                                    .checked_add(until.wait_time_from(b.limiter.clock().now()))
-                                    .unwrap_or(deadline),
-                            );
+                    if priority == Priority::Background {
+                        for (id, previous) in &snapshots {
+                            let b = budgets.get(*id).ok_or("unknown RPC budget")?;
+                            if b.reserve == 0 {
+                                continue;
+                            }
+                            // Construction guarantees reserve + 1 fits within the burst.
+                            let cells = NonZeroU32::new(b.reserve.saturating_add(1))
+                                .ok_or("invalid RPC interactive reserve")?;
+                            let admission = b.limiter.check_n(cells);
+                            // This is only a capacity probe, even when check_n succeeds.
+                            *b.state.0.lock().unwrap_or_else(PoisonError::into_inner) = *previous;
+                            if let Err(until) =
+                                admission.map_err(|_| "RPC reserve exceeds burst")?
+                            {
+                                denied = true;
+                                wake = wake.max(
+                                    Instant::now()
+                                        .checked_add(until.wait_time_from(b.limiter.clock().now()))
+                                        .unwrap_or(deadline),
+                                );
+                            }
+                        }
+                    }
+                    if !denied {
+                        for id in &ids {
+                            let b = budgets.get(*id).ok_or("unknown RPC budget")?;
+                            if let Err(until) = b.limiter.check() {
+                                denied = true;
+                                wake = wake.max(
+                                    Instant::now()
+                                        .checked_add(until.wait_time_from(b.limiter.clock().now()))
+                                        .unwrap_or(deadline),
+                                );
+                            }
                         }
                     }
                     if !denied {

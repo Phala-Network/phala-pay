@@ -130,6 +130,7 @@ impl<T: Clone + Send + Sync + 'static> Coalesced<T> {
             company,
         }
     }
+    // A fetch coalesced between API and background callers sends at the priority of whichever caller is polling it, so the reserve is best-effort for coalesced price fetches.
     async fn get(
         &self,
         reuse: Duration,

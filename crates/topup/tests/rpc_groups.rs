@@ -352,6 +352,7 @@ async fn lagging_empty_and_rpc_error_windows_leave_both_cursors_until_complete_a
                         BudgetSpec {
                             requests_per_second: 1000,
                             burst: 100,
+                            interactive_reserve: 0,
                         },
                     ),
                     (
@@ -359,6 +360,7 @@ async fn lagging_empty_and_rpc_error_windows_leave_both_cursors_until_complete_a
                         BudgetSpec {
                             requests_per_second: 1000,
                             burst: 100,
+                            interactive_reserve: 0,
                         },
                     ),
                 ]))

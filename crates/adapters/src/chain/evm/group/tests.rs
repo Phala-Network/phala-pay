@@ -164,6 +164,7 @@ fn budgets() -> Arc<Budgets> {
                 budget::BudgetSpec {
                     requests_per_second: 10,
                     burst: 1,
+                    interactive_reserve: 0,
                 },
             ),
             (
@@ -171,6 +172,7 @@ fn budgets() -> Arc<Budgets> {
                 budget::BudgetSpec {
                     requests_per_second: 100,
                     burst: 1,
+                    interactive_reserve: 0,
                 },
             ),
         ]))
@@ -186,9 +188,14 @@ async fn joint_admission_cannot_bank_account_permits_while_key_waits() {
     for _ in 0..3 {
         let b = budgets.clone();
         tasks.push(tokio::spawn(async move {
-            b.admit("account", "key", Instant::now() + Duration::from_secs(3))
-                .await
-                .unwrap();
+            b.admit(
+                "account",
+                "key",
+                Instant::now() + Duration::from_secs(3),
+                budget::Priority::Background,
+            )
+            .await
+            .unwrap();
             Instant::now()
         }));
     }
@@ -219,6 +226,376 @@ fn group(url: &str) -> Arc<RpcGroup> {
         budgets(),
     )
     .unwrap()
+}
+
+fn reserved_budgets(rate: u32, burst: u32, account_reserve: u32, key_reserve: u32) -> Arc<Budgets> {
+    Arc::new(
+        Budgets::new(&BTreeMap::from([
+            (
+                "account".into(),
+                budget::BudgetSpec {
+                    requests_per_second: rate,
+                    burst,
+                    interactive_reserve: account_reserve,
+                },
+            ),
+            (
+                "key".into(),
+                budget::BudgetSpec {
+                    requests_per_second: rate,
+                    burst,
+                    interactive_reserve: key_reserve,
+                },
+            ),
+        ]))
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn background_admission_preserves_interactive_reserve() {
+    for (account_reserve, key_reserve) in [(2, 0), (0, 2), (1, 2), (2, 2)] {
+        let budgets = reserved_budgets(1, 4, account_reserve, key_reserve);
+        for _ in 0..2 {
+            budgets
+                .admit(
+                    "account",
+                    "key",
+                    Instant::now() + Duration::from_millis(20),
+                    budget::Priority::Background,
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            budgets
+                .admit(
+                    "account",
+                    "key",
+                    Instant::now() + Duration::from_millis(20),
+                    budget::Priority::Background
+                )
+                .await,
+            Err("RPC admission deadline")
+        );
+        // Both successful and denied probes must leave all remaining capacity intact.
+        for _ in 0..2 {
+            budgets
+                .admit(
+                    "account",
+                    "key",
+                    Instant::now() + Duration::from_millis(20),
+                    budget::Priority::Interactive,
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            budgets
+                .admit(
+                    "account",
+                    "key",
+                    Instant::now() + Duration::from_millis(20),
+                    budget::Priority::Interactive
+                )
+                .await
+                .is_err()
+        );
+    }
+    // A shared account/key scope is charged once, even with a reserve.
+    let budgets = reserved_budgets(1, 4, 2, 0);
+    for priority in [
+        budget::Priority::Background,
+        budget::Priority::Background,
+        budget::Priority::Interactive,
+        budget::Priority::Interactive,
+    ] {
+        budgets
+            .admit(
+                "account",
+                "account",
+                Instant::now() + Duration::from_millis(20),
+                priority,
+            )
+            .await
+            .unwrap();
+    }
+}
+
+async fn saturate_background(
+    budgets: Arc<Budgets>,
+    unreserved: u32,
+) -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::watch::Receiver<()>,
+) {
+    let (ready, saturated) = tokio::sync::oneshot::channel();
+    let (sent, admissions) = tokio::sync::watch::channel(());
+    let background = tokio::spawn(async move {
+        for _ in 0..unreserved {
+            budgets
+                .admit(
+                    "account",
+                    "key",
+                    Instant::now() + Duration::from_secs(10),
+                    budget::Priority::Background,
+                )
+                .await
+                .unwrap();
+        }
+        ready.send(()).unwrap();
+        loop {
+            budgets
+                .admit(
+                    "account",
+                    "key",
+                    Instant::now() + Duration::from_secs(10),
+                    budget::Priority::Background,
+                )
+                .await
+                .unwrap();
+            // Sending does not yield: keep draining until quota admission suspends this task.
+            sent.send(()).unwrap();
+        }
+    });
+    saturated.await.unwrap();
+    (background, admissions)
+}
+
+#[tokio::test]
+async fn interactive_admitted_while_background_saturates() {
+    // A missing reserve costs at least the next 200 ms token, exceeding the 100 ms bound.
+    let budgets = reserved_budgets(5, 4, 1, 0);
+    let (background, _admissions) = saturate_background(budgets.clone(), 3).await;
+    let waiting = Instant::now();
+    let admission = budgets
+        .admit(
+            "account",
+            "key",
+            Instant::now() + Duration::from_secs(1),
+            budget::Priority::Interactive,
+        )
+        .await;
+    let elapsed = waiting.elapsed();
+    background.abort();
+    assert!(background.await.unwrap_err().is_cancelled());
+    admission.unwrap();
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "interactive wait: {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn zero_reserve_is_current_behavior() {
+    for priority in [budget::Priority::Background, budget::Priority::Interactive] {
+        let budgets = reserved_budgets(10, 2, 0, 0);
+        let start = Instant::now();
+        for _ in 0..2 {
+            budgets
+                .admit("account", "key", start + Duration::from_secs(1), priority)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            budgets
+                .admit(
+                    "account",
+                    "key",
+                    start + Duration::from_millis(30),
+                    priority
+                )
+                .await,
+            Err("RPC admission deadline")
+        );
+        budgets
+            .admit("account", "key", start + Duration::from_secs(1), priority)
+            .await
+            .unwrap();
+        assert!(start.elapsed() >= Duration::from_millis(90));
+    }
+}
+
+#[test]
+fn reserve_must_be_below_burst() {
+    let legacy: budget::BudgetSpec =
+        serde_json::from_value(json!({"requests_per_second": 10, "burst": 4})).unwrap();
+    assert_eq!(legacy.interactive_reserve, 0);
+    for reserve in [0, 3, 4, 5, u32::MAX] {
+        let spec = budget::BudgetSpec {
+            interactive_reserve: reserve,
+            ..legacy.clone()
+        };
+        let result = Budgets::new(&BTreeMap::from([("account".into(), spec)]));
+        if reserve < 4 {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(
+                result.err(),
+                Some("RPC interactive reserve must be below burst")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn priority_task_local_propagates_through_join() {
+    let priority = || async {
+        tokio::task::yield_now().await;
+        budget::RPC_PRIORITY.try_with(|p| *p).unwrap_or_default()
+    };
+    assert_eq!(priority().await, budget::Priority::Background);
+    budget::interactive(async {
+        let (left, right) = tokio::join!(priority(), priority());
+        assert_eq!(
+            (left, right),
+            (budget::Priority::Interactive, budget::Priority::Interactive)
+        );
+        let joined: Result<_, ()> = tokio::try_join!(async { Ok(priority().await) }, async {
+            Ok(priority().await)
+        });
+        assert_eq!(
+            joined.unwrap(),
+            (budget::Priority::Interactive, budget::Priority::Interactive)
+        );
+        assert_eq!(
+            tokio::spawn(priority()).await.unwrap(),
+            budget::Priority::Background
+        );
+    })
+    .await;
+    assert_eq!(priority().await, budget::Priority::Background);
+}
+
+#[tokio::test]
+async fn interactive_budget_wait_p95_under_saturated_background() {
+    for reserve in 1..=3 {
+        let budgets = reserved_budgets(10, 4, reserve, 0);
+        let (background, mut admissions) = saturate_background(budgets.clone(), 4 - reserve).await;
+        let head_budgets = budgets.clone();
+        let heads = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(250));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                head_budgets
+                    .admit(
+                        "account",
+                        "key",
+                        Instant::now() + Duration::from_secs(10),
+                        budget::Priority::Background,
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let mut waits = Vec::new();
+        let mut quotes = tokio::time::interval(Duration::from_millis(250));
+        quotes.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let measurement = budget::interactive(async {
+            for _ in 0..20 {
+                quotes.tick().await;
+                // Observe a fresh background send, after which its task drains all available
+                // unreserved capacity before yielding. This avoids sampling refill boundaries.
+                admissions.borrow_and_update();
+                tokio::time::timeout(Duration::from_secs(2), admissions.changed())
+                    .await
+                    .map_err(|_| "background saturation timeout")?
+                    .map_err(|_| "background task stopped")?;
+                let waiting = Instant::now();
+                budgets
+                    .admit(
+                        "account",
+                        "key",
+                        Instant::now() + Duration::from_secs(1),
+                        budget::Priority::current(),
+                    )
+                    .await?;
+                waits.push(waiting.elapsed());
+            }
+            Ok::<_, &'static str>(())
+        })
+        .await;
+        background.abort();
+        heads.abort();
+        assert!(background.await.unwrap_err().is_cancelled());
+        assert!(heads.await.unwrap_err().is_cancelled());
+        measurement.unwrap();
+        waits.sort();
+        let p95 = waits[18];
+        println!(
+            "interactive budget acceptance: rate=10 burst=4 reserve={reserve} head_offered_rps=4 quotes_rps=4 saturated_background=true samples={} p95={p95:?}",
+            waits.len()
+        );
+        // At 10 rps a missing reserve costs a 100 ms token; p95 must be below half of that.
+        assert!(
+            p95 < Duration::from_millis(50),
+            "reserve={reserve}: p95={p95:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn send_once_uses_interactive_priority_and_wait_metrics() {
+    let (url, task) = server(Router::new().route(
+        "/",
+        post(|| async { Json(json!({"jsonrpc":"2.0","id":1,"result":"0x1"})) }),
+    ))
+    .await;
+    let group = RpcGroup::new(
+        "interactive-budget-metrics-test".into(),
+        1,
+        GroupPolicy::default(),
+        vec![Member {
+            id: "one".into(),
+            company: "company".into(),
+            endpoint: Redacted::parse(&url).unwrap(),
+            account: "account".into(),
+            key: "key".into(),
+            priority: 0,
+            weight: 1,
+        }],
+        reserved_budgets(1, 4, 3, 0),
+    )
+    .unwrap();
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]});
+    group
+        .send_once(0, &request, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    let denied = group
+        .send_once(0, &request, Instant::now() + Duration::from_millis(20))
+        .await;
+    let admitted =
+        budget::interactive(group.send_once(0, &request, Instant::now() + Duration::from_secs(1)))
+            .await;
+    task.abort();
+    let _ = task.await;
+    assert_eq!(denied, Err(Failure::Deadline));
+    admitted.unwrap();
+    let families = metrics::events().unwrap();
+    let samples = |name: &str| {
+        families
+            .iter()
+            .filter(|family| family.name() == name)
+            .flat_map(|family| family.get_metric())
+            .filter(|sample| {
+                sample.get_label().iter().any(|label| {
+                    label.name() == "group" && label.value() == "interactive-budget-metrics-test"
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let interactive = samples("topup_rpc_interactive_budget_wait_seconds_total");
+    assert_eq!(interactive.len(), 1);
+    assert!(interactive[0].get_counter().get_value() > 0.0);
+    assert!(
+        samples("topup_rpc_budget_wait_seconds_total")[0]
+            .get_counter()
+            .get_value()
+            >= interactive[0].get_counter().get_value()
+    );
+    assert!(samples("topup_rpc_member_failures_total").is_empty());
 }
 #[tokio::test]
 async fn cooldown_requires_repeated_success_and_redirect_quarantine_is_permanent() {
@@ -451,6 +828,7 @@ async fn shared_account_budget_applies_across_methods_and_credentials_at_real_se
                 budget::BudgetSpec {
                     requests_per_second: 10,
                     burst: 1,
+                    interactive_reserve: 0,
                 },
             ),
             (
@@ -458,6 +836,7 @@ async fn shared_account_budget_applies_across_methods_and_credentials_at_real_se
                 budget::BudgetSpec {
                     requests_per_second: 100,
                     burst: 1,
+                    interactive_reserve: 0,
                 },
             ),
             (
@@ -465,6 +844,7 @@ async fn shared_account_budget_applies_across_methods_and_credentials_at_real_se
                 budget::BudgetSpec {
                     requests_per_second: 100,
                     burst: 1,
+                    interactive_reserve: 0,
                 },
             ),
         ]))
@@ -880,6 +1260,7 @@ async fn unknown_rpc_limit_under_http_429_pauses_account_and_switches_account() 
             budget::BudgetSpec {
                 requests_per_second: 100,
                 burst: 100,
+                interactive_reserve: 0,
             },
         ),
         (
@@ -887,6 +1268,7 @@ async fn unknown_rpc_limit_under_http_429_pauses_account_and_switches_account() 
             budget::BudgetSpec {
                 requests_per_second: 100,
                 burst: 100,
+                interactive_reserve: 0,
             },
         ),
         (
@@ -894,6 +1276,7 @@ async fn unknown_rpc_limit_under_http_429_pauses_account_and_switches_account() 
             budget::BudgetSpec {
                 requests_per_second: 100,
                 burst: 100,
+                interactive_reserve: 0,
             },
         ),
         (
@@ -901,6 +1284,7 @@ async fn unknown_rpc_limit_under_http_429_pauses_account_and_switches_account() 
             budget::BudgetSpec {
                 requests_per_second: 100,
                 burst: 100,
+                interactive_reserve: 0,
             },
         ),
     ]);
@@ -1413,6 +1797,7 @@ impl PinnedReadFixture {
                     budget::BudgetSpec {
                         requests_per_second: 1000,
                         burst: 1000,
+                        interactive_reserve: 0,
                     },
                 ),
                 (
@@ -1420,6 +1805,7 @@ impl PinnedReadFixture {
                     budget::BudgetSpec {
                         requests_per_second: 1000,
                         burst: 1000,
+                        interactive_reserve: 0,
                     },
                 ),
             ]))

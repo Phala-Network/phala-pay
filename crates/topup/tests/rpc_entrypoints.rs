@@ -164,6 +164,7 @@ fn group(id: &str, urls: &[&str], rate: u32, policy: GroupPolicy) -> Result<Arc<
                 BudgetSpec {
                     requests_per_second: rate,
                     burst: rate,
+                    interactive_reserve: 0,
                 },
             ),
             (
@@ -171,6 +172,7 @@ fn group(id: &str, urls: &[&str], rate: u32, policy: GroupPolicy) -> Result<Arc<
                 BudgetSpec {
                     requests_per_second: rate,
                     burst: rate,
+                    interactive_reserve: 0,
                 },
             ),
         ]))
