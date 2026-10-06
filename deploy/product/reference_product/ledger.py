@@ -16,152 +16,191 @@ from typing import Any
 ORDER_FLOW_CODE = "crypto-top-up"
 ORDER_PROVIDER = "crypto_topup"
 
-BASE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS teams (
-    id TEXT PRIMARY KEY,
-    suspended INTEGER NOT NULL DEFAULT 0
-);
--- team_id is NULL only for credits held because they name no known workspace.
-CREATE TABLE IF NOT EXISTS orders (
-    id TEXT PRIMARY KEY,
-    team_id TEXT REFERENCES teams (id),
-    provider TEXT NOT NULL,
-    order_flow_code TEXT NOT NULL,
-    provider_order_id TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    status TEXT NOT NULL,
-    reason TEXT,
-    credit_transaction_id TEXT,
-    created_at REAL NOT NULL
-);
--- Phala Cloud's partial unique index; the key is also looked up across teams before insert.
-CREATE UNIQUE INDEX IF NOT EXISTS orders_crypto_topup_provider_order
-    ON orders (team_id, provider_order_id) WHERE order_flow_code = 'crypto-top-up';
-CREATE INDEX IF NOT EXISTS orders_flow_provider_order
-    ON orders (order_flow_code, provider_order_id);
-CREATE INDEX IF NOT EXISTS orders_team ON orders (team_id);
-CREATE TABLE IF NOT EXISTS credit_transactions (
-    id TEXT PRIMARY KEY,
-    team_id TEXT NOT NULL REFERENCES teams (id),
-    order_id TEXT NOT NULL UNIQUE REFERENCES orders (id),
-    amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
-    funding_source TEXT NOT NULL,
-    created_at REAL NOT NULL
-);
--- The latest merged snapshot of each deposit (`deposit.*` events carry the whole deposit): the
--- later status and the larger cumulative claw-backs win, whatever order events arrive in.
-CREATE TABLE IF NOT EXISTS deposit_snapshots (
-    provider_order_id TEXT PRIMARY KEY,
-    status TEXT NOT NULL,
-    amount_refunded_minor INTEGER NOT NULL CHECK (amount_refunded_minor >= 0),
-    amount_reversed_minor INTEGER NOT NULL CHECK (amount_reversed_minor >= 0)
-);
--- Changes to a credited order after its credit: refunds and reversals take it back.
-CREATE TABLE IF NOT EXISTS credit_adjustments (
-    id TEXT PRIMARY KEY,
-    team_id TEXT NOT NULL REFERENCES teams (id),
-    order_id TEXT NOT NULL REFERENCES orders (id),
-    amount_minor INTEGER NOT NULL CHECK (amount_minor <> 0),
-    reason TEXT NOT NULL,
-    created_at REAL NOT NULL
-);
--- The product's own promotion on an accepted order (`bonus_bps`), a line of its own beside the
--- credit: the grant, then its claw-backs as refunds and reversals net the credit down. An order's
--- rows sum to its current bonus. Not a Phala Pay amount: the service never sees it.
-CREATE TABLE IF NOT EXISTS bonus_credits (
-    id TEXT PRIMARY KEY,
-    team_id TEXT NOT NULL REFERENCES teams (id),
-    order_id TEXT NOT NULL REFERENCES orders (id),
-    amount_minor INTEGER NOT NULL CHECK (amount_minor <> 0),
-    reason TEXT NOT NULL,
-    created_at REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS credit_adjustments_order ON credit_adjustments (order_id);
-CREATE INDEX IF NOT EXISTS credit_adjustments_team ON credit_adjustments (team_id);
-CREATE INDEX IF NOT EXISTS bonus_credits_order ON bonus_credits (order_id);
-CREATE INDEX IF NOT EXISTS bonus_credits_team ON bonus_credits (team_id);
--- The webhook inbox: every verified delivery once, by its `webhook-id` (the event's `evt_` id),
--- committed with its ledger effect. `data` is the event's parsed `data`, for the product's own
--- reads; `body` and the three Standard Webhooks headers are the delivery exactly as received, the
--- evidence a service restore imports (deploy/runbooks/restore.md, step 5).
-CREATE TABLE IF NOT EXISTS webhook_events (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    data TEXT NOT NULL,
-    received_at REAL NOT NULL,
-    body BLOB NOT NULL,
-    webhook_timestamp TEXT NOT NULL,
-    webhook_signature TEXT NOT NULL
-);
--- Each quote and deposit address the product created, as the service returned it, its
--- `client_secret` included: the merchant's records a service restore re-issues them from
--- (deploy/runbooks/restore.md, step 4). A client secret is a capability: the ledger file is
--- readable by its owner only, and nothing logs it. `recorded_at` is when the product last got
--- the response.
-CREATE TABLE IF NOT EXISTS quote_records (
-    id TEXT PRIMARY KEY,
-    team_id TEXT NOT NULL REFERENCES teams (id),
-    response TEXT NOT NULL,
-    recorded_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS deposit_address_records (
-    id TEXT PRIMARY KEY,
-    team_id TEXT NOT NULL REFERENCES teams (id),
-    response TEXT NOT NULL,
-    recorded_at REAL NOT NULL
-);
--- The demo console's (reference_product.demo): each visitor's quotes, with the quote's creation
--- request in `api` for the developer view; its deposit address; and its refunds.
-CREATE TABLE IF NOT EXISTS demo_quotes (
-    id TEXT PRIMARY KEY,
-    account TEXT NOT NULL REFERENCES teams (id),
-    amount INTEGER NOT NULL,
-    amount_atomic TEXT NOT NULL,
-    exchange_rate TEXT NOT NULL,
-    address TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    created INTEGER NOT NULL,
-    api TEXT NOT NULL,
-    asset TEXT NOT NULL,
-    chain_id INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS demo_quotes_account ON demo_quotes (account, created);
-CREATE TABLE IF NOT EXISTS demo_deposit_addresses (
-    account TEXT PRIMARY KEY REFERENCES teams (id),
-    id TEXT NOT NULL,
-    created INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS demo_refunds (
-    id TEXT PRIMARY KEY,
-    account TEXT NOT NULL REFERENCES teams (id),
-    deposit TEXT NOT NULL,
-    created INTEGER NOT NULL
-);
-"""
-
-
-EVENT_REFS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS event_refs (
-    ref TEXT NOT NULL,
-    event_id TEXT NOT NULL REFERENCES webhook_events (id),
-    PRIMARY KEY (ref, event_id)
-);
-"""
-# Kept as a complete schema for offline tools and legacy fixtures.
-SCHEMA = BASE_SCHEMA + EVENT_REFS_SCHEMA
-SCHEMA_VERSION = 2
-
-
-def _execute_schema(db: sqlite3.Connection, schema: str) -> None:
-    """Execute complete SQL statements without executescript's implicit COMMIT."""
-    statement = ""
-    for line in schema.splitlines(keepends=True):
-        statement += line
-        if sqlite3.complete_statement(statement):
-            db.execute(statement)
-            statement = ""
-    if statement.strip():
-        raise ValueError("incomplete ledger migration statement")
+MIGRATIONS: tuple[tuple[str, ...], ...] = (
+    (
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            id TEXT PRIMARY KEY,
+            suspended INTEGER NOT NULL DEFAULT 0
+        );
+        """,
+        """
+        -- team_id is NULL only for credits held because they name no known workspace.
+        CREATE TABLE IF NOT EXISTS orders (
+            id TEXT PRIMARY KEY,
+            team_id TEXT REFERENCES teams (id),
+            provider TEXT NOT NULL,
+            order_flow_code TEXT NOT NULL,
+            provider_order_id TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT,
+            credit_transaction_id TEXT,
+            created_at REAL NOT NULL
+        );
+        """,
+        """
+        -- Phala Cloud's partial unique index; the key is also looked up across teams before insert.
+        CREATE UNIQUE INDEX IF NOT EXISTS orders_crypto_topup_provider_order
+            ON orders (team_id, provider_order_id) WHERE order_flow_code = 'crypto-top-up';
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS orders_flow_provider_order
+            ON orders (order_flow_code, provider_order_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS orders_team ON orders (team_id);
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS credit_transactions (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL REFERENCES teams (id),
+            order_id TEXT NOT NULL UNIQUE REFERENCES orders (id),
+            amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+            funding_source TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+        """,
+        """
+        -- The latest merged snapshot of each deposit (`deposit.*` events carry the whole deposit):
+        -- the
+        -- later status and the larger cumulative claw-backs win, whatever order events arrive in.
+        CREATE TABLE IF NOT EXISTS deposit_snapshots (
+            provider_order_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            amount_refunded_minor INTEGER NOT NULL CHECK (amount_refunded_minor >= 0),
+            amount_reversed_minor INTEGER NOT NULL CHECK (amount_reversed_minor >= 0)
+        );
+        """,
+        """
+        -- Changes to a credited order after its credit: refunds and reversals take it back.
+        CREATE TABLE IF NOT EXISTS credit_adjustments (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL REFERENCES teams (id),
+            order_id TEXT NOT NULL REFERENCES orders (id),
+            amount_minor INTEGER NOT NULL CHECK (amount_minor <> 0),
+            reason TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+        """,
+        """
+        -- The product's own promotion on an accepted order (`bonus_bps`), a line of its own beside
+        -- the
+        -- credit: the grant, then its claw-backs as refunds and reversals net the credit down. An
+        -- order's
+        -- rows sum to its current bonus. Not a Phala Pay amount: the service never sees it.
+        CREATE TABLE IF NOT EXISTS bonus_credits (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL REFERENCES teams (id),
+            order_id TEXT NOT NULL REFERENCES orders (id),
+            amount_minor INTEGER NOT NULL CHECK (amount_minor <> 0),
+            reason TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS credit_adjustments_order ON credit_adjustments (order_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS credit_adjustments_team ON credit_adjustments (team_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS bonus_credits_order ON bonus_credits (order_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS bonus_credits_team ON bonus_credits (team_id);
+        """,
+        """
+        -- The webhook inbox: every verified delivery once, by its `webhook-id` (the event's `evt_`
+        -- id),
+        -- committed with its ledger effect. `data` is the event's parsed `data`, for the product's
+        -- own
+        -- reads; `body` and the three Standard Webhooks headers are the delivery exactly as
+        -- received, the
+        -- evidence a service restore imports (deploy/runbooks/restore.md, step 5).
+        CREATE TABLE IF NOT EXISTS webhook_events (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            data TEXT NOT NULL,
+            received_at REAL NOT NULL,
+            body BLOB NOT NULL,
+            webhook_timestamp TEXT NOT NULL,
+            webhook_signature TEXT NOT NULL
+        );
+        """,
+        """
+        -- Each quote and deposit address the product created, as the service returned it, its
+        -- `client_secret` included: the merchant's records a service restore re-issues them from
+        -- (deploy/runbooks/restore.md, step 4). A client secret is a capability: the ledger file is
+        -- readable by its owner only, and nothing logs it. `recorded_at` is when the product last
+        -- got
+        -- the response.
+        CREATE TABLE IF NOT EXISTS quote_records (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL REFERENCES teams (id),
+            response TEXT NOT NULL,
+            recorded_at REAL NOT NULL
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS deposit_address_records (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL REFERENCES teams (id),
+            response TEXT NOT NULL,
+            recorded_at REAL NOT NULL
+        );
+        """,
+        """
+        -- The demo console's (reference_product.demo): each visitor's quotes, with the quote's
+        -- creation
+        -- request in `api` for the developer view; its deposit address; and its refunds.
+        CREATE TABLE IF NOT EXISTS demo_quotes (
+            id TEXT PRIMARY KEY,
+            account TEXT NOT NULL REFERENCES teams (id),
+            amount INTEGER NOT NULL,
+            amount_atomic TEXT NOT NULL,
+            exchange_rate TEXT NOT NULL,
+            address TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            created INTEGER NOT NULL,
+            api TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            chain_id INTEGER NOT NULL
+        );
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS demo_quotes_account ON demo_quotes (account, created);
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS demo_deposit_addresses (
+            account TEXT PRIMARY KEY REFERENCES teams (id),
+            id TEXT NOT NULL,
+            created INTEGER NOT NULL
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS demo_refunds (
+            id TEXT PRIMARY KEY,
+            account TEXT NOT NULL REFERENCES teams (id),
+            deposit TEXT NOT NULL,
+            created INTEGER NOT NULL
+        );
+        """,
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS event_refs (
+            ref TEXT NOT NULL,
+            event_id TEXT NOT NULL REFERENCES webhook_events (id),
+            PRIMARY KEY (ref, event_id)
+        );
+        """,
+    ),
+)
+SCHEMA_VERSION = len(MIGRATIONS)
+# Legacy fixture exports; production executes the migration statements directly.
+BASE_SCHEMA = "\n".join(MIGRATIONS[0])
+SCHEMA = "\n".join(statement for migration in MIGRATIONS for statement in migration)
 
 
 @dataclass(frozen=True)
@@ -250,14 +289,16 @@ class ProductLedger:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
                 raise ValueError("ledger schema is newer than this product")
-            if version < 1:
-                _execute_schema(db, BASE_SCHEMA)
-                db.execute("PRAGMA user_version = 1")
-            if version < 2:
-                _execute_schema(db, EVENT_REFS_SCHEMA)
-                for event_id, data in db.execute("SELECT id, data FROM webhook_events"):
-                    self._record_event_refs(db, event_id, json.loads(data))
-                db.execute("PRAGMA user_version = 2")
+            for target_version, statements in enumerate(MIGRATIONS, start=1):
+                if target_version <= version:
+                    continue
+                for statement in statements:
+                    db.execute(statement)
+                if target_version == 2:
+                    for event_id, data in db.execute("SELECT id, data FROM webhook_events"):
+                        self._record_event_refs(db, event_id, json.loads(data))
+                # target_version comes only from the local migration tuple, not external input.
+                db.execute(f"PRAGMA user_version = {target_version}")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
