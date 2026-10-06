@@ -731,6 +731,9 @@ async fn assert_credited_within(
         let cancellation = cancellation.clone();
         async move { pump.run(cancellation).await }
     });
+    let cursor_before = db::get_cursor(&chain.pool, chain.chain_id)
+        .await?
+        .context("the finalized cursor")?;
     let scanner_task = tokio::spawn(run_chain(
         chain.pool.clone(),
         labeled_reader(&chain.anvil.rpc_url, label, chain.chain_id)?,
@@ -771,14 +774,25 @@ async fn assert_credited_within(
     scanner_task.await??;
     result?;
 
-    // Provider A's calls over the run: about one head poll and one log request per block, and one
-    // receipt, block, and transaction read for the one transfer.
+    // Provider A's calls over the run: about one head poll and one log request per block, plus
+    // the finalized backstop's window over blocks finalized during the run, and one receipt,
+    // block, and transaction read for the one transfer.
     let blocks = chain.anvil.block_number()?.saturating_sub(started).max(1);
     let calls = provider_call_counts(label);
     eprintln!("provider A calls over {blocks} blocks: {calls:?}");
     let count = |method| calls.get(method).copied().unwrap_or_default();
     ensure!(count("eth_blockNumber") <= 2 * blocks + 4, "{calls:?}");
-    ensure!(count("eth_getLogs") <= blocks + 1, "{calls:?}");
+    // The finalized backstop runs alongside: a pass that finds `finalized` advanced reads the new
+    // blocks once (one transfer and one factory request per window) and moves the cursor past
+    // them; it never re-reads below the cursor.
+    let cursor_after = db::get_cursor(&chain.pool, chain.chain_id)
+        .await?
+        .context("the finalized cursor")?;
+    let backstop = 2 * cursor_after.saturating_sub(cursor_before);
+    ensure!(
+        count("eth_getLogs") <= blocks + 1 + backstop,
+        "{calls:?} backstop={backstop}"
+    );
     ensure!(count("eth_getTransactionReceipt") <= 2, "{calls:?}");
     Ok(())
 }
