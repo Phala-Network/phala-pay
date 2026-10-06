@@ -1,33 +1,29 @@
 import { Moon, Sun } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type Theme = "light" | "dark";
 
-/** The visitor's theme: stored, else the system's; `dark` on `<html>`. */
+const listeners = new Set<() => void>();
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+function currentTheme(): Theme {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+function setTheme(next: Theme) {
+  document.documentElement.classList.toggle("dark", next === "dark");
+  try {
+    localStorage.setItem("demo-theme", next);
+  } catch {
+    // Theme changes still work for this visit when persistence is unavailable.
+  }
+  for (const listener of listeners) listener();
+}
+
+/** One theme store shared by the header and demo islands. The head script initializes it. */
 export function useTheme(): [Theme, (theme: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>(() => {
-    try {
-      const stored = localStorage.getItem("demo-theme");
-      if (stored === "light" || stored === "dark") return stored;
-    } catch {
-      // Use the system preference when storage is unavailable.
-    }
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  });
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-  }, [theme]);
-  return [
-    theme,
-    (next) => {
-      try {
-        localStorage.setItem("demo-theme", next);
-      } catch {
-        // Theme changes still work for this visit when persistence is unavailable.
-      }
-      setTheme(next);
-    },
-  ];
+  return [useSyncExternalStore(subscribe, currentTheme), setTheme];
 }
 
 /** The header's icon buttons: one hover and fill in either theme. */

@@ -330,7 +330,7 @@ export function DemoSection({ children }: { children?: ReactNode }) {
   return (
     <section id="demo" aria-labelledby="demo-title" className={`${CONTAINER} min-h-[80rem] scroll-mt-24 pb-16 lg:min-h-[56rem] lg:pb-20`}>
       <h2 id="demo-title" className="mb-8 text-2xl font-semibold tracking-tight">Live demo (testnet)</h2>
-      {children ?? <DemoPlaceholder />}
+      <div id="demo-root">{children ?? <DemoPlaceholder />}</div>
     </section>
   );
 }

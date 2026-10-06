@@ -1,14 +1,10 @@
 import "@fontsource-variable/geist";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App.js";
+import { mountChrome } from "./chrome.js";
+import { DemoIsland } from "./DemoIsland.js";
 import "./index.css";
 
-const root = document.getElementById("root");
-if (root !== null) {
-  createRoot(root).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  );
-}
+mountChrome();
+const demo = document.getElementById("demo-root");
+if (demo !== null) createRoot(demo).render(<StrictMode><DemoIsland /></StrictMode>);

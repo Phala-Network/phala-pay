@@ -988,3 +988,27 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   await expect.poll(async () => (await page.getByRole("banner").boundingBox())?.y).toBe(0);
 });
+
+
+test("loading home islands preserves the original prerendered hero", async ({ page }) => {
+  let releaseEntry: (() => void) | undefined;
+  const entryReady = new Promise<void>((resolve) => { releaseEntry = resolve; });
+  await page.route("**/assets/home-*.js", async (route) => {
+    await entryReady;
+    await route.continue();
+  });
+  try {
+    await page.goto(env("SITE_URL"), { waitUntil: "commit" });
+    const hero = page.locator("#hero-title");
+    await expect(hero).toBeVisible();
+    const original = await hero.elementHandle();
+    releaseEntry?.();
+    await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+    expect(await original.evaluate((node) => node.isConnected)).toBe(true);
+    await page.getByRole("button", { name: "Switch to dark theme" }).click();
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+  } finally {
+    releaseEntry?.();
+  }
+});
