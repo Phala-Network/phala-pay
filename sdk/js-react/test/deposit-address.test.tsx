@@ -412,14 +412,14 @@ describe("DepositAddress payments", () => {
     expect(microtask).toHaveBeenCalledTimes(1);
     expect(() => microtask.mock.calls[0]?.[0]()).toThrow(error);
     expect(screen.getByText("1.5 PHA received on Sepolia, 1 confirmation")).toBeDefined();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("");
     served = view([payment({ status: "credited" })]);
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(onChange).toHaveBeenCalledTimes(2);
     expect(microtask).toHaveBeenCalledTimes(2);
     expect(screen.getByText("1.5 PHA on Sepolia credited")).toBeDefined();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 
   it("removes its visibilitychange listener on unmount", async () => {
@@ -486,7 +486,7 @@ describe("DepositAddress payments", () => {
     expect(screen.getByRole("list", { name: "Payments" }).textContent).toBe(payments);
     online = true;
     await act(() => vi.advanceTimersByTimeAsync(30000));
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("");
     unmount();
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -505,7 +505,7 @@ describe("DepositAddress payments", () => {
       <DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />,
     );
     await act(() => vi.advanceTimersByTimeAsync(0));
-    return container.querySelector(".pp-message")?.textContent ?? "";
+    return [...container.querySelectorAll(".pp-message")].at(-1)?.textContent ?? "";
   }
 
   function payment(overrides: Record<string, unknown> = {}) {

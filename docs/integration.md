@@ -406,19 +406,31 @@ import "./pay-theme.css";
 
 ```css
 .pp-root[data-theme] {
+  --pp-color-surface: var(--app-color-surface);
   --pp-color-text: var(--app-color-text);
   --pp-color-text-muted: var(--app-color-text-muted);
+  --pp-color-border: var(--app-color-border);
   --pp-color-primary: var(--app-color-primary);
   --pp-color-primary-foreground: var(--app-color-on-primary);
   --pp-color-focus: var(--app-color-focus-ring);
+  --pp-color-success: var(--app-color-success);
+  --pp-color-warning: var(--app-color-warning-text);
+  --pp-color-danger: var(--app-color-danger);
   --pp-font-size: 1em;
 }
 ```
 
-The components draw no frame or background: place them in your own card or dialog. They take
-your page's font; `--pp-font-size: 1em` also takes its text size. Map
-`--pp-color-focus` to your focus ring color, distinct from the primary color, so that a keyboard
-user can tell the focused choice from the selected one.
+Without `theme`, defaults suit light backgrounds only; on dark hosts map every color variable.
+A color you leave unmapped keeps its light default, so on a dark card the status row (the
+surface) would be light-on-light. `--pp-color-warning` and `--pp-color-danger` color text, so map
+them to text-safe tokens. A mapping written for an earlier SDK must use the current names:
+`--pp-color-text-secondary` is now `--pp-color-text-muted`, and an old name is silently ignored.
+
+The components draw no frame or background: place them in your own card or dialog, and give it
+inner padding of at least 4px so that the 2px focus outline is not clipped by its
+`overflow: hidden`. They take your page's font; `--pp-font-size: 1em` also takes its text size.
+Map `--pp-color-focus` to your focus ring color, distinct from the primary color, so that a
+keyboard user can tell the focused choice from the selected one.
 
 When you do not map your own tokens, `appearance.theme: "dark"` selects the built-in neutral dark
 palette.

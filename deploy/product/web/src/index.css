@@ -173,6 +173,8 @@
   --pp-color-focus: var(--ring);
   --pp-color-success: var(--success);
   --pp-color-danger: var(--destructive);
+  /* --pp-color-warning keeps the SDK default: --warning is not yet safe as text color. */
+  --pp-font-family-mono: var(--font-mono);
   --pp-radius: var(--radius);
 }
 .github-icon { mask: url("./icons/github.svg") center / contain no-repeat; }

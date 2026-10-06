@@ -202,7 +202,7 @@ function StatusLine({
         )}
       </span>
       {status === "waiting" && quote !== null && (
-        <span className="pp-status__countdown" aria-label="Time left to pay">
+        <span className="pp-status__countdown" role="timer" aria-label="Time left to pay">
           {formatCountdown(quote.expires_at, now)}
         </span>
       )}

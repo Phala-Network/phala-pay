@@ -104,7 +104,8 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 .pp-button__detail { font-weight: 400; opacity: 0.85; }
 
 .pp-message { margin: 0.5em 0 0; color: var(--pp-color-text-muted); }
-.pp-message:empty { display: none; }
+/* An empty live region stays in place, without space, so that what fills it is announced. */
+.pp-message:empty { margin: 0; }
 .pp-message[data-tone="danger"] { color: var(--pp-color-danger); }
 
 /* QR code: four quiet modules in the code, then 8px of white, readable on any page. */
@@ -161,8 +162,14 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 .pp-payments__item[data-tone="success"] .pp-payments__dot { background: var(--pp-color-success); }
 .pp-payments__item[data-tone="danger"] .pp-payments__dot { background: var(--pp-color-danger); }
 
+/* Forced colors would draw every border in one color: the selected choice and tab keep a
+   Highlight one, in system colors throughout. */
 @media (forced-colors: active) {
   .pp-choices__input:checked { border-color: Highlight; forced-color-adjust: none; }
+  .pp-tabs__tab { border-bottom-color: Canvas; color: CanvasText; forced-color-adjust: none; }
+  .pp-tabs__tab:hover { border-bottom-color: GrayText; }
+  .pp-tabs__tab[aria-selected="true"] { border-bottom-color: Highlight; }
+  .pp-root .pp-tabs__tab:focus-visible { outline-color: Highlight; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pp-skeleton__line { animation: none; }

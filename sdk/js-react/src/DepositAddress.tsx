@@ -101,7 +101,7 @@ export function DepositAddress({
                 onChange={() => setSelectedChain(each.chain_id)}
               />
               <NetworkIcon chainId={each.chain_id} size={16} />
-              <span className="pp-choices__label">{networkName(each.chain_id)}</span>
+              {networkName(each.chain_id)}
             </label>
           ))}
         </fieldset>
@@ -119,7 +119,7 @@ export function DepositAddress({
                 onChange={() => setSelectedAsset(each.asset)}
               />
               <AssetIcon asset={each.asset} size={16} />
-              <span className="pp-choices__label">{each.asset.toUpperCase()}</span>
+              {each.asset.toUpperCase()}
             </label>
           ))}
         </fieldset>
@@ -132,7 +132,7 @@ export function DepositAddress({
         <Field label={`Token (${symbol}) contract`} value={contract} copy />
         <Field label="Deposit address" value={to} copy />
       </dl>
-      {reconnecting && <p className="pp-message" role="status">Reconnecting…</p>}
+      <p className="pp-message" role="status">{reconnecting ? "Reconnecting…" : ""}</p>
       {payments.length > 0 && (
         <ul className="pp-payments" aria-live="polite" aria-label="Payments">
           {payments.map((payment) => (

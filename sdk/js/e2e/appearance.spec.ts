@@ -286,11 +286,12 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
   expect(selected.style).toBe("none");
 
   // In forced colors, the selection keeps a system color of its own.
-  await page.emulateMedia({ forcedColors: "active" });
+  await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+  await expect.poll(() => page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
   const borders = await page.getByRole("group", { name: "Network" }).getByRole("radio").evaluateAll((radios) =>
     radios.map((radio) => getComputedStyle(radio).borderTopColor));
   expect(new Set(borders).size).toBe(2);
-  await page.emulateMedia({ forcedColors: "none" });
+  await page.emulateMedia({ forcedColors: "none", reducedMotion: "no-preference" });
 
   const tabs = new URLSearchParams({ client_secret: CLIENT_SECRET, expected_address: ADDRESS, api_base: API_BASE });
   const served = waiting();
@@ -303,6 +304,21 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
   expect(tab.style).toBe("solid");
   expect(tab.width).toBe("2px");
   if (screenshots !== undefined) await page.locator(".pp-root").screenshot({ caret: "initial", path: join(screenshots, "focus-tab.png") });
+
+  // In forced colors, the selected tab keeps a system color of its own. Measured on the selection
+  // alone (Chromium paints a focused element apart), without transitions (none under reduced
+  // motion), once the emulation applies, which forces the notice's muted text color.
+  const noticeColor = () => page.locator(".pp-notice").evaluate((notice) => getComputedStyle(notice).color);
+  await page.getByRole("tab", { name: "QR code" }).blur();
+  const unforced = await noticeColor();
+  await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+  await expect.poll(noticeColor).not.toBe(unforced);
+  const underlines = await page.getByRole("tab").evaluateAll((tabs) =>
+    tabs.map((tab) => [tab.getAttribute("aria-selected"), getComputedStyle(tab).borderBottomColor] as const));
+  const selectedUnderline = underlines.find(([selected]) => selected === "true")?.[1];
+  expect(underlines.filter(([selected]) => selected !== "true").map(([, color]) => color))
+    .not.toContain(selectedUnderline);
+  await page.emulateMedia({ forcedColors: "none", reducedMotion: "no-preference" });
 
   // The copy icon stays 16px whatever the text size.
   await page.getByRole("tab", { name: "Manual transfer" }).click();

@@ -256,7 +256,14 @@ one.
 To map your own light/dark tokens, omit `appearance.theme` and load your mapping after the SDK
 stylesheet. Passing `theme: "dark"` sets `data-theme="dark"`, whose SDK selector
 `.pp-root[data-theme="dark"]` overrides a plain `.pp-root` mapping, so target
-`.pp-root[data-theme]` in your mapping.
+`.pp-root[data-theme]` in your mapping. Without `theme`, defaults suit light backgrounds only; on
+dark hosts map every color variable: one left unmapped keeps its light default (a light status
+row on a dark card, for example). Mappings written for earlier releases use renamed variables, which
+are silently ignored: `--pp-color-text-secondary` is now `--pp-color-text-muted`; see the CHANGELOG
+for the others.
+
+The components draw no frame or background: give the card or dialog around them inner padding of
+at least 4px, so that the 2px focus outline (offset by 2px) is not clipped by `overflow: hidden`.
 
 The components show a payer's receive address and token contract in full, in groups of four
 characters after `0x` (`0x5290 8400 0985 …`), never shortened, so that a payer can compare it
@@ -264,8 +271,8 @@ group by group with what their wallet shows; selecting and copying it gives the 
 spaces. The QR code keeps the standard quiet zone of four modules inside 8px of white, so it scans
 on a dark page too. The status row's text stays the body color on a neutral surface; its icon
 carries the tone. Transitions and the loading placeholder's pulse stop under
-`prefers-reduced-motion: reduce`, and the selected choice keeps a system color in forced-colors
-mode.
+`prefers-reduced-motion: reduce`, and the selected choice and tab keep a system color in
+forced-colors mode.
 
 ### Content Security Policy
 
