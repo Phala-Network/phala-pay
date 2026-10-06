@@ -24,6 +24,7 @@ import {
   CONFIG_STALE_TIME_MS,
   EXPIRED_QUOTE_INTERVAL_MS,
   QUERY_RECOVERY_INTERVAL_MS,
+  QUERY_RETRY_LIMIT,
   SWEEPS_INTERVAL_MS,
   TERMINAL_ACCOUNT_STATUSES,
   TERMINAL_DEPOSIT_STATUSES,
@@ -36,7 +37,7 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       // Permanent client refusals are answers, not outages; timeouts and rate limits can recover.
-      retry: (failures, error) => !isTerminalApiError(error) && failures < 2,
+      retry: (failures, error) => !isTerminalApiError(error) && failures < QUERY_RETRY_LIMIT,
     },
     mutations: { retry: false },
   },

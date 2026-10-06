@@ -16,6 +16,8 @@ export const QUERY_RECOVERY_INTERVAL_MS = 15_000;
 export const SWEEPS_INTERVAL_MS = 10_000;
 // Match the product's five-minute trust/configuration cache.
 export const CONFIG_STALE_TIME_MS = 5 * 60_000;
+// Two retries recover brief outages without keeping failed views pending indefinitely.
+export const QUERY_RETRY_LIMIT = 2;
 
 // Use the product's response types so statuses from a different resource cannot enter a set.
 export const TERMINAL_DEPOSIT_STATUSES: ReadonlySet<NonNullable<Timeline["deposit"]>["status"]> = new Set(["credited", "rejected", "reversed"]);

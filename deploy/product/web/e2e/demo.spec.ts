@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
 import type { Timeline } from "../src/api.js";
-import { EXPIRED_QUOTE_INTERVAL_MS, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
+import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
 
 declare global {
   interface Window {
@@ -364,9 +364,15 @@ test("query outages show retrying states, recover, and preserve the last account
   await expect(trust).not.toContainText("retrying…");
 
   available = false;
-  const unavailable = page.waitForResponse((response) => response.url().endsWith("/api/account") && response.status() === 503);
-  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
-  await unavailable;
+  for (let attempt = 0; attempt <= QUERY_RETRY_LIMIT; attempt += 1) {
+    const unavailable = page.waitForResponse("**/api/account");
+    if (attempt === 0) {
+      await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+    }
+    const response = await unavailable;
+    expect(response.status()).toBe(503);
+    await response.finished();
+  }
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
   await expect(product).not.toContainText("Account is unavailable");
 });
