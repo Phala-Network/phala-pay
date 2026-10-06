@@ -1,4 +1,4 @@
-import type { Deposit, Quote, Refund } from "../../../../sdk/js-server/src/types.js";
+import type { PaymentRow, Refund, Timeline } from "./api.js";
 
 // Idle accounts need only occasional balance refreshes.
 export const ACCOUNT_IDLE_INTERVAL_MS = 15_000;
@@ -17,11 +17,11 @@ export const SWEEPS_INTERVAL_MS = 10_000;
 // Match the product's five-minute trust/configuration cache.
 export const CONFIG_STALE_TIME_MS = 5 * 60_000;
 
-// The generated API permits new status values; unknown values remain nonterminal.
-export const TERMINAL_DEPOSIT_STATUSES: ReadonlySet<Deposit["status"]> = new Set(["credited", "rejected", "reversed"]);
-export const TERMINAL_QUOTE_STATUSES: ReadonlySet<Quote["status"]> = new Set(["complete", "expired", "canceled"]);
+// Use the product's response types so statuses from a different resource cannot enter a set.
+export const TERMINAL_DEPOSIT_STATUSES: ReadonlySet<NonNullable<Timeline["deposit"]>["status"]> = new Set(["credited", "rejected", "reversed"]);
+export const TERMINAL_QUOTE_STATUSES: ReadonlySet<NonNullable<Timeline["quote"]>["status"]> = new Set(["complete", "expired", "canceled"]);
 export const TERMINAL_REFUND_STATUSES: ReadonlySet<Refund["status"]> = new Set(["succeeded", "failed", "canceled"]);
-export const TERMINAL_ACCOUNT_STATUSES: ReadonlySet<Deposit["status"]> = new Set([
+export const TERMINAL_ACCOUNT_STATUSES: ReadonlySet<PaymentRow["status"]> = new Set([
   ...TERMINAL_DEPOSIT_STATUSES,
-  ...TERMINAL_QUOTE_STATUSES,
+  "expired",
 ]);
