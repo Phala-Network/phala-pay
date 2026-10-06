@@ -71,6 +71,13 @@ const SOURCE_REUSE: Duration = Duration::from_secs(12);
 // Bound an individual source on long-running confirm steps, capped by its caller deadline.
 const SOURCE_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Clone, Copy)]
+enum Reuse {
+    Ttl,
+    Fresh,
+    Since(tokio::time::Instant),
+}
+
 struct Cached<T> {
     value: T,
     completed_at: tokio::time::Instant,
@@ -571,8 +578,7 @@ impl PricingRuntime {
                     route,
                     role,
                     &mut audit,
-                    true,
-                    Some(arrived),
+                    Reuse::Since(arrived),
                     arrived + SOURCE_TIMEOUT,
                 )
                 .await
@@ -639,7 +645,7 @@ impl PricingRuntime {
         route: &RouteFile,
         deadline: tokio::time::Instant,
     ) -> Result<ValidatedQuote, PricingFailure> {
-        self.fetch_with_reuse(route, false, deadline).await
+        self.fetch_with_reuse(route, Reuse::Ttl, deadline).await
     }
     /// Crediting fetches fresh evidence, sharing only fetches completed after arrival.
     pub async fn fetch_fresh(
@@ -647,15 +653,15 @@ impl PricingRuntime {
         route: &RouteFile,
         deadline: tokio::time::Instant,
     ) -> Result<ValidatedQuote, PricingFailure> {
-        self.fetch_with_reuse(route, true, deadline).await
+        self.fetch_with_reuse(route, Reuse::Fresh, deadline).await
     }
     async fn fetch_with_reuse(
         &self,
         route: &RouteFile,
-        fresh_only: bool,
+        reuse: Reuse,
         deadline: tokio::time::Instant,
     ) -> Result<ValidatedQuote, PricingFailure> {
-        let result = self.fetch_inner(route, fresh_only, deadline).await;
+        let result = self.fetch_inner(route, reuse, deadline).await;
         if let Err(evidence) = &result {
             price_metrics::failure(route, evidence);
         }
@@ -676,7 +682,7 @@ impl PricingRuntime {
     async fn fetch_inner(
         &self,
         route: &RouteFile,
-        fresh_only: bool,
+        reuse: Reuse,
         deadline: tokio::time::Instant,
     ) -> Result<ValidatedQuote, PricingFailure> {
         let mut audit = Audit {
@@ -724,10 +730,7 @@ impl PricingRuntime {
                     .as_ref()
                     .is_none_or(|asset| asset == &route.asset.symbol)
             }) {
-                let quote = observe(
-                    entry, route, "sources", &mut audit, fresh_only, None, deadline,
-                )
-                .await?;
+                let quote = observe(entry, route, "sources", &mut audit, reuse, deadline).await?;
                 if let Some(quote) = quote {
                     observed.push((
                         quote.valuation,
@@ -768,16 +771,9 @@ impl PricingRuntime {
             let mut ca = Audit::default();
             let mut fa = Audit::default();
             let (primary, check, fx) = tokio::join!(
-                first(
-                    &self.primary,
-                    route,
-                    "primary",
-                    &mut pa,
-                    fresh_only,
-                    deadline
-                ),
-                first(&self.check, route, "check", &mut ca, fresh_only, deadline),
-                first(&self.fx, route, "fx", &mut fa, fresh_only, deadline)
+                first(&self.primary, route, "primary", &mut pa, reuse, deadline),
+                first(&self.check, route, "check", &mut ca, reuse, deadline),
+                first(&self.fx, route, "fx", &mut fa, reuse, deadline)
             );
             audit.observations.extend(
                 pa.observations
@@ -872,13 +868,11 @@ async fn first<'a>(
     route: &RouteFile,
     role: &str,
     audit: &mut Audit,
-    fresh_only: bool,
+    reuse: Reuse,
     deadline: tokio::time::Instant,
 ) -> Result<Option<(&'a Entry, PriceQuote)>, PricingFailure> {
     for (index, entry) in entries.iter().enumerate() {
-        if let Some(observation) =
-            observe(entry, route, role, audit, fresh_only, None, deadline).await?
-        {
+        if let Some(observation) = observe(entry, route, role, audit, reuse, deadline).await? {
             if index > 0 {
                 price_metrics::failover(route, role, entry.source_id, entry.company);
             }
@@ -892,17 +886,14 @@ async fn observe(
     route: &RouteFile,
     role: &str,
     audit: &mut Audit,
-    fresh_only: bool,
-    arrived: Option<tokio::time::Instant>,
+    reuse: Reuse,
     deadline: tokio::time::Instant,
 ) -> Result<Option<PriceQuote>, PricingFailure> {
     let deadline = deadline.min(tokio::time::Instant::now() + SOURCE_TIMEOUT);
-    let result = if let Some(arrived) = arrived {
-        entry.source.quote_shared_since(arrived, deadline).await
-    } else if fresh_only {
-        entry.source.quote_shared_fresh(deadline).await
-    } else {
-        entry.source.quote_shared(deadline).await
+    let result = match reuse {
+        Reuse::Ttl => entry.source.quote_shared(deadline).await,
+        Reuse::Fresh => entry.source.quote_shared_fresh(deadline).await,
+        Reuse::Since(arrived) => entry.source.quote_shared_since(arrived, deadline).await,
     };
     let cached_age_ms = result.as_ref().ok().and_then(|(_, age_ms)| *age_ms);
     let now = validation_time()?;
@@ -1834,8 +1825,7 @@ mod tests {
                     &route(),
                     "primary",
                     &mut audit,
-                    false,
-                    None,
+                    Reuse::Ttl,
                     test_deadline(),
                 )
                 .await
@@ -1847,8 +1837,7 @@ mod tests {
                     &route(),
                     "primary",
                     &mut audit,
-                    false,
-                    None,
+                    Reuse::Ttl,
                     test_deadline(),
                 )
                 .await
@@ -1862,8 +1851,7 @@ mod tests {
                                 &route(),
                                 "primary",
                                 &mut audit,
-                                false,
-                                None,
+                                Reuse::Ttl,
                                 test_deadline()
                             )
                             .await
@@ -1927,8 +1915,7 @@ mod tests {
             &route,
             "primary",
             &mut leader_audit,
-            true,
-            None,
+            Reuse::Fresh,
             test_deadline(),
         );
         let waiter = async {
@@ -1939,8 +1926,7 @@ mod tests {
                     &route,
                     "primary",
                     &mut waiter_audit,
-                    true,
-                    None,
+                    Reuse::Fresh,
                     test_deadline()
                 )
                 .await
@@ -1953,8 +1939,7 @@ mod tests {
                 &route,
                 "primary",
                 &mut waiter_audit,
-                true,
-                None,
+                Reuse::Fresh,
                 test_deadline(),
             )
             .await
