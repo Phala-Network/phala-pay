@@ -1,1 +1,10 @@
-{"vulnerabilities": []}
+{
+  "vulnerabilities": [
+    {
+      "id": "GHSA-wq5f-xc86-pv6w",
+      "purls": ["pkg:npm/sharp@0.35.4"],
+      "statement": "dev-only: sharp is pulled in by cf → miniflare (local Workers dev server), a native module never included in the deployed Workers static-asset bundle; no fixed version reachable because miniflare pins sharp 0.35.4; remove when cf/miniflare allow sharp ≥0.35.5. deploy/product/web/pnpm-lock.yaml is the only lockfile in the repo that resolves sharp 0.35.4.",
+      "expired_at": "2026-11-05T00:00:00Z"
+    }
+  ]
+}
