@@ -33,8 +33,11 @@ export const ICON_BUTTON =
 export function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }) {
   const next = theme === "dark" ? "light" : "dark";
   return (
-    <button type="button" className={ICON_BUTTON} onClick={() => onChange(next)} aria-label={`Switch to ${next} theme`}>
-      {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+    <button type="button" className={ICON_BUTTON} onClick={() => onChange(next)}>
+      <Sun aria-hidden="true" className="hidden dark:block" />
+      <Moon aria-hidden="true" className="dark:hidden" />
+      <span className="sr-only hidden dark:block">Switch to light theme</span>
+      <span className="sr-only dark:hidden">Switch to dark theme</span>
     </button>
   );
 }
