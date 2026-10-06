@@ -153,7 +153,7 @@ describe("createCheckout", () => {
       expect(calls).toHaveLength(3);
       expect(checkout.getState().status).toBe("waiting");
       await vi.advanceTimersByTimeAsync(1);
-      expect(checkout.getState()).toMatchObject({ status: "error", quote: initial, error: { code: "api_error" } });
+      expect(checkout.getState()).toMatchObject({ status: "error", quote: initial, error: { code: "api_error", status } });
       await vi.advanceTimersByTimeAsync(120_000);
       document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(0);
@@ -238,7 +238,7 @@ describe("createCheckout", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(checkout.getState()).toMatchObject({
       status: "error",
-      error: { code: "invalid_client_secret" },
+      error: { code: "invalid_client_secret", status: 404 },
     });
     expect(calls).toHaveLength(1);
   });
@@ -275,7 +275,7 @@ describe("createCheckout", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(checkout.getState()).toMatchObject({
       status: "loading",
-      error: { code: "invalid_response" },
+      error: { code: "invalid_response", status: 200 },
     });
   });
 
@@ -286,6 +286,15 @@ describe("createCheckout", () => {
     checkout.destroy();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("CheckoutError", () => {
+  it("has no HTTP status for a network error", () => {
+    const cause = new TypeError("offline");
+    const error = new CheckoutError("network_error", "could not reach the payment service", { cause });
+    expect(error.status).toBeUndefined();
+    expect(error.cause).toBe(cause);
   });
 });
 
@@ -339,6 +348,7 @@ describe("expectedAddress", () => {
     expect(states).toHaveLength(1);
     expect(states[0]?.status).toBe("error");
     expect(states[0]?.error?.code).toBe("address_mismatch");
+    expect(states[0]?.error?.status).toBe(200);
     // Nothing of the quote is kept to render.
     expect(states[0]?.quote).toBeNull();
     expect(calls).toHaveLength(1);
@@ -361,6 +371,7 @@ describe("expectedAddress", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(checkout.getState().error).toMatchObject({
       code: "rate_limited",
+      status: 429,
       retryAfter: 30,
       requestId: "req_0123456789abcdef0123456789abcdef",
     });
