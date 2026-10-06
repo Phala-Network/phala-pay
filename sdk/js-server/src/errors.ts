@@ -22,7 +22,6 @@ export class ResponseValidationError extends PhalaPayError {
 export class AddressMismatchError extends ResponseValidationError {}
 export class AttestationError extends PhalaPayError {}
 export class SignatureVerificationError extends PhalaPayError {}
-export { SignatureVerificationError as WebhookSignatureError };
 export class LedgerSnapshotError extends PhalaPayError {}
 export class TransportError extends PhalaPayError {
   constructor(readonly code: "network" | "timeout" | "cancelled") {

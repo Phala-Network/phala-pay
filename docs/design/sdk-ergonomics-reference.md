@@ -57,7 +57,7 @@ rounding using lossless decoding; requests and arithmetic reject unsafe integers
   page/action.
 - Errors: PhalaPayError (Python TopupError), ApiError, TransportError, ConfigurationError,
   ResponseValidationError, AddressMismatchError, AttestationError, SignatureVerificationError,
-  LedgerSnapshotError. Keep JS WebhookSignatureError alias. TransportError.code:
+  LedgerSnapshotError. TransportError.code:
   network/timeout/cancelled. ApiError: statusCode, code, message, errorType, param, docUrl,
   requestId, retryAfter (seconds); Python keeps snake_case fields, including error_type; optional
   fields null. Malformed responses raise ResponseValidationError with status/request ID, no raw
@@ -185,7 +185,7 @@ Connection/validation/merge/commit failure rolls back: 5xx.
 
 ```javascript
 import Database from "better-sqlite3";
-import { balanceDelta } from "@phala/pay-server";
+import { balanceDelta } from "@phala/pay-server/helpers";
 
 const depositEvents = new Set([
   "deposit.credited",

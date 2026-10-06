@@ -1,14 +1,11 @@
 import { parseJson } from "./json.js";
+import { SignatureVerificationError } from "./errors.js";
 /**
  * Standard Webhooks `v1a` verification of Phala Pay deliveries (design D11): an ed25519 signature
  * over `{webhook-id}.{webhook-timestamp}.{body}` by your account's webhook key in the endpoint's
  * mode, pinned from `GET /v1/attestation`. Uses WebCrypto, so it runs on Node 20+, Deno, Bun, and
  * edge runtimes.
  */
-
-/** A delivery that did not verify: answer `400` and do nothing. */
-export { SignatureVerificationError as WebhookSignatureError } from "./errors.js";
-import { SignatureVerificationError as WebhookSignatureError } from "./errors.js";
 
 /** A verified event. `data.object` is the object the event is about, such as a deposit. */
 export interface WebhookEvent {
@@ -74,18 +71,18 @@ export async function constructEvent(
     typeof payload === "string" &&
     new TextDecoder("utf-8", { fatal: true }).decode(body) !== payload
   )
-    throw new WebhookSignatureError("webhook body is not exact UTF-8");
+    throw new SignatureVerificationError("webhook body is not exact UTF-8");
   const id = header(headers, "webhook-id");
   const timestamp = header(headers, "webhook-timestamp");
   const signatures = header(headers, "webhook-signature");
   if (id === undefined || timestamp === undefined || signatures === undefined) {
-    throw new WebhookSignatureError("webhook headers missing");
+    throw new SignatureVerificationError("webhook headers missing");
   }
   if (!/^\d+$/.test(timestamp) || !Number.isSafeInteger(Number(timestamp))) {
-    throw new WebhookSignatureError("webhook timestamp malformed");
+    throw new SignatureVerificationError("webhook timestamp malformed");
   }
   if (Math.abs(now - Number(timestamp)) > tolerance) {
-    throw new WebhookSignatureError("webhook timestamp outside tolerance");
+    throw new SignatureVerificationError("webhook timestamp outside tolerance");
   }
   const signed = concat(new TextEncoder().encode(`${id}.${timestamp}.`), body);
   const keys = await Promise.all(
@@ -97,7 +94,7 @@ export async function constructEvent(
   let verified = false;
   for (const entry of signatures.split(" ")) {
     if (entry.split(",").length !== 2)
-      throw new WebhookSignatureError("duplicate or malformed webhook signature");
+      throw new SignatureVerificationError("duplicate or malformed webhook signature");
     const [version, encoded] = entry.split(",", 2);
     const signature = version === "v1a" && encoded !== undefined ? base64(encoded) : undefined;
     if (signature === undefined) {
@@ -110,7 +107,7 @@ export async function constructEvent(
     }
   }
   if (!verified) {
-    throw new WebhookSignatureError("no valid webhook signature");
+    throw new SignatureVerificationError("no valid webhook signature");
   }
   let event: unknown;
   try {
@@ -140,13 +137,13 @@ export async function constructEvent(
     throw new TypeError("webhook body is not an event");
   }
   if (eventId !== id) {
-    throw new WebhookSignatureError("webhook id does not match the event");
+    throw new SignatureVerificationError("webhook id does not match the event");
   }
   if (account !== options.expectedAccount) {
-    throw new WebhookSignatureError("webhook event is for another account");
+    throw new SignatureVerificationError("webhook event is for another account");
   }
   if (livemode !== options.expectedLivemode) {
-    throw new WebhookSignatureError("webhook event is for the other mode");
+    throw new SignatureVerificationError("webhook event is for the other mode");
   }
   const previous = isRecord(data) ? data["previous_attributes"] : undefined;
   return {
@@ -177,9 +174,9 @@ function header(
     return headers.get(name)?.trim() ?? undefined;
   }
   const matches = Object.entries(headers).filter(([key]) => key.toLowerCase() === name);
-  if (matches.length > 1) throw new WebhookSignatureError("duplicate webhook header");
+  if (matches.length > 1) throw new SignatureVerificationError("duplicate webhook header");
   const value = matches[0]?.[1];
-  if (Array.isArray(value)) throw new WebhookSignatureError("duplicate webhook header");
+  if (Array.isArray(value)) throw new SignatureVerificationError("duplicate webhook header");
   return value?.trim();
 }
 

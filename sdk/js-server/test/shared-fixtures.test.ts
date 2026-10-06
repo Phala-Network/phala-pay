@@ -9,7 +9,7 @@ import {
   forwarderAddress,
   quoteAddress,
   quoteSalt,
-} from "../src/index.js";
+} from "../src/helpers.js";
 type Manifest = {
   schema_version: number;
   groups: {

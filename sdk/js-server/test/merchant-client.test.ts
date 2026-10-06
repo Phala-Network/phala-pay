@@ -9,11 +9,10 @@ import {
   ConfigurationError,
   ResponseValidationError,
   SignatureVerificationError,
-  quoteAddress,
-  depositAddress,
   type Quote,
 } from "../src/index.js";
 import type { CheckoutParams } from "../src/index.js";
+import { quoteAddress, depositAddress } from "../src/helpers.js";
 import {
   requestUrl,
   apiKey,

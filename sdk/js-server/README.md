@@ -49,8 +49,9 @@ try {
 ```
 
 `pins` accepts the versioned `ppay_pins_v1.…` string or a `Pins` value returned by
-`parsePins`. `encodePins` produces its canonical encoding. Pins are recursively frozen and bind
-the normalized API origin, account, mode, forwarder contracts, chain treasuries and public webhook
+`parsePins` from `@phala/pay-server/helpers`. `encodePins` from that entry produces its canonical
+encoding. Pins are recursively frozen and bind the normalized API origin, account, mode,
+forwarder contracts, chain treasuries and public webhook
 keys. Both test and live clients require pins. An explicit `apiBase` must match that origin;
 HTTP is permitted only for explicitly configured test loopback origins. No trust discovery occurs.
 `fromEnv(env, { apiBase })` reads no other variables and loads no files or dotenv configuration.
@@ -64,8 +65,10 @@ payability and returns `{ clientSecret, expectedAddress, apiBase }`.
 ### Resources and types
 
 Wire fields remain snake_case. Params and responses, including `QuoteCreateParams`, `Quote` and
-`Deposit`, are aliases of the generated OpenAPI definitions. Response fields and future enums are
-retained; unsafe JSON integers are rejected before rounding.
+`Deposit`, are aliases of the generated OpenAPI definitions exported from `@phala/pay-server`.
+`Forwarder` at that entry is the API response type returned by `pay.forwarders`; the offline
+contract pins type `Forwarder` is exported from `@phala/pay-server/helpers`.
+Response fields and future enums are retained; unsafe JSON integers are rejected before rounding.
 
 | Resource | Methods |
 | --- | --- |
@@ -111,7 +114,7 @@ defaults to false so interactive requests keep the existing timeout/attempt budg
 
 Errors inherit `PhalaPayError`: `ApiError`, `TransportError`, `ConfigurationError`,
 `ResponseValidationError`, `AddressMismatchError`, `AttestationError`,
-`SignatureVerificationError` (also exported as `WebhookSignatureError`) and `LedgerSnapshotError`.
+`SignatureVerificationError` and `LedgerSnapshotError`.
 `ApiError` exposes `statusCode`, `code`, `message`, `errorType`, `param`, `docUrl`, `requestId` and
 `retryAfter` in seconds; absent optional fields are null. `TransportError.code` is `network`,
 `timeout` or `cancelled`. Malformed responses expose status/request ID without raw bodies or causes.
@@ -127,17 +130,19 @@ and should be ignored before accessing it. Change overlapping webhook pins manua
 attestation; security notices never modify trust.
 
 `depositNetAmount(deposit)` returns integer minor units. `balanceDelta(previousSnapshot, deposit)`
-returns `{ snapshot, contribution, delta }` without IO or mutation. Commit the returned snapshot
-and delta together in your own transaction before acknowledging a webhook. Duplicate and reordered
+returns `{ snapshot, contribution, delta }` without IO or mutation. Import both from
+`@phala/pay-server/helpers`. Commit the returned snapshot and delta together in your own
+transaction before acknowledging a webhook. Duplicate and reordered
 snapshots converge through monotone statuses and cumulative deductions. Refund events retain
 `status: "credited"`; unknown statuses, identity/valuation conflicts and impossible deductions
 raise `LedgerSnapshotError`. These helpers provide no SQL adapter or authorization policy.
 
 ## Server helpers
 
-Keyless pins, ledger, address, signature and sweep builders live at `@phala/pay-server/helpers`, including for
-WebCrypto-capable non-Node runtimes. Existing exports from `/server` remain available on supported server runtimes;
-browser callers must move to `/server/helpers`:
+Keyless pins, ledger, address, signature and sweep helpers are exported only from
+`@phala/pay-server/helpers`, including for WebCrypto-capable non-Node runtimes. The root
+`@phala/pay-server` entry exports the merchant client, its errors and types, and the generated API
+types. Import offline functions and their types from the helpers entry:
 
 ```ts
 import { constructEvent, flushTransactions, safeBatch, verifyQuoteAddress } from "@phala/pay-server/helpers";

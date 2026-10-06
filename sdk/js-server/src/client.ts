@@ -198,7 +198,7 @@ export class PhalaPay {
           expectedLivemode: this.livemode,
         },
       );
-      // Legacy low-level verification normalizes previous_attributes; bound events preserve the wire value.
+      // Low-level verification normalizes previous_attributes; bound events preserve the wire value.
       const raw: unknown = parseJson(
         typeof body === "string" ? body : new TextDecoder("utf-8", { fatal: true }).decode(body),
       );
