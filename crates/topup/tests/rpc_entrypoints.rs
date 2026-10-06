@@ -292,6 +292,51 @@ async fn scan(pool: &PgPool, routes: &RouteSet) -> Result<scanner::ScanStats> {
     let reader = FinalizedReader::new(routes.provider(CHAIN, 0)?.clone());
     Ok(scanner::scan_once(pool, &reader, &chain_routes(routes)[0]).await?)
 }
+
+#[tokio::test]
+async fn restore_check_anchors_with_an_observation_only_group() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let node = Node::start(0).await?;
+            let a = group("provider-a", &[&node.url], 1000, GroupPolicy::default())?;
+            let b = group("provider-b", &[&node.url], 1000, GroupPolicy::default())?;
+            let observation = group("base-mainnet-a", &[&node.url], 1000, GroupPolicy::default())?;
+            // The fixture helper retains Base's sequencer uptime gate on the payment route.
+            let payment_routes = routes(a.clone(), b.clone(), false)?;
+            let routes = Arc::new(
+                RouteSet::with_groups(
+                    payment_routes.routes().to_vec(),
+                    BTreeMap::from([
+                        (a.id.clone(), Arc::new(EvmClient::from_group(a, None)?)),
+                        (b.id.clone(), Arc::new(EvmClient::from_group(b, None)?)),
+                        (
+                            observation.id.clone(),
+                            Arc::new(EvmClient::from_group(observation.clone(), None)?),
+                        ),
+                    ]),
+                )
+                .map_err(anyhow::Error::msg)?,
+            );
+            let state = topup::rpc_runtime::bind_durable_state(&database.app_pool, &routes, "cfg")
+                .map_err(anyhow::Error::msg)?;
+            let reconciler = topup::reconciler::Reconciler::from_routes(
+                database.app_pool.clone(),
+                routes.clone(),
+            )?;
+            ensure!(reconciler.post_restore_once().await.is_ok());
+            ensure!(
+                topup::rpc_runtime::ensure_anchors(&database.app_pool, &routes)
+                    .await
+                    .is_ok()
+            );
+            let observation_store = observation.watermark_store().context("observation store")?;
+            ensure!(Arc::ptr_eq(&state, &observation_store));
+            Ok(())
+        })
+    })
+    .await
+}
+
 #[tokio::test]
 async fn dense_window_completes_at_ten_rps_through_the_scanner() -> Result<()> {
     let Some(database) = support::TestDatabase::create().await? else {

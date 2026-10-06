@@ -42,6 +42,7 @@ set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 source "$root/deploy/contracts/common.sh"
+source "$root/deploy/local/price-fixtures.sh"
 for command in docker forge cast jq python3 openssl; do
     require_command "$command"
 done
@@ -257,8 +258,6 @@ dc up -d --wait anvil anvil-base-sepolia anvil-mainnet-price anvil-base-mainnet-
 # Both chains carry the canonical Multicall3 that topup's balance and addressOf reads go through.
 install_anvil_multicall3 "$rpc_url"
 install_anvil_multicall3 "$base_rpc_url"
-install_anvil_multicall3 "$mainnet_price_rpc_url"
-install_anvil_multicall3 "$base_mainnet_price_rpc_url"
 docker run -d --name "$client" --network "${project}_default" "$client_image" sleep infinity \
     >/dev/null
 # `docker cp` streams through the API, so this works where the daemon cannot see the checkout.
@@ -326,88 +325,7 @@ printf 'base-sepolia: token=%s second_token=%s third_token=%s sanctions_oracle=%
     "$base_token" "$base_second_token" "$base_third_token" "$base_oracle"
 
 echo "== installing hermetic mainnet price fixtures"
-fixture_aggregator_code=$(cd "$CONTRACTS_DIR" && forge inspect test/mocks/PriceFixtures.sol:MockPriceAggregator deployedBytecode)
-fixture_pair_code=$(cd "$CONTRACTS_DIR" && forge inspect test/mocks/PriceFixtures.sol:MockUniswapV2Pair deployedBytecode)
-set_code() {
-    local rpc=$1 address=$2 code=$3
-    cast rpc --rpc-url "$rpc" anvil_setCode "$address" "$code" >/dev/null
-}
-set_storage() {
-    local rpc=$1 address=$2 slot=$3 value=$4
-    cast rpc --rpc-url "$rpc" anvil_setStorageAt "$address" \
-        "$(python3 - "$slot" <<'PY'
-import sys
-print(f"0x{int(sys.argv[1], 0):064x}")
-PY
-)" "$(python3 - "$value" <<'PY'
-import sys
-print(f"0x{int(sys.argv[1], 0):064x}")
-PY
-)" >/dev/null
-}
-eth_feed=0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419
-usdc_feed=0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6
-usdt_feed=0x3E7d1eAB13ad0104d2750B8863b489D65364e32D
-sequencer_feed=0xBCF85224fc0756B9Fa45aA7892530B47e10b6433
-pair=0x8867f20c1c63baccec7617626254a060eeb0e61e
-for feed_address in "$eth_feed" "$usdc_feed" "$usdt_feed"; do
-    set_code "$mainnet_price_rpc_url" "$feed_address" "$fixture_aggregator_code"
-done
-set_code "$mainnet_price_rpc_url" "$pair" "$fixture_pair_code"
-set_code "$base_mainnet_price_rpc_url" "$sequencer_feed" "$fixture_aggregator_code"
-# MockPriceAggregator slots: decimals, answer, roundId, startedAt, updatedAt, answeredInRound.
-set_storage "$mainnet_price_rpc_url" "$eth_feed" 0 8
-set_storage "$mainnet_price_rpc_url" "$eth_feed" 1 200000000000
-set_storage "$mainnet_price_rpc_url" "$eth_feed" 2 1
-price_timestamp=$(cast block latest --field timestamp --rpc-url "$mainnet_price_rpc_url")
-price_timestamp=$(python3 - "$price_timestamp" <<'PY'
-import sys
-print(int(sys.argv[1], 0))
-PY
-)
-set_storage "$mainnet_price_rpc_url" "$eth_feed" 3 "$price_timestamp"
-set_storage "$mainnet_price_rpc_url" "$eth_feed" 4 "$price_timestamp"
-set_storage "$mainnet_price_rpc_url" "$eth_feed" 5 1
-for feed_address in "$usdc_feed" "$usdt_feed"; do
-    set_storage "$mainnet_price_rpc_url" "$feed_address" 0 8
-    set_storage "$mainnet_price_rpc_url" "$feed_address" 1 100000000
-    set_storage "$mainnet_price_rpc_url" "$feed_address" 2 1
-    set_storage "$mainnet_price_rpc_url" "$feed_address" 3 "$price_timestamp"
-    set_storage "$mainnet_price_rpc_url" "$feed_address" 4 "$price_timestamp"
-    set_storage "$mainnet_price_rpc_url" "$feed_address" 5 1
-done
-set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 0 0
-set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 1 0
-set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 2 1
-base_price_timestamp=$(cast block latest --field timestamp --rpc-url "$base_mainnet_price_rpc_url")
-base_price_timestamp=$(python3 - "$base_price_timestamp" <<'PY'
-import sys
-print(int(sys.argv[1], 0))
-PY
-)
-set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 3 "$((base_price_timestamp - 7200))"
-set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 4 "$base_price_timestamp"
-set_storage "$base_mainnet_price_rpc_url" "$sequencer_feed" 5 1
-# MockUniswapV2Pair slots: token0, token1, packed reserves/timestamp, cumulative0, cumulative1.
-set_storage "$mainnet_price_rpc_url" "$pair" 0 0x6c5ba91642f10282b576d91922ae6448c9d52f4e
-set_storage "$mainnet_price_rpc_url" "$pair" 1 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
-pair_timestamp=$(cast block latest --field timestamp --rpc-url "$mainnet_price_rpc_url")
-pair_timestamp=$(python3 - "$pair_timestamp" <<'PY'
-import sys
-print(int(sys.argv[1], 0))
-PY
-)
-pair_packed=$(python3 - "$pair_timestamp" <<'PY'
-import sys
-timestamp = int(sys.argv[1]) - 1800
-reserve0 = 100_000 * 10**18
-reserve1 = 100 * 10**18
-print((reserve0 | (reserve1 << 112) | ((timestamp & 0xffffffff) << 224)))
-PY
-)
-set_storage "$mainnet_price_rpc_url" "$pair" 2 "$pair_packed"
-set_storage "$mainnet_price_rpc_url" "$pair" 3 0
-set_storage "$mainnet_price_rpc_url" "$pair" 4 0
+install_anvil_price_fixtures "$mainnet_price_rpc_url" "$base_mainnet_price_rpc_url"
 
 echo "== writing the configuration and rendering the staging compose"
 # Phala's staging configuration with this network's addresses: on each chain the test token stands
@@ -543,7 +461,7 @@ dc stop --timeout 10 topup >/dev/null
 twap_policy='{"window_s":1800,"max_sample_age_s":180,"min_weth_reserve_usd":100000,"max_spot_deviation_bps":300,"max_sample_jump_bps":500}'
 twap_sql="$tmp/twap.sql"
 : >"$twap_sql"
-pair_timestamp_last=$((pair_timestamp - 1800))
+pair_timestamp_last=$((ANVIL_PRICE_PAIR_TIMESTAMP - 1800))
 window_start=$(($(date +%s) - 1860))
 twap_spot=$(python3 - <<'PY'
 print((100 * 10**18 << 112) // (100_000 * 10**18))

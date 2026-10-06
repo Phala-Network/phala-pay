@@ -31,6 +31,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- `topup restore-check` and `topup reconcile` bind durable RPC state to price-observation groups too; with such a group sorted first they failed with `chain_unavailable`.
 - `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
   and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
   seconds per chain and could time out.

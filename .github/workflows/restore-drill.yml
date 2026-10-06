@@ -1,7 +1,7 @@
 name: Restore drill
 
 # The drill uses named volumes filled with `docker cp` and rejects bind mounts.
-# Submodules are not needed: its images build from crates/ and deploy/ only.
+# Foundry deployment helpers build the local contract fixtures from the pinned submodules.
 
 on:
   schedule:
@@ -27,6 +27,11 @@ jobs:
       TOPUP_RESTORE_DRILL_ID: gh${{ github.run_id }}a${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: v1.8.3
       - name: Run the controlled and crash restore drills
         env:
           # The runner empties runner.temp after every job, including cancelled ones. The runner

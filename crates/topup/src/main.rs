@@ -532,7 +532,8 @@ async fn restore_check(args: &RestoreCheckArgs) -> anyhow::Result<ExitCode> {
 async fn run_restore_check(
     args: &RestoreCheckArgs,
 ) -> anyhow::Result<topup::restore::RestoreReport> {
-    let routes = load_config(&args.config)?
+    let config = load_config(&args.config)?;
+    let routes = config
         .route_set()
         .map_err(anyhow::Error::msg)
         .context("failed to load the route configuration")?;
@@ -546,23 +547,12 @@ async fn run_restore_check(
     topup::rpc_runtime::verify_persisted_genesis(&pool, &routes)
         .await
         .map_err(anyhow::Error::msg)?;
-    let config = load_config(&args.config)?;
-    let rpc_state = topup::db::rpc::state(
+    topup::rpc_runtime::bind_durable_state(
         &pool,
-        topup::db::rpc::digest(
-            &config
-                .resolved_json()
-                .map_err(anyhow::Error::msg)?
-                .to_string(),
-        ),
-    );
-    for chain in routes.chain_ids() {
-        for role in 0..2 {
-            if let Some(group) = routes.provider(chain, role)?.group() {
-                group.set_store(rpc_state.clone());
-            }
-        }
-    }
+        &routes,
+        &config.resolved_json().map_err(anyhow::Error::msg)?,
+    )
+    .map_err(anyhow::Error::msg)?;
     let reconciler = topup::reconciler::Reconciler::from_routes(pool.clone(), Arc::new(routes))
         .context("failed to configure the post-restore reconciler")?;
     let expectations = topup::restore::RestoreExpectations {
@@ -1273,7 +1263,8 @@ async fn rpc_command(command: RpcCommand) -> anyhow::Result<ExitCode> {
 }
 
 async fn reconcile(args: &ReconcileArgs) -> anyhow::Result<ExitCode> {
-    let routes = load_config(&args.config)?
+    let config = load_config(&args.config)?;
+    let routes = config
         .route_set()
         .map_err(anyhow::Error::msg)
         .context("failed to load the route configuration")?;
@@ -1287,23 +1278,12 @@ async fn reconcile(args: &ReconcileArgs) -> anyhow::Result<ExitCode> {
     topup::rpc_runtime::verify_persisted_genesis(&pool, &routes)
         .await
         .map_err(anyhow::Error::msg)?;
-    let config = load_config(&args.config)?;
-    let rpc_state = topup::db::rpc::state(
+    topup::rpc_runtime::bind_durable_state(
         &pool,
-        topup::db::rpc::digest(
-            &config
-                .resolved_json()
-                .map_err(anyhow::Error::msg)?
-                .to_string(),
-        ),
-    );
-    for chain in routes.chain_ids() {
-        for role in 0..2 {
-            if let Some(group) = routes.provider(chain, role)?.group() {
-                group.set_store(rpc_state.clone());
-            }
-        }
-    }
+        &routes,
+        &config.resolved_json().map_err(anyhow::Error::msg)?,
+    )
+    .map_err(anyhow::Error::msg)?;
     let reconciler = topup::reconciler::Reconciler::from_routes(pool.clone(), Arc::new(routes))
         .context("failed to configure reconciler")?;
     let result = match topup::reconciler::hold_lease_owner_lock(&pool).await {

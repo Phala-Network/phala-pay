@@ -242,6 +242,21 @@ fn groups(routes: &RouteSet) -> Result<Groups<'_>, String> {
     }
     Ok(result)
 }
+
+/// Binds one durable safety store to every group the runtime constructs
+/// (route A/B roles and observation-only groups), keyed by the accepted config digest.
+pub fn bind_durable_state(
+    pool: &PgPool,
+    routes: &RouteSet,
+    public_config: &str,
+) -> Result<Arc<dyn WatermarkStore>, String> {
+    let state = db::rpc::state(pool, db::rpc::digest(public_config));
+    for (group, _) in groups(routes)?.values() {
+        group.set_store(state.clone());
+    }
+    Ok(state)
+}
+
 /// First acceptance needs one fully verified member in each group; offline backups do not veto it.
 /// The exact accepted digest may restart with no serving members, without issuing or crediting on
 /// unavailable evidence. Every returning member still undergoes complete verification.
@@ -256,10 +271,7 @@ pub async fn accept(pool: &PgPool, routes: &RouteSet, public_config: &str) -> Re
     .map_err(|e| e.to_string())?;
     let groups = groups(routes)?;
     check_roles(pool, routes).await?;
-    let state = db::rpc::state(pool, digest.clone());
-    for (group, _) in groups.values() {
-        group.set_store(state.clone());
-    }
+    let state = bind_durable_state(pool, routes, public_config)?;
     let mut genesis = BTreeMap::new();
     let mut validations = Vec::new();
     for (group, route_files) in groups.values() {
@@ -328,9 +340,6 @@ pub async fn accept(pool: &PgPool, routes: &RouteSet, public_config: &str) -> Re
     }
     tx.commit().await.map_err(|e| e.to_string())?;
     anchor_cursors(pool, routes, state.as_ref()).await?;
-    for (group, _) in groups.values() {
-        group.set_store(state.clone());
-    }
     Ok(())
 }
 async fn check_roles(pool: &PgPool, routes: &RouteSet) -> Result<(), String> {
@@ -357,14 +366,18 @@ pub async fn ensure_anchors(pool: &PgPool, routes: &RouteSet) -> Result<(), Stri
     if !routes.has_rpc_groups() {
         return Ok(());
     }
-    check_roles(pool, routes).await?;
     let configured = groups(routes)?;
-    let Some((group, _)) = configured.values().next() else {
+    let mut state = None;
+    for (id, (group, _)) in &configured {
+        let store = group
+            .watermark_store()
+            .ok_or_else(|| format!("RPC durable safety store missing for group {id}"))?;
+        state.get_or_insert(store);
+    }
+    let Some(state) = state else {
         return Ok(());
     };
-    let state = group
-        .watermark_store()
-        .ok_or("RPC durable safety store missing")?;
+    check_roles(pool, routes).await?;
     anchor_cursors(pool, routes, state.as_ref()).await
 }
 async fn anchor_cursors(
@@ -1228,6 +1241,61 @@ mod probe_tests {
             budgets,
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn ensure_anchors_names_an_unbound_observation_group() {
+        let pool = PgPool::connect_lazy("postgres://unused:unused@127.0.0.1/unused").unwrap();
+        let state = db::rpc::state(&pool, db::rpc::digest("cfg"));
+        let a = group(
+            "http://127.0.0.1:1",
+            "provider-a",
+            100,
+            GroupPolicy::default(),
+        );
+        let b = group(
+            "http://127.0.0.1:1",
+            "provider-b",
+            100,
+            GroupPolicy::default(),
+        );
+        let observation = group_on_chain(
+            "http://127.0.0.1:1",
+            "base-mainnet-a",
+            100,
+            GroupPolicy::default(),
+            8453,
+        );
+        a.set_store(state.clone());
+        b.set_store(state);
+        let mut route: RouteFile =
+            serde_saphyr::from_str(include_str!("../tests/fixtures/phala-cloud-pha.yaml")).unwrap();
+        route.chain.chain_id = 11155111;
+        route.livemode = false;
+        route.chain.rpc_providers = vec![a.id.clone(), b.id.clone()];
+        let routes = RouteSet::with_groups(
+            vec![route],
+            BTreeMap::from([
+                (
+                    a.id.clone(),
+                    Arc::new(EvmClient::from_group(a, None).unwrap()),
+                ),
+                (
+                    b.id.clone(),
+                    Arc::new(EvmClient::from_group(b, None).unwrap()),
+                ),
+                (
+                    observation.id.clone(),
+                    Arc::new(EvmClient::from_group(observation, None).unwrap()),
+                ),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            ensure_anchors(&pool, &routes).await.unwrap_err(),
+            "RPC durable safety store missing for group base-mainnet-a"
+        );
+        pool.close().await;
     }
 
     #[tokio::test]
