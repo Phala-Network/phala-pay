@@ -63,8 +63,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         """,
         """
         -- The latest merged snapshot of each deposit (`deposit.*` events carry the whole deposit):
-        -- the
-        -- later status and the larger cumulative claw-backs win, whatever order events arrive in.
+        -- the later status and the larger cumulative claw-backs win, regardless of event order.
         CREATE TABLE IF NOT EXISTS deposit_snapshots (
             provider_order_id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
@@ -84,11 +83,10 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         );
         """,
         """
-        -- The product's own promotion on an accepted order (`bonus_bps`), a line of its own beside
-        -- the
-        -- credit: the grant, then its claw-backs as refunds and reversals net the credit down. An
-        -- order's
-        -- rows sum to its current bonus. Not a Phala Pay amount: the service never sees it.
+        -- The product's own promotion on an accepted order (`bonus_bps`), beside the credit:
+        -- the grant, then its claw-backs as refunds and reversals net the credit down.
+        -- An order's rows sum to its current bonus. This is the product's amount;
+        -- the service never sees it.
         CREATE TABLE IF NOT EXISTS bonus_credits (
             id TEXT PRIMARY KEY,
             team_id TEXT NOT NULL REFERENCES teams (id),
@@ -111,13 +109,11 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         CREATE INDEX IF NOT EXISTS bonus_credits_team ON bonus_credits (team_id);
         """,
         """
-        -- The webhook inbox: every verified delivery once, by its `webhook-id` (the event's `evt_`
-        -- id),
-        -- committed with its ledger effect. `data` is the event's parsed `data`, for the product's
-        -- own
-        -- reads; `body` and the three Standard Webhooks headers are the delivery exactly as
-        -- received, the
-        -- evidence a service restore imports (deploy/runbooks/restore.md, step 5).
+        -- The webhook inbox: every verified delivery once, by its `webhook-id` (the event's
+        -- `evt_` id), committed with its ledger effect. `data` is the event's parsed `data`,
+        -- for the product's own reads. `body` and the three Standard Webhooks headers preserve
+        -- the delivery exactly as received, as evidence for a service restore
+        -- (deploy/runbooks/restore.md, step 5).
         CREATE TABLE IF NOT EXISTS webhook_events (
             id TEXT PRIMARY KEY,
             type TEXT NOT NULL,
@@ -132,9 +128,8 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         -- Each quote and deposit address the product created, as the service returned it, its
         -- `client_secret` included: the merchant's records a service restore re-issues them from
         -- (deploy/runbooks/restore.md, step 4). A client secret is a capability: the ledger file is
-        -- readable by its owner only, and nothing logs it. `recorded_at` is when the product last
-        -- got
-        -- the response.
+        -- readable by its owner only, and nothing logs it.
+        -- `recorded_at` is when the product last got the response.
         CREATE TABLE IF NOT EXISTS quote_records (
             id TEXT PRIMARY KEY,
             team_id TEXT NOT NULL REFERENCES teams (id),
@@ -151,9 +146,8 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         );
         """,
         """
-        -- The demo console's (reference_product.demo): each visitor's quotes, with the quote's
-        -- creation
-        -- request in `api` for the developer view; its deposit address; and its refunds.
+        -- The demo console's (reference_product.demo): each visitor's quotes, with the
+        -- creation request in `api` for the developer view; its deposit address; and its refunds.
         CREATE TABLE IF NOT EXISTS demo_quotes (
             id TEXT PRIMARY KEY,
             account TEXT NOT NULL REFERENCES teams (id),
