@@ -222,7 +222,7 @@ async function expectPaymentOptions(product: Locator) {
   const token = product.getByRole("radiogroup", { name: "Token" });
   await expect(token.getByRole("radio")).toHaveCount(2);
   await expect(token.getByRole("radio", { name: "Test PHA", exact: true })).toBeChecked();
-  const rows = product.getByTestId("token-option");
+  const rows = token.getByTestId("token-option");
   await expect(rows.filter({ hasText: "PHA" })).toContainText("+10% bonus");
   // A stablecoin is $1.00; a spot token is at the market rate, which a quote locks.
   await expect(rows.filter({ hasText: "USDC" }).getByTestId("token-price")).toHaveText("$1.00");
@@ -359,7 +359,7 @@ test("query outages show retrying states, recover, and preserve the last account
   await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
   await recovered;
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
-  await expect(product.getByLabel("Network", { exact: true })).toBeEnabled();
+  await expect(product.getByRole("combobox", { name: "Network", exact: true })).toBeEnabled();
   await expect(trust).toContainText("Attestation verified");
   await expect(trust).not.toContainText("retrying…");
 
@@ -793,8 +793,10 @@ test("a deposit address: one verified address, any amount credited at spot, then
     await expect(form).toContainText("Sent: 0x");
     const chain = createTestClient({ mode: "anvil", chain: sepolia, transport: http(env("ANVIL_URL")) });
     await chain.mine({ blocks: 1 });
+    await product.getByRole("tab", { name: "Exact amount", exact: true }).click();
+    await expect(form).not.toBeVisible();
 
-    // The backend follows the payment as it arrives.
+    // The mounted address SDK keeps the backend following payments while its tab is inactive.
     const payment = scenes.getByTestId("address-payment").first();
     await expect(payment).toContainText("25 PHA");
     await expect(payment.getByRole("button", { name: /^View/ })).toHaveAttribute("aria-pressed", "true");
@@ -827,6 +829,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   await expect(scenes.getByTestId("refund-unavailable")).toContainText("reversed");
   await openTab(scenes, "API");
   await expect(scenes.getByTestId("webhook-event").filter({ hasText: "deposit.reversed" })).toBeVisible();
+  await product.getByRole("tab", { name: "Deposit address", exact: true }).click();
   await expect(product.locator(".pp-payments")).toContainText("25 PHA");
   // The customer sees each payment at the rate it was credited at.
   await expect(product.getByTestId("credit").first()).toContainText("25 Test PHA");
@@ -877,7 +880,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   expect((await usdcRequest).postDataJSON()).toEqual({ amount: 500, chain_id: sepolia.id, asset: "usdc" });
   await expect(product.getByTestId("locked-rate")).toContainText("1 USDC = $1.00");
-  await expect(product.getByText(/bonus/)).toHaveCount(0);
+  await expect(product.getByRole("tabpanel", { name: "Exact amount", exact: true }).getByText(/bonus/)).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.screenshot({ path: testInfo.outputPath("usdc-quote.png") });
   await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();

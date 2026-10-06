@@ -188,7 +188,7 @@ export function Product({
                     />
                   )}
                 </TabsContent>
-                <TabsContent value="address" className="pt-4">
+                <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-4">
                   {account === null ? (
                     <CheckoutSkeleton />
                   ) : (
