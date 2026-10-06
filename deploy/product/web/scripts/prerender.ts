@@ -2,10 +2,8 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { SITE_UPDATED } from "../src/content/site.ts";
-import { COMPARE_ACCESSED } from "../src/content/compare.ts";
 import { THEME_SCRIPT } from "../src/content/theme-script.ts";
-import { ROOT_MARKER } from "../src/content/template.ts";
+import { PAGES, ROOT_MARKER, type Page } from "../src/content/template.ts";
 import { renderPage } from "./prerender-page.ts";
 
 const web = resolve(import.meta.dirname, "..");
@@ -18,12 +16,12 @@ async function prerender() {
   const scriptPolicy = /\bscript-src\s+([^;\r\n]+)/i.exec(headers)?.[1];
   if (!scriptPolicy?.split(/\s+/).includes(`'sha256-${themeHash}'`)) throw new Error("Theme bootstrap CSP hash is stale");
   const { render } = await import(pathToFileURL(resolve(web, ".prerender/entry-server.js")).href) as typeof import("../src/entry-server.js");
-  for (const page of ["home", "compare"] as const) {
-    const file = resolve(assets, page === "home" ? "index.html" : "compare.html");
+  for (const page of Object.keys(PAGES) as Page[]) {
+    const file = resolve(assets, PAGES[page].file);
     const template = await readFile(file, "utf8");
     await writeFile(file, renderPage(template, render(page), ROOT_MARKER));
   }
-  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${[["/", SITE_UPDATED], ["/compare", COMPARE_ACCESSED]].map(([path, lastmod]) => `  <url><loc>${origin}${path}</loc><lastmod>${lastmod}</lastmod></url>`).join("\n")}\n</urlset>\n`;
+  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${Object.values(PAGES).map(({ path, lastmod }) => `  <url><loc>${origin}${path}</loc><lastmod>${lastmod}</lastmod></url>`).join("\n")}\n</urlset>\n`;
   await writeFile(resolve(assets, "sitemap.xml"), sitemap);
 }
 

@@ -2,15 +2,17 @@ import sdkPackage from "../../../../../sdk/js/package.json" with { type: "json" 
 import { COMPARE_ACCESSED, COMPARE_DESCRIPTION, COMPARE_KEYWORDS, COMPARE_TITLE } from "./compare.ts";
 import { FAQ, HOME_DESCRIPTION, HOME_KEYWORDS, HOME_TITLE } from "./site.ts";
 
-export type Page = "home" | "compare";
+import { PAGES, type Page } from "./template.ts";
+export type { Page } from "./template.ts";
 export interface PageMetadata { title: string; description: string; keywords: string; url: string }
 const origin = "https://pay.phala.com";
 const repo = "https://github.com/Phala-Network/phala-pay";
 
 export function pageMetadata(page: Page): PageMetadata {
+  const url = `${origin}${PAGES[page].path}`;
   return page === "home"
-    ? { title: HOME_TITLE, description: HOME_DESCRIPTION, keywords: HOME_KEYWORDS, url: `${origin}/` }
-    : { title: COMPARE_TITLE, description: COMPARE_DESCRIPTION, keywords: COMPARE_KEYWORDS, url: `${origin}/compare` };
+    ? { title: HOME_TITLE, description: HOME_DESCRIPTION, keywords: HOME_KEYWORDS, url }
+    : { title: COMPARE_TITLE, description: COMPARE_DESCRIPTION, keywords: COMPARE_KEYWORDS, url };
 }
 
 export function structuredData(page: Page): Record<string, unknown> {
