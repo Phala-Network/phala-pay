@@ -16,7 +16,7 @@ const repo = "https://github.com/Phala-Network/phala-pay";
 async function prerender() {
   const headers = await readFile(resolve(assets, "_headers"), "utf8");
   const themeHash = createHash("sha256").update(THEME_SCRIPT).digest("base64");
-  const scriptPolicy = /script-src ([^;]+)/.exec(headers)?.[1];
+  const scriptPolicy = /\bscript-src\s+([^;\r\n]+)/i.exec(headers)?.[1];
   if (!scriptPolicy?.split(/\s+/).includes(`'sha256-${themeHash}'`)) throw new Error("Theme bootstrap CSP hash is stale");
   const { render } = await import(pathToFileURL(resolve(web, ".prerender/entry-server.js")).href) as typeof import("../src/entry-server.js");
   // The web shell has no release version; use the lockstep service/SDK package version.

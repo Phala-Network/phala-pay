@@ -26,7 +26,7 @@ await test("page metadata and JSON-LD are escaped without changing Vite's client
   assert.ok(html.includes('property="og:title" content="Tokens &amp; &quot;treasury&quot;"'));
   assert.ok(html.includes('src="./src/main.tsx"'));
   assert.ok(html.includes('name="keywords" content="gateways &amp; tokens"'));
-  const json = /<script type="application\/ld\+json">(.*?)<\/script>/.exec(html)?.[1];
+  const json = /<script\b\s+type\s*=\s*"application\/ld\+json"\s*>([\s\S]*?)<\/script\s*>/i.exec(html)?.[1];
   assert.ok(json);
   const parsed: unknown = JSON.parse(json);
   assert.deepEqual(parsed, { description: value });
@@ -35,12 +35,35 @@ await test("page metadata and JSON-LD are escaped without changing Vite's client
 
 await test("theme bootstrap is synchronous and authorized by the exact CSP hash", () => {
   const html = renderPage(template, "<h1>Page</h1>", metadata, {});
-  const scripts = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)]
-    .filter((match) => !match[1]?.includes("src=") && !match[1]?.includes("application/ld+json"));
-  assert.equal(scripts.length, 1);
-  assert.equal(scripts[0]?.[2], THEME_SCRIPT);
+  assert.equal(executableInlineScriptTags(html).length, 1);
+  assert.ok(html.includes(`<script>${THEME_SCRIPT}</script>`));
   assert.ok(html.indexOf(`<script>${THEME_SCRIPT}</script>`) < html.indexOf("</head>"));
   const headers = readFileSync(new URL("../public/_headers", import.meta.url), "utf8");
   const hash = createHash("sha256").update(THEME_SCRIPT).digest("base64");
-  assert.ok(/script-src ([^;]+)/.exec(headers)?.[1]?.split(/\s+/).includes(`'sha256-${hash}'`));
+  assert.ok(/\bscript-src\s+([^;\r\n]+)/i.exec(headers)?.[1]?.split(/\s+/).includes(`'sha256-${hash}'`));
+});
+
+// Count opening tags independently of closing-tag spelling or script contents.
+function executableInlineScriptTags(html: string): string[] {
+  return [...html.matchAll(/<script\b[^>]*>/gi)]
+    .map((match) => match[0])
+    .filter((tag) => !/\ssrc\s*=/i.test(tag)
+      && !/\stype\s*=\s*(?:"application\/ld\+json"|'application\/ld\+json'|application\/ld\+json(?=\s|>))/i.test(tag));
+}
+
+await test("script detection counts uppercase and multiline tags with spaced attributes", () => {
+  const html = `<SCRIPT nonce="test">first()</SCRIPT>
+<ScRiPt
+  defer
+>second()</sCrIpT >
+<script type="module">third()</script>
+<SCRIPT SRC = "/entry.js"></SCRIPT>
+<script TYPE = 'application/ld+json'>{}</script>
+<script type = application/ld+json>{}</script>
+<scripted>Not a script element</scripted>`;
+  assert.deepEqual(executableInlineScriptTags(html), [
+    '<SCRIPT nonce="test">',
+    '<ScRiPt\n  defer\n>',
+    '<script type="module">',
+  ]);
 });
