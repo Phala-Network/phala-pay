@@ -242,13 +242,3 @@ are pinned in the image. Optional `twap` settings default to `window_s: 1800`,
 and `max_sample_jump_bps: 500`. Windows below thirty minutes are rejected. The service samples
 once/minute into PostgreSQL even without quote traffic; startup and gaps require a continuous
 window before prices become available. `config show` includes the resolved guard rails.
-
-For one migration window the parser accepts old `pricing.primary` and `pricing.check` shapes,
-maps each to a one-item role list and the FX leg to `fx`, and emits only `price`. Mixing old and
-new sections is rejected. Coin Metrics migrates as restricted evidence and fails validation:
-replace it explicitly with an eligible source set: Chainlink for stablecoins, or the documented
-PHA TWAP/Kraken plan for noncommercial rehearsal only. Restricted exchange adapters remain staging-only.
-Add an independent check and FX for volatile assets; do not reduce the source count. Existing
-route versions and RPC bindings are retained. This breaking schema ships in 0.9.0, which declares
-**no rollback to 0.8.3; restore required**. Use the pre-upgrade backup and
-[restore runbook](../deploy/RESTORE.md); no 0.8.x rollback is supported.

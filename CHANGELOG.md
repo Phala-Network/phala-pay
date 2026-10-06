@@ -40,6 +40,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 ### Removed
 
 - **Breaking:** the reusable Deploy workflow no longer accepts bootstrap_maintenance; upgrades from 0.8.x are unsupported.
+- **Breaking:** route files no longer accept the legacy pricing section; use price. Coin Metrics is no longer a recognized source.
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
