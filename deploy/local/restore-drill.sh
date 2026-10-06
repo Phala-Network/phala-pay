@@ -6,6 +6,7 @@ shopt -s inherit_errexit
 # Contract deployments use the same pinned Foundry profile as the sandbox/rehearsal.
 # shellcheck source=../contracts/common.sh
 source "$(dirname -- "$0")/../contracts/common.sh"
+source "$(dirname -- "$0")/price-fixtures.sh"
 
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
 # No bind mounts: CI's Docker daemon cannot see the checkout (see restore-drill.compose.yml).
@@ -22,6 +23,10 @@ case "$mode" in
     *) echo "usage: $0 [controlled|crash|all]" >&2; exit 64 ;;
 esac
 
+for command in docker forge cast anvil jq python3 openssl; do
+    require_command "$command"
+done
+
 # TOPUP_RESTORE_DRILL_ID lets a caller (the weekly workflow) find and clean up its own projects.
 drill_id=${TOPUP_RESTORE_DRILL_ID:-$$}
 case "$drill_id" in
@@ -36,6 +41,7 @@ export TOPUP_LOCAL_PRODUCT_IMAGE="phala-pay-reference-product:$project"
 writer_pid=
 samples_file=
 env_dir=
+compose_ready=false
 admin_dir=
 switch_lsn=
 seed_container="$project-seed"
@@ -63,7 +69,7 @@ dc() {
 
 cleanup() {
     local status=$?
-    if [ "$status" -ne 0 ] && [ -n "$env_dir" ]; then
+    if [ "$status" -ne 0 ] && [ "$compose_ready" = true ]; then
         dc logs --no-log-prefix --tail 40 postgres topup restore-check >&2 || true
     fi
     if [ -n "$writer_pid" ]; then
@@ -74,7 +80,9 @@ cleanup() {
         rm -f "$samples_file"
     fi
     docker rm -f "$seed_container" >/dev/null 2>&1 || true
-    dc --profile tools down --volumes --remove-orphans >/dev/null 2>&1 || true
+    if [ "$compose_ready" = true ]; then
+        dc --profile tools down --volumes --remove-orphans >/dev/null 2>&1 || true
+    fi
     docker image rm "$TOPUP_LOCAL_SERVICE_IMAGE" "$TOPUP_LOCAL_POSTGRES_IMAGE" \
         "$TOPUP_LOCAL_DSTACK_IMAGE" "$TOPUP_LOCAL_PRODUCT_IMAGE" >/dev/null 2>&1 || true
     if [ "$foundry_out_created" = true ] && [ -d "$root/contracts/out" ] && [ ! -L "$root/contracts/out" ]; then
@@ -1204,7 +1212,9 @@ threading.Event().wait()
 image = 'ghcr.io/foundry-rs/foundry:v1.8.3@sha256:2e4287278639262de76db72477301d5d3212fa1b1cce710d7d148750a46ce9e7'
 services = {}
 for name, chain_id, alias in [('anvil', 11155111, 'sepolia.drill-a.test'),
-                              ('anvil-base', 84532, 'base.drill-a.test')]:
+                              ('anvil-base', 84532, 'base.drill-a.test'),
+                              ('anvil-mainnet-price', 1, 'mainnet.drill-a.test'),
+                              ('anvil-base-mainnet-price', 8453, 'base-mainnet.drill-a.test')]:
     services[name] = {
         'image': image, 'entrypoint': ['anvil'],
         'command': ['--host', '0.0.0.0', '--chain-id', str(chain_id),
@@ -1215,23 +1225,39 @@ for name, chain_id, alias in [('anvil', 11155111, 'sepolia.drill-a.test'),
                                  'http://127.0.0.1:8545'],
                         'interval': '2s', 'timeout': '2s', 'retries': 30},
         'restart': 'no'}
+    if chain_id in (1, 8453):
+        services[name]['command'] += ['--timestamp', '${REHEARSAL_PRICE_ANVIL_TIMESTAMP:-1}']
+        services[name]['networks']['default']['aliases'].append(
+            'mainnet.drpc.test' if chain_id == 1 else 'base-mainnet.drill-b.test')
 services['chain-b'] = {
     'image': 'python:3.14-slim-trixie@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2',
     'command': ['python3', '-c', proxy],
     'networks': {'default': {'aliases': ['sepolia.drill-b.test', 'base.drill-b.test']}},
     'restart': 'no'}
+services['price-stub'] = {
+    'image': services['chain-b']['image'],
+    'command': ['python3', '/etc/price-stub/server.py', '8080'],
+    'networks': {'default': {'aliases': ['api.kraken.com', 'data-api.binance.vision']}},
+    'configs': [{'source': 'price_stub_server', 'target': '/etc/price-stub/server.py'}],
+    'restart': 'no'}
 with open(sys.argv[1], 'w') as output:
-    json.dump({'services': services}, output)
+    json.dump({'services': services, 'configs': {
+        'price_stub_server': {'content': '${TOPUP_PRICE_STUB_SERVER}'}}}, output)
 with open(sys.argv[2], 'w') as output:
     json.dump({'services': {
         'heartbeat': {'command': ['topup', 'heartbeat', '--interval-s', '15']},
-        'topup': {'command': ['topup', 'run', '--config', '/etc/topup/topup.yaml',
+        'topup': {'environment': {
+                     'TOPUP_TEST_KRAKEN_ENDPOINT': 'http://price-stub:8080/0/public/Ticker',
+                     'TOPUP_TEST_BINANCE_ENDPOINT': 'http://price-stub:8080/api/v3/ticker/price'},
+                 'command': ['topup', 'run', '--config', '/etc/topup/topup.yaml',
                              '--public-origin', 'http://topup:8080',
                              '--head-poll-interval-s', '1', '--finalized-poll-interval-s', '1']}
     }}, output)
 PYCHAINS
 chain_overlay=(-f "$admin_dir/chains.json")
 service_overlay=(-f "$admin_dir/service.json")
+export TOPUP_PRICE_STUB_SERVER REHEARSAL_PRICE_ANVIL_TIMESTAMP
+TOPUP_PRICE_STUB_SERVER="$(<"$root/deploy/local/price_stub.py")"
 
 compose_version=$(docker compose version --short)
 if [ "$(printf '%s\n' 2.24.4 "$compose_version" | sort -V | head -1)" != 2.24.4 ]; then
@@ -1243,6 +1269,7 @@ dc --profile tools config --format json |
     echo "the drill stack bind-mounts a host path; CI's Docker daemon cannot see it" >&2
     exit 1
 }
+compose_ready=true
 
 dc build --build-arg BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" postgres dstack-simulator topup
 if [ "$mode" = controlled ]; then
@@ -1251,21 +1278,11 @@ fi
 # Deploy the canonical factory/implementation and Multicall3, then install local token/oracle
 # runtimes at the configured addresses so the merchant's signed fixture records stay valid.
 export FOUNDRY_OUT="$CONTRACTS_DIR/out"
-dc up -d --wait anvil anvil-base chain-b
-# The weekly Docker-only runner has no Foundry installation. Reuse the pinned image's tools
-# locally for the deployment helpers, in a task directory removed by the cleanup trap.
-if ! command -v forge >/dev/null || ! command -v cast >/dev/null; then
-    [ "$(uname -s)" = Linux ] || die "install Foundry to run the drill on this platform"
-    mkdir "$admin_dir/bin"
-    container=$(dc ps -q anvil)
-    for tool in forge cast; do
-        docker cp "$container:/usr/local/bin/$tool" "$admin_dir/bin/$tool"
-        chmod +x "$admin_dir/bin/$tool"
-    done
-    export PATH="$admin_dir/bin:$PATH"
-fi
-require_command forge
-require_command cast
+REHEARSAL_PRICE_ANVIL_TIMESTAMP=$(($(date +%s) - 1950))
+dc up -d --wait anvil anvil-base chain-b anvil-mainnet-price anvil-base-mainnet-price price-stub
+mainnet_price_rpc_url="http://$(dc port anvil-mainnet-price 8545)"
+base_mainnet_price_rpc_url="http://$(dc port anvil-base-mainnet-price 8545)"
+install_anvil_price_fixtures "$mainnet_price_rpc_url" "$base_mainnet_price_rpc_url"
 for chain in sepolia base-sepolia; do
     service=anvil
     [ "$chain" != base-sepolia ] || service=anvil-base
@@ -1310,14 +1327,20 @@ done
 jq '
     .rpc_companies.tenderly.domains = ["drill-a.test"]
     | .rpc_companies.publicnode.domains = ["drill-b.test"]
+    | .rpc_companies.drpc.domains = ["drpc.test"]
     | .rpc_groups |= with_entries(.key as $group | .value.members = [.value.members[0]]
         | .value.members[0] |= (del(.sealed_key) | .url = (if $group == "provider-a" then "http://sepolia.drill-a.test:8545"
               elif $group == "provider-b" then "http://sepolia.drill-b.test:18545"
               elif $group == "base-sepolia-a" then "http://base.drill-a.test:8545"
               elif $group == "base-sepolia-b" then "http://base.drill-b.test:18546"
-              else error("unexpected RPC group") end)))' "$admin_dir/config.json" >"$env_dir/topup.yaml"
+              elif $group == "mainnet-a" then "http://mainnet.drill-a.test:8545"
+              elif $group == "mainnet-b" then "http://mainnet.drpc.test:8545"
+              elif $group == "base-mainnet-a" then "http://base-mainnet.drill-a.test:8545"
+              elif $group == "base-mainnet-b" then "http://base-mainnet.drill-b.test:8545"
+              else error("unexpected RPC group") end)))' "$admin_dir/config.json" >"$admin_dir/topup.json"
 docker run --rm -i --network none "$TOPUP_LOCAL_SERVICE_IMAGE" topup config check /dev/stdin \
-    <"$env_dir/topup.yaml"
+    <"$admin_dir/topup.json"
+mv "$admin_dir/topup.json" "$env_dir/topup.yaml"
 
 seed_drill_volumes
 dc up -d keys s3-init mock-product

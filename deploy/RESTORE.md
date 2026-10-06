@@ -460,9 +460,12 @@ source heartbeat. `--expected-heartbeat-at` retains its legacy name but takes th
 The local drill starts disposable Anvil chains for every configured route, with Sepolia and Base
 Sepolia chain IDs, canonical factories and Multicall3, and local token/oracle fixtures. A/B groups
 use distinct domains and ports over each chain's shared state; all staging RPC members are replaced.
-Its own invocation sets a 15-second heartbeat cadence. On Linux, missing Foundry tools are
-extracted from the pinned Anvil image into the drill's temporary directory; other platforms
-require Foundry installed locally. Cleanup removes the chains and their
+Ethereum and Base mainnet observation groups use local production-chain-ID Anvils with the
+CVM rehearsal's shared Chainlink, Uniswap V2, and sequencer fixtures; exchange responses come
+from the same local price stub. Its own invocation sets a 15-second heartbeat cadence.
+The drill requires Foundry v1.8.3 and the pinned contract submodules (`git submodule update --init
+--recursive`); the weekly workflow installs the same Foundry version as the CVM rehearsal.
+Cleanup removes the chains and their
 project volumes together with the rest of the drill.
 The local drill may switch its isolated replacement to service mode; the staging isolation drill
 above remains read-only and cannot attest full merchant-service RTO.
