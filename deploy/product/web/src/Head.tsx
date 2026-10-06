@@ -34,6 +34,7 @@ export function renderHead(metadata: PageMetadata, graph: Record<string, unknown
     <meta name="twitter:title" content={metadata.title} />
     <meta name="twitter:description" content={metadata.description} />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content={image} />
     <meta name="twitter:image:alt" content={alt} />
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(graph).replaceAll("<", "\\u003c") }} />
   </>);

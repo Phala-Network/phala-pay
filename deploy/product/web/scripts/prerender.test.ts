@@ -81,6 +81,8 @@ await test("home and comparison head tags use their own content metadata", () =>
     const metadata = pageMetadata(page);
     const document = parse(`<head>${renderHead(metadata, structuredData(page))}</head>`);
     assert.equal(text(element(document, "title")), metadata.title);
+    assert.equal(attribute(element(document, "meta", { name: "twitter:image" }), "content"),
+      attribute(element(document, "meta", { property: "og:image" }), "content"));
     assert.equal(attribute(element(document, "link", { rel: "canonical" }), "href"), metadata.url);
     assert.equal(attribute(element(document, "meta", { name: "keywords" }), "content"), metadata.keywords);
   }
