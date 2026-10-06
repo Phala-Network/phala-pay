@@ -26,5 +26,5 @@ export function QueryState({ view, className }: {
   className?: string;
 }) {
   const message = view.error ?? (view.paused ? "Updates paused." : null);
-  return message === null ? null : <p className={cn("text-xs text-muted-foreground", className)} role="status">{message}</p>;
+  return message === null ? null : <p className={cn("text-sm text-muted-foreground", className)} role="status">{message}</p>;
 }

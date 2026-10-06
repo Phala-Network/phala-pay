@@ -4,8 +4,9 @@ import { RadioGroup as RadioGroupPrimitive } from "radix-ui"
 
 /**
  * A single choice among a few short options (up to four), side by side: a radio group, so the
- * arrow keys move between options and Tab enters at the chosen one. In forced-colors mode the
- * chosen option takes the system highlight.
+ * arrow keys move between options and Tab enters at the chosen one. Each option's target is 44px
+ * tall, over the track's padding. In forced-colors mode the chosen option takes the system
+ * highlight.
  */
 function SegmentedControl({
   className,
@@ -32,7 +33,7 @@ function SegmentedControlItem({
     <RadioGroupPrimitive.Item
       data-slot="segmented-control-item"
       className={cn(
-        "inline-flex min-w-max flex-1 items-center justify-center gap-1.5 rounded-sm px-3 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 data-checked:bg-background data-checked:text-foreground data-checked:ring-1 data-checked:ring-foreground/15 dark:data-checked:bg-input/40 forced-colors:data-checked:forced-color-adjust-none forced-colors:data-checked:bg-[Highlight] forced-colors:data-checked:text-[HighlightText] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "relative inline-flex min-w-max flex-1 items-center justify-center gap-1.5 rounded-sm px-3 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 data-checked:bg-background data-checked:text-foreground data-checked:ring-1 data-checked:ring-foreground/15 dark:data-checked:bg-input/40 forced-colors:data-checked:forced-color-adjust-none forced-colors:data-checked:bg-[Highlight] forced-colors:data-checked:text-[HighlightText] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 before:absolute before:inset-x-0 before:-inset-y-1.5",
         className
       )}
       {...props}

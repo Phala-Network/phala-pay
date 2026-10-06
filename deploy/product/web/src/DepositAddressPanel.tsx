@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { Account, Asset, DepositAddressResponse, Network } from "./api.js";
-import { ExplorerLink, InfoTip, describe, errorMessage, isShortOfTokens, loadSdk, wallet } from "./common.js";
+import { ExplorerLink, TOUCH, describe, errorMessage, isShortOfTokens, loadSdk, wallet } from "./common.js";
 import { assetOf, networkOf } from "./chains.js";
 import { atomicAmount, dollars, price, signedDollars, statusLabel, tokenName, tokens } from "./format.js";
 import { FundWallet } from "./Funding.js";
@@ -51,9 +51,9 @@ export function DepositAddressPanel({
 
   if (created === null || created.client_secret === undefined) {
     return (
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-5">
         {picker}
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
           <Button
             type="button"
             size="lg"
@@ -66,13 +66,9 @@ export function DepositAddressPanel({
           >
             {show.isPending ? "Getting your address…" : "Show my deposit address"}
           </Button>
-          <p className="flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
-            Any amount, any time, at the market rate
-            <InfoTip label="About the deposit address">
-              Your workspace's own address for adding credits of any amount, at any time: one address for every supported
-              token on every supported network, reusable, and credited at the market rate when a payment arrives. Use
-              it when you pay from an exchange or cannot hit an exact amount.
-            </InfoTip>
+          <p className="text-sm text-pretty text-muted-foreground">
+            Your workspace's own address, for any amount at any time: one address for every token on every network,
+            credited at the market rate when a payment arrives.
           </p>
         </div>
         {show.error !== null && (
@@ -90,8 +86,8 @@ export function DepositAddressPanel({
       <Suspense
         fallback={
           <div className="flex flex-col gap-3" aria-hidden="true">
-            <Skeleton className="mx-auto size-40" />
-            <Skeleton className="h-10 w-full" />
+            <Skeleton className="mx-auto size-56" />
+            <Skeleton className="h-11 w-full" />
           </div>
         }
       >
@@ -137,10 +133,10 @@ function Credits({ account }: { account: Account }) {
   }
   return (
     <section aria-labelledby="credits-title" className="flex flex-col gap-2">
-      <h4 id="credits-title" className="text-sm font-medium">
+      <h5 id="credits-title" className="text-sm font-semibold">
         Your credits
-      </h4>
-      <ul className="flex flex-col divide-y rounded-lg border text-xs" data-testid="credits">
+      </h5>
+      <ul className="flex flex-col divide-y border-y text-sm" data-testid="credits">
         {deposits.map((row) => {
           const network = networkOf(networks, row.chain_id);
           const token = assetOf(network, row.asset);
@@ -149,8 +145,8 @@ function Credits({ account }: { account: Account }) {
           const reversed = row.status === "reversed" || row.status === "rejected";
           const valued = row.exchange_rate === null ? null : `${price(row.exchange_rate)} / ${symbol}`;
           return (
-            <li key={row.id} data-testid="credit" className="flex items-center justify-between gap-3 px-3 py-2.5">
-              <span className="flex min-w-0 flex-col gap-0.5">
+            <li key={row.id} data-testid="credit" className="flex items-start justify-between gap-3 py-2.5">
+              <span className="flex min-w-0 flex-col">
                 <span className="font-medium tabular-nums">
                   {tokens(row.amount_atomic, tokenName(symbol, testnet), token?.decimals)}
                 </span>
@@ -164,13 +160,8 @@ function Credits({ account }: { account: Account }) {
                         : `Credited at ${valued}`}
                 </span>
               </span>
-              <span className="flex shrink-0 flex-col items-end gap-0.5">
-                <span
-                  className={cn(
-                    "text-sm font-medium tabular-nums",
-                    reversed ? "text-muted-foreground line-through" : "text-success",
-                  )}
-                >
+              <span className="flex shrink-0 flex-col items-end">
+                <span className={cn("font-medium tabular-nums", reversed && "text-muted-foreground line-through")}>
                   {row.amount === null ? "—" : `+${dollars(row.amount)}`}
                 </span>
                 {row.bonus !== null && row.bonus > 0 && (
@@ -235,9 +226,10 @@ function PayFromWallet({
       <div className="flex gap-2">
         <Input
           id={id}
-          className="tabular-nums"
+          className={cn("tabular-nums", TOUCH)}
           inputMode="decimal"
           value={amount}
+          aria-invalid={invalid !== null}
           // Fixed while the wallet confirms the transfer: the transfer is for this amount.
           disabled={send.isPending}
           onChange={(event) => {
@@ -246,11 +238,11 @@ function PayFromWallet({
             send.reset();
           }}
         />
-        <Button type="submit" variant="secondary" disabled={send.isPending || to === ""}>
+        <Button type="submit" variant="secondary" className={TOUCH} disabled={send.isPending || to === ""}>
           {send.isPending ? "Confirm in your wallet…" : "Send"}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground wrap-anywhere empty:hidden" aria-live="polite">
+      <p className="text-sm text-muted-foreground wrap-anywhere empty:hidden" aria-live="polite">
         {invalid ?? (
           <>
             {send.isSuccess && (

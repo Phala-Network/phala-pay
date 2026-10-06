@@ -411,6 +411,7 @@ import "./pay-theme.css";
   --pp-color-text: var(--app-color-text);
   --pp-color-text-muted: var(--app-color-text-muted);
   --pp-color-border: var(--app-color-border);
+  --pp-color-input: var(--app-color-input-border);
   --pp-color-primary: var(--app-color-primary);
   --pp-color-primary-foreground: var(--app-color-on-primary);
   --pp-color-focus: var(--app-color-focus-ring);

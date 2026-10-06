@@ -84,32 +84,38 @@ function DemoContent({ theme }: { theme: Theme }) {
 
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="grid items-start gap-x-8 gap-y-12 lg:grid-cols-[25rem_minmax(0,1fr)] xl:grid-cols-[27.5rem_minmax(0,1fr)] 2xl:gap-x-10">
-        <Product
-          account={views.account}
-          networks={views.networks}
-          method={method}
-          onMethodChange={setMethod}
-          session={session}
-          onQuote={(created) => {
-            setSession(created);
-            setSelected({ kind: "quote", id: created.quote });
-          }}
-          onNewTopUp={() => setSession(null)}
-          onCredited={() => void queryClient.invalidateQueries({ queryKey: keys.account })}
-          address={address}
-          onAddress={setAddress}
-          appearance={appearance}
-        />
-        <Backend
-          account={views.account}
-          selected={selected}
-          timeline={views.timeline}
-          trust={views.trust}
-          address={views.address}
-          networks={views.networks}
-          onSelect={setSelected}
-        />
+      {/* Two sibling cards at their natural heights: the customer's view, then (beside it from lg)
+          what the backend sees. */}
+      <div className="grid items-start gap-6 lg:grid-cols-12">
+        <div className="min-w-0 lg:col-span-5">
+          <Product
+            account={views.account}
+            networks={views.networks}
+            method={method}
+            onMethodChange={setMethod}
+            session={session}
+            onQuote={(created) => {
+              setSession(created);
+              setSelected({ kind: "quote", id: created.quote });
+            }}
+            onNewTopUp={() => setSession(null)}
+            onCredited={() => void queryClient.invalidateQueries({ queryKey: keys.account })}
+            address={address}
+            onAddress={setAddress}
+            appearance={appearance}
+          />
+        </div>
+        <div className="min-w-0 lg:col-span-7">
+          <Backend
+            account={views.account}
+            selected={selected}
+            timeline={views.timeline}
+            trust={views.trust}
+            address={views.address}
+            networks={views.networks}
+            onSelect={setSelected}
+          />
+        </div>
       </div>
     </TooltipProvider>
   );

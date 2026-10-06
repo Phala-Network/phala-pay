@@ -307,8 +307,69 @@ async function watchConsole(page: Page): Promise<string[]> {
 }
 
 /**
+ * The demo at a phone's width: every control is a 44px target around its centre (its own box, its
+ * label's, or a hit area it draws), save a link inside a sentence (WCAG 2.5.8's inline exception);
+ * and no card holds a boxed part that holds another (a card's parts are set apart by dividers).
+ */
+async function expectTouchLayout(page: Page, state: string): Promise<void> {
+  const { small, nested } = await page.locator("#demo-root").evaluate((root) => {
+    const small: string[] = [];
+    const controls = root.querySelectorAll<HTMLElement>(
+      "a[href], button, input, select, textarea, summary, [role=tab], [role=radio]",
+    );
+    for (const control of controls) {
+      if (control.getAttribute("aria-hidden") === "true" || !control.checkVisibility()) {
+        continue;
+      }
+      const sentence = control.closest("p");
+      if (control instanceof HTMLAnchorElement && sentence !== null && sentence.textContent.trim() !== control.textContent.trim()) {
+        continue;
+      }
+      // A control in a label or an input group is reached through it: the box is the target.
+      const target = control.closest("label, [data-slot=input-group]") ?? control;
+      target.scrollIntoView({ block: "center", inline: "center" });
+      const box = target.getBoundingClientRect();
+      // 21px either side of the centre: a 44px target, as hit testing rounds to whole pixels.
+      const [x, y, reach] = [box.left + box.width / 2, box.top + box.height / 2, 21];
+      const stray = [[x - reach, y], [x + reach, y], [x, y - reach], [x, y + reach]]
+        .map(([px = 0, py = 0]) => document.elementFromPoint(px, py))
+        .find((hit) => hit === null || !target.contains(hit));
+      if (stray !== undefined) {
+        const name = control.getAttribute("aria-label") ?? control.textContent.trim();
+        const hit = stray === null ? "nothing" : `${stray.tagName.toLowerCase()}.${[...stray.classList].slice(0, 3).join(".")}`;
+        small.push(`${control.tagName.toLowerCase()} "${name}" (${Math.round(box.width)}×${Math.round(box.height)}, reaches ${hit})`);
+      }
+    }
+    window.scrollTo(0, 0);
+    // A box: an element framed on every side, other than a control.
+    const boxed = (element: Element) => {
+      if (element.matches("a, button, input, select, textarea, label, summary, [role=radio], [role=tab], [data-slot=input-group]")) {
+        return false;
+      }
+      const style = getComputedStyle(element);
+      return (["Top", "Right", "Bottom", "Left"] as const).every(
+        (side) => style[`border${side}Style`] !== "none" && parseFloat(style[`border${side}Width`]) > 0,
+      ) && !/rgba\(.*, 0\)$/.test(style.borderTopColor);
+    };
+    const nested: string[] = [];
+    for (const element of root.querySelectorAll("*")) {
+      if (!boxed(element)) continue;
+      let depth = 1;
+      for (let parent = element.parentElement; parent !== null && parent !== root; parent = parent.parentElement) {
+        if (boxed(parent)) depth += 1;
+      }
+      if (depth > 2) nested.push(`${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")} (${depth} deep)`);
+    }
+    return { small, nested };
+  });
+  expect(small, `${state}: targets under 44px at 390px`).toEqual([]);
+  expect(nested, `${state}: cards nested more than one level`).toEqual([]);
+}
+
+/**
  * Checks the page with axe at its width and at a phone's (390px), each in the theme it is in, then
- * in the other (switched with the header's toggle, and back): no serious or critical violation.
+ * in the other (switched with the header's toggle, and back): no serious or critical violation. At
+ * 390px, the demo's targets and cards too.
  */
 async function expectAccessible(page: Page, state: string): Promise<void> {
   const viewport = page.viewportSize() ?? { width: 1360, height: 1000 };
@@ -323,6 +384,9 @@ async function expectAccessible(page: Page, state: string): Promise<void> {
         .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
         .map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(" ")).join(", ")}`);
       expect(serious, `${state}, ${width}px, ${theme} theme`).toEqual([]);
+      if (width === 390 && pass === 0) {
+        await expectTouchLayout(page, state);
+      }
       await page.getByRole("button", { name: "Dark theme" }).click();
     }
   }
@@ -422,7 +486,7 @@ test("query outages show retrying states, recover, and preserve the last account
     }
   });
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   await expect(product).toContainText("Account is unavailable right now; retrying…", { timeout: 15_000 });
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const trust = await openTab(scenes, "Trust");
@@ -464,7 +528,7 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
     });
   });
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   await expect(scenes).toContainText("Timeline is unavailable for this request.");
@@ -490,7 +554,7 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
     });
   });
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
@@ -535,7 +599,7 @@ for (const sent of [false, true]) {
       });
     });
     await page.goto(env("SITE_URL"));
-    const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+    const product = page.getByRole("region", { name: "Customer view" });
     await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
     await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
@@ -574,7 +638,7 @@ test("a swept payment keeps polling until its webhook arrives", async ({ page, t
     });
   });
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "current");
@@ -615,7 +679,7 @@ for (const status of ["reversed", "rejected"] as const) {
       });
     });
     await page.goto(env("SITE_URL"));
-    const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+    const product = page.getByRole("region", { name: "Customer view" });
     await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
     await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
@@ -669,8 +733,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
     "https://github.com/Phala-Network/phala-pay/blob/main/docs/self-hosting.md",
   );
   await expectMetadata(page);
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
-  await expect(product.getByTestId("testnet-badge")).toHaveText("Testnet");
+  const product = page.getByRole("region", { name: "Customer view" });
+  await expect(product.getByTestId("testnet-notice")).toHaveText("Testnet demo: test tokens only.");
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const preview = scenes.getByRole("list", { name: "The steps of a payment" });
   await expect(preview).toBeVisible();
@@ -701,10 +765,11 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   const quoteRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   expect((await quoteRequest).postDataJSON()).toEqual({ amount: 2000, chain_id: sepolia.id, asset: "pha" });
-  // The quote's locked rate; the SDK's status line holds the one countdown.
-  const rate = product.getByTestId("locked-rate");
-  await expect(rate).toContainText("Locked rate · Test PHA");
-  await expect(rate).toContainText("1 PHA = $0.25");
+  // The checkout's summary states the quote: 80 PHA for $20.00 (its rate is in the backend's
+  // timeline); the SDK's status line holds the one countdown.
+  const summary = product.locator(".pp-summary");
+  await expect(summary).toContainText("80 PHA");
+  await expect(summary).toContainText("$20.00");
   await expect(product.getByLabel("Time left to pay")).toHaveText(/^1[45]:\d\d$/);
   await expect(product.getByText(/\d+:\d\d$/)).toHaveCount(1);
   await expectAccessible(page, "a quote awaiting payment");
@@ -714,7 +779,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   const created = await openStep(timeline, "quote_created");
   await expect(created).toContainText("1 PHA = $0.25");
   await expect(created).toContainText("80 PHA");
-  const order = (await scenes.getByTestId("meta-order").getAttribute("title"))?.match(/^order_[0-9a-f]{12}$/)?.[0];
+  const order = (await scenes.getByTestId("meta-order").locator("[title]").getAttribute("title"))?.match(/^order_[0-9a-f]{12}$/)?.[0];
   expect(order).toBeDefined();
   // Nothing of the backend shows in the product.
   await expect(product).not.toContainText("order_");
@@ -727,8 +792,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   const confirmation = product.getByTestId("payment-credited");
   await expect(confirmation).toContainText("Payment credited");
   await expect(confirmation).toContainText("$20.00");
-  // Nothing pending once credited: the locked rate is gone with the countdown.
-  await expect(rate).toHaveCount(0);
+  // Nothing pending once credited: the checkout is gone with its countdown.
+  await expect(summary).toHaveCount(0);
   // The demo merchant's +10% PHA bonus, a line of its own: $20.00 and $2.00.
   await expect(product.getByTestId("bonus-credited")).toContainText("+$2.00", { timeout: 10_000 });
   await expect(confirmation).toContainText("Total$22.00");
@@ -757,7 +822,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   // only reach the treasury), indexed by the service once final.
   const sweeps = (await openTab(scenes, "Sweeps")).getByRole("region", { name: "PHA on Sepolia testnet" });
   await expect(sweeps.getByTestId("unswept")).toContainText("80 PHA in 1 forwarder", { timeout: 30_000 });
-  await sweeps.getByRole("button", { name: "Sweep to treasury from my wallet" }).click();
+  await sweeps.getByRole("button", { name: "Sweep from wallet" }).click();
   await expect(sweeps.getByTestId("flush-status")).toContainText("Flush sent: 0x");
   await expectComplete(timeline, ["swept"]);
   expect(await tokenBalance(env("TREASURY"))).toBe(parseEther("80"));
@@ -832,24 +897,24 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await page.setViewportSize({ width: 420, height: 900 });
   await page.screenshot({ path: testInfo.outputPath("mobile-dark.png"), fullPage: true });
 
-  // A quote that ends unpaid, expired or canceled, drops its locked rate too.
+  // A quote that ends unpaid, expired or canceled, says so; another top-up starts from the button.
   await page.setViewportSize({ width: 1360, height: 1000 });
-  const followed = scenes.locator('[title^="qt_"]');
+  // The quote the backend follows, its id the title of the header's Quote.
+  const followed = scenes.getByTestId("meta-selected").locator('[title^="qt_"]');
   for (const [end, message] of [
     ["expire", "Quote expired"],
     ["cancel", "Quote canceled"],
   ] as const) {
     const before = await followed.getAttribute("title");
-    await product.getByRole("button", { name: "Add more credits" }).click();
+    await product.getByRole("button", { name: "Start a new top-up" }).click();
     await product.getByText("$5", { exact: true }).click();
     await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
-    await expect(rate).toContainText("1 PHA = $0.25");
     await expect(followed).not.toHaveAttribute("title", before ?? "");
+    await expect(summary).toContainText("20 PHA");
     const quote = (await followed.getAttribute("title")) ?? "";
     const ended = await fetch(`${env("SERVICE_URL")}/_test/quotes/${quote}/${end}`, { method: "POST" });
     expect(ended.status).toBe(200);
     await expect(product.getByRole("status").first()).toContainText(message, { timeout: 10_000 });
-    await expect(rate).toHaveCount(0);
   }
   expect(problems).toEqual([]);
 });
@@ -861,7 +926,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   const problems = await watchConsole(page);
   await installWallet(page);
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
 
@@ -881,7 +946,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   await expect(tokensOnNetwork).toHaveText(["Test PHA, Test USDC", "Test PHA, Test USDT"]);
   await expect(tokensOnNetwork.first().locator("xpath=..")).toContainText("Sepolia testnet");
   await expect(tokensOnNetwork.last().locator("xpath=..")).toContainText("Base Sepolia testnet");
-  const address = (await scenes.getByTestId("deposit-address").textContent()) ?? "";
+  const address = (await scenes.getByTestId("deposit-address").getByRole("link").getAttribute("href"))?.split("/").at(-1) ?? "";
   expect(address).toMatch(/^0x[0-9a-fA-F]{40}$/);
   // The SDK's <DepositAddress> shows the customer the same address to copy, and the networks'
   // typical credit time from the address's public view.
@@ -911,7 +976,8 @@ test("a deposit address: one verified address, any amount credited at spot, then
     // The mounted address SDK keeps the backend following payments while its tab is inactive.
     const payment = scenes.getByTestId("address-payment").first();
     await expect(payment).toContainText("25 PHA");
-    await expect(payment.getByRole("button", { name: /^View/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(payment).toHaveAttribute("aria-current", "true");
+    await expect(payment).toContainText("Viewing");
     await expectComplete(timeline, ["sent", "received", "credited", "webhook_received"]);
 
     // Before it is final, the service's finality watch proves the transaction dropped (here, the
@@ -965,7 +1031,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   const problems = await watchConsole(page);
   await installWallet(page);
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const helper = page.getByRole("note", { name: "Test tokens" });
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
@@ -991,7 +1057,10 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   const usdcRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   expect((await usdcRequest).postDataJSON()).toEqual({ amount: 500, chain_id: sepolia.id, asset: "usdc" });
-  await expect(product.getByTestId("locked-rate")).toContainText("1 USDC = $1.00");
+  await expect(product.locator(".pp-summary")).toContainText("5 USDC");
+  await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
+    "1 USDC = $1.00",
+  );
   await expect(product.getByRole("tabpanel", { name: "Exact amount", exact: true }).getByText(/bonus/)).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.screenshot({ path: testInfo.outputPath("usdc-quote.png") });
@@ -1006,7 +1075,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
 
   // Base Sepolia: its own token list and faucets; test PHA mints there, from the wallet on that
   // network, and a PHA quote there earns the bonus, at staging's rate, formatted.
-  await product.getByRole("button", { name: "Add more credits" }).click();
+  await product.getByRole("button", { name: "Start a new top-up" }).click();
   await chooseNetwork(product, "Base Sepolia testnet");
   const tokens = product.getByRole("radiogroup", { name: "Token" });
   await expect(tokens.getByRole("radio")).toHaveCount(2);
@@ -1029,8 +1098,11 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   const baseRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   expect((await baseRequest).postDataJSON()).toEqual({ amount: 2000, chain_id: baseSepolia.id, asset: "pha" });
-  await expect(product.getByTestId("locked-rate")).toContainText("1 PHA = $0.06041");
-  await expect(product.getByTestId("testnet-badge")).toBeVisible();
+  await expect(product.locator(".pp-summary")).toContainText("$20.00");
+  await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
+    "1 PHA = $0.06041",
+  );
+  await expect(product.getByTestId("testnet-notice")).toBeVisible();
   await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$20.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toContainText("+$2.00", { timeout: 10_000 });
@@ -1044,13 +1116,16 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   const usdt = { rpc: env("BASE_ANVIL_URL"), token: env("BASE_USDT_ADDRESS") };
   await helper.getByRole("button", { name: "Mint 1,000 test USDT" }).click();
   await expect.poll(() => tokenBalance(env("PAYER_ADDRESS"), usdt)).toBe(parseUnits("1000", 6));
-  await product.getByRole("button", { name: "Add more credits" }).click();
+  await product.getByRole("button", { name: "Start a new top-up" }).click();
   await product.getByRole("radio", { name: "Test USDT", exact: true }).check({ force: true });
   await product.getByText("$5", { exact: true }).click();
   const usdtRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   expect((await usdtRequest).postDataJSON()).toEqual({ amount: 500, chain_id: baseSepolia.id, asset: "usdt" });
-  await expect(product.getByTestId("locked-rate")).toContainText("1 USDT = $1.00");
+  await expect(product.locator(".pp-summary")).toContainText("5 USDT");
+  await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
+    "1 USDT = $1.00",
+  );
   await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$5.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
@@ -1071,7 +1146,7 @@ test("a quote a wallet cannot cover sends nothing; the mint beside it funds that
     { name: "Empty Wallet", account: empty },
   ]);
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   const helper = page.getByRole("note", { name: "Test tokens" });
   const pay = product.getByRole("button", { name: "Pay with crypto (Empty Wallet)" });
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
@@ -1094,12 +1169,12 @@ test("a quote a wallet cannot cover sends nothing; the mint beside it funds that
   // $500 in test PHA at 0.25 USD per PHA: 2,000 PHA, more than the default mint, which grows to
   // cover the quote; paying first is refused, and the mint beside the refusal mints to the wallet
   // that paid, not the first one announced.
-  await product.getByRole("button", { name: "Add more credits" }).click();
+  await product.getByRole("button", { name: "Start a new top-up" }).click();
   await product.getByRole("radio", { name: "Test PHA", exact: true }).check({ force: true });
   await product.getByText("Custom", { exact: true }).click();
   await product.getByLabel("Custom amount (USD)").fill("500");
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
-  await expect(product.getByTestId("locked-rate")).toContainText("1 PHA = $0.25");
+  await expect(product.locator(".pp-summary")).toContainText("2,000 PHA");
   await expect(helper.getByRole("button", { name: "Mint 2,000 test PHA" })).toBeVisible();
   await pay.click();
   await expect(product.getByText("Your wallet holds 0 PHA, less than the 2,000 PHA to pay. Nothing was sent.")).toBeVisible();
@@ -1127,7 +1202,7 @@ test("the deposit address: a canceled mint mints nothing; the amount typed sizes
   const account = await emptyAccount(2);
   const { forwarded, holdSends } = await installWallet(page, [{ name: "Test Wallet", account }]);
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   const helper = page.getByRole("note", { name: "Test tokens" });
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
 
@@ -1344,13 +1419,13 @@ test("loading home islands preserves the original prerendered hero", async ({ pa
     const originalHeader = await page.getByRole("banner").elementHandle();
     const originalFooter = await page.getByRole("contentinfo").elementHandle();
     releaseEntry?.();
-    await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Customer view" })).toBeVisible();
     expect(await original.evaluate((node) => node.isConnected)).toBe(true);
     expect(await originalHeader.evaluate((node) => node.isConnected)).toBe(true);
     expect(await originalFooter.evaluate((node) => node.isConnected)).toBe(true);
     await page.getByRole("button", { name: "Dark theme" }).click();
     await expect(page.locator("html")).toHaveClass(/dark/);
-    await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Customer view" })).toBeVisible();
   } finally {
     releaseEntry?.();
   }
@@ -1360,7 +1435,7 @@ test("loading home islands preserves the original prerendered hero", async ({ pa
 test("forced colors keep the chosen amount, the active tab, and keyboard focus visible", async ({ page }) => {
   await page.emulateMedia({ forcedColors: "active" });
   await page.goto(env("SITE_URL"));
-  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  const product = page.getByRole("region", { name: "Customer view" });
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
   const style = (locator: Locator, property: "backgroundColor" | "outlineStyle") =>
     locator.evaluate((element, name) => getComputedStyle(element)[name], property);
@@ -1397,7 +1472,7 @@ test("home and comparison hydrate in either theme without CSP violations or Reac
         const problems = await watchConsole(page);
         await page.goto(new URL(path, env("SITE_URL")).href);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-        if (path === "") await expect(page.getByRole("region", { name: "Acme Cloud · Billing" })).toBeVisible();
+        if (path === "") await expect(page.getByRole("region", { name: "Customer view" })).toBeVisible();
         const next = colorScheme === "dark" ? "light" : "dark";
         const theme = page.getByRole("button", { name: "Dark theme" });
         await expect(theme).toHaveAttribute("aria-pressed", String(colorScheme === "dark"));

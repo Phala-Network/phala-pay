@@ -1,7 +1,6 @@
-import { ChevronRight, Info } from "lucide-react";
-import type { ComponentProps, ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
+import { useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { Hash } from "@/components/ui/hash";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { StatusTone } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
 import { ApiError } from "./api.js";
@@ -10,6 +9,16 @@ import { useNetworks } from "./queries.js";
 
 /** An inline text link, in the page's text colour. */
 export const LINK = "font-medium underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground";
+
+/** On a phone, a control is 44px tall: a touch target's size. */
+export const TOUCH = "max-sm:h-11";
+
+/**
+ * Every table of the backend: 44px rows under muted 12px headings, its first and last columns on
+ * the panel's content edges.
+ */
+export const TABLE =
+  "text-sm [&_th]:h-10 [&_th]:px-2 [&_th]:text-xs [&_th]:font-medium [&_th]:text-muted-foreground [&_td]:h-11 [&_td]:px-2 [&_td]:py-2 [&_tr>*:first-child]:pl-0 [&_tr>*:last-child]:pr-0";
 
 /**
  * The visitor's wallet helpers (./testTokens), loaded on first use: they carry the chain and wallet
@@ -24,13 +33,15 @@ export function loadSdk() {
   return import("@phala/pay-react");
 }
 
-/** GitHub's mark (./icons/github.svg), in the text colour. */
-export function GitHubIcon({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn("github-icon inline-block size-4 shrink-0 bg-current", className)}
-    />
+/** Whether the media query matches, following it as it changes. The demo renders on the client only. */
+export function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const list = window.matchMedia(query);
+      list.addEventListener("change", onChange);
+      return () => list.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia(query).matches,
   );
 }
 
@@ -60,42 +71,18 @@ export function ExplorerLink({
 }
 
 /**
- * An explanation behind a small info icon: the page shows one short line, the popover the rest. It
- * opens on a click or a tap, so touch screens reach it too.
+ * Labelled values, one per row and each row at least 44px tall, as a table's: the label in the
+ * muted colour beside its value; on a phone, above it.
  */
-export function InfoTip({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          className={cn(
-            "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors focus-visible:outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground",
-            className,
-          )}
-        >
-          <Info className="size-3.5" aria-hidden="true" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent side="bottom" collisionPadding={12} className="w-72 p-3 text-xs leading-relaxed text-pretty text-muted-foreground">
-        {children}
-      </PopoverContent>
-    </Popover>
-  );
+export function DataList({ className, ...props }: ComponentProps<"dl">) {
+  return <dl className={cn("flex flex-col text-sm", className)} {...props} />;
 }
 
-/** A list of labelled values, such as a timeline step's details. */
-export function Details({ className, ...props }: ComponentProps<"dl">) {
-  // The card on the light console's tinted surface; muted on the dark one.
-  return <dl className={cn("grid gap-1.5 rounded-lg bg-card p-3 text-xs dark:bg-muted", className)} {...props} />;
-}
-
-export function Detail({ label, className, ...props }: ComponentProps<"dd"> & { label: ReactNode }) {
+export function DataItem({ label, className, ...props }: ComponentProps<"dd"> & { label: ReactNode }) {
   return (
-    <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-3 sm:grid-cols-[minmax(0,9rem)_minmax(0,1fr)]">
-      <dt className="font-sans text-muted-foreground">{label}</dt>
-      <dd className={cn("wrap-anywhere", className)} {...props} />
+    <div className="grid min-h-11 content-center gap-x-4 gap-y-0.5 py-2 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)] sm:items-center">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={cn("min-w-0 wrap-anywhere", className)} {...props} />
     </div>
   );
 }
@@ -115,11 +102,11 @@ export function Subsection({
   className?: string;
 }) {
   return (
-    <section className={cn("flex min-w-0 flex-col gap-3 text-xs", className)} aria-labelledby={id}>
-      <div className="flex items-center gap-2">
-        <h3 id={id} className="text-sm font-medium">
+    <section className={cn("flex min-w-0 flex-col gap-3", className)} aria-labelledby={id}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h4 id={id} className="text-sm font-semibold">
           {title}
-        </h3>
+        </h4>
         {aside}
       </div>
       {children}
@@ -130,15 +117,15 @@ export function Subsection({
 /** Secondary detail, collapsed until opened. */
 export function Disclosure({ summary, children }: { summary: ReactNode; children: ReactNode }) {
   return (
-    <details className="group/disclosure text-xs">
-      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-sm font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+    <details className="group/disclosure">
+      <summary className="flex min-h-11 w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm text-sm font-medium [&::-webkit-details-marker]:hidden">
         <ChevronRight
-          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/disclosure:rotate-90 motion-reduce:transition-none"
+          className="size-4 shrink-0 text-muted-foreground transition-transform group-open/disclosure:rotate-90 motion-reduce:transition-none"
           aria-hidden="true"
         />
         {summary}
       </summary>
-      <div className="mt-3 flex flex-col gap-2">{children}</div>
+      <div className="mt-1 flex flex-col gap-2">{children}</div>
     </details>
   );
 }

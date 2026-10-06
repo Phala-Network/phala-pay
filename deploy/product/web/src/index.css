@@ -133,6 +133,7 @@
   --pp-color-text: var(--card-foreground);
   --pp-color-text-muted: var(--muted-foreground);
   --pp-color-border: var(--border);
+  --pp-color-input: var(--input);
   --pp-color-primary: var(--primary);
   --pp-color-primary-foreground: var(--primary-foreground);
   --pp-color-focus: var(--focus);
@@ -140,6 +141,7 @@
   --pp-color-danger: var(--destructive);
   /* --pp-color-warning keeps the SDK default: --warning is not yet safe as text color. */
   --pp-font-family-mono: var(--font-mono);
+  --pp-font-size: var(--text-sm);
   --pp-radius: var(--radius);
 }
 .github-icon { mask: url("./icons/github.svg") center / contain no-repeat; }

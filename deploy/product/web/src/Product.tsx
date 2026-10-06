@@ -1,28 +1,27 @@
 import type { CheckoutStatus } from "@phala/pay";
 import type { Appearance } from "@phala/pay-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, CircleAlert, Cloud, CircleCheck, Copy, Gift, Lock } from "lucide-react";
+import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react";
 import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChoiceCard } from "@/components/ui/choice-card";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Hash } from "@/components/ui/hash";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
-import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
-import { TokenIcon, assetOf, networkOf, tokenFullName } from "./chains.js";
-import { ExplorerLink, InfoTip, describe, loadSdk } from "./common.js";
+import { ChainIcon, TokenIcon, assetOf, networkOf, tokenFullName } from "./chains.js";
+import { ExplorerLink, TOUCH, describe, loadSdk } from "./common.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
-import { atomicAmount, dollars, percent, presetDollars, rate, signedDollars, tokenName } from "./format.js";
+import { atomicAmount, dollars, percent, presetDollars, signedDollars, tokenName } from "./format.js";
 import { FundWallet, TestTokens, type Need } from "./Funding.js";
 import { keys, useCreateQuote } from "./queries.js";
 import type { PaidWith } from "./testTokens.js";
@@ -37,8 +36,7 @@ const METHODS: { id: Method; label: string }[] = [
 ];
 
 /**
- * The product: a made-up cloud provider's billing page (Acme Cloud, at acme.example), as its
- * customer sees it in their browser, with Phala Pay inside.
+ * The customer's view: a made-up cloud provider's billing page (Acme Cloud), with Phala Pay inside.
  * Only customer-facing UI belongs here; what the backend sees is in ./Backend.
  */
 export function Product({
@@ -86,6 +84,8 @@ export function Product({
     const atomic = atomicAmount(sendAmount, asset.decimals);
     need = atomic === null ? null : { asset: asset.asset, atomic };
   }
+  // Until the account loads, or while it cannot, nothing can be paid for.
+  const unavailable = account === null && accountView.error !== null;
   const picker = (
     <PaymentOptions
       networks={networksView}
@@ -96,193 +96,108 @@ export function Product({
     />
   );
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <AreaLabel step={1} title="Your customer's view" text="Your app's billing page" />
-      {/* An app in a browser window: the raised surface of the two. */}
-      <section
-        aria-labelledby="product-title"
-        className="product-app overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lg shadow-black/5 dark:shadow-black/40"
-      >
-        <div className="flex h-10 items-center gap-3 border-b bg-muted/40 px-4">
-          <span className="flex gap-1.5" aria-hidden="true">
-            <span className="size-2.5 rounded-full bg-foreground/15" />
-            <span className="size-2.5 rounded-full bg-foreground/15" />
-            <span className="size-2.5 rounded-full bg-foreground/15" />
-          </span>
-          {/* The address bar: the app's page, as a browser shows it. */}
-          <span className="flex min-w-0 flex-1 justify-center" aria-hidden="true">
-            <span className="flex h-6 w-full max-w-56 min-w-0 items-center justify-center gap-1.5 rounded-md border bg-background px-2.5 text-xs text-muted-foreground">
-              <Lock className="size-3 shrink-0" />
-              <span className="truncate">acme.example/billing</span>
-            </span>
-          </span>
-          {(network?.testnet ?? true) && <TestnetBadge network={network?.name ?? "a"} />}
+    <Card role="region" aria-labelledby="product-title">
+      <CardHeader>
+        <div className="min-w-0">
+          <CardTitle id="product-title">Customer view</CardTitle>
+          <CardDescription className="mt-1">Acme Cloud · Billing</CardDescription>
         </div>
-        <div className="flex flex-col gap-6 p-5 sm:p-6">
-          <div className="flex flex-col gap-5">
-            {/* The app's own header: its name and page, and the signed-in workspace. */}
-            <div className="flex items-center justify-between gap-4">
-              <h2 id="product-title" className="flex min-w-0 items-center gap-2 text-sm font-semibold">
-                <span
-                  className="flex size-5 shrink-0 items-center justify-center rounded-md bg-foreground text-background"
-                  aria-hidden="true"
-                >
-                  <Cloud className="size-3" />
-                </span>
-                <span className="truncate">
-                  Acme Cloud<span className="font-normal text-muted-foreground"> · Billing</span>
-                </span>
-              </h2>
-              <Workspace account={account} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <h3 id="balance-title" className="text-sm text-muted-foreground">
-                Account balance
-              </h3>
-              <div
-                className="text-3xl font-semibold tracking-tight tabular-nums"
-                aria-live="polite"
-                aria-labelledby="balance-title"
-                data-testid="balance"
-              >
-                {account === null
-                  ? accountView.error === null ? <Skeleton className="h-9 w-32" /> : <span className="text-sm font-normal text-muted-foreground">Unavailable</span>
-                  : dollars(account.balance)}
-              </div>
-              {accountView.data !== undefined && <QueryState view={accountView} />}
-            </div>
+        {account !== null && (
+          <div className="flex min-w-0 items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Workspace</span>
+            <Hash value={account.account_id} copyLabel="Copy workspace id" />
           </div>
-          {accountView.data === undefined && <QueryState view={accountView} className="text-sm" />}
-          <Separator />
-          <section aria-labelledby="pay-title" className="flex flex-col gap-4">
-            <h3 id="pay-title" className="text-base font-semibold">
-              Add credits
-            </h3>
-            {(account !== null || accountView.error === null) && (
-              <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
-                <TabsList aria-label="Payment method" className="w-full">
-                  {METHODS.map(({ id, label }) => (
-                    <TabsTrigger key={id} value={id}>
-                      {label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                <TabsContent value="quote" className="pt-4">
-                  {session === null || account === null ? (
-                    <AmountPicker account={account} network={network} asset={asset} picker={picker} onQuote={onQuote} />
-                  ) : (
-                    <QuoteCheckout
-                      key={session.quote}
-                      session={session}
-                      account={account}
-                      network={networkOf(networks, session.chain_id)}
-                      appearance={appearance}
-                      onCredited={onCredited}
-                      onNewTopUp={onNewTopUp}
-                    />
-                  )}
-                </TabsContent>
-                <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-4">
-                  {account === null ? (
-                    <CheckoutSkeleton />
-                  ) : (
-                    <DepositAddressPanel
-                      account={account}
-                      picker={picker}
-                      network={network}
-                      asset={asset}
-                      appearance={appearance}
-                      created={address}
-                      onCreated={onAddress}
-                      sendAmount={sendAmount}
-                      onSendAmountChange={setSendAmount}
-                    />
-                  )}
-                </TabsContent>
-              </Tabs>
-            )}
-          </section>
+        )}
+      </CardHeader>
+      {(network?.testnet ?? true) && (
+        <p data-testid="testnet-notice" className="flex items-start gap-2 border-b bg-warning-muted px-4 py-2.5 text-sm sm:px-6">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+          Testnet demo: test tokens only.
+        </p>
+      )}
+      <CardContent className="flex flex-col gap-6">
+        <div className="flex flex-col gap-1">
+          <p id="balance-title" className="text-sm text-muted-foreground">
+            Account balance
+          </p>
+          <div
+            className="text-3xl font-semibold tracking-tight tabular-nums"
+            aria-live="polite"
+            aria-labelledby="balance-title"
+            data-testid="balance"
+          >
+            {account !== null ? dollars(account.balance) : unavailable ? "—" : <Skeleton className="h-9 w-32" />}
+          </div>
+          {accountView.data !== undefined && <QueryState view={accountView} />}
         </div>
-      </section>
-      {network?.testnet === true && <TestTokens key={network.chain_id} network={network} need={need} className="mt-1" />}
-    </div>
-  );
-}
-
-/**
- * The caption above each of the demo's two areas, numbered as a guide's steps are; on a phone its
- * text on a line of its own.
- */
-export function AreaLabel({ step, title, text }: { step: number; title: string; text: string }) {
-  return (
-    <p className="flex min-h-5 items-start gap-2.5 px-1 text-sm">
-      <span
-        className="flex size-5 shrink-0 items-center justify-center rounded-full border font-mono text-xs text-muted-foreground"
-        aria-hidden="true"
-      >
-        {step}
-      </span>
-      <span className="min-w-0">
-        <span className="font-medium">{title}</span>
-        <span className="text-muted-foreground max-sm:block">
-          <span className="max-sm:hidden"> · </span>
-          {text}
-        </span>
-      </span>
-    </p>
-  );
-}
-
-/**
- * The product frame's testnet marker: in its title bar, where a customer looks for where they are;
- * it opens on a click or a tap to say what that means.
- */
-function TestnetBadge({ network }: { network: string }) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button type="button" data-testid="testnet-badge" className="rounded-full">
-          <StatusBadge tone="warning">Testnet</StatusBadge>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" collisionPadding={12} className="w-64 p-3 text-xs leading-relaxed text-pretty text-muted-foreground">
-        A demo on {network}: you pay with free test tokens, and no real money moves.
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** The demo workspace: its id, truncated, with a copy button. */
-function Workspace({ account }: { account: Account | null }) {
-  const [copied, setCopied] = useState(false);
-  if (account === null) {
-    return <Skeleton className="h-7 w-32 rounded-full" />;
-  }
-  const copy = () => {
-    navigator.clipboard.writeText(account.account_id).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => undefined,
-    );
-  };
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={copy}
-          aria-label={`Workspace ${account.account_id}, copy`}
-          className="flex h-7 max-w-40 items-center gap-1.5 rounded-full border px-2.5 font-mono text-xs text-muted-foreground transition-colors focus-visible:outline-hidden hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span className="size-1.5 shrink-0 rounded-full bg-success" aria-hidden="true" />
-          <span className="truncate">{account.account_id}</span>
-          {copied ? <Check className="size-3 shrink-0" aria-hidden="true" /> : <Copy className="size-3 shrink-0" aria-hidden="true" />}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent align="end">{copied ? "Copied" : "Your demo account, kept in this browser's cookie."}</TooltipContent>
-    </Tooltip>
+        {unavailable ? (
+          <Alert variant="destructive">
+            <CircleAlert aria-hidden="true" />
+            <AlertTitle>Can't load your account</AlertTitle>
+            <AlertDescription>{accountView.error}</AlertDescription>
+          </Alert>
+        ) : (
+          <section aria-labelledby="pay-title" className="flex flex-col gap-4 border-t pt-6">
+            <h4 id="pay-title" className="text-base font-semibold">
+              Add credits
+            </h4>
+            <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
+              <TabsList aria-label="Payment method" className="w-full">
+                {METHODS.map(({ id, label }) => (
+                  <TabsTrigger key={id} value={id}>
+                    {label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              <TabsContent value="quote" className="pt-4">
+                {session === null || account === null ? (
+                  <AmountPicker
+                    account={account}
+                    network={network}
+                    asset={asset}
+                    ready={account !== null && networks !== undefined}
+                    picker={picker}
+                    onQuote={onQuote}
+                  />
+                ) : (
+                  <QuoteCheckout
+                    key={session.quote}
+                    session={session}
+                    account={account}
+                    network={networkOf(networks, session.chain_id)}
+                    appearance={appearance}
+                    onCredited={onCredited}
+                    onNewTopUp={onNewTopUp}
+                  />
+                )}
+              </TabsContent>
+              <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-4">
+                {account === null ? (
+                  <CheckoutSkeleton />
+                ) : (
+                  <DepositAddressPanel
+                    account={account}
+                    picker={picker}
+                    network={network}
+                    asset={asset}
+                    appearance={appearance}
+                    created={address}
+                    onCreated={onAddress}
+                    sendAmount={sendAmount}
+                    onSendAmountChange={setSendAmount}
+                  />
+                )}
+              </TabsContent>
+            </Tabs>
+          </section>
+        )}
+      </CardContent>
+      {network?.testnet === true && (
+        <CardFooter>
+          <TestTokens key={network.chain_id} network={network} need={need} />
+        </CardFooter>
+      )}
+    </Card>
   );
 }
 
@@ -291,8 +206,8 @@ function CheckoutSkeleton() {
     <div className="flex flex-col gap-3" aria-hidden="true">
       <Skeleton className="h-7 w-40" />
       <Skeleton className="h-4 w-56" />
-      <Skeleton className="h-10 w-full" />
-      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-11 w-full" />
+      <Skeleton className="h-11 w-full" />
     </div>
   );
 }
@@ -300,7 +215,8 @@ function CheckoutSkeleton() {
 /**
  * The network, then the token, as checkouts and wallets ask for them: a network select, and the
  * network's tokens as a list with each one's price terms. Shown even with one option each, so
- * the customer sees what they pay with (a test token, on a testnet) before paying.
+ * the customer sees what they pay with (a test token, on a testnet) before paying. While the
+ * networks load, each field keeps its label over a placeholder of its control's size.
  */
 function PaymentOptions({
   networks: networksView,
@@ -317,18 +233,10 @@ function PaymentOptions({
 }) {
   const id = useId();
   const networks = networksView.data;
-  if (networks === undefined) {
-    if (networksView.error !== null) {
-      return <QueryState view={networksView} className="text-sm" />;
-    }
-    return (
-      <div className="space-y-6" aria-hidden="true">
-        <Skeleton className="h-10 w-full rounded-lg" />
-        <Skeleton className="h-16 w-full rounded-lg" />
-      </div>
-    );
+  if (networks === undefined && networksView.error !== null) {
+    return <QueryState view={networksView} />;
   }
-  if (network === undefined || asset === undefined) {
+  if (networks !== undefined && (network === undefined || asset === undefined)) {
     return (
       <>
         <p className="text-sm text-muted-foreground">No network accepts payments right now.</p>
@@ -338,69 +246,87 @@ function PaymentOptions({
   }
   return (
     <>
-      <div className="space-y-2">
-        <Label htmlFor={`${id}-network`}>Network</Label>
-        <NativeSelect
-          id={`${id}-network`}
-          value={network.chain_id}
-          onChange={(event) => onNetworkChange(Number(event.target.value))}
-          data-testid="network-select"
-        >
-          {networks.map((each) => (
-            <NativeSelectOption key={each.chain_id} value={each.chain_id}>
-              {each.name}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </div>
-      <div className="space-y-2">
-        <Label id={`${id}-token`} asChild>
+      <Field>
+        <FieldLabel htmlFor={`${id}-network`}>Network</FieldLabel>
+        {network === undefined ? (
+          <Skeleton className="h-11 sm:h-10" />
+        ) : (
+          // The network's mark sits in the select's start, where a native option cannot show one.
+          <div className="relative">
+            <NativeSelect
+              id={`${id}-network`}
+              className={cn("pl-9", TOUCH)}
+              value={network.chain_id}
+              onChange={(event) => onNetworkChange(Number(event.target.value))}
+              data-testid="network-select"
+            >
+              {networks?.map((each) => (
+                <NativeSelectOption key={each.chain_id} value={each.chain_id}>
+                  {each.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <ChainIcon
+              chainId={network.chain_id}
+              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 rounded"
+            />
+          </div>
+        )}
+      </Field>
+      <Field>
+        <FieldLabel id={`${id}-token`} asChild>
           <span>Token</span>
-        </Label>
-        {/* Keyed by network: each network lists its own tokens. */}
-        <RadioGroup
-          key={network.chain_id}
-          value={asset.asset}
-          onValueChange={onAssetChange}
-          aria-label="Token"
-          className="auto-rows-fr gap-2"
-        >
-          {network.assets.map((each) => (
-            <TokenOption key={each.asset} id={`${id}-token-${network.chain_id}-${each.asset}`} asset={each} testnet={network.testnet} />
-          ))}
-        </RadioGroup>
-      </div>
+        </FieldLabel>
+        {network === undefined || asset === undefined ? (
+          <div className="grid gap-2">
+            <Skeleton className="h-15" />
+            <Skeleton className="h-15" />
+          </div>
+        ) : (
+          // Keyed by network: each network lists its own tokens.
+          <RadioGroup
+            key={network.chain_id}
+            value={asset.asset}
+            onValueChange={onAssetChange}
+            aria-labelledby={`${id}-token`}
+            className="auto-rows-fr"
+          >
+            {network.assets.map((each) => (
+              <TokenOption key={each.asset} id={`${id}-token-${network.chain_id}-${each.asset}`} asset={each} testnet={network.testnet} />
+            ))}
+          </RadioGroup>
+        )}
+      </Field>
       <QueryState view={networksView} />
     </>
   );
 }
 
 /**
- * A token row: its mark, symbol with the demo merchant's bonus, if any, and name; on the right its
- * price terms, which never shrink, and its radio. Where the row is narrow the bonus wraps under the
- * symbol, and every row takes the tallest's height.
+ * A token: its mark, symbol, and name; on the right its price terms, with the demo merchant's bonus
+ * under them, which never shrink; then its radio.
  */
 function TokenOption({ id, asset, testnet }: { id: string; asset: Asset; testnet: boolean }) {
   return (
-    <ChoiceCard htmlFor={id} data-testid="token-option">
-      <TokenIcon asset={asset.asset} />
-      <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
-          {asset.symbol}
-          {asset.bonus_bps > 0 && (
-            <StatusBadge tone="success" data-testid="token-bonus">
-              +{percent(asset.bonus_bps)} bonus
-            </StatusBadge>
-          )}
-        </span>
-        <span className="text-xs font-normal text-pretty text-muted-foreground">
+    <ChoiceCard htmlFor={id} data-testid="token-option" className="min-h-15">
+      <TokenIcon asset={asset.asset} className="size-6" />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="font-medium">{asset.symbol}</span>
+        <span className="text-pretty text-muted-foreground">
           {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
         </span>
       </span>
       {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
           locks (the locked-rate line). */}
-      <span className="shrink-0 text-sm font-normal tabular-nums" data-testid="token-price">
-        {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
+      <span className="flex shrink-0 flex-col items-end text-right">
+        <span className="tabular-nums" data-testid="token-price">
+          {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
+        </span>
+        {asset.bonus_bps > 0 && (
+          <span className="text-success" data-testid="token-bonus">
+            +{percent(asset.bonus_bps)} bonus
+          </span>
+        )}
       </span>
       <RadioGroupItem value={asset.asset} id={id} aria-label={tokenName(asset.symbol, testnet)} />
     </ChoiceCard>
@@ -411,12 +337,15 @@ function AmountPicker({
   account,
   network,
   asset,
+  ready,
   picker,
   onQuote,
 }: {
   account: Account | null;
   network: Network | undefined;
   asset: Asset | undefined;
+  /** Whether the account and its networks have loaded: until then the form is disabled. */
+  ready: boolean;
   /** The network and token choice. */
   picker: ReactNode;
   onQuote: (created: CreatedQuote) => void;
@@ -452,15 +381,16 @@ function AmountPicker({
   const minutes = Math.round((asset?.quote_ttl_seconds ?? 900) / 60);
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-6">
-      <div className="space-y-2">
-        <Label id={`${id}-amount-label`} asChild>
+    <form onSubmit={submit} className="flex flex-col gap-5">
+      <Field>
+        <FieldLabel id={`${id}-amount-label`} asChild>
           <span>Amount</span>
-        </Label>
+        </FieldLabel>
         <SegmentedControl
           value={String(preset)}
           onValueChange={(value) => setPreset(value === "custom" ? "custom" : Number(value))}
           aria-labelledby={`${id}-amount-label`}
+          disabled={!ready}
         >
           {options.map((option) => (
             <SegmentedControlItem key={option.value} value={option.value} className="tabular-nums">
@@ -468,11 +398,11 @@ function AmountPicker({
             </SegmentedControlItem>
           ))}
         </SegmentedControl>
-      </div>
+      </Field>
       {preset === "custom" && (
-        <div className="space-y-2">
-          <Label htmlFor={`${id}-amount`}>Custom amount (USD)</Label>
-          <InputGroup>
+        <Field>
+          <FieldLabel htmlFor={`${id}-amount`}>Custom amount (USD)</FieldLabel>
+          <InputGroup className={TOUCH}>
             <InputGroupAddon>
               <InputGroupText>$</InputGroupText>
             </InputGroupAddon>
@@ -480,30 +410,22 @@ function AmountPicker({
               id={`${id}-amount`}
               inputMode="decimal"
               placeholder="25.00"
-              className="tabular-nums"
+              className="h-full tabular-nums"
+              aria-invalid={invalid !== null}
               value={custom}
               onChange={(event) => setCustom(event.target.value)}
             />
           </InputGroup>
-        </div>
+        </Field>
       )}
       {picker}
-      <div className="flex flex-col gap-2.5">
-        <Button
-          type="submit"
-          size="lg"
-          className="w-full"
-          disabled={quote.isPending || account === null || asset === undefined}
-        >
+      <div className="flex flex-col gap-2">
+        <Button type="submit" size="lg" className="w-full" disabled={quote.isPending || !ready || asset === undefined}>
           {quote.isPending ? "Creating quote…" : "Pay with crypto"}
         </Button>
-        <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-          Price locked for {minutes} minutes
-          <InfoTip label="About paying for an exact amount">
-            A quote locks the price for {minutes} minutes for an exact amount. Pay from a browser wallet, by QR code, or
-            by sending the exact amount manually; another amount, or a late payment, is credited at the market rate
-            instead.
-          </InfoTip>
+        <p className="text-sm text-pretty text-muted-foreground">
+          The price is locked for {minutes} minutes. Another amount, or a late payment, is credited at the market
+          rate.
         </p>
       </div>
       {error !== null && (
@@ -521,8 +443,8 @@ function AmountPicker({
 const PAYABLE: ReadonlySet<CheckoutStatus> = new Set(["loading", "waiting", "seen", "confirming"]);
 
 /**
- * The quote's checkout: the SDK's `<Checkout>`, with the locked rate above it while it applies;
- * once credited, one confirmation of what the balance gained.
+ * The quote's checkout: the SDK's `<Checkout>`, whose summary states the quote's amount; once
+ * credited, one confirmation of what the balance gained.
  */
 function QuoteCheckout({
   session,
@@ -543,26 +465,19 @@ function QuoteCheckout({
   const queryClient = useQueryClient();
   // The wallet that held too little for the quote, so the checkout sent nothing.
   const [short, setShort] = useState<PaidWith | null>(null);
-  const testnet = network?.testnet ?? true;
   const token = assetOf(network, session.asset);
   const bps = token?.bonus_bps ?? 0;
   const symbol = session.asset.toUpperCase();
   return (
     <div className="flex flex-col gap-4">
-      {PAYABLE.has(status) && (
-        <div data-testid="locked-rate" className="flex items-center justify-between gap-4 rounded-lg border bg-muted/40 px-4 py-3">
-          <span className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
-            <TokenIcon asset={session.asset} className="size-5" />
-            <span className="truncate">Locked rate · {tokenName(symbol, testnet)}</span>
-          </span>
-          <span className="shrink-0 text-sm font-semibold tabular-nums">{rate(symbol, session.exchange_rate)}</span>
-        </div>
-      )}
       {PAYABLE.has(status) && bps > 0 && (
-        <p className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Gift className="size-3.5 text-success" aria-hidden="true" />
-          Paying in {symbol} earns a +{percent(bps)} bonus, this demo merchant's promotion.
-        </p>
+        <Alert>
+          <Info aria-hidden="true" />
+          <AlertDescription>
+            Paying in {symbol} earns a +{percent(bps)} bonus: this demo merchant's promotion, not a Phala Pay
+            feature.
+          </AlertDescription>
+        </Alert>
       )}
       {status === "credited" ? (
         <Credited session={session} account={account} bps={bps} />
@@ -585,55 +500,55 @@ function QuoteCheckout({
       {short !== null && status === "waiting" && network !== undefined && token !== undefined && (
         <FundWallet network={network} token={token} needed={BigInt(session.amount_atomic)} wallet={short} />
       )}
-      <Button type="button" variant="secondary" className="w-full" onClick={onNewTopUp}>
-        Add more credits
-      </Button>
+      <div className="flex justify-end">
+        <Button type="button" variant="ghost" className={TOUCH} onClick={onNewTopUp}>
+          Start a new top-up
+        </Button>
+      </div>
     </div>
   );
 }
 
 /**
- * The credited payment: the credit, the demo merchant's bonus on it, and the new total, with the
- * paying transaction. The amounts come from the product's own ledger as it applies the webhook.
+ * The credited payment: the credit, the demo merchant's bonus on it, and the new total, side by
+ * side, with the paying transaction. The amounts come from the product's own ledger as it applies
+ * the webhook.
  */
 function Credited({ session, account, bps }: { session: CreatedQuote; account: Account; bps: number }) {
   const row = account.payments.find((each) => each.quote === session.quote && each.id.startsWith("dep_"));
   const bonus = row?.bonus ?? 0;
   const symbol = session.asset.toUpperCase();
   return (
-    <Alert variant="success" data-testid="payment-credited" role="status">
+    <Alert variant="success" data-testid="payment-credited">
       <CircleCheck aria-hidden="true" />
       <AlertTitle>Payment credited</AlertTitle>
       <AlertDescription>
-        <dl className="mt-1 grid w-full gap-1.5 tabular-nums">
-          <div className="flex justify-between gap-3">
-            <dt>Credit</dt>
-            <dd>{dollars(session.amount)}</dd>
+        <dl className="mt-2 grid grid-cols-3 gap-x-4 gap-y-1 tabular-nums">
+          <div>
+            <dt className="text-muted-foreground">Credit</dt>
+            <dd className="font-medium">{dollars(session.amount)}</dd>
           </div>
           {bonus > 0 && (
-            <div className="flex justify-between gap-3" data-testid="bonus-credited">
-              <dt>
+            <div data-testid="bonus-credited">
+              <dt className="text-muted-foreground">
                 {symbol} bonus{bps > 0 ? ` +${percent(bps)}` : ""}
               </dt>
-              <dd className="text-success">{signedDollars(bonus)}</dd>
+              <dd className="font-medium">{signedDollars(bonus)}</dd>
             </div>
           )}
           {bonus > 0 && (
-            <div className="flex justify-between gap-3 border-t pt-1.5 font-medium">
-              <dt>Total</dt>
-              <dd>{dollars(session.amount + bonus)}</dd>
-            </div>
-          )}
-          {row?.tx_hash != null && (
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-muted-foreground">Transaction</dt>
-              <dd>
-                <ExplorerLink chainId={session.chain_id} kind="tx" value={row.tx_hash} copy />
-              </dd>
+            <div>
+              <dt className="text-muted-foreground">Total</dt>
+              <dd className="font-medium">{dollars(session.amount + bonus)}</dd>
             </div>
           )}
         </dl>
-        {bonus > 0 && <p className="mt-1 text-xs text-muted-foreground">The bonus is this demo merchant's promotion.</p>}
+        {row?.tx_hash != null && (
+          <p className="mt-3 flex flex-wrap items-center gap-x-3">
+            <span className="text-muted-foreground">Transaction</span>
+            <ExplorerLink chainId={session.chain_id} kind="tx" value={row.tx_hash} copy />
+          </p>
+        )}
       </AlertDescription>
     </Alert>
   );

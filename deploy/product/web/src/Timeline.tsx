@@ -1,5 +1,7 @@
 import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
 import { CodeBlock } from "@/components/ui/code-block";
+import { Hash } from "@/components/ui/hash";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
@@ -12,9 +14,9 @@ import type {
   Timeline,
   WebhookEvent,
 } from "./api.js";
-import { Detail, Details, Empty, ExplorerLink, InfoTip, Subsection } from "./common.js";
+import { DataItem, DataList, Empty, ExplorerLink, Subsection, TABLE } from "./common.js";
 import { assetOf, networkOf } from "./chains.js";
-import { approx, clock, dollars, duration, rate, short, signedDollars, time, tokens } from "./format.js";
+import { approx, clock, dollars, duration, minusDollars, rate, short, signedDollars, time, tokens } from "./format.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { useNetworks } from "./queries.js";
 
@@ -71,13 +73,10 @@ const STEP_COPY: Record<StepKey, { title: string; hint: string; failed?: string;
   },
 };
 
-// A step's line in columns: its time, its dot, its title with the opener, and the time since
-// sending, which ends on the card's right content edge. The time's column is kept before a payment
-// has times, so the lines stay put when its first one arrives.
-const STEP_GRID = "grid grid-cols-[4rem_1rem_minmax(0,1fr)_auto] items-center gap-x-2 sm:gap-x-3";
-// Where a step's opened details start: under its title (px-2, 4rem, 1rem, and two gaps); on a
-// phone, under its time, to keep the details' width.
-const STEP_INDENT = "pl-2 sm:pl-[calc(0.5rem+5rem+1.5rem)]";
+// A step's line in columns: its dot, its title with the opener, and its time on the right: the
+// time since sending for the steps after it, else the time it happened; for a step yet to happen,
+// how long it usually takes. Each line is a 44px target.
+const STEP_GRID = "grid grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3";
 
 // A quote's steps, shown before there is a payment to follow.
 const PREVIEW: StepKey[] = ["quote_created", "sent", "received", "credited", "webhook_received", "final", "swept"];
@@ -103,7 +102,7 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
   if (loading === null) {
     return (
       <div className="flex flex-col gap-3">
-        <p className="px-2 text-sm text-pretty text-muted-foreground">
+        <p className="text-sm text-pretty text-muted-foreground">
           Each step of a payment, as your backend receives it, with real times from the chain and the service.
         </p>
         <ol className="flex flex-col" aria-label="The steps of a payment">
@@ -116,13 +115,12 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
   }
   if (timeline === null) {
     if (timelineView.error !== null) {
-      return <QueryState view={timelineView} className="px-2 text-sm" />;
+      return <QueryState view={timelineView} />;
     }
     return (
       <ol className="flex flex-col" aria-label={`Loading ${short(loading)}`} aria-busy="true">
         {PREVIEW.map((key) => (
-          <li key={key} className={cn(STEP_GRID, "h-9 px-2")}>
-            <span className="h-2 w-12 rounded-full bg-muted motion-safe:animate-pulse" />
+          <li key={key} className={cn(STEP_GRID, "h-11 px-2")}>
             <span className="size-2.5 justify-self-center rounded-full bg-muted motion-safe:animate-pulse" />
             <span className="h-2.5 w-40 rounded-full bg-muted motion-safe:animate-pulse" />
           </li>
@@ -153,18 +151,18 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
 function StepDot({ state }: { state: Step["state"] }) {
   if (state === "current") {
     return (
-      <span className="relative flex size-4 items-center justify-center" aria-hidden="true">
-        <span className="size-2.5 rounded-full bg-brand ring-2 ring-primary/30" />
+      <span className="flex size-4 items-center justify-center" aria-hidden="true">
+        <span className="size-2.5 rounded-full bg-brand ring-2 ring-foreground/20" />
       </span>
     );
   }
   return (
     <span
       className={cn(
-        "flex size-4 items-center justify-center rounded-full transition-colors duration-500 motion-reduce:transition-none",
-        state === "complete" && "bg-foreground/90 text-background",
+        "flex size-4 items-center justify-center rounded-full bg-card transition-colors motion-reduce:transition-none",
+        state === "complete" && "bg-foreground text-background",
         state === "failed" && "bg-destructive text-background",
-        state === "upcoming" && "border border-dashed border-foreground/25",
+        state === "upcoming" && "border border-dashed border-muted-foreground",
       )}
       aria-hidden="true"
     >
@@ -202,35 +200,21 @@ function StreamStep({
     step.at !== null && sent !== null && step.key !== "sent" && step.key !== "quote_created" ? step.at - sent : null;
   const failed = step.state === "failed" && copy.failed !== undefined;
   return (
+    // The rail from this step's dot to the next one's, through the dots' centres (8px of padding
+    // and half a dot in), past this step's opened details.
     <li
-      className="group/step relative"
+      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden"
       data-step={step.key}
       data-state={step.state}
       aria-current={step.state === "current" ? "step" : undefined}
     >
-      {/* The rail between this step's dot and the next one's, through the dots' centres (px-2, the
-          time's column, a gap, half a dot); on a phone the opened details take its place. */}
-      <span
-        className="absolute top-7 bottom-[-0.375rem] left-[calc(5.5rem-0.5px)] w-px bg-border group-last/step:hidden max-sm:group-has-[[data-state=open]]/step:hidden sm:left-[calc(5.75rem-0.5px)]"
-        aria-hidden="true"
-      />
       <Collapsible>
         <CollapsibleTrigger
           className={cn(
             STEP_GRID,
-            "group/trigger relative min-h-9 w-full rounded-md px-2 py-1.5 text-left focus-visible:outline-hidden transition-colors hover:bg-card dark:hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+            "group/trigger min-h-11 w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 motion-reduce:transition-none",
           )}
         >
-          {/* A step yet to happen leaves its time blank. */}
-          <span className="font-mono text-xs text-muted-foreground tabular-nums">
-            {step.at !== null ? (
-              <time dateTime={new Date(step.at * 1000).toISOString()}>{clock(step.at)}</time>
-            ) : since !== null ? (
-              <time dateTime={new Date(since * 1000).toISOString()} title="Waiting since">
-                {clock(since)}
-              </time>
-            ) : null}
-          </span>
           <StepDot state={step.state} />
           <span className="flex min-w-0 items-center gap-1.5">
             <span
@@ -245,44 +229,40 @@ function StreamStep({
               <span className="sr-only">, {stateLabel(step.state)}</span>
             </span>
             <ChevronDown
-              className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-[transform,opacity] group-hover/step:opacity-100 group-focus-within/step:opacity-100 group-data-[state=open]/trigger:rotate-180 group-data-[state=open]/trigger:opacity-100 motion-reduce:transition-none"
+              className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/trigger:rotate-180 motion-reduce:transition-none"
               aria-hidden="true"
             />
           </span>
-          <span className="text-right font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+          <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums">
             {elapsed !== null ? (
               `+${duration(elapsed)}`
+            ) : step.at !== null ? (
+              <time dateTime={new Date(step.at * 1000).toISOString()}>{clock(step.at)}</time>
             ) : (step.state === "upcoming" || step.state === "current") && usually !== undefined ? (
-              <>
-                <span className="font-sans">usually </span>
-                {usually}
-              </>
+              `usually ${usually}`
+            ) : since !== null ? (
+              <time dateTime={new Date(since * 1000).toISOString()}>since {clock(since)}</time>
             ) : null}
           </span>
         </CollapsibleTrigger>
-        {failed && (
-          <p className={cn("pb-1 text-xs text-pretty text-destructive", STEP_INDENT)}>
-            {copy.failed}
-          </p>
-        )}
-        <CollapsibleContent
-          className={cn("flex flex-col gap-2 pr-2 pb-3 text-xs", STEP_INDENT)}
-        >
-          <p className="text-muted-foreground text-pretty">{copy.hint}</p>
+        {failed && <p className="pb-1 pl-9 text-sm text-pretty text-destructive">{copy.failed}</p>}
+        {/* Under the title: 8px of padding, the dot, and the gap. */}
+        <CollapsibleContent className="flex flex-col gap-2 pr-2 pb-3 pl-9 text-sm">
+          <p className="text-pretty text-muted-foreground">{copy.hint}</p>
           {step.at !== null && (
-            <p className="font-mono text-xs" data-testid="step-time">
+            <p className="tabular-nums" data-testid="step-time">
               {time(step.at)}
               {elapsed !== null && <span className="text-muted-foreground"> · {duration(elapsed)} after sending</span>}
             </p>
           )}
           {step.details.length > 0 && (
-            <Details>
+            <DataList className="border-l pl-3">
               {step.details.map((detail) => (
-                <Detail key={detail.label} label={detail.label}>
+                <DataItem key={detail.label} label={detail.label}>
                   <DetailValue detail={detail} token={token} />
-                </Detail>
+                </DataItem>
               ))}
-            </Details>
+            </DataList>
           )}
         </CollapsibleContent>
       </Collapsible>
@@ -295,8 +275,17 @@ function DetailValue({ detail, token }: { detail: StepDetail; token: StepToken }
   if (value === null) {
     return <>—</>;
   }
+  if (kind === "json") {
+    return <CodeBlock value={JSON.stringify(value, null, 2)} label={detail.label} />;
+  }
+  if (typeof value === "object") {
+    return <>{JSON.stringify(value)}</>;
+  }
   if ((kind === "address" || kind === "tx") && typeof value === "string") {
-    return <ExplorerLink chainId={token.chainId} kind={kind} value={value} />;
+    return <ExplorerLink chainId={token.chainId} kind={kind} value={value} copy />;
+  }
+  if ((kind === "id" || kind === "hash") && typeof value === "string") {
+    return <Hash value={value} copyLabel={`Copy ${detail.label.toLowerCase()}`} />;
   }
   if (kind === "time" && typeof value === "number") {
     return <>{time(value)}</>;
@@ -313,35 +302,38 @@ function DetailValue({ detail, token }: { detail: StepDetail; token: StepToken }
   if (kind === "rate" && typeof value === "string") {
     return <span className="tabular-nums">{rate(detail.unit ?? token.symbol, value)}</span>;
   }
-  return <span className={detail.mono === true ? "font-mono" : undefined}>{String(value)}</span>;
+  return <>{String(value)}</>;
 }
 
+/** The deposit's ledger: the service's amounts, what they net to, and what the product's server holds. */
 export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
   const product = ledger.product;
   return (
-    <Subsection
-      title="Ledger"
-      id="ledger-title"
-      aside={
-        <InfoTip label="About the balance rule">
-          Every deposit.* event carries those cumulative amounts, so the result does not depend on the order events
-          arrive in.
-        </InfoTip>
-      }
-    >
-      <p className="text-muted-foreground">
-        While <code>credited</code> or <code>reversed</code>, a deposit nets to{" "}
-        <code>amount − amount_refunded − amount_reversed</code>; otherwise to 0.
+    <Subsection title="Ledger" id="ledger-title">
+      <p className="text-sm text-pretty text-muted-foreground">
+        While <code className="font-mono text-[13px]">credited</code> or{" "}
+        <code className="font-mono text-[13px]">reversed</code>, a deposit nets to{" "}
+        <code className="font-mono text-[13px]">amount − amount_refunded − amount_reversed</code>; otherwise to 0.
+        Every <code className="font-mono text-[13px]">deposit.*</code> event carries these cumulative amounts, so
+        the result does not depend on the order events arrive in.
       </p>
-      <Details data-testid="ledger" className="font-mono tabular-nums">
-        <Detail label="Status">{ledger.status}</Detail>
-        <Detail label="amount">{ledger.amount === null ? "—" : dollars(ledger.amount)}</Detail>
-        <Detail label="amount_refunded">−{dollars(ledger.amount_refunded)}</Detail>
-        <Detail label="amount_reversed">−{dollars(ledger.amount_reversed)}</Detail>
-        <Detail label="Nets to" data-testid="nets-to">
-          <strong>{dollars(ledger.nets_to)}</strong>
-        </Detail>
-        <Detail label="Your server's ledger" data-testid="console-net">
+      <DataList data-testid="ledger" className="divide-y border-y">
+        <DataItem label="Status" className="font-mono text-[13px]">
+          {ledger.status}
+        </DataItem>
+        <DataItem label="Amount" className="font-mono text-[13px] tabular-nums">
+          {ledger.amount === null ? "—" : dollars(ledger.amount)}
+        </DataItem>
+        <DataItem label="Refunded" className="font-mono text-[13px] tabular-nums">
+          {minusDollars(ledger.amount_refunded)}
+        </DataItem>
+        <DataItem label="Reversed" className="font-mono text-[13px] tabular-nums">
+          {minusDollars(ledger.amount_reversed)}
+        </DataItem>
+        <DataItem label="Nets to" className="font-mono text-[13px] font-semibold tabular-nums" data-testid="nets-to">
+          {dollars(ledger.nets_to)}
+        </DataItem>
+        <DataItem label="Your server's ledger" className="tabular-nums" data-testid="console-net">
           {product === null || product.status === null
             ? "no order yet"
             : product.net === null
@@ -349,28 +341,31 @@ export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
               : `${dollars(product.net)} (credit ${dollars(product.credit ?? 0)}${product.adjustments
                   .map((adjustment) => `, ${signedDollars(adjustment.amount)} by ${adjustment.reason}`)
                   .join("")})`}
-        </Detail>
+        </DataItem>
         {product?.bonus != null && product.bonus !== 0 && (
-          <Detail label="Bonus (this demo's)" data-testid="console-bonus">
+          <DataItem label="Bonus (this demo's)" className="tabular-nums" data-testid="console-bonus">
             {signedDollars(product.bonus)}, its promotion's share of what the credit nets to
-          </Detail>
+          </DataItem>
         )}
-      </Details>
+      </DataList>
     </Subsection>
   );
 }
 
+/** The webhook events the product's server received; their ids where there is room. */
 export function EventsLog({ events }: { events: WebhookEvent[] }) {
   return (
     <Subsection title="Webhook events received" id="events-title">
       {events.length === 0 ? (
         <Empty>None yet.</Empty>
       ) : (
-        <Table className="text-xs">
+        <Table className={TABLE}>
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead scope="col">Type</TableHead>
-              <TableHead scope="col">Event id</TableHead>
+              <TableHead scope="col" className="hidden md:table-cell">
+                Event id
+              </TableHead>
               <TableHead scope="col">Received</TableHead>
               <TableHead scope="col">Signature</TableHead>
             </TableRow>
@@ -378,12 +373,14 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
           <TableBody>
             {events.map((event) => (
               <TableRow key={event.id} data-testid="webhook-event">
-                <TableCell className="font-mono text-muted-foreground">{event.type}</TableCell>
-                <TableCell className="font-mono text-muted-foreground" title={event.id}>
-                  {short(event.id)}
+                <TableCell className="font-mono text-[13px]">{event.type}</TableCell>
+                <TableCell className="hidden md:table-cell">
+                  <Hash value={event.id} />
                 </TableCell>
-                <TableCell className="font-mono tabular-nums">{time(event.received_at)}</TableCell>
-                <TableCell className="text-success">{event.verified ? "Verified" : "—"}</TableCell>
+                <TableCell className="text-muted-foreground tabular-nums" title={time(event.received_at)}>
+                  {clock(event.received_at)}
+                </TableCell>
+                <TableCell>{event.verified ? "Verified" : "—"}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -396,41 +393,42 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
 /** The product's API requests: sent from its server with its restricted key, never the browser. */
 export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; title: string; id: string }) {
   return (
-    <Subsection
-      title={`${title} (${exchanges.length})`}
-      id={id}
-      aside={
-        <InfoTip label="About these requests">
-          Sent from the product's server with its restricted API key; the browser never holds it.
-        </InfoTip>
-      }
-    >
+    <Subsection title={`${title} (${exchanges.length})`} id={id}>
+      <p className="text-sm text-pretty text-muted-foreground">
+        Sent from the product's server with its restricted API key; the browser never holds it.
+      </p>
       {exchanges.length === 0 ? (
         <Empty>None yet.</Empty>
       ) : (
-        <ul className="flex flex-col divide-y rounded-lg border">
-          {exchanges.map((exchange, index) => (
-            <li key={`${exchange.method}-${exchange.url}-${index}`}>
-              <details className="group/exchange">
-                <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono focus-visible:outline-hidden hover:bg-card dark:hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-                  <ChevronRight
-                    className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/exchange:rotate-90 motion-reduce:transition-none"
-                    aria-hidden="true"
-                  />
-                  <code className="min-w-0 flex-1 wrap-anywhere">
-                    <span className="text-muted-foreground">{exchange.method}</span> {new URL(exchange.url).pathname}
-                    {new URL(exchange.url).search}
-                  </code>
-                  <span className={exchange.status < 400 ? "text-success" : "text-destructive"}>{exchange.status}</span>
-                </summary>
-                <CodeBlock
-                  value={JSON.stringify({ request: exchange.request, response: exchange.response }, null, 2)}
-                  label="request and response"
-                  className="max-h-80 rounded-none border-x-0 border-b-0"
-                />
-              </details>
-            </li>
-          ))}
+        <ul className="flex flex-col divide-y border-y">
+          {exchanges.map((exchange, index) => {
+            const url = new URL(exchange.url);
+            return (
+              <li key={`${exchange.method}-${exchange.url}-${index}`}>
+                <details className="group/exchange">
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-2 py-2 transition-colors hover:bg-muted/60 [&::-webkit-details-marker]:hidden">
+                    <ChevronRight
+                      className="size-4 shrink-0 text-muted-foreground transition-transform group-open/exchange:rotate-90 motion-reduce:transition-none"
+                      aria-hidden="true"
+                    />
+                    <code className="min-w-0 flex-1 font-mono text-[13px] wrap-anywhere">
+                      <span className="text-muted-foreground">{exchange.method}</span> {url.pathname}
+                      {url.search}
+                    </code>
+                    <StatusBadge tone={exchange.status < 400 ? "success" : "danger"} className="tabular-nums">
+                      {exchange.status}
+                    </StatusBadge>
+                  </summary>
+                  <div className="pb-3 pl-8">
+                    <CodeBlock
+                      value={JSON.stringify({ request: exchange.request, response: exchange.response }, null, 2)}
+                      label="request and response"
+                    />
+                  </div>
+                </details>
+              </li>
+            );
+          })}
         </ul>
       )}
     </Subsection>

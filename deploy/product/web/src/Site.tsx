@@ -225,10 +225,10 @@ export function DemoSection({ children }: { children?: ReactNode }) {
   );
 }
 
-// The demo's first view (product and backend, the account loaded) measures 1830px tall at 390px wide
-// (1894px at 320), 1672 to 1692px from 640px, and 1025px from 1024px, where its columns sit side by
-// side. Without scripting the demo never arrives, so nothing is reserved.
-const DEMO_HEIGHT = "min-h-[114rem] sm:min-h-[105rem] lg:min-h-[64rem] noscript:min-h-0";
+// The demo's first view (product and backend, the account loaded) measures 1885px tall at 390px wide
+// (1973px at 320), 1669 to 1709px from 640px, and 1096 to 1176px from 1024px, where its columns sit
+// side by side. Without scripting the demo never arrives, so nothing is reserved.
+const DEMO_HEIGHT = "min-h-[117rem] sm:min-h-[104rem] lg:min-h-[68rem] noscript:min-h-0";
 
 /** The demo's space in static HTML and while the page hydrates. */
 export function DemoPlaceholder() {

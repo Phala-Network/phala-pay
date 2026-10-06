@@ -93,7 +93,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   - Without `theme`, defaults suit light backgrounds only; on dark hosts map every color
     variable, as an unmapped one keeps its light default.
   - The theme is these custom properties on `.pp-root[data-theme]`: `--pp-color-surface`,
-    `-text`, `-text-muted`, `-border`, `-primary`, `-primary-foreground`, `-focus`,
+    `-text`, `-text-muted`, `-border`, `-input`, `-primary`, `-primary-foreground`, `-focus`,
     `-success`, `-warning`, `-danger`; `--pp-font-family`, `--pp-font-family-mono`,
     `--pp-font-size` (default `14px`; `1em` follows the page); `--pp-radius`; and
     `--pp-control-height`. Renamed, and an old name is silently ignored, so rename it in your
@@ -101,7 +101,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
     `--pp-color-text-secondary` to `--pp-color-text-muted`, `--pp-border-radius` to
     `--pp-radius`. Removed: `--pp-root-border`, `--pp-root-padding`, `--pp-root-max-width`,
     `--pp-root-background`, `--pp-color-background`. The focus ring is `--pp-color-focus`, no
-    longer the primary color.
+    longer the primary color. The network and token choices' edges are the new
+    `--pp-color-input` (default `#8a8a93`, dark `#71717a`, 3:1 or more against white, `#f4f4f5`,
+    and dark backgrounds), no longer `--pp-color-border`, which now draws only dividers and the QR
+    code's frame: map it to a control-border token of yours that keeps 3:1.
   - Classes are BEM-style blocks: `.pp-summary` (`__amount`, `__meta`, `__network`,
     `__test-mode`; were `.pp-amount`, `.pp-subtitle`, `.pp-badge`), `.pp-status` (`__icon`,
     `__text`, `__note`, `__countdown`; was `.pp-countdown`), `.pp-tabs` (`__tab`, `__panel`; was

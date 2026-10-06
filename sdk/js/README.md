@@ -218,7 +218,8 @@ the theme (or map the colors) that suits its background.
 | `--pp-color-surface`            | `#f4f4f5`         | `#18181b`    | Status row, loading placeholder, copy button hover  |
 | `--pp-color-text`               | `#18181b`         | `#fafafa`    | Text                                                |
 | `--pp-color-text-muted`         | `#52525b`         | `#a1a1aa`    | Labels, hints, in-progress status icon              |
-| `--pp-color-border`             | `#e4e4e7`         | `#27272a`    | Borders and dividers                                |
+| `--pp-color-border`             | `#e4e4e7`         | `#27272a`    | Dividers and the QR code's frame                    |
+| `--pp-color-input`              | `#8a8a93`         | `#71717a`    | Edges of the network and token choices              |
 | `--pp-color-primary`            | `#171717`         | `#fafafa`    | Pay button, selected tab and choice                 |
 | `--pp-color-primary-foreground` | `#fafafa`         | `#18181b`    | Text on the primary color                           |
 | `--pp-color-focus`              | `#2563eb`         | `#60a5fa`    | Keyboard focus ring                                 |
@@ -242,7 +243,8 @@ Set these CSS custom properties in your own stylesheet, after the SDK stylesheet
 color with a dark `--pp-color-primary-foreground`. Set `--pp-font-size: 1em` to follow your
 page's text size. Keep `--pp-color-focus` distinct from `--pp-color-primary`, with at least 3:1
 contrast to the background: it is how a keyboard user tells the focused choice from the selected
-one.
+one. Keep `--pp-color-input` at 3:1 or more against the background too, as WCAG 1.4.11 asks of the
+edge that shows where a control is; `--pp-color-border` draws only dividers and may be fainter.
 
 ```css
 .pp-root[data-theme] {

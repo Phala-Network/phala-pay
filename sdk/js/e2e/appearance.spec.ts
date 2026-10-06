@@ -260,6 +260,47 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
+/** The contrast of each element's border against the page behind it, as WCAG 1.4.11 measures a control's edge. */
+function edgeContrast(locator: Locator): Promise<number[]> {
+  return locator.evaluateAll((elements) => {
+    const rgba = (color: string) => {
+      const [r = 0, g = 0, b = 0, a = 1] = (color.match(/[\d.]+/g) ?? []).map(Number);
+      return { r, g, b, a };
+    };
+    const luminance = ({ r, g, b }: { r: number; g: number; b: number }) => {
+      const [lr = 0, lg = 0, lb = 0] = [r, g, b].map((value) => {
+        const c = value / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
+    };
+    return elements.map((element) => {
+      let behind = { r: 255, g: 255, b: 255, a: 1 };
+      for (let node = element.parentElement; node !== null; node = node.parentElement) {
+        const background = rgba(getComputedStyle(node).backgroundColor);
+        if (background.a > 0) {
+          behind = background;
+          break;
+        }
+      }
+      const edge = rgba(getComputedStyle(element).borderTopColor);
+      const over = (front: number, back: number) => front * edge.a + back * (1 - edge.a);
+      const drawn = { r: over(edge.r, behind.r), g: over(edge.g, behind.g), b: over(edge.b, behind.b) };
+      const [light, dark] = [luminance(drawn), luminance(behind)].sort((x, y) => y - x);
+      return ((light ?? 0) + 0.05) / ((dark ?? 0) + 0.05);
+    });
+  });
+}
+
+for (const theme of ["light", "dark"]) {
+  test(`choices' edges keep 3:1 against the page, ${theme}`, async ({ page }) => {
+    await page.goto(`/?deposit&theme=${theme}`);
+    const choices = page.locator(".pp-choices__input:not(:checked)");
+    await expect(choices.first()).toBeVisible();
+    for (const ratio of await edgeContrast(choices)) expect(ratio).toBeGreaterThanOrEqual(3);
+  });
+}
+
 test("keyboard focus is visible and differs from the selected state", async ({ page }) => {
   await page.goto("/?deposit");
   await expect(page.getByRole("group", { name: "Network" })).toBeVisible();

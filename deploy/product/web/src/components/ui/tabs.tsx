@@ -17,9 +17,9 @@ function Tabs({
 }
 
 /**
- * Two looks: `default`, a 40px segmented row inside a form; `line`, a page's 44px tab row over a
- * bottom border, the active tab underlined. In forced-colors mode the active tab takes the system
- * highlight.
+ * Two looks: `default`, a 40px segmented row inside a form, each tab's target 44px tall over the
+ * row's padding; `line`, a page's 44px tab row over a bottom border, the active tab underlined. In
+ * forced-colors mode the active tab takes the system highlight.
  */
 const tabsListVariants = cva(
   "group/tabs-list inline-flex w-fit items-center text-muted-foreground",
@@ -61,7 +61,7 @@ function TabsTrigger({
       data-slot="tabs-trigger"
       className={cn(
         "relative inline-flex h-full items-center justify-center gap-1.5 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 data-active:text-foreground forced-colors:data-active:forced-color-adjust-none forced-colors:data-active:bg-[Highlight] forced-colors:data-active:text-[HighlightText] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        "group-data-[variant=default]/tabs-list:flex-1 group-data-[variant=default]/tabs-list:rounded-md group-data-[variant=default]/tabs-list:px-2 group-data-[variant=default]/tabs-list:data-active:bg-background group-data-[variant=default]/tabs-list:data-active:ring-1 group-data-[variant=default]/tabs-list:data-active:ring-foreground/15 dark:group-data-[variant=default]/tabs-list:data-active:bg-input/40",
+        "group-data-[variant=default]/tabs-list:flex-1 group-data-[variant=default]/tabs-list:before:absolute group-data-[variant=default]/tabs-list:before:inset-x-0 group-data-[variant=default]/tabs-list:before:-inset-y-[5px] group-data-[variant=default]/tabs-list:rounded-md group-data-[variant=default]/tabs-list:px-2 group-data-[variant=default]/tabs-list:data-active:bg-background group-data-[variant=default]/tabs-list:data-active:ring-1 group-data-[variant=default]/tabs-list:data-active:ring-foreground/15 dark:group-data-[variant=default]/tabs-list:data-active:bg-input/40",
         "after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground after:opacity-0 after:transition-opacity group-data-[variant=line]/tabs-list:data-active:after:opacity-100",
         className
       )}
