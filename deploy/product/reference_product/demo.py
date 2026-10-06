@@ -1549,6 +1549,7 @@ def _failure_value(error: Exception) -> Failure:
             None,
             f"demo: service answered {error.status_code} {error.code}",
             source_type=source_type,
+            source_message=str(error),
         )
     if isinstance(error, AddressMismatchError):
         return Failure(
@@ -1558,6 +1559,7 @@ def _failure_value(error: Exception) -> Failure:
             "demo: the service returned an address the pins do not derive",
             logging.ERROR,
             source_type=source_type,
+            source_message=str(error),
         )
     if isinstance(error, TransportError):
         return Failure(
@@ -1566,6 +1568,7 @@ def _failure_value(error: Exception) -> Failure:
             "2",
             "demo: service transport unavailable",
             source_type=source_type,
+            source_message=str(error),
         )
     if isinstance(error, ResponseValidationError):
         return Failure(
@@ -1574,6 +1577,7 @@ def _failure_value(error: Exception) -> Failure:
             None,
             "demo: service response validation failed",
             source_type=source_type,
+            source_message=str(error),
         )
     if isinstance(error, (httpx.HTTPError, MissingProductKeyError)):
         return Failure(
@@ -1583,6 +1587,7 @@ def _failure_value(error: Exception) -> Failure:
             "demo: service unavailable",
             log_exc_info=True,
             source_type=source_type,
+            source_message=str(error),
         )
     raise error
 

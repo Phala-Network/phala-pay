@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextlib import suppress
 from dataclasses import dataclass
 from http import HTTPStatus
 
@@ -26,13 +27,19 @@ class Failure:
     log_level: int = logging.WARNING
     log_exc_info: bool = False
     source_type: str | None = None
+    source_message: str = ""
 
 
 class CachedFailureError(TopupError):
     """A fresh control-flow signal carrying a cached failure value to the HTTP boundary."""
 
     def __init__(self, failure: Failure) -> None:
-        super().__init__(failure.message)
+        message = (
+            f"{failure.source_type}: {failure.source_message}"
+            if failure.source_type is not None
+            else failure.message
+        )
+        super().__init__(message)
         self.failure = failure
 
 
@@ -69,7 +76,7 @@ class SingleFlightTTL[T]:
         self._expires = 0.0
         self._error: Failure | None = None
         self._refreshing = False
-        self._future: Future[T | Failure] | None = None
+        self._future: Future[T] | None = None
 
     def get(
         self,
@@ -84,7 +91,9 @@ class SingleFlightTTL[T]:
                 finished, self._future = self._future, None
                 # Surface unexpected executor failures to the next HTTP reader, even
                 # when the refresh was started by a reader receiving a stale value.
-                finished.result()
+                # Expected failures have already published their typed negative cache.
+                with suppress(*self._cache_errors):
+                    finished.result()
             while self._refreshing and self._executor is None:
                 remaining = self._remaining(None)
                 self._changed.wait(timeout=remaining)
@@ -111,7 +120,7 @@ class SingleFlightTTL[T]:
                 return stale(self._value, now - self._stored_at)
             pending = self._future
         if leader:
-            return self._unwrap(self._refresh(fetch))
+            return self._refresh(fetch)
         if pending is None:
             raise TransportError("unavailable")
         try:
@@ -122,7 +131,7 @@ class SingleFlightTTL[T]:
             with self._changed:
                 if pending.done() and self._future is pending:
                     self._future = None
-        return self._unwrap(result)
+        return result
 
     @staticmethod
     def _remaining(timeout: float | None) -> float | None:
@@ -134,13 +143,7 @@ class SingleFlightTTL[T]:
             raise TransportError("timeout")
         return remaining if timeout is None else min(timeout, remaining)
 
-    @staticmethod
-    def _unwrap(value: T | Failure) -> T:
-        if isinstance(value, Failure):
-            raise CachedFailureError(value)
-        return value
-
-    def _refresh(self, fetch: Callable[[], T]) -> T | Failure:
+    def _refresh(self, fetch: Callable[[], T]) -> T:
         try:
             value = fetch()
         except self._cache_errors as error:
@@ -149,7 +152,9 @@ class SingleFlightTTL[T]:
                 self._expires = self._clock() + self._negative_ttl
                 if self._value is not None:
                     return self._value
-                return self._error
+            # The first reader gets the original exception and traceback; only later
+            # readers receive a fresh signal carrying the cached failure value.
+            raise
         else:
             with self._changed:
                 incomplete = self._incomplete(value)

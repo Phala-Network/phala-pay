@@ -1541,16 +1541,16 @@ def test_failed_sweeps_refreshes_back_off_from_failure_completion(
         clock.now += 5
         raise TransportError("network")
 
-    def read() -> None:
+    def read(*, refresh: bool = False) -> None:
         if warm:
             assert console._sweeps_view() == cached
         else:
-            with pytest.raises(CachedFailureError):
+            with pytest.raises(TransportError if refresh else CachedFailureError):
                 console._sweeps_view()
         console.drain()
 
     monkeypatch.setattr(console, "_build_sweeps_view", fail)
-    read()
+    read(refresh=True)
     for _ in range(5):
         read()
     assert len(calls) == 1
@@ -1558,7 +1558,7 @@ def test_failed_sweeps_refreshes_back_off_from_failure_completion(
     read()
     assert len(calls) == 1
     clock.now += 1
-    read()
+    read(refresh=True)
     assert len(calls) == 2
 
 
@@ -1799,3 +1799,48 @@ def test_unmapped_sdk_errors_preserve_server_response_and_traceback(
         assert record.exc_info is not None
         assert record.exc_info[0] is ConfigurationError
         assert record.exc_info[2] is not None
+
+
+@pytest.mark.parametrize("kind", ["trust", "networks", "sweeps"])
+@pytest.mark.parametrize("error_type", [httpx.HTTPError, MissingProductKeyError])
+def test_cache_leader_logs_original_traceback_and_replays_source_message(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+    error_type: type[Exception],
+) -> None:
+    console, _ = demo
+    cookie = _account(console) if kind == "sweeps" else ""
+    calls: list[int] = []
+
+    def fail(*args: Any) -> Any:
+        calls.append(1)
+        raise error_type("original failure text")
+
+    monkeypatch.setattr(
+        console,
+        {
+            "trust": "_fetch_trust_view",
+            "networks": "_fetch_payable_networks",
+            "sweeps": "_build_sweeps_view",
+        }[kind],
+        fail,
+    )
+    path = f"/api/{'assets' if kind == 'networks' else kind}"
+    for _ in range(2):
+        response = console.handle("GET", path, {"cookie": cookie}, b"")
+        assert response.status == 503
+        assert response.body == b'{"code": "unavailable"}'
+    assert len(calls) == 1
+    records = [
+        record for record in caplog.records if record.getMessage() == "demo: service unavailable"
+    ]
+    assert len(records) == 2
+    first, replay = records
+    assert first.exc_info is not None
+    assert first.exc_info[0] is error_type
+    assert first.exc_info[2] is not None
+    assert replay.exc_info is not None
+    assert replay.exc_info[0] is CachedFailureError
+    assert str(replay.exc_info[1]) == f"{error_type.__name__}: original failure text"
