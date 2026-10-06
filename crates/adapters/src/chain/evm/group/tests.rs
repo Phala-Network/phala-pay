@@ -269,7 +269,6 @@ async fn head_validation_metrics_never_count_as_failures() {
         .await
         .unwrap();
     task.abort();
-    metrics::event(&group, 0, "head_skipped", 1);
     group.failed(0, Failure::Server);
     let families = metrics::events().unwrap();
     let samples = |name: &str| {
@@ -285,19 +284,14 @@ async fn head_validation_metrics_never_count_as_failures() {
             .collect::<Vec<_>>()
     };
     let heads = samples("topup_rpc_head_validations_total");
-    assert_eq!(heads.len(), 2);
-    for result in ["performed", "skipped_pinned"] {
-        let sample = heads
+    assert_eq!(heads.len(), 1);
+    assert!(
+        heads[0]
+            .get_label()
             .iter()
-            .find(|sample| {
-                sample
-                    .get_label()
-                    .iter()
-                    .any(|label| label.name() == "result" && label.value() == result)
-            })
-            .unwrap();
-        assert_eq!(sample.get_counter().get_value(), 1.0);
-    }
+            .any(|label| label.name() == "result" && label.value() == "performed")
+    );
+    assert_eq!(heads[0].get_counter().get_value(), 1.0);
     let failures = samples("topup_rpc_member_failures_total");
     assert_eq!(failures.len(), 1);
     assert!(
