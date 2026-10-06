@@ -107,15 +107,10 @@ export function useTimeline(selection: Selection | null) {
 
 /** The visitor's deposit address and its payments, followed once the product has shown it. */
 export function useDepositAddress(enabled: boolean) {
-  // The SDK's DepositAddress polls too, but has no change callback to refresh the product's view.
   return useQuery({
     queryKey: keys.depositAddress,
     queryFn: ({ signal }) => getDepositAddress(signal),
     enabled,
-    refetchInterval: (query) => isTerminalApiError(query.state.error) ? false :
-      query.state.data?.deposit_address.payments.some((payment) =>
-        !["credited", "rejected", "reversed"].includes(payment.status),
-      ) ? 3000 : 15_000,
   });
 }
 

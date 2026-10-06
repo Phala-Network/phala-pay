@@ -786,7 +786,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   const mining = async (state: "pause" | "resume") => {
     expect((await fetch(`${env("SERVICE_URL")}/_test/mining/${state}`, { method: "POST" })).status).toBe(200);
   };
-  // Hold the payment before finality while the product's 15 s discovery read catches up.
+  // Keep reversal deterministic: the service refuses it once the payment reaches finality.
   await mining("pause");
   try {
     await form.getByRole("button", { name: "Send" }).click();
@@ -796,8 +796,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
 
     // The backend follows the payment as it arrives.
     const payment = scenes.getByTestId("address-payment").first();
-    // The product discovers a new payment on its 15 s fallback read; then pending payments poll at 3 s.
-    await expect(payment).toContainText("25 PHA", { timeout: 20_000 });
+    await expect(payment).toContainText("25 PHA");
     await expect(payment.getByRole("button", { name: /^View/ })).toHaveAttribute("aria-pressed", "true");
     await expectComplete(timeline, ["sent", "received", "credited", "webhook_received"]);
 
