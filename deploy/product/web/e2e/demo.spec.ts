@@ -441,7 +441,8 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
   expect((await refetchTimeline(page)).status()).toBe(200);
   missing = true;
-  const response = page.waitForResponse("**/api/quotes/*");
+  const timelineUrl = new URLPattern(`${env("API_URL")}/api/quotes/*`);
+  const response = page.waitForResponse((response) => timelineUrl.test(response.url()) && response.status() === 404);
   await page.clock.runFor(TIMELINE_INTERVAL_MS);
   const refused = await response;
   expect(refused.status()).toBe(404);
