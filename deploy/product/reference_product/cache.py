@@ -11,7 +11,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from http import HTTPStatus
 
-from topup_sdk.errors import TransportError
+from topup_sdk.errors import TopupError, TransportError
 
 from .transport import operation_deadline
 
@@ -26,9 +26,10 @@ class Failure:
     message: str
     log_level: int = logging.WARNING
     log_exc_info: bool = False
+    source_type: str | None = None
 
 
-class CachedFailureError(Exception):
+class CachedFailureError(TopupError):
     """A fresh control-flow signal carrying a cached failure value to the HTTP boundary."""
 
     def __init__(self, failure: Failure) -> None:

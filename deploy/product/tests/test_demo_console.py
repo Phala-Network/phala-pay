@@ -38,6 +38,7 @@ from reference_product.ledger import ProductLedger
 from reference_product.server import AccountApi, ProductServer
 from reference_product.transport import operation_deadline
 from topup_sdk import (
+    AddressMismatchError,
     ApiError,
     credited_event_id,
     deposit_address_salt,
@@ -1637,3 +1638,121 @@ def test_unexpected_sweeps_errors_reach_server_logging(
     assert records
     assert all(record.getMessage() == "product request failed" for record in records)
     assert all(record.levelno == logging.ERROR and record.exc_info for record in records)
+
+
+@pytest.mark.parametrize("cached", [True, False])
+@pytest.mark.parametrize(
+    ("error", "status", "body", "retry", "level", "message"),
+    [
+        (
+            ApiError(429, "rate_limited", "private", retry_after=9),
+            429,
+            b'{"code": "rate_limited"}',
+            None,
+            logging.WARNING,
+            "demo: service answered 429 rate_limited",
+        ),
+        (
+            ApiError(404, "not_found", "private"),
+            400,
+            b'{"code": "not_found"}',
+            None,
+            logging.WARNING,
+            "demo: service answered 404 not_found",
+        ),
+        (
+            ApiError(503, "service_unavailable", "private"),
+            502,
+            b'{"code": "service_unavailable"}',
+            None,
+            logging.WARNING,
+            "demo: service answered 503 service_unavailable",
+        ),
+        (
+            AddressMismatchError("private"),
+            502,
+            b'{"code": "address_not_derivable"}',
+            None,
+            logging.ERROR,
+            "demo: the service returned an address the pins do not derive",
+        ),
+        (
+            TransportError("timeout", "private"),
+            503,
+            b'{"code": "unavailable"}',
+            "2",
+            logging.WARNING,
+            "demo: service transport unavailable",
+        ),
+        (
+            ResponseValidationError("private"),
+            502,
+            b'{"code": "bad_gateway"}',
+            None,
+            logging.WARNING,
+            "demo: service response validation failed",
+        ),
+        (
+            httpx.HTTPError("private"),
+            503,
+            b'{"code": "unavailable"}',
+            None,
+            logging.WARNING,
+            "demo: service unavailable",
+        ),
+        (
+            MissingProductKeyError("private"),
+            503,
+            b'{"code": "unavailable"}',
+            None,
+            logging.WARNING,
+            "demo: service unavailable",
+        ),
+    ],
+)
+def test_failure_boundary_preserves_bytes_headers_and_logs(
+    demo: tuple[DemoConsole, Service],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    *,
+    cached: bool,
+    error: Exception,
+    status: int,
+    body: bytes,
+    retry: str | None,
+    level: int,
+    message: str,
+) -> None:
+    console, _ = demo
+
+    def fail(*args: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(console, "_fetch_payable_networks" if cached else "_api", fail)
+    for _ in range(2):
+        response = console.handle("GET", "/api/assets", {}, b"")
+        assert response.status == status
+        assert response.body == body
+        assert response.headers.get("retry-after") == retry
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (level, message)
+    ] * 2
+
+
+def test_sweeps_refresh_logging_preserves_cached_sdk_failure_type(
+    demo: tuple[DemoConsole, Service],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    console, _ = demo
+    cookie = _account(console)
+    clock.now += 301
+
+    def fail(*args: Any) -> Any:
+        raise TransportError("network")
+
+    monkeypatch.setattr(console, "_fetch_payable_networks", fail)
+    assert _get(console, cookie, "sweeps") == (503, {"code": "unavailable"})
+    assert "sweeps refresh failed: TransportError" in caplog.messages
+    assert "demo: service transport unavailable" in caplog.messages

@@ -250,7 +250,7 @@ class DemoConsole:
             negative_ttl=10,
             failure=_failure_value,
             executor=self._refresh_workers,
-            cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError, CachedFailureError),
+            cache_errors=(TopupError, httpx.HTTPError, MissingProductKeyError),
             inclusive=True,
         )
         self._block_times = ExpiringLRU[tuple[int, str], tuple[int, int] | None](1024, clock)
@@ -293,38 +293,8 @@ class DemoConsole:
     def _handle_api(self, method: str, name: str, headers: dict[str, str], body: bytes) -> Response:
         try:
             return self._api(method, name, headers, body)
-        except CachedFailureError as error:
-            failure = error.failure
-            _log_failure(failure)
-            response = _json(failure.status, {"code": failure.code})
-            if failure.retry_after is not None:
-                response.headers["retry-after"] = failure.retry_after
-            return response
-        except ApiError as error:
-            # The service's documented code is public; its message and everything else are not.
-            LOG.warning("demo: service answered %s %s", error.status_code, error.code)
-            if error.status_code == 429:
-                status = HTTPStatus.TOO_MANY_REQUESTS
-            elif 400 <= error.status_code < 500:
-                status = HTTPStatus.BAD_REQUEST
-            else:
-                status = HTTPStatus.BAD_GATEWAY
-            return _json(status, {"code": error.code})
-        except AddressMismatchError:
-            # The SDK refused an address the product cannot derive from its pins: never shown.
-            LOG.error("demo: the service returned an address the pins do not derive")
-            return _json(HTTPStatus.BAD_GATEWAY, {"code": "address_not_derivable"})
-        except TransportError:
-            LOG.warning("demo: service transport unavailable")
-            response = _json(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
-            response.headers["retry-after"] = "2"
-            return response
-        except ResponseValidationError:
-            LOG.warning("demo: service response validation failed")
-            return _json(HTTPStatus.BAD_GATEWAY, {"code": "bad_gateway"})
-        except (httpx.HTTPError, MissingProductKeyError):
-            LOG.warning("demo: service unavailable", exc_info=True)
-            return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
+        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+            return _failure_response(_failure_value(error))
 
     def _api(self, method: str, name: str, headers: dict[str, str], body: bytes) -> Response:
         # The same for every visitor, cached, and read before a demo account exists.
@@ -869,8 +839,11 @@ class DemoConsole:
         token = operation_deadline.set(time.monotonic() + OPERATION_TIMEOUT_SECONDS)
         try:
             return self._build_sweeps_view(self._clock())
-        except (TopupError, httpx.HTTPError, MissingProductKeyError, CachedFailureError) as error:
-            LOG.warning("sweeps refresh failed: %s", type(error).__name__)
+        except (TopupError, httpx.HTTPError, MissingProductKeyError) as error:
+            source_type = (
+                error.failure.source_type if isinstance(error, CachedFailureError) else None
+            )
+            LOG.warning("sweeps refresh failed: %s", source_type or type(error).__name__)
             raise
         finally:
             operation_deadline.reset(token)
@@ -1542,6 +1515,7 @@ def _failure_value(error: Exception) -> Failure:
     """Map failures once, preserving the demo's HTTP contract without SDK exceptions."""
     if isinstance(error, CachedFailureError):
         return error.failure
+    source_type = type(error).__name__
     if isinstance(error, ApiError):
         if error.status_code == 429:
             status = HTTPStatus.TOO_MANY_REQUESTS
@@ -1550,7 +1524,11 @@ def _failure_value(error: Exception) -> Failure:
         else:
             status = HTTPStatus.BAD_GATEWAY
         return Failure(
-            status, error.code, None, f"demo: service answered {error.status_code} {error.code}"
+            status,
+            error.code,
+            None,
+            f"demo: service answered {error.status_code} {error.code}",
+            source_type=source_type,
         )
     if isinstance(error, AddressMismatchError):
         return Failure(
@@ -1559,6 +1537,7 @@ def _failure_value(error: Exception) -> Failure:
             None,
             "demo: the service returned an address the pins do not derive",
             logging.ERROR,
+            source_type=source_type,
         )
     if isinstance(error, TransportError):
         return Failure(
@@ -1566,10 +1545,15 @@ def _failure_value(error: Exception) -> Failure:
             "unavailable",
             "2",
             "demo: service transport unavailable",
+            source_type=source_type,
         )
     if isinstance(error, ResponseValidationError):
         return Failure(
-            HTTPStatus.BAD_GATEWAY, "bad_gateway", None, "demo: service response validation failed"
+            HTTPStatus.BAD_GATEWAY,
+            "bad_gateway",
+            None,
+            "demo: service response validation failed",
+            source_type=source_type,
         )
     if isinstance(error, (httpx.HTTPError, MissingProductKeyError)):
         return Failure(
@@ -1578,14 +1562,19 @@ def _failure_value(error: Exception) -> Failure:
             None,
             "demo: service unavailable",
             log_exc_info=True,
+            source_type=source_type,
         )
     return Failure(
         HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", None, "request failed"
     )
 
 
-def _log_failure(failure: Failure) -> None:
+def _failure_response(failure: Failure) -> Response:
     LOG.log(failure.log_level, failure.message, exc_info=failure.log_exc_info)
+    response = _json(failure.status, {"code": failure.code})
+    if failure.retry_after is not None:
+        response.headers["retry-after"] = failure.retry_after
+    return response
 
 
 def _json_body(body: bytes) -> dict[str, Any] | None:
