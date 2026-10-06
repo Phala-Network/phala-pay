@@ -40,12 +40,12 @@ retry_delay() {
 
 retry_after() {
     local value
-    value=$(awk 'tolower($0) ~ /^retry-after:[[:space:]]*[0-9]+[[:space:]]*$/ {
+    value=$(awk 'tolower($0) ~ /^retry-after:/ {
             sub(/^[^:]*:[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); value=$0
         }
         END { if (value != "") print value }' "$tmp/response.headers")
-    [[ "$value" =~ ^[0-9]+$ ]] || return 1
-    printf '%s\n' "$value"
+    [[ "$value" =~ ^[0-9]{1,9}$ ]] || return 1
+    printf '%s\n' "$((10#$value))"
 }
 
 attempt=1
@@ -101,7 +101,6 @@ while stage_remaining; do
     if retry_after_value=$(retry_after); then
         ((retry_after_value > delay)) && delay=$retry_after_value
     fi
-    ((delay < 1)) && delay=1
     remaining=$((stage_deadline - SECONDS))
     if ((delay >= remaining)); then
         [[ -s "$tmp/response.body" ]] && cat "$tmp/response.body" >&2

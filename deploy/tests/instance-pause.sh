@@ -50,9 +50,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.connection.shutdown(socket.SHUT_RDWR)
             self.connection.close()
             return
-        if mode == "retry-after-zero" and count == 1:
+        if mode in ("retry-after-zero", "retry-after-eight") and count == 1:
             self.send_response(503)
-            self.send_header("Retry-After", "0")
+            self.send_header("Retry-After", "0" if mode == "retry-after-zero" else "08")
             body = b'{"error":"warming up"}\n'
         elif mode == "400":
             self.send_response(400)
@@ -132,6 +132,20 @@ cmp -s "$tmp/expected-body" "$tmp/retry-after-zero.out"
 [[ "$(<"$tmp/retry-after-zero.count")" == 2 ]]
 [[ "$(created_count "$tmp/retry-after-zero.signatures")" == 2 ]]
 grep -q 'retrying resume after HTTP 503 (attempt 1, backoff 1s)' "$tmp/retry-after-zero.err"
+stop_server
+
+mkdir "$tmp/bin"
+cat >"$tmp/bin/sleep" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >>"$STUB_SLEEP_LOG"
+SH
+chmod +x "$tmp/bin/sleep"
+start_server retry-after-eight
+STUB_SLEEP_LOG="$tmp/retry-after-eight.sleep" PATH="$tmp/bin:$PATH" \
+    run_pause retry-after-eight "$tmp/retry-after-eight.out" "$tmp/retry-after-eight.err"
+cmp -s "$tmp/expected-body" "$tmp/retry-after-eight.out"
+[[ "$(<"$tmp/retry-after-eight.count")" == 2 ]]
+[[ "$(<"$tmp/retry-after-eight.sleep")" == 8 ]]
 stop_server
 
 start_server redirect
