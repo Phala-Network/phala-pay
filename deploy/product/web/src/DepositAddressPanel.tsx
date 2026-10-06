@@ -1,5 +1,5 @@
 import type { Appearance } from "@phala/pay-react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -13,7 +13,7 @@ import { PRIMARY_BUTTON, ExplorerLink, InfoTip, describe, errorMessage, isShortO
 import { assetOf, networkOf } from "./chains.js";
 import { atomicAmount, dollars, price, signedDollars, statusLabel, tokenName, tokens } from "./format.js";
 import { FundWallet } from "./Funding.js";
-import { useCreateDepositAddress, useNetworks } from "./queries.js";
+import { keys, useCreateDepositAddress, useNetworks } from "./queries.js";
 
 const DepositAddress = lazy(() => loadSdk().then((sdk) => ({ default: sdk.DepositAddress })));
 
@@ -47,6 +47,7 @@ export function DepositAddressPanel({
   onSendAmountChange: (amount: string) => void;
 }) {
   const show = useCreateDepositAddress();
+  const queryClient = useQueryClient();
 
   if (created === null || created.client_secret === undefined) {
     return (
@@ -99,6 +100,11 @@ export function DepositAddressPanel({
           clientSecret={created.client_secret}
           apiBase={account.api_base}
           appearance={appearance}
+          onChange={() => {
+            void queryClient.invalidateQueries({ queryKey: keys.depositAddress });
+            void queryClient.invalidateQueries({ queryKey: keys.account });
+            void queryClient.invalidateQueries({ queryKey: keys.timelines });
+          }}
           {...(network === undefined || asset === undefined ? {} : { chainId: network.chain_id, asset: asset.asset })}
         />
       </Suspense>

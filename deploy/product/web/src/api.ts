@@ -89,7 +89,7 @@ export interface PaymentRow {
   asset: string | null;
   /** USD per token: the quote's locked price, or the deposit's valuation. */
   exchange_rate: string | null;
-  status: string;
+  status: Deposit["status"] | "awaiting_payment" | "expired";
   final: boolean;
   swept: boolean;
   tx_hash: string | null;
@@ -143,7 +143,7 @@ export interface ApiExchange {
 
 export interface Deposit {
   id: string;
-  status: string;
+  status: "pending" | "credited" | "rejected" | "reversed";
   final: boolean;
   /** When the service's finality watch found it final, Unix seconds; null until final. */
   final_at?: number | null;
@@ -201,7 +201,7 @@ export interface Timeline {
   kind: "quote" | "address";
   quote: {
     id: string;
-    status: string;
+    status: "open" | "complete" | "expired" | "canceled";
     chain_id: number;
     asset: string;
     exchange_rate: string;
@@ -315,6 +315,12 @@ export class ApiError extends Error {
   ) {
     super(code);
   }
+}
+
+/** Timeouts and rate limits can recover; other client refusals need a different request. */
+export function isTerminalApiError(error: unknown): boolean {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500 &&
+    error.status !== 408 && error.status !== 429;
 }
 
 const API = `${import.meta.env.VITE_DEMO_API_ORIGIN}/api/`;

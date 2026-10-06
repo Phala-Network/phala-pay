@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { CreatedQuote, DepositAddressResponse, Selection } from "./api.js";
 import { Backend } from "./Backend.js";
-import { describe } from "./common.js";
+import { queryView } from "./queryView.js";
 import { Product, type Method } from "./Product.js";
 import { queryClient, keys, useAccount, useDepositAddress, useNetworks, useTimeline, useTrust } from "./queries.js";
 import type { Theme } from "./theme.js";
@@ -27,6 +27,39 @@ function DemoContent({ theme }: { theme: Theme }) {
   // follows it as the product reads it (its payments).
   const [address, setAddress] = useState<DepositAddressResponse | null>(null);
   const current = useDepositAddress(address !== null);
+  const views = {
+    account: queryView(account, "Account is"),
+    networks: queryView(networks, "Networks are"),
+    timeline: queryView(timeline, "Timeline is"),
+    trust: queryView(trust, "Trust information is"),
+    address: queryView(current, "Deposit address is"),
+  };
+
+  // Server-side settlement moves the balance and address view without a customer mutation.
+  const observedTimeline = useRef<{ key: string; signature: string } | null>(null);
+  useEffect(() => {
+    if (selected === null || timeline.data === undefined) {
+      observedTimeline.current = null;
+      return;
+    }
+    const deposit = timeline.data.deposit;
+    const signature = JSON.stringify([
+      deposit?.status,
+      deposit?.swept,
+      deposit?.final,
+      deposit?.amount_refunded_atomic,
+      [...timeline.data.refunds].sort((left, right) => left.id.localeCompare(right.id))
+        .map((refund) => [refund.id, refund.status]),
+    ]);
+    const key = `${selected.kind}:${selected.id}`;
+    const previous = observedTimeline.current;
+    observedTimeline.current = { key, signature };
+    if (previous === null || previous.key !== key || previous.signature === signature) {
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: keys.account });
+    void queryClient.invalidateQueries({ queryKey: keys.depositAddress });
+  }, [selected, timeline.data, queryClient]);
 
   // A new payment to the deposit address is followed as it arrives, as a quote is once created.
   const seenPayments = useRef<Set<string> | null>(null);
@@ -53,9 +86,8 @@ function DemoContent({ theme }: { theme: Theme }) {
     <TooltipProvider delayDuration={150}>
       <div className="grid items-start gap-x-8 gap-y-12 lg:grid-cols-[25rem_minmax(0,1fr)] xl:grid-cols-[27.5rem_minmax(0,1fr)] 2xl:gap-x-10">
         <Product
-          account={account.data ?? null}
-          accountError={account.error === null ? null : describe(account.error)}
-          networks={networks.data}
+          account={views.account}
+          networks={views.networks}
           method={method}
           onMethodChange={setMethod}
           session={session}
@@ -70,12 +102,12 @@ function DemoContent({ theme }: { theme: Theme }) {
           appearance={appearance}
         />
         <Backend
-          account={account.data ?? null}
+          account={views.account}
           selected={selected}
-          timeline={timeline.data ?? null}
-          trust={trust.data ?? null}
-          address={current.data ?? null}
-          networks={networks.data}
+          timeline={views.timeline}
+          trust={views.trust}
+          address={views.address}
+          networks={views.networks}
           onSelect={setSelected}
         />
       </div>

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { errors, expect, test as base, type Locator, type Page, type Request } from "@playwright/test";
 import {
   createPublicClient,
   createTestClient,
@@ -16,6 +16,8 @@ import {
   type Hash,
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
+import type { Timeline } from "../src/api.js";
+import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
 
 declare global {
   interface Window {
@@ -33,6 +35,57 @@ function env(name: string): string {
     throw new Error(`${name} is not set; global setup did not run`);
   }
   return value;
+}
+
+// Track in-flight reads from before navigation so the assertion can finish them before its window.
+const test = base.extend<{ timelineRequests: Set<Request> }>({
+  timelineRequests: async ({ page }, runTest) => {
+    const requests = new Set<Request>();
+    const timelineUrl = new URLPattern(`${env("API_URL")}/api/quotes/*`);
+    const record = (request: Request) => {
+      if (timelineUrl.test(request.url())) {
+        requests.add(request);
+      }
+    };
+    const finished = (request: Request) => requests.delete(request);
+    page.on("request", record);
+    page.on("requestfinished", finished);
+    page.on("requestfailed", finished);
+    try {
+      await runTest(requests);
+    } finally {
+      page.off("request", record);
+      page.off("requestfinished", finished);
+      page.off("requestfailed", finished);
+    }
+  },
+});
+
+/** Finish the visible page's initial timeline refresh before observing its polling interval. */
+async function refetchTimeline(page: Page) {
+  const response = page.waitForResponse("**/api/quotes/*");
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  const current = await response;
+  await current.finished();
+  return current;
+}
+
+/** Finish existing reads, then observe whether a new request is issued during the window. */
+async function expectNoTimelineRequests(page: Page, requests: Set<Request>, windowMs: number) {
+  while (requests.size > 0) {
+    await Promise.all([...requests].map(async (request) => {
+      const response = await request.response();
+      if (response !== null) {
+        await response.finished();
+      }
+      requests.delete(request);
+    }));
+  }
+  const issued = page.waitForRequest("**/api/quotes/*", { timeout: windowMs });
+  await Promise.all([
+    page.clock.runFor(windowMs),
+    expect(issued).rejects.toThrow(errors.TimeoutError),
+  ]);
 }
 
 /** The owner's balance of a token: Sepolia's test PHA unless named. */
@@ -220,7 +273,7 @@ async function expectPaymentOptions(product: Locator) {
   const token = product.getByRole("radiogroup", { name: "Token" });
   await expect(token.getByRole("radio")).toHaveCount(2);
   await expect(token.getByRole("radio", { name: "Test PHA", exact: true })).toBeChecked();
-  const rows = product.getByTestId("token-option");
+  const rows = token.getByTestId("token-option");
   await expect(rows.filter({ hasText: "PHA" })).toContainText("+10% bonus");
   // A stablecoin is $1.00; a spot token is at the market rate, which a quote locks.
   await expect(rows.filter({ hasText: "USDC" }).getByTestId("token-price")).toHaveText("$1.00");
@@ -329,6 +382,228 @@ async function declareRefund(scenes: Locator, amount: string): Promise<Locator> 
   const refund = scenes.locator(`[data-refund="${id ?? ""}"]`);
   await expect(refund).toHaveAttribute("data-status", "pending");
   return refund;
+}
+
+test("query outages show retrying states, recover, and preserve the last account data", async ({ page }) => {
+  let available = false;
+  await page.route("**/api/{account,assets,trust}", async (route) => {
+    if (available) {
+      await route.continue();
+    } else {
+      await route.fulfill({
+        status: 503,
+        json: { code: "service_unavailable" },
+        headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+      });
+    }
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await expect(product).toContainText("Account is unavailable right now; retrying…", { timeout: 15_000 });
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  const trust = await openTab(scenes, "Trust");
+  await expect(trust).toContainText("Trust information is unavailable right now; retrying…");
+  await expect(trust).toContainText("Networks are unavailable right now; retrying…");
+
+  available = true;
+  const recovered = page.waitForResponse("**/api/account");
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  const recoveredResponse = await recovered;
+  expect(recoveredResponse.status()).toBe(200);
+  await recoveredResponse.finished();
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  await expect(product.getByRole("combobox", { name: "Network", exact: true })).toBeEnabled();
+  await expect(trust).toContainText("Attestation verified");
+  await expect(trust).not.toContainText("retrying…");
+
+  available = false;
+  for (let attempt = 0; attempt <= QUERY_RETRY_LIMIT; attempt += 1) {
+    const unavailable = page.waitForResponse("**/api/account");
+    if (attempt === 0) {
+      await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+    }
+    const response = await unavailable;
+    expect(response.status()).toBe(503);
+    await response.finished();
+  }
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  await expect(product).not.toContainText("Account is unavailable");
+});
+
+test("a missing timeline shows a terminal message and stops polling", async ({ page, timelineRequests }) => {
+  await page.clock.install();
+  await page.route("**/api/quotes/*", async (route) => {
+    await route.fulfill({
+      status: 404,
+      json: { code: "not_found" },
+      headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+    });
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  await expect(scenes).toContainText("Timeline is unavailable for this request.");
+  await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  await expect(scenes.getByTestId("stream-status")).toHaveText("Unavailable");
+  await expect(scenes.getByRole("list", { name: /^Loading/ })).toHaveCount(0);
+  expect((await refetchTimeline(page)).status()).toBe(404);
+  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+});
+
+test("a refused timeline keeps its cached data and shows paused updates", async ({ page, timelineRequests }) => {
+  let missing = false;
+  await page.clock.install();
+  await page.route("**/api/quotes/*", async (route) => {
+    if (!missing) {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 404,
+      json: { code: "not_found" },
+      headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+    });
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  const timeline = scenes.getByRole("list", { name: "Payment timeline" });
+  await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
+  await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  expect((await refetchTimeline(page)).status()).toBe(200);
+  missing = true;
+  const timelineUrl = new URLPattern(`${env("API_URL")}/api/quotes/*`);
+  const response = page.waitForResponse((response) => timelineUrl.test(response.url()) && response.status() === 404);
+  await page.clock.runFor(TIMELINE_INTERVAL_MS);
+  const refused = await response;
+  expect(refused.status()).toBe(404);
+  await refused.finished();
+  await expect(scenes.getByText("Updates paused.", { exact: true })).toBeVisible();
+  await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
+  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+});
+
+for (const sent of [false, true]) {
+  test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page, timelineRequests }) => {
+    await page.clock.install();
+    await page.route("**/api/quotes/*", async (route) => {
+      const timeline: Timeline = {
+        kind: "quote",
+        quote: {
+          id: new URL(route.request().url()).pathname.split("/").at(-1) ?? "",
+          status: sent ? "open" : "expired",
+          chain_id: sepolia.id,
+          asset: "pha",
+          exchange_rate: "0.25",
+          expires_at: 1,
+          metadata: {},
+        },
+        deposit: null,
+        sent: sent ? { tx_hash: `0x${"1".repeat(64)}`, block_number: 1, at: 1 } : null,
+        steps: [{ key: "sent", state: sent ? "current" : "failed", at: null, details: [] }],
+        refunds: [], ledger: null, events: [], api: [],
+      };
+      await route.fulfill({
+        json: timeline,
+        headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+      });
+    });
+    await page.goto(env("SITE_URL"));
+    const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+    await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+    await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
+    await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+    expect((await refetchTimeline(page)).status()).toBe(200);
+    if (!sent) {
+      await expectNoTimelineRequests(page, timelineRequests, TIMELINE_INTERVAL_MS);
+    }
+    const response = page.waitForResponse("**/api/quotes/*");
+    await page.clock.runFor(sent ? TIMELINE_ACTIVE_INTERVAL_MS : EXPIRED_QUOTE_INTERVAL_MS - TIMELINE_INTERVAL_MS);
+    const update = await response;
+    expect(update.status()).toBe(200);
+    await update.finished();
+  });
+}
+
+test("a swept payment keeps polling until its webhook arrives", async ({ page, timelineRequests }) => {
+  let delivered = false;
+  await page.clock.install();
+  await page.route("**/api/quotes/*", async (route) => {
+    const timeline: Timeline = {
+      kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events: [], api: [],
+      deposit: {
+        id: `dep_${"1".repeat(32)}`,
+        status: "credited", final: true, swept: true,
+        amount: 2000, amount_atomic: (80n * 10n ** 18n).toString(),
+        chain_id: sepolia.id, asset: "pha", exchange_rate: "0.25", price_source: "quote",
+        amount_refunded_atomic: "0", amount_refunded: 0, amount_reversed: 0,
+        from_address: env("PAYER_ADDRESS"), asset_contract: env("TOKEN_ADDRESS"),
+        tx_hash: `0x${"1".repeat(64)}`, metadata: {},
+      },
+      steps: [{ key: "webhook_received", state: delivered ? "complete" : "current", at: delivered ? 1 : null, details: [] }],
+    };
+    await route.fulfill({
+      json: timeline,
+      headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+    });
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "current");
+  await expect(scenes.getByTestId("stream-status")).toHaveText("Live");
+  await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  expect((await refetchTimeline(page)).status()).toBe(200);
+  delivered = true;
+  const response = page.waitForResponse("**/api/quotes/*");
+  await page.clock.runFor(TIMELINE_INTERVAL_MS);
+  const update = await response;
+  expect(update.status()).toBe(200);
+  await update.finished();
+  await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "complete");
+  await expect(scenes.getByTestId("stream-status")).toHaveText("Done");
+  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+});
+
+for (const status of ["reversed", "rejected"] as const) {
+  test(`a ${status} deposit ${status === "reversed" ? "stops" : "continues"} timeline polling`, async ({ page, timelineRequests }) => {
+    await page.clock.install();
+    await page.route("**/api/quotes/*", async (route) => {
+      const timeline: Timeline = {
+        kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events: [], api: [],
+        deposit: {
+          id: `dep_${"1".repeat(32)}`, status, final: false, swept: false,
+          amount: status === "reversed" ? 2000 : null, amount_atomic: (80n * 10n ** 18n).toString(),
+          chain_id: sepolia.id, asset: "pha", exchange_rate: status === "reversed" ? "0.25" : null,
+          price_source: status === "reversed" ? "quote" : null,
+          amount_refunded_atomic: "0", amount_refunded: 0, amount_reversed: status === "reversed" ? 2000 : 0,
+          from_address: env("PAYER_ADDRESS"), asset_contract: env("TOKEN_ADDRESS"),
+          tx_hash: `0x${"1".repeat(64)}`, metadata: {},
+        },
+        steps: [{ key: status === "reversed" ? "reversed" : "credited", state: "failed", at: 1, details: [] }],
+      };
+      await route.fulfill({
+        json: timeline,
+        headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+      });
+    });
+    await page.goto(env("SITE_URL"));
+    const product = page.getByRole("region", { name: "Acme Cloud · Billing" });
+    await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+    await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
+    await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+    expect((await refetchTimeline(page)).status()).toBe(200);
+    if (status === "reversed") {
+      await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+    } else {
+      const response = page.waitForResponse("**/api/quotes/*");
+      await page.clock.runFor(TIMELINE_INTERVAL_MS);
+      expect((await response).status()).toBe(200);
+    }
+  });
 }
 
 test("a quote: locked price, metadata, the merchant's sweep, and refunds that succeed, fail, or are canceled", async ({
@@ -592,25 +867,38 @@ test("a deposit address: one verified address, any amount credited at spot, then
   await expect(testTokens).toContainText("Minted:");
   const form = product.getByRole("form", { name: "Pay to the deposit address from a browser wallet" });
   await form.getByLabel(/^Send from your browser wallet/).fill("25");
-  await form.getByRole("button", { name: "Send" }).click();
-  await expect(form).toContainText("Sent: 0x");
-
-  // The backend follows the payment as it arrives.
-  const payment = scenes.getByTestId("address-payment").first();
-  await expect(payment).toContainText("25 PHA");
-  await expect(payment.getByRole("button", { name: /^View/ })).toHaveAttribute("aria-pressed", "true");
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
-  await expectComplete(timeline, ["sent", "received", "credited", "webhook_received"]);
+  const mining = async (state: "pause" | "resume") => {
+    expect((await fetch(`${env("SERVICE_URL")}/_test/mining/${state}`, { method: "POST" })).status).toBe(200);
+  };
+  // Keep reversal deterministic: the service refuses it once the payment reaches finality.
+  await mining("pause");
+  try {
+    await form.getByRole("button", { name: "Send" }).click();
+    await expect(form).toContainText("Sent: 0x");
+    const chain = createTestClient({ mode: "anvil", chain: sepolia, transport: http(env("ANVIL_URL")) });
+    await chain.mine({ blocks: 1 });
+    await product.getByRole("tab", { name: "Exact amount", exact: true }).click();
+    await expect(form).not.toBeVisible();
 
-  // Before it is final, the service's finality watch proves the transaction dropped (here, the
-  // stand-in's test hook): deposit.reversed takes the credit back.
-  const deposit = await page.evaluate(async (api) => {
-    const response = await fetch(`${api}/api/deposit_address`, { credentials: "include" });
-    return ((await response.json()) as { deposit_address: { payments: { deposit: string }[] } }).deposit_address
-      .payments[0]?.deposit;
-  }, env("API_URL"));
-  const reversed = await fetch(`${env("SERVICE_URL")}/_test/deposits/${deposit ?? ""}/reverse`, { method: "POST" });
-  expect(reversed.status).toBe(200);
+    // The mounted address SDK keeps the backend following payments while its tab is inactive.
+    const payment = scenes.getByTestId("address-payment").first();
+    await expect(payment).toContainText("25 PHA");
+    await expect(payment.getByRole("button", { name: /^View/ })).toHaveAttribute("aria-pressed", "true");
+    await expectComplete(timeline, ["sent", "received", "credited", "webhook_received"]);
+
+    // Before it is final, the service's finality watch proves the transaction dropped (here, the
+    // stand-in's test hook): deposit.reversed takes the credit back.
+    const deposit = await page.evaluate(async (api) => {
+      const response = await fetch(`${api}/api/deposit_address`, { credentials: "include" });
+      return ((await response.json()) as { deposit_address: { payments: { deposit: string }[] } }).deposit_address
+        .payments[0]?.deposit;
+    }, env("API_URL"));
+    const reversed = await fetch(`${env("SERVICE_URL")}/_test/deposits/${deposit ?? ""}/reverse`, { method: "POST" });
+    expect(reversed.status).toBe(200);
+  } finally {
+    await mining("resume");
+  }
 
   // 25 PHA at 0.25 USD, credited at spot; the address's metadata arrived with the deposit.
   await openStep(timeline, "credited");
@@ -626,6 +914,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   await expect(scenes.getByTestId("refund-unavailable")).toContainText("reversed");
   await openTab(scenes, "API");
   await expect(scenes.getByTestId("webhook-event").filter({ hasText: "deposit.reversed" })).toBeVisible();
+  await product.getByRole("tab", { name: "Deposit address", exact: true }).click();
   await expect(product.locator(".pp-payments")).toContainText("25 PHA");
   // The customer sees each payment at the rate it was credited at.
   await expect(product.getByTestId("credit").first()).toContainText("25 Test PHA");
@@ -676,7 +965,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   expect((await usdcRequest).postDataJSON()).toEqual({ amount: 500, chain_id: sepolia.id, asset: "usdc" });
   await expect(product.getByTestId("locked-rate")).toContainText("1 USDC = $1.00");
-  await expect(product.getByText(/bonus/)).toHaveCount(0);
+  await expect(product.getByRole("tabpanel", { name: "Exact amount", exact: true }).getByText(/bonus/)).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.screenshot({ path: testInfo.outputPath("usdc-quote.png") });
   await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();

@@ -1,5 +1,6 @@
 import type { CheckoutStatus } from "@phala/pay";
 import type { Appearance } from "@phala/pay-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Check, CircleAlert, Cloud, CircleCheck, Copy, FlaskConical, Gift, Lock } from "lucide-react";
 import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -17,10 +18,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
 import { TokenIcon, assetOf, networkOf, tokenFullName } from "./chains.js";
 import { PRIMARY_BUTTON, ExplorerLink, InfoTip, describe, loadSdk } from "./common.js";
+import { QueryState, type QueryView } from "./queryView.js";
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
 import { atomicAmount, dollars, percent, presetDollars, rate, signedDollars, tokenName } from "./format.js";
 import { FundWallet, TestTokens, type Need } from "./Funding.js";
-import { useCreateQuote } from "./queries.js";
+import { keys, useCreateQuote } from "./queries.js";
 import type { PaidWith } from "./testTokens.js";
 import { cn } from "@/lib/utils";
 
@@ -46,9 +48,8 @@ const METHODS: { id: Method; label: string }[] = [
  * Only customer-facing UI belongs here; what the backend sees is in ./Backend.
  */
 export function Product({
-  account,
-  accountError,
-  networks,
+  account: accountView,
+  networks: networksView,
   method,
   onMethodChange,
   session,
@@ -59,9 +60,8 @@ export function Product({
   onAddress,
   appearance,
 }: {
-  account: Account | null;
-  accountError: string | null;
-  networks: Network[] | undefined;
+  account: QueryView<Account>;
+  networks: QueryView<Network[]>;
   method: Method;
   onMethodChange: (method: Method) => void;
   session: CreatedQuote | null;
@@ -72,6 +72,8 @@ export function Product({
   onAddress: (created: DepositAddressResponse) => void;
   appearance: Appearance;
 }) {
+  const account = accountView.data ?? null;
+  const networks = networksView.data;
   // The network, then the token, the customer pays with, for either method: the first offered
   // until they choose; a network's first token when they change the network.
   const [choice, setChoice] = useState<{ chainId: number | null; asset: string | null }>({
@@ -92,7 +94,7 @@ export function Product({
   }
   const picker = (
     <PaymentOptions
-      networks={networks}
+      networks={networksView}
       network={network}
       asset={asset}
       onNetworkChange={(chainId) => setChoice({ chainId, asset: null })}
@@ -149,62 +151,62 @@ export function Product({
                 aria-labelledby="balance-title"
                 data-testid="balance"
               >
-                {account === null ? <Skeleton className="h-9 w-32" /> : dollars(account.balance)}
+                {account === null
+                  ? accountView.error === null ? <Skeleton className="h-9 w-32" /> : <span className="text-sm font-normal text-muted-foreground">Unavailable</span>
+                  : dollars(account.balance)}
               </div>
+              {accountView.data !== undefined && <QueryState view={accountView} />}
             </div>
           </div>
-          {accountError !== null && (
-            <Alert variant="destructive">
-              <CircleAlert aria-hidden="true" />
-              <AlertDescription>Could not load the account: {accountError}</AlertDescription>
-            </Alert>
-          )}
+          {accountView.data === undefined && <QueryState view={accountView} className="text-sm" />}
           <Separator />
           <section aria-labelledby="pay-title" className="flex flex-col gap-4">
             <h3 id="pay-title" className="text-base font-semibold">
               Add credits
             </h3>
-            <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
-              <TabsList aria-label="Payment method" className="w-full">
-                {METHODS.map(({ id, label }) => (
-                  <TabsTrigger key={id} value={id}>
-                    {label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-              <TabsContent value="quote" className="pt-4">
-                {session === null || account === null ? (
-                  <AmountPicker account={account} network={network} asset={asset} picker={picker} onQuote={onQuote} />
-                ) : (
-                  <QuoteCheckout
-                    key={session.quote}
-                    session={session}
-                    account={account}
-                    network={networkOf(networks, session.chain_id)}
-                    appearance={appearance}
-                    onCredited={onCredited}
-                    onNewTopUp={onNewTopUp}
-                  />
-                )}
-              </TabsContent>
-              <TabsContent value="address" className="pt-4">
-                {account === null ? (
-                  <CheckoutSkeleton />
-                ) : (
-                  <DepositAddressPanel
-                    account={account}
-                    picker={picker}
-                    network={network}
-                    asset={asset}
-                    appearance={appearance}
-                    created={address}
-                    onCreated={onAddress}
-                    sendAmount={sendAmount}
-                    onSendAmountChange={setSendAmount}
-                  />
-                )}
-              </TabsContent>
-            </Tabs>
+            {(account !== null || accountView.error === null) && (
+              <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
+                <TabsList aria-label="Payment method" className="w-full">
+                  {METHODS.map(({ id, label }) => (
+                    <TabsTrigger key={id} value={id}>
+                      {label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+                <TabsContent value="quote" className="pt-4">
+                  {session === null || account === null ? (
+                    <AmountPicker account={account} network={network} asset={asset} picker={picker} onQuote={onQuote} />
+                  ) : (
+                    <QuoteCheckout
+                      key={session.quote}
+                      session={session}
+                      account={account}
+                      network={networkOf(networks, session.chain_id)}
+                      appearance={appearance}
+                      onCredited={onCredited}
+                      onNewTopUp={onNewTopUp}
+                    />
+                  )}
+                </TabsContent>
+                <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-4">
+                  {account === null ? (
+                    <CheckoutSkeleton />
+                  ) : (
+                    <DepositAddressPanel
+                      account={account}
+                      picker={picker}
+                      network={network}
+                      asset={asset}
+                      appearance={appearance}
+                      created={address}
+                      onCreated={onAddress}
+                      sendAmount={sendAmount}
+                      onSendAmountChange={setSendAmount}
+                    />
+                  )}
+                </TabsContent>
+              </Tabs>
+            )}
           </section>
         </div>
       </section>
@@ -310,20 +312,24 @@ function CheckoutSkeleton() {
  * the customer sees what they pay with (a test token, on a testnet) before paying.
  */
 function PaymentOptions({
-  networks,
+  networks: networksView,
   network,
   asset,
   onNetworkChange,
   onAssetChange,
 }: {
-  networks: Network[] | undefined;
+  networks: QueryView<Network[]>;
   network: Network | undefined;
   asset: Asset | undefined;
   onNetworkChange: (chainId: number) => void;
   onAssetChange: (asset: string) => void;
 }) {
   const id = useId();
+  const networks = networksView.data;
   if (networks === undefined) {
+    if (networksView.error !== null) {
+      return <QueryState view={networksView} className="text-sm" />;
+    }
     return (
       <div className="space-y-6" aria-hidden="true">
         <Skeleton className="h-10 w-full rounded-lg" />
@@ -332,7 +338,12 @@ function PaymentOptions({
     );
   }
   if (network === undefined || asset === undefined) {
-    return <p className="text-sm text-muted-foreground">No network accepts payments right now.</p>;
+    return (
+      <>
+        <p className="text-sm text-muted-foreground">No network accepts payments right now.</p>
+        <QueryState view={networksView} />
+      </>
+    );
   }
   return (
     <>
@@ -369,6 +380,7 @@ function PaymentOptions({
           ))}
         </RadioGroup>
       </div>
+      <QueryState view={networksView} />
     </>
   );
 }
@@ -547,6 +559,7 @@ function QuoteCheckout({
   onNewTopUp: () => void;
 }) {
   const [status, setStatus] = useState<CheckoutStatus>("loading");
+  const queryClient = useQueryClient();
   // The wallet that held too little for the quote, so the checkout sent nothing.
   const [short, setShort] = useState<PaidWith | null>(null);
   const testnet = network?.testnet ?? true;
@@ -579,7 +592,10 @@ function QuoteCheckout({
             expectedAddress={session.expected_address}
             apiBase={account.api_base}
             appearance={appearance}
-            onChange={(state) => setStatus(state.status)}
+            onChange={(state) => {
+              setStatus(state.status);
+              void queryClient.invalidateQueries({ queryKey: keys.timelines });
+            }}
             onWalletError={(error, wallet) => setShort(error.code === "insufficient_balance" ? wallet : null)}
             onSuccess={onCredited}
           />

@@ -3,7 +3,6 @@
 
 import { QueryClient, skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ApiError,
   cancelRefund,
   createDepositAddress,
   createQuote,
@@ -15,14 +14,30 @@ import {
   getTimeline,
   getTrust,
   markRefundPaid,
+  isTerminalApiError,
   type Selection,
 } from "./api.js";
+
+import {
+  ACCOUNT_IDLE_INTERVAL_MS,
+  ACCOUNT_PENDING_INTERVAL_MS,
+  CONFIG_STALE_TIME_MS,
+  EXPIRED_QUOTE_INTERVAL_MS,
+  QUERY_RECOVERY_INTERVAL_MS,
+  QUERY_RETRY_LIMIT,
+  SWEEPS_INTERVAL_MS,
+  TERMINAL_ACCOUNT_STATUSES,
+  TERMINAL_DEPOSIT_STATUSES,
+  TERMINAL_REFUND_STATUSES,
+  TIMELINE_ACTIVE_INTERVAL_MS,
+  TIMELINE_INTERVAL_MS,
+} from "./polling.js";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // The product's refusals (4xx) are answers, not outages: only other failures are retried.
-      retry: (failures, error) => !(error instanceof ApiError && error.status < 500) && failures < 2,
+      // Permanent client refusals are answers, not outages; timeouts and rate limits can recover.
+      retry: (failures, error) => !isTerminalApiError(error) && failures < QUERY_RETRY_LIMIT,
     },
     mutations: { retry: false },
   },
@@ -40,17 +55,34 @@ export const keys = {
 
 /** The visitor's demo account: balance, ledger lines, and payments. */
 export function useAccount() {
-  return useQuery({ queryKey: keys.account, queryFn: ({ signal }) => getAccount(signal), refetchInterval: 4000 });
+  return useQuery({
+    queryKey: keys.account,
+    queryFn: ({ signal }) => getAccount(signal),
+    refetchInterval: (query) => isTerminalApiError(query.state.error) ? false :
+      query.state.data?.payments.some((payment) =>
+        !TERMINAL_ACCOUNT_STATUSES.has(payment.status),
+      ) ? ACCOUNT_PENDING_INTERVAL_MS : ACCOUNT_IDLE_INTERVAL_MS,
+  });
 }
 
 /** The networks, and their tokens, a customer can pay with; the service's config changes rarely. */
 export function useNetworks() {
-  return useQuery({ queryKey: keys.networks, queryFn: ({ signal }) => getNetworks(signal), staleTime: 5 * 60_000 });
+  return useQuery({
+    queryKey: keys.networks,
+    queryFn: ({ signal }) => getNetworks(signal),
+    staleTime: CONFIG_STALE_TIME_MS,
+    refetchInterval: (query) => query.state.status === "error" && !isTerminalApiError(query.state.error) ? QUERY_RECOVERY_INTERVAL_MS : false,
+  });
 }
 
 /** The service's attestation, checked by the product (cached there for 5 minutes). */
 export function useTrust() {
-  return useQuery({ queryKey: keys.trust, queryFn: ({ signal }) => getTrust(signal), staleTime: 5 * 60_000 });
+  return useQuery({
+    queryKey: keys.trust,
+    queryFn: ({ signal }) => getTrust(signal),
+    staleTime: CONFIG_STALE_TIME_MS,
+    refetchInterval: (query) => query.state.status === "error" && !isTerminalApiError(query.state.error) ? QUERY_RECOVERY_INTERVAL_MS : false,
+  });
 }
 
 /** The followed payment's timeline, live. */
@@ -58,17 +90,50 @@ export function useTimeline(selection: Selection | null) {
   return useQuery({
     queryKey: keys.timeline(selection),
     queryFn: selection === null ? skipToken : ({ signal }) => getTimeline(selection, signal),
-    refetchInterval: 3000,
+    refetchInterval: (query) => {
+      if (isTerminalApiError(query.state.error)) {
+        return false;
+      }
+      const timeline = query.state.data;
+      // Marked-paid refunds stay pending until their transfer is verified at finality.
+      if (timeline?.refunds.some((refund) => !TERMINAL_REFUND_STATUSES.has(refund.status))) {
+        return TIMELINE_ACTIVE_INTERVAL_MS;
+      }
+      if (timeline?.deposit?.status === "reversed") {
+        return false;
+      }
+      if (timeline?.deposit?.status === "credited" && timeline.deposit.swept) {
+        return timeline.steps.some((step) => step.key === "webhook_received" && step.state === "current")
+          ? TIMELINE_INTERVAL_MS : false;
+      }
+      if (timeline?.deposit === null && timeline.sent === null && timeline.quote !== null) {
+        if (timeline.quote.status === "canceled") {
+          return false;
+        }
+        if (timeline.quote.status === "expired" ||
+            (timeline.quote.status === "open" && Date.now() >= timeline.quote.expires_at * 1000)) {
+          return EXPIRED_QUOTE_INTERVAL_MS;
+        }
+      }
+      const inFlight = timeline?.deposit != null
+        ? !TERMINAL_DEPOSIT_STATUSES.has(timeline.deposit.status)
+        : timeline?.sent != null;
+      return inFlight ? TIMELINE_ACTIVE_INTERVAL_MS : TIMELINE_INTERVAL_MS;
+    },
   });
 }
 
 /** The visitor's deposit address and its payments, followed once the product has shown it. */
 export function useDepositAddress(enabled: boolean) {
-  return useQuery({ queryKey: keys.depositAddress, queryFn: ({ signal }) => getDepositAddress(signal), enabled, refetchInterval: 3000 });
+  return useQuery({
+    queryKey: keys.depositAddress,
+    queryFn: ({ signal }) => getDepositAddress(signal),
+    enabled,
+  });
 }
 
 export function useSweeps() {
-  return useQuery({ queryKey: keys.sweeps, queryFn: ({ signal }) => getSweeps(signal), refetchInterval: 10_000 });
+  return useQuery({ queryKey: keys.sweeps, queryFn: ({ signal }) => getSweeps(signal), refetchInterval: SWEEPS_INTERVAL_MS });
 }
 
 export function useCreateQuote() {

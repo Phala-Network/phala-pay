@@ -20,6 +20,7 @@ import { Refunds } from "./Refunds.js";
 import { assetOf, networkOf } from "./chains.js";
 import { day, dollars, price, short, signedDollars, statusLabel, time, tokenName, tokens } from "./format.js";
 import { Sweeps } from "./Sweeps.js";
+import { QueryState, type QueryView } from "./queryView.js";
 import { EventStream, EventsLog, LedgerPanel, Requests } from "./Timeline.js";
 
 /**
@@ -45,23 +46,26 @@ const STACKED = {
 };
 
 export function Backend({
-  account,
+  account: accountView,
   selected,
-  timeline,
-  trust,
-  address,
-  networks,
+  timeline: timelineView,
+  trust: trustView,
+  address: addressView,
+  networks: networksView,
   onSelect,
 }: {
-  account: Account | null;
+  account: QueryView<Account>;
   selected: Selection | null;
-  timeline: Timeline | null;
-  trust: Trust | null;
-  address: DepositAddressResponse | null;
-  networks: Network[] | undefined;
+  timeline: QueryView<Timeline>;
+  trust: QueryView<Trust>;
+  address: QueryView<DepositAddressResponse>;
+  networks: QueryView<Network[]>;
   onSelect: (selection: Selection) => void;
 }) {
-  const live = timeline?.steps.some((step) => step.state === "current") ?? selected !== null;
+  const account = accountView.data ?? null;
+  const timeline = timelineView.data ?? null;
+  const networks = networksView.data;
+  const live = timelineView.error === null && (timeline?.steps.some((step) => step.state === "current") ?? selected !== null);
   const order = timeline?.quote?.metadata["order_id"];
   const deposit = timeline?.deposit ?? null;
   return (
@@ -86,7 +90,7 @@ export function Backend({
               {live && <span className="absolute inset-0 rounded-full bg-success/60 motion-safe:animate-ping" />}
               <span className={cn("relative size-2 rounded-full", live ? "bg-success" : "bg-muted-foreground/50")} />
             </span>
-            {selected === null ? "Idle" : live ? "Live" : "Done"}
+            {selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done"}
           </Badge>
           {selected !== null && (
             <dl className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
@@ -100,7 +104,8 @@ export function Backend({
             least its height, so an empty tab centres its message in the space left. */}
         <ScrollArea className="lg:min-h-0 lg:flex-1 [&_[data-slot=scroll-area-viewport]>div]:flex! [&_[data-slot=scroll-area-viewport]>div]:min-h-full [&_[data-slot=scroll-area-viewport]>div]:flex-col">
           <div className="px-3 py-3" aria-live="off">
-            <EventStream timeline={timeline} loading={selected?.id ?? null} />
+            <EventStream timeline={timelineView} loading={selected?.id ?? null} />
+            {timelineView.data !== undefined && <QueryState view={timelineView} />}
           </div>
           <Tabs defaultValue="credits" className="flex-1 gap-0 border-t">
             <TabsList
@@ -123,13 +128,17 @@ export function Backend({
               <Tab value="trust">Trust</Tab>
             </TabsList>
             <TabsContent value="credits" className="flex flex-col p-5">
-              <CreditsTab
-                account={account}
-                selected={selected}
-                address={address}
-                networks={networks}
-                onSelect={onSelect}
-              />
+              {addressView.data === undefined && <QueryState view={addressView} />}
+              {accountView.error === null && (
+                <CreditsTab
+                  account={account}
+                  selected={selected}
+                  address={addressView}
+                  networks={networks}
+                  onSelect={onSelect}
+                />
+              )}
+              <QueryState view={accountView} />
             </TabsContent>
             <TabsContent value="refunds" className="p-5">
               {timeline === null || deposit === null || account === null ? (
@@ -155,7 +164,7 @@ export function Backend({
               )}
             </TabsContent>
             <TabsContent value="trust" className="p-5">
-              <TrustDetails trust={trust} networks={networks} />
+              <TrustDetails trust={trustView} networks={networksView} />
             </TabsContent>
           </Tabs>
         </ScrollArea>
@@ -213,16 +222,17 @@ function ViewButton({ selected, id, onClick }: { selected: boolean; id: string; 
 function CreditsTab({
   account,
   selected,
-  address,
+  address: addressView,
   networks,
   onSelect,
 }: {
   account: Account | null;
   selected: Selection | null;
-  address: DepositAddressResponse | null;
+  address: QueryView<DepositAddressResponse>;
   networks: Network[] | undefined;
   onSelect: (selection: Selection) => void;
 }) {
+  const address = addressView.data ?? null;
   // One empty state for the panel until the first payment, centred in the space the panel has.
   if (account === null || (account.payments.length === 0 && account.ledger.length === 0 && address === null)) {
     return (
@@ -390,13 +400,16 @@ function CreditsTab({
           </Subsection>
         )}
         {address !== null && (
-          <AddressView
-            account={account}
-            address={address}
-            networks={networks}
-            selected={selected}
-            onSelect={onSelect}
-          />
+          <div className="flex flex-col gap-2">
+            <AddressView
+              account={account}
+              address={address}
+              networks={networks}
+              selected={selected}
+              onSelect={onSelect}
+            />
+            <QueryState view={addressView} />
+          </div>
         )}
       </div>
     </div>
@@ -542,7 +555,12 @@ function MetadataJson({ metadata }: { metadata: Record<string, string> }) {
   );
 }
 
-function TrustDetails({ trust, networks }: { trust: Trust | null; networks: Network[] | undefined }) {
+function TrustDetails({ trust: trustView, networks: networksView }: {
+  trust: QueryView<Trust>;
+  networks: QueryView<Network[]>;
+}) {
+  const trust = trustView.data;
+  const networks = networksView.data;
   const attestation = trust?.attestation;
   const evidence = trust?.tls_evidence;
   return (
@@ -564,7 +582,7 @@ function TrustDetails({ trust, networks }: { trust: Trust | null; networks: Netw
       <div className="grid gap-3 @4xl/console:grid-cols-3">
         <TrustItem icon={<ShieldCheck />} title="Attestation">
           {attestation === undefined ? (
-            <p className="text-muted-foreground">Loading…</p>
+            trustView.error !== null ? <QueryState view={trustView} /> : <p className="text-muted-foreground" role="status">Loading…</p>
           ) : attestation.binding_verified ? (
             <p className="text-muted-foreground">
               <span className="font-medium text-success">Verified</span> for a fresh nonce: the TDX quote's report data
@@ -604,11 +622,15 @@ function TrustDetails({ trust, networks }: { trust: Trust | null; networks: Netw
             Every address pays only the merchant's treasury, fixed in the address. Phala Pay holds no funds and sends
             no transactions: the merchant sweeps and refunds itself.
           </p>
-          <p className="text-muted-foreground">
-            {networks === undefined ? "Networks: loading…" : `Networks: ${networks.map((each) => each.name).join(", ")}`}
-          </p>
+          {networksView.error === null && (
+            <p className="text-muted-foreground">
+              {networks === undefined ? "Networks: loading…" : `Networks: ${networks.map((each) => each.name).join(", ")}`}
+            </p>
+          )}
+          <QueryState view={networksView} />
         </TrustItem>
       </div>
+      {trustView.data !== undefined && <QueryState view={trustView} />}
     </div>
   );
 }
