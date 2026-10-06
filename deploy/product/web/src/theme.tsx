@@ -1,5 +1,6 @@
 import { Moon, Sun } from "lucide-react";
 import { useSyncExternalStore } from "react";
+import { useHydrated } from "./islands.js";
 
 export type Theme = "light" | "dark";
 
@@ -26,18 +27,22 @@ export function useTheme(): [Theme, (theme: Theme) => void] {
   return [useSyncExternalStore(subscribe, currentTheme, () => "light" as const), setTheme];
 }
 
-/** The header's icon buttons: one hover and fill in either theme. */
+/** The header's icon buttons: 36px, with a 44px hit area; one hover and fill in either theme. */
 export const ICON_BUTTON =
-  "inline-flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors focus-visible:outline-hidden hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4";
+  "relative inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors before:absolute before:-inset-1 hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4";
 
+/**
+ * A toggle for the dark theme. Its icon follows the theme class the head script sets, so it is right
+ * before hydration. Static HTML cannot know the visitor's theme, so the button states no pressed
+ * state until it hydrates (and works); from then on it follows the theme store.
+ */
 export function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }) {
-  const next = theme === "dark" ? "light" : "dark";
+  const hydrated = useHydrated();
   return (
-    <button type="button" className={ICON_BUTTON} onClick={() => onChange(next)}>
-      <Sun aria-hidden="true" className="hidden dark:block" />
-      <Moon aria-hidden="true" className="dark:hidden" />
-      <span className="sr-only hidden dark:block">Switch to light theme</span>
-      <span className="sr-only dark:hidden">Switch to dark theme</span>
+    <button type="button" className={ICON_BUTTON} aria-label="Dark theme" aria-pressed={hydrated ? theme === "dark" : undefined}
+      onClick={() => onChange(theme === "dark" ? "light" : "dark")}>
+      <Sun aria-hidden="true" strokeWidth={1.75} className="hidden dark:block" />
+      <Moon aria-hidden="true" strokeWidth={1.75} className="dark:hidden" />
     </button>
   );
 }

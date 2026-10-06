@@ -16,8 +16,8 @@ export function render(page: Page): { head: string; html: string } {
       {page === "home" ? (
         <main id="top" className="flex-1">
           <Hero />
-          <HowItWorks />
           <DemoSection />
+          <HowItWorks />
           <Properties />
           <CompareTeaser />
           <Faq />
