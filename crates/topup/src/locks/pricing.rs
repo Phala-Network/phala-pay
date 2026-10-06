@@ -414,9 +414,6 @@ impl PricingRuntime {
                         _ => s.company(),
                     };
                     let source = match s {
-                        Source::Coinmetrics { .. } => {
-                            return Err("restricted legacy source requires migration".into());
-                        }
                         Source::Kraken { symbol, .. } => SharedSource::get_or_build(
                             sources,
                             SourceKey::Kraken {

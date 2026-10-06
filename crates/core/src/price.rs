@@ -82,7 +82,8 @@ pub fn provider(source: &str) -> Option<Provider> {
             "binance" => "binance",
             "coinbase" => "coinbase",
             "uniswap_v2_twap" | "uniswap-v2-onchain" => "uniswap-v2-onchain",
-            _ => "coinmetrics",
+            "coinmetrics" => "coinmetrics",
+            _ => return None,
         },
         url,
         clause,
@@ -190,12 +191,6 @@ impl TwapConfig {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Source {
-    /// Restricted legacy input, emitted only by the migration parser; never constructed at runtime.
-    #[serde(skip_deserializing)]
-    Coinmetrics {
-        /// Legacy asset identity for manual migration.
-        asset: String,
-    },
     /// On-chain observation, independently read through A and B.
     Chainlink {
         /// Pinned feed id.
@@ -244,7 +239,6 @@ impl Source {
     /// Source/company id.
     pub fn company(&self) -> &'static str {
         match self {
-            Self::Coinmetrics { .. } => "coinmetrics",
             Self::Chainlink { .. } => "chainlink",
             Self::UniswapV2Twap { .. } => "uniswap-v2-onchain",
             Self::Kraken { .. } => "kraken",
@@ -254,7 +248,6 @@ impl Source {
     /// Asset observed (USD for Chainlink and Kraken, USDT for Binance).
     pub fn asset(&self) -> &str {
         match self {
-            Self::Coinmetrics { asset } => asset,
             Self::UniswapV2Twap { .. } => "pha",
             Self::Chainlink { feed, .. } => match feed.as_str() {
                 "USDC_USD" => "usdc",
@@ -346,10 +339,7 @@ impl PriceConfig {
         for (_, sources) in self.roles() {
             for source in sources {
                 let verdict = provider(source.company()).map(|p| p.verdict);
-                if matches!(source, Source::Coinmetrics { .. })
-                    || (verdict != Some(Verdict::Allowed)
-                        && !(staging && self.allow_unclear_sources))
-                {
+                if verdict != Some(Verdict::Allowed) && !(staging && self.allow_unclear_sources) {
                     return Err(RouteError::validation(
                         "price",
                         "production requires Allowed licensing verdict",
@@ -428,9 +418,7 @@ impl PriceConfig {
                 let verdict = provider(company)
                     .ok_or_else(|| fail("unknown source"))?
                     .verdict;
-                if matches!(source, Source::Coinmetrics { .. })
-                    || (verdict != Verdict::Allowed && !self.allow_unclear_sources)
-                {
+                if verdict != Verdict::Allowed && !self.allow_unclear_sources {
                     return Err(fail(
                         "source is not Allowed; staging must explicitly opt in",
                     ));
@@ -619,14 +607,11 @@ mod tests {
             p.fx.clear();
             assert!(p.validate_licensing(false).is_err());
         }
-        let mut p = volatile();
-        p.sources = vec![Source::Coinmetrics {
-            asset: "pha".into(),
-        }];
-        p.primary.clear();
-        p.check.clear();
-        p.fx.clear();
-        assert!(p.validate_licensing(true).is_err());
+        let error = serde_json::from_value::<Source>(serde_json::json!({
+            "source": "coinmetrics", "asset": "pha"
+        }))
+        .expect_err("Coin Metrics is no longer a source");
+        assert!(error.to_string().contains("unknown variant `coinmetrics`"));
     }
     #[test]
     fn chainlink_only_stablecoins_are_production_eligible_without_opt_in() {

@@ -48,33 +48,22 @@ mod tests {
     }
 
     #[test]
-    fn old_route_migrates_but_restricted_source_cannot_be_enabled() {
+    fn legacy_pricing_section_is_rejected() {
         let legacy = include_str!("../tests/fixtures/legacy-price-route.yaml");
-        let route: RouteFile = serde_saphyr::from_str(legacy).expect("migration parser");
-        let resolved = resolved_json(&route).expect("resolved migration");
-        assert!(resolved.contains("\"price\""));
-        assert!(!resolved.contains("\"pricing\""));
-        assert_eq!(route.pricing.primary.len(), 1);
-        assert_eq!(route.pricing.check.len(), 1);
-        assert_eq!(route.pricing.fx.len(), 1);
-        assert!(
-            route
-                .validate()
-                .expect_err("restricted source")
-                .to_string()
-                .contains("price")
-        );
-        let migrated = legacy.replace("source: coinmetrics", "source: kraken");
-        let mut route: RouteFile = serde_saphyr::from_str(&migrated).expect("exchange migration");
-        route.pricing.allow_unclear_sources = true;
-        assert!(route.validate().is_ok());
-        assert!(route.pricing.validate_licensing(false).is_err());
-        assert_eq!(
-            parse_and_validate(&resolved_json(&route).unwrap(), false),
-            Ok(route)
-        );
-        let mixed = format!("{legacy}\nprice: {{mode: stablecoin}}\n");
-        assert!(serde_saphyr::from_str::<RouteFile>(&mixed).is_err());
+        let error = parse_and_validate(legacy, false).expect_err("legacy pricing must be rejected");
+        assert!(error.contains("unknown field `pricing`"), "{error}");
+    }
+
+    #[test]
+    fn price_section_is_required() {
+        let (before_price, price_and_merchant) =
+            VALID.split_once("\nprice:").expect("price section");
+        let (_, merchant) = price_and_merchant
+            .split_once("\nmerchant:")
+            .expect("merchant section");
+        let yaml = format!("{before_price}\nmerchant:{merchant}");
+        let error = parse_and_validate(&yaml, false).expect_err("price must be required");
+        assert!(error.contains("missing field `price`"), "{error}");
     }
 
     #[test]

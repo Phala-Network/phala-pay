@@ -398,26 +398,6 @@ pub enum PricingMode {
     Stablecoin,
 }
 
-/// Primary reference-rate descriptor.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PrimaryPriceConfig {
-    /// Provider identifier.
-    pub source: String,
-    /// Provider asset identifier; the metric is always the one-minute `ReferenceRateUSD`.
-    pub asset: String,
-}
-
-/// Foreign-exchange cross-check descriptor.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FxPriceConfig {
-    /// Provider identifier.
-    pub source: String,
-    /// Market pair.
-    pub pair: String,
-}
-
 /// Screening thresholds and oracle address.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScreeningConfig {
@@ -583,11 +563,7 @@ pub struct RouteSpec {
     /// Deposited asset.
     pub asset: AssetSpec,
     /// Price sources.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub price: Option<PricingConfig>,
-    /// Legacy shape, accepted only for migration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pricing: Option<PricingSpec>,
+    pub price: PricingConfig,
     /// The default and bounds of each account's terms.
     pub merchant: MerchantSpec,
     /// Alert threshold overrides.
@@ -640,52 +616,6 @@ pub struct AssetSpec {
     /// How transfers are requested; default [`Backstop::Token`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backstop: Option<Backstop>,
-}
-
-/// Price sources of a route file.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PricingSpec {
-    /// Valuation mode; default spot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<LegacyPricingMode>,
-    /// Primary reference-rate source.
-    pub primary: PrimaryPriceConfig,
-    /// Market cross-check, required in spot mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub check: Option<CheckPriceSpec>,
-    /// Maximum observation age; default [`DEFAULT_PRICE_MAX_AGE_S`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_age_s: Option<u64>,
-    /// Maximum primary/check divergence; default [`DEFAULT_PRICE_MAX_DEVIATION_BPS`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_deviation_bps: Option<Bps>,
-    /// Maximum FX divergence in spot mode; default [`DEFAULT_PRICE_MAX_FX_DEVIATION_BPS`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_fx_deviation_bps: Option<Bps>,
-}
-
-/// Modes understood by the one-window legacy migration parser.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LegacyPricingMode {
-    /// Legacy two-source spot policy.
-    Spot,
-    /// Legacy stablecoin policy.
-    Stablecoin,
-}
-
-/// Market cross-check of a route file.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckPriceSpec {
-    /// Provider identifier.
-    pub source: String,
-    /// Market symbol.
-    pub symbol: String,
-    /// FX leg; default Kraken `USDT/USD` for a USDT-quoted market, required otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fx: Option<FxPriceConfig>,
 }
 
 /// One merchant parameter of a route file: the operator's default and bounds, each left out for
@@ -815,12 +745,6 @@ pub const TYPICAL_SAFE_SECONDS: u64 = 300;
 pub const TYPICAL_FINALIZED_SECONDS: u64 = 900;
 /// Provider ids of a route that names none: the configuration's `provider-a` and `provider-b`.
 pub const DEFAULT_RPC_PROVIDERS: [&str; 2] = ["provider-a", "provider-b"];
-/// Legacy migration freshness bound; new exchange sources default to 90 seconds.
-pub const DEFAULT_PRICE_MAX_AGE_S: u64 = 120;
-/// 1% between the primary rate and the market check.
-pub const DEFAULT_PRICE_MAX_DEVIATION_BPS: u16 = 100;
-/// 0.5% between USDT and USD flags a depeg.
-pub const DEFAULT_PRICE_MAX_FX_DEVIATION_BPS: u16 = 50;
 /// A 15-minute payment window.
 pub const DEFAULT_QUOTE_WINDOW_S: u64 = 900;
 /// Quotes are priced 0.5% below spot.
@@ -890,16 +814,6 @@ impl TryFrom<RouteSpec> for RouteFile {
                     format!("is required for chain {chain_id}, which has no Chainalysis oracle"),
                 )
             })?;
-        let pricing = match (spec.price, spec.pricing) {
-            (Some(price), None) => price,
-            (None, Some(legacy)) => migrate_pricing(legacy)?,
-            _ => {
-                return Err(RouteError::validation(
-                    "price",
-                    "exactly one price or legacy pricing section required",
-                ));
-            }
-        };
         let stuck = spec.alerts.stuck_after_s;
         let confirmations = spec.chain.confirmations.unwrap_or_else(|| {
             ChainFamily::of(chain_id).map_or(Confirmations::Finalized, |family| {
@@ -934,7 +848,7 @@ impl TryFrom<RouteSpec> for RouteFile {
                 backstop: spec.asset.backstop.unwrap_or_default(),
             },
             livemode: spec.livemode,
-            pricing,
+            pricing: spec.price,
             screening: ScreeningConfig { sanctions_oracle },
             merchant: merchant_bounds(spec.merchant)?,
             alerts: AlertsConfig {
@@ -969,8 +883,7 @@ impl From<RouteFile> for RouteSpec {
                 quote_amount_decimals: Some(route.asset.quote_amount_decimals),
                 backstop: Some(route.asset.backstop),
             },
-            price: Some(route.pricing),
-            pricing: None,
+            price: route.pricing,
             merchant: MerchantSpec {
                 quote_ttl_seconds: route.merchant.quote_ttl_seconds.into(),
                 quote_spread_bps: route.merchant.quote_spread_bps.into(),
@@ -1395,74 +1308,4 @@ fn serialize_groups<S: serde::Serializer>(
         b: b.clone(),
     }
     .serialize(s)
-}
-
-/// Migrates only understood source identities; restricted defaults require explicit replacement.
-fn migrate_pricing(old: PricingSpec) -> Result<PricingConfig, RouteError> {
-    use crate::price::Source;
-    let source = |id: &str, symbol: String| -> Result<Source, RouteError> {
-        match id {
-            "coinmetrics" => Ok(Source::Coinmetrics {
-                asset: symbol.trim_end_matches("USD").to_ascii_lowercase(),
-            }),
-            "kraken" => Ok(Source::Kraken {
-                symbol,
-                company: "kraken".into(),
-            }),
-            "binance" => Ok(Source::Binance {
-                symbol,
-                company: "binance".into(),
-            }),
-            _ => Err(RouteError::validation(
-                "pricing.primary",
-                "legacy restricted/unknown source must be replaced with explicit price sources",
-            )),
-        }
-    };
-    let mode = match old.mode.unwrap_or(LegacyPricingMode::Spot) {
-        LegacyPricingMode::Spot => PricingMode::Spot,
-        LegacyPricingMode::Stablecoin => PricingMode::Stablecoin,
-    };
-    let primary = source(
-        &old.primary.source,
-        format!("{}USD", old.primary.asset.to_ascii_uppercase()),
-    )?;
-    let mut price = PricingConfig {
-        mode,
-        max_age_s: old.max_age_s.unwrap_or(DEFAULT_PRICE_MAX_AGE_S),
-        peg_band_bps: old.max_deviation_bps.unwrap_or(bps("price", 100)?),
-        max_deviation_bps: old
-            .max_deviation_bps
-            .unwrap_or(bps("price", DEFAULT_PRICE_MAX_DEVIATION_BPS)?),
-        max_fx_deviation_bps: old
-            .max_fx_deviation_bps
-            .or(Some(bps("price", DEFAULT_PRICE_MAX_FX_DEVIATION_BPS)?)),
-        allow_unclear_sources: false,
-        sources: vec![],
-        primary: vec![],
-        check: vec![],
-        fx: vec![],
-        sequencer_uptime: None,
-    };
-    if mode == PricingMode::Stablecoin {
-        if old.check.is_some() {
-            return Err(RouteError::validation(
-                "pricing.check",
-                "ambiguous stablecoin migration: remove unused check explicitly",
-            ));
-        }
-        price.sources.push(primary);
-    } else {
-        price.primary.push(primary);
-        if let Some(check) = old.check {
-            price.check.push(source(&check.source, check.symbol)?);
-            if let Some(fx) = check.fx.or(Some(FxPriceConfig {
-                source: "kraken".into(),
-                pair: "USDTUSD".into(),
-            })) {
-                price.fx.push(source(&fx.source, fx.pair.replace('/', ""))?);
-            }
-        }
-    }
-    Ok(price)
 }

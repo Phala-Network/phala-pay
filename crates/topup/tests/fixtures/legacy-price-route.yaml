@@ -1,7 +1,4 @@
-# Fully valid schema fixture. Addresses are from the A1 deterministic test-vector deployment.
-# It overrides defaults the tests rely on: providers, the chain defaults (so tests may change the
-# chain id), crediting only at `finalized` (so the suite checks that `finalized` reproduces the
-# behaviour before fast credit), and the deposit floor.
+# Invalid route fixture: the removed top-level `pricing` section must be rejected as unknown.
 route: phala-cloud-ethereum-pha-usd
 version: 1
 livemode: true

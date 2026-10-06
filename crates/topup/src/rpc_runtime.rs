@@ -437,7 +437,7 @@ async fn anchor_cursors(
         if height > ahead.number.min(bhead.number) {
             state.freeze(chain).await.map_err(|e| e.to_string())?;
             return Err(
-                "legacy cursor exceeds agreed finalized evidence; audited recovery required"
+                "stored cursor exceeds agreed finalized evidence; audited recovery required"
                     .to_owned(),
             );
         }
