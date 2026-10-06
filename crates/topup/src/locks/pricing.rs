@@ -302,8 +302,13 @@ impl PricingRuntime {
             .sequencer_uptime
             .as_ref()
             .map(|s| -> Result<_, String> {
+                let alias_chain = matches!(s.rpc_group.as_str(), "a" | "b")
+                    .then_some(route.chain.chain_id)
+                    .or_else(|| {
+                        matches!(s.rpc_group_b.as_str(), "a" | "b").then_some(route.chain.chain_id)
+                    });
                 let key = format!(
-                    "{}|{BASE_CHAIN_ID}|{}|{}|{}",
+                    "{}|{BASE_CHAIN_ID}|{}|{}|{}|{alias_chain:?}",
                     s.feed,
                     price_group(route, &s.rpc_group)?,
                     price_group(route, &s.rpc_group_b)?,
@@ -1538,6 +1543,67 @@ mod tests {
             assert!(Arc::ptr_eq(&a.source, &b.source));
         }
         assert_ne!(a.primary[0].descriptor, b.primary[0].descriptor);
+    }
+    #[tokio::test]
+    async fn sequencer_aliases_do_not_share_clients_across_chains() {
+        let [mut a, mut b] = pha_routes();
+        a.chain.chain_id = 8453;
+        b.chain.chain_id = 84532;
+        for route in [&mut a, &mut b] {
+            route.chain.rpc_providers = vec!["provider-a".into(), "provider-b".into()];
+            route.pricing.primary = vec![Source::Kraken {
+                symbol: "PHAUSD".into(),
+                company: "kraken".into(),
+            }];
+            route.pricing.check = vec![Source::Binance {
+                symbol: "PHAUSDT".into(),
+                company: "binance".into(),
+            }];
+            route.pricing.fx = vec![Source::Kraken {
+                symbol: "USDTUSD".into(),
+                company: "kraken".into(),
+            }];
+            route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
+                feed: "BASE_SEQUENCER_UPTIME".into(),
+                rpc_group: "a".into(),
+                rpc_group_b: "b".into(),
+                grace_s: 3600,
+            });
+        }
+        let routes = RouteSet::with_providers(
+            vec![a.clone(), b.clone()],
+            &BTreeMap::from([
+                (
+                    "provider-a".into(),
+                    crate::rpc_provider::ProviderUrl::parse("http://127.0.0.1:1").unwrap(),
+                ),
+                (
+                    "provider-b".into(),
+                    crate::rpc_provider::ProviderUrl::parse("http://127.0.0.1:2").unwrap(),
+                ),
+            ]),
+        )
+        .unwrap();
+        assert!(!Arc::ptr_eq(
+            &routes.price_group(&a, "a").unwrap(),
+            &routes.price_group(&b, "a").unwrap()
+        ));
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/shared-pricing")
+            .unwrap();
+        let runtimes = PricingRuntime::build_all(&routes, pool).unwrap();
+        let a = runtimes[&(a.route.clone(), a.version)]
+            .sequencer
+            .as_ref()
+            .unwrap();
+        let b = runtimes[&(b.route.clone(), b.version)]
+            .sequencer
+            .as_ref()
+            .unwrap();
+        assert!(
+            !Arc::ptr_eq(a, b),
+            "per-chain alias clients cannot share a sequencer"
+        );
     }
     #[tokio::test(start_paused = true)]
     async fn sampler_fetches_pair_once_per_interval_across_routes() {
