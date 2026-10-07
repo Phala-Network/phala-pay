@@ -59,7 +59,7 @@ enum TopupCommand {
         #[command(subcommand)]
         command: RouteCommand,
     },
-    /// Pinned RPC member preflight and stopped-service owner recovery.
+    /// Typed read/verify endpoint preflight.
     Rpc {
         #[command(subcommand)]
         command: RpcCommand,
@@ -89,7 +89,7 @@ enum TopupCommand {
 
 #[derive(Subcommand)]
 enum RpcCommand {
-    /// Probe every member with its sealed credential; print only validated member ids.
+    /// Probe every endpoint with its sealed credential; print only validated endpoint ids.
     Check {
         #[arg(long)]
         config: PathBuf,

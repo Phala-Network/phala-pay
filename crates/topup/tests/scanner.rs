@@ -32,6 +32,7 @@ struct Reader {
     receipt: Option<TransferLog>,
     error: bool,
     forged_header: bool,
+    forged_at: Option<u64>,
     requests: Mutex<Vec<(Vec<Address>, u64, u64)>>,
     factory: Option<FactoryReceipt>,
     receipt_reads: Mutex<usize>,
@@ -45,6 +46,7 @@ impl Reader {
             receipt: None,
             error: false,
             forged_header: false,
+            forged_at: None,
             requests: Mutex::new(Vec::new()),
             factory: None,
             receipt_reads: Mutex::new(0),
@@ -67,7 +69,7 @@ impl ChainReader for Reader {
     }
     async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
         Ok((
-            if self.forged_header {
+            if self.forged_header || self.forged_at == Some(number) {
                 B256::ZERO
             } else {
                 hash(number)
@@ -271,12 +273,18 @@ async fn empty_chain_is_initialized_before_issuance_and_legacy_state_refuses_sta
     with_database(|d| {
         Box::pin(async move {
             let mut tx = d.app_pool.begin().await?;
-            ensure!(!db::chain_reads::admit_address(&mut tx, 1).await?);
+            ensure!(
+                db::chain_reads::admit_address(&mut tx, 1).await?
+                    == db::chain_reads::AddressAdmission::NotReady
+            );
             tx.rollback().await?;
             let reader = Reader::new(10000);
             scanner::initialize_chain(&d.app_pool, 1, &reader, &reader).await?;
             let mut tx = d.app_pool.begin().await?;
-            ensure!(db::chain_reads::admit_address(&mut tx, 1).await?);
+            ensure!(
+                db::chain_reads::admit_address(&mut tx, 1).await?
+                    == db::chain_reads::AddressAdmission::Admitted
+            );
             tx.rollback().await?;
             ensure!(
                 db::chain_reads::coverage(&d.app_pool, 1)
@@ -579,7 +587,7 @@ async fn lagging_chunk_is_bounded_and_never_bulk_marks_unscanned_addresses() -> 
         ensure!(marked==1000);
         ensure!(read.requests.lock().unwrap().iter().all(|(addresses,_,_)|addresses.len()<=1000));
         ensure!(verify.requests.lock().unwrap().iter().all(|(addresses,_,_)|addresses.len()<=1000));
-        let mut tx=d.app_pool.begin().await?;ensure!(!db::chain_reads::admit_address(&mut tx,1).await?);tx.rollback().await?;
+        let mut tx=d.app_pool.begin().await?;ensure!(db::chain_reads::admit_address(&mut tx,1).await? == db::chain_reads::AddressAdmission::CapacityReached);tx.rollback().await?;
         Ok(())
     })).await
 }
@@ -664,6 +672,46 @@ async fn marked_deposits_are_skipped_but_existing_factory_records_are_always_rev
                     .is_err()
             );
             ensure!(topup::reconciler::chain_is_blocked(&d.app_pool, 1).await?);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn previous_checkpoint_is_rechecked_on_each_endpoint_before_a_new_checkpoint() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            for (chain, forge_read) in [(1, true), (8453, false)] {
+                let initial = Reader::new(100);
+                topup::checkpoint::advance(&d.app_pool, chain, &initial, &initial).await?;
+                let mut read = Reader::new(200);
+                let mut verify = Reader::new(200);
+                if forge_read {
+                    read.forged_at = Some(100);
+                } else {
+                    verify.forged_at = Some(100);
+                }
+                // Both agree on the new boundary: only the previous hash re-check can catch this.
+                ensure!(matches!(
+                    topup::checkpoint::advance(&d.app_pool, chain, &read, &verify).await,
+                    Err(scanner::ScannerError::Disagreement)
+                ));
+                ensure!(
+                    db::chain_reads::checkpoint(&d.app_pool, chain)
+                        .await?
+                        .unwrap()
+                        .number
+                        == 100
+                );
+                let check: String = sqlx::query_scalar(
+                    "SELECT check_name FROM reconciliation_blocks WHERE chain_id=$1",
+                )
+                .bind(i64::try_from(chain)?)
+                .fetch_one(&d.app_pool)
+                .await?;
+                ensure!(check == "finalized_checkpoint_conflict");
+            }
             Ok(())
         })
     })

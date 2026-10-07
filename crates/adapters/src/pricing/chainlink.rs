@@ -29,7 +29,7 @@ pub struct Round {
     /// Completed round identifier.
     pub answered_in_round: u128,
 }
-/// A single block agreed by both groups, including timestamp and canonical hash.
+/// A single block agreed by both endpoints, including timestamp and canonical hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PriceBlock {
     /// Ethereum block height.
@@ -39,7 +39,7 @@ pub struct PriceBlock {
     /// Full Unix timestamp (the pair uses its low 32 bits).
     pub timestamp: u64,
 }
-/// Shared independent group clients; no alternate direct HTTP endpoint.
+/// Shared independent endpoint clients; no alternate direct HTTP endpoint.
 pub struct Chainlink {
     snapshots: Arc<super::snapshot::Snapshots>,
     feed: Feed,
@@ -336,7 +336,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn typed_group_round_agreement_and_fault_injection() {
+    async fn typed_endpoint_round_agreement_and_fault_injection() {
         let now = unix_now().unwrap().value();
         let a = rpc("price-test-a", 100_000_000, 20, 20, now, false).await;
         for (answer, round_id, complete, updated, malformed, healthy) in [

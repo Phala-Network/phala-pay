@@ -81,7 +81,7 @@ impl RouteSet {
     ///
     /// A provider whose URL or key is missing or invalid does not fail construction; the consumer
     /// that needs it fails instead, so commands that use only provider A do not require provider B.
-    /// `topup run` checks every provider at startup ([`crate::contracts::verify_routes`]).
+    /// `topup run` checks every provider at startup ([`crate::contracts::check_pair`]).
     pub fn with_providers(
         routes: Vec<RouteFile>,
         providers: &BTreeMap<String, ProviderUrl>,

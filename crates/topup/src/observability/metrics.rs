@@ -213,9 +213,10 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
 /// Durable coverage and daily budget gauges are reloaded on authenticated scrapes, including
 /// after restart; no RPC request or address-wide backfill is issued here.
 pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> {
-    let (coverage,budgets)=tokio::try_join!(
+    let (coverage,budgets,issued)=tokio::try_join!(
         sqlx::query_as::<_,(i64,i64,i64)>("SELECT c.chain_id,GREATEST(0,extract(epoch FROM now()-c.through_time)::bigint),(SELECT count(*) FROM addresses a WHERE a.chain_id=c.chain_id AND (a.dual_covered_through IS NULL OR a.dual_covered_through < c.through_block)) FROM chain_coverage c").fetch_all(pool),
-        sqlx::query_as::<_,(String,i32)>("SELECT name,used FROM daily_budgets WHERE day=(now() AT TIME ZONE 'UTC')::date").fetch_all(pool)
+        sqlx::query_as::<_,(String,i32)>("SELECT name,used FROM daily_budgets WHERE day=(now() AT TIME ZONE 'UTC')::date").fetch_all(pool),
+        sqlx::query_as::<_,(i64,i64)>("SELECT chain_id,count(*) FROM addresses GROUP BY chain_id UNION ALL SELECT chain_id,0 FROM chain_coverage c WHERE NOT EXISTS(SELECT 1 FROM addresses a WHERE a.chain_id=c.chain_id)").fetch_all(pool)
     )?;
     let lag = IntGaugeVec::new(
         Opts::new(
@@ -246,7 +247,30 @@ pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> 
     for (name, count) in budgets {
         used.with_label_values(&[&name]).set(i64::from(count));
     }
+    let issued_gauge = IntGaugeVec::new(
+        Opts::new(
+            "topup_issued_addresses",
+            "All historical issued addresses; retirement and expiry do not free capacity.",
+        ),
+        &["chain_id"],
+    )?;
+    let cap_gauge = IntGaugeVec::new(
+        Opts::new(
+            "topup_issued_address_cap",
+            "Permanent per-chain issued-address pilot cap.",
+        ),
+        &["chain_id"],
+    )?;
+    for (chain, count) in issued {
+        let chain = chain.to_string();
+        issued_gauge.with_label_values(&[&chain]).set(count);
+        cap_gauge
+            .with_label_values(&[&chain])
+            .set(crate::db::chain_reads::ISSUED_ADDRESS_CAP);
+    }
     let mut families = lag.collect();
+    families.extend(issued_gauge.collect());
+    families.extend(cap_gauge.collect());
     families.extend(addresses.collect());
     families.extend(used.collect());
     families.retain(|family| !family.get_metric().is_empty());

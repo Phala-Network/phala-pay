@@ -30,7 +30,7 @@ pub fn emit_alert(alert: &str, component: &str, severity: &str, observed: i64, t
 /// The supplied clock makes transitions and reminders deterministic in tests.
 #[derive(Default)]
 struct AlertState {
-    active: BTreeMap<(&'static str, &'static str), (&'static str, i64)>,
+    active: BTreeMap<(&'static str, String), (&'static str, i64)>,
 }
 
 impl AlertState {
@@ -38,12 +38,12 @@ impl AlertState {
         &mut self,
         now: i64,
         alert: &'static str,
-        component: &'static str,
+        component: &str,
         severity: Option<&'static str>,
         observed: i64,
         threshold: i64,
     ) {
-        let key = (alert, component);
+        let key = (alert, component.to_owned());
         let Some(severity) = severity else {
             if self.active.remove(&key).is_some() {
                 // No alert tag, and INFO stays a breadcrumb rather than a Sentry event.
@@ -71,7 +71,7 @@ fn report_age(
     state: &mut AlertState,
     now: DateTime<Utc>,
     alert: &'static str,
-    component: &'static str,
+    component: &str,
     severity: &'static str,
     age: i64,
     threshold: i64,
@@ -97,7 +97,7 @@ struct OutboxHealth {
 fn report_outbox(
     state: &mut AlertState,
     now: DateTime<Utc>,
-    component: &'static str,
+    component: &str,
     health: &OutboxHealth,
 ) {
     let oldest_age = age(now, health.oldest_pending);
@@ -140,8 +140,34 @@ const OUTBOX_HEALTH_SQL: &str = "SELECT count(*) AS pending_count, \
     AND ((e.status = 'enabled' AND e.deleted_at IS NULL) OR d.url IS NOT NULL) \
     AND (e.last_attempt_at IS NULL OR e.last_attempt_status BETWEEN 200 AND 299)";
 
+const ADDRESS_COUNTS_SQL: &str =
+    "SELECT chain_id, count(*)::bigint FROM addresses GROUP BY chain_id";
+
+fn report_address_capacity(state: &mut AlertState, now: DateTime<Utc>, chain: i64, count: i64) {
+    let cap = crate::db::chain_reads::ISSUED_ADDRESS_CAP;
+    let (severity, threshold) = if count >= cap * 90 / 100 {
+        (Some("critical"), cap * 90 / 100)
+    } else if count >= cap * 70 / 100 {
+        (Some("warning"), cap * 70 / 100)
+    } else {
+        (None, cap * 70 / 100)
+    };
+    state.observe(
+        now.timestamp(),
+        "TopupAddressCapacity",
+        &format!("chain:{chain}"),
+        severity,
+        count,
+        threshold,
+    );
+}
+
 async fn probe_database(pool: &PgPool, state: &mut AlertState) -> Result<(), sqlx::Error> {
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()").fetch_one(pool).await?;
+    let counts: Vec<(i64, i64)> = sqlx::query_as(ADDRESS_COUNTS_SQL).fetch_all(pool).await?;
+    for (chain, count) in counts {
+        report_address_capacity(state, now, chain, count);
+    }
     let heartbeat = sqlx::query_scalar("SELECT max(recorded_at) FROM heartbeat")
         .fetch_one(pool)
         .await?;
@@ -320,6 +346,71 @@ mod tests {
             25,
             "24 hourly events and one new incident, no recovery event"
         );
+    }
+
+    #[tokio::test]
+    async fn capacity_counts_all_history_and_alerts_at_seventy_and_ninety_percent()
+    -> Result<(), sqlx::Error> {
+        use sqlx::Connection as _;
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            assert_ne!(
+                std::env::var("CI").as_deref(),
+                Ok("true"),
+                "CI requires DATABASE_URL"
+            );
+            return Ok(());
+        };
+        let mut conn = sqlx::PgConnection::connect(&url).await?;
+        sqlx::raw_sql("CREATE TEMP TABLE addresses (chain_id bigint, status text); INSERT INTO addresses SELECT 1,'closed' FROM generate_series(1,699)").execute(&mut conn).await?;
+        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let events = sentry::test::with_captured_events(|| {
+            tracing::subscriber::with_default(super::super::log_subscriber(std::io::sink), || {
+                let mut state = AlertState::default();
+                report_address_capacity(&mut state, now, 1, 699);
+                report_address_capacity(&mut state, now, 1, 700);
+                report_address_capacity(&mut state, now, 1, 899);
+                report_address_capacity(&mut state, now, 1, 900);
+                report_address_capacity(&mut state, now, 2, 700);
+            });
+        });
+        assert_eq!(events.len(), 3, "70%, 90%, and a separate chain must alert");
+        assert!(
+            events
+                .iter()
+                .all(|e| e.tags.get("alert").map(String::as_str) == Some("TopupAddressCapacity"))
+        );
+        assert!(events.iter().all(|e| {
+            e.tags
+                .get("runbook")
+                .is_some_and(|r| r.ends_with("address-capacity.md"))
+        }));
+        assert_eq!(
+            events[0].tags.get("severity").map(String::as_str),
+            Some("warning")
+        );
+        assert_eq!(
+            events[1].tags.get("severity").map(String::as_str),
+            Some("critical")
+        );
+        sqlx::query("INSERT INTO addresses SELECT 1,'retired' FROM generate_series(1,301)")
+            .execute(&mut conn)
+            .await?;
+        let counts: Vec<(i64, i64)> = sqlx::query_as(ADDRESS_COUNTS_SQL)
+            .fetch_all(&mut conn)
+            .await?;
+        assert_eq!(counts, vec![(1, 1000)]);
+        let preupgrade = include_str!("../../../../deploy/check-address-capacity.sql");
+        sqlx::raw_sql(preupgrade).execute(&mut conn).await?;
+        sqlx::query("INSERT INTO addresses VALUES (1,'active')")
+            .execute(&mut conn)
+            .await?;
+        let error = sqlx::raw_sql(preupgrade)
+            .execute(&mut conn)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("address capacity exceeded"));
+        sqlx::raw_sql("ROLLBACK").execute(&mut conn).await?;
+        Ok(())
     }
 
     #[test]

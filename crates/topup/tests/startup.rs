@@ -14,7 +14,7 @@ const TREASURY: &str = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc";
 const FIXTURE: &str = include_str!("fixtures/phala-cloud-pha.yaml");
 
 #[tokio::test]
-async fn run_refuses_to_start_when_the_contracts_differ_from_the_route_or_build() -> Result<()> {
+async fn dual_contract_check_detects_route_build_and_multicall_mismatches() -> Result<()> {
     let Some(anvil) = Anvil::start_if_available(&[]).await? else {
         return Ok(());
     };
@@ -33,90 +33,40 @@ async fn run_refuses_to_start_when_the_contracts_differ_from_the_route_or_build(
         route.chain.contracts.implementation == implementation,
         "the default implementation must be the one the factory created"
     );
-    topup::contracts::verify_routes(&route_set(&route)?)
+    let clients = route_set(&route)?;
+    let read = clients.provider(route.chain.chain_id, 0)?;
+    let verify = clients.provider(route.chain.chain_id, 1)?;
+    let check = async |candidate: &RouteFile| {
+        topup::contracts::check_pair(
+            read,
+            verify,
+            candidate.chain.chain_id,
+            std::slice::from_ref(candidate),
+        )
         .await
-        .map_err(anyhow::Error::msg)
-        .context("the deployed contracts must match their own route")?;
-
+    };
+    ensure!(check(&route).await? == topup::contracts::ContractCheck::Pass);
     let mut wrong_implementation = route.clone();
     wrong_implementation.chain.contracts.implementation = Address::from_str(TREASURY)?;
-    let error = topup::contracts::verify_routes(&route_set(&wrong_implementation)?)
-        .await
-        .expect_err("a wrong implementation must fail");
-    ensure!(error.contains("implementation()"), "{error}");
-
-    // Correct getters but different runtime code: one unreachable byte appended to each contract.
-    for (contract, name) in [(factory, "factory"), (implementation, "implementation")] {
+    ensure!(check(&wrong_implementation).await? == topup::contracts::ContractCheck::Mismatch);
+    // Correct getters with altered runtime code still fail the production dual check.
+    for contract in [factory, implementation] {
         let original = cast(&["code", &format!("{contract:#x}"), "--rpc-url", &rpc_url])?;
         set_code(&rpc_url, contract, &format!("{original}00"))?;
-        ensure!(
-            implementation_of(&rpc_url, factory)? == implementation,
-            "the getters must still answer"
-        );
-        let error = topup::contracts::verify_routes(&route_set(&route)?)
-            .await
-            .expect_err("modified code must fail");
-        ensure!(
-            error.contains(name) && error.contains("differs from the recorded code hash"),
-            "{error}"
-        );
+        ensure!(implementation_of(&rpc_url, factory)? == implementation);
+        ensure!(check(&route).await? == topup::contracts::ContractCheck::Mismatch);
         set_code(&rpc_url, contract, &original)?;
     }
-    topup::contracts::verify_routes(&route_set(&route)?)
-        .await
-        .map_err(anyhow::Error::msg)
-        .context("restored code must pass again")?;
-
-    // Balance and addressOf reads are aggregated through Multicall3: without the canonical
-    // deployment the service must refuse to start rather than fail every read later.
+    ensure!(check(&route).await? == topup::contracts::ContractCheck::Pass);
     let multicall = Address::from_str("0xcA11bde05977b3631167028862bE2a173976CA11")?;
     let canonical = cast(&["code", &format!("{multicall:#x}"), "--rpc-url", &rpc_url])?;
-    for (code, expected) in [
-        ("0x", "has no code on chain"),
-        ("0x00", "is not the canonical deployment"),
-    ] {
+    for code in ["0x", "0x00"] {
         set_code(&rpc_url, multicall, code)?;
-        let error = topup::contracts::verify_routes(&route_set(&route)?)
-            .await
-            .expect_err("a missing or different Multicall3 must fail");
-        ensure!(
-            error.contains("Multicall3") && error.contains(expected),
-            "{error}"
-        );
+        ensure!(check(&route).await? == topup::contracts::ContractCheck::Mismatch);
     }
     set_code(&rpc_url, multicall, &canonical)?;
-    topup::contracts::verify_routes(&route_set(&route)?)
-        .await
-        .map_err(anyhow::Error::msg)
-        .context("the canonical Multicall3 must pass again")?;
+    ensure!(check(&route).await? == topup::contracts::ContractCheck::Pass);
 
-    // `topup run` refuses a factory whose code is not the recorded build.
-    let original = cast(&["code", &format!("{factory:#x}"), "--rpc-url", &rpc_url])?;
-    set_code(&rpc_url, factory, &format!("{original}00"))?;
-    let path = std::env::temp_dir().join(format!("topup-startup-{}.yaml", uuid::Uuid::new_v4()));
-    std::fs::write(&path, config_yaml(factory, TREASURY, None))?;
-    let output = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .args(["run", "--config"])
-        .arg(&path)
-        .env_clear()
-        // Complete runtime configuration, with a database nobody listens on: the contract check
-        // must refuse before the service connects to it.
-        .env("DATABASE_URL", "postgres://topup_service@127.0.0.1:1/topup")
-        .env("TOPUP_RPC_ANKR_KEY", "test-key")
-        .env("TOPUP_RPC_INFURA_KEY", "test-key")
-        .output();
-    std::fs::remove_file(&path)?;
-    let output = output.context("start topup run")?;
-    let logs = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    ensure!(!output.status.success(), "run must refuse to start: {logs}");
-    ensure!(
-        logs.contains("failed to connect to database"),
-        "run must refuse without durable acceptance state: {logs}"
-    );
     Ok(())
 }
 

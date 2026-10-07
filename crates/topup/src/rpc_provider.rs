@@ -1,6 +1,6 @@
 //! RPC endpoint URL templates (`rpc`, docs/configuration.md).
 //!
-//! Each public, attested template names an endpoint and optionally `{key}`. The typed member
+//! Each public, attested template names an endpoint and optionally `{key}`. The typed endpoint
 //! names its sealed `TOPUP_RPC_*_KEY` explicitly, so credentials never enter public config.
 //!
 //! The placeholder may only be a whole path segment or a whole query value, and substituting the

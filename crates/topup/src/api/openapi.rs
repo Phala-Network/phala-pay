@@ -182,6 +182,14 @@ fn finish(openapi: &OpenApi, title: &str, description: &str) -> Value {
             }
         }
     }
+    document["components"]["schemas"]["KnownErrorCode"] = json!({
+        "type": "string", "enum": ERROR_CODES.iter().map(|(code, _, _)| *code).collect::<Vec<_>>()
+    });
+    document["components"]["schemas"]["ErrorDetail"]["properties"]["code"] = json!({
+        "description": "Stable machine-readable error code; clients accept future codes.",
+        "anyOf": [{"$ref": "#/components/schemas/KnownErrorCode"}, {"type": "string"}]
+    });
+
     document
 }
 

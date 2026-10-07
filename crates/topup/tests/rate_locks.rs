@@ -2739,7 +2739,16 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
             sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES ((now() AT TIME ZONE 'UTC')::date,'price:1',100)")
                 .execute(pool).await?;
             // An exhausted budget must fail before contacting either endpoint.
-            let endpoint = Arc::new(topup_adapters::chain::evm::EvmClient::new("http://127.0.0.1:1")?.with_chain_id(1));
+            let requests=Arc::new(AtomicUsize::new(0));
+            let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let url=format!("http://{}",listener.local_addr()?);
+            let mock=axum::Router::new().route("/",axum::routing::post({let requests=requests.clone();move |axum::Json(body):axum::Json<Value>| {
+                let requests=requests.clone();async move {requests.fetch_add(1,Ordering::SeqCst);axum::Json(json!({"jsonrpc":"2.0","id":body["id"],"result":"0x1"}))}
+            }}));
+            let server=tokio::spawn(async move {axum::serve(listener,mock).await});
+            let endpoint = Arc::new(topup_adapters::chain::evm::EvmClient::new(&url)?.with_chain_id(1));
+            endpoint.latest_head().await?;
+            ensure!(endpoint.ready());
             let routes = Arc::new(topup::routes::RouteSet::with_rpc(vec![route], std::collections::BTreeMap::from([
                 (1, topup::chain_rpc::ChainRpc { read: endpoint.clone(), verify: endpoint }),
             ])).map_err(anyhow::Error::msg)?);
@@ -2761,7 +2770,78 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
             ensure!(response_json(response).await?["error"]["code"]=="price_unavailable");
             ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==0);
             ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='price:1'").fetch_one(pool).await?==100);
+            ensure!(requests.load(Ordering::SeqCst)==1,"the exhausted budget must refuse before any price RPC");
+            server.abort();let _=server.await;
             Ok(())
         })
     }).await
+}
+
+#[tokio::test]
+async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretryable_error()
+-> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool=&database.app_pool;
+        let (account,key)=seed_product(pool,"capacity merchant").await?;
+        let customer=seed_account(pool,account.id,"historical").await?;
+        for number in 1..=1000_u64 {
+            seed::insert_address(pool,&seed::NewAddress {id:Uuid::new_v4(),customer_id:customer.id,
+                chain_id:1,route:test_route().route,salt:B256::from(U256::from(number)),
+                address:Address::from_word(B256::from(U256::from(number)))}).await?;
+        }
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes WHERE status='cancelled'").fetch_one(pool).await?==1000);
+        let admin=SigningKey::from_bytes(&[44;32]);
+        let app=topup::api::router(AppState {
+            pool:pool.clone(),routes:Arc::new(test_routes()),maintenance_keys:Vec::new(),
+            admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
+            public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
+            rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
+            screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+            contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
+        }).0;
+        for (path,body) in [("/v1/quotes",json!({"client_reference_id":"capacity-quote","amount":100,"currency":"usd","chain_id":1,"asset":"pha"})),
+            ("/v1/deposit_addresses",json!({"client_reference_id":"capacity-address"}))] {
+            let response=app.clone().oneshot(merchant_request(Method::POST,path,serde_json::to_vec(&body)?,&key)).await?;
+            ensure!(response.status()==StatusCode::UNPROCESSABLE_ENTITY,"{path}: {}",response.status());
+            ensure!(!response.headers().contains_key("retry-after"));
+            let body=response_json(response).await?;
+            ensure!(body["error"]["code"]=="address_capacity_reached");
+            ensure!(body["error"]["type"]=="invalid_request_error");
+        }
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM addresses").fetch_one(pool).await?==1000);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==1000);
+        let metrics=topup::observability::metrics::render_chain_reads(pool).await?;
+        ensure!(metrics.contains("topup_issued_addresses{chain_id=\"1\"} 1000"));
+        ensure!(metrics.contains("topup_issued_address_cap{chain_id=\"1\"} 1000"));
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn routed_chain_not_ready_returns_chain_unavailable_for_both_issuance_paths() -> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool=&database.app_pool;
+        let (_,key)=seed_product(pool,"unready merchant").await?;
+        let endpoint=Arc::new(topup_adapters::chain::evm::EvmClient::new("http://127.0.0.1:1")?);
+        let routes=topup::routes::RouteSet::with_rpc(vec![test_route()],std::collections::BTreeMap::from([
+            (1,topup::chain_rpc::ChainRpc {read:endpoint.clone(),verify:endpoint})
+        ])).map_err(anyhow::Error::msg)?;
+        let admin=SigningKey::from_bytes(&[44;32]);
+        let app=topup::api::router(AppState {
+            pool:pool.clone(),routes:Arc::new(routes),maintenance_keys:Vec::new(),
+            admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
+            public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
+            rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
+            screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+            contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
+        }).0;
+        for (path,body) in [("/v1/quotes",json!({"client_reference_id":"unready-quote","amount":100,"currency":"usd","chain_id":1,"asset":"pha"})),
+            ("/v1/deposit_addresses",json!({"client_reference_id":"unready-address"}))] {
+            let response=app.clone().oneshot(merchant_request(Method::POST,path,serde_json::to_vec(&body)?,&key)).await?;
+            ensure!(response.status()==StatusCode::SERVICE_UNAVAILABLE);
+            ensure!(response.headers()["retry-after"]=="30");
+            ensure!(response_json(response).await?["error"]["code"]=="chain_unavailable");
+        }
+        Ok(())
+    })).await
 }

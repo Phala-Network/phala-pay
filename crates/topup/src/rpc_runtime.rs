@@ -1,4 +1,4 @@
-//! Typed startup/deploy endpoint checks, without probes, member admission, anchors or recovery.
+//! Typed startup/deploy endpoint checks and bounded transport-readiness recovery.
 use crate::{db, routes::RouteSet};
 use alloy::sol_types::SolEvent;
 use alloy::{
@@ -256,4 +256,96 @@ pub async fn ensure_checkpoints(pool: &PgPool, routes: &RouteSet) -> Result<(), 
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Recovery uses a cheap head read every thirty seconds only for endpoints that are not ready.
+pub const RECOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// A transport success never bypasses a failed independent contract check or Infura's quota halt.
+pub async fn probe_not_ready(pair: &crate::chain_rpc::ChainRpc) {
+    let probe = async |client: &EvmClient| {
+        if !client.ready() {
+            if let Err(error) = client.latest_head().await {
+                tracing::warn!(tags.alert="TopupRpcEndpointUnavailable", chain_id=?client.chain_id(),
+                    provider=%client.endpoint().provider().unwrap_or_default(), %error,
+                    "endpoint recovery head probe failed");
+            }
+        }
+    };
+    tokio::join!(probe(&pair.read), probe(&pair.verify));
+}
+/// One independently cancellable recovery cadence per configured RPC chain.
+pub async fn recover(
+    pair: crate::chain_rpc::ChainRpc,
+    cancellation: tokio_util::sync::CancellationToken,
+) {
+    let mut interval = tokio::time::interval(RECOVERY_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! { _=cancellation.cancelled()=>return, _=interval.tick()=>{} }
+        tokio::select! { _=cancellation.cancelled()=>return, _=probe_not_ready(&pair)=>{} }
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn flapping_requests_stay_ready_and_failed_endpoint_recovers_on_a_head_probe() {
+        let failed = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app=Router::new().route("/",post({let failed=failed.clone();let requests=requests.clone();
+            move |Json(body):Json<Value>| {let failed=failed.clone();let requests=requests.clone(); async move {
+                assert_eq!(body["method"],"eth_blockNumber"); requests.fetch_add(1,Ordering::SeqCst);
+                Json(if failed.load(Ordering::SeqCst) {json!({"jsonrpc":"2.0","id":body["id"],"error":{"code":-32603,"message":"temporary failure"}})}
+                    else {json!({"jsonrpc":"2.0","id":body["id"],"result":"0xa"})})
+            }} }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let read = Arc::new(EvmClient::new(&url).unwrap());
+        let verify = Arc::new(EvmClient::new(&url).unwrap());
+        read.latest_head().await.unwrap();
+        verify.latest_head().await.unwrap();
+        let pair = crate::chain_rpc::ChainRpc { read, verify };
+        for _ in 0..4 {
+            failed.store(true, Ordering::SeqCst);
+            assert!(pair.read.latest_head().await.is_err());
+            assert!(
+                pair.read.ready(),
+                "a single final failure must not flap readiness"
+            );
+            failed.store(false, Ordering::SeqCst);
+            pair.read.latest_head().await.unwrap();
+        }
+        failed.store(true, Ordering::SeqCst);
+        for failures in 1..=3 {
+            assert!(pair.read.latest_head().await.is_err());
+            assert_eq!(pair.read.ready(), failures < 3);
+        }
+        probe_not_ready(&pair).await;
+        assert!(!pair.read.ready());
+        failed.store(false, Ordering::SeqCst);
+        probe_not_ready(&pair).await;
+        assert!(pair.read.ready());
+        let count = requests.load(Ordering::SeqCst);
+        probe_not_ready(&pair).await;
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            count,
+            "healthy endpoints need no recovery traffic"
+        );
+        // A head probe cannot bypass the separate contract identity gate.
+        pair.read.contract_checked(false);
+        probe_not_ready(&pair).await;
+        assert!(!pair.read.ready());
+        server.abort();
+        let _ = server.await;
+    }
 }

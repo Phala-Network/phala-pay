@@ -1,6 +1,6 @@
 //! Endpoint readiness and the single Alloy retry policy; no endpoint selection or failover.
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::time::Duration;
 
 use alloy::transports::{RpcError, TransportError, layers::RetryPolicy};
@@ -10,6 +10,7 @@ use chrono::Utc;
 #[derive(Debug, Default)]
 pub struct EndpointState {
     ready: AtomicBool,
+    consecutive_failures: AtomicU32,
     contract_pending: AtomicBool,
     quota_until: AtomicI64,
     verify: AtomicBool,
@@ -24,7 +25,7 @@ impl EndpointState {
     pub fn quota_exhausted(&self) -> bool {
         Utc::now().timestamp() < self.quota_until.load(Ordering::Relaxed)
     }
-    /// Readiness is false after an error until an operation succeeds, including after UTC reset.
+    /// Three consecutive final request failures suspend readiness; success recovers immediately.
     pub fn ready(&self) -> bool {
         self.ready.load(Ordering::Relaxed) && !self.quota_exhausted() && self.contract_ready()
     }
@@ -39,12 +40,21 @@ impl EndpointState {
     /// Records a fully decoded successful operation.
     pub fn succeeded(&self) {
         if !self.quota_exhausted() {
+            self.consecutive_failures.store(0, Ordering::Relaxed);
             self.ready.store(true, Ordering::Relaxed);
         }
     }
-    /// A failed operation makes this endpoint unavailable without stopping the service.
+    /// Count final operation outcomes, never individual Alloy retry attempts.
     pub fn failed(&self) {
-        self.ready.store(false, Ordering::Relaxed);
+        let previous = self
+            .consecutive_failures
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                Some(count.saturating_add(1))
+            })
+            .unwrap_or(u32::MAX);
+        if previous >= 2 {
+            self.ready.store(false, Ordering::Relaxed);
+        }
     }
     /// Records HTTP status before Alloy's HTTP transport decodes a JSON-RPC error body.
     pub fn http_status(&self, status: u16) {
@@ -58,9 +68,6 @@ impl EndpointState {
                 self.quota_until
                     .store(next.and_utc().timestamp(), Ordering::Relaxed);
             }
-        }
-        if !(200..300).contains(&status) {
-            self.failed();
         }
     }
 }

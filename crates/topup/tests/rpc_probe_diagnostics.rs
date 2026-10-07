@@ -73,9 +73,9 @@ async fn rpc_check_reports_every_wrong_chain_endpoint_without_retry_or_secrets()
         ensure!(!output.status.success());
         ensure!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr)?;
-        for member in &expected_endpoint_ids {
+        for endpoint in &expected_endpoint_ids {
             ensure!(
-                stderr.contains(&format!("{member}: chain id: endpoint identity mismatch")),
+                stderr.contains(&format!("{endpoint}: chain id: endpoint identity mismatch")),
                 "{stderr}"
             );
         }

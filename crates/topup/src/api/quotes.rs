@@ -148,7 +148,8 @@ pub(super) fn quote_terms(terms: &Terms) -> QuoteTerms {
                            minute; retry after `Retry-After` seconds",
             body = ErrorResponse
         ),
-        (status = 503, description = "Service Unavailable", body = ErrorResponse)
+        (status = 422, description = "Permanent chain `address_capacity_reached`; not retryable", body = ErrorResponse),
+        (status = 503, description = "`chain_unavailable`, `price_unavailable` or Service Unavailable", body = ErrorResponse)
     ),
     security(("api_key" = [])),
     tag = "quotes"
@@ -202,7 +203,12 @@ pub(crate) async fn create_quote(
         return Err(ApiError::chain_frozen());
     }
     if !state.routes.chain_ready(route.chain.chain_id) {
-        return Err(ApiError::price_unavailable());
+        return Err(ApiError::chain_unavailable());
+    }
+    if crate::db::chain_reads::issued_address_count(&state.pool, route.chain.chain_id).await?
+        >= crate::db::chain_reads::ISSUED_ADDRESS_CAP
+    {
+        return Err(ApiError::address_capacity_reached());
     }
     let route_scopes = repository::route_paused_scopes(&state.pool, &route.route).await?;
     if has_quotes_pause(&merchant.account, &customer, &route_scopes) {
@@ -745,9 +751,8 @@ pub(super) fn map_error(error: RateLockError) -> ApiError {
         RateLockError::InvalidInput(message) => ApiError::bad_request(message),
         RateLockError::AmountTooSmall(message) => ApiError::amount_too_small("amount", message),
         RateLockError::AmountTooLarge(message) => ApiError::amount_too_large("amount", message),
-        RateLockError::ChainUnavailable => {
-            ApiError::service_unavailable("chain is not ready to issue an address")
-        }
+        RateLockError::ChainUnavailable => ApiError::chain_unavailable(),
+        RateLockError::AddressCapacityReached => ApiError::address_capacity_reached(),
         RateLockError::PricingUnavailable => ApiError::price_unavailable(),
         RateLockError::RateLimited { retry_after } => ApiError::customer_quote_limit(retry_after),
         RateLockError::TreasuryNotSet => ApiError::treasury_not_set(),

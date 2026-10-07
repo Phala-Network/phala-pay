@@ -189,6 +189,12 @@ pub enum DepositAddressError {
     /// can be issued.
     #[error("no chain accepts new deposit addresses")]
     NoChain,
+    /// The chain's permanent pilot quota counts every address ever issued.
+    #[error("permanent chain address capacity reached")]
+    AddressCapacityReached,
+    /// The chain's dual coverage is not ready for issuance yet.
+    #[error("chain is not ready")]
+    ChainUnavailable,
     /// The account has no treasury on any chain that accepts new networks.
     #[error("no treasury is set on a chain that accepts new deposit addresses")]
     NoTreasury,
@@ -740,8 +746,14 @@ async fn keep_network(
     if exists {
         return Ok(());
     }
-    if !crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
-        return Err(DepositAddressError::NoChain);
+    match crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
+        crate::db::chain_reads::AddressAdmission::Admitted => {}
+        crate::db::chain_reads::AddressAdmission::NotReady => {
+            return Err(DepositAddressError::ChainUnavailable);
+        }
+        crate::db::chain_reads::AddressAdmission::CapacityReached => {
+            return Err(DepositAddressError::AddressCapacityReached);
+        }
     }
     sqlx::query(
         r#"
@@ -1172,8 +1184,14 @@ pub async fn sync_networks(
         if restored > 0 {
             continue;
         }
-        if !crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
-            return Err(DepositAddressError::NoChain);
+        match crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
+            crate::db::chain_reads::AddressAdmission::Admitted => {}
+            crate::db::chain_reads::AddressAdmission::NotReady => {
+                return Err(DepositAddressError::ChainUnavailable);
+            }
+            crate::db::chain_reads::AddressAdmission::CapacityReached => {
+                return Err(DepositAddressError::AddressCapacityReached);
+            }
         }
         // A newly derived forwarder cannot hold earlier payments to this salt and treasury unless
         // someone sent to the address before its network existed (on a chain added later, or
@@ -1285,8 +1303,14 @@ pub(crate) async fn replace_networks(
             new_addresses.push(address.clone());
         }
     }
-    if !crate::db::chain_reads::admit_addresses(transaction, chain.chain_id, ids.len()).await? {
-        return Err(DepositAddressError::NoChain);
+    match crate::db::chain_reads::admit_addresses(transaction, chain.chain_id, ids.len()).await? {
+        crate::db::chain_reads::AddressAdmission::Admitted => {}
+        crate::db::chain_reads::AddressAdmission::NotReady => {
+            return Err(DepositAddressError::ChainUnavailable);
+        }
+        crate::db::chain_reads::AddressAdmission::CapacityReached => {
+            return Err(DepositAddressError::AddressCapacityReached);
+        }
     }
     // As in `sync_networks`, the scanner covers a new forwarder from the chain's committed cursor.
     sqlx::query(

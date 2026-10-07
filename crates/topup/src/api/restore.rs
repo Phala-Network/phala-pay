@@ -728,7 +728,7 @@ pub(crate) async fn reissue_quote(
         })
         .ok_or_else(|| ApiError::invalid_param("asset", "no route has the chain and asset"))?;
     if !state.routes.chain_ready(route.chain.chain_id) {
-        return Err(ApiError::price_unavailable());
+        return Err(ApiError::chain_unavailable());
     }
     let (lock, issued) = locks::reissue(
         &state.pool,

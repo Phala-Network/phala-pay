@@ -418,6 +418,19 @@ async fn published_image_round_trip() -> Result<()> {
         let second=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(16)?;
         // Restart at a scheduled-round boundary without changing production cadences.
         current_service.stop()?;current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;credited(&database,second).await?;
+        wait_until("N finalized second payment",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT final_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?)}).await?;
+        let first_salt:String=sqlx::query_scalar("SELECT salt FROM addresses WHERE deposit_address_id=$1").bind(da_id).fetch_one(&database.app_pool).await?;
+        let n_flush=send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&format!("[{first_salt}]"),&format!("{token:#x}")])?;
+        anvil.mine(16)?;
+        current_service.stop()?;current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;
+        wait_until("N recorded flush and swept second payment",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM flushed WHERE tx_hash=$1) AND EXISTS(SELECT 1 FROM deposits WHERE tx_hash=$2 AND final_at IS NOT NULL AND state='swept')").bind(format!("{n_flush:#x}")).bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?)}).await?;
+        current_service.stop()?;
+        // The typed self-test needs a transaction/receipt/log at the finalized Anvil boundary.
+        // Genuine zero transfers to the treasury pay no issued address and change no balance.
+        for _ in 0..16 {send(&anvil,token,"transfer(address,uint256)",&[&format!("{treasury:#x}"),"0"])?;}
+        reconcile(None,&current_path,&database,&tls)?;
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM reconciliation_blocks").fetch_one(&database.app_pool).await?==0,"N reconciliation must be clean before rollback");
+        current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;
         let cancel=merchant(&origin,&key,"/v1/quotes",json!({"client_reference_id":"cancel","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"})).await?;
         let canceled=merchant(&origin,&key,&format!("/v1/quotes/{}/cancel",cancel["id"].as_str().unwrap()),json!({})).await?;
         ensure!(canceled["status"]=="open" && canceled["cancel_requested_at"].is_number());

@@ -568,6 +568,13 @@ pub async fn run(
     cancellation: CancellationToken,
 ) -> Result<(), ScannerError> {
     let mut tasks = tokio::task::JoinSet::new();
+    for pair in routes.rpc().values() {
+        let pair = pair.clone();
+        let token = cancellation.clone();
+        tasks.spawn(async move {
+            crate::rpc_runtime::recover(pair, token).await;
+        });
+    }
     for (offset, chain) in chain_routes(routes).into_iter().enumerate() {
         let read = FinalizedReader::new(
             routes
@@ -600,22 +607,24 @@ pub async fn run(
         let fast_chain = chain.clone();
         let fast_token = cancellation.clone();
         tasks.spawn(async move {
+            let monitor = crate::observability::CronMonitor::fast_scanner(fast_chain.chain.chain_id);
             let mut interval = tokio::time::interval(FAST_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! { _ = fast_token.cancelled() => break, _ = interval.tick() => {} }
-                if crate::reconciler::chain_is_blocked(&fast_pool,fast_chain.chain.chain_id).await.unwrap_or(true) {continue;}
+                if crate::reconciler::chain_is_blocked(&fast_pool,fast_chain.chain.chain_id).await.unwrap_or(true) {monitor.check_in(false); continue;}
                 if !contract_read.contract_ready() || !contract_verify.contract_ready() {
                     let checked=tokio::select! {
                         _=fast_token.cancelled()=>break,
                         result=crate::contracts::check_and_enforce(&fast_pool,&contract_read,&contract_verify,fast_chain.chain.chain_id,&contract_routes)=>result,
                     };
-                    if !matches!(checked,Ok(true)) {continue;}
+                    if !matches!(checked,Ok(true)) {monitor.check_in(false); continue;}
                 }
                 let result = tokio::select! {
                     _ = fast_token.cancelled() => break,
                     result = fast_once(&fast_pool,&fast_read,&fast_chain) => result,
                 };
+                monitor.check_in(result.is_ok());
                 if let Err(error) = result { tracing::warn!(chain_id=fast_chain.chain.chain_id,%error,"fast discovery waits"); }
             }
         });
@@ -631,12 +640,13 @@ pub async fn run(
         let heads = heads.clone();
         let token = cancellation.clone();
         tasks.spawn(async move {
+            let monitor = crate::observability::CronMonitor::coverage_scanner(chain.chain.chain_id);
             let mut interval = tokio::time::interval_at(tokio::time::Instant::now()+Duration::from_secs(u64::try_from(offset).unwrap_or(0).saturating_mul(30)),COVERAGE_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut round = 0_u64;
             loop {
                 tokio::select! { _ = token.cancelled() => break, _ = interval.tick() => {} }
-                if !coverage_read.contract_ready() || !coverage_verify.contract_ready() {continue;}
+                if !coverage_read.contract_ready() || !coverage_verify.contract_ready() {monitor.check_in(false); continue;}
                 round = round.saturating_add(1);
                 let result = tokio::select! {
                     _ = token.cancelled() => break,
@@ -645,6 +655,7 @@ pub async fn run(
                         coverage_once(&pool,&read,&verify,&chain,round).await
                     } => result,
                 };
+                monitor.check_in(result.is_ok());
                 match result {
                     Ok(stats) => {
                         if let Ok(Some(checkpoint)) = chain_reads::checkpoint(&pool,chain.chain.chain_id).await { heads.publish(chain.chain.chain_id,FinalizedHead {number:checkpoint.number,time:checkpoint.time}); }

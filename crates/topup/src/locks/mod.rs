@@ -250,9 +250,12 @@ pub enum RateLockError {
     /// Current validated pricing is unavailable.
     #[error("validated pricing is unavailable")]
     PricingUnavailable,
-    /// The chain is not initialized or its pilot address capacity is exhausted.
+    /// The chain is not initialized or temporarily unavailable.
     #[error("chain cannot issue an address yet")]
     ChainUnavailable,
+    /// The permanent per-chain issued-address pilot quota is exhausted.
+    #[error("permanent chain address capacity reached")]
+    AddressCapacityReached,
     /// The account has no treasury on the route's chain.
     #[error("no treasury is set on the chain")]
     TreasuryNotSet,
@@ -542,8 +545,14 @@ pub async fn create_in(
     .bind(Json(terms))
     .execute(&mut **transaction)
     .await?;
-    if !crate::db::chain_reads::admit_address(transaction, route.chain.chain_id).await? {
-        return Err(RateLockError::ChainUnavailable);
+    match crate::db::chain_reads::admit_address(transaction, route.chain.chain_id).await? {
+        crate::db::chain_reads::AddressAdmission::Admitted => {}
+        crate::db::chain_reads::AddressAdmission::NotReady => {
+            return Err(RateLockError::ChainUnavailable);
+        }
+        crate::db::chain_reads::AddressAdmission::CapacityReached => {
+            return Err(RateLockError::AddressCapacityReached);
+        }
     }
     // A freshly derived single-use address cannot hold earlier payments, so the scanner only
     // needs to cover it from the chain's committed cursor instead of backfilling from genesis.
@@ -700,8 +709,14 @@ pub async fn reissue(
         transaction.commit().await?;
         return Ok((existing, false));
     }
-    if !crate::db::chain_reads::admit_address(&mut transaction, route.chain.chain_id).await? {
-        return Err(RateLockError::ChainUnavailable);
+    match crate::db::chain_reads::admit_address(&mut transaction, route.chain.chain_id).await? {
+        crate::db::chain_reads::AddressAdmission::Admitted => {}
+        crate::db::chain_reads::AddressAdmission::NotReady => {
+            return Err(RateLockError::ChainUnavailable);
+        }
+        crate::db::chain_reads::AddressAdmission::CapacityReached => {
+            return Err(RateLockError::AddressCapacityReached);
+        }
     }
     let tolerance = crate::treasuries::IN_FORCE_TOLERANCE;
     // A quote the restored database holds was returned above, whenever it was created.

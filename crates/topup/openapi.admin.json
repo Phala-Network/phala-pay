@@ -1906,8 +1906,15 @@
         "description": "Stable error fields safe to expose to callers.",
         "properties": {
           "code": {
-            "description": "Stable machine-readable code.",
-            "type": "string"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnownErrorCode"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Stable machine-readable error code; clients accept future codes."
           },
           "doc_url": {
             "description": "The documentation of `code` in the API reference. Every error of this service carries it;\nit is optional in the schema, as in Stripe's, so a client never fails on an error without\nit.",
@@ -2187,6 +2194,66 @@
           "reason"
         ],
         "type": "object"
+      },
+      "KnownErrorCode": {
+        "enum": [
+          "address_capacity_reached",
+          "chain_unavailable",
+          "price_unavailable",
+          "parameter_invalid",
+          "parameter_missing",
+          "parameter_unknown",
+          "amount_too_small",
+          "amount_too_large",
+          "exposure_cap_exceeded",
+          "paused",
+          "chain_frozen",
+          "asset_not_accepted",
+          "payment_settings_unconfirmed",
+          "treasury_not_set",
+          "treasury_proof_invalid",
+          "treasury_challenge_expired",
+          "treasury_challenge_used",
+          "treasury_not_deployed",
+          "treasury_sanctioned",
+          "treasury_change_pending",
+          "treasury_unchanged",
+          "treasury_unexpected_state",
+          "quote_payment_received",
+          "quote_window_closed",
+          "quote_unexpected_state",
+          "deposit_unexpected_state",
+          "deposit_not_refundable",
+          "deposit_not_final",
+          "destination_sanctioned",
+          "transfer_already_used",
+          "refund_unexpected_state",
+          "api_key_inactive",
+          "last_api_key",
+          "deposit_address_cap_exceeded",
+          "deposit_address_retired",
+          "webhook_endpoint_cap_exceeded",
+          "webhook_endpoint_disabled",
+          "idempotency_key_reused",
+          "signature_invalid",
+          "signature_replayed",
+          "api_key_missing",
+          "api_key_invalid",
+          "api_key_expired",
+          "permission_denied",
+          "testmode_charges_only",
+          "resource_missing",
+          "idempotency_key_in_use",
+          "rate_limit",
+          "customer_rate_limit",
+          "internal_error",
+          "unavailable",
+          "service_maintenance",
+          "service_restoring",
+          "restore_not_frozen",
+          "restore_rescan_incomplete"
+        ],
+        "type": "string"
       },
       "Limits": {
         "description": "The caps of one account in one mode.",

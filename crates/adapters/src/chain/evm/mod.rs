@@ -120,9 +120,9 @@ impl ReceiptLookup {
     }
 }
 
-/// Evidence judged together from one member, never assembled across a group's members.
+/// Evidence judged together from one endpoint, independently verified against the other endpoint.
 pub struct FinalityEvidence {
-    /// Member-validated finalized height.
+    /// Endpoint-validated finalized height.
     pub finalized: u64,
     /// Receipt at the requested position.
     pub receipt: ReceiptLookup,
@@ -611,7 +611,7 @@ impl EvmClient {
         self.state.ready()
     }
 
-    /// Mark this endpoint unavailable after a decoded capability or identity failure.
+    /// Record a final decoded capability failure in the readiness streak.
     pub fn mark_not_ready(&self) {
         self.state.failed();
     }
@@ -966,7 +966,7 @@ impl EvmClient {
         .await
     }
 
-    /// Reads a complete numbered/tagged header through the bounded group transport.
+    /// Reads a complete numbered/tagged header through the bounded endpoint transport.
     pub async fn price_block(
         &self,
         block: BlockNumberOrTag,

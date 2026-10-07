@@ -184,6 +184,21 @@ impl TwapConfig {
                 "invalid TWAP window/liquidity/freshness/deviation/jump limits",
             ));
         }
+        // The only TWAP observation chain is Ethereum mainnet. Leave sixteen blocks of margin
+        // so the window's oldest canonical sample stays inside Multicall3's BLOCKHASH reach.
+        let reach = crate::route::ChainFamily::EthereumL1
+            .block_seconds()
+            .saturating_mul(240);
+        if self
+            .window_s
+            .checked_add(self.max_sample_age_s)
+            .is_none_or(|history| history > reach)
+        {
+            return Err(RouteError::validation(
+                "price",
+                "TWAP window plus sample age exceeds the 256-block BLOCKHASH reach with a 16-block margin",
+            ));
+        }
         Ok(())
     }
 }
@@ -346,7 +361,7 @@ impl PriceConfig {
         Ok(())
     }
     /// Validate safety and licensing at the route boundary.
-    pub fn validate(&self, chain: u64, asset: &str, _live: bool) -> Result<(), RouteError> {
+    pub fn validate(&self, chain: u64, asset: &str, live: bool) -> Result<(), RouteError> {
         let fail = |s| RouteError::validation("price", s);
         if self.max_age_s == 0 || self.max_age_s > 3600 {
             return Err(fail("max_age_s must be 1..3600"));
@@ -416,6 +431,13 @@ impl PriceConfig {
                         twap,
                     } => {
                         twap.validate()?;
+                        // Preserve main's production validation bounds; five-minute staging
+                        // sampling alone admits the wider age limit (defaults stay 180/500).
+                        if live && twap.max_sample_age_s > 600 {
+                            return Err(fail(
+                                "live TWAP sample age must retain the original 60..600-second bound",
+                            ));
+                        }
                         if chain != 1 && observation_chain_id != &Some(chain) {
                             return Err(fail(
                                 "TWAP requires an explicit cross-network observation_chain_id",
@@ -470,7 +492,7 @@ impl PriceConfig {
         if let Some(s) = &self.sequencer_uptime
             && (s.feed != "BASE_SEQUENCER_UPTIME" || s.grace_s < 3600)
         {
-            return Err(fail("invalid sequencer feed/groups/grace"));
+            return Err(fail("invalid sequencer feed/chain/grace"));
         }
         Ok(())
     }
@@ -534,6 +556,41 @@ mod tests {
         config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"observation_chain_id":11155111})).unwrap()];
         assert!(config.validate(11155111, "pha", false).is_ok());
     }
+    #[test]
+    fn twap_history_stays_within_blockhash_reach_and_wider_age_is_test_only() {
+        let reach = 240 * crate::route::ChainFamily::EthereumL1.block_seconds();
+        let mut policy = TwapConfig::default();
+        policy.window_s = reach - policy.max_sample_age_s;
+        assert!(policy.validate().is_ok());
+        policy.window_s += 1;
+        assert!(policy.validate().is_err());
+        policy.window_s = u64::MAX;
+        assert!(policy.validate().is_err());
+        let mut config = volatile();
+        config.primary = vec![Source::UniswapV2Twap {
+            observation_chain_id: None,
+            twap: TwapConfig::default(),
+        }];
+        config.check = vec![Source::Kraken {
+            symbol: "PHAUSD".into(),
+            company: "kraken".into(),
+        }];
+        for (age, test_ok, live_ok) in [
+            (600, true, true),
+            (601, true, false),
+            (900, true, false),
+            (901, false, false),
+        ] {
+            let Source::UniswapV2Twap { twap, .. } = &mut config.primary[0] else {
+                unreachable!()
+            };
+            twap.max_sample_age_s = age;
+            twap.max_sample_jump_bps = Bps::new(1100).unwrap();
+            assert_eq!(config.validate(1, "pha", false).is_ok(), test_ok);
+            assert_eq!(config.validate(1, "pha", true).is_ok(), live_ok);
+        }
+    }
+
     #[test]
     fn twap_policy_boundaries_admit_staging_five_minute_samples() {
         let mut policy = TwapConfig::default();

@@ -63,18 +63,28 @@ impl ScreenRoute {
             .sanctions
             .sanctions(deposit.from_address, deposit.block_number)
             .await;
-        if sanctions.block_number < deposit.block_number {
-            return transient_result("sanctions_pin_before_payment", deposit.block_number);
-        }
-        let outcome = screen(
-            deposit.amount_atomic,
-            &sanctions,
-            &bounds,
-            &pause_scopes.effective,
-            &PauseScopes::default(),
-        );
+        let outcome = if sanctions.block_number < deposit.block_number {
+            StepOutcome::Retry {
+                error: RetryError::SanctionsInconclusive,
+            }
+        } else {
+            screen(
+                deposit.amount_atomic,
+                &sanctions,
+                &bounds,
+                &pause_scopes.effective,
+                &PauseScopes::default(),
+            )
+        };
         let oracle = self.route.screening.sanctions_oracle;
-        let evidence = screening_evidence(oracle, sanctions, bounds, &pause_scopes);
+        let mut evidence = screening_evidence(oracle, sanctions, bounds, &pause_scopes);
+        if outcome
+            == (StepOutcome::Retry {
+                error: RetryError::SanctionsInconclusive,
+            })
+        {
+            evidence["sanctions_hold"] = json!(true);
+        }
         let mut result = StepResult::new(outcome, evidence);
         if let StepOutcome::Reject(_) = outcome {
             result.events.push(rejected_event(deposit));
@@ -326,6 +336,7 @@ fn screening_evidence(
     json!({
         "oracle": format!("{oracle:#x}"),
         "block_number": sanctions.block_number,
+        "block_hash": sanctions.block_hash,
         "provider_a": sanctions.provider_a,
         "provider_b": sanctions.provider_b,
         "bounds": {

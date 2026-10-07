@@ -89,13 +89,30 @@ pub async fn freeze(pool: &PgPool, chain: u64, check: &str) -> Result<(), sqlx::
     tx.commit().await
 }
 
-/// Per-chain issued-address pilot cap, including quote and reusable addresses.
+/// Permanent per-chain pilot cap, counting all historical quote and reusable addresses.
 pub const ISSUED_ADDRESS_CAP: i64 = 1_000;
+/// Outcome of admission while holding the per-chain issuance lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddressAdmission {
+    /// The chain is initialized and has space for the requested addresses.
+    Admitted,
+    /// Dual coverage has not been initialized yet.
+    NotReady,
+    /// The permanent pilot quota would be exceeded.
+    CapacityReached,
+}
+/// Current permanent usage; retirement and expiration do not free capacity.
+pub async fn issued_address_count(pool: &PgPool, chain: u64) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT count(*) FROM addresses WHERE chain_id=$1")
+        .bind(to_i64(chain, "chain id")?)
+        .fetch_one(pool)
+        .await
+}
 /// Serialize issuance against coverage initialization and the per-chain pilot cap.
 pub async fn admit_address(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     chain: u64,
-) -> Result<bool, sqlx::Error> {
+) -> Result<AddressAdmission, sqlx::Error> {
     admit_addresses(tx, chain, 1).await
 }
 /// Admit a batch atomically against the same chain boundary and pilot cap.
@@ -103,7 +120,7 @@ pub async fn admit_addresses(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     chain: u64,
     additional: usize,
-) -> Result<bool, sqlx::Error> {
+) -> Result<AddressAdmission, sqlx::Error> {
     super::rpc::guard_in(tx, chain).await?;
     let boundary: Option<i64> =
         sqlx::query_scalar("SELECT through_block FROM chain_coverage WHERE chain_id=$1 FOR UPDATE")
@@ -111,7 +128,7 @@ pub async fn admit_addresses(
             .fetch_optional(&mut **tx)
             .await?;
     if boundary.is_none() {
-        return Ok(false);
+        return Ok(AddressAdmission::NotReady);
     }
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM addresses WHERE chain_id=$1")
         .bind(to_i64(chain, "chain id")?)
@@ -119,7 +136,14 @@ pub async fn admit_addresses(
         .await?;
     let additional = i64::try_from(additional)
         .map_err(|_| sqlx::Error::Protocol("address count overflow".into()))?;
-    Ok(count
-        .checked_add(additional)
-        .is_some_and(|total| total <= ISSUED_ADDRESS_CAP))
+    Ok(
+        if count
+            .checked_add(additional)
+            .is_some_and(|total| total <= ISSUED_ADDRESS_CAP)
+        {
+            AddressAdmission::Admitted
+        } else {
+            AddressAdmission::CapacityReached
+        },
+    )
 }

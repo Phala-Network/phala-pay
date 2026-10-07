@@ -365,6 +365,18 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
         // transfer and factory event is indexed, and only forwarders whose settled ledger holds
         // unswept funds.
         scanned_through(&pool, 140).await?;
+        // Finality advances independently beyond coverage. This distinct hash is deliberately
+        // rejected by the chain fixture: custody at it would compare unindexed state.
+        db::chain_reads::advance_checkpoint(
+            &pool,
+            CHAIN_ID,
+            db::chain_reads::Boundary {
+                number: 150,
+                hash: B256::repeat_byte(25),
+                time: Utc::now(),
+            },
+        )
+        .await?;
         ensure!(
             reconciler
                 .check(CheckName::CustodyBalance)

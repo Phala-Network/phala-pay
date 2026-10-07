@@ -187,7 +187,7 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         | "TopupFinalizedCheckpointConflict"
         | "TopupUnverifiedEvidenceMismatch" => "chain-frozen.md",
         "TopupRpcEndpointUnavailable" => "rpc-health.md",
-        "TopupRpcDisagreement" => "provider-disagreement.md",
+        "TopupRpcDisagreement" | "TopupSanctionsHold" => "provider-disagreement.md",
         "TopupDepositReversalUnproven" => "deposit-reversed.md",
         "TopupDepositStateAgeExceeded" => match tag("state") {
             Some("detected" | "confirmed") => "provider-disagreement.md",
@@ -200,6 +200,7 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
             "chain-frozen.md"
         }
         "TopupReconciliationMismatch" => "reconciliation-mismatch.md",
+        "TopupAddressCapacity" => "address-capacity.md",
         "TopupLockExpiryFailing" => "lock-expiry-worker-failure.md",
         "TopupLockExposureNearCap" => "lock-exposure-near-cap.md",
         "TopupUnsupportedInflows" => "rejected-funds-at-treasury.md",
@@ -267,10 +268,24 @@ pub struct CronMonitor {
 }
 
 impl CronMonitor {
-    /// Successful finalized scanner passes of one chain: a stalled or stopped scanner.
+    /// Fast discovery: one completed round per minute, with a two-minute missed-check-in margin.
     #[must_use]
-    pub fn scanner(chain_id: u64) -> Self {
-        Self::heartbeat(format!("topup-scanner-{chain_id}"), 5)
+    pub fn fast_scanner(chain_id: u64) -> Self {
+        let mut monitor = Self::heartbeat(format!("topup-fast-scanner-{chain_id}"), 2);
+        monitor.config.failure_issue_threshold = Some(3);
+        monitor
+    }
+    /// Dual coverage: one round per ten minutes, with a two-minute missed-check-in margin.
+    #[must_use]
+    pub fn coverage_scanner(chain_id: u64) -> Self {
+        Self::new(
+            format!("topup-coverage-scanner-{chain_id}"),
+            MonitorSchedule::Interval {
+                value: 10,
+                unit: MonitorIntervalUnit::Minute,
+            },
+            2,
+        )
     }
 
     /// Polls of the finality watch.
@@ -608,6 +623,41 @@ mod tests {
             Some("reconciliation check failed")
         );
         assert!(events[1].fingerprint.as_ref() == ["{{ default }}"]);
+    }
+
+    #[test]
+    fn scanner_monitors_report_separate_per_chain_fast_and_coverage_cadences() {
+        let envelopes = with_captured_envelopes_options(
+            || {
+                CronMonitor::fast_scanner(1).check_in(true);
+                CronMonitor::coverage_scanner(1).check_in(false);
+                CronMonitor::coverage_scanner(8453).check_in(true);
+            },
+            options().environment("staging"),
+        );
+        let checks = envelopes
+            .iter()
+            .flat_map(|e| e.items())
+            .filter_map(|item| match item {
+                EnvelopeItem::MonitorCheckIn(check) => Some(check),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(checks.len(), 3);
+        for (check, (slug, minutes, status)) in checks.iter().zip([
+            ("topup-fast-scanner-1", 1, MonitorCheckInStatus::Ok),
+            ("topup-coverage-scanner-1", 10, MonitorCheckInStatus::Error),
+            ("topup-coverage-scanner-8453", 10, MonitorCheckInStatus::Ok),
+        ]) {
+            assert_eq!(check.monitor_slug, slug);
+            assert_eq!(check.status, status);
+            let config = serde_json::to_value(&check.monitor_config).unwrap();
+            assert_eq!(
+                config["schedule"],
+                serde_json::json!({"type":"interval","value":minutes,"unit":"minute"})
+            );
+            assert_eq!(config["checkin_margin"], 2);
+        }
     }
 
     #[test]

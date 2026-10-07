@@ -232,7 +232,7 @@ impl Reconciler {
     /// Runs one bounded check page without persisting its findings. Repeated calls resume
     /// the durable cursor; completed row passes wrap so old rows are checked again.
     ///
-    /// Safe repairs and freezes still apply: `missing_deposit` and `missing_flush_link` write the
+    /// Safe repairs and freezes still apply: `missing_flush_link` writes the
     /// ledger, and `address_derivation` and `custody_balance` freeze a chain, exactly as a full
     /// round does.
     pub async fn check(&self, check: CheckName) -> Result<Vec<Finding>, ReconciliationError> {

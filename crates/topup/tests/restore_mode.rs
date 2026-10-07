@@ -4736,6 +4736,28 @@ async fn a_sanctions_hit_keeps_a_delivered_credit_and_blocks_its_sweep() -> Resu
                 .execute(&harness.pool)
                 .await?;
 
+            // A disagreement on replay cannot undo delivered value or create a sanctions hit.
+            struct SplitSanctions;
+            #[async_trait]
+            impl topup_adapters::risk::oracle::SanctionsSource for SplitSanctions {
+                async fn sanctions(&self,_:Address,block_number:u64)->topup_core::screening::SanctionsResult {
+                    topup_core::screening::SanctionsResult {provider_a:topup_core::screening::SanctionsAnswer::Clear,
+                        provider_b:topup_core::screening::SanctionsAnswer::Sanctioned,block_number,block_hash:Some(B256::repeat_byte(7))}
+                }
+            }
+            let before=topup::db::get_deposit(&harness.pool,deposit).await?.context("replayed deposit")?.credit_minor;
+            let split=topup::steps::screen::ScreenStep::new(harness.pool.clone(),[
+                topup::steps::screen::ScreenRoute::new(harness.route.clone(),Arc::new(SplitSanctions))])?;
+            run_pump(&harness,deposit,StepSet::new(Box::new(Unreached),Box::new(split))).await?;
+            let held=topup::db::get_deposit(&harness.pool,deposit).await?.context("held replay")?;
+            ensure!(held.state==topup_core::deposit::DepositState::Confirmed);
+            ensure!(held.credit_minor==before);
+            let hit: bool = sqlx::query_scalar("SELECT sanctions_hit_at IS NOT NULL FROM deposits WHERE id=$1").bind(deposit).fetch_one(&harness.pool).await?;
+            ensure!(!hit);
+            let recorded:Value=sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1").bind(deposit).fetch_one(&harness.pool).await?;
+            ensure!(recorded["sanctions_hold"]==true);
+            sqlx::query("UPDATE deposits SET next_attempt_at=now()-interval '1 second' WHERE id=$1").bind(deposit).execute(&harness.pool).await?;
+
             // The list now names the sender.
             let screen = topup::steps::screen::ScreenStep::new(
                 harness.pool.clone(),

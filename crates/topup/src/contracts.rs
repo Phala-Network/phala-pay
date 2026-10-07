@@ -3,13 +3,9 @@
 use std::collections::BTreeSet;
 
 use alloy_primitives::{Address, B256, b256, keccak256};
-use topup_adapters::chain::flush::ContractAddressGetter;
-use topup_core::address::forwarder_address;
 use topup_core::route::RouteFile;
 
 use topup_adapters::chain::evm::{ChainError, EvmClient, MULTICALL3};
-
-use crate::routes::RouteSet;
 
 // The build fingerprints below are recorded by `deploy/contracts/check-build.sh --write` in
 // `deploy/contracts/expected-codehashes.json`; a unit test keeps these copies equal to that file,
@@ -33,132 +29,6 @@ const FORWARDER_FACTORY_OFFSETS: &[usize] = &[208, 319];
 /// unit test keeps it equal to `deploy/contracts/multicall3.json`.
 const MULTICALL3_RUNTIME_CODE_HASH: B256 =
     b256!("d5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891");
-
-/// Salt used to compare the factory's `addressOf` with local address derivation.
-#[must_use]
-pub fn sample_salt() -> B256 {
-    keccak256("crypto-topup-service.startup-check")
-}
-
-/// Treasury used to compare the factory's `addressOf` with local address derivation. Treasuries
-/// are the accounts' (design D10), so any fixed address serves.
-#[must_use]
-pub fn sample_treasury() -> Address {
-    Address::from_word(keccak256("crypto-topup-service.startup-check.treasury"))
-}
-
-/// Checks every route's contracts on every configured RPC provider before the service starts.
-pub async fn verify_routes(routes: &RouteSet) -> Result<(), String> {
-    let mut checked = BTreeSet::new();
-    for route in routes.routes() {
-        let contracts = &route.chain.contracts;
-        for (index, provider) in route.chain.rpc_providers.iter().enumerate() {
-            let key = (
-                route.chain.chain_id,
-                provider.as_str(),
-                contracts.forwarder_factory,
-                contracts.implementation,
-            );
-            if !checked.insert(key) {
-                continue;
-            }
-            let client = routes
-                .provider(route.chain.chain_id, index)
-                .map_err(|error| error.to_string())?;
-            let label = client.endpoint().provider().unwrap_or_default();
-            verify_on(client, route)
-                .await
-                .map_err(|error| format!("route `{}` via `{label}`: {error}", route.route))?;
-        }
-    }
-    Ok(())
-}
-
-/// Compares one provider's view of the contracts with the route. The getters come first so a
-/// mismatch names the differing address; the code hashes then prove the immutables are the only
-/// difference from the audited build. The treasury is not in any contract: it is each clone's
-/// argument, so a sample `addressOf(treasury, salt)` proves the factory derives addresses as the
-/// service does for any treasury.
-pub(crate) async fn verify_on(client: &EvmClient, route: &RouteFile) -> Result<(), String> {
-    let contracts = &route.chain.contracts;
-    let factory = contracts.forwarder_factory;
-    let implementation = contracts.implementation;
-    let read = |probe: &str, error: ChainError| format!("{probe}: {error}");
-
-    // Every balance and `addressOf` read, including the sample below, goes through Multicall3.
-    let multicall = client
-        .code_at(MULTICALL3)
-        .await
-        .map_err(|e| read("Multicall3 code", e))?;
-    if multicall.is_empty() {
-        return Err(format!(
-            "RPC capability unavailable: Multicall3 {MULTICALL3:#x} has no code on chain {}; balance and addressOf reads \
-             are aggregated through it",
-            route.chain.chain_id
-        ));
-    }
-    if keccak256(&multicall) != MULTICALL3_RUNTIME_CODE_HASH {
-        return Err(format!(
-            "RPC member identity invalid: Multicall3 {MULTICALL3:#x} on chain {} is not the canonical deployment (code hash \
-             {:#x})",
-            route.chain.chain_id,
-            keccak256(&multicall)
-        ));
-    }
-
-    let actual = client
-        .contract_address(factory, ContractAddressGetter::Implementation)
-        .await
-        .map_err(|e| read("factory implementation() capability", e))?;
-    if actual != implementation {
-        return Err(format!(
-            "RPC member identity invalid: factory implementation() is {actual:#x}, route expects {implementation:#x}"
-        ));
-    }
-    let owner = client
-        .contract_address(implementation, ContractAddressGetter::Factory)
-        .await
-        .map_err(|e| read("implementation factory() capability", e))?;
-    if owner != factory {
-        return Err(format!(
-            "RPC member identity invalid: implementation factory() is {owner:#x}, route expects {factory:#x}"
-        ));
-    }
-    let factory_code = client
-        .code_at(factory)
-        .await
-        .map_err(|e| read("factory code", e))?;
-    verify_code(
-        &factory_code,
-        &[(implementation, FACTORY_IMPLEMENTATION_OFFSETS)],
-        FACTORY_RUNTIME_TEMPLATE_HASH,
-    )
-    .map_err(|error| format!("RPC member identity invalid: factory {factory:#x} {error} of the ForwarderFactory build"))?;
-    let implementation_code = client
-        .code_at(implementation)
-        .await
-        .map_err(|e| read("implementation code", e))?;
-    verify_code(
-        &implementation_code,
-        &[(factory, FORWARDER_FACTORY_OFFSETS)],
-        FORWARDER_RUNTIME_TEMPLATE_HASH,
-    )
-    .map_err(|error| {
-        format!("RPC member identity invalid: implementation {implementation:#x} {error} of the Forwarder build")
-    })?;
-    let sample = client
-        .factory_addresses(factory, sample_treasury(), &[sample_salt()])
-        .await
-        .map_err(|e| read("Multicall3 factory addressOf capability", e))?;
-    let expected = forwarder_address(factory, implementation, sample_treasury(), sample_salt());
-    if sample.as_slice() != [expected] {
-        return Err(format!(
-            "RPC member identity invalid: factory addressOf(treasury, sample) is {sample:?}, local derivation gives \
-             {expected:#x}"
-        ));
-    }
-    Ok(())
-}
 
 /// Result of a fresh independent check at one canonical finalized block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

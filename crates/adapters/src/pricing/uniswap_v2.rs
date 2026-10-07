@@ -307,7 +307,7 @@ pub struct UniswapV2 {
     store: Arc<dyn ObservationStore>,
 }
 impl UniswapV2 {
-    /// Restrict observation clients to independent Ethereum groups.
+    /// Restrict observation clients to independent Ethereum endpoints.
     pub fn new(
         a: Arc<EvmClient>,
         b: Arc<EvmClient>,
