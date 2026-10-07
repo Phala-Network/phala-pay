@@ -1,6 +1,7 @@
 # Chain frozen
 
-**Trigger:** `TopupReconciliationMismatch` with `check:address_derivation` or
+**Trigger:** `TopupContractCodeMismatch`, `TopupFinalizedCheckpointConflict`,
+`TopupUnverifiedEvidenceMismatch`, or `TopupReconciliationMismatch` with `check:address_derivation` or
 `check:custody_balance`; merchants report
 `400 chain_frozen` from address issuance or quote creation; `topup-scanner-<chain_id>` misses
 its check-ins because the frozen chain's scanner has paused.
@@ -10,7 +11,7 @@ its check-ins because the frozen chain's scanner has paused.
 prove where deposits go, or a forwarder's finalized balance is not its final deposits minus its
 finalized `Flushed` amounts (`custody_balance`), so a transfer or sweep is missing from, or wrong
 in, the ledger. Until the freeze is lifted, the chain's deposits wait (nothing is credited), its
-scanner (the per-block scan and the finalized backstop) stops, and address issuance and quote creation answer `400 chain_frozen`. Other chains
+scanner (fast discovery and dual finalized coverage) stops, and address issuance and quote creation answer `400 chain_frozen`. Other chains
 keep running; credited facts are never rolled back.
 
 ## First steps
@@ -48,7 +49,7 @@ keep running; credited facts are never rolled back.
   Security and Finance.
 - `custody_balance`: compare the chain's `Transfer` logs to the forwarder and the factory's
   `Flushed` logs for it with the deposit view (`admin GET /v1/admin/deposits/{id}`) of each of its
-  deposits. A transfer the ledger lacks is repaired by `missing_deposit` within a round; a
+  deposits. Dual coverage records an omitted transfer after both sources agree; a
   fee-on-transfer or rebasing token, or a ledger row that disagrees with the chain, is an
   Engineering and Finance incident.
 - Contracts match but the stored address differs: database corruption or tampering; preserve the
@@ -69,9 +70,12 @@ admin GET /v1/admin/reports/daily | jq '.reconciliation_blocks'
 admin POST "/v1/admin/reconciliation_blocks/chain:$CHAIN_ID/lift" '{"reason":"INC-123: factory and stored addresses agree, Security sign-off"}'
 ```
 
-The chain resumes on the next iteration of each component, without a restart. The lift does not
-re-check: if any stored address still disagrees, the next reconciliation round (every 10 minutes, once
-`finalized` has advanced) freezes the chain again.
+The chain resumes on the next iteration of each component, without a restart. The lift first runs a fresh dual-source factory, implementation and Multicall3 code check. It
+refuses unavailable, disagreeing or mismatched evidence. Only a passing check permits the
+audited lift. A contract mismatch agreed by both endpoints freezes only its chain; disagreement
+or one unavailable endpoint keeps that chain not-ready without a freeze row. Correct code alone
+does not lift an existing block. If another finding still reproduces, reconciliation freezes
+the chain again.
 
 ## Done when
 

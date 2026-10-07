@@ -88,12 +88,12 @@ routes:
 
     price:
       mode: volatile
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a }
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
       allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: uniswap_v2_twap, twap: { max_sample_age_s: 900, max_sample_jump_bps: 1100 }, rpc_group: mainnet-a, observation_chain_id: 84532 }]
+      primary: [{ source: uniswap_v2_twap, twap: { max_sample_age_s: 900, max_sample_jump_bps: 1100 }, observation_chain_id: 84532 }]
       check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
       fx:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 84532 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 84532 }
 
     merchant:
       min_amount: { default: 100 }
@@ -124,15 +124,13 @@ routes:
       contract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
       decimals: 6
       # About 1 to 1.5 transfers per block on Base Sepolia (1 740 to 3 065 in 2 000 blocks, up to 14 in
-      # one, Sep 2026): a token-wide 2 000-block backstop window would be up to 1.9 MB and a third of
-      # providers' 10 000-log response caps. Address mode puts the whole chain, PHA included, on
       # requests by recipient (architecture §8).
 
     price:
       mode: stablecoin
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a }
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
       sources:
-        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 84532 }
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, observation_chain_id: 84532 }
       peg_band_bps: 100
 
     merchant:
@@ -171,9 +169,9 @@ routes:
 
     price:
       mode: stablecoin
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a }
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
       sources:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 84532 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 84532 }
       peg_band_bps: 100
 
     merchant:
@@ -204,10 +202,10 @@ routes:
     price:
       mode: volatile
       allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: uniswap_v2_twap, twap: { max_sample_age_s: 900, max_sample_jump_bps: 1100 }, rpc_group: mainnet-a, observation_chain_id: 11155111 }]
+      primary: [{ source: uniswap_v2_twap, twap: { max_sample_age_s: 900, max_sample_jump_bps: 1100 }, observation_chain_id: 11155111 }]
       check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
       fx:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 11155111 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 11155111 }
 
     merchant:
       min_amount: { default: 100 }
@@ -233,15 +231,13 @@ routes:
       symbol: usdc
       contract: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
       decimals: 6
-      # About 2 transfers per block on Sepolia (4 280 in 2 000 blocks, up to 41 in one, Sep 2026):
-      # a token-wide 2 000-block backstop window would be 2.7 MB and near providers' 10 000-log
       # response caps. Address mode puts the whole chain, PHA included, on requests by recipient
       # (architecture §8).
 
     price:
       mode: stablecoin
       sources:
-        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 11155111 }
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, observation_chain_id: 11155111 }
       peg_band_bps: 100
 
     merchant:
@@ -276,7 +272,7 @@ routes:
     price:
       mode: stablecoin
       sources:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 11155111 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 11155111 }
       peg_band_bps: 100
 
     merchant:

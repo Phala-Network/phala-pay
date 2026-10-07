@@ -59,7 +59,8 @@ kit/deploy/render.sh "${gateway[@]}" --images images.json production/topup >dock
 AWS_ACCESS_KEY_ID=operator-key-id
 AWS_SECRET_ACCESS_KEY=operator-secret
 SENTRY_DSN=
-TOPUP_RPC_ALCHEMY_SEPOLIA_KEY=operator-alchemy-key
+TOPUP_RPC_ANKR_KEY=operator-read-key
+TOPUP_RPC_INFURA_KEY=operator-verify-key
 ENV
 )
 kit/deploy/preflight.sh --env .env.production --compose docker-compose.production.yml \

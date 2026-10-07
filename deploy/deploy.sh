@@ -393,7 +393,7 @@ main() {
                 echo "admin_key:"
                 echo "  id: admin/v1"
                 echo "  public_key: $TOPUP_ADMIN_PUBLIC_KEY"
-                sed -n '/^rpc_companies:/,$p' "$kit/deploy/environments/phala-cloud-template/topup/topup.yaml"
+                sed -n '/^rpc:/,$p' "$kit/deploy/environments/phala-cloud-template/topup/topup.yaml"
             } >"$env_dir/topup.yaml"
             cat >"$env_dir/compose.yaml" <<YAML
 # Written by deploy.sh $release, as deploy/environments/example/topup/compose.yaml describes.

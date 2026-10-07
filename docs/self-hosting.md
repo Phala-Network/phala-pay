@@ -170,7 +170,7 @@ comes from a release.
 
    | File | Settings |
    |---|---|
-   | `topup.yaml` ([reference](configuration.md#the-configuration-file)) | `environment` (the Sentry environment), `public_origin` (`https://` + your domain), `admin_key` (step 2), `rpc_groups`, `rpc_companies` and `rpc_budgets` (each chain's A/B members, with `{key}` in place of an API key; the first must serve `eth_getLogs` over 2 000 blocks and with no contract address, [deploy/README.md, "RPC providers"](../deploy/README.md#rpc-providers)), and `routes` (section 3) |
+   | `topup.yaml` ([reference](configuration.md#the-configuration-file)) | `environment` (the Sentry environment), `public_origin` (`https://` + your domain), `admin_key` (step 2), `rpc` (each payment and price chain's independent read/verify endpoints, with `{key}` in place of a sealed key, [deploy/README.md, "RPC providers"](../deploy/README.md#rpc-providers)), and `routes` (section 3) |
    | `compose.yaml` | `WALG_S3_PREFIX` (`s3://BUCKET/PATH`, empty and used by no other app), `AWS_ENDPOINT`, `AWS_REGION`, `AWS_S3_FORCE_PATH_STYLE`, dstack-ingress's `DOMAIN` (your domain), and one `TOPUP_RPC_<ID>_KEY` line per keyed provider |
 
    The kit renders it and the release's image checks it, so you can check it before committing:
@@ -272,7 +272,7 @@ Deploy `upgrade`, never a runtime setting.
   not list. A chain is added there, and to [networks.json](../deploy/contracts/networks.json) for
   the contract scripts, by a pull request to Phala Pay and ships in its next release. A chain without a Chainalysis sanctions oracle needs
   `chain.sanctions_oracle`.
-- **Its RPC providers.** Require explicit `chain.rpc_groups: { a: ..., b: ... }` and
+- **Its RPC providers.** Require explicit `rpc` read/verify pairs and
   company-disjoint reviewed groups. Configure every member URL/credential, shared budget and
   bounded selection policy in the attested public configuration; keep credentials sealed under
   the explicit member key names. See [RPC configuration](../deploy/README.md#rpc-providers) and

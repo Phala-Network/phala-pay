@@ -1,11 +1,10 @@
 # Provider disagreement
 
-**Trigger:** `TopupDepositStateAgeExceeded` with `state:detected` (the confirm step: finality and
+**Trigger:** `TopupRpcDisagreement` or `TopupDepositStateAgeExceeded` with `state:detected` (the confirm step: finality and
 valuation) or `state:confirmed` (the sanctions screen).
 
 **Impact:** affected deposits keep retrying in their state; nothing is rejected or credited on
-one provider's word. A sanctions hit is different: any provider answering `Sanctioned` rejects the
-deposit at once.
+one provider's word. Sanctions decisions also require agreement at the same canonical pin, at or after the payment block. A single hit waits and alerts.
 
 ## First steps
 

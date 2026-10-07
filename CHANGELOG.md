@@ -40,6 +40,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   limits. `topup_rpc_interactive_budget_wait_seconds_total` reports interactive admission waits.
   Release the code before adopting the field in configuration; remove it before rollback to
   older versions.
+- Dual finalized coverage and per-address backfill markers, independently verified deposit evidence,
+  and durable agreed checkpoints. Contract code mismatch freezes only its chain; audited lifts
+  require a fresh passing dual-source check.
 
 ### Changed
 
@@ -50,10 +53,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the
   restore report's `expected_heartbeat_at` JSON field is now `failure_at`. Both refer to the
   externally recorded failure instant.
-- RPC reads pinned to a numeric block skip redundant head validation when the same member's
-  validated head already covers it. Every send retains the durable freeze check; explicit head
-  reads still validate canonicality and persist watermarks. Head state loads use one database
-  statement, and RPC head validation metrics report skipped pinned reads.
 - Request deadline errors now say "the request did not complete within its deadline; retry"
   instead of blaming the database, with `503 unavailable` and `Retry-After: 2`.
 - Price adapters are shared across routes and coalesce concurrent fetches. Quotes may reuse
@@ -66,8 +65,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
-- RPC member recovery probe failures emit rate-limited warning logs, and lagging-node
-  "is beyond the latest block of this node" errors are classified as retryable server errors.
 - Reference-product sweep groups retain their last successful balances and sweep history for up to
   ten minutes when a refresh fails, while disabling stale signable calls.
 - Deploy pause and resume requests retry transport errors and HTTP 408, 429, 500, 502, 503, and 504
@@ -76,7 +73,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Kraken pricing uses order-book mid instead of a potentially stale last trade, retaining bid,
   ask and last in audit evidence. Checks with spreads above `max_deviation_bps` are unavailable
   (`wide_spread`), allowing failover without recording price disagreement.
-- `topup restore-check` and `topup reconcile` bind durable RPC state to price-observation groups too; with such a group sorted first they failed with `chain_unavailable`.
 - `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
   and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
   seconds per chain and could time out.

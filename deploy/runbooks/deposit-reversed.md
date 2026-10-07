@@ -2,14 +2,14 @@
 
 **Trigger:** `TopupDepositReversed` (a deposit's transaction left the chain before finality and
 the deposit is now `reversed`), or `TopupDepositPendingAfterReorg` (a deposit's transaction has
-been in no block for an hour, with its sender's nonce still unused). Both carry `chain_id` and
+been in no block for an hour, without positive replacement evidence). Both carry `chain_id` and
 `state` tags and the `deposit_id` and `tx_hash` fields.
 
 **Impact:** the service credits at the route's confirmation (two blocks on Ethereum) and watches
 each deposit to finality ([architecture §7](../../docs/architecture.md#7-states-and-pump)). A
 reversal already sent `deposit.reversed` when the merchant had been told of the deposit
 (`credited` or `rejected`); its snapshot's `amount_reversed` takes the credit back in the
-merchant's ledger, and a quote the deposit completed opened again (or expired). Nothing needs
+merchant's ledger, and a quote the deposit completed always reopened with its reservation; dual coverage later expires or cancels it. Nothing needs
 undoing in the service. What an account can lose this way is bounded by its cap on credit before
 finality (`max_unfinalized_credit`, $1 000 per mode by default). A reversal
 is a chain-health signal: depth-2 reorgs were not observed on post-Merge Ethereum, so more than a
@@ -24,8 +24,9 @@ rare one means the chain, or a provider, is misbehaving.
    ```
 
    In `admin.transitions`, the transition to `reversed` has `evidence.result`
-   `dropped_nonce_consumed` (with `tx_from`, `tx_nonce`, and each provider's nonce at
-   `finalized`), `transfer_absent_at_finality` (with the block both providers showed), or
+   `known_finalized_replacement` (another transaction already known to the service with the same
+   sender and nonce, independently agreed at or below the checkpoint),
+   `transfer_absent_at_finality` (with the block both providers showed), or
    `transfer_changed_at_finality`: another transfer is final at the deposit's receipt position (a
    contract-mediated payment re-executed against other state), and `successor_deposit_id`, when
    present, is the new deposit recorded for it, which the pump credits like any other. The
@@ -36,8 +37,6 @@ rare one means the chain, or a provider, is misbehaving.
    ```sh
    cast rpc --rpc-url "$RPC_PROVIDER_A_URL" eth_getTransactionReceipt "$TX_HASH" | jq .blockHash
    cast rpc --rpc-url "$RPC_PROVIDER_B_URL" eth_getTransactionReceipt "$TX_HASH" | jq .blockHash
-   cast nonce --rpc-url "$RPC_PROVIDER_A_URL" --block finalized "$TX_FROM"
-   cast nonce --rpc-url "$RPC_PROVIDER_B_URL" --block finalized "$TX_FROM"
    ```
 
 ## Decide
@@ -65,9 +64,8 @@ rare one means the chain, or a provider, is misbehaving.
   ```
 
 - `TopupDepositPendingAfterReorg`: the transaction is out of every block and may still be mined
-  (for example stuck in a mempool at a low fee). Nothing to do while the nonce is unused; the
-  deposit is reversed automatically once another transaction consumes the nonce and that is
-  final. If the providers disagree about the receipt, follow
+  (for example stuck in a mempool at a low fee). Wait for positive evidence. A changed account nonce, including an EIP-7702 authorization,
+  does not prove replacement. `TopupDepositReversalUnproven` records this wait. If the providers disagree about the receipt, follow
   [Provider disagreement](provider-disagreement.md).
 
 ## Fix

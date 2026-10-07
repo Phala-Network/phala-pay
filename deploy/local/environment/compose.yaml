@@ -1,6 +1,10 @@
 # The local stacks' environment (deploy/local/compose.sh): local object storage (s3.compose.yml) and
 # a placeholder domain; dstack-ingress never runs locally.
 services:
+  topup:
+    environment:
+      TOPUP_RPC_ANKR_KEY: ${TOPUP_RPC_ANKR_KEY:-}
+      TOPUP_RPC_INFURA_KEY: ${TOPUP_RPC_INFURA_KEY:-}
   postgres:
     environment: &walg
       WALG_S3_PREFIX: s3://topup-backups/postgres

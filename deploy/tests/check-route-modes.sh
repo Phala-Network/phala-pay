@@ -24,21 +24,21 @@ staging="$root/deploy/environments/phala-network/staging/topup"
 route_json() {
     jq -c --arg name "$1" --argjson chain "$2" --argjson live "$3" \
         '.route = $name | .chain.chain_id = $chain | .livemode = $live
-        | .chain.rpc_groups = {a:"\($name)-a", b:"\($name)-b"}
         | .price.fx = [{source:"kraken", symbol:"USDTUSD", company:"kraken"}]' "$tmp/route.json"
 }
 # environment NAME ROUTE_LINE...: staging's environment with each route appended as a list item,
 # and each route's two providers configured; rendered to $tmp/NAME.yml.
 environment() {
-    local name=$1 line id
+    local name=$1 line id chain
     shift
     cp -r "$staging" "$tmp/$name"
     for line in "$@"; do
         printf '  - %s\n' "$line" >>"$tmp/$name/topup.yaml"
         id=$(sed -E 's/.*route"?: *"?([a-z0-9-]+).*/\1/' <<<"$line")
         chain=$(sed -E 's/.*chain_id"?: *([0-9]+).*/\1/' <<<"$line")
-        if ! grep -q '^  test-a:' "$tmp/$name/topup.yaml"; then sed -i "s|^rpc_companies:$|rpc_companies:\n  test-a: { domains: [test-a.example] }\n  test-b: { domains: [test-b.example] }|" "$tmp/$name/topup.yaml"; fi
-        sed -i "s|^rpc_groups:$|rpc_groups:\n  $id-a:\n    chain_id: $chain\n    members: [{id: $id-a, company: test-a, url: 'https://$id.test-a.example', account_budget: tenderly-account, key_budget: provider-a-key}]\n  $id-b:\n    chain_id: $chain\n    members: [{id: $id-b, company: test-b, url: 'https://$id.test-b.example', account_budget: publicnode-account, key_budget: provider-b-key}]|" "$tmp/$name/topup.yaml"
+        if ! grep -q "chain_id: $chain$" "$tmp/$name/topup.yaml"; then
+            sed -i "s|^rpc:$|rpc:\n  - chain_id: $chain\n    read: {id: $id-read, url: 'https://read.example/{key}', sealed_key: TOPUP_RPC_ANKR_KEY, max_log_blocks: 3000}\n    verify: {id: $id-verify, url: 'https://verify.example/{key}', sealed_key: TOPUP_RPC_INFURA_KEY, max_log_blocks: 3000}|" "$tmp/$name/topup.yaml"
+        fi
 
     done
     "$root/deploy/render.sh" --images "$tmp/images.json" \

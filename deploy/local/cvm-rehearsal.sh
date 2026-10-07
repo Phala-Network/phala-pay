@@ -49,6 +49,7 @@ done
 
 project="topup-cvm-rehearsal-$$"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/topup-cvm-rehearsal.XXXXXX")
+printf '%s\n' '{"services":{}}' >"$tmp/rpc-tls.json"
 cvm="$tmp/cvm"
 mkdir -p "$cvm"
 : >"$cvm/.env"
@@ -85,15 +86,6 @@ mkdir "$environment"
         sed -e 's|WALG_S3_PREFIX: .*|WALG_S3_PREFIX: s3://topup-backups/postgres|' \
             -e 's|AWS_ENDPOINT: .*|AWS_ENDPOINT: http://s3:3900|' \
             -e 's|AWS_REGION: .*|AWS_REGION: us-east-1|'
-    # Staging's providers are keyless; the rehearsal's provider B is keyed (below), so its
-    # environment declares that key's sealed name, as a keyed provider's environment does.
-    cat <<'OVERLAY'
-  topup:
-    environment: &rpc-keys
-      TOPUP_RPC_PROVIDER_B_KEY: ${TOPUP_RPC_PROVIDER_B_KEY:-}
-  restore-check:
-    environment: *rpc-keys
-OVERLAY
 } >"$environment/compose.yaml"
 cp "$root/deploy/environments/phala-network/staging/topup/topup.yaml" "$environment/topup.yaml"
 
@@ -108,7 +100,7 @@ dc() {
     env "${unset[@]}" docker compose --progress quiet -p "$project" --project-directory "$root/deploy/local" \
         --env-file "$cvm/.env" -f "$compose_file" \
         -f "$root/deploy/local/cvm-rehearsal.compose.yml" \
-        -f "$root/deploy/local/test-tls.compose.yml" "$@"
+        -f "$root/deploy/local/test-tls.compose.yml" -f "$tmp/rpc-tls.json" "$@"
 }
 
 # The reference-product CVM: its rendered compose with its own `.env`, joined to the rehearsal
@@ -169,7 +161,7 @@ trap 'exit 143' TERM
 # Trust only this run's certificate; HTTPS checks stay enabled in the SDK and HTTPX.
 mkdir "$TOPUP_TEST_TLS_DIR"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=topup-tls \
-    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub \
+    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub,DNS:*.rpc.test \
     -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
     -out "$TOPUP_TEST_TLS_DIR/cert.pem" >/dev/null 2>&1
 python3 - "$TOPUP_TEST_TLS_DIR/cert.pem" "$TOPUP_TEST_TLS_DIR/ca.pem" <<'PYTHON'
@@ -358,15 +350,6 @@ write_config() {
                     "phala-cloud-base-sepolia-usdc-usd": [$base_usdc, $base_oracle],
                     "phala-cloud-base-sepolia-usdt-usd": [$base_usdt, $base_oracle]}')" '
             .admin_key = {id: $id, public_key: $key}
-            | .rpc_companies |= with_entries(.value.domains = [.key + ".test"])
-            # Match sandbox-local fixture budgets: public-provider throttling must not race
-            # the five-second reference product request deadline on our own Anvils.
-            | .rpc_budgets |= with_entries(.value = {requests_per_second: 100, burst: 100})
-            | .rpc_groups |= with_entries(.value.members |= map(
-                .url = ("http://" + .id + "." + .company + ".test:8545")
-                | del(.sealed_key)))
-            | .rpc_groups["provider-b"].members[0].url += "/?key={key}"
-            | .rpc_groups["provider-b"].members[0].sealed_key = "TOPUP_RPC_PROVIDER_B_KEY"
             | .routes |= map(($assets[.route] // error("no rehearsal token for \(.route)")) as $asset
                 | .chain.forwarder_factory = $factory | .chain.implementation = $implementation
                 | .asset.contract = $asset[0] | .chain.sanctions_oracle = $asset[1]
@@ -376,6 +359,11 @@ write_config() {
                     end
                   else . end)' \
         >"$environment/topup.yaml"
+    python3 "$root/deploy/local/rpc-tls.py" "$environment/topup.yaml" "$tmp/rpc-tls.json" \
+        --certificate "$TOPUP_TEST_TLS_DIR/cert.pem" --key "$TOPUP_TEST_TLS_DIR/key.pem" \
+        --image "$client_image" --chain 11155111=http://anvil:8545 \
+        --chain 84532=http://anvil-base-sepolia:8545 --chain 1=http://anvil-mainnet-price:8545 \
+        --chain 8453=http://anvil-base-mainnet-price:8545
     docker run --rm -i --network none "$TOPUP_IMAGE" topup config check /dev/stdin \
         <"$environment/topup.yaml" >/dev/null || die "the rehearsal configuration is invalid"
 }
@@ -399,7 +387,8 @@ declare -A values=(
     # Empty: the rehearsal proves the service runs unchanged with Sentry reporting off.
     [SENTRY_DSN]=''
     # Provider A's URL is keyless; topup reaches provider B only with its key in place of `{key}`.
-    [TOPUP_RPC_PROVIDER_B_KEY]=rehearsal-rpc-key
+    [TOPUP_RPC_ANKR_KEY]=rehearsal-rpc-key
+    [TOPUP_RPC_INFURA_KEY]=rehearsal-rpc-key
 )
 ((${#values[@]} == ${#env_names[@]})) || die "the rehearsal .env and the compose's sealed names differ"
 for name in "${env_names[@]}"; do

@@ -73,7 +73,7 @@ Store every observation and decision for audit.
 
 Each role has an ordered failover list. A role advances only on timeout, stale/malformed data or
 provider outage. Every accepted valuation needs at least two fresh, agreeing sources; `primary`
-and `check` company sets are disjoint, as in `rpc_companies` in [RPC failover](rpc-failover.md).
+and `check` company sets are disjoint, with independent read/verify companies in [chain reads](chain-reads.md).
 FX is independently checked and is required for USDT-quoted markets.
 
 | Role | Ordered sources | Rule |
@@ -190,14 +190,13 @@ price:
   max_age_s: 90 # exchange ticker age; Chainlink uses feed heartbeat + margin
   peg_band_bps: 100
   sources: # stablecoin mode: one quorum list, never primary/check/fx
-    - { source: chainlink, feed: USDC_USD, chain_id: 8453, rpc_group: a }
-    - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a,
+    - { source: chainlink, feed: USDC_USD, chain_id: 8453 }
+    - { source: chainlink, feed: USDT_USD, chain_id: 1,
         observation_chain_id: 11155111 }
-  primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b,
+  primary: [{ source: uniswap_v2_twap,
               observation_chain_id: 11155111 }] # volatile PHA only
   check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # requires written permission in production
-  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a,
-         rpc_group_b: mainnet-b, observation_chain_id: 11155111 }]
+  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 11155111 }]
   sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
 ```
 
