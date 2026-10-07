@@ -2736,7 +2736,7 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
             }];
             route.validate()?;
             seed::accept_routes(pool, account.id, true, &[&route]).await?;
-            sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES ((now() AT TIME ZONE 'UTC')::date,'price:1',100)")
+            sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES ((now() AT TIME ZONE 'UTC')::date,'price:1',60)")
                 .execute(pool).await?;
             // An exhausted budget must fail before contacting either endpoint.
             let requests=Arc::new(AtomicUsize::new(0));
@@ -2769,7 +2769,7 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
             ensure!(response.status()==StatusCode::SERVICE_UNAVAILABLE);
             ensure!(response_json(response).await?["error"]["code"]=="price_unavailable");
             ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==0);
-            ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='price:1'").fetch_one(pool).await?==100);
+            ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='price:1'").fetch_one(pool).await?==60);
             ensure!(requests.load(Ordering::SeqCst)==1,"the exhausted budget must refuse before any price RPC");
             server.abort();let _=server.await;
             Ok(())

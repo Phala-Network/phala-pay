@@ -604,7 +604,9 @@ cost per month = 30 × cost per day
 accounts for the fixed 60-second discovery and ten-minute coverage cadences, bounded backfill,
 and hourly catch-up. Compare measured call counters with each provider's dashboard. Both
 environments share keys and upstream quotas. Each fresh quote snapshot costs one read call and
-240 verify credits; the DB enforces 100 fresh snapshots per price chain per UTC day per environment.
+240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
+[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all twelve
+chain/token routes and the reduced combined deposit pilot bound of 100/day.
 
 ## Attestation, ingress, and egress
 

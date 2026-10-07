@@ -27,8 +27,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Quote cancellation requests keep the quote open and its exposure reserved until its address
   catches up to dual finalized coverage past `expires_at`. Quote objects add
   `cancel_requested_at`; completion emits `quote.canceled`. Expiry uses the same evidence gate.
-- Fresh quote price snapshots are capped at 100 per price chain/environment/UTC day. Exhaustion
+- Fresh quote price snapshots are capped at 60 per price chain/environment/UTC day. Exhaustion
   returns retryable `503 price_unavailable`; the twelve-second reuse limit is unchanged.
+  The combined deposit pilot bound is 100/day; stop adding merchants above an 80/day seven-day
+  average. These bounds include hourly dual custody on every routed chain/token pair and keep
+  worst-case usage below both provider stop lines, including the ten-percent retry allowance.
 - Remove RPC recovery/resume commands, member pools, review sweeps, single-source backstops and
   custom head-poll flags. The expand-only migration preserves rollback to the prior stable
   release, whose RPC frozen/anchor/recovery state must be resolved before starting this version.

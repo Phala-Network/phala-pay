@@ -4,7 +4,7 @@ use chrono::{NaiveDate, Utc};
 use sqlx::PgPool;
 
 /// Fresh quote snapshots allowed per price chain and UTC day in this environment.
-pub const QUOTE_SNAPSHOTS_PER_DAY: i32 = 100;
+pub const QUOTE_SNAPSHOTS_PER_DAY: i32 = 60;
 
 /// Claims one unit without exceeding `limit`; a failed persistence operation is never admission.
 pub async fn claim(pool: &PgPool, name: &str, limit: i32) -> Result<bool, sqlx::Error> {

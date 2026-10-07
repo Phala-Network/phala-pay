@@ -1,12 +1,12 @@
 //! Periodic custody and credit reconciliation.
 //!
-//! Regular ledger checks run each round; scheduled dual custody runs at most once per hour,
+//! Regular ledger checks run each round; scheduled dual custody runs on startup and hourly,
 //! independently per chain and token route. Per-deposit failures are
 //! recorded as findings; a check that cannot complete is reported in
 //! [`ReconciliationReport::failed_checks`] and withholds the round heartbeat.
 //!
 //! Chain reads stay proportional to what changed: the service's rounds run only after the
-//! agreed checkpoint advances, reuse the head the scanner published, verify each stored
+//! agreed checkpoint advances or custody is due, reuse the published head, verify each stored
 //! `(address, salt, treasury)` against the factory with a bounded LRU cache, and read balances only of
 //! forwarders that hold unswept funds by the ledger.
 
@@ -21,7 +21,7 @@ use std::time::Duration;
 use alloy_primitives::Address;
 use serde_json::json;
 use sqlx::PgPool;
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::time::{Instant, MissedTickBehavior, interval, sleep_until};
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::FinalizedReader;
 use topup_core::money::{PRICE_SCALE, ScaledPrice, credit};
@@ -380,8 +380,8 @@ impl Reconciler {
     }
 
     /// Runs a round every `every` in which the agreed checkpoint, as `heads` publishes it,
-    /// advanced on some chain since the last complete round, until cancellation. A round without
-    /// an advance would read the same finalized state, so it is skipped and reported healthy.
+    /// advanced on some chain since the last complete round, until cancellation. Without an
+    /// advance or pending work, rounds are skipped unless the hourly custody check is due.
     pub async fn run_loop(
         &self,
         every: Duration,
@@ -392,24 +392,24 @@ impl Reconciler {
         let mut ticks = interval(every);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut reconciled: Option<RoundHeads> = None;
-        let custody_rounds = Duration::from_secs(3_600)
-            .as_nanos()
-            .div_ceil(every.as_nanos())
-            .max(1);
-        let mut round = 0_u128;
+        let custody_interval = Duration::from_secs(3_600);
+        let started = Instant::now();
+        let mut last_custody_run: Option<Instant> = None;
         loop {
+            let next_custody = last_custody_run.unwrap_or(started) + custody_interval;
             tokio::select! {
                 () = cancellation.cancelled() => return,
-                _ = ticks.tick() => {}
+                _ = ticks.tick() => {},
+                () = sleep_until(next_custody) => {},
             }
-            let custody_due = round.is_multiple_of(custody_rounds);
-            round = round.wrapping_add(1);
+            let custody_due =
+                last_custody_run.is_none_or(|last| last.elapsed() >= custody_interval);
             let published = self
                 .chains
                 .keys()
                 .filter_map(|chain_id| Some((*chain_id, heads.get(*chain_id)?.number)))
                 .collect::<RoundHeads>();
-            if !published.is_empty() && reconciled.as_ref() == Some(&published) {
+            if !custody_due && !published.is_empty() && reconciled.as_ref() == Some(&published) {
                 match self.work_pending().await {
                     Ok(false) => {
                         monitor.check_in(true);
@@ -420,6 +420,9 @@ impl Reconciler {
                         tracing::warn!(%error,"could not read reconciliation work cursors");
                     }
                 }
+            }
+            if custody_due {
+                last_custody_run = Some(Instant::now());
             }
             tokio::select! {
                 () = cancellation.cancelled() => return,

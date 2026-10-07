@@ -547,9 +547,9 @@ Caught-up addresses scan `(cursor, e]`; at most 1,000 lagging addresses backfill
 The union of both candidate sets is resolved independently by receipt, transaction and header.
 Active unmarked identities are read without trusting their stored block numbers. All receipt,
 transaction, factory and boundary-header RPCs run without the chain lock. After taking that
-lock, the scanner re-reads the unmarked ids. New ids trigger verification of the delta with the
-lock released, for at most three commit attempts; changed address or coverage snapshots abort
-the round. Independently agreed block time and nonce correct an existing `detected` row;
+lock, the scanner re-reads the unmarked ids as a set. Any added or removed id, or changed
+address/coverage snapshot, aborts the round and discards all cached RPC evidence. One immediate
+retry repeats the full RPC round; a second snapshot change waits for the next coverage tick. Independently agreed block time and nonce correct an existing `detected` row;
 canonical receipts beyond the scanned range wait. A changed provisional recipient uses the
 shared finality reversal/successor transaction before coverage is published. Historical
 `reversed` revisions, including unmarked N-1 writes, are excluded from re-verification; a dual
@@ -566,7 +566,8 @@ both endpoints. Startup rebases an old cursor above dual coverage. Lowering `cre
 atomically clears its dual marker, lowers the compatibility cursor as needed and clears its time.
 Negative decisions require both chain coverage and the address's own caught-up marker.
 
-Scheduled custody runs on the first tick and at most once per hour thereafter, independently
+Scheduled custody runs on the first tick and hourly thereafter using its last-run time and an
+independent timer, even when a regular checkpoint round is skipped. This is independent
 of the reconciliation interval, per chain and token route; manual and post-restore checks run immediately. Custody reads the full balance vector on both endpoints at the same EIP-1898 canonical hash at
 `min(checkpoint, coverage)`. Errors and mismatches wait; only dual agreement can report a clean
 ledger or freeze a discrepant chain.
@@ -662,7 +663,7 @@ Invoice model, with this service's exception profile:
   An in-window payment discovered later consumes it normally. Once dual coverage permits closure,
   a cancel-requested quote becomes `cancelled` with `quote.canceled`; otherwise `expired` with
   `quote.expired`. Both release the reservation atomically.
-- Fresh quote price snapshots use the DB daily budget: at most 100 per price chain per environment
+- Fresh quote price snapshots use the DB daily budget: at most 60 per price chain per environment
   per UTC day. Exhaustion returns retryable `503 price_unavailable`, with no stale price. Quote
   reuse remains twelve seconds; confirmation always requests a fresh dual Multicall3 snapshot.
 - Exposure counters sum `credit_minor` across routes, which every route counts in USD cents

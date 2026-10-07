@@ -43,20 +43,57 @@ Fast discovery runs every 60 seconds. Dual finalized coverage runs every ten min
 3,000 blocks normally and 19,200 every sixth round. Address history is backfilled separately in
 chunks of at most 1,000 addresses. A candidate is provisional until both endpoints agree on
 receipt status, transaction, inclusion, log position and contents, block time, sender and nonce.
-Scheduled custody reads each chain/token route on the first reconciliation tick and at most
-once per hour thereafter, independently of the configured reconciliation interval, on both endpoints at the same canonical hash. Manual
-`reconcile`, post-restore checks and process restarts run custody immediately. During steady
-operation, balances are batched in 200-address multicalls: a nonempty route with at most
-200 eligible addresses adds 24 Ankr calls and 1,920 Infura credits/day; at the 1,000-address
-cap it adds up to 120 Ankr calls and 9,600 Infura credits/day. Four full routes add 480 Ankr
-calls and 38,400 Infura credits/day, additional to the approved §5.2 budget; empty or
-unsettled ledgers use no balance RPC. These checks count toward the existing shared provider
-stop lines. The maximum takes §5.2's combined typical Infura estimate to
-1,383,360 credits/day, or 1,521,696 with its ten-percent allowance (above the 1,500,000 stop
-line), so operators must bound added load using the existing usage alerts
-and paid-provider upgrade path rather than treating that original estimate as inclusive.
+Scheduled custody checks each chain/token route on the first reconciliation tick and every
+hour thereafter. An in-memory last-run timestamp and a separate hourly wake-up keep custody
+due even when the checkpoint stalls or the normal reconciliation interval does not divide an
+hour. Both endpoints read at the same canonical hash. Manual `reconcile`, post-restore checks
+and process restarts run custody immediately.
 
-Coverage commits only after every request succeeds, and every boundary and pending cleanup ends
+### Worst-case pilot budget
+
+The approved §5.2 figure of **1,344,960 Infura credits/day is a worst-case figure**, before the
+×1.1 retry allowance. The following replaces its custody term and lowers the operational pilot
+caps to include every routed chain/token pair; it does not change the approved design document.
+
+Four payment chains (Sepolia, Base Sepolia, Ethereum and Base), each with PHA, USDC and USDT,
+mean **12 custody routes** across staging and production. Each route can have balances on all
+1,000 historical addresses. The 200-address multicall batch needs five calls per endpoint per
+hour: `12 × 24 × ceil(1000 / 200) = 1,440` Ankr calls and `1,440 × 80 = 115,200` Infura
+credits/day. Empty ledgers use no balance RPC, but the bound assumes every route is full.
+
+The original fixed Ankr term includes `4 × 144 = 576` single-source custody calls. Replace,
+rather than add to, that term. Infura's original term has no custody reads:
+
+```text
+Fixed Ankr:   16,128 - 576 + 1,440 = 16,992 calls/day
+Fixed Infura: 771,840 + 115,200    = 887,040 credits/day
+```
+
+Keep the 1,000-address cap and reserve the original PR 3 hint bound `H = 150` per environment.
+Reduce the combined deposit pilot bound to `D = 100` per day (stop adding merchants at a
+seven-day average above 80), and enforce `Q = 60` fresh quote snapshots per price chain per
+environment per UTC day. There are four price-chain/environment instances. Staging's two PHA
+routes share one TWAP pool, policy and snapshot; the sampler coalesces them at each tick,
+so five-minute sampling adds `86,400 / 300 = 288` snapshots/day. Production in this pilot has
+no additional periodic TWAP sampler; adding a pool or sampler requires a new budget review.
+
+```text
+Ankr:   16,992 + (288 + 4 × 60) + 15 × 100 + 2 × 12 × 150 = 22,620
+        22,620 × 1.1 = 24,882 calls/day ≤ 25,000
+Infura: 887,040 + 240 × (288 + 4 × 60) + 1,440 × 100 + 2 × 640 × 150 = 1,349,760
+        1,349,760 × 1.1 = 1,484,736 credits/day ≤ 1,500,000
+```
+
+Reducing only the quote cap cannot fit Ankr: even `Q = 0` with `D = H = 150` costs
+`16,992 + 288 + 2,250 + 3,600 = 23,130`, or 25,443 calls after retries. Both reduced caps
+are necessary for this allocation. The retry allowance covers bounded snapshot retries and
+ordinary endpoint retries. Additional routes, manual reconciliation runs, repeated restarts or
+provider preflights need quota headroom or a paid-provider upgrade before adding that load.
+Alerts report unexpected usage; they do not authorize exceeding either stop line.
+
+An address or unverified-id snapshot change abandons all cached evidence and retries once
+immediately with a full fresh RPC round. A second change waits for the next tick. Coverage
+commits only after every request succeeds, and every boundary and pending cleanup ends
 at the scanned block, even when the checkpoint is farther ahead.
 
 Observe `topup_rpc_endpoint_ready`, `topup_rpc_errors_total`, `topup_coverage_lag_seconds`,
@@ -64,10 +101,10 @@ Observe `topup_rpc_endpoint_ready`, `topup_rpc_errors_total`, `topup_coverage_la
 Both environments share provider quotas: stop adding load at Ankr's 25,000 calls/day seven-day
 run rate or Infura's 50% daily credit usage. Compare provider dashboards with the recording rules.
 Keep at most 1,000 issued addresses per chain and stop adding merchants when the seven-day
-average exceeds 120 deposits/day (the combined pilot bound is 150).
+average exceeds 80 deposits/day (the combined pilot bound is 100).
 
 Each fresh quote snapshot consumes one unit of its environment's UTC price-chain budget, capped
-at 100. Quotes return retryable `price_unavailable` when exhausted. A cached snapshot is usable
+at 60. Quotes return retryable `price_unavailable` when exhausted. A cached snapshot is usable
 for at most twelve seconds; confirmation always fetches fresh evidence. A snapshot costs one
 Ankr call and 240 Infura credits, including verify's head and pin header.
 

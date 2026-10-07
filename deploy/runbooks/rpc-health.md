@@ -14,7 +14,7 @@ fixed cadences and shared quotas.
 3. For a credential failure, submit the complete sealed secret set, preserving all unchanged
    secrets. Run compose-path preflight before an owner-authorized upgrade.
 4. HTTP 402 waits until UTC midnight. Do not create extra free accounts, switch endpoints or
-   enlarge budgets. Fresh quote snapshots also have a hard 100/day/price-chain cap; exhaustion
+   enlarge budgets. Fresh quote snapshots also have a hard 60/day/price-chain cap; exhaustion
    returns retryable `price_unavailable`, and the UTC day resets that budget.
 5. On disagreement, preserve decoded evidence and wait. Never pick one source or manually
    advance coverage. A checkpoint conflict or progressed evidence mismatch uses the existing

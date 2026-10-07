@@ -843,7 +843,7 @@ async fn loop_respects_cancellation() -> Result<()> {
 }
 
 #[tokio::test]
-async fn scheduled_custody_reads_both_sources_at_most_hourly() -> Result<()> {
+async fn scheduled_custody_reads_both_sources_hourly() -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
         let seed = seed_identity(&pool, &route, 85).await?;
@@ -913,6 +913,66 @@ async fn scheduled_custody_reads_both_sources_at_most_hourly() -> Result<()> {
         result
     })
     .await
+}
+
+#[tokio::test]
+async fn stalled_checkpoint_still_runs_dual_custody_every_hour() -> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let seed = seed_identity(&pool, &route, 86).await?;
+        seed_deposit(&pool, &route, &seed,
+            DepositSeed::new(86, DepositState::Credited).block(100).amount(250)).await?;
+        scanned_through(&pool, 140).await?;
+        let chain = Arc::new(MockChain::at(150));
+        chain.derive(&[&seed]);
+        chain.balances.lock().unwrap().insert(seed.address, U256::from(250));
+        let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?);
+        let heads = topup::scanner::FinalizedHeads::default();
+        heads.publish(CHAIN_ID, FinalizedHead { number: 140, time: Utc::now() });
+        let cancellation = CancellationToken::new();
+        tokio::time::pause();
+        // Keep PostgreSQL I/O from advancing the paused clock automatically.
+        let clock_guard = tokio::spawn({
+            let cancellation = cancellation.clone();
+            async move { while !cancellation.is_cancelled() { tokio::task::yield_now().await; } }
+        });
+        let task = tokio::spawn({
+            let reconciler = reconciler.clone();
+            let cancellation = cancellation.clone();
+            async move { reconciler.run_loop(StdDuration::from_secs(7_200), heads, cancellation).await; }
+        });
+        tokio::time::advance(StdDuration::from_millis(1)).await;
+        let result = async {
+            for hour in 0..=2 {
+                let expected = (hour + 1) * 2;
+                let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+                loop {
+                    let reads = chain.balance_reads.lock().unwrap().len();
+                    let complete: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM reconciliation_work_cursors WHERE chain_id=$1 AND check_name LIKE 'custody:%' AND last_id IS NULL) AND NOT EXISTS(SELECT 1 FROM reconciliation_work_cursors WHERE last_id IS NOT NULL)",
+                    ).bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
+                    if reads == expected && complete { break; }
+                    ensure!(std::time::Instant::now() < deadline,
+                        "stalled checkpoint skipped hourly dual custody at hour {hour}: {reads} reads, expected {expected}");
+                    // Poll Tokio's millisecond timer driver without allowing DB I/O to
+                    // auto-advance the paused clock to the next scheduled hour.
+                    tokio::time::advance(StdDuration::from_millis(1)).await;
+                    tokio::task::yield_now().await;
+                }
+                // Let the completed report reach the loop's checkpoint cache before the next tick.
+                tokio::task::yield_now().await;
+                ensure!(chain.balance_reads.lock().unwrap().iter().all(|(block,_)| *block == 140),
+                    "custody required the checkpoint to advance");
+                if hour < 2 { tokio::time::advance(StdDuration::from_millis(3_600_001)).await; }
+            }
+            Ok::<_,anyhow::Error>(())
+        }.await;
+        cancellation.cancel();
+        tokio::time::resume();
+        task.await?;
+        clock_guard.await?;
+        result
+    }).await
 }
 
 #[tokio::test]

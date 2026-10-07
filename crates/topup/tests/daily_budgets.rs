@@ -25,17 +25,25 @@ async fn snapshot_budget_is_atomic_scoped_and_resets_next_utc_day() -> Result<()
                 }
             }
             ensure!(
-                admitted == 100,
-                "concurrent claims must admit exactly 100 snapshots"
+                admitted == 60,
+                "concurrent claims must admit exactly 60 snapshots"
             );
-            ensure!(!claim_on(&context.app_pool, day, "price:1", 100).await?);
-            ensure!(claim_on(&context.app_pool, day, "price:8453", 100).await?);
+            ensure!(!claim_on(&context.app_pool, day, "price:1", QUOTE_SNAPSHOTS_PER_DAY).await?);
+            ensure!(
+                claim_on(
+                    &context.app_pool,
+                    day,
+                    "price:8453",
+                    QUOTE_SNAPSHOTS_PER_DAY
+                )
+                .await?
+            );
             ensure!(
                 claim_on(
                     &context.app_pool,
                     day.succ_opt().expect("next day"),
                     "price:1",
-                    100
+                    QUOTE_SNAPSHOTS_PER_DAY
                 )
                 .await?
             );
@@ -46,7 +54,7 @@ async fn snapshot_budget_is_atomic_scoped_and_resets_next_utc_day() -> Result<()
             .fetch_one(&context.app_pool)
             .await?;
             ensure!(
-                used == 100,
+                used == 60,
                 "refused attempts must leave the counter unchanged"
             );
             Ok(())
