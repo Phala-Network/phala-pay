@@ -88,6 +88,9 @@ pub(super) fn merchant(openapi: &OpenApi) -> Value {
     let mut document = finish(openapi, "Phala Pay API", &merchant_description());
     // Every merchant request counts toward the account's rate limit.
     for_each_operation(&mut document, |_, operation| {
+        if is_transaction_submission(operation) {
+            return;
+        }
         let responses = &mut operation["responses"];
         if responses.get("403").is_none() {
             responses["403"] = error_response(
@@ -141,6 +144,13 @@ pub(super) fn admin(openapi: &OpenApi) -> Value {
     document
 }
 
+fn is_transaction_submission(operation: &Value) -> bool {
+    matches!(
+        operation["operationId"].as_str(),
+        Some("submit_quote_transaction" | "submit_deposit_address_transaction")
+    )
+}
+
 fn finish(openapi: &OpenApi, title: &str, description: &str) -> Value {
     let mut document = serde_json::to_value(openapi).unwrap_or_else(|error| {
         // utoipa's document is plain data; it always serializes.
@@ -157,6 +167,9 @@ fn finish(openapi: &OpenApi, title: &str, description: &str) -> Value {
         .map(|(url, description)| json!({"url": url, "description": description}))
         .collect();
     for_each_operation(&mut document, |method, operation| {
+        if is_transaction_submission(operation) {
+            return;
+        }
         let responses = &mut operation["responses"];
         if responses.get("503").is_none() {
             responses["503"] = error_response(

@@ -468,7 +468,7 @@ async fn published_image_round_trip() -> Result<()> {
             admin_key:topup::api::VerificationKey::from_base64("drill/admin".into(),&support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))).unwrap(),
             maintenance_keys:Vec::new(),public_origin:topup::api::PublicOrigin::parse(support::TEST_ORIGIN).unwrap(),
             attestor:Arc::new(topup_adapters::attestation::DstackAttestor::new()),
-            rate_lock_quotes:Arc::new(topup::locks::UnavailableQuoteProvider),client_reads:Arc::default(),rate_limits:Arc::default(),
+            rate_lock_quotes:Arc::new(topup::locks::UnavailableQuoteProvider),client_reads:Arc::default(),rate_limits:Arc::default(), hint_limits: Arc::default(), transaction_hints: Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         });
         use tower::ServiceExt;

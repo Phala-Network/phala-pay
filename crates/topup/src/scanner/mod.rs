@@ -86,7 +86,7 @@ pub enum ScannerError {
 pub struct ChainRoutes {
     /// Attested chain configuration.
     pub chain: ChainConfig,
-    routes: BTreeMap<Address, (String, u64)>,
+    pub(crate) routes: BTreeMap<Address, (String, u64)>,
 }
 /// Group current token routes by payment chain.
 pub fn chain_routes(routes: &RouteSet) -> Vec<ChainRoutes> {

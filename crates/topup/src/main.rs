@@ -678,6 +678,8 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
                 READ_ONLY_CONNECTIONS,
             )),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         };
@@ -810,6 +812,8 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             connection_count,
         )),
         rate_limits: Arc::default(),
+        hint_limits: Arc::default(),
+        transaction_hints: Arc::default(),
         screening: Arc::clone(&screening) as Arc<dyn topup::refunds::DestinationScreener>,
         contract_signatures: Arc::new(
             topup::treasuries::EvmContractSignatures::from_routes(pool.clone(), &routes)
@@ -817,6 +821,12 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
                 .context("failed to configure treasury proof checks")?,
         ),
     };
+    let hint_queue = state.transaction_hints.clone();
+    let hint_pool = pool.clone();
+    let hint_routes = routes.clone();
+    tasks.spawn("transaction hints", |cancellation| {
+        hint_queue.run(hint_pool, hint_routes, cancellation)
+    });
     let monitored_origin = state.public_origin.to_string();
     let (application, _) = topup::api::booting_router(state);
     tasks.spawn("API server", |cancellation| {

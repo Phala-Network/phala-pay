@@ -28,6 +28,7 @@ mod rate_limit;
 mod repository;
 mod restore;
 mod sweeps;
+mod transactions;
 mod treasuries;
 mod webhook_endpoints;
 
@@ -62,7 +63,7 @@ pub use client_limit::ClientReadLimiter;
 pub use deadlines::DeadlineListener;
 pub use idempotency::IdempotencyKeyPruner;
 pub(crate) use keys::api_key_object;
-pub use rate_limit::{ApiRateLimiter, RateLimits};
+pub use rate_limit::{ApiRateLimiter, HintRateLimiter, RateLimits};
 pub use topup_adapters::http_signature::PublicOrigin;
 pub(crate) use treasuries::treasury_object;
 
@@ -87,6 +88,10 @@ pub struct AppState {
     pub client_reads: Arc<ClientReadLimiter>,
     /// Per-account and platform rate limits of authenticated merchant requests.
     pub rate_limits: Arc<ApiRateLimiter>,
+    /// Dedicated object and peer limits for transaction hints.
+    pub hint_limits: Arc<HintRateLimiter>,
+    /// Shared bounded process-local hint queue.
+    pub transaction_hints: Arc<crate::hints::HintQueue>,
     /// Sanctions screening of refund destinations and treasuries.
     pub screening: Arc<dyn DestinationScreener>,
     /// EIP-1271 checks of contract treasuries' proofs.
@@ -279,6 +284,16 @@ const ROUTE_PERMISSIONS: &[(&str, &str, Permission)] = &[
     ("POST", "/v1/quotes/{id}", Permission::QuotesWrite),
     ("POST", "/v1/quotes/{id}/cancel", Permission::QuotesWrite),
     (
+        "POST",
+        "/v1/quotes/{id}/transactions",
+        Permission::QuotesWrite,
+    ),
+    (
+        "POST",
+        "/v1/deposit_addresses/{id}/transactions",
+        Permission::DepositAddressesWrite,
+    ),
+    (
         "GET",
         "/v1/deposit_addresses",
         Permission::DepositAddressesRead,
@@ -404,6 +419,8 @@ fn client_secret_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(quotes::get_quote))
         .routes(routes!(deposit_addresses::get_deposit_address))
+        .routes(routes!(transactions::submit_quote_transaction))
+        .routes(routes!(transactions::submit_deposit_address_transaction))
 }
 
 /// The operator's routes, authenticated by RFC 9421 signatures.
@@ -509,6 +526,10 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
         .route_layer(middleware::from_fn_with_state(
             merchant_auth,
             auth::authenticate_merchant_or_client_secret,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            transactions::ingress,
         ));
     let admin = admin_routes()
         .route_layer(middleware::from_fn(instance_pause::admit_request))
@@ -550,6 +571,7 @@ fn router_from_routes(
         // Stripe's error object for any other path or method too, never an empty body.
         .fallback(unrecognized_request)
         .method_not_allowed_fallback(unrecognized_request)
+        .layer(middleware::from_fn(transactions::received))
         .layer(Extension(Arc::new(docs.clone())))
         .layer(Extension(pause))
         .with_state(state);
@@ -793,6 +815,8 @@ mod tests {
             rate_lock_quotes: Arc::new(crate::locks::UnavailableQuoteProvider),
             client_reads: Arc::default(),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(crate::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(crate::treasuries::UnavailableContractSignatures),
         }

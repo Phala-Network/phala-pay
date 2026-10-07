@@ -2504,6 +2504,8 @@ fn test_router_on(
         rate_lock_quotes: Arc::new(topup::locks::UnavailableQuoteProvider),
         client_reads,
         rate_limits: Arc::default(),
+        hint_limits: Arc::default(),
+        transaction_hints: Arc::default(),
         screening,
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
     };

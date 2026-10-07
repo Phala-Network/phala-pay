@@ -64,6 +64,8 @@ impl Harness {
             // The limiter's clock stands still, so no limit refills between a test's requests
             // however slowly the machine answers them.
             rate_limits: Arc::new(ManualClock::new().rate_limiter(limits)),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         };
