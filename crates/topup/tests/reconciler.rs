@@ -879,13 +879,21 @@ async fn scheduled_custody_reads_both_sources_at_most_hourly() -> Result<()> {
             let reconciler = reconciler.clone(); let cancellation = cancellation.clone();
             async move { reconciler.run_loop(StdDuration::from_secs(300),topup::scanner::FinalizedHeads::default(),cancellation).await; }
         });
+        tokio::time::advance(StdDuration::from_millis(1)).await;
         let result = async {
             for tick in 1..=14 {
                 let deadline = std::time::Instant::now() + StdDuration::from_secs(10);
+                let mut timer_poll = std::time::Instant::now();
                 loop {
                     tokio::select! {
                         () = chain.derivation_started.notified() => break,
-                        () = tokio::task::yield_now() => ensure!(std::time::Instant::now() < deadline,"reconciliation did not reach tick {tick}"),
+                        () = tokio::task::yield_now() => {
+                            ensure!(std::time::Instant::now() < deadline,"reconciliation did not reach tick {tick}");
+                            if timer_poll.elapsed() >= StdDuration::from_millis(10) {
+                                tokio::time::advance(StdDuration::from_millis(1)).await;
+                                timer_poll = std::time::Instant::now();
+                            }
+                        },
                     }
                 }
                 // A five-minute regular cadence still has only one dual snapshot before
