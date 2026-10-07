@@ -129,7 +129,7 @@ spot/TWAP difference **above 3%** pauses valuation by default in either directio
 fail closed. Accepted audit evidence records TWAP, spot, agreement and the chosen valuation.
 
 Every pair getter, reserve and Chainlink round/decimals call uses the canonical snapshot pin
-specified by [chain reads](chain-reads.md#24-prices): read supplies the latest block, state calls
+specified by [chain reads](chain-reads.md#24-money-evidence-both-endpoints): read supplies the latest block, state calls
 use its hash with EIP-1898 `requireCanonical`, and verify independently re-pins after read.
 Both endpoints must agree on number, hash and timestamp. Stored endpoint hashes and the latest persisted sample are rechecked for reorgs.
 This also pins the existing standalone Chainlink readers. Historical calls within the window
