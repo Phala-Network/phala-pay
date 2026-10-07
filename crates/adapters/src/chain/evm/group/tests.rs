@@ -70,6 +70,28 @@ fn classification_precedence_and_every_error_class() {
         Some(Failure::Malformed)
     );
 }
+#[test]
+fn sentio_lagging_backend_error_is_retryable_server_failure() {
+    let message = "block 11859810 is beyond the latest block of this node, retry later";
+    let error = classify("eth_call", &reply(200, -32000, message)).unwrap();
+    assert_eq!(error, Failure::Server);
+    assert!(error.retryable());
+    assert_eq!(
+        classify("eth_call", &reply(200, -32001, message)),
+        Some(Failure::Unclassified)
+    );
+    for message in [
+        "unknown block",
+        "block 11859810 is beyond current head",
+        "block 11859810 is beyond the latest block",
+    ] {
+        assert_eq!(
+            classify("eth_call", &reply(200, -32000, message)),
+            Some(Failure::Unclassified)
+        );
+    }
+}
+
 async fn server(router: Router) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -210,10 +232,13 @@ async fn joint_admission_cannot_bank_account_permits_while_key_waits() {
     }
 }
 fn group(url: &str) -> Arc<RpcGroup> {
+    group_with_policy(url, GroupPolicy::default())
+}
+fn group_with_policy(url: &str, policy: GroupPolicy) -> Arc<RpcGroup> {
     RpcGroup::new(
         "a".into(),
         1,
-        GroupPolicy::default(),
+        policy,
         vec![Member {
             id: "one".into(),
             company: "company".into(),
@@ -226,6 +251,43 @@ fn group(url: &str) -> Arc<RpcGroup> {
         budgets(),
     )
     .unwrap()
+}
+
+#[tokio::test]
+async fn one_sentio_lagging_backend_error_keeps_the_only_member_eligible() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let seen = hits.clone();
+    let (url, task) = server(Router::new().route(
+        "/",
+        post(move |Json(request): Json<Value>| {
+            let seen = seen.clone();
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                Json(json!({"jsonrpc":"2.0","id":request["id"],"error":{
+                    "code":-32000,
+                    "message":"block 11859810 is beyond the latest block of this node, retry later"
+                }}))
+            }
+        }),
+    ))
+    .await;
+    let group = group_with_policy(
+        &url,
+        GroupPolicy {
+            max_attempts: 1,
+            ..Default::default()
+        },
+    );
+    group.verified(0, true);
+    assert_eq!(group.eligible(), 1);
+    let result = group
+        .request(json!({"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":["latest",false]}))
+        .await;
+    task.abort();
+    let _ = task.await;
+    assert_eq!(result, Err(Failure::Server));
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert_eq!(group.eligible(), 1);
 }
 
 fn reserved_budgets(rate: u32, burst: u32, account_reserve: u32, key_reserve: u32) -> Arc<Budgets> {

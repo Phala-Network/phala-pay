@@ -525,11 +525,12 @@ async fn recover_members_every(
         .map(|(group, _)| group.clone())
         .collect::<Vec<_>>();
     let recovery = async {
+        let mut probe_failures = BTreeMap::new();
         loop {
             tokio::select! {()=cancellation.cancelled()=>return Ok(()),()=tokio::time::sleep(period)=>{}}
             refresh_metrics_safely(db::rpc::refresh_metrics(&pool)).await;
             for (group, route_files) in groups.values() {
-                for index in 0..group.members.len() {
+                for (index, member) in group.members.iter().enumerate() {
                     if group.probe_due(index) {
                         let result = probe(group, index, route_files).await;
                         let known = sqlx::query_scalar::<_, String>(
@@ -556,10 +557,9 @@ async fn recover_members_every(
                                 continue;
                             }
                         };
-                        group.probe_result(
-                            index,
-                            result.is_ok_and(|hash| known.as_ref() == Some(&hash)),
-                        );
+                        let result = validate_recovery_genesis(result, known.as_deref());
+                        log_recovery_probe_result(group, &member.id, &result, &mut probe_failures);
+                        group.probe_result(index, result.is_ok());
                     }
                 }
             }
@@ -575,6 +575,44 @@ async fn recover_members_every(
         }
     };
     with_availability_monitor(&watched, &cancellation, recovery).await
+}
+
+fn validate_recovery_genesis(
+    result: Result<String, String>,
+    known: Option<&str>,
+) -> Result<String, String> {
+    result.and_then(|hash| {
+        if known == Some(hash.as_str()) {
+            Ok(hash)
+        } else {
+            Err("persisted genesis anchor mismatch".into())
+        }
+    })
+}
+
+// Warn on the first and every tenth consecutive failure per member; only a probe matching the
+// persisted genesis resets the count. Other failures are debug.
+fn log_recovery_probe_result(
+    group: &RpcGroup,
+    member: &str,
+    result: &Result<String, String>,
+    failures: &mut BTreeMap<(String, String), u64>,
+) {
+    let key = (group.id.clone(), member.to_owned());
+    match result {
+        Ok(_) => {
+            failures.remove(&key);
+        }
+        Err(error) => {
+            let count = failures.entry(key).or_default();
+            *count = count.saturating_add(1);
+            if *count == 1 || count.is_multiple_of(10) {
+                tracing::warn!(group=%group.id, member=%member, %error, "RPC member recovery probe failed");
+            } else {
+                tracing::debug!(group=%group.id, member=%member, %error, "RPC member recovery probe failed");
+            }
+        }
+    }
 }
 
 /// Per-member network preflight, returning only stable ids. An offline backup is reported and
@@ -1297,6 +1335,87 @@ mod probe_tests {
             "RPC durable safety store missing for group base-mainnet-a"
         );
         pool.close().await;
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn recovery_failures_warn_on_first_and_tenth_and_reset_only_after_accepted_genesis() {
+        let mock = Arc::new(MockProbe {
+            price_only: true,
+            price_call_failure: true,
+            ..MockProbe::new()
+        });
+        let (url, task) = server(mock).await;
+        let mut policy = GroupPolicy::default();
+        policy.probe.attempts = 1;
+        let group = group_on_chain(&url, "recovery-log-test", 1000, policy, 1);
+        let mut failures = BTreeMap::new();
+        for attempt in 1..=11 {
+            if attempt == 11 {
+                let accepted = validate_recovery_genesis(Ok("genesis".into()), Some("genesis"));
+                assert!(accepted.is_ok());
+                log_recovery_probe_result(&group, "one", &accepted, &mut failures);
+            }
+            let result = match attempt {
+                2 => validate_recovery_genesis(Ok("genesis".into()), None),
+                10 => validate_recovery_genesis(Ok("genesis".into()), Some("other genesis")),
+                _ => validate_recovery_genesis(probe(&group, 0, &[]).await, Some("genesis")),
+            };
+            assert!(result.is_err(), "rejected recovery probe was accepted");
+            tracing::info_span!("recovery_probe", attempt).in_scope(|| {
+                log_recovery_probe_result(&group, "one", &result, &mut failures);
+            });
+        }
+        task.abort();
+        let _ = task.await;
+
+        logs_assert(|lines: &[&str]| {
+            let recovery: Vec<_> = lines
+                .iter()
+                .filter(|line| line.contains("RPC member recovery probe failed"))
+                .collect();
+            let warnings: Vec<_> = recovery
+                .iter()
+                .filter(|line| line.contains(" WARN "))
+                .collect();
+            if recovery.len() != 11
+                || warnings.len() != 3
+                || ![1, 10, 11].iter().all(|attempt| {
+                    warnings
+                        .iter()
+                        .any(|line| line.contains(&format!("attempt={attempt}}}")))
+                })
+            {
+                return Err(format!(
+                    "unexpected recovery warning sequence: {recovery:?}"
+                ));
+            }
+            if !recovery
+                .iter()
+                .any(|line| line.contains(" DEBUG ") && line.contains("attempt=2}"))
+            {
+                return Err("second recovery probe failure was not logged at debug".into());
+            }
+            if recovery.iter().any(|line| {
+                let expected_error = if line.contains("attempt=2}") || line.contains("attempt=10}")
+                {
+                    "error=persisted genesis anchor mismatch"
+                } else {
+                    "error=price decimals capability: RPC server failure"
+                };
+                !line.contains("group=recovery-log-test")
+                    || !line.contains("member=one")
+                    || !line.contains(expected_error)
+            }) {
+                return Err(format!(
+                    "missing sanitized recovery log fields: {recovery:?}"
+                ));
+            }
+            if recovery.iter().any(|line| line.contains(&url)) {
+                return Err("mock server URL leaked into a recovery log".into());
+            }
+            Ok(())
+        });
     }
 
     #[tokio::test]

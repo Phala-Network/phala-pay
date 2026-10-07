@@ -43,6 +43,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- RPC member recovery probe failures emit rate-limited warning logs, and lagging-node
+  "is beyond the latest block of this node" errors are classified as retryable server errors.
 - Reference-product sweep groups retain their last successful balances and sweep history for up to
   ten minutes when a refresh fails, while disabling stale signable calls.
 - Deploy pause and resume requests retry transport errors and HTTP 408, 429, 500, 502, 503, and 504
