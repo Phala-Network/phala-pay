@@ -21,7 +21,7 @@ async fn dual_contract_check_detects_route_build_and_multicall_mismatches() -> R
     let rpc_url = anvil.rpc_url.clone();
     let factory = forge_create(&rpc_url, "src/ForwarderFactory.sol:ForwarderFactory", &[])?;
     let implementation = implementation_of(&rpc_url, factory)?;
-    anvil.mine(16)?;
+    anvil.mine(64)?;
 
     let yaml = route_yaml(&anvil, factory, TREASURY);
     let mut route: RouteFile = serde_saphyr::from_str(&yaml)?;
@@ -46,7 +46,10 @@ async fn dual_contract_check_detects_route_build_and_multicall_mismatches() -> R
         )
         .await
     };
-    ensure!(check(&route).await? == topup::contracts::ContractCheck::Pass);
+    ensure!(
+        check(&route).await? == topup::contracts::ContractCheck::Pass,
+        "initial code must pass"
+    );
     let mut wrong_implementation = route.clone();
     wrong_implementation.chain.contracts.implementation = Address::from_str(TREASURY)?;
     ensure!(check(&wrong_implementation).await? == topup::contracts::ContractCheck::Mismatch);
@@ -55,18 +58,30 @@ async fn dual_contract_check_detects_route_build_and_multicall_mismatches() -> R
         let original = cast(&["code", &format!("{contract:#x}"), "--rpc-url", &rpc_url])?;
         set_code(&rpc_url, contract, &format!("{original}00"))?;
         ensure!(implementation_of(&rpc_url, factory)? == implementation);
-        ensure!(check(&route).await? == topup::contracts::ContractCheck::Mismatch);
+        ensure!(
+            check(&route).await? == topup::contracts::ContractCheck::Mismatch,
+            "modified code must fail"
+        );
         set_code(&rpc_url, contract, &original)?;
     }
-    ensure!(check(&route).await? == topup::contracts::ContractCheck::Pass);
+    ensure!(
+        check(&route).await? == topup::contracts::ContractCheck::Pass,
+        "restored code must pass"
+    );
     let multicall = Address::from_str("0xcA11bde05977b3631167028862bE2a173976CA11")?;
     let canonical = cast(&["code", &format!("{multicall:#x}"), "--rpc-url", &rpc_url])?;
     for code in ["0x", "0x00"] {
         set_code(&rpc_url, multicall, code)?;
-        ensure!(check(&route).await? == topup::contracts::ContractCheck::Mismatch);
+        ensure!(
+            check(&route).await? == topup::contracts::ContractCheck::Mismatch,
+            "modified code must fail"
+        );
     }
     set_code(&rpc_url, multicall, &canonical)?;
-    ensure!(check(&route).await? == topup::contracts::ContractCheck::Pass);
+    ensure!(
+        check(&route).await? == topup::contracts::ContractCheck::Pass,
+        "restored code must pass"
+    );
 
     Ok(())
 }
@@ -345,7 +360,7 @@ fn set_code(rpc_url: &str, contract: Address, code: &str) -> Result<()> {
         &format!("{contract:#x}"),
         code,
     ])?;
-    cast(&["rpc", "--rpc-url", rpc_url, "anvil_mine", "0x10"])?;
+    cast(&["rpc", "--rpc-url", rpc_url, "anvil_mine", "0x40"])?;
     Ok(())
 }
 
