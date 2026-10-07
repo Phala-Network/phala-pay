@@ -245,6 +245,9 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             ensure!(reserved);
             ensure!(chain.events("quote.expired").await?.is_empty());
             chain.anvil.mine(80)?;
+            chain.anvil.mine(1)?;
+            run_checked("cast", &["rpc", "evm_increaseTime", "60", "--rpc-url", &chain.anvil.rpc_url], None)?;
+            chain.anvil.mine(FINALITY_DEPTH + 2)?;
             coverage_once(&chain.pool,&chain.reader,&chain.reader,&chain.routes,1).await?;
             ensure!(topup::locks::expire_once(&chain.pool,&RouteSet::new(vec![chain.route.clone()]).unwrap()).await?==1);
             ensure!(chain.events("quote.expired").await?.len()==1);
@@ -320,7 +323,7 @@ async fn the_payers_view_credits_the_shown_payment_and_drops_a_reversed_one() ->
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
             chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
-            ensure!(stats.reversed == 1 && stats.finalized == 1, "{stats:?}");
+            ensure!(stats.reversed == 1 && stats.finalized == 2, "{stats:?}");
             ensure!(chain.deposit(first).await?.state == DepositState::Reversed);
             ensure!(chain.deposit(second).await?.state == DepositState::Credited);
             let view = chain.client_quote().await?;
@@ -596,7 +599,10 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
 
             let stats =
                 coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1).await?;
-            ensure!(stats.inserted == 1, "{stats:?}");
+            ensure!(
+                stats.inserted == 0,
+                "known replacement must be idempotent: {stats:?}"
+            );
             chain.settle().await?;
             let successor = replacement_hash(&replacement)?;
             ensure!(chain.deposit(successor).await?.state == DepositState::Credited);

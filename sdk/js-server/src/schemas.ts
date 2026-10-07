@@ -547,6 +547,12 @@ export const schemas: Record<string, Schema> = {
       "asset": {
         "type": "string"
       },
+      "cancel_requested_at": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "chain_id": {
         "minimum": 0,
         "type": "integer"
@@ -1995,6 +2001,12 @@ export const schemas: Record<string, Schema> = {
       },
       "asset": {
         "type": "string"
+      },
+      "cancel_requested_at": {
+        "type": [
+          "integer",
+          "null"
+        ]
       },
       "chain_id": {
         "minimum": 0,

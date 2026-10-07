@@ -2710,6 +2710,14 @@
             "description": "Asset code.",
             "type": "string"
           },
+          "cancel_requested_at": {
+            "description": "Deferred cancellation request time, Unix seconds; null before a request.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "chain_id": {
             "description": "EVM chain identifier.",
             "format": "int64",

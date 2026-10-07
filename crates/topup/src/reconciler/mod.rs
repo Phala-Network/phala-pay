@@ -537,7 +537,7 @@ impl Reconciler {
         Ok(())
     }
 
-    /// Repairs finalized transfers missing from the deposit ledger through the scanner path.
+    /// Recomputes credits from their recorded valuation evidence.
     async fn credit_recomputation(
         &self,
         findings: &mut Vec<Finding>,

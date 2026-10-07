@@ -2152,11 +2152,12 @@ async fn refund_rpc(Json(request): Json<Value>) -> Json<Value> {
             "result": receipt,
         }));
     }
-    Json(json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": finalized_block(),
-    }))
+    let mut block = finalized_block();
+    if request["params"][0] == "0x5a" {
+        block["number"] = json!("0x5a");
+        block["hash"] = json!(format!("{:#x}", B256::from(U256::from(900_u64))));
+    }
+    Json(json!({"jsonrpc":"2.0","id":id,"result":block}))
 }
 
 fn refund_receipt(tx_hash: &str) -> Value {

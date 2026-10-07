@@ -660,11 +660,19 @@ pub async fn apply_transition(
         .bind(deposit_id)
         .fetch_one(&mut **transaction)
         .await?;
-    super::rpc::guard_in(
-        transaction,
-        u64::try_from(chain).map_err(|e| sqlx::Error::Encode(e.into()))?,
-    )
-    .await?;
+    if update.transition.to == expected_state
+        && *writes.effects == TransitionEffects::default()
+        && writes.outbox_events.is_empty()
+    {
+        // A frozen chain can record a wait/retry and release its worker lease.
+        super::rpc::lock_reconciliation_in(transaction, &format!("chain:{chain}")).await?;
+    } else {
+        super::rpc::guard_in(
+            transaction,
+            u64::try_from(chain).map_err(|e| sqlx::Error::Encode(e.into()))?,
+        )
+        .await?;
+    }
     let expected = state_code(expected_state);
     let target = state_code(update.transition.to);
     let reason = update.rejection_reason.map(RejectReason::code);

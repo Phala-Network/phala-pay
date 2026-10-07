@@ -10,6 +10,7 @@ from ..types import UNSET, Unset
 
 from ..models.client_quote_object import check_client_quote_object
 from ..models.client_quote_object import ClientQuoteObject
+from ..types import UNSET, Unset
 from typing import cast
 
 
@@ -58,6 +59,7 @@ class ClientQuote:
             typical_credit_seconds (int): Typical time from payment to credit, in seconds, at the confirmation the quote's
                 payments
                 are credited at, as `GET /v1/config` reports it.
+            cancel_requested_at (int | None | Unset): Deferred cancellation request time, Unix seconds.
     """
 
     address: str
@@ -77,6 +79,7 @@ class ClientQuote:
     payment_uri: str
     status: str
     typical_credit_seconds: int
+    cancel_requested_at: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -116,6 +119,12 @@ class ClientQuote:
 
         typical_credit_seconds = self.typical_credit_seconds
 
+        cancel_requested_at: int | None | Unset
+        if isinstance(self.cancel_requested_at, Unset):
+            cancel_requested_at = UNSET
+        else:
+            cancel_requested_at = self.cancel_requested_at
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -139,6 +148,8 @@ class ClientQuote:
                 "typical_credit_seconds": typical_credit_seconds,
             }
         )
+        if cancel_requested_at is not UNSET:
+            field_dict["cancel_requested_at"] = cancel_requested_at
 
         return field_dict
 
@@ -189,6 +200,15 @@ class ClientQuote:
 
         typical_credit_seconds = d.pop("typical_credit_seconds")
 
+        def _parse_cancel_requested_at(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        cancel_requested_at = _parse_cancel_requested_at(d.pop("cancel_requested_at", UNSET))
+
         client_quote = cls(
             address=address,
             amount=amount,
@@ -207,6 +227,7 @@ class ClientQuote:
             payment_uri=payment_uri,
             status=status,
             typical_credit_seconds=typical_credit_seconds,
+            cancel_requested_at=cancel_requested_at,
         )
 
         client_quote.additional_properties = d

@@ -248,4 +248,31 @@ mod tests {
             "confirm consumes no quote budget"
         );
     }
+
+    #[tokio::test]
+    async fn noncanonical_state_waits_and_the_next_attempt_uses_a_fresh_verify_pin() {
+        use crate::pricing::test_rpc;
+        use serde_json::json;
+        let changed = Arc::new(AtomicBool::new(false));
+        let node = |read: bool| {
+            let changed = changed.clone();
+            test_rpc::rpc(if read {"canonical-read"} else {"canonical-verify"}, move |request| {
+                if request["method"] == "eth_blockNumber" { return json!("0x64"); }
+                assert_eq!(request["method"], "eth_getBlockByNumber");
+                let mut header = serde_json::to_value(alloy::rpc::types::Block::<alloy::rpc::types::Transaction>::default()).unwrap();
+                header["number"] = json!("0x62");
+                header["timestamp"] = json!("0x3e8");
+                header["hash"] = json!(alloy_primitives::B256::repeat_byte(if read || changed.load(Ordering::SeqCst) {22} else {11}));
+                header
+            })
+        };
+        let read = node(true).await;
+        let verify = node(false).await;
+        let snapshots = Snapshots::new(1, read.client.clone(), verify.client.clone(), Vec::new(), None);
+        assert!(matches!(snapshots.fetch(SnapshotUse::Confirm).await, Err(PriceError::RpcUnavailable)));
+        changed.store(true, Ordering::SeqCst);
+        let agreed = snapshots.fetch(SnapshotUse::Confirm).await.unwrap();
+        assert_eq!(agreed.block.hash, alloy_primitives::B256::repeat_byte(22));
+        assert_eq!(verify.sends.load(Ordering::SeqCst), 6, "failed pin is never cached");
+    }
 }

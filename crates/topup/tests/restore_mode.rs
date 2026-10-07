@@ -1034,7 +1034,7 @@ async fn unfreeze_needs_the_rescan_and_the_checklist_and_is_audited() -> Result<
                 .await?;
             ensure!(status.body["rescan"][0]["pending_backfills"] == 1);
             ensure!(status.body["rescan"][0]["complete"] == false);
-            sqlx::query("UPDATE addresses SET backfilled = true WHERE id = $1")
+            sqlx::query("UPDATE addresses SET backfilled = true,dual_covered_through=(SELECT through_block FROM chain_coverage WHERE chain_id=addresses.chain_id) WHERE id = $1")
                 .bind(address.id)
                 .execute(&harness.pool)
                 .await?;
@@ -2601,6 +2601,13 @@ impl ScriptedChain {
 }
 
 impl ChainReader for ScriptedChain {
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        Ok(self.state(|state| match &state.transfer {
+            Some(log) if log.block_number == number => (log.block_hash, log.block_time),
+            _ => (B256::ZERO, DateTime::UNIX_EPOCH),
+        }))
+    }
+
     async fn factory_logs(
         &self,
         _factory: Address,
@@ -2708,6 +2715,21 @@ struct Pipeline {
 }
 
 impl Pipeline {
+    async fn watch_once(&self, harness: &Harness) -> Result<topup::finality::WatchStats> {
+        let head = self.chain.finalized_head().await?;
+        db::chain_reads::advance_checkpoint(
+            &harness.pool,
+            1,
+            db::chain_reads::Boundary {
+                number: head.number,
+                hash: B256::ZERO,
+                time: head.time,
+            },
+        )
+        .await?;
+        Ok(self.watch.watch_once(1).await?)
+    }
+
     fn new(harness: &Harness) -> Result<Self> {
         let mut route = harness.route.clone();
         route.chain.confirmations = Confirmations::Depth(2);
@@ -2942,7 +2964,7 @@ async fn a_reversed_deposit_and_its_successor_keep_their_identities_through_a_re
             ensure!(valuation(&harness, old).await?.0 == "credited");
             let second = router_transfer(harness.route.asset.contract, forwarder, 11, 0xbb, 90);
             pipeline.chain.set(30, 20, Some(second));
-            ensure!(pipeline.watch.watch_once(1).await?.reversed == 1);
+            ensure!(pipeline.watch_once(&harness).await?.reversed == 1);
             pipeline.settle().await?;
             let new = topup_core::identity::deposit_revision_id(1, ROUTER_TX, 0, 1);
             let credited = valuation(&harness, new).await?;
@@ -3064,7 +3086,7 @@ async fn a_rejected_deposit_reversed_before_finality_round_trips_through_a_resto
             pipeline.chain.set(12, 5, Some(transfer.clone()));
             pipeline.fast_scan(&harness, &transfer, address_id).await?;
             pipeline.chain.set(30, 20, None);
-            ensure!(pipeline.watch.watch_once(1).await?.reversed == 1);
+            ensure!(pipeline.watch_once(&harness).await?.reversed == 1);
             harness.deliver().await?;
             let deposit = deposit_id(1, ROUTER_TX, 0);
             let public_id = topup::ids::format(topup::ids::DEPOSIT, deposit);

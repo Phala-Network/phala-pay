@@ -1952,7 +1952,8 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, node).await });
         let client = EvmClient::new(&format!("http://{address}/rpc"))
             .expect("production adapter accepts URL")
-            .with_provider("base-sepolia-a");
+            .with_provider("base-sepolia-a")
+            .with_chain_id(84532);
         (FinalizedReader::new(Arc::new(client)), server)
     }
 
@@ -2220,6 +2221,46 @@ mod tests {
                 transfer: Some(Box::new(transfer)),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn receipt_evidence_rejects_a_forged_transaction_chain_and_failed_status() {
+        let tx = b256!("0x4b6cf1a33019535930118d535e51966a0405d78874213f5e34e5df2eb223902f");
+        for wrong_chain in [true, false] {
+            let mut transaction = base_sepolia("transaction");
+            let mut receipt = base_sepolia("receipt");
+            if wrong_chain {
+                transaction["chainId"] = serde_json::json!("0x1");
+            } else {
+                receipt["status"] = serde_json::json!("0x0");
+            }
+            let (reader, task) = replay_node(
+                vec![
+                    ("eth_getTransactionReceipt", receipt),
+                    ("eth_getTransactionByHash", transaction),
+                    ("eth_getBlockByHash", base_sepolia("block-47445875")),
+                ],
+                Vec::new(),
+            )
+            .await;
+            let result = reader.receipt_transfer(tx, 0).await;
+            task.abort();
+            if wrong_chain {
+                assert!(matches!(
+                    result,
+                    Err(ChainError::Reorganized("receipt transaction identity"))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Ok(ReceiptLookup::Included {
+                        status: false,
+                        transfer: None,
+                        ..
+                    })
+                ));
+            }
+        }
     }
 
     #[test]

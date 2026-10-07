@@ -44,6 +44,9 @@ struct ScriptedChain {
 }
 
 impl ChainReader for ScriptedChain {
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        Ok((block_hash(number), BLOCK_TIME))
+    }
     async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
         Ok(FinalizedHead {
             number: FINALIZED,

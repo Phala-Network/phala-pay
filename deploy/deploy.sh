@@ -398,6 +398,10 @@ main() {
             cat >"$env_dir/compose.yaml" <<YAML
 # Written by deploy.sh $release, as deploy/environments/example/topup/compose.yaml describes.
 services:
+  topup:
+    environment:
+      TOPUP_RPC_ANKR_KEY: \${TOPUP_RPC_ANKR_KEY:-}
+      TOPUP_RPC_INFURA_KEY: \${TOPUP_RPC_INFURA_KEY:-}
   postgres:
     environment: &walg
       WALG_S3_PREFIX: $(yaml_string "$WALG_S3_PREFIX")

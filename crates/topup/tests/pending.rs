@@ -129,7 +129,11 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         "unexpected head scan {scan:?}, addresses={:?}, logs={:?}",
         db::list_scan_addresses(pool, CHAIN_ID).await?,
         reader
-            .transfer_logs_to(&[lock_address, other_quote], 1, 1000)
+            .transfer_logs_to(
+                &[lock_address, other_quote],
+                1,
+                reader.latest_header().await?.number
+            )
             .await?
     );
     ensure!(

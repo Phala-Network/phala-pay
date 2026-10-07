@@ -335,10 +335,6 @@ struct SharedSequencer {
     coalesced: Coalesced<Value>,
 }
 impl SharedSequencer {
-    #[cfg(test)]
-    async fn evidence(&self, deadline: tokio::time::Instant) -> Result<Value, PriceError> {
-        self.evidence_for(Reuse::Ttl, deadline).await
-    }
     async fn evidence_for(
         &self,
         reuse: Reuse,
@@ -2744,24 +2740,41 @@ mod tests {
             grace_s: 3600,
             coalesced: Coalesced::new("sequencer", "chainlink"),
         };
-        let results =
-            futures_util::future::join_all((0..10).map(|_| sequencer.evidence(test_deadline())))
-                .await;
+        let results = futures_util::future::join_all(
+            (0..10).map(|_| sequencer.evidence_for(Reuse::Fresh, test_deadline())),
+        )
+        .await;
         assert!(results.iter().all(Result::is_ok));
         let one_fetch = sends.load(Ordering::SeqCst);
         assert!(one_fetch > 0, "sequencer evidence must actually be fetched");
-        sequencer.evidence(test_deadline()).await.unwrap();
+        sequencer
+            .evidence_for(Reuse::Fresh, test_deadline())
+            .await
+            .unwrap();
         assert_eq!(
             sends.load(Ordering::SeqCst),
             2 * one_fetch,
             "sequencer must fetch again after completion"
         );
         down.store(true, Ordering::SeqCst);
-        assert!(sequencer.evidence(test_deadline()).await.is_err());
+        assert!(
+            sequencer
+                .evidence_for(Reuse::Fresh, test_deadline())
+                .await
+                .is_err()
+        );
         assert!(sequencer.coalesced.state.lock().unwrap().cached.is_none());
-        assert!(sequencer.evidence(test_deadline()).await.is_err());
+        assert!(
+            sequencer
+                .evidence_for(Reuse::Fresh, test_deadline())
+                .await
+                .is_err()
+        );
         down.store(false, Ordering::SeqCst);
-        sequencer.evidence(test_deadline()).await.unwrap();
+        sequencer
+            .evidence_for(Reuse::Fresh, test_deadline())
+            .await
+            .unwrap();
         assert_eq!(sends.load(Ordering::SeqCst), 5 * one_fetch);
     }
 }

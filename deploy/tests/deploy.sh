@@ -297,7 +297,7 @@ grep -qx '  public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=' "$tmp/cust
 deploys | head -1 | grep -qF -- "--name custom " || fail "custom did not provision first"
 deploys | tail -1 | grep -qF -- "--cvm-id cvm-0123 " || fail "custom did not upgrade the new CVM"
 ! deploys | tail -1 | grep -qF -- " -e " || fail "custom's upgrade sent an env"
-[[ "$(cut -d= -f1 "$tmp/state/env" | tr '\n' ' ')" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY " ]] ||
+[[ "$(cut -d= -f1 "$tmp/state/env" | tr '\n' ' ')" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
     fail "custom sealed other names than the ones it was given"
 grep -q 'GATEWAY_DOMAIN: gateway.dstack-pha-prod5.phala.network' "$tmp/custom/docker-compose.custom.yml" ||
     fail "custom's compose does not name the CVM's gateway"

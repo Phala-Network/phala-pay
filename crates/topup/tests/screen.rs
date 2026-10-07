@@ -177,7 +177,7 @@ async fn postgres_pump_persists_screening_transitions_pauses_and_outbox() -> Res
 }
 
 #[tokio::test]
-async fn anvil_oracle_uses_recorded_blocks_and_maps_live_results() -> Result<()> {
+async fn anvil_oracle_uses_current_canonical_pins_and_maps_live_results() -> Result<()> {
     let Some(anvil) = Anvil::start_if_available(&[]).await? else {
         return Ok(());
     };
@@ -189,6 +189,7 @@ async fn anvil_oracle_uses_recorded_blocks_and_maps_live_results() -> Result<()>
     )?;
     let account = Address::repeat_byte(0x22);
     let recorded_block = current_block(&rpc_url)?;
+    anvil.mine(2)?;
     let source = Arc::new(SanctionsOracle::new(
         client(&rpc_url, StdDuration::from_secs(2))?,
         client(&rpc_url, StdDuration::from_secs(2))?,
@@ -200,11 +201,12 @@ async fn anvil_oracle_uses_recorded_blocks_and_maps_live_results() -> Result<()>
 
     set_sanctioned(&rpc_url, oracle, account, true)?;
     let latest_block = current_block(&rpc_url)?;
+    anvil.mine(2)?;
     ensure!(latest_block > recorded_block);
     let historical = source.sanctions(account, recorded_block).await;
     let latest = source.sanctions(account, latest_block).await;
-    ensure!(historical.provider_a == SanctionsAnswer::Clear);
-    ensure!(historical.provider_b == SanctionsAnswer::Clear);
+    ensure!(historical.provider_a == SanctionsAnswer::Sanctioned);
+    ensure!(historical.provider_b == SanctionsAnswer::Sanctioned);
     ensure!(latest.provider_a == SanctionsAnswer::Sanctioned);
     ensure!(latest.provider_b == SanctionsAnswer::Sanctioned);
 
@@ -226,9 +228,13 @@ async fn anvil_oracle_uses_recorded_blocks_and_maps_live_results() -> Result<()>
                 .await?
                 .context("historical deposit")?;
             let old_result = step.run(&old_deposit).await;
-            ensure!(old_result.outcome == StepOutcome::Advance);
-            ensure!(old_result.evidence["block_number"] == recorded_block);
-            ensure!(old_result.evidence["provider_a"] == "clear");
+            ensure!(old_result.outcome == StepOutcome::Reject(RejectReason::Sanctioned));
+            ensure!(
+                old_result.evidence["block_number"]
+                    .as_u64()
+                    .is_some_and(|pin| pin >= latest_block)
+            );
+            ensure!(old_result.evidence["provider_a"] == "sanctioned");
 
             let latest_deposit = db::get_deposit(&context.app_pool, latest_id)
                 .await?

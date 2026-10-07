@@ -36,8 +36,8 @@ const CHAIN_ID: u64 = 31_337;
 #[derive(Default)]
 struct MockChain {
     finalized: AtomicU64,
-    finalized_delay: StdDuration,
-    finalized_started: Notify,
+    derivation_delay: StdDuration,
+    derivation_started: Notify,
     fail_derivation: AtomicBool,
     fail_logs_from: Mutex<Option<u64>>,
     logs: Mutex<Vec<TransferLog>>,
@@ -67,8 +67,6 @@ impl MockChain {
 #[async_trait]
 impl ReconciliationChain for MockChain {
     async fn finalized_head(&self) -> Result<u64, ReconciliationError> {
-        self.finalized_started.notify_one();
-        tokio::time::sleep(self.finalized_delay).await;
         Ok(self.finalized.load(Ordering::SeqCst))
     }
 
@@ -147,6 +145,8 @@ impl ReconciliationChain for MockChain {
         _treasury: Address,
         salts: &[B256],
     ) -> Result<Vec<Address>, ReconciliationError> {
+        self.derivation_started.notify_one();
+        tokio::time::sleep(self.derivation_delay).await;
         if self.fail_derivation.load(Ordering::SeqCst) {
             return Err(ReconciliationError::Chain("addressOf timed out".to_owned()));
         }
@@ -746,11 +746,12 @@ async fn application_role_cannot_rewrite_findings_or_blocks() -> Result<()> {
 async fn loop_respects_cancellation() -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
-        seed_account(&pool).await?;
+        let seed = seed_identity(&pool, &route, 82).await?;
         let chain = Arc::new(MockChain {
-            finalized_delay: StdDuration::from_secs(10),
+            derivation_delay: StdDuration::from_secs(10),
             ..MockChain::default()
         });
+        chain.derive(&[&seed]);
         let reconciler = Arc::new(Reconciler::with_dependencies(
             pool.clone(),
             route_set(route)?,
@@ -772,7 +773,7 @@ async fn loop_respects_cancellation() -> Result<()> {
         });
         tokio::time::timeout(
             StdDuration::from_secs(1),
-            chain.finalized_started.notified(),
+            chain.derivation_started.notified(),
         )
         .await?;
         cancellation.cancel();
@@ -798,7 +799,7 @@ async fn loop_publishes_failed_checks_for_the_daily_report() -> Result<()> {
         let cancellation = CancellationToken::new();
         // The first tick is immediate; no other test completes a loop round in this binary.
         let round = async {
-            while topup::observability::reconciliation().is_none() {
+            while !topup::observability::reconciliation().is_some_and(|status| status.failed_checks.iter().any(|(check, _)| check == "address_derivation")) {
                 tokio::time::sleep(StdDuration::from_millis(20)).await;
             }
         };

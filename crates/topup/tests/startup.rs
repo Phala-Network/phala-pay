@@ -240,7 +240,7 @@ async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
                 })??;
                 let ready: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM chain_coverage c JOIN chain_checkpoints p USING(chain_id) WHERE c.chain_id=31337 AND c.through_block>0 AND c.through_block=p.block_number)")
                     .fetch_one(&database.app_pool).await?;
-                ensure!(ready,"coverage and checkpoint initialized before recording");
+                ensure!(ready,"coverage and checkpoint initialized before recording: {}", service.logs()?);
                 Ok(())
             }
             .await;

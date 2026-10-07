@@ -2,6 +2,12 @@
 groups:
   - name: phala-pay-rpc
     rules:
+      - alert: RpcEvidenceDisagreement
+        expr: sum by (chain_id) (increase(topup_rpc_errors_total{class="disagreement"}[5m])) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "Read and verify evidence disagreed on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/provider-disagreement.md"
       - alert: RpcEndpointUnavailable
         expr: topup_rpc_endpoint_ready == 0
         for: 5m

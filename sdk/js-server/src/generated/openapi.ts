@@ -1322,6 +1322,11 @@ export interface components {
             readonly asset: string;
             /**
              * Format: int64
+             * @description Deferred cancellation request time, Unix seconds.
+             */
+            readonly cancel_requested_at?: number | null;
+            /**
+             * Format: int64
              * @description EVM chain identifier.
              */
             readonly chain_id: number;
@@ -3009,6 +3014,11 @@ export interface components {
             readonly amount_atomic: string;
             /** @description Asset code. */
             readonly asset: string;
+            /**
+             * Format: int64
+             * @description Deferred cancellation request time, Unix seconds; null before a request.
+             */
+            readonly cancel_requested_at?: number | null;
             /**
              * Format: int64
              * @description EVM chain identifier.

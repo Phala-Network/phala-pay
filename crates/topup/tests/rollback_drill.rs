@@ -137,8 +137,8 @@ async fn serve(app: Router) -> Result<(String, Task)> {
     ))
 }
 fn cast(anvil: &Anvil, args: &[&str]) -> Result<Value> {
-    let mut arguments = vec!["--rpc-url", anvil.rpc_url.as_str()];
-    arguments.extend_from_slice(args);
+    let mut arguments = args.to_vec();
+    arguments.extend(["--rpc-url", anvil.rpc_url.as_str()]);
     let output = run_checked("cast", &arguments, None)?;
     Ok(serde_json::from_slice(&output.stdout)?)
 }

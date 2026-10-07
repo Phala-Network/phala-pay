@@ -634,7 +634,7 @@ mod tests {
         assert_eq!(
             result.outcome,
             StepOutcome::Retry {
-                error: RetryError::InvariantViolation,
+                error: RetryError::Transient,
             }
         );
         assert_eq!(result.evidence["error"], "sanctions_pin_before_payment");

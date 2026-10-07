@@ -692,6 +692,7 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
                     "currency": "usd", "asset": "pha", "decimals": route.asset.decimals,
                     "chain_id": 1, "amount_atomic": "100", "address": created["address"],
                     "payment_uri": created["payment_uri"], "expires_at": created["expires_at"],
+                    "cancel_requested_at": null,
                     "payment_status": "none", "confirmations": null,
                     "amount_credited": null, "typical_credit_seconds": 900,
                 }),
@@ -2704,4 +2705,52 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
         })
     })
     .await
+}
+
+#[tokio::test]
+async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let pool = &database.app_pool;
+            let (account, key) = seed_product(pool, "phala-cloud").await?;
+            seed_account(pool, account.id, "budget-checkout").await?;
+            let mut route = test_route();
+            route.pricing.mode = topup_core::route::PricingMode::Stablecoin;
+            route.asset.symbol = "usdc".into();
+            route.pricing.primary.clear();
+            route.pricing.check.clear();
+            route.pricing.fx.clear();
+            route.pricing.sources = vec![topup_core::price::Source::Chainlink {
+                feed: "USDC_USD".into(), chain_id: 1, observation_chain_id: None,
+            }];
+            route.validate()?;
+            seed::accept_routes(pool, account.id, true, &[&route]).await?;
+            sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES ((now() AT TIME ZONE 'UTC')::date,'price:1',100)")
+                .execute(pool).await?;
+            // An exhausted budget must fail before contacting either endpoint.
+            let endpoint = Arc::new(topup_adapters::chain::evm::EvmClient::new("http://127.0.0.1:1")?.with_chain_id(1));
+            let routes = Arc::new(topup::routes::RouteSet::with_rpc(vec![route], std::collections::BTreeMap::from([
+                (1, topup::chain_rpc::ChainRpc { read: endpoint.clone(), verify: endpoint }),
+            ])).map_err(anyhow::Error::msg)?);
+            let runtimes = locks::pricing::PricingRuntime::build_all(&routes, pool.clone()).map_err(anyhow::Error::msg)?;
+            let admin = SigningKey::from_bytes(&[44;32]);
+            let app = topup::api::router(AppState {
+                pool:pool.clone(), routes,
+                admin_key:VerificationKey::from_base64(ADMIN_KID.into(), &public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
+                maintenance_keys:Vec::new(), public_origin:PublicOrigin::parse(TEST_ORIGIN)?,
+                attestor:Arc::new(DstackAttestor::new()), rate_lock_quotes:Arc::new(locks::ConfiguredQuoteProvider::from_runtimes(runtimes)),
+                client_reads:Arc::default(),rate_limits:Arc::default(),
+                screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+                contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
+            }).0;
+            let response = app.oneshot(merchant_request_with_key(Method::POST,"/v1/quotes",serde_json::to_vec(&json!({
+                "client_reference_id":"budget-checkout","amount":100,"currency":"usd","chain_id":1,"asset":"usdc",
+            }))?,&key,"snapshot-cap")).await?;
+            ensure!(response.status()==StatusCode::SERVICE_UNAVAILABLE);
+            ensure!(response_json(response).await?["error"]["code"]=="price_unavailable");
+            ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==0);
+            ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='price:1'").fetch_one(pool).await?==100);
+            Ok(())
+        })
+    }).await
 }
