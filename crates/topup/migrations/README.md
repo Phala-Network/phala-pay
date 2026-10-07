@@ -327,3 +327,11 @@ N-1 tables, columns, defaults, and writes. Binary rollback keeps these additions
 migration is a no-op. The compatibility floor remains `20261029030005`, verified against
 the published v0.9.2 migration set. `chain_checkpoints`, `chain_coverage`, and `daily_budgets`
 grant only SELECT, INSERT and UPDATE to `topup_app`.
+
+`20261031000000_dual_compat_cursor` is an expand-only forward repair of the cursor trigger
+and existing compatibility cursors. Its down migration is a no-op; the compatibility floor
+stays at `20261029030005`. The cursor is no longer monotonic: an upgrade, restore or reissue
+that lowers `created_block` can expose unscanned history, so the compatibility cursor must
+rebase to the boundary reached by every address and clear `scanned_block_time`. N-1 pauses
+expiry while that time is NULL and rescans from the lowered cursor. N publishes an agreed
+time only in the transaction that commits the corresponding dual address markers and coverage.
