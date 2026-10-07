@@ -2808,6 +2808,7 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
             admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
             public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
             rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
+            hint_limits:Arc::default(),transaction_hints:Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;
@@ -2844,6 +2845,7 @@ async fn routed_chain_not_ready_returns_chain_unavailable_for_both_issuance_path
             admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
             public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
             rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
+            hint_limits:Arc::default(),transaction_hints:Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;

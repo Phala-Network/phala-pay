@@ -44,6 +44,8 @@ struct Rpc {
     head: Arc<Mutex<Value>>,
     calls: Arc<AtomicUsize>,
     receipt_gate: Arc<AtomicBool>,
+    failure: Arc<AtomicBool>,
+    methods: Arc<Mutex<Vec<String>>>,
 }
 impl Rpc {
     fn new() -> Self {
@@ -69,11 +71,23 @@ impl Rpc {
             head: Arc::new(Mutex::new(json!("0x2d3f77a"))),
             calls: Arc::default(),
             receipt_gate: Arc::default(),
+            failure: Arc::default(),
+            methods: Arc::default(),
         }
     }
 }
 async fn rpc(State(state): State<Rpc>, Json(request): Json<Value>) -> Json<Value> {
     state.calls.fetch_add(1, Ordering::SeqCst);
+    state
+        .methods
+        .lock()
+        .unwrap()
+        .push(request["method"].as_str().unwrap().into());
+    if state.failure.load(Ordering::SeqCst) {
+        return Json(
+            json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"fixture endpoint failure"}}),
+        );
+    }
     if request["method"] == "eth_getTransactionReceipt" {
         while state.receipt_gate.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -127,11 +141,14 @@ struct Harness {
     key: String,
     quote_id: String,
     secret: String,
+    read_label: String,
     _nodes: Vec<Task>,
 }
 async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<Harness> {
-    let (read, read_task) = node(read_rpc, "tx-hint-read").await?;
-    let (verify, verify_task) = node(verify_rpc, "tx-hint-verify").await?;
+    let read_label = format!("hint-read-{}", Uuid::new_v4());
+    let verify_label = format!("hint-verify-{}", Uuid::new_v4());
+    let (read, read_task) = node(read_rpc, &read_label).await?;
+    let (verify, verify_task) = node(verify_rpc, &verify_label).await?;
     let mut route: RouteFile =
         serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml"))?;
     route.chain.chain_id = CHAIN;
@@ -232,6 +249,7 @@ async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<
         key,
         quote_id,
         secret,
+        read_label,
         _nodes: vec![read_task, verify_task],
     })
 }
@@ -415,9 +433,10 @@ async fn not_ready_parks_without_spending_daily_budget_then_resumes() -> Result<
         return Ok(());
     };
     let result = async {
-        let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        let verify = Rpc::new();
+        let h = harness(&db.app_pool, Rpc::new(), verify.clone()).await?;
         ensure!(h.read.ready());
-        h.verify.mark_not_ready();
+        fail_endpoint(&h.verify, &verify).await?;
         h.submit(
             &format!("/v1/quotes/{}/transactions", h.quote_id),
             Some(&h.key),
@@ -434,6 +453,7 @@ async fn not_ready_parks_without_spending_daily_budget_then_resumes() -> Result<
                 == 0
         );
         ensure!(deposits(&db.app_pool).await? == 0);
+        verify.failure.store(false, Ordering::SeqCst);
         h.verify.latest_head().await?;
         wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
         cancel.cancel();
@@ -788,10 +808,12 @@ async fn browser_preflight_and_read_only_requests_keep_quiet_acknowledgements() 
                     .body(Body::empty())?,
             )
             .await?;
-        ensure!(preflight.status() == StatusCode::ACCEPTED);
+        ensure!(preflight.status() == StatusCode::NO_CONTENT);
         ensure!(preflight.headers()["access-control-allow-origin"] == "*");
         ensure!(preflight.headers()["access-control-allow-methods"] == "POST, OPTIONS");
         ensure!(preflight.headers()["access-control-allow-headers"] == "Content-Type");
+        ensure!(preflight.headers()["access-control-max-age"] == "600");
+        ensure!(to_bytes(preflight.into_body(), 4096).await?.is_empty());
         let response = h
             .read_only_app
             .clone()
@@ -813,4 +835,359 @@ async fn browser_preflight_and_read_only_requests_keep_quiet_acknowledgements() 
     .await;
     db.cleanup().await?;
     result
+}
+
+// Use the real transport failure streak: the first two failures retain readiness.
+async fn fail_endpoint(client: &EvmClient, rpc: &Rpc) -> Result<()> {
+    rpc.failure.store(true, Ordering::SeqCst);
+    for failure in 1..=3 {
+        ensure!(client.latest_head().await.is_err());
+        ensure!(client.ready() == (failure < 3));
+    }
+    Ok(())
+}
+fn disagreements(h: &Harness) -> u64 {
+    topup_adapters::chain::evm::metrics::rpc_error_counts()
+        .into_iter()
+        .filter(|(provider, _, _, class, _)| provider == &h.read_label && *class == "disagreement")
+        .map(|(_, _, _, _, count)| count)
+        .sum()
+}
+
+#[tokio::test]
+async fn verify_lagging_for_one_and_a_half_seconds_records_within_whole_task_budget() -> Result<()>
+{
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let read = Rpc::new();
+        let verify = Rpc::new();
+        let receipt = verify.receipt.lock().unwrap().clone();
+        *verify.receipt.lock().unwrap() = Value::Null;
+        let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
+        let read_start = read.calls.load(Ordering::SeqCst);
+        let verify_start = verify.calls.load(Ordering::SeqCst);
+        h.submit(
+            &format!("/v1/quotes/{}/transactions", h.quote_id),
+            Some(&h.key),
+            json!({"transaction_hash":TX}),
+        )
+        .await?;
+        let (cancel, _worker) = h.worker(&db.app_pool);
+        wait_until(async || {
+            Ok(verify
+                .methods
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|method| method == "eth_getTransactionReceipt"))
+        })
+        .await?;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        ensure!(deposits(&db.app_pool).await? == 0);
+        for rpc in [&read, &verify] {
+            ensure!(!rpc.methods.lock().unwrap().iter().any(|method| matches!(
+                method.as_str(),
+                "eth_getBlockByHash" | "eth_getTransactionByHash"
+            )));
+        }
+        *verify.receipt.lock().unwrap() = receipt;
+        wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+        cancel.cancel();
+        ensure!(read.calls.load(Ordering::SeqCst) <= read_start + 12);
+        ensure!(verify.calls.load(Ordering::SeqCst) <= verify_start + 8);
+        ensure!(disagreements(&h) == 0);
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn reorg_during_confirmation_wait_uses_fresh_independent_evidence() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let read = Rpc::new();
+        let verify = Rpc::new();
+        for rpc in [&read, &verify] {
+            *rpc.head.lock().unwrap() = json!("0x2d3f773");
+        }
+        let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
+        h.submit(
+            &format!("/v1/quotes/{}/transactions", h.quote_id),
+            Some(&h.key),
+            json!({"transaction_hash":TX}),
+        )
+        .await?;
+        let (cancel, _worker) = h.worker(&db.app_pool);
+        wait_until(async || Ok(verify.calls.load(Ordering::SeqCst) >= 2)).await?;
+        ensure!(deposits(&db.app_pool).await? == 0);
+        let new_hash = format!("0x{}", "88".repeat(32));
+        for rpc in [&read, &verify] {
+            ensure!(!rpc.methods.lock().unwrap().iter().any(|method| matches!(
+                method.as_str(),
+                "eth_getBlockByHash" | "eth_getTransactionByHash"
+            )));
+        }
+        reinclude(&read, &new_hash);
+        *read.head.lock().unwrap() = json!("0x2d3f77a");
+        // Verify still sees the old inclusion and shallow head until it catches up.
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        ensure!(disagreements(&h) == 0);
+        reinclude(&verify, &new_hash);
+        *verify.head.lock().unwrap() = json!("0x2d3f77a");
+        wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+        cancel.cancel();
+        let (hash, amount, signature): (String, String, bool) = sqlx::query_as(
+            "SELECT block_hash,amount_atomic::text,dual_verified_at=created_at FROM deposits",
+        )
+        .fetch_one(&db.app_pool)
+        .await?;
+        ensure!(hash == new_hash && amount == "23" && signature);
+        ensure!(disagreements(&h) == 0);
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+fn reinclude(rpc: &Rpc, hash: &str) {
+    let mut receipt = rpc.receipt.lock().unwrap();
+    receipt["blockHash"] = json!(hash);
+    receipt["logs"][0]["blockHash"] = json!(hash);
+    receipt["logs"][0]["data"] = json!(format!("0x{:064x}", 23));
+    rpc.transaction.lock().unwrap()["blockHash"] = json!(hash);
+    rpc.block.lock().unwrap()["hash"] = json!(hash);
+}
+
+#[tokio::test]
+async fn independent_evidence_disagreement_at_depth_alerts_without_recording() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let verify = Rpc::new();
+        verify.transaction.lock().unwrap()["nonce"] = json!("0xffff");
+        let h = harness(&db.app_pool, Rpc::new(), verify).await?;
+        h.submit(
+            &format!("/v1/quotes/{}/transactions", h.quote_id),
+            Some(&h.key),
+            json!({"transaction_hash":TX}),
+        )
+        .await?;
+        let (cancel, _worker) = h.worker(&db.app_pool);
+        wait_until(async || Ok(disagreements(&h) == 1)).await?;
+        cancel.cancel();
+        ensure!(deposits(&db.app_pool).await? == 0);
+        ensure!(
+            sqlx::query_scalar::<_, bool>("SELECT through_block=0 FROM chain_coverage")
+                .fetch_one(&db.app_pool)
+                .await?
+        );
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn readiness_loss_after_dequeue_parks_then_resumes_without_spending_budget() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let verify = Rpc::new();
+        let h = harness(&db.app_pool, Rpc::new(), verify.clone()).await?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&db.app_url)
+            .await?;
+        let held = pool.begin().await?;
+        h.submit(
+            &format!("/v1/quotes/{}/transactions", h.quote_id),
+            Some(&h.key),
+            json!({"transaction_hash":TX}),
+        )
+        .await?;
+        let (cancel, _worker) = h.worker(&pool);
+        wait_until(async || Ok(h.queue.pending() == 0)).await?;
+        fail_endpoint(&h.verify, &verify).await?;
+        held.rollback().await?;
+        wait_until(async || Ok(h.queue.pending() == 1)).await?;
+        ensure!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM daily_budgets WHERE name='hints'")
+                .fetch_one(&db.app_pool)
+                .await?
+                == 0
+        );
+        verify.failure.store(false, Ordering::SeqCst);
+        h.verify.latest_head().await?;
+        wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+        cancel.cancel();
+        pool.close().await;
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn frozen_chain_defers_before_claiming_budget_or_reading_rpc() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let read = Rpc::new();
+        let verify = Rpc::new();
+        let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
+        topup::db::chain_reads::freeze(&db.app_pool, CHAIN, "hint-test").await?;
+        h.submit(
+            &format!("/v1/quotes/{}/transactions", h.quote_id),
+            Some(&h.key),
+            json!({"transaction_hash":TX}),
+        )
+        .await?;
+        let (cancel, _worker) = h.worker(&db.app_pool);
+        wait_until(async || Ok(h.queue.pending() == 0)).await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.cancel();
+        ensure!(read.calls.load(Ordering::SeqCst) == 1 && verify.calls.load(Ordering::SeqCst) == 1);
+        ensure!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM daily_budgets WHERE name='hints'")
+                .fetch_one(&db.app_pool)
+                .await?
+                == 0
+        );
+        ensure!(deposits(&db.app_pool).await? == 0);
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn same_ingress_peer_does_not_globally_limit_hints_but_object_credentials_do() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        let (customer_id, route): (Uuid, String) =
+            sqlx::query_as("SELECT customer_id,route FROM quotes LIMIT 1")
+                .fetch_one(&db.app_pool)
+                .await?;
+        for index in 1_u8..=25 {
+            let address = seed::insert_address(
+                &db.app_pool,
+                &NewAddress {
+                    id: Uuid::new_v4(),
+                    customer_id,
+                    chain_id: CHAIN,
+                    route: route.clone(),
+                    salt: B256::repeat_byte(index),
+                    address: Address::repeat_byte(index),
+                },
+            )
+            .await?;
+            let id = topup::ids::format(topup::ids::QUOTE, address.quote_id.unwrap());
+            h.submit(
+                &format!("/v1/quotes/{id}/transactions"),
+                Some(&h.key),
+                json!({"transaction_hash":TX}),
+            )
+            .await?;
+        }
+        ensure!(h.queue.pending() == 25);
+        let path = format!("/v1/quotes/{}/transactions", h.quote_id);
+        for _ in 0..25 {
+            h.submit(&path, Some("invalid"), json!({"transaction_hash":TX}))
+                .await?;
+        }
+        for byte in 30..=33 {
+            h.submit(
+                &path,
+                Some(&h.key),
+                json!({"transaction_hash":format!("{:#x}", B256::repeat_byte(byte))}),
+            )
+            .await?;
+        }
+        ensure!(
+            h.queue.pending() == 28,
+            "only three authenticated hints per object per minute"
+        );
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn hinted_in_window_payment_blocks_cancel_and_cancel_requested_closure() -> Result<()> {
+    for cancel_requested in [false, true] {
+        let Some(db) = TestDatabase::create().await? else {
+            return Ok(());
+        };
+        let result = async {
+            let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+            let (id, account): (Uuid, Uuid) = sqlx::query_as("SELECT id,account_id FROM quotes LIMIT 1").fetch_one(&db.app_pool).await?;
+            sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,expires_at=now()+interval '1 hour'").execute(&db.app_pool).await?;
+            if cancel_requested { sqlx::query("UPDATE quotes SET cancel_requested_at=now(),expires_at=now()-interval '1 second'").execute(&db.app_pool).await?; }
+            h.submit(&format!("/v1/quotes/{}/transactions", h.quote_id), Some(&h.key), json!({"transaction_hash":TX})).await?;
+            let (cancel, _worker) = h.worker(&db.app_pool);
+            wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?; cancel.cancel();
+            if cancel_requested {
+                cover_past_now(&db.app_pool).await?;
+                ensure!(topup::locks::expire_once(&db.app_pool, &h.routes).await? == 0);
+                ensure!(sqlx::query_scalar::<_, bool>("SELECT status='open' AND cancel_requested_at IS NOT NULL FROM quotes").fetch_one(&db.app_pool).await?);
+            } else {
+                ensure!(matches!(topup::locks::cancel(&db.app_pool, &h.routes, topup::tenancy::Scope::new(account, false), &topup::audit::Actor::system("hint-test"), id).await, Err(topup::locks::RateLockError::PendingPayment)));
+            }
+            Ok(())
+        }.await;
+        db.cleanup().await?;
+        result?;
+    }
+    Ok(())
+}
+async fn cover_past_now(pool: &sqlx::PgPool) -> Result<()> {
+    sqlx::query("UPDATE chain_coverage SET through_time=now()+interval '1 second',through_block=through_block+1").execute(pool).await?;
+    sqlx::query("UPDATE addresses SET dual_covered_through=(SELECT through_block FROM chain_coverage WHERE chain_id=$1)").bind(i64::try_from(CHAIN)?).execute(pool).await?;
+    Ok(())
+}
+#[tokio::test]
+async fn late_payment_hint_records_a_positive_fact_without_reopening_or_preventing_expiry()
+-> Result<()> {
+    for already_expired in [false, true] {
+        let Some(db) = TestDatabase::create().await? else {
+            return Ok(());
+        };
+        let result = async {
+            let rpc = Rpc::new();
+            let block_time = i64::from_str_radix(rpc.block.lock().unwrap()["timestamp"].as_str().unwrap().trim_start_matches("0x"), 16)?;
+            let h = harness(&db.app_pool, rpc, Rpc::new()).await?;
+            sqlx::query("UPDATE quotes SET expires_at=to_timestamp($1),status=$2,closed_at=CASE WHEN $3 THEN now() ELSE NULL END")
+                .bind((block_time - 1) as f64).bind(if already_expired { "expired" } else { "open" }).bind(already_expired).execute(&db.app_pool).await?;
+            h.submit(&format!("/v1/quotes/{}/transactions", h.quote_id), Some(&h.key), json!({"transaction_hash":TX})).await?;
+            let (cancel, _worker) = h.worker(&db.app_pool);
+            wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?; cancel.cancel();
+            ensure!(sqlx::query_scalar::<_, bool>("SELECT state='detected' AND dual_verified_at=created_at FROM deposits").fetch_one(&db.app_pool).await?);
+            ensure!(topup::locks::expire_once(&db.app_pool, &h.routes).await? == 0, "hint cannot supply negative coverage");
+            cover_past_now(&db.app_pool).await?;
+            ensure!(topup::locks::expire_once(&db.app_pool, &h.routes).await? == u64::from(!already_expired));
+            ensure!(sqlx::query_scalar::<_, bool>("SELECT status='expired' FROM quotes").fetch_one(&db.app_pool).await?);
+            Ok(())
+        }.await;
+        db.cleanup().await?;
+        result?;
+    }
+    Ok(())
 }

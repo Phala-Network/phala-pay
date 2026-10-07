@@ -200,6 +200,7 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
         families.extend(since.collect());
     }
 
+    families.extend(crate::hints::collect_metrics()?);
     families.extend(super::capacity::collect()?);
     families.extend(super::price_metrics::collect()?);
     families.extend(http.requests.collect());

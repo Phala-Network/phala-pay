@@ -1020,6 +1020,45 @@ pub struct FinalizedReader {
     origins: Mutex<FifoCache<B256, (Address, u64)>>,
 }
 
+/// A freshly fetched receipt bound to the endpoint that fetched it.
+pub struct HintReceipt<'a> {
+    reader: &'a FinalizedReader,
+    receipt: AnyTransactionReceipt,
+    block_number: u64,
+    block_hash: B256,
+}
+impl HintReceipt<'_> {
+    /// Including height, used only to wait for confirmation.
+    pub fn block_number(&self) -> u64 {
+        self.block_number
+    }
+    /// Including hash, useful for tracking re-inclusion without reusing old decision fields.
+    pub fn block_hash(&self) -> B256 {
+        self.block_hash
+    }
+    /// Read this endpoint's header and nonce independently, without reader caches.
+    pub async fn complete(
+        self,
+        recipient: Address,
+        tokens: &[Address],
+    ) -> Result<HintEvidence, ChainError> {
+        self.reader
+            .complete_hint(&self.receipt, recipient, tokens)
+            .await
+    }
+}
+/// Independently decoded decision fields at the confirmed inclusion.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HintEvidence {
+    /// Routed positive transfers to the object's server-derived address.
+    pub transfers: Vec<TransferLog>,
+    block_number: u64,
+    block_hash: B256,
+    status: bool,
+    block_time: DateTime<Utc>,
+    origin: (Address, u64),
+}
+
 /// EIP-2718 type of an OP-stack deposit transaction (specs.optimism.io, "Deposits").
 const DEPOSIT_TX_TYPE: u8 = 0x7e;
 
@@ -1732,51 +1771,72 @@ impl ChainReader for FinalizedReader {
 }
 
 impl FinalizedReader {
-    /// Poll a receipt and independently complete only successful routed transfers to `recipient`.
-    /// `None` means unmined; an empty vector means the hint has no positive candidate.
-    pub async fn hint_transfers(
-        &self,
-        tx_hash: B256,
-        recipient: Address,
-        tokens: &[Address],
-    ) -> Result<Option<Vec<TransferLog>>, ChainError> {
+    /// Poll inclusion without reading decision fields before confirmation. Completion stays bound
+    /// to this reader, so another endpoint cannot complete or reuse its receipt.
+    pub async fn hint_receipt(&self, tx_hash: B256) -> Result<Option<HintReceipt<'_>>, ChainError> {
         let Some(receipt) = self.receipt(tx_hash).await? else {
             return Ok(None);
         };
         if receipt.transaction_hash != tx_hash {
             return Err(ChainError::Reorganized("hint receipt transaction hash"));
         }
-        if !receipt.status() {
-            return Ok(Some(Vec::new()));
-        }
+        let block_number = receipt
+            .block_number
+            .ok_or(ChainError::MissingField("receipt.block_number"))?;
+        let block_hash = receipt
+            .block_hash
+            .ok_or(ChainError::MissingField("receipt.block_hash"))?;
+        Ok(Some(HintReceipt {
+            reader: self,
+            receipt,
+            block_number,
+            block_hash,
+        }))
+    }
+
+    async fn complete_hint(
+        &self,
+        receipt: &AnyTransactionReceipt,
+        recipient: Address,
+        tokens: &[Address],
+    ) -> Result<HintEvidence, ChainError> {
+        let tx_hash = receipt.transaction_hash;
         let mut candidates = Vec::new();
-        for (position, log) in receipt.logs().iter().enumerate() {
-            if is_transfer(log)
-                && let Some(decoded) = decode_transfer_log(log)?
-                && decoded.to == recipient
-                && tokens.contains(&decoded.token)
-            {
-                if log.transaction_hash != Some(tx_hash)
-                    || log.block_number != receipt.block_number
-                    || log.block_hash != receipt.block_hash
+        if receipt.status() {
+            for (position, log) in receipt.logs().iter().enumerate() {
+                if is_transfer(log)
+                    && let Some(decoded) = decode_transfer_log(log)?
+                    && decoded.to == recipient
+                    && tokens.contains(&decoded.token)
                 {
-                    return Err(ChainError::MissingField("hint receipt.log_identity"));
+                    if log.transaction_hash != Some(tx_hash)
+                        || log.block_number != receipt.block_number
+                        || log.block_hash != receipt.block_hash
+                    {
+                        return Err(ChainError::MissingField("hint receipt.log_identity"));
+                    }
+                    let position = u64::try_from(position)
+                        .map_err(|_| ChainError::MissingField("hint receipt position"))?;
+                    candidates.push((position, decoded));
                 }
-                let position = u64::try_from(position)
-                    .map_err(|_| ChainError::MissingField("hint receipt position"))?;
-                candidates.push((position, decoded));
             }
         }
-        if candidates.is_empty() {
-            return Ok(Some(Vec::new()));
-        }
-        let (time, origin) = self.receipt_details(tx_hash, &receipt).await?;
-        Ok(Some(
-            candidates
+        let (time, origin) = self.receipt_details(tx_hash, receipt).await?;
+        Ok(HintEvidence {
+            transfers: candidates
                 .into_iter()
                 .map(|(position, log)| log.complete(position, time, origin))
                 .collect(),
-        ))
+            status: receipt.status(),
+            block_time: time,
+            origin,
+            block_number: receipt
+                .block_number
+                .ok_or(ChainError::MissingField("receipt.block_number"))?,
+            block_hash: receipt
+                .block_hash
+                .ok_or(ChainError::MissingField("receipt.block_hash"))?,
+        })
     }
 
     async fn receipt_details(
