@@ -2,7 +2,7 @@
 //! the swept linkage they drive (design §4, §13).
 
 use serde_json::json;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgExecutor, PgPool, Postgres, Transaction};
 use topup_adapters::chain::evm::FactoryLog;
 use topup_adapters::chain::flush::FactoryEvent;
 use uuid::Uuid;
@@ -11,7 +11,7 @@ use super::types::{address_hex, b256_hex, to_i64};
 
 /// Insert-only factory records must still match complete dual receipt evidence on re-coverage.
 pub(crate) async fn stored_factory_evidence_matches(
-    pool: &PgPool,
+    executor: impl PgExecutor<'_>,
     chain: u64,
     hash: alloy_primitives::B256,
     logs: &[FactoryLog],
@@ -27,7 +27,7 @@ pub(crate) async fn stored_factory_evidence_matches(
     )
     .bind(to_i64(chain, "factory evidence chain")?)
     .bind(b256_hex(hash))
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     for row in rows {
         let position: i64 = row.try_get("log_index")?;

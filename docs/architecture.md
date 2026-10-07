@@ -545,14 +545,15 @@ hash. A conflict freezes the chain. Coverage ends at `e = min(checkpoint, cursor
 Caught-up addresses scan `(cursor, e]`; at most 1,000 lagging addresses backfill from their own
 `dual_covered_through + 1`, or `created_block` when NULL. Every log request must succeed.
 The union of both candidate sets is resolved independently by receipt, transaction and header.
-After taking the chain lock, all active unmarked identities are re-read without trusting their stored
-block numbers, including those inserted by fast discovery during the RPC reads. Independently
-agreed block time and nonce correct an existing `detected` row; canonical receipts beyond the
-address's scanned range wait for a later round. A changed provisional recipient stays with the
-finality reversal/successor flow; that coverage round rolls back all markers and cursors until the
-reversal and successor commit atomically. Historical `reversed` revisions, including unmarked
-N-1 writes, are excluded from re-verification; a dual reversal marks its old revision verified. Differing
-agreed evidence freezes a progressed row.
+Active unmarked identities are read without trusting their stored block numbers. All receipt,
+transaction, factory and boundary-header RPCs run without the chain lock. After taking that
+lock, the scanner re-reads the unmarked ids. New ids trigger verification of the delta with the
+lock released, for at most three commit attempts; changed address or coverage snapshots abort
+the round. Independently agreed block time and nonce correct an existing `detected` row;
+canonical receipts beyond the scanned range wait. A changed provisional recipient uses the
+shared finality reversal/successor transaction before coverage is published. Historical
+`reversed` revisions, including unmarked N-1 writes, are excluded from re-verification; a dual
+reversal marks its old revision verified. Differing agreed evidence freezes a progressed row.
 Factory events are always reverified. Only configured-factory events count.
 
 One transaction writes evidence, dual markers, coverage at `e`, address progress at its actual
@@ -565,7 +566,8 @@ both endpoints. Startup rebases an old cursor above dual coverage. Lowering `cre
 atomically clears its dual marker, lowers the compatibility cursor as needed and clears its time.
 Negative decisions require both chain coverage and the address's own caught-up marker.
 
-Custody reads the full balance vector on both endpoints at the same EIP-1898 canonical hash at
+Scheduled custody runs on the first and every sixth ten-minute reconciliation tick, per chain
+and token route; manual and post-restore checks run immediately. Custody reads the full balance vector on both endpoints at the same EIP-1898 canonical hash at
 `min(checkpoint, coverage)`. Errors and mismatches wait; only dual agreement can report a clean
 ledger or freeze a discrepant chain.
 
@@ -1413,8 +1415,8 @@ stops (§7, the freeze) until an operator lifts it.
 
 Dual coverage (§8) supplies complete log history; reconciliation has no separate missing-deposit
 scan. Custody uses `B = min(checkpoint, chain_coverage.through_block)` only for caught-up
-forwarders, pinned to `B`'s canonical hash. A mismatch is independently reread on verify before
-freezing. Factory events are already dual-verified at the coverage boundary.
+forwarders, pinned to `B`'s canonical hash. Both endpoints must agree on the complete balance vector before concluding the ledger is
+clean or freezing it. Factory events are already dual-verified at the coverage boundary.
 
 A chain block stays until the cause is investigated and signed off. The admin API's
 `POST /v1/admin/reconciliation_blocks/{block_key}/lift {reason}` first runs a fresh dual contract

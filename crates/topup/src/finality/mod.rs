@@ -751,7 +751,7 @@ async fn record_evidence(
 /// rule whole should one ever be pending.
 ///
 /// `successor`, the final transfer now at the deposit's receipt position, is recorded as a new
-/// deposit in the same transaction ([`record_successor`]). Returns `None` when nothing was
+/// deposit in the same transaction ([`reverse_in`]). Returns `None` when nothing was
 /// reversed.
 async fn reverse_deposit(
     pool: &PgPool,
@@ -761,52 +761,35 @@ async fn reverse_deposit(
     mut evidence: Value,
     successor: Option<&TransferLog>,
 ) -> Result<Option<Reversed>, FinalityError> {
-    let Ok(transition) = reverse(deposit.state) else {
-        return Ok(None);
-    };
-    let from = db::state_code(transition.from);
-    let to = db::state_code(transition.to);
+    let chain = chain_routes(routes)
+        .into_iter()
+        .find(|chain| chain.chain.chain_id == chain_id)
+        .ok_or(FinalityError::UnknownChain(chain_id))?;
     let mut transaction = pool.begin().await?;
     db::rpc::guard_in(&mut transaction, chain_id).await?;
-    let owner = sqlx::query_as::<_, (Uuid, bool)>(
-        r#"
-        UPDATE deposits
-        SET state = $3, reason = NULL, lease_token = NULL, lease_until = NULL,
-            next_attempt_at = now(), updated_at = now(), dual_verified_at = now()
-        WHERE id = $1 AND state = $2 AND final_at IS NULL
-        RETURNING account_id, livemode
-        "#,
-    )
-    .bind(deposit.id)
-    .bind(from)
-    .bind(to)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    let Some((account_id, livemode)) = owner else {
-        return Ok(None);
-    };
-    let successor = match successor {
+    let next = match successor {
         Some(transfer) => {
-            record_successor(&mut transaction, routes, chain_id, deposit.id, transfer).await?
+            match db::find_scan_address(&mut *transaction, chain_id, transfer.to).await? {
+                Some(address) if transfer.block_number >= address.created_block => {
+                    Some(resolve_log(transfer.clone(), &address, &chain, Utc::now()))
+                }
+                _ => None,
+            }
         }
         None => None,
     };
-    // A successor paid to the same address takes the quote over: it stays open for the
-    // successor's confirm step, which consumes it if the successor pays it; otherwise it expires
-    // as any quote does once no payment to its address is left unconfirmed (§9). So the quote
-    // does not expire on the way, and the merchant sees no `quote.expired` before the credit.
-    if let (Some(id), Some(evidence)) = (successor, evidence.as_object_mut()) {
-        evidence.insert("successor_deposit_id".to_owned(), json!(id));
-    }
-    insert_transition(
+    let Some((account_id, livemode, successor)) = reverse_in(
         &mut transaction,
         deposit.id,
-        from,
-        to,
+        deposit.state,
         deposit.attempt,
-        &evidence,
+        &mut evidence,
+        next.as_ref(),
     )
-    .await?;
+    .await?
+    else {
+        return Ok(None);
+    };
     let scope = Scope::new(account_id, livemode);
     let pending_refunds: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM refunds WHERE deposit_id = $1 AND status = 'pending' AND tx_hash IS NULL \
@@ -825,12 +808,10 @@ async fn reverse_deposit(
         let event = NewOutboxEvent::system(Uuid::new_v4(), "refund.updated", scope, object);
         db::enqueue_in(&mut transaction, routes, &event, Some(&before)).await?;
     }
-    sqlx::query("UPDATE quotes SET consumed_by=NULL,status='open',exposure_reserved=true,closed_at=NULL WHERE consumed_by=$1")
-        .bind(deposit.id).execute(&mut *transaction).await?;
     // Rendered last, so the object shows the deposit, its refunds, and its quote as the reversal
     // leaves them.
     if matches!(
-        transition.from,
+        deposit.state,
         DepositState::Credited | DepositState::Rejected
     ) {
         let event = NewOutboxEvent::system(
@@ -845,35 +826,59 @@ async fn reverse_deposit(
     Ok(Some(Reversed { successor }))
 }
 
-/// Records `transfer`, final on both providers at the receipt position of `replaces`, as a new
-/// deposit exactly as the scanner would, when it pays an issued address at or after the address's
-/// creation block; returns its id. The old deposit, reversed earlier in `transaction`, no longer
-/// holds the position, so the new one takes the next revision (`identity::deposit_revision_id`)
-/// and goes through the pump like any other: the scanners and the reconciler read it while the
-/// old deposit held the position and recorded nothing, and read it again only as a duplicate.
-async fn record_successor(
+/// Shared DB-only reversal boundary. The caller holds the chain lock and commits the
+/// reversal, canonical successor, quote reopening and any coverage in one transaction.
+/// Delivered-credit callers also enqueue their refund and reversal events before committing.
+pub(crate) async fn reverse_in(
     transaction: &mut Transaction<'_, Postgres>,
-    routes: &RouteSet,
-    chain_id: u64,
-    replaces: Uuid,
-    transfer: &TransferLog,
-) -> Result<Option<Uuid>, FinalityError> {
-    let Some(address) = db::find_scan_address(&mut **transaction, chain_id, transfer.to).await?
-    else {
+    id: Uuid,
+    state: DepositState,
+    attempt: i32,
+    evidence: &mut Value,
+    next: Option<&db::NewDeposit>,
+) -> Result<Option<(Uuid, bool, Option<Uuid>)>, sqlx::Error> {
+    let Ok(transition) = reverse(state) else {
         return Ok(None);
     };
-    if transfer.block_number < address.created_block {
-        return Ok(None);
-    }
-    let chain = chain_routes(routes)
-        .into_iter()
-        .find(|chain| chain.chain.chain_id == chain_id)
-        .ok_or(FinalityError::UnknownChain(chain_id))?;
-    let deposit = resolve_log(transfer.clone(), &address, &chain, Utc::now());
-    Ok(
-        db::insert_scanned_deposit_in(transaction, &deposit, Evidence::Successor { replaces })
-            .await?,
+    let from = db::state_code(transition.from);
+    let to = db::state_code(transition.to);
+    let owner = sqlx::query_as::<_, (Uuid, bool)>(
+        "UPDATE deposits SET state=$3,reason=NULL,lease_token=NULL,lease_until=NULL, \
+         next_attempt_at=now(),updated_at=now(),dual_verified_at=now() \
+         WHERE id=$1 AND state=$2 AND final_at IS NULL RETURNING account_id,livemode",
     )
+    .bind(id)
+    .bind(from)
+    .bind(to)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some((account, livemode)) = owner else {
+        return Ok(None);
+    };
+    let successor = match next {
+        Some(deposit) => {
+            db::insert_scanned_deposit_in(
+                transaction,
+                deposit,
+                Evidence::Successor { replaces: id },
+            )
+            .await?
+        }
+        None => None,
+    };
+    if let Some(next) = successor {
+        sqlx::query("UPDATE deposits SET dual_verified_at=now() WHERE id=$1")
+            .bind(next)
+            .execute(&mut **transaction)
+            .await?;
+        if let Some(object) = evidence.as_object_mut() {
+            object.insert("successor_deposit_id".into(), json!(next));
+        }
+    }
+    insert_transition(transaction, id, from, to, attempt, evidence).await?;
+    sqlx::query("UPDATE quotes SET consumed_by=NULL,status='open',exposure_reserved=true,closed_at=NULL WHERE consumed_by=$1")
+        .bind(id).execute(&mut **transaction).await?;
+    Ok(Some((account, livemode, successor)))
 }
 
 async fn insert_transition(

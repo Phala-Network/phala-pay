@@ -2,7 +2,7 @@
 mod support;
 
 use alloy_primitives::{Address, B256, U256};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex};
 use support::{
@@ -40,6 +40,8 @@ struct Reader {
     factory_reads: Mutex<usize>,
     header_reads: Mutex<Vec<u64>>,
     logs_gate: Option<(Arc<Notify>, Arc<Notify>)>,
+    receipt_gate: Option<(Arc<Notify>, Arc<Notify>)>,
+    header_gate: Option<(u64, Arc<Notify>, Arc<Notify>)>,
 }
 impl Reader {
     fn new(head: u64) -> Self {
@@ -56,6 +58,8 @@ impl Reader {
             factory_reads: Mutex::new(0),
             header_reads: Mutex::new(Vec::new()),
             logs_gate: None,
+            receipt_gate: None,
+            header_gate: None,
         }
     }
 }
@@ -73,6 +77,12 @@ impl ChainReader for Reader {
         self.finalized_head().await
     }
     async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        if let Some((at, started, resume)) = &self.header_gate
+            && *at == number
+        {
+            started.notify_one();
+            resume.notified().await;
+        }
         self.header_reads.lock().unwrap().push(number);
         Ok((
             if self.forged_header || self.forged_at == Some(number) {
@@ -134,6 +144,10 @@ impl ChainReader for Reader {
         Ok(self.factory.clone())
     }
     async fn receipt_transfer(&self, tx: B256, position: u64) -> Result<ReceiptLookup, ChainError> {
+        if let Some((started, resume)) = &self.receipt_gate {
+            started.notify_one();
+            resume.notified().await;
+        }
         *self.receipt_reads.lock().unwrap() += 1;
         Ok(match &self.receipt {
             Some(log) if log.tx_hash == tx && log.receipt_log_index == position => {
@@ -455,6 +469,66 @@ async fn coverage_requeries_fast_inserts_after_taking_the_chain_lock() -> Result
 }
 
 #[tokio::test]
+async fn slow_rpc_does_not_hold_chain_lock_during_initialization_or_coverage() -> Result<()> {
+    for initializing in [true, false] {
+        with_database(|d| {
+            Box::pin(async move {
+                let address = address(d, 100).await?;
+                let started = Arc::new(Notify::new());
+                let resume = Arc::new(Notify::new());
+                let mut read = Reader::new(200);
+                let mut verify = Reader::new(200);
+                if initializing {
+                    read.header_gate = Some((99, started.clone(), resume.clone()));
+                } else {
+                    scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+                    read.logs.push(transfer(&address, 100));
+                    read.receipt = Some(transfer(&address, 100));
+                    verify.receipt = read.receipt.clone();
+                    read.receipt_gate = Some((started.clone(), resume.clone()));
+                }
+                let chain = chain();
+                let scanner = async {
+                    if initializing {
+                        scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+                    } else {
+                        scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 1).await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                };
+                let issuance = async {
+                    started.notified().await;
+                    let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                        let mut tx = d.app_pool.begin().await?;
+                        let admitted = db::chain_reads::admit_address(&mut tx, 1).await?;
+                        tx.rollback().await?;
+                        Ok::<_, sqlx::Error>(admitted)
+                    })
+                    .await;
+                    // Release even when a mutation causes a timeout, so DB cleanup can finish.
+                    resume.notify_one();
+                    outcome
+                };
+                let (scan, admission) = tokio::join!(scanner, issuance);
+                scan?;
+                let admitted = admission.context("slow RPC blocked the chain issuance lock")??;
+                ensure!(
+                    admitted
+                        == if initializing {
+                            db::chain_reads::AddressAdmission::NotReady
+                        } else {
+                            db::chain_reads::AddressAdmission::Admitted
+                        }
+                );
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn changed_provisional_recipient_reverses_before_successor_coverage() -> Result<()> {
     for (tracked, permanent) in [(true, false), (false, false), (true, true), (false, true)] {
         with_database(|d| {
@@ -510,16 +584,11 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
                     );
                     return Ok(());
                 }
-                ensure!(matches!(
-                    scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await,
-                    Err(scanner::ScannerError::SnapshotChanged)
-                ));
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
                 let id = topup_core::identity::deposit_id(1, old.tx_hash, 0);
-                let provisional = db::get_deposit(&d.app_pool, id).await?.unwrap();
-                ensure!(
-                    provisional.state == topup_core::deposit::DepositState::Detected
-                        && provisional.address_id == original.id
-                );
+                let original_row = db::get_deposit(&d.app_pool, id).await?.unwrap();
+                ensure!(original_row.state == topup_core::deposit::DepositState::Reversed);
+                ensure!(marker(d, other.id).await? == Some(200));
                 let watch = topup::finality::FinalityWatch::single(
                     d.app_pool.clone(),
                     Arc::new(routes()),
@@ -527,11 +596,7 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
                     read,
                     verify,
                 );
-                let stats = watch.watch_once(1).await?;
-                ensure!(
-                    stats.reversed == 1,
-                    "provisional recipient was not handed to finality: {stats:?}; tracked={tracked}"
-                );
+                ensure!(watch.watch_once(1).await?.reversed == 0);
                 let mut read = Reader::new(201);
                 let mut verify = Reader::new(201);
                 read.receipt = Some(canonical.clone());
@@ -564,7 +629,8 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
 }
 
 #[tokio::test]
-async fn pending_recipient_successor_holds_expiry_and_cancel_until_finality() -> Result<()> {
+async fn recipient_successor_and_coverage_commit_atomically_before_expiry_or_cancel() -> Result<()>
+{
     for cancelled in [false, true] {
         with_database(|d| {
             Box::pin(async move {
@@ -589,32 +655,24 @@ async fn pending_recipient_successor_holds_expiry_and_cancel_until_finality() ->
                 read.receipt = Some(canonical.clone());
                 verify.receipt = Some(canonical.clone());
 
-                let coverage = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await;
-                // Run the real expiry/cancel worker before finality has recorded B's payment.
-                topup::locks::expire_once(&d.app_pool, &routes()).await?;
-                let quote: (String, bool, String) = sqlx::query_as(
-                    "SELECT status,exposure_reserved,price_scaled::text FROM quotes WHERE id=$1",
-                ).bind(recipient.quote_id).fetch_one(&d.app_pool).await?;
-                ensure!(quote == ("open".into(), true, "100000000".into()),
-                    "pending successor lost its recipient's reserved quote: {quote:?}; cancelled={cancelled}");
-                ensure!(matches!(coverage, Err(scanner::ScannerError::SnapshotChanged)));
-                ensure!(marker(d, original.id).await?.is_none());
-                ensure!(marker(d, recipient.id).await?.is_none());
-                ensure!(compat(d).await? == (99, Some(time(99))));
-                ensure!(db::chain_reads::coverage(&d.app_pool, 1).await?.unwrap().number == 99);
-                let missing: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM deposits WHERE address_id=$1)")
-                    .bind(recipient.id).fetch_one(&d.app_pool).await?;
-                ensure!(missing, "test did not exercise the pending-successor gap");
-
-                let watch = topup::finality::FinalityWatch::single(
-                    d.app_pool.clone(), Arc::new(routes()), 1, read, verify,
-                );
-                ensure!(watch.watch_once(1).await?.reversed == 1);
-                let mut read = Reader::new(201);
-                let mut verify = Reader::new(201);
-                read.receipt = Some(canonical.clone());
-                verify.receipt = Some(canonical);
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+                let started = Arc::new(Notify::new());
+                let resume = Arc::new(Notify::new());
+                read.receipt_gate = Some((started.clone(),resume.clone()));
+                let chain = chain();
+                let coverage = scanner::coverage_once(&d.app_pool,&read,&verify,&chain,1);
+                let during_rpc = async {
+                    started.notified().await;
+                    let closed = topup::locks::expire_once(&d.app_pool,&routes()).await;
+                    resume.notify_one();
+                    ensure!(closed? == 0, "pending RPC allowed a recipient quote to close");
+                    Ok::<_,anyhow::Error>(())
+                };
+                tokio::try_join!(async { Ok::<_,anyhow::Error>(coverage.await?) },during_rpc)?;
+                // Run expiry immediately after coverage, before the finality worker can run.
+                // B's successor must already protect both expiry and cancellation here.
+                ensure!(marker(d,original.id).await? == Some(200));
+                ensure!(marker(d,recipient.id).await? == Some(200));
+                ensure!(compat(d).await? == (200,Some(time(200))));
                 ensure!(topup::locks::expire_once(&d.app_pool, &routes()).await? == 0);
                 let successor: (String, DateTime<Utc>, bool) = sqlx::query_as(
                     "SELECT state,block_time,dual_verified_at IS NOT NULL FROM deposits WHERE address_id=$1 AND state <> 'reversed'",
