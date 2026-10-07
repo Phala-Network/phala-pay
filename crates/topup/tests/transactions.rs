@@ -147,6 +147,13 @@ struct Harness {
     read_label: String,
     _nodes: Vec<Task>,
 }
+type PositionHistory = (
+    Uuid,
+    String,
+    i64,
+    Option<Uuid>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
 async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<Harness> {
     let read_label = format!("hint-read-{}", Uuid::new_v4());
     let verify_label = format!("hint-verify-{}", Uuid::new_v4());
@@ -442,7 +449,7 @@ async fn reversal_history_written_during_hint_rpc_never_reenters_as_fresh_eviden
                 tx.commit().await?;
                 Ok::<_, anyhow::Error>(())
             }).await.context("hint held the chain lock during RPC")??;
-            let history: Vec<(Uuid, String, i64, Option<Uuid>, Option<chrono::DateTime<chrono::Utc>>)> =
+            let history: Vec<PositionHistory> =
                 sqlx::query_as("SELECT id,state,revision,replaces,dual_verified_at FROM deposits ORDER BY revision")
                     .fetch_all(&db.app_pool).await?;
             h.submit(&path, Some(&h.key), json!({"transaction_hash":TX})).await?;
