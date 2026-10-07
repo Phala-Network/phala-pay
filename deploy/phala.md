@@ -7,6 +7,21 @@ a reference product whose API serves the live demo on Phala's website,
 Another operator needs none of it, and can run the reference product the same way for its own
 rehearsals. The generic procedures are in the [deployment reference](README.md).
 
+## API admission limits
+
+The service sees only the gateway's WireGuard address (`10.4.0.1`) through dstack-ingress's TCP
+forwarding. There is no per-client-IP limiting. Protection consists of authenticated scope
+limits, `client_secret` object limits, the pre-authentication database gate, the global limit of
+256 concurrent API requests, and the Phala gateway's per-app connection cap
+([Service configuration](../docs/configuration.md#api-admission-limits)).
+
+The authentication gate holds at most half the database pool's slots, with a minimum of one.
+Well-formed Bearer keys that cannot acquire a slot within 250 ms get `503 database_busy` with
+`Retry-After: 1`. Malformed or checksum-invalid keys get `401` before taking a slot. Payer reads
+by `client_secret` have their own slots; `/healthz` and admin authentication bypass this gate.
+Real client IPs via PROXY protocol remain future work: enable the dstack gateway's `port_policy`
+option `pp` and change ingress to carry them to the service.
+
 ## Onboarding policy
 
 Phala's instance onboards only Phala's own accounts, as in

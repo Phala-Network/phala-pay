@@ -5,7 +5,7 @@ use super::AppState;
 use super::error::ApiError;
 use super::repository;
 use axum::body::{Body, to_bytes};
-use axum::extract::{ConnectInfo, MatchedPath, Request, State};
+use axum::extract::{MatchedPath, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -13,7 +13,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::VerifyingKey;
-use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Semaphore;
 use topup_adapters::http_signature::{self, PublicOrigin, SignedMessage};
 use zeroize::Zeroizing;
 
@@ -25,25 +27,26 @@ use crate::tenancy::Scope;
 const MAX_SIGNED_BODY_BYTES: usize = 1_048_576;
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 
-/// Applies a small ingress budget before any database-backed authentication work.
-pub async fn ingress_budget(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Response {
-    let source = source_for_request(&request);
-    if !state.rate_limits.allow_source(&source) {
-        return ApiError::too_many_requests().into_response();
-    }
-    next.run(request).await
+/// How long a well-formed API key waits for a database authentication slot.
+const SLOT_WAIT: Duration = Duration::from_millis(250);
+
+/// Both Bearer entry points share slots for authentication's database work only.
+#[derive(Clone)]
+pub(super) struct MerchantAuthState {
+    app: AppState,
+    slots: Arc<Semaphore>,
 }
 
-fn source_for_request(request: &Request) -> String {
-    request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ConnectInfo(address)| address.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_owned())
+impl MerchantAuthState {
+    pub(super) fn new(app: AppState) -> Self {
+        let slots = usize::try_from(app.pool.options().get_max_connections() / 2)
+            .unwrap_or(1)
+            .max(1);
+        Self {
+            app,
+            slots: Arc::new(Semaphore::new(slots)),
+        }
+    }
 }
 
 /// A configured RFC 9421 ed25519 verification key of the admin API.
@@ -107,9 +110,11 @@ impl Merchant {
 /// revoked such keys again and unfrozen the service. This is the service's one freeze gate for
 /// merchant requests: it runs before authorization and the idempotency layer, so a refusal is
 /// neither replayed nor saved, and after the key's form and checksum are checked in memory, so a
-/// request without a well-formed key is refused without a database read.
-pub async fn authenticate_merchant(
-    State(state): State<AppState>,
+/// request without a well-formed key is refused without a database read. Database authentication
+/// holds at most half the pool's slots; waiting more than 250 ms is `503 database_busy` with
+/// `Retry-After: 1`. The slot is released before any handler runs.
+pub(super) async fn authenticate_merchant(
+    State(auth): State<MerchantAuthState>,
     mut request: Request,
     next: Next,
 ) -> Response {
@@ -120,18 +125,25 @@ pub async fn authenticate_merchant(
     if api_keys::check_format(&presented).is_none() {
         return unauthorized(ApiError::api_key_invalid());
     }
-    match crate::restore_mode::is_frozen(&state.pool).await {
-        Ok(false) => {}
-        Ok(true) => return super::restoring(),
-        Err(error) => return ApiError::from(error).into_response(),
-    }
-    let authenticated = match api_keys::authenticate(&state.pool, &presented).await {
-        Ok(Ok(authenticated)) => authenticated,
-        Ok(Err(Rejection::Expired)) => return unauthorized(ApiError::api_key_expired()),
-        Ok(Err(Rejection::Invalid | Rejection::Revoked)) => {
-            return unauthorized(ApiError::api_key_invalid());
+    let state = &auth.app;
+    let authenticated = {
+        let _slot = match tokio::time::timeout(SLOT_WAIT, auth.slots.acquire()).await {
+            Ok(Ok(slot)) => slot,
+            Ok(Err(_)) | Err(_) => return ApiError::pre_auth_database_busy().into_response(),
+        };
+        match crate::restore_mode::is_frozen(&state.pool).await {
+            Ok(false) => {}
+            Ok(true) => return super::restoring(),
+            Err(error) => return ApiError::from(error).into_response(),
         }
-        Err(error) => return ApiError::from(error).into_response(),
+        match api_keys::authenticate(&state.pool, &presented).await {
+            Ok(Ok(authenticated)) => authenticated,
+            Ok(Err(Rejection::Expired)) => return unauthorized(ApiError::api_key_expired()),
+            Ok(Err(Rejection::Invalid | Rejection::Revoked)) => {
+                return unauthorized(ApiError::api_key_invalid());
+            }
+            Err(error) => return ApiError::from(error).into_response(),
+        }
     };
     let scope = authenticated.key.scope();
     // The operator can turn live mode off after issuing live keys (design D12).
@@ -176,8 +188,8 @@ pub async fn authorize(request: Request, next: Next) -> Response {
 /// Passes a request without `Authorization` that carries a `client_secret` query parameter to
 /// the handler without a merchant, which then serves the quote's public view; any other request
 /// must be an authenticated merchant request.
-pub async fn authenticate_merchant_or_client_secret(
-    state: State<AppState>,
+pub(super) async fn authenticate_merchant_or_client_secret(
+    state: State<MerchantAuthState>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -355,25 +367,11 @@ fn header_value<'a>(headers: &'a HeaderMap, name: &'static str) -> Result<&'a st
 
 #[cfg(test)]
 mod tests {
-    use axum::http::Request;
     use std::error::Error;
 
     use ed25519_dalek::SigningKey;
 
     use super::*;
-
-    #[test]
-    fn ingress_source_ignores_spoofed_forwarding_headers_and_requires_peer_info() {
-        let mut request = Request::new(Body::empty());
-        request
-            .headers_mut()
-            .insert("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
-        assert_eq!(source_for_request(&request), "unknown");
-        request.extensions_mut().insert(ConnectInfo(
-            "192.0.2.9:443".parse::<SocketAddr>().expect("peer"),
-        ));
-        assert_eq!(source_for_request(&request), "192.0.2.9");
-    }
 
     fn signed_message<'a>(
         vector: &'a serde_json::Value,

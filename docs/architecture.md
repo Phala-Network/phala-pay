@@ -1047,7 +1047,22 @@ restricted key one it was granted (`api_keys.permissions`; a `write` includes it
 webhook endpoints or resends, webhook keys, or account settings (design, launch hardening). A live key of an account the operator has not
 enabled for live mode is `403 testmode_charges_only`. Requests are rate-limited per account and
 mode in the process, 100 per second live and 25 test, with a 500 per second test-mode ceiling
-across accounts (`429 rate_limit`, `Retry-After: 1`). Every response carries `Request-Id: req_…`,
+across accounts (`429 rate_limit`, `Retry-After: 1`). Before database-backed authentication,
+well-formed, checksum-valid Bearer keys take one of the shared authentication slots, half the
+database pool with a minimum of one. The slot covers the restore freeze check and key lookup and
+is released before the handler runs. Waiting more than 250 ms returns `503 database_busy` with
+`Retry-After: 1`; malformed or checksum-invalid keys return `401` without taking a slot.
+Anonymous `client_secret` reads retain their separate object limits and database slots; health
+checks and admin authentication bypass the authentication gate.
+
+Through dstack-ingress's TCP forwarding, the service sees only the Phala gateway's WireGuard
+address (`10.4.0.1`), so there is no per-client-IP limiting. The authenticated scope limits,
+`client_secret` object limits, authentication database gate, global 256-request concurrency
+limit, and Phala gateway's per-app connection cap protect the service. Real client IPs via PROXY
+protocol are future work, requiring the dstack gateway's `port_policy` option `pp` and a
+corresponding ingress change.
+
+Every response carries `Request-Id: req_…`,
 and an event a request causes records it with the request's `Idempotency-Key`. A request for
 another account's object, or for the same account's object in the other mode, answers `404` as for
 a missing one.
@@ -1326,7 +1341,7 @@ destination is `400 destination_sanctioned`. A reversed deposit is not refundabl
 | 401 | `invalid_request_error` | `signature_replayed` (admin: the signature was already used) |
 | 409 | `idempotency_error` | `idempotency_key_in_use` (a request with the key still runs; retry); the only `409` |
 | 429 | `invalid_request_error` | `rate_limit` (requests per account and mode; reads of a public view by `client_secret`), `customer_rate_limit` (quote creations per minute and deposit address rotations per hour of one customer); each with `Retry-After` |
-| 503 | `api_error` | `unavailable` (no fresh price, database unavailable), `service_maintenance` (planned upgrades pause new mutations; reads continue while the process is up; retry after `Retry-After` with the same `Idempotency-Key`, since the request has not executed), `service_restoring` (every merchant request with an API key, reads included, while the service is frozen after a restore, §14; with `Retry-After`) |
+| 503 | `api_error` | `unavailable` (no fresh price, database unavailable), `database_busy` (API-key authentication slots full; retry after `Retry-After: 1`), `service_maintenance` (planned upgrades pause new mutations; reads continue while the process is up; retry after `Retry-After` with the same `Idempotency-Key`, since the request has not executed), `service_restoring` (every merchant request with an API key, reads included, while the service is frozen after a restore, §14; with `Retry-After`) |
 | 400 | `invalid_request_error` | admin only: `restore_not_frozen`, `restore_rescan_incomplete` (§14) |
 | 500 | `api_error` | `internal_error` |
 

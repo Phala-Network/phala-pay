@@ -487,6 +487,7 @@ fn router_with_pause(
 }
 
 fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Router, ApiDocs) {
+    let merchant_auth = auth::MerchantAuthState::new(state.clone());
     // Every merchant POST is idempotent by `Idempotency-Key`; authentication and then
     // authorization run first, so a replay needs the route's permission too.
     let merchant = merchant_routes()
@@ -499,14 +500,14 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
         // Also the freeze gate: while frozen after a restore, a request with a key is refused
         // here, before authorization and the idempotency layer.
         .route_layer(middleware::from_fn_with_state(
-            state.clone(),
+            merchant_auth.clone(),
             auth::authenticate_merchant,
         ));
     // A quote and a deposit address are also readable without an API key by a `client_secret`.
     let client_secret = client_secret_routes()
         .route_layer(middleware::from_fn(auth::authorize))
         .route_layer(middleware::from_fn_with_state(
-            state.clone(),
+            merchant_auth,
             auth::authenticate_merchant_or_client_secret,
         ));
     let admin = admin_routes()
@@ -515,12 +516,7 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
             state.clone(),
             auth::authenticate_admin,
         ));
-    let merchant = merchant
-        .merge(client_secret)
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::ingress_budget,
-        ));
+    let merchant = merchant.merge(client_secret);
     router_from_routes(state, pause, merchant, admin)
 }
 
