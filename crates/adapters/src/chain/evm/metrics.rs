@@ -16,6 +16,58 @@ use tower::{Layer, Service};
 
 tokio::task_local! {
     static HTTP_STATUS: std::cell::Cell<Option<u16>>;
+    static TASK_CALLS: TaskCalls;
+}
+
+/// Hard transport-level limits of one hint task, including retries and batch items.
+#[derive(Clone)]
+struct TaskCalls {
+    read: CallLabels,
+    verify: CallLabels,
+    remaining: Arc<Mutex<(usize, usize)>>,
+}
+
+impl TaskCalls {
+    fn claim(&self, labels: &CallLabels, count: usize) -> bool {
+        let mut remaining = self
+            .remaining
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if remaining.0 == 0 || remaining.1 == 0 {
+            return false;
+        }
+        let side = if *labels == self.read {
+            &mut remaining.0
+        } else if *labels == self.verify {
+            &mut remaining.1
+        } else {
+            return false;
+        };
+        if let Some(left) = side.checked_sub(count) {
+            *side = left;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Scope the whole task's actual transport calls; exhaustion sends no further requests.
+pub(super) async fn task_call_limits<T>(
+    read: CallLabels,
+    verify: CallLabels,
+    work: impl Future<Output = T>,
+) -> T {
+    TASK_CALLS
+        .scope(
+            TaskCalls {
+                read,
+                verify,
+                remaining: Arc::new(Mutex::new((12, 8))),
+            },
+            work,
+        )
+        .await
 }
 
 /// Preserve a response's HTTP status across Alloy's JSON-RPC error-body decoding.
@@ -250,6 +302,13 @@ where
             });
         }
         let methods: Vec<_> = request.method_names().map(bounded_method).collect();
+        if TASK_CALLS.try_with(|budget| budget.claim(&self.labels, methods.len())) == Ok(false) {
+            return Box::pin(async {
+                Err(alloy::transports::TransportErrorKind::non_retryable_str(
+                    "hint task RPC call limit exhausted",
+                ))
+            });
+        }
         for method in &methods {
             record(&self.labels, method);
         }
