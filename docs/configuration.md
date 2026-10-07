@@ -31,6 +31,12 @@ limits are built in, with no new configuration setting.
 Carrying real client IPs via PROXY protocol is future work: it requires the dstack gateway's
 `port_policy` option `pp` and a corresponding ingress change.
 
+Transaction-hash hints have no per-IP limit. Their controls are credential-gated per-object
+limits of 3/minute and 10/day, a hard cap of 150 tasks per environment per UTC day, and at most
+four tasks in flight. Merchant-key hints share the database authentication gate above.
+dstack-ingress uses HAProxy in TCP mode and forwards to `topup:8080` without PROXY protocol;
+client-supplied forwarding headers are not trusted.
+
 ## Commands
 
 `topup --help` lists them; each takes `--help`.
@@ -48,15 +54,6 @@ Carrying real client IPs via PROXY protocol is future work: it requires the dsta
 | `topup heartbeat` | Records the RPO heartbeat every `--interval-s` seconds (60 by default). |
 | `topup healthcheck` | Exits zero only when the local API answers `GET /healthz` with `200`. |
 | `topup restore-check --config FILE [--report FILE]` | Validates a restored database and runs the post-restore reconciliation ([deploy/RESTORE.md](../deploy/RESTORE.md)). |
-
-## API admission limits
-
-dstack-ingress uses HAProxy in TCP mode and forwards to `topup:8080` without PROXY protocol.
-The service sees the ingress container's peer IP; no per-client IP is available. Client-supplied
-forwarding headers are not trusted. Transaction-hash hints therefore have no per-IP limit.
-Their controls are credential-gated per-object limits of 3/minute and 10/day, a hard cap of
-150 tasks per environment per UTC day, and at most four tasks in flight.
-Merchant-key hints pass through the shared merchant authentication entry point.
 
 ## The configuration file
 
