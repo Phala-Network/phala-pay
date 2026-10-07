@@ -20,6 +20,12 @@ describe("parseClientQuote", () => {
     expect(parseClientQuote(JSON.parse(JSON.stringify(quote())))).toEqual(quote());
   });
 
+  it.each([null, 1_790_410_499])("preserves the deferred cancellation request %j while still open", (requestedAt) => {
+    const pending = { ...quote(), cancel_requested_at: requestedAt };
+    expect(parseClientQuote(pending)).toEqual(pending);
+    expect(parseClientQuote(pending).status).toBe("open");
+  });
+
   it.each([
     ["a non-object", null],
     ["an unknown status", { ...quote(), status: "consumed" }],
@@ -29,6 +35,8 @@ describe("parseClientQuote", () => {
     ["fractional cents", { ...quote(), amount: 25.5 }],
     ["fractional credited cents", { ...quote(), amount_credited: 10.5 }],
     ["no typical credit time", { ...quote(), typical_credit_seconds: undefined }],
+    ["a malformed cancellation time", { ...quote(), cancel_requested_at: "now" }],
+    ["a fractional cancellation time", { ...quote(), cancel_requested_at: 1.5 }],
   ])("rejects %s", (_, value) => {
     expect(() => parseClientQuote(value)).toThrow(TypeError);
   });
