@@ -642,7 +642,7 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
         let pool=&database.app_pool;
         let seed=seed_account(pool).await?;
         let route=screen_route("screen",Address::repeat_byte(9));
-        let alerter=topup::pump::AgeAlerter::new(pool.clone(),topup::pump::AgeAlertConfig::from_routes(&[route.clone()])?,StdDuration::from_secs(1));
+        let alerter=topup::pump::AgeAlerter::new(pool.clone(),topup::pump::AgeAlertConfig::from_routes(std::slice::from_ref(&route))?,StdDuration::from_secs(1));
         let mut number=0;let mut held=None;
         for a in [SanctionsAnswer::Clear,SanctionsAnswer::Sanctioned,SanctionsAnswer::Unavailable] {
             for b in [SanctionsAnswer::Clear,SanctionsAnswer::Sanctioned,SanctionsAnswer::Unavailable] {
