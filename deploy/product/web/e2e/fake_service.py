@@ -963,6 +963,9 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
         def do_POST(self) -> None:
             self.dispatch(self.post)
 
+        def do_OPTIONS(self) -> None:
+            self.send(HTTPStatus.ACCEPTED, {}, cors=True)
+
         def dispatch(self, route: Any) -> None:
             url = urlsplit(self.path)
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
@@ -1057,6 +1060,22 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
         def post(self, path: str, parts: list[str], _query: dict[str, str]) -> None:
             length = int(self.headers.get("content-length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
+            if (
+                parts[:2] in (["v1", "quotes"], ["v1", "deposit_addresses"])
+                and len(parts) == 4
+                and parts[3] == "transactions"
+            ):
+                # A hint acknowledges submission only; the stand-in's scanner records payments.
+                self.send(
+                    HTTPStatus.ACCEPTED,
+                    {
+                        "object": "transaction_submission",
+                        "transaction_hash": body.get("transaction_hash", ""),
+                        "status": "received",
+                    },
+                    cors=True,
+                )
+                return
             if parts[:2] == ["_test", "deposits"] and parts[3:] == ["reverse"]:
                 self.send(HTTPStatus.OK, _public(fake.reverse(parts[2])))
                 return
@@ -1108,6 +1127,8 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
             self.send_header("request-id", "req_" + uuid.uuid4().hex)
             if cors:
                 self.send_header("access-control-allow-origin", "*")
+                self.send_header("access-control-allow-methods", "POST, OPTIONS")
+                self.send_header("access-control-allow-headers", "Content-Type")
             self.send_header("content-length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
