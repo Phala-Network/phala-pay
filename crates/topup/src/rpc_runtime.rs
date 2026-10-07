@@ -263,12 +263,12 @@ pub const RECOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 /// A transport success never bypasses a failed independent contract check or Infura's quota halt.
 pub async fn probe_not_ready(pair: &crate::chain_rpc::ChainRpc) {
     let probe = async |client: &EvmClient| {
-        if !client.ready() {
-            if let Err(error) = client.latest_head().await {
-                tracing::warn!(tags.alert="TopupRpcEndpointUnavailable", chain_id=?client.chain_id(),
-                    provider=%client.endpoint().provider().unwrap_or_default(), %error,
-                    "endpoint recovery head probe failed");
-            }
+        if !client.ready()
+            && let Err(error) = client.latest_head().await
+        {
+            tracing::warn!(tags.alert="TopupRpcEndpointUnavailable", chain_id=?client.chain_id(),
+                provider=%client.endpoint().provider().unwrap_or_default(), %error,
+                "endpoint recovery head probe failed");
         }
     };
     tokio::join!(probe(&pair.read), probe(&pair.verify));
