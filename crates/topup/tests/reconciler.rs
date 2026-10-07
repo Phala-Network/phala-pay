@@ -843,7 +843,7 @@ async fn loop_respects_cancellation() -> Result<()> {
 }
 
 #[tokio::test]
-async fn scheduled_custody_reads_both_sources_only_every_sixth_round() -> Result<()> {
+async fn scheduled_custody_reads_both_sources_at_most_hourly() -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
         let seed = seed_identity(&pool, &route, 85).await?;
@@ -868,44 +868,40 @@ async fn scheduled_custody_reads_both_sources_only_every_sixth_round() -> Result
         chain.fail_derivation.store(true, Ordering::SeqCst);
         let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?);
         let cancellation = CancellationToken::new();
-        let task = tokio::spawn({
-            let reconciler = reconciler.clone();
+        tokio::time::pause();
+        // Keep the runtime runnable while PostgreSQL responds, so paused time advances
+        // only at the explicit boundaries below, rather than automatically during DB I/O.
+        let clock_guard = tokio::spawn({
             let cancellation = cancellation.clone();
-            async move {
-                reconciler
-                    .run_loop(
-                        StdDuration::from_millis(50),
-                        topup::scanner::FinalizedHeads::default(),
-                        cancellation,
-                    )
-                    .await;
-            }
+            async move { while !cancellation.is_cancelled() { tokio::task::yield_now().await; } }
+        });
+        let task = tokio::spawn({
+            let reconciler = reconciler.clone(); let cancellation = cancellation.clone();
+            async move { reconciler.run_loop(StdDuration::from_secs(300),topup::scanner::FinalizedHeads::default(),cancellation).await; }
         });
         let result = async {
-            for tick in 1..=8 {
-                tokio::time::timeout(
-                    StdDuration::from_secs(10),
-                    chain.derivation_started.notified(),
-                )
-                .await?;
-                // Each notification begins a round, after the preceding one has completed.
-                if (2..=7).contains(&tick) {
-                    ensure!(
-                        chain.balance_reads.lock().unwrap().len() == 2,
-                        "custody ran more often than every sixth round at tick {tick}"
-                    );
-                } else if tick == 8 {
-                    ensure!(
-                        chain.balance_reads.lock().unwrap().len() == 4,
-                        "hourly dual custody did not resume"
-                    );
+            for tick in 1..=14 {
+                let deadline = std::time::Instant::now() + StdDuration::from_secs(10);
+                loop {
+                    tokio::select! {
+                        () = chain.derivation_started.notified() => break,
+                        () = tokio::task::yield_now() => ensure!(std::time::Instant::now() < deadline,"reconciliation did not reach tick {tick}"),
+                    }
                 }
+                // A five-minute regular cadence still has only one dual snapshot before
+                // the hour, and a second one at the hour. Each notification starts a round.
+                if (2..=13).contains(&tick) {
+                    ensure!(chain.balance_reads.lock().unwrap().len()==2,
+                        "custody ran more often than hourly at tick {tick}");
+                } else if tick==14 {
+                    ensure!(chain.balance_reads.lock().unwrap().len()==4,
+                        "hourly dual custody did not resume");
+                }
+                tokio::time::advance(StdDuration::from_secs(300)).await;
             }
-            Ok::<_, anyhow::Error>(())
-        }
-        .await;
-        cancellation.cancel();
-        task.await?;
+            Ok::<_,anyhow::Error>(())
+        }.await;
+        cancellation.cancel(); tokio::time::resume(); task.await?; clock_guard.await?;
         result
     })
     .await

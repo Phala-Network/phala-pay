@@ -1,7 +1,7 @@
 //! Periodic custody and credit reconciliation.
 //!
-//! Regular ledger checks run each round; scheduled dual custody runs every sixth ten-minute
-//! tick, independently per chain and token route. Per-deposit failures are
+//! Regular ledger checks run each round; scheduled dual custody runs at most once per hour,
+//! independently per chain and token route. Per-deposit failures are
 //! recorded as findings; a check that cannot complete is reported in
 //! [`ReconciliationReport::failed_checks`] and withholds the round heartbeat.
 //!
@@ -392,13 +392,17 @@ impl Reconciler {
         let mut ticks = interval(every);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut reconciled: Option<RoundHeads> = None;
-        let mut round = 0_u64;
+        let custody_rounds = Duration::from_secs(3_600)
+            .as_nanos()
+            .div_ceil(every.as_nanos())
+            .max(1);
+        let mut round = 0_u128;
         loop {
             tokio::select! {
                 () = cancellation.cancelled() => return,
                 _ = ticks.tick() => {}
             }
-            let custody_due = round.is_multiple_of(6);
+            let custody_due = round.is_multiple_of(custody_rounds);
             round = round.wrapping_add(1);
             let published = self
                 .chains

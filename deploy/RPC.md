@@ -43,9 +43,10 @@ Fast discovery runs every 60 seconds. Dual finalized coverage runs every ten min
 3,000 blocks normally and 19,200 every sixth round. Address history is backfilled separately in
 chunks of at most 1,000 addresses. A candidate is provisional until both endpoints agree on
 receipt status, transaction, inclusion, log position and contents, block time, sender and nonce.
-Scheduled custody reads each chain/token route on the first and every sixth ten-minute
-reconciliation tick (at most hourly), on both endpoints at the same canonical hash. Manual
-`reconcile` and post-restore checks run custody immediately. With the 1,000-address cap, a
+Scheduled custody reads each chain/token route on the first reconciliation tick and at most
+once per hour thereafter, independently of the configured reconciliation interval, on both endpoints at the same canonical hash. Manual
+`reconcile`, post-restore checks and process restarts run custody immediately. During steady
+operation, with the 1,000-address cap, a
 nonempty route uses one balance multicall per endpoint: 24 Ankr calls and 24 × 80 = 1,920
 Infura credits per route per day, additional to the approved §5.2 budget. Four route chains
 add 96 Ankr calls and 7,680 Infura credits per day; empty or unsettled ledgers use no balance

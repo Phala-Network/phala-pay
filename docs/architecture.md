@@ -566,8 +566,8 @@ both endpoints. Startup rebases an old cursor above dual coverage. Lowering `cre
 atomically clears its dual marker, lowers the compatibility cursor as needed and clears its time.
 Negative decisions require both chain coverage and the address's own caught-up marker.
 
-Scheduled custody runs on the first and every sixth ten-minute reconciliation tick, per chain
-and token route; manual and post-restore checks run immediately. Custody reads the full balance vector on both endpoints at the same EIP-1898 canonical hash at
+Scheduled custody runs on the first tick and at most once per hour thereafter, independently
+of the reconciliation interval, per chain and token route; manual and post-restore checks run immediately. Custody reads the full balance vector on both endpoints at the same EIP-1898 canonical hash at
 `min(checkpoint, coverage)`. Errors and mismatches wait; only dual agreement can report a clean
 ledger or freeze a discrepant chain.
 
