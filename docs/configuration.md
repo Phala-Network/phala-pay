@@ -167,7 +167,7 @@ application role. Recovery and restore checks require stopped writers.
 | Variable | Read by | Meaning |
 |---|---|---|
 | `DATABASE_URL` | database commands | The login above; its password is in `PGPASSFILE`. |
-| `TOPUP_RPC_*_KEY` | `run`, `reconcile`, `restore-check`, `config check --secrets`, `rpc` | Each member's explicit `sealed_key`, which fills its URL's `{key}`. |
+| `TOPUP_RPC_*_KEY` | `run`, `reconcile`, `restore-check`, `config check --secrets`, `rpc` | Each endpoint's explicit `sealed_key`, which fills its URL's `{key}`. |
 | `DSTACK_APP_DOMAIN`, `TOPUP_ADMIN_PUBLIC_KEY` | `run`, only when named by the flags above | The Phala Cloud template's origin host and admin key. |
 | `SENTRY_DSN` | `run` | Sentry reporting, off while unset or empty ([deploy/README.md, "Sentry"](../deploy/README.md#sentry)). The environment is the file's `environment`; the release is the source commit compiled into the image. |
 
@@ -233,5 +233,9 @@ The staging PHA routes use 300 s TWAP samples with `max_sample_age_s: 900` and
 `max_sample_jump_bps: 1100`. The gap bound retains three sample intervals, tolerating two
 missed samples. The jump bound scales the existing 500 bps per minute by
 √(300/60) under the random-walk assumption, rounded to 1100 bps. Code defaults remain
-180 s and 500 bps; the configured age bound is validated up to 900 s and the jump bound
-up to 2000 bps.
+180 s and 500 bps. Only `livemode: false` routes allow sample ages up to 900 s. Live routes
+retain their original validation bounds: age 60–600 s and jump 1–2000 bps. These are bounds,
+not the defaults. Both modes reject `window_s + max_sample_age_s > 2880 s`: the pinned TWAP
+observation chain is Ethereum (12 s blocks), and Multicall3's `BLOCKHASH` can reach only 256
+blocks. The limit leaves a 16-block margin (240 × 12 s) for the oldest sample. A longer window
+cannot be verified by that contract and is refused at config validation.

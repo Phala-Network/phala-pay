@@ -273,15 +273,16 @@ Deploy `upgrade`, never a runtime setting.
   the contract scripts, by a pull request to Phala Pay and ships in its next release. A chain without a Chainalysis sanctions oracle needs
   `chain.sanctions_oracle`.
 - **Its RPC providers.** Require explicit `rpc` read/verify pairs and
-  company-disjoint reviewed groups. Configure every member URL/credential, shared budget and
-  bounded selection policy in the attested public configuration; keep credentials sealed under
-  the explicit member key names. See [RPC configuration](../deploy/README.md#rpc-providers) and
+  distinct endpoint hosts. Configure each endpoint URL, `sealed_key` and measured `max_log_blocks`
+  in the attested public configuration; keep credentials sealed under their explicit key names. See [RPC configuration](../deploy/README.md#rpc-providers) and
   [the RPC runbook](../deploy/RPC.md) for startup checks, outage recovery and migration.
 
 - **The contracts.** The `ForwarderFactory` has no owner, no roles, and no admin, and is deployed
   deterministically through the Arachnid proxy at `0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747`,
   with its implementation at `0x49F2F1F1a25269Ea0C6FF2AB1C7B09dCBE9c5bA9`, on every chain. Reuse it;
-  `topup run` refuses to start unless the chain holds exactly that code. Check a chain with the
+  A dual-source agreed code mismatch freezes that chain; disagreement or an unavailable endpoint
+  keeps it not-ready. The API and other chains continue. An audited lift requires a fresh passing
+  dual-source check. Check a chain with the
   kit's read-only `deploy/contracts/verify-deployment.sh --rpc NETWORK/a=URL_A --rpc NETWORK/b=URL_B`
   (`NETWORK` from `networks.json`, the URLs with their keys), which compares it with the release's
   reference deployment.

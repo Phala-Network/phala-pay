@@ -65,7 +65,9 @@ coverage-filter and canonical-state capabilities on both endpoints.
 
 Staging PHA samples every 300 seconds with `max_sample_age_s: 900` (three intervals) and
 `max_sample_jump_bps: 1100` (500 × sqrt(300/60), rounded). Defaults for 60-second sampling
-remain 180 seconds and 500 bps. PHA remains production-ineligible.
+remain 180 seconds and 500 bps. The widened age applies only to test routes. The 1,800-second
+window plus 900-second age fits the 2,880-second Ethereum BLOCKHASH bound, leaving a 16-block
+margin within its 256-block reach. PHA remains production-ineligible.
 
 ## Staging reset (HUMAN-ONLY)
 

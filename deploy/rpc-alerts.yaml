@@ -34,6 +34,18 @@ groups:
         annotations:
           summary: "Fresh quote snapshot budget exhausted until UTC midnight"
           runbook: "deploy/runbooks/rpc-health.md"
+      - alert: RpcAddressCapacityWarning
+        expr: topup_issued_addresses / topup_issued_address_cap >= 0.7
+        labels: { severity: warning }
+        annotations:
+          summary: "Historical address count has reached 70% of the cap on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/address-capacity.md"
+      - alert: RpcAddressCapacityCritical
+        expr: topup_issued_addresses / topup_issued_address_cap >= 0.9
+        labels: { severity: critical }
+        annotations:
+          summary: "Historical address count has reached 90% of the cap on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/address-capacity.md"
       - record: topup_rpc_daily_calls
         expr: sum by (provider, chain_id) (increase(topup_rpc_calls_total[1d]))
       - record: topup_rpc_infura_daily_credits

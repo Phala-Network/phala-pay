@@ -44,6 +44,21 @@ keep running; credited facts are never rolled back.
 
 ## Decide
 
+- `contract_code_mismatch` / `TopupContractCodeMismatch`: both endpoints agree factory,
+  implementation or Multicall3 code differs from the reviewed build. Preserve both hashes and
+  the attested route/build. Treat as a configuration or deployment incident; engage Security.
+  Restore the reviewed code/configuration. Disagreement or unavailability alone is not a freeze:
+  it keeps the chain not-ready and retries. The audited lift refuses until a fresh dual check passes.
+- `finalized_checkpoint_conflict` / `TopupFinalizedCheckpointConflict`: both endpoints must
+  re-read the previous checkpoint hash before advancing. Preserve the old hash, both current
+  answers and heights; investigate a finalized fork or provider fault with both providers and
+  Security. Never replace the stored checkpoint manually.
+- `unverified_evidence_mismatch` / `TopupUnverifiedEvidenceMismatch`: an existing deposit past
+  `detected` differs from dual verified canonical decision fields. Preserve its transition
+  evidence and receipt/transaction/header, including time and nonce. Escalate to Engineering,
+  Security and Finance; reconcile delivered effects before an audited lift. Never edit the
+  deposit to match one endpoint.
+
 - Providers disagree about `addressOf` or the balance: [provider disagreement](provider-disagreement.md) first.
 - Factory or implementation differs from the route: configuration or deployment incident; engage
   Security and Finance.
@@ -80,4 +95,4 @@ the chain again.
 ## Done when
 
 A reconciliation round raises no new `address_derivation` or `custody_balance` finding,
-`topup-scanner-<chain_id>` checks in again, and address issuance answers normally.
+`topup-fast-scanner-<chain_id>` and `topup-coverage-scanner-<chain_id>` check in again, and address issuance answers normally.

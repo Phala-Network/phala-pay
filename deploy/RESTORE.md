@@ -458,9 +458,9 @@ newest restored commit with the externally recorded failure instant, never merel
 source heartbeat. `--failure-at` takes that failure instant; the report records it as `failure_at`.
 
 The local drill starts disposable Anvil chains for every configured route, with Sepolia and Base
-Sepolia chain IDs, canonical factories and Multicall3, and local token/oracle fixtures. A/B groups
-use distinct domains and ports over each chain's shared state; all staging RPC members are replaced.
-Ethereum and Base mainnet observation groups use local production-chain-ID Anvils with the
+Sepolia chain IDs, canonical factories and Multicall3, and local token/oracle fixtures. Read/verify endpoints
+use distinct domains and ports over each chain's shared state; all staging endpoints are replaced.
+Ethereum and Base mainnet observation pairs use local production-chain-ID Anvils with the
 CVM rehearsal's shared Chainlink, Uniswap V2, and sequencer fixtures; exchange responses come
 from the same local price stub. Its own invocation sets a 15-second heartbeat cadence.
 The drill requires Foundry v1.8.3 and the pinned contract submodules (`git submodule update --init

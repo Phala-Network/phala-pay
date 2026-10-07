@@ -36,7 +36,7 @@ fail with `401`; `ADMIN_KEY_ID` is its `admin_key.id`, `admin/<Environment>-v1` 
 ```sh
 export BASE_URL="https://pay-api-staging.phala.com"   # the Environment's public_origin
 # The affected route, one of deploy/phala.md's "Staging routes" on staging; Base Sepolia's are
-# CHAIN_ID=84532 with providers base-sepolia-a/-b.
+# CHAIN_ID=84532 with ankr-base-sepolia and infura-base-sepolia.
 export ROUTE=phala-cloud-sepolia-pha-usd CHAIN_ID=11155111
 export RPC_PROVIDER_A_URL=https://provider-a.example RPC_PROVIDER_B_URL=https://provider-b.example
 export FACTORY=0x... IMPLEMENTATION=0x... TOKEN=0x... TREASURY=0x...
@@ -63,21 +63,22 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 
 | Alert, monitor, or symptom | Runbook |
 |---|---|
-| `TopupRpcGroupUnavailable`, `TopupRpcChainFrozen`, `TopupRpcMemberQuarantined`, `TopupRpcMemberCooldown`, `TopupRpcQuotaPressure`, `TopupRpcUnclassifiedError`, `TopupRpcAnchorUnavailable`, `TopupRpcRecoveryUnavailable`, `TopupRpcMetricsRefreshFailed` | [RPC health](rpc-health.md) |
-| `TopupReconciliationMismatch` (`check:address_derivation` or `check:custody_balance`), `400 chain_frozen` | [Chain frozen](chain-frozen.md) |
+| `TopupRpcEndpointUnavailable`, `RpcEndpointUnavailable`, `RpcCoverageLag`, `RpcAddressBackfillLag`, `RpcPriceSnapshotBudgetExhausted`, `RpcInfuraQuotaPressure`, `RpcAnkrQuotaPressure` | [RPC health](rpc-health.md) |
+| `TopupReconciliationMismatch` (`check:address_derivation` or `check:custody_balance`), `TopupContractCodeMismatch`, `TopupFinalizedCheckpointConflict`, `TopupUnverifiedEvidenceMismatch`, `400 chain_frozen` | [Chain frozen](chain-frozen.md) |
 | `TopupReconciliationMismatch` (other `check`), `topup-reconciler` | [Reconciliation mismatch](reconciliation-mismatch.md) |
 | `price-outage` (zero sources, disagreement, depeg, sequencer/grace, stuck valuation) | [Price outage](price-outage.md) |
-| `TopupDepositStateAgeExceeded` (`state:detected` or `state:confirmed`) | [Provider disagreement](provider-disagreement.md), then [Price outage](price-outage.md) |
+| `TopupRpcDisagreement`, `RpcEvidenceDisagreement`, `TopupSanctionsHold`, `TopupDepositStateAgeExceeded` (`state:detected` or `state:confirmed`) | [Provider disagreement](provider-disagreement.md), then [Price outage](price-outage.md) |
+| `TopupAddressCapacity`, `RpcAddressCapacityWarning`, `RpcAddressCapacityCritical`, `422 address_capacity_reached` | [Address capacity](address-capacity.md) |
 | `TopupLockExposureNearCap`, `400 exposure_cap_exceeded` | [Lock exposure near cap](lock-exposure-near-cap.md) |
 | `TopupLockExpiryFailing`, `topup-lock-expiry` | [Lock expiry worker failure](lock-expiry-worker-failure.md) |
-| `topup-scanner-<chain_id>` | [Scanner lag](scanner-lag.md) |
+| `topup-fast-scanner-<chain_id>`, `topup-coverage-scanner-<chain_id>` | [Scanner lag](scanner-lag.md) |
 | `TopupHeartbeatStale`, `TopupTreasuryProgressAge`, `TopupRefundProgressAge`, `TopupCertificateExpiry`, `TopupCertificateProbeFailed`, `TopupBusinessProbeFailed` | [Business health](business-health.md) |
 | `topup-backup` | [Backup age](backup-age.md) |
 | `TopupOutboxBacklog`, `TopupOutboxStalled`, `TopupOutboxInternalFailure`, `topup-outbox-test`, `topup-outbox-live`, `outbox delivery claim failed` or `outbox delivery failed`, daily report `credited_undelivered` or `failing_webhook_endpoints`, a merchant reports missing webhooks or credits | [Outbox backlog](outbox-backlog.md) |
 | `TopupUnsupportedInflows`, rejected funds at the treasury | [Rejected funds at treasury](rejected-funds-at-treasury.md) |
 | `TopupTreasurySanctioned`, a treasury on a sanctions list | [Treasury change, "Sanctioned treasury"](treasury-change.md#sanctioned-treasury) |
 | `TopupDeliveredCreditSanctioned`, a credit delivered before a restore whose sender is now listed | [Reconciliation after a restore, "Sanctioned delivered credit"](restore.md#sanctioned-delivered-credit) |
-| `TopupDepositReversed`, `TopupDepositPendingAfterReorg`, `topup-finality-watch` | [Deposit reversed or pending after a reorg](deposit-reversed.md) |
+| `TopupDepositReversed`, `TopupDepositPendingAfterReorg`, `TopupDepositReversalUnproven`, `topup-finality-watch` | [Deposit reversed or pending after a reorg](deposit-reversed.md) |
 | Merchant reports a secret key exposed or lost, or requests it did not make | [API key compromise and key recovery](api-key-compromise.md) |
 | Unswept credited deposits, a `FlushFailed` target | Not a platform alert: the merchant sweeps with its own wallet, and a target whose transfer failed (a token or treasury refusing it) is the merchant's to resolve ([deploy/README.md, "Sweeping"](../README.md#sweeping)) |
 | Database loss, restore drill | [RESTORE.md](../RESTORE.md) |

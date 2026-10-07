@@ -416,12 +416,15 @@ second notice; `admin GET "/v1/admin/accounts/$ACCOUNT"` shows `status: held` un
 ### Sanctioned delivered credit
 
 `TopupDeliveredCreditSanctioned` names a deposit whose credit was delivered before the restore and
-whose sender a sanctions list now names. That is compliance, not commercial policy
+whose sender both endpoints now agree is sanctioned at the verified screening block. That is compliance, not commercial policy
 (docs/design/payment-settings.md §11): the delivered credit stands, so no `deposit.rejected`
 rewrites what the merchant applied. The service records the hit, and `GET
 /v1/forwarders?sweepable` never offers that forwarder, so the funds stay in it. Escalate to
 compliance with the deposit id, tell the merchant which credit is affected and why its forwarder is
-excluded, and record the decision. The service never sweeps or refunds it.
+excluded, and record the decision. Disagreement or unavailability instead holds and alerts:
+no hit is recorded and the delivered credit is unchanged. The exception applies only to credit
+already delivered before restore; every new credit requires two clear answers.
+The service never sweeps or refunds a deposit with a recorded hit.
 
 ## Done when
 

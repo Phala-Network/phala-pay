@@ -128,9 +128,10 @@ check even though valuation remains capped at TWAP. The TWAP is the manipulation
 spot/TWAP difference **above 3%** pauses valuation by default in either direction, so fast markets
 fail closed. Accepted audit evidence records TWAP, spot, agreement and the chosen valuation.
 
-Every pair getter, reserve and Chainlink round/decimals call uses one numeric block: two blocks
-behind the slower A/B head. Both groups must agree on its number, hash and timestamp before and
-after reads. Stored endpoint hashes and the latest persisted sample are rechecked for reorgs.
+Every pair getter, reserve and Chainlink round/decimals call uses the canonical snapshot pin
+specified by [chain reads](chain-reads.md#24-prices): read supplies the latest block, state calls
+use its hash with EIP-1898 `requireCanonical`, and verify independently re-pins after read.
+Both endpoints must agree on number, hash and timestamp. Stored endpoint hashes and the latest persisted sample are rechecked for reorgs.
 This also pins the existing standalone Chainlink readers. Historical calls within the window
 must be supported; archive access to the entire chain is not required.
 
@@ -138,7 +139,7 @@ Default guard rails (under source `twap`) are:
 
 | Field | Default | Reason |
 |---|---|---|
-| `window_s` | 1800 s, configurable 1800–86400 s | prevents using a spot-sized window; at least thirty minutes |
+| `window_s` | 1800 s; window + sample age ≤2880 s | prevents using a spot-sized window; at least thirty minutes |
 | `max_sample_age_s` | 180 s, configurable 60–600 s | tolerates two missed one-minute samples; also bounds every gap and anchor slack |
 | `min_weth_reserve_usd` | $100,000 | about 100× the default $1,000 unfinalized exposure cap, on the WETH side alone |
 | `max_spot_deviation_bps` | 300 (3%) | pauses fast markets and rejects spikes/ramps inconsistent with the averaging window |

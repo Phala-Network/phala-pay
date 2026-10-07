@@ -551,7 +551,8 @@ environment is `topup.yaml`'s `environment`, both attested.
 
   | Monitor | Checks in | Margin |
   |---|---|---|
-  | `topup-scanner-<chain_id>` | after each coverage round (every ten minutes), `error` while dual coverage fails | 5 min |
+  | `topup-fast-scanner-<chain_id>` | after fast discovery (every minute); three failures alert | 2 min |
+  | `topup-coverage-scanner-<chain_id>` | after each dual coverage round (every ten minutes), `error` while coverage fails | 2 min |
   | `topup-pump-<n>`, `topup-outbox-test`, `topup-outbox-live` | each iteration or poll, every minute | 5 min |
   | `topup-lock-expiry` | after each successful expiry scan, every minute | 5 min |
   | `topup-finality-watch` | after each `finalized` advance's passes, and every minute | 5 min |
@@ -900,6 +901,19 @@ selects `declared` mode: CI skips the image smoke and prints the declaration in 
 or lower. Without a declaration, N-1 runs the real image rollback smoke. Breaking migrations raise
 the floor to the new schema's maximum; retain a tested pre-upgrade restore/reconciliation plan and
 obtain owner acceptance.
+
+Before upgrading to the read/verify pilot, run this check against a verified pre-upgrade
+restore copy with PostgreSQL access (the production CVM exposes no database port):
+
+```sh
+psql "$RESTORED_DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/check-address-capacity.sql
+```
+
+It reports every chain's historical issued-address count and the permanent 1,000-address cap,
+then refuses if any count is already over the cap. At exactly 1,000 the upgrade is safe, but new
+issuance returns `422 address_capacity_reached`. Review the
+[address capacity runbook](runbooks/address-capacity.md) at 70% and 90%. Preserve this output in
+the upgrade evidence; never delete rows to pass the check.
 
 Before upgrade, preserve the verified N-1 deploy kit, image digests and configuration and a tested
 pre-upgrade recovery point. To roll back, verify N-1's release again, render its compose/config,

@@ -594,6 +594,11 @@ See [price failover](design/price-failover.md) and [configuration](configuration
 
 **Screening** is direct sanctions-list screening plus per-deposit bounds. KYC, KYT, and the Travel
 Rule are not part of the software: they are the operator's and the merchant's responsibility (§15).
+New credit requires both endpoints to answer clear at the verified screening block. Both
+sanctioned answers reject. Disagreement or unavailability holds and retries, alerting after the
+confirmation window. For credit delivered before restore, agreed sanctioned answers record a
+hit and block sweep while preserving the credit; inconclusive replay records no hit and leaves
+that credit unchanged.
 
 ## 9. Quotes
 
@@ -1671,8 +1676,8 @@ Crons and issue history supply worker/incident evidence.
 |---|---|---|
 | API availability | 99.9% successful `/healthz` probes over 30 days; inspect Sentry Uptime history. Authenticated API diagnostic error ratio is 5xx / (2xx + 3xx + 5xx). | Uptime failures page; inspect load-shed and 5xx request counts on demand. |
 | API latency | During an observed interval, p95 successful GET/HEAD response headers ≤ 250 ms and POST ≤ 1 s. Use HTTP histogram bucket deltas for matched routes; exclude admin reports/attestation and intentional waits. | This percentile is a diagnostic target with no automatic alert; investigate an Uptime or worker incident using snapshots. |
-| RPC evidence availability | Every required A/B group has a serving candidate; no uninterrupted outage ≥ 1 minute. Count quota-paused candidates as unavailable. | Page on `TopupRpcGroupUnavailable`; fork freezes and quarantines require immediate safety triage. Cooldown/quota/unclassified events warn. |
-| Deposit progress | For unpaused, supported deposits, target 99% leaving `detected` and `confirmed` within 30 minutes after satisfying the configured confirmation policy (for example `depth2`, `depth3`, or `finalized`), rather than starting all clocks at finalization. Review the policy, daily report ages and deposit timelines; this target is not a measured percentile. | Existing route age alerts (default 1,800 s) and scanner/finality Crons identify stalled work; Crons check-in margins are 5 minutes. This is not an automatically computed percentile. |
+| RPC evidence availability | Every configured read/verify pair is ready; three consecutive request failures make its endpoint not-ready, and recovery probes run at most every 30 s. Infura 402 remains unavailable until UTC midnight. | `TopupRpcEndpointUnavailable` after five minutes; `TopupRpcDisagreement` and chain freezes require immediate triage. Address capacity warns at 70% and 90%. |
+| Deposit progress | For unpaused, supported deposits, target 99% leaving `detected` and `confirmed` within 30 minutes after satisfying the configured confirmation policy (for example `depth2`, `depth3`, or `finalized`), rather than starting all clocks at finalization. Review the policy, daily report ages and deposit timelines; this target is not a measured percentile. | Route age alerts and scanner/finality Crons identify stalled work. Sanctions holds alert after the configured confirmation window. Fast and coverage scanner monitors expect 1-minute and 10-minute check-ins with 2-minute margins. This is not an automatically computed percentile. |
 | Reconciliation and backup | Every scheduled reconciliation succeeds before its next round; backup success marker age ≤ 2 minutes. Inspect Sentry Crons and the daily report. | Existing reconciliation and backup monitors alert; backup requires three stale observations to avoid restart noise. |
 
 Configure Sentry issue rules by the above alert names and existing Crons/Uptime monitors; this

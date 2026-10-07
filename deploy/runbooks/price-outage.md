@@ -15,7 +15,7 @@ topup config check "$CONFIG"
 curl --fail --max-time 8 -sS 'https://api.kraken.com/0/public/Ticker?pair=PHAUSD,USDCUSD,USDTUSD'
 ```
 
-Read each configured Chainlink proxy through **both observation groups**, using the approved RPC
+Read each configured Chainlink proxy through **read and verify endpoints**, using the approved RPC
 probe workflow in [RPC operations](../RPC.md). Never print expanded keyed URLs. Check
 `decimals()`, `latestRoundData()` round/value agreement, `answeredInRound >= roundId`, positive
 answer, and `updatedAt <= now`. Age must be at most the pinned heartbeat plus 600 seconds.
@@ -23,19 +23,19 @@ The last eight Ethereum rounds arrived up to 36 seconds after their heartbeat in
 the pinned margin allows publication delay under congestion while deviation-triggered updates
 and agreement/peg checks remain active (see the design and registry evidence).
 Ethereum USDC uses 82,800 seconds; Ethereum USDT and Base stablecoin feeds use 86,400 seconds.
-Ethereum ETH/USD uses 3,600 seconds. All values are read at one A/B-agreed numeric block.
+Ethereum ETH/USD uses 3,600 seconds. All values are read at one agreed canonical block hash with EIP-1898 `requireCanonical`.
 Testnet tokens deliberately observe Ethereum mainnet; verify `observation_chain_id` and the
-configured `mainnet-a`/`mainnet-b` pair, not a nonexistent testnet price feed.
+configured `ankr-mainnet`/`infura-mainnet` pair, not a nonexistent testnet price feed.
 
 For Base and Base Sepolia, also inspect the Base mainnet sequencer proxy through
-`base-mainnet-a`/`base-mainnet-b`: zero means up, one means down. A zero or future recovery
+`ankr-base-mainnet`/`infura-base-mainnet`: zero means up, one means down. A zero or future recovery
 start, inconsistent round, or the first 3,600 seconds after recovery keeps valuation halted.
 
 For PHA, inspect `uniswap_v2_twap` evidence and `price_source_refusals_total{code=...}`.
-Read the pinned PHA/WETH pair through both mainnet groups at the **same numeric block** as ETH/USD;
+Read the pinned PHA/WETH pair through both mainnet endpoints at the **same canonical block hash** as ETH/USD;
 compare headers, token order, both cumulatives and reserves. Check the WETH-side USD reserve floor,
 TWAP/spot divergence, the persisted window's block range, and sample ages/gaps. The service sampler
-must advance once/minute even without quote traffic. Do not call `sync()` or mutate the pair.
+must advance once/minute even without quote traffic (every 300 seconds on staging PHA). Do not call `sync()` or mutate the pair.
 
 ## Decide
 

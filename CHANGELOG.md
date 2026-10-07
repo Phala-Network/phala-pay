@@ -16,6 +16,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Breaking (operators)
 
+- The pilot permanently caps issued addresses at 1,000 per chain, counting all historical
+  addresses. Quotes and deposit addresses return non-retryable `422 address_capacity_reached`
+  at the cap. Operators must run the pre-upgrade count check; alerts warn at 70% and 90%.
+  Capacity growth requires a reviewed paid-provider or token-wide scanning/indexer upgrade.
+
 - Replace RPC company, budget and group registries with one strict `rpc` read/verify pair per
   route or price chain. Seal the complete secret set with `TOPUP_RPC_ANKR_KEY` and
   `TOPUP_RPC_INFURA_KEY`. Deploy preflight checks the actual compose environment path.
@@ -35,11 +40,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `Retry-After: 1`; the request has not executed. Malformed or checksum-invalid keys still return
   `401` without taking a slot. Payer reads, health checks, and admin authentication use their
   existing admission paths.
-- RPC budgets accept an optional `interactive_reserve` (default 0, below `burst`), preserving
-  capacity for merchant and admin API requests while background work shares account and key
-  limits. `topup_rpc_interactive_budget_wait_seconds_total` reports interactive admission waits.
-  Release the code before adopting the field in configuration; remove it before rollback to
-  older versions.
 - Dual finalized coverage and per-address backfill markers, independently verified deposit evidence,
   and durable agreed checkpoints. Contract code mismatch freezes only its chain; audited lifts
   require a fresh passing dual-source check.
@@ -50,6 +50,16 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   gateway's WireGuard address, so one client could exhaust it and cause every merchant to receive
   `429`. There is no per-client-IP limiting; see
   [API admission limits](docs/configuration.md#api-admission-limits) for the protection model.
+- Quote pricing failures now return retryable `503 price_unavailable` instead of `unavailable`.
+  Routed chains that are not ready return `503 chain_unavailable`.
+- **Compliance-relevant behaviour change:** A deposit is credited ONLY when both endpoints answer
+  "clear" at the verified screening block. If both answer "sanctioned", it is rejected, exactly
+  as before. If the endpoints disagree, or one is unavailable, the deposit is HELD. It is retried,
+  never credited, and an alert fires when the hold persists past the deposit's confirmation window.
+  For a credit already delivered to the merchant before a restore, keep the credit: both endpoints
+  must agree "sanctioned" before a hit is recorded and its sweep is blocked. Disagreement or
+  unavailability holds and alerts without recording a hit or changing the delivered credit.
+
 - **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the
   restore report's `expected_heartbeat_at` JSON field is now `failure_at`. Both refer to the
   externally recorded failure instant.
@@ -98,6 +108,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
+- Generated server error-code types include `address_capacity_reached` and `chain_unavailable`;
+  unknown future codes remain accepted.
 - Quote types expose `cancel_requested_at`, including the browser's parsed `ClientQuote`.
 - `CheckoutError.status` exposes the HTTP status when the error came from a response.
 - `<DepositAddress onChange(state)>` receives the public view after the first successful read
@@ -334,6 +346,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Added
+
+- Quote types expose `cancel_requested_at`.
+- Generated error-code types include `address_capacity_reached` and `chain_unavailable`;
+  unknown future codes remain accepted.
 
 - Opt-in `upgradeTolerance` in `@phala/pay-server` for GET and idempotent POST retries across
   maintenance, connection failures, and gateway 502/503/504 for up to five minutes. Explicit

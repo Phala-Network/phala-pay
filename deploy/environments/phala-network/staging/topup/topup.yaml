@@ -12,7 +12,7 @@ maintenance_keys:
   - id: maintenance/staging-v1
     public_key: CtqyNNdC0DWZ/+TKeI+nvBvlV6Dq+A2/NXw5zDU7AFQ=
 # Independent Ankr read and Infura verify endpoints, with both sealed keys (deploy/RPC.md).
-# A makes the scanner's log requests; a company belongs to only one group per chain.
+# Fast discovery uses read; coverage and money decisions require read/verify agreement.
 rpc:
   - chain_id: 11155111
     read:

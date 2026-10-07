@@ -1,42 +1,51 @@
 # Scanner lag
 
-**Trigger:** the `topup-scanner-<chain_id>` monitor missing its check-ins (no successful finalized
-scan for five minutes). If the chain is frozen (`TopupReconciliationMismatch`,
-`check:address_derivation`), the scanner is paused on purpose: [Chain frozen](chain-frozen.md).
+**Trigger:** `topup-fast-scanner-<chain_id>` or `topup-coverage-scanner-<chain_id>` Sentry Crons,
+`RpcCoverageLag` (>45 minutes), or persistent `RpcAddressBackfillLag`.
 
-**Impact:** new finalized transfers are not detected, so customers wait; rate locks on the chain
-cannot expire. Existing deposits continue. One chain and every route on it.
+**Impact:** fast discovery runs every 60 seconds on read; dual finalized coverage runs every
+600 seconds on read and verify. Missing fast discovery delays credits until coverage discovers
+the payment. Failed coverage delays negative decisions: quote expiry/cancel completion and
+custody reconciliation wait for complete coverage. A not-ready or frozen chain pauses issuance
+and credit, while the API and other chains continue.
 
 ## First steps
 
+Inspect the relevant chain's readiness and coverage metrics, the Crons check-ins, and its blocks:
+
 ```sh
+admin GET /v1/admin/metrics | jq
+admin GET /v1/admin/reports/daily | jq '.reconciliation_blocks'
+cast block latest --json --rpc-url "$RPC_PROVIDER_A_URL" | jq '(.data // .) | {number,hash}'
 cast block finalized --json --rpc-url "$RPC_PROVIDER_A_URL" | jq '(.data // .) | {number,hash}'
 cast block finalized --json --rpc-url "$RPC_PROVIDER_B_URL" | jq '(.data // .) | {number,hash}'
 ```
 
-When the lag is material, pause issuance (existing addresses stay valid and watched):
+The fast monitor expects a one-minute interval, two-minute margin and three failures before
+alerting. Coverage expects a ten-minute interval and two-minute margin. Both have per-chain
+slugs; success on another chain cannot hide this chain's failure.
+
+When lag is material, pause quotes:
 `admin POST "/v1/admin/routes/$ROUTE/pause" '{"scopes":["quotes"]}'`.
 
 ## Decide
 
-- A provider down, throttling, or behind: the scanner reads provider A; follow
-  [provider disagreement](provider-disagreement.md) and replace it through a route upgrade. A
-  provider A whose `finalized` is below one it answered before, or below the committed cursor (a
-  load-balanced gateway answering from a node that has not caught up; repeat the first command a
-  few times), is retried, not trusted: the monitor reports errors until it catches up. If it
-  keeps lagging, replace it.
-- An address backfill longer than the provider allows at once (`finalized chain scan failed
-  transiently` repeating while the provider answers): each pass keeps the backfill windows it
-  committed and the next resumes after them, so the cursor moves on once it completes; nothing to
-  do unless the errors are not provider refusals or timeouts.
-- A chain scanner that stops on a failure it cannot retry stops the whole service (Sentry:
-  `chain scanner task stopped; stopping every chain scanner`), which the container restart policy
-  restarts; the scanner resumes from its committed cursor, and a transfer it had not recorded is
-  recorded then. If the service keeps restarting, read the error and escalate. If both providers
-  are healthy and the monitor is still silent, **HUMAN-ONLY:** restart the CVM
-  (`deploy/phala cvms restart "$TOPUP_CVM_ID"`).
+- Endpoint unavailable or throttled: follow [RPC health](rpc-health.md). Three consecutive final
+  request failures mark it not-ready; short head probes run at most every 30 seconds to recover.
+  Infura 402 waits until UTC midnight. Never select a substitute endpoint in process.
+- Evidence disagrees: follow [provider disagreement](provider-disagreement.md). A round cannot
+  advance coverage until both sources verify every candidate and the actual scanned end.
+- Chain frozen: follow [Chain frozen](chain-frozen.md); a code, checkpoint or verified-evidence
+  conflict requires cause repair and an audited lift. Repeated requests do not lift it.
+- Historical backfill: each successful round advances by the configured log-window limit and
+  processes at most 1,000 lagging addresses. New, reissued and restored addresses remain lagging
+  until their own history catches up. Let the bounded rounds finish; never bulk-mark them.
+- Healthy endpoints but missing check-ins: escalate the worker issue. **HUMAN-ONLY:** restart
+  the CVM only after preserving Sentry evidence (`deploy/phala cvms restart "$TOPUP_CVM_ID"`).
+  Durable checkpoints and coverage survive a restart; interrupted rounds do not advance them.
 
 ## Done when
 
-`topup-scanner-<chain_id>` checks in again, deposits made during the lag appear (the merchant's
-`GET /v1/deposits?tx_hash=…`, then the admin deposit view), and issuance is resumed.
+Both per-chain scanner monitors check in, coverage lag drains below 45 minutes, address backfill
+completes, payments appear once, and quotes are resumed. Confirm delayed expiry/cancel decisions
+complete only after dual coverage passes their expiry time.
