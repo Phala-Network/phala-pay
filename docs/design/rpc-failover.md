@@ -1,6 +1,7 @@
 # RPC load balancing and failover
 
-Status: implemented in v0.7.0; current operations are in [the RPC runbook](../../deploy/RPC.md).
+Status: implemented in v0.7.0; to be replaced by [chain reads](chain-reads.md). Current operations
+are in [the RPC runbook](../../deploy/RPC.md).
 
 ## Decision and scope
 
