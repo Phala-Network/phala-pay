@@ -320,3 +320,10 @@ rollback; the down migration is intentionally a no-op. Compatibility floor remai
 so compatible N-1 can ignore the new table and ledger entry with its previous configuration.
 The inherited 0.9.0 declaration requires restore for legacy 0.8.x; its N-1 gate runs in `declared`
 mode and skips old-image startup. Changing policies starts a separate window.
+
+`20261030000000_chain_reads` adds dual checkpoints, chain/address coverage, deposit
+verification markers, deferred cancel requests, and atomic UTC daily budgets. It preserves
+N-1 tables, columns, defaults, and writes. Binary rollback keeps these additions; its down
+migration is a no-op. The compatibility floor remains `20261029030005`, verified against
+the published v0.9.2 migration set. `chain_checkpoints`, `chain_coverage`, and `daily_budgets`
+grant only SELECT, INSERT and UPDATE to `topup_app`.

@@ -2,6 +2,7 @@
 
 mod accounts;
 mod addresses;
+pub mod daily_budgets;
 mod deposits;
 pub(crate) mod migrations;
 mod outbox;

@@ -261,3 +261,10 @@ are pinned in the image. Optional `twap` settings default to `window_s: 1800`,
 and `max_sample_jump_bps: 500`. Windows below thirty minutes are rejected. The service samples
 once/minute into PostgreSQL even without quote traffic; startup and gaps require a continuous
 window before prices become available. `config show` includes the resolved guard rails.
+
+The staging PHA routes use 300 s TWAP samples with `max_sample_age_s: 900` and
+`max_sample_jump_bps: 1100`. The gap bound retains three sample intervals, tolerating two
+missed samples. The jump bound scales the existing 500 bps per minute by
+√(300/60) under the random-walk assumption, rounded to 1100 bps. Code defaults remain
+180 s and 500 bps; the configured age bound is validated up to 900 s and the jump bound
+up to 2000 bps.

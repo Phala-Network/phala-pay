@@ -465,6 +465,38 @@ mod tests {
             .collect()
     }
     #[test]
+    fn five_minute_staging_history_enforces_configured_gap_and_jump() {
+        let policy = TwapConfig {
+            max_sample_age_s: 900,
+            max_sample_jump_bps: Bps::new(1100).unwrap(),
+            ..TwapConfig::default()
+        };
+        let spot = q(10_000);
+        let history: Vec<_> = (0..=6_u64)
+            .map(|i| sample(10_000 + i * 300, spot, spot * U256::from(i * 300)))
+            .collect();
+        let current = history.last().unwrap();
+        assert!(average(&history, current, current.timestamp, &policy).is_ok());
+        let gap: Vec<_> = history
+            .iter()
+            .filter(|s| ![10300, 10600, 10900].contains(&s.timestamp))
+            .cloned()
+            .collect();
+        class(
+            average(&gap, current, current.timestamp, &policy),
+            "twap_history",
+        );
+        let previous = sample(10_000, spot, U256::ZERO);
+        let allowed = sample(10_300, q(11_100), U256::ZERO);
+        assert!(check_sample(&previous, &allowed, &policy).is_ok());
+        let refused = sample(10_300, q(11_101), U256::ZERO);
+        class(
+            check_sample(&previous, &refused, &policy),
+            "twap_sample_jump",
+        );
+    }
+
+    #[test]
     fn recorded_mainnet_cumulative_math_and_token_order() {
         // Actual mainnet blocks 26,120,450 and 26,120,610, not synthetic reserves.
         let fixture: Value = serde_json::from_str(include_str!(

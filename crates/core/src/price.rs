@@ -173,7 +173,7 @@ impl TwapConfig {
     /// Reject unsafe windows, unbounded history and ineffective guard rails.
     pub fn validate(&self) -> Result<(), RouteError> {
         if !(1800..=86400).contains(&self.window_s)
-            || !(60..=600).contains(&self.max_sample_age_s)
+            || !(60..=900).contains(&self.max_sample_age_s)
             || self.min_weth_reserve_usd == 0
             || self.min_weth_reserve_usd > 1_000_000_000
             || !(1..=2000).contains(&self.max_spot_deviation_bps.value())
@@ -581,6 +581,29 @@ mod tests {
         *rpc_group_b = "a".into();
         assert!(config.validate(1, "pha", true).is_err());
     }
+    #[test]
+    fn twap_policy_boundaries_admit_staging_five_minute_samples() {
+        let mut policy = TwapConfig::default();
+        assert_eq!(policy.max_sample_age_s, 180);
+        assert_eq!(policy.max_sample_jump_bps.value(), 500);
+        for age in [60, 900] {
+            policy.max_sample_age_s = age;
+            for jump in [1, 1100, 2000] {
+                policy.max_sample_jump_bps = Bps::new(jump).unwrap();
+                assert!(policy.validate().is_ok());
+            }
+        }
+        for age in [59, 901] {
+            policy.max_sample_age_s = age;
+            assert!(policy.validate().is_err());
+        }
+        policy.max_sample_age_s = 900;
+        for jump in [0, 2001] {
+            policy.max_sample_jump_bps = Bps::new(jump).unwrap();
+            assert!(policy.validate().is_err());
+        }
+    }
+
     #[test]
     fn licensing_gate_cannot_be_overridden_in_production() {
         let p = volatile();
