@@ -125,8 +125,8 @@ pub enum PriceError {
     /// The bounded observation deadline expired.
     #[error("price source timeout")]
     Timeout,
-    /// Existing RPC group execution failed; details remain sanitized in RPC telemetry.
-    #[error("price RPC group unavailable")]
+    /// A required endpoint failed; details remain sanitized in RPC telemetry.
+    #[error("price RPC endpoint unavailable")]
     RpcUnavailable,
     /// Sanitized numeric feed evidence for a failed round or A/B disagreement.
     #[error("on-chain price rejected: {class}")]
@@ -139,8 +139,8 @@ pub enum PriceError {
     /// Feed is outside its pinned freshness window.
     #[error("stale price source")]
     Stale,
-    /// Independent RPC groups disagree; failover must not mask this.
-    #[error("price RPC groups disagree")]
+    /// Independent read and verify endpoints disagree.
+    #[error("price RPC endpoints disagree")]
     Disagreement,
     /// Base sequencer is down or recovering.
     #[error("sequencer unavailable or in grace")]

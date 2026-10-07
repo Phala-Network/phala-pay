@@ -47,5 +47,5 @@ pub mod treasuries;
 pub mod webhook_endpoints;
 pub mod webhook_keys;
 
-/// RPC group acceptance and recovery probes.
+/// Typed read/verify endpoint self-tests and checkpoint initialization.
 pub mod rpc_runtime;
