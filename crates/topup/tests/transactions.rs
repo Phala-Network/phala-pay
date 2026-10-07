@@ -599,7 +599,9 @@ async fn whole_task_caps_include_unmined_receipt_polls_and_confirmation_head_pol
             ensure!(read.calls.load(Ordering::SeqCst) <= read_start + 12);
             ensure!(verify.calls.load(Ordering::SeqCst) <= verify_start + 8);
             if case == "verify-behind" {
-                ensure!(read.calls.load(Ordering::SeqCst) == read_start + 10);
+                // One discovery receipt and eight read heads; either exhausted side
+                // stops both transports before another read head can be sent.
+                ensure!(read.calls.load(Ordering::SeqCst) == read_start + 9);
                 ensure!(verify.calls.load(Ordering::SeqCst) == verify_start + 8);
             } else {
                 ensure!(read.calls.load(Ordering::SeqCst) == read_start + 12);
