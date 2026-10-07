@@ -224,7 +224,7 @@ policy live-credentials restore-check "$tmp/restore-check.json" \
 template="$root/deploy/environments/phala-cloud-template/topup"
 render --template "$template" >"$tmp/template.yml"
 [[ "$("$compose" -f "$tmp/template.yml" config --variables | awk 'NR > 1 { print $1 }' | sort |
-    tr '\n' ' ')" == "AWS_ACCESS_KEY_ID AWS_ENDPOINT AWS_REGION AWS_SECRET_ACCESS_KEY DSTACK_APP_DOMAIN SENTRY_DSN TOPUP_ADMIN_PUBLIC_KEY WALG_S3_PREFIX " ]] ||
+    tr '\n' ' ')" == "AWS_ACCESS_KEY_ID AWS_ENDPOINT AWS_REGION AWS_SECRET_ACCESS_KEY DSTACK_APP_DOMAIN SENTRY_DSN TOPUP_ADMIN_PUBLIC_KEY TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY WALG_S3_PREFIX " ]] ||
     { echo "the template's runtime names changed" >&2; exit 1; }
 refused template-gateway "--template serves the app's gateway domain" --images "$tmp/images.json" \
     --template "${gateway[@]}" "$template"

@@ -99,7 +99,7 @@ mod tests {
                 6
             )
         );
-        assert_eq!(usdt.asset.backstop, topup_core::route::Backstop::Addresses);
+
         assert_eq!(
             usdt.pricing.mode,
             topup_core::route::PricingMode::Stablecoin
@@ -121,12 +121,12 @@ mod tests {
             route.chain.confirmations,
             topup_core::route::Confirmations::Depth(2)
         );
-        assert_eq!(route.asset.backstop, topup_core::route::Backstop::Token);
+
         assert_eq!(
             format!("{:#x}", route.chain.contracts.implementation),
             "0x49f2f1f1a25269ea0c6ff2ab1c7b09dcbe9c5ba9"
         );
-        assert_eq!(route.chain.rpc_providers, ["provider-a", "provider-b"]);
+        assert_eq!(route.chain.rpc_providers, ["read", "verify"]);
         assert_eq!(route.pricing.primary[0].company(), "uniswap-v2-onchain");
         assert!(matches!(
             route.pricing.primary[0],
@@ -157,7 +157,7 @@ mod tests {
             (usdc.asset.symbol.as_str(), usdc.asset.decimals),
             ("usdc", 6)
         );
-        assert_eq!(usdc.asset.backstop, topup_core::route::Backstop::Addresses);
+
         assert_eq!(
             usdc.pricing.mode,
             topup_core::route::PricingMode::Stablecoin
@@ -180,7 +180,6 @@ mod tests {
         assert_eq!(routes.current_in(false).count(), 2);
         let chains = topup::scanner::chain_routes(&routes);
         assert_eq!(chains.len(), 1);
-        assert!(!chains[0].token_mode());
     }
 
     #[test]
@@ -240,19 +239,9 @@ mod tests {
             pha.chain.confirmations,
             topup_core::route::ChainFamily::OpStack.default_confirmations()
         );
-        assert_eq!(
-            pha.chain.rpc_providers,
-            ["base-sepolia-a", "base-sepolia-b"]
-        );
+        assert_eq!(pha.chain.rpc_providers, ["read", "verify"]);
         let sepolia = staging(DEPLOY_ROUTE).expect("staging route must pass");
         assert_eq!(pha.chain.contracts, sepolia.chain.contracts);
-        assert_eq!(
-            (pha.asset.backstop, usdc.asset.backstop),
-            (
-                topup_core::route::Backstop::Token,
-                topup_core::route::Backstop::Addresses
-            )
-        );
         assert_eq!(
             usdc.pricing.mode,
             topup_core::route::PricingMode::Stablecoin
@@ -277,9 +266,9 @@ mod tests {
         assert_eq!(
             chains
                 .iter()
-                .map(|chain| (chain.chain.chain_id, chain.token_mode()))
+                .map(|chain| chain.chain.chain_id)
                 .collect::<Vec<_>>(),
-            [(84_532, false), (11_155_111, false)]
+            [84_532, 11_155_111]
         );
     }
 
@@ -360,15 +349,15 @@ mod tests {
             // The service sends no transactions: no operator key, flush schedule, or gas policy.
             (
                 VALID.replace(
-                    "  rpc_groups: { a: alchemy, b: quicknode }\n",
-                    "  rpc_groups: { a: alchemy, b: quicknode }\n  operator_key_version: 1\n",
+                    "  chain_id: 1\n",
+                    "  chain_id: 1\n  operator_key_version: 1\n",
                 ),
                 "operator_key_version",
             ),
             (
                 VALID.replace(
-                    "  rpc_groups: { a: alchemy, b: quicknode }\n",
-                    "  rpc_groups: { a: alchemy, b: quicknode }\n  flush:\n    schedule: \"0 * * * *\"\n",
+                    "  chain_id: 1\n",
+                    "  chain_id: 1\n  flush:\n    schedule: \"0 * * * *\"\n",
                 ),
                 "flush",
             ),
@@ -467,29 +456,8 @@ mod tests {
             (VALID.replace("livemode: true\n", ""), "livemode"),
             (
                 VALID.replace(
-                    "rpc_groups: { a: alchemy, b: quicknode }",
-                    "rpc_groups: { a: alchemy, b: alchemy }",
-                ),
-                "chain.rpc_groups",
-            ),
-            (
-                VALID.replace(
-                    "rpc_groups: { a: alchemy, b: quicknode }",
-                    "rpc_groups: { a: \"\", b: \"\" }",
-                ),
-                "chain.rpc_groups",
-            ),
-            (
-                VALID.replace(
-                    "rpc_groups: { a: alchemy, b: quicknode }",
-                    "rpc_providers: [alchemy]",
-                ),
-                "rpc_providers",
-            ),
-            (
-                VALID.replace(
-                    "  rpc_groups: { a: alchemy, b: quicknode }\n",
-                    "  rpc_groups: { a: alchemy, b: quicknode }\n  implementation: \"0x0000000000000000000000000000000000000000\"\n",
+                    "  chain_id: 1\n",
+                    "  chain_id: 1\n  implementation: \"0x0000000000000000000000000000000000000000\"\n",
                 ),
                 "chain.implementation",
             ),

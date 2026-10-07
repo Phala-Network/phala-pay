@@ -175,6 +175,7 @@ async fn step_evidence_and_events_commit_with_the_transition() -> Result<()> {
                 }],
                 effects: TransitionEffects {
                     mark_final: false,
+                    dual_verified: false,
                     sanctions_hit: false,
                     canonical_evidence: None,
                     valuation: Some(StoredValuation {
@@ -898,6 +899,10 @@ impl ChainReader for ConfirmChain {
             .map_or(ReceiptLookup::Missing, |log| ReceiptLookup::Included {
                 block_number: log.block_number,
                 block_hash: log.block_hash,
+                block_time: log.block_time,
+                status: true,
+                tx_from: log.tx_from,
+                tx_nonce: log.tx_nonce,
                 transfer: Some(Box::new(log)),
             }))
     }

@@ -14,6 +14,28 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Breaking (operators)
+
+- The pilot permanently caps issued addresses at 1,000 per chain, counting all historical
+  addresses. Quotes and deposit addresses return non-retryable `422 address_capacity_reached`
+  at the cap. Operators must run the pre-upgrade count check; alerts warn at 70% and 90%.
+  Capacity growth requires a reviewed paid-provider or token-wide scanning/indexer upgrade.
+
+- Replace RPC company, budget and group registries with one strict `rpc` read/verify pair per
+  route or price chain. Seal the complete secret set with `TOPUP_RPC_ANKR_KEY` and
+  `TOPUP_RPC_INFURA_KEY`. Deploy preflight checks the actual compose environment path.
+- Quote cancellation requests keep the quote open and its exposure reserved until its address
+  catches up to dual finalized coverage past `expires_at`. Quote objects add
+  `cancel_requested_at`; completion emits `quote.canceled`. Expiry uses the same evidence gate.
+- Fresh quote price snapshots are capped at 60 per price chain/environment/UTC day. Exhaustion
+  returns retryable `503 price_unavailable`; the twelve-second reuse limit is unchanged.
+  The combined deposit pilot bound is 100/day; stop adding merchants above an 80/day seven-day
+  average. These bounds include hourly dual custody on every routed chain/token pair and keep
+  worst-case usage below both provider stop lines, including the ten-percent retry allowance.
+- Remove RPC recovery/resume commands, member pools, review sweeps, single-source backstops and
+  custom head-poll flags. The expand-only migration preserves rollback to the prior stable
+  release, whose RPC frozen/anchor/recovery state must be resolved before starting this version.
+
 ### Added
 
 - API-key authentication uses a database slot gate sized to half the pool (at least one slot).
@@ -21,11 +43,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `Retry-After: 1`; the request has not executed. Malformed or checksum-invalid keys still return
   `401` without taking a slot. Payer reads, health checks, and admin authentication use their
   existing admission paths.
-- RPC budgets accept an optional `interactive_reserve` (default 0, below `burst`), preserving
-  capacity for merchant and admin API requests while background work shares account and key
-  limits. `topup_rpc_interactive_budget_wait_seconds_total` reports interactive admission waits.
-  Release the code before adopting the field in configuration; remove it before rollback to
-  older versions.
+- Dual finalized coverage and per-address backfill markers, independently verified deposit evidence,
+  and durable agreed checkpoints. Contract code mismatch freezes only its chain; audited lifts
+  require a fresh passing dual-source check.
 
 ### Changed
 
@@ -33,13 +53,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   gateway's WireGuard address, so one client could exhaust it and cause every merchant to receive
   `429`. There is no per-client-IP limiting; see
   [API admission limits](docs/configuration.md#api-admission-limits) for the protection model.
+- Quote pricing failures now return retryable `503 price_unavailable` instead of `unavailable`.
+  Routed chains that are not ready return `503 chain_unavailable`.
+- **Compliance-relevant behaviour change:** A deposit is credited ONLY when both endpoints answer
+  "clear" at the verified screening block. If both answer "sanctioned", it is rejected, exactly
+  as before. If the endpoints disagree, or one is unavailable, the deposit is HELD. It is retried,
+  never credited, and an alert fires when the hold persists past the deposit's confirmation window.
+  For a credit already delivered to the merchant before a restore, keep the credit: both endpoints
+  must agree "sanctioned" before a hit is recorded and its sweep is blocked. Disagreement or
+  unavailability holds and alerts without recording a hit or changing the delivered credit.
+
 - **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the
   restore report's `expected_heartbeat_at` JSON field is now `failure_at`. Both refer to the
   externally recorded failure instant.
-- RPC reads pinned to a numeric block skip redundant head validation when the same member's
-  validated head already covers it. Every send retains the durable freeze check; explicit head
-  reads still validate canonicality and persist watermarks. Head state loads use one database
-  statement, and RPC head validation metrics report skipped pinned reads.
 - Request deadline errors now say "the request did not complete within its deadline; retry"
   instead of blaming the database, with `503 unavailable` and `Retry-After: 2`.
 - Price adapters are shared across routes and coalesce concurrent fetches. Quotes may reuse
@@ -52,8 +78,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
-- RPC member recovery probe failures emit rate-limited warning logs, and lagging-node
-  "is beyond the latest block of this node" errors are classified as retryable server errors.
 - Reference-product sweep groups retain their last successful balances and sweep history for up to
   ten minutes when a refresh fails, while disabling stale signable calls.
 - Deploy pause and resume requests retry transport errors and HTTP 408, 429, 500, 502, 503, and 504
@@ -62,7 +86,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Kraken pricing uses order-book mid instead of a potentially stale last trade, retaining bid,
   ask and last in audit evidence. Checks with spreads above `max_deviation_bps` are unavailable
   (`wide_spread`), allowing failover without recording price disagreement.
-- `topup restore-check` and `topup reconcile` bind durable RPC state to price-observation groups too; with such a group sorted first they failed with `chain_unavailable`.
 - `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
   and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
   seconds per chain and could time out.
@@ -88,6 +111,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
+- Generated server error-code types include `address_capacity_reached` and `chain_unavailable`;
+  unknown future codes remain accepted.
+- Quote types expose `cancel_requested_at`, including the browser's parsed `ClientQuote`.
 - `CheckoutError.status` exposes the HTTP status when the error came from a response.
 - `<DepositAddress onChange(state)>` receives the public view after the first successful read
   and then once per content change, so integrators can update their UI without additional polling.
@@ -156,6 +182,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `SignatureVerificationError`.
 
 ### Python SDK (`phala-pay`)
+
+#### Added
+
+- Quote objects expose `cancel_requested_at` for deferred cancellation requests.
 
 #### Removed
 

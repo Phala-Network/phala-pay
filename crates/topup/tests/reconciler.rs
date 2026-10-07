@@ -2,20 +2,16 @@
 
 mod support;
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration as StdDuration, Instant};
+use std::time::Duration as StdDuration;
 
-use alloy::providers::MULTICALL3_ADDRESS;
-use alloy::providers::bindings::IMulticall3::{Result as Call3Result, aggregate3Call};
-use alloy::sol_types::SolCall as _;
-use alloy_primitives::{Address, B256, Bloom, Bytes, U256, keccak256};
+use alloy_primitives::{Address, B256, U256};
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use axum::http::StatusCode;
 use chrono::{Duration, Utc};
-use serde_json::{Value, json};
+use serde_json::json;
 use sqlx::PgPool;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -26,7 +22,6 @@ use topup::reconciler::{
     frozen_chains, hold_lease_owner_lock,
 };
 use topup_adapters::chain::evm::{ChainError, ChainReader, FinalizedHead, TransferLog};
-use topup_adapters::chain::flush::{addressOfCall, balanceOfCall};
 use topup_core::deposit::{DepositState, StepOutcome};
 use topup_core::identity::deposit_id;
 use topup_core::money::AtomicAmount;
@@ -41,12 +36,10 @@ const CHAIN_ID: u64 = 31_337;
 #[derive(Default)]
 struct MockChain {
     finalized: AtomicU64,
-    finalized_delay: StdDuration,
-    finalized_started: Notify,
+    derivation_delay: StdDuration,
+    derivation_started: Notify,
     fail_derivation: AtomicBool,
-    fail_logs_from: Mutex<Option<u64>>,
-    logs: Mutex<Vec<TransferLog>>,
-    log_requests: Mutex<Vec<(u64, u64)>>,
+    fail_balances: AtomicBool,
     balances: Mutex<BTreeMap<Address, U256>>,
     balance_reads: Mutex<Vec<(u64, Vec<Address>)>>,
     derived: Mutex<BTreeMap<B256, Address>>,
@@ -71,56 +64,27 @@ impl MockChain {
 
 #[async_trait]
 impl ReconciliationChain for MockChain {
-    async fn finalized_head(&self) -> Result<u64, ReconciliationError> {
-        self.finalized_started.notify_one();
-        tokio::time::sleep(self.finalized_delay).await;
-        Ok(self.finalized.load(Ordering::SeqCst))
-    }
-
-    async fn transfer_logs_to(
-        &self,
-        addresses: &[Address],
-        from_block: u64,
-        to_block: u64,
-    ) -> Result<Vec<TransferLog>, ReconciliationError> {
-        self.log_requests
-            .lock()
-            .unwrap()
-            .push((from_block, to_block));
-        if self
-            .fail_logs_from
-            .lock()
-            .unwrap()
-            .is_some_and(|block| from_block >= block)
-        {
-            return Err(ReconciliationError::Chain(
-                "transfer logs unavailable".to_owned(),
-            ));
-        }
-        Ok(self
-            .logs
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|log| {
-                addresses.contains(&log.to)
-                    && log.block_number >= from_block
-                    && log.block_number <= to_block
-            })
-            .cloned()
-            .collect())
-    }
-
-    async fn token_balances(
+    async fn token_balances_pinned(
         &self,
         _token: Address,
         addresses: &[Address],
-        block: u64,
+        hash: B256,
     ) -> Result<Vec<U256>, ReconciliationError> {
+        if hash != B256::repeat_byte(24) {
+            return Err(ReconciliationError::Invariant(
+                "fixture custody pin changed",
+            ));
+        }
+        let block = self.finalized.load(Ordering::SeqCst).min(140);
         self.balance_reads
             .lock()
             .unwrap()
             .push((block, addresses.to_vec()));
+        if self.fail_balances.load(Ordering::SeqCst) {
+            return Err(ReconciliationError::Chain(
+                "balance endpoint unavailable".into(),
+            ));
+        }
         let balances = self.balances.lock().unwrap();
         Ok(addresses
             .iter()
@@ -134,6 +98,8 @@ impl ReconciliationChain for MockChain {
         _treasury: Address,
         salts: &[B256],
     ) -> Result<Vec<Address>, ReconciliationError> {
+        self.derivation_started.notify_one();
+        tokio::time::sleep(self.derivation_delay).await;
         if self.fail_derivation.load(Ordering::SeqCst) {
             return Err(ReconciliationError::Chain("addressOf timed out".to_owned()));
         }
@@ -150,170 +116,6 @@ struct Seed {
     address_id: Uuid,
     salt: B256,
     address: Address,
-}
-
-#[tokio::test]
-async fn repairs_missing_deposits_incrementally_and_sweeps_with_audit() -> Result<()> {
-    with_database(|pool| async move {
-        let route = route()?;
-        let seed = seed_identity(&pool, &route, 1).await?;
-        let chain = Arc::new(MockChain::at(5));
-        chain.derive(&[&seed]);
-        chain.logs.lock().unwrap().push(transfer(
-            11,
-            2,
-            3,
-            route.asset.contract,
-            Address::from([13; 20]),
-            seed.address,
-            500,
-        ));
-        let reconciler = reconciler(&pool, route.clone(), chain.clone())?;
-        scanned_through(&pool, 5).await?;
-
-        let missing = reconciler.check(CheckName::MissingDeposit).await?;
-        ensure!(missing.len() == 1 && missing[0].repair_applied);
-        let requests = chain.log_requests.lock().unwrap().clone();
-        ensure!(requests == [(0, 5)]);
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().len() == 1);
-        chain.finalized.store(9, Ordering::SeqCst);
-        scanned_through(&pool, 9).await?;
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().last() == Some(&(6, 9)));
-        let repaired = deposit(&pool, deposit_id(CHAIN_ID, B256::from([11; 32]), 2)).await?;
-        ensure!(repaired.state == DepositState::Detected);
-
-        let linked_id = seed_deposit(
-            &pool,
-            &route,
-            &seed,
-            DepositSeed::new(21, DepositState::Credited).block(4),
-        )
-        .await?;
-        // Indexed without the sweep, as by a scanner that stopped between the two writes.
-        seed_flushed(&pool, &route, &seed, 101, 1, 1_500).await?;
-        let report = reconciler.run_once().await?;
-        ensure!(report.succeeded());
-        ensure!(report.findings.iter().any(|finding| {
-            finding.check == CheckName::MissingFlushLink && finding.repair_applied
-        }));
-        ensure!(deposit(&pool, linked_id).await?.state == DepositState::Swept);
-        ensure!(
-            reconciler
-                .check(CheckName::MissingFlushLink)
-                .await?
-                .is_empty()
-        );
-        let repairs: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM audit WHERE actor_type = 'system' AND actor_id = 'reconciler' \
-             AND action = 'reconciliation_repair'",
-        )
-        .fetch_one(&pool)
-        .await?;
-        ensure!(repairs >= 1);
-        Ok(())
-    })
-    .await
-}
-
-/// In token mode the scanner requests only routed tokens, so the missing-deposit check is what
-/// finds another token sent to an issued address.
-#[tokio::test]
-async fn missing_deposit_check_records_unrouted_tokens_in_token_mode() -> Result<()> {
-    with_database(|pool| async move {
-        let route = route()?;
-        ensure!(route.asset.backstop == topup_core::route::Backstop::Token);
-        let seed = seed_identity(&pool, &route, 1).await?;
-        let chain = Arc::new(MockChain::at(5));
-        chain.derive(&[&seed]);
-        let other_token = Address::from([201; 20]);
-        chain.logs.lock().unwrap().push(transfer(
-            12,
-            0,
-            3,
-            other_token,
-            Address::from([13; 20]),
-            seed.address,
-            500,
-        ));
-        let reconciler = reconciler(&pool, route.clone(), chain.clone())?;
-        scanned_through(&pool, 5).await?;
-
-        let missing = reconciler.check(CheckName::MissingDeposit).await?;
-        ensure!(missing.len() == 1 && missing[0].repair_applied);
-        let recorded = deposit(&pool, deposit_id(CHAIN_ID, B256::from([12; 32]), 0)).await?;
-        ensure!(recorded.state == DepositState::Rejected);
-        ensure!(recorded.reason == Some(topup_core::deposit::RejectReason::UnsupportedAsset));
-        Ok(())
-    })
-    .await
-}
-
-#[tokio::test]
-async fn missing_deposit_scan_never_passes_the_scanner() -> Result<()> {
-    with_database(|pool| async move {
-        let route = route()?;
-        let seed = seed_identity(&pool, &route, 2).await?;
-        let chain = Arc::new(MockChain::at(9));
-        chain.derive(&[&seed]);
-        chain.logs.lock().unwrap().push(transfer(
-            12,
-            0,
-            7,
-            route.asset.contract,
-            Address::from([13; 20]),
-            seed.address,
-            500,
-        ));
-        let reconciler = reconciler(&pool, route, chain.clone())?;
-
-        // Nothing is compared before the scanner commits a range.
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().is_empty());
-
-        // The scanner cursor does not cover an address still awaiting its backfill.
-        db::commit_scan(&pool, CHAIN_ID, &[], &[], Some(6), None).await?;
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().is_empty());
-
-        // A transfer the scanner has not reached yet is not reported as missing.
-        db::commit_scan(&pool, CHAIN_ID, &[], &[seed.address_id], None, None).await?;
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().as_slice() == [(0, 6)]);
-
-        db::commit_scan(&pool, CHAIN_ID, &[], &[], Some(9), None).await?;
-        let missing = reconciler.check(CheckName::MissingDeposit).await?;
-        ensure!(missing.len() == 1 && missing[0].repair_applied);
-        ensure!(chain.log_requests.lock().unwrap().last() == Some(&(7, 9)));
-        Ok(())
-    })
-    .await
 }
 
 #[tokio::test]
@@ -569,13 +371,28 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
         // transfer and factory event is indexed, and only forwarders whose settled ledger holds
         // unswept funds.
         scanned_through(&pool, 140).await?;
+        // Finality advances independently beyond coverage. This distinct hash is deliberately
+        // rejected by the chain fixture: custody at it would compare unindexed state.
+        db::chain_reads::advance_checkpoint(
+            &pool,
+            CHAIN_ID,
+            db::chain_reads::Boundary {
+                number: 150,
+                hash: B256::repeat_byte(25),
+                time: Utc::now(),
+            },
+        )
+        .await?;
         ensure!(
             reconciler
                 .check(CheckName::CustodyBalance)
                 .await?
                 .is_empty()
         );
-        ensure!(chain.balance_reads.lock().unwrap().as_slice() == [(140, vec![swept.address])]);
+        ensure!(
+            chain.balance_reads.lock().unwrap().as_slice()
+                == [(140, vec![swept.address]), (140, vec![swept.address])]
+        );
         ensure!(
             frozen_chains(&pool, &*route_set(route.clone())?)
                 .await?
@@ -607,383 +424,101 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
     .await
 }
 
-/// Staging's provider A is Tenderly's public Sepolia gateway, and every task of the service starts
-/// at once on it, so the first round after a restart meets refusals (`429`, `-32005`) that later
-/// rounds do not. The round backs off within itself: it completes, still repairs and reports,
-/// and resumes from the cursors the rounds before the restart stored.
 #[tokio::test]
-async fn first_round_after_restart_completes_against_a_rate_limiting_provider() -> Result<()> {
+async fn custody_requires_full_dual_balance_agreement_even_when_read_matches() -> Result<()> {
     with_database(|pool| async move {
-        let (node, port, server) = RpcNode::serve().await?;
-        let mut route = route()?;
-        // Provider A is the node; the reconciler never reads provider B.
-        route.chain.rpc_providers = vec![
-            format!("http://127.0.0.1:{port}/"),
-            format!("http://localhost:{port}/"),
-        ];
-        let token = route.asset.contract;
-        let seed = seed_identity(&pool, &route, 91).await?;
-        let later_seed = seed_identity(&pool, &route, 94).await?;
-        node.derived.lock().unwrap().insert(seed.salt, seed.address);
-        node.derived
-            .lock()
-            .unwrap()
-            .insert(later_seed.salt, later_seed.address);
-        let recorded = transfer(
-            91,
-            91,
-            100,
-            token,
-            Address::from([201; 20]),
-            seed.address,
-            1_000,
-        );
+        let route = route()?;
+        let first = seed_identity(&pool, &route, 81).await?;
+        let second = seed_identity(&pool, &route, 82).await?;
         seed_deposit(
             &pool,
             &route,
-            &seed,
-            DepositSeed::new(91, DepositState::Detected)
+            &first,
+            DepositSeed::new(81, DepositState::Credited)
                 .block(100)
-                .amount(1_000),
+                .amount(100),
         )
         .await?;
-        let missed = transfer(
-            92,
-            0,
-            120,
-            token,
-            Address::from([202; 20]),
-            seed.address,
-            500,
-        );
-        node.logs.lock().unwrap().extend([recorded, missed]);
-        node.balances
+        seed_deposit(
+            &pool,
+            &route,
+            &second,
+            DepositSeed::new(82, DepositState::Credited)
+                .block(100)
+                .amount(200),
+        )
+        .await?;
+        scanned_through(&pool, 140).await?;
+        let read = Arc::new(MockChain::at(150));
+        let verify = Arc::new(MockChain::at(150));
+        for reader in [&read, &verify] {
+            reader.balances.lock().unwrap().extend([
+                (first.address, U256::from(100)),
+                (second.address, U256::from(200)),
+            ]);
+        }
+        let check = reconciler(&pool, route.clone(), read.clone())?.with_verifiers(BTreeMap::from(
+            [(CHAIN_ID, verify.clone() as Arc<dyn ReconciliationChain>)],
+        ));
+        // The first entry agrees; the second does not. A matching read vector cannot clear it.
+        verify
+            .balances
             .lock()
             .unwrap()
-            .insert(seed.address, U256::from(1_500_u64));
-        node.finalized.store(150, Ordering::SeqCst);
-        scanned_through(&pool, 150).await?;
-
-        let before_restart = Reconciler::from_routes(pool.clone(), route_set(route.clone())?)?;
-        let report = before_restart.run_once().await?;
-        ensure!(report.succeeded(), "{:?}", report.check_errors);
-        drop(before_restart);
-
-        // The finality watch settled the repaired deposit.
-        sqlx::query("UPDATE deposits SET final_at = now() WHERE final_at IS NULL")
-            .execute(&pool)
-            .await?;
-        // While the service was down the chain moved on: one more transfer the scanner missed, and
-        // a balance that no longer matches the ledger.
-        let later = transfer(
-            93,
-            0,
-            250,
-            token,
-            Address::from([203; 20]),
-            later_seed.address,
-            200,
-        );
-        node.logs.lock().unwrap().push(later);
-        node.balances
-            .lock()
-            .unwrap()
-            .insert(seed.address, U256::from(1_501_u64));
-        node.finalized.store(300, Ordering::SeqCst);
-        scanned_through(&pool, 300).await?;
-        node.limit.store(3, Ordering::SeqCst);
-
-        let restarted = Reconciler::from_routes(pool.clone(), route_set(route)?)?;
-        let report = restarted.run_once().await?;
-        server.abort();
-
-        ensure!(report.succeeded(), "{:?}", report.check_errors);
+            .insert(second.address, U256::from(201));
         ensure!(
-            node.refused.load(Ordering::SeqCst) > 0,
-            "the provider never refused"
+            check.check(CheckName::CustodyBalance).await.is_err(),
+            "read-only agreement reported clean custody"
         );
-        ensure!(report.findings.iter().any(|finding| {
-            finding.check == CheckName::MissingDeposit
-                && finding.repair_applied
-                && finding.subjects.get("tx_hash") == Some(&format!("{:#x}", B256::from([93; 32])))
-        }));
-        ensure!(report.findings.iter().any(|finding| {
-            finding.check == CheckName::CustodyBalance
-                && finding.observed["balance_atomic"] == json!("1501")
-        }));
-        let deposit_cursor: i64 = sqlx::query_scalar(
-            "SELECT next_block FROM reconciliation_deposit_cursors WHERE chain_id = $1",
-        )
-        .bind(i64::try_from(CHAIN_ID)?)
-        .fetch_one(&pool)
-        .await?;
-        ensure!(deposit_cursor == 301);
-        // Even in token mode the check reads by recipient, any token, so it also finds transfers
-        // of tokens the scanner does not request.
-        ensure!(node.by_recipient.load(Ordering::SeqCst) > 0);
+        ensure!(
+            frozen_chains(&pool, &*route_set(route.clone())?)
+                .await?
+                .is_empty()
+        );
+        verify.fail_balances.store(true, Ordering::SeqCst);
+        ensure!(
+            check.check(CheckName::CustodyBalance).await.is_err(),
+            "an unavailable verifier reported clean custody"
+        );
+        ensure!(
+            frozen_chains(&pool, &*route_set(route.clone())?)
+                .await?
+                .is_empty()
+        );
+        verify.fail_balances.store(false, Ordering::SeqCst);
+        verify
+            .balances
+            .lock()
+            .unwrap()
+            .insert(second.address, U256::from(200));
+        ensure!(check.check(CheckName::CustodyBalance).await?.is_empty());
+        ensure!(
+            verify.balance_reads.lock().unwrap().len() == 3,
+            "a clean ledger skipped independent balances"
+        );
+        read.balances
+            .lock()
+            .unwrap()
+            .insert(first.address, U256::from(101));
+        ensure!(check.check(CheckName::CustodyBalance).await.is_err());
+        ensure!(
+            frozen_chains(&pool, &*route_set(route.clone())?)
+                .await?
+                .is_empty()
+        );
+        verify
+            .balances
+            .lock()
+            .unwrap()
+            .insert(first.address, U256::from(101));
+        ensure!(check.check(CheckName::CustodyBalance).await?.len() == 1);
+        ensure!(frozen_chains(&pool, &*route_set(route)?).await? == BTreeSet::from([CHAIN_ID]));
         Ok(())
     })
     .await
 }
 
-/// One JSON-RPC provider serving a reconciliation round's reads from a fixed chain: finalized
-/// head, `Transfer` logs with their blocks, no `Flushed` events, and Multicall3 `addressOf` and
-/// `balanceOf`. Past `limit` requests in one second it answers like Tenderly's public gateway:
-/// HTTP 429 with JSON-RPC `-32005 rate limit exceeded`.
-struct RpcNode {
-    finalized: AtomicU64,
-    limit: AtomicUsize,
-    admitted: Mutex<VecDeque<Instant>>,
-    refused: AtomicUsize,
-    /// `eth_getLogs` requests that named their recipients (address mode).
-    by_recipient: AtomicUsize,
-    logs: Mutex<Vec<TransferLog>>,
-    derived: Mutex<BTreeMap<B256, Address>>,
-    balances: Mutex<BTreeMap<Address, U256>>,
-}
-
-impl RpcNode {
-    async fn serve() -> Result<(Arc<Self>, u16, tokio::task::JoinHandle<std::io::Result<()>>)> {
-        let node = Arc::new(Self {
-            finalized: AtomicU64::new(0),
-            limit: AtomicUsize::new(usize::MAX),
-            admitted: Mutex::new(VecDeque::new()),
-            refused: AtomicUsize::new(0),
-            by_recipient: AtomicUsize::new(0),
-            logs: Mutex::new(Vec::new()),
-            derived: Mutex::new(BTreeMap::new()),
-            balances: Mutex::new(BTreeMap::new()),
-        });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
-        let app = axum::Router::new().route(
-            "/",
-            axum::routing::post({
-                let node = Arc::clone(&node);
-                move |axum::Json(request): axum::Json<Value>| async move {
-                    let id = request["id"].clone();
-                    if !node.admit() {
-                        let refusal = json!({"jsonrpc": "2.0", "id": id, "error": {
-                            "code": -32005, "message": "rate limit exceeded"}});
-                        return (StatusCode::TOO_MANY_REQUESTS, axum::Json(refusal));
-                    }
-                    let answer = match node.answer(&request) {
-                        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                        Err(error) => json!({"jsonrpc": "2.0", "id": id, "error": {
-                            "code": -32000, "message": error.to_string()}}),
-                    };
-                    (StatusCode::OK, axum::Json(answer))
-                }
-            }),
-        );
-        let server = tokio::spawn(async move { axum::serve(listener, app).await });
-        Ok((node, port, server))
-    }
-
-    fn admit(&self) -> bool {
-        let now = Instant::now();
-        let mut admitted = self.admitted.lock().unwrap();
-        while admitted
-            .front()
-            .is_some_and(|at| now.duration_since(*at) >= StdDuration::from_secs(1))
-        {
-            admitted.pop_front();
-        }
-        if admitted.len() >= self.limit.load(Ordering::SeqCst) {
-            self.refused.fetch_add(1, Ordering::SeqCst);
-            return false;
-        }
-        admitted.push_back(now);
-        true
-    }
-
-    fn answer(&self, request: &Value) -> Result<Value> {
-        let params = &request["params"];
-        match request["method"].as_str().unwrap_or_default() {
-            "eth_getBlockByNumber" => {
-                let number = self.finalized.load(Ordering::SeqCst);
-                Ok(rpc_block(B256::from(U256::from(number)), number))
-            }
-            "eth_getBlockByHash" => Ok(rpc_block(serde_json::from_value(params[0].clone())?, 0)),
-            "eth_getLogs" => {
-                let filter = &params[0];
-                let from = quantity(&filter["fromBlock"])?;
-                let to = quantity(&filter["toBlock"])?;
-                let transfers = filter["topics"][0] == json!(transfer_topic());
-                // By recipient (address mode), or every transfer of the tokens (token mode).
-                if !filter["topics"][2].is_null() {
-                    self.by_recipient.fetch_add(1, Ordering::SeqCst);
-                }
-                let recipients = match &filter["topics"][2] {
-                    Value::Null => None,
-                    Value::Array(topics) => Some(topics.clone()),
-                    topic => Some(vec![topic.clone()]),
-                };
-                let tokens: Option<Vec<Address>> = match &filter["address"] {
-                    Value::Null => None,
-                    Value::Array(tokens) => {
-                        Some(serde_json::from_value(Value::Array(tokens.clone()))?)
-                    }
-                    token => Some(vec![serde_json::from_value(token.clone())?]),
-                };
-                Ok(Value::Array(
-                    self.logs
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .filter(|log| {
-                            transfers
-                                && (from..=to).contains(&log.block_number)
-                                && recipients.as_ref().is_none_or(|topics| {
-                                    topics.contains(&json!(log.to.into_word()))
-                                })
-                                && tokens
-                                    .as_ref()
-                                    .is_none_or(|tokens| tokens.contains(&log.token))
-                        })
-                        .map(rpc_log)
-                        .collect(),
-                ))
-            }
-            "eth_call" => {
-                let call = &params[0];
-                let to: Address = serde_json::from_value(call["to"].clone())?;
-                ensure!(to == MULTICALL3_ADDRESS, "only Multicall3 is served");
-                let input: Bytes =
-                    serde_json::from_value(call.get("input").unwrap_or(&call["data"]).clone())?;
-                let results = aggregate3Call::abi_decode(&input)?
-                    .calls
-                    .iter()
-                    .map(|call| {
-                        let data = &call.callData;
-                        let returned = if let Ok(call) = addressOfCall::abi_decode(data) {
-                            let derived = self.derived.lock().unwrap();
-                            addressOfCall::abi_encode_returns(
-                                derived.get(&call.salt).context("unknown salt")?,
-                            )
-                        } else {
-                            let account = balanceOfCall::abi_decode(data)?.account;
-                            let balances = self.balances.lock().unwrap();
-                            balanceOfCall::abi_encode_returns(
-                                &balances.get(&account).copied().unwrap_or_default(),
-                            )
-                        };
-                        Ok(Call3Result {
-                            success: true,
-                            returnData: returned.into(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(json!(Bytes::from(aggregate3Call::abi_encode_returns(
-                    &results
-                ))))
-            }
-            "eth_getTransactionReceipt" => {
-                let hash: B256 = serde_json::from_value(params[0].clone())?;
-                let logs = self.logs.lock().unwrap();
-                let receipt_logs = logs
-                    .iter()
-                    .filter(|log| log.tx_hash == hash)
-                    .collect::<Vec<_>>();
-                let first = receipt_logs.first().context("unknown transaction")?;
-                Ok(json!({
-                    "transactionHash": hash,
-                    "transactionIndex": "0x0",
-                    "blockHash": first.block_hash,
-                    "blockNumber": format!("{:#x}", first.block_number),
-                    "from": first.tx_from,
-                    "to": first.token,
-                    "cumulativeGasUsed": "0x0",
-                    "gasUsed": "0x0",
-                    "effectiveGasPrice": "0x0",
-                    "contractAddress": null,
-                    "logs": receipt_logs.iter().map(|log| rpc_log(log)).collect::<Vec<_>>(),
-                    "logsBloom": Bloom::ZERO,
-                    "type": "0x2",
-                    "status": "0x1",
-                }))
-            }
-            "eth_getTransactionByHash" => {
-                let hash: B256 = serde_json::from_value(params[0].clone())?;
-                let logs = self.logs.lock().unwrap();
-                let log = logs
-                    .iter()
-                    .find(|log| log.tx_hash == hash)
-                    .context("unknown transaction")?;
-                Ok(json!({
-                    "hash": hash,
-                    "nonce": format!("{:#x}", log.tx_nonce),
-                    "blockHash": log.block_hash,
-                    "blockNumber": format!("{:#x}", log.block_number),
-                    "transactionIndex": "0x0",
-                    "from": log.tx_from,
-                    "to": log.token,
-                    "value": "0x0",
-                    "gas": "0x0",
-                    "maxFeePerGas": "0x0",
-                    "maxPriorityFeePerGas": "0x0",
-                    "gasPrice": "0x0",
-                    "input": "0x",
-                    "chainId": "0x1",
-                    "type": "0x2",
-                    "accessList": [],
-                    "v": "0x0",
-                    "yParity": "0x0",
-                    "r": "0x1",
-                    "s": "0x1",
-                }))
-            }
-            method => anyhow::bail!("{method} is not served"),
-        }
-    }
-}
-
-fn transfer_topic() -> B256 {
-    keccak256("Transfer(address,address,uint256)")
-}
-
-fn quantity(value: &Value) -> Result<u64> {
-    let hex = value.as_str().context("quantity is a string")?;
-    Ok(u64::from_str_radix(hex.trim_start_matches("0x"), 16)?)
-}
-
-fn rpc_block(hash: B256, number: u64) -> Value {
-    json!({
-        "hash": hash,
-        "parentHash": B256::ZERO,
-        "sha3Uncles": B256::ZERO,
-        "miner": Address::ZERO,
-        "stateRoot": B256::ZERO,
-        "transactionsRoot": B256::ZERO,
-        "receiptsRoot": B256::ZERO,
-        "logsBloom": Bloom::ZERO,
-        "difficulty": "0x0",
-        "number": format!("{number:#x}"),
-        "gasLimit": "0x0",
-        "gasUsed": "0x0",
-        "timestamp": "0x6553f100",
-        "extraData": "0x",
-        "mixHash": B256::ZERO,
-        "nonce": "0x0000000000000000",
-        "transactions": [],
-        "uncles": [],
-    })
-}
-
-fn rpc_log(log: &TransferLog) -> Value {
-    json!({
-        "address": log.token,
-        "topics": [transfer_topic(), log.from.into_word(), log.to.into_word()],
-        "data": B256::from(log.amount.value().to_be_bytes::<32>()),
-        "blockHash": log.block_hash,
-        "blockNumber": format!("{:#x}", log.block_number),
-        "transactionHash": log.tx_hash,
-        "transactionIndex": "0x0",
-        "logIndex": format!("{:#x}", log.log_index),
-        "removed": false,
-    })
-}
-
+/// Derivation reads are cached only while the stored derivation inputs remain unchanged.
 #[tokio::test]
 async fn each_stored_derivation_is_read_once_until_its_row_changes() -> Result<()> {
     with_database(|pool| async move {
@@ -1196,9 +731,7 @@ async fn frozen_chain_gates_startup_pumps_and_scanner() -> Result<()> {
         ensure!(reason.as_deref() == Some("chain_frozen"));
 
         let scanner_routes = topup::scanner::chain_routes(&*route_set(route)?);
-        let stats =
-            topup::scanner::scan_once(&pool, &UnreachableReader, &scanner_routes[0]).await?;
-        ensure!(stats.inserted == 0);
+        ensure!(topup::scanner::coverage_once(&pool, &UnreachableReader, &UnreachableReader, &scanner_routes[0], 1).await.is_err());
         Ok(())
     })
     .await
@@ -1272,11 +805,12 @@ async fn application_role_cannot_rewrite_findings_or_blocks() -> Result<()> {
 async fn loop_respects_cancellation() -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
-        seed_account(&pool).await?;
+        let seed = seed_identity(&pool, &route, 82).await?;
         let chain = Arc::new(MockChain {
-            finalized_delay: StdDuration::from_secs(10),
+            derivation_delay: StdDuration::from_secs(10),
             ..MockChain::default()
         });
+        chain.derive(&[&seed]);
         let reconciler = Arc::new(Reconciler::with_dependencies(
             pool.clone(),
             route_set(route)?,
@@ -1298,7 +832,7 @@ async fn loop_respects_cancellation() -> Result<()> {
         });
         tokio::time::timeout(
             StdDuration::from_secs(1),
-            chain.finalized_started.notified(),
+            chain.derivation_started.notified(),
         )
         .await?;
         cancellation.cancel();
@@ -1306,6 +840,139 @@ async fn loop_respects_cancellation() -> Result<()> {
         Ok(())
     })
     .await
+}
+
+#[tokio::test]
+async fn scheduled_custody_reads_both_sources_hourly() -> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let seed = seed_identity(&pool, &route, 85).await?;
+        seed_deposit(
+            &pool,
+            &route,
+            &seed,
+            DepositSeed::new(85, DepositState::Credited)
+                .block(100)
+                .amount(250),
+        )
+        .await?;
+        scanned_through(&pool, 140).await?;
+        let chain = Arc::new(MockChain::at(150));
+        chain.derive(&[&seed]);
+        chain
+            .balances
+            .lock()
+            .unwrap()
+            .insert(seed.address, U256::from(250));
+        // A due derivation reports each round; failed checks do not suspend custody's schedule.
+        chain.fail_derivation.store(true, Ordering::SeqCst);
+        let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?);
+        let cancellation = CancellationToken::new();
+        tokio::time::pause();
+        // Keep the runtime runnable while PostgreSQL responds, so paused time advances
+        // only at the explicit boundaries below, rather than automatically during DB I/O.
+        let clock_guard = tokio::spawn({
+            let cancellation = cancellation.clone();
+            async move { while !cancellation.is_cancelled() { tokio::task::yield_now().await; } }
+        });
+        let task = tokio::spawn({
+            let reconciler = reconciler.clone(); let cancellation = cancellation.clone();
+            async move { reconciler.run_loop(StdDuration::from_secs(300),topup::scanner::FinalizedHeads::default(),cancellation).await; }
+        });
+        tokio::time::advance(StdDuration::from_millis(1)).await;
+        let result = async {
+            for tick in 1..=14 {
+                let deadline = std::time::Instant::now() + StdDuration::from_secs(10);
+                let mut timer_poll = std::time::Instant::now();
+                loop {
+                    tokio::select! {
+                        () = chain.derivation_started.notified() => break,
+                        () = tokio::task::yield_now() => {
+                            ensure!(std::time::Instant::now() < deadline,"reconciliation did not reach tick {tick}");
+                            if timer_poll.elapsed() >= StdDuration::from_millis(10) {
+                                tokio::time::advance(StdDuration::from_millis(1)).await;
+                                timer_poll = std::time::Instant::now();
+                            }
+                        },
+                    }
+                }
+                // A five-minute regular cadence still has only one dual snapshot before
+                // the hour, and a second one at the hour. Each notification starts a round.
+                if (2..=13).contains(&tick) {
+                    ensure!(chain.balance_reads.lock().unwrap().len()==2,
+                        "custody ran more often than hourly at tick {tick}");
+                } else if tick==14 {
+                    ensure!(chain.balance_reads.lock().unwrap().len()==4,
+                        "hourly dual custody did not resume");
+                }
+                tokio::time::advance(StdDuration::from_secs(300)).await;
+            }
+            Ok::<_,anyhow::Error>(())
+        }.await;
+        cancellation.cancel(); tokio::time::resume(); task.await?; clock_guard.await?;
+        result
+    })
+    .await
+}
+
+#[tokio::test]
+async fn stalled_checkpoint_still_runs_dual_custody_every_hour() -> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let seed = seed_identity(&pool, &route, 86).await?;
+        seed_deposit(&pool, &route, &seed,
+            DepositSeed::new(86, DepositState::Credited).block(100).amount(250)).await?;
+        scanned_through(&pool, 140).await?;
+        let chain = Arc::new(MockChain::at(150));
+        chain.derive(&[&seed]);
+        chain.balances.lock().unwrap().insert(seed.address, U256::from(250));
+        let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?);
+        let heads = topup::scanner::FinalizedHeads::default();
+        heads.publish(CHAIN_ID, FinalizedHead { number: 140, time: Utc::now() });
+        let cancellation = CancellationToken::new();
+        tokio::time::pause();
+        // Keep PostgreSQL I/O from advancing the paused clock automatically.
+        let clock_guard = tokio::spawn({
+            let cancellation = cancellation.clone();
+            async move { while !cancellation.is_cancelled() { tokio::task::yield_now().await; } }
+        });
+        let task = tokio::spawn({
+            let reconciler = reconciler.clone();
+            let cancellation = cancellation.clone();
+            async move { reconciler.run_loop(StdDuration::from_secs(7_200), heads, cancellation).await; }
+        });
+        tokio::time::advance(StdDuration::from_millis(1)).await;
+        let result = async {
+            for hour in 0..=2 {
+                let expected = (hour + 1) * 2;
+                let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+                loop {
+                    let reads = chain.balance_reads.lock().unwrap().len();
+                    let complete: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM reconciliation_work_cursors WHERE chain_id=$1 AND check_name LIKE 'custody:%' AND last_id IS NULL) AND NOT EXISTS(SELECT 1 FROM reconciliation_work_cursors WHERE last_id IS NOT NULL)",
+                    ).bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
+                    if reads == expected && complete { break; }
+                    ensure!(std::time::Instant::now() < deadline,
+                        "stalled checkpoint skipped hourly dual custody at hour {hour}: {reads} reads, expected {expected}");
+                    // Poll Tokio's millisecond timer driver without allowing DB I/O to
+                    // auto-advance the paused clock to the next scheduled hour.
+                    tokio::time::advance(StdDuration::from_millis(1)).await;
+                    tokio::task::yield_now().await;
+                }
+                // Let the completed report reach the loop's checkpoint cache before the next tick.
+                tokio::task::yield_now().await;
+                ensure!(chain.balance_reads.lock().unwrap().iter().all(|(block,_)| *block == 140),
+                    "custody required the checkpoint to advance");
+                if hour < 2 { tokio::time::advance(StdDuration::from_millis(3_600_001)).await; }
+            }
+            Ok::<_,anyhow::Error>(())
+        }.await;
+        cancellation.cancel();
+        tokio::time::resume();
+        task.await?;
+        clock_guard.await?;
+        result
+    }).await
 }
 
 #[tokio::test]
@@ -1324,7 +991,7 @@ async fn loop_publishes_failed_checks_for_the_daily_report() -> Result<()> {
         let cancellation = CancellationToken::new();
         // The first tick is immediate; no other test completes a loop round in this binary.
         let round = async {
-            while topup::observability::reconciliation().is_none() {
+            while !topup::observability::reconciliation().is_some_and(|status| status.failed_checks.iter().any(|(check, _)| check == "address_derivation")) {
                 tokio::time::sleep(StdDuration::from_millis(20)).await;
             }
         };
@@ -1355,6 +1022,7 @@ where
     let Some(context) = TestDatabase::create().await? else {
         return Ok(());
     };
+    seed::initialize_dual_chain(&context.app_pool, CHAIN_ID).await?;
     let result = test(context.app_pool.clone()).await;
     let cleanup = context.cleanup().await;
     result.and(cleanup)
@@ -1395,7 +1063,19 @@ async fn scanned_through(pool: &PgPool, block: u64) -> Result<()> {
         .into_iter()
         .map(|address| address.id)
         .collect::<Vec<_>>();
-    db::commit_scan(pool, CHAIN_ID, &[], &ids, Some(block), None).await?;
+    let boundary = topup::db::chain_reads::Boundary {
+        number: block,
+        hash: B256::repeat_byte(24),
+        time: Utc::now(),
+    };
+    topup::db::chain_reads::advance_checkpoint(pool, CHAIN_ID, boundary).await?;
+    topup::db::chain_reads::initialize_coverage(pool, CHAIN_ID, boundary).await?;
+    sqlx::query("UPDATE chain_coverage SET through_block=$2,through_hash=$3,through_time=$4 WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).bind(i64::try_from(block)?).bind(format!("{:#x}",boundary.hash)).bind(boundary.time).execute(pool).await?;
+    sqlx::query("UPDATE addresses SET backfilled=true,dual_covered_through=$2 WHERE id=ANY($1)")
+        .bind(ids)
+        .bind(i64::try_from(block)?)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -1409,32 +1089,6 @@ async fn deposit(pool: &PgPool, id: Uuid) -> Result<Deposit> {
         .context("deposit must exist")
 }
 
-fn transfer(
-    number: u8,
-    log_index: u64,
-    block_number: u64,
-    token: Address,
-    from: Address,
-    to: Address,
-    amount: u64,
-) -> TransferLog {
-    TransferLog {
-        tx_hash: B256::from([number; 32]),
-        log_index,
-        receipt_log_index: log_index,
-        tx_from: alloy_primitives::Address::ZERO,
-        tx_nonce: 0,
-        block_number,
-        block_hash: B256::from([number.wrapping_add(1); 32]),
-        block_time: Utc::now(),
-        token,
-        from,
-        to,
-        amount: AtomicAmount::new(U256::from(amount)),
-    }
-}
-
-/// Returns the test account, creating it once.
 async fn seed_account(pool: &PgPool) -> Result<Uuid> {
     let existing =
         sqlx::query_scalar::<_, Uuid>("SELECT id FROM accounts WHERE name = 'reconciler'")
@@ -1620,6 +1274,7 @@ fn route_set(route: RouteFile) -> Result<Arc<topup::routes::RouteSet>> {
 async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposits() -> Result<()> {
     support::with_database(|database| Box::pin(async move {
         let pool=database.app_pool.clone();
+        seed::initialize_dual_chain(&pool, CHAIN_ID).await?;
         let route=route()?;
         let seed=seed_identity(&pool,&route,1).await?;
         let original=seed_deposit(&pool,&route,&seed,DepositSeed::new(2,DepositState::Credited).block(3).credit(101)).await?;
@@ -1673,31 +1328,6 @@ async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposit
         ensure!(findings.len()==1 && findings[0].subjects["deposit_id"]==original.to_string(),"old credit was skipped: {findings:?}");
         println!("SCALE credit_round_max={max_credit_round:?} old_work_per_round=200000 new_work_per_round=1000");
 
-        let old_payment=transfer(222,0,3,route.asset.contract,Address::from([13;20]),seed.address,500);
-        let (first_page,_)=db::scan_address_page(&pool,CHAIN_ID,None).await?;
-        let early=transfer(224,0,5,route.asset.contract,Address::from([13;20]),first_page[0].address,500);
-        let reader=ScaleReader {payments:vec![old_payment,early],requests:AtomicUsize::new(0),max_addresses:AtomicUsize::new(0)};
-        let configured_routes=route_set(route.clone())?;
-        let routes=topup::scanner::chain_routes(&configured_routes).remove(0);
-        db::initialize_cursor(&pool,CHAIN_ID,0,Utc::now()).await?;
-        let mut head_routes=routes.clone();
-        head_routes.chain.confirmations=topup_core::route::Confirmations::Depth(1);
-        for round in 0..200 {
-            let heads=topup_core::route::ChainHeads {latest:Some(5),safe:Some(5),finalized:5};
-            topup::scanner::scan_new_blocks(&pool,&reader,&head_routes,heads).await?.context("head page should run")?;
-            ensure!(db::get_confirmed_cursor(&pool,CHAIN_ID).await?==Some(if round<199 {0}else{5}),"confirmation cursor advanced before every page committed");
-            let pending:i64=sqlx::query_scalar("SELECT count(*) FROM pending_transfers WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
-            ensure!(pending==if round<199 {1}else{2},"head page deleted another page's pending transfer");
-        }
-        for round in 0..200 {
-            let started=std::time::Instant::now();
-            let stats=topup::scanner::scan_once(&pool,&reader,&routes).await?;
-            ensure!(stats.cursor==if round<199 {0}else{5},"scanner skipped an address page");
-            ensure!(started.elapsed()<StdDuration::from_secs(5),"unbounded scan round {round}");
-        }
-        ensure!(reader.max_addresses.load(Ordering::Relaxed)<=1_000);
-        ensure!(deposit(&pool,deposit_id(CHAIN_ID,B256::from([222;32]),0)).await?.address_id==seed.address_id);
-        println!("SCALE scanner_rounds=200 max_addresses={} rpc_requests={}",reader.max_addresses.load(Ordering::Relaxed),reader.requests.load(Ordering::Relaxed));
         let (first_page,_)=db::scan_address_page(&pool,CHAIN_ID,None).await?;
         for address in first_page {chain.balances.lock().unwrap().insert(address.address,U256::from(10_u64).pow(U256::from(18_u8)));}
         let custody_started=std::time::Instant::now();
@@ -1705,95 +1335,8 @@ async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposit
         ensure!(chain.balance_reads.lock().unwrap().iter().all(|(_,a)|a.len()<=1_000));
         ensure!(custody_started.elapsed()<StdDuration::from_secs(5));
         println!("SCALE custody_round={:?}",custody_started.elapsed());
-        chain.logs.lock().unwrap().push(transfer(223,0,4,route.asset.contract,Address::from([13;20]),seed.address,500));
-        for round in 0..200 {
-            let reconciler=reconciler(&pool,route.clone(),chain.clone())?;
-            if round==100 {
-                *chain.fail_logs_from.lock().unwrap()=Some(0);
-                ensure!(reconciler.check(CheckName::MissingDeposit).await.is_err());
-                *chain.fail_logs_from.lock().unwrap()=None;
-            }
-            reconciler.check(CheckName::MissingDeposit).await?;
-        }
-        ensure!(deposit(&pool,deposit_id(CHAIN_ID,B256::from([223;32]),0)).await?.address_id==seed.address_id,"old address omitted by paged reconciliation");
-        let next:i64=sqlx::query_scalar("SELECT next_block FROM reconciliation_deposit_cursors WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
-        ensure!(next==6);
         Ok(())
     })).await
-}
-
-struct ScaleReader {
-    payments: Vec<TransferLog>,
-    requests: AtomicUsize,
-    max_addresses: AtomicUsize,
-}
-impl ScaleReader {
-    fn logs(&self, addresses: &[Address], from: u64, to: u64) -> Vec<TransferLog> {
-        self.requests.fetch_add(1, Ordering::Relaxed);
-        self.max_addresses
-            .fetch_max(addresses.len(), Ordering::Relaxed);
-        self.payments
-            .iter()
-            .filter(|payment| {
-                addresses.contains(&payment.to) && (from..=to).contains(&payment.block_number)
-            })
-            .cloned()
-            .collect()
-    }
-}
-impl ChainReader for ScaleReader {
-    async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
-        Ok(FinalizedHead {
-            number: 5,
-            time: Utc::now(),
-        })
-    }
-    async fn factory_logs(
-        &self,
-        _factory: Address,
-        _addresses: &[Address],
-        _from: u64,
-        _to: u64,
-    ) -> Result<Vec<topup_adapters::chain::evm::FactoryLog>, ChainError> {
-        Ok(Vec::new())
-    }
-    async fn transfer_logs_to(
-        &self,
-        addresses: &[Address],
-        from: u64,
-        to: u64,
-    ) -> Result<Vec<TransferLog>, ChainError> {
-        Ok(self.logs(addresses, from, to))
-    }
-    async fn token_transfers(
-        &self,
-        _tokens: &[Address],
-        addresses: &std::collections::BTreeSet<Address>,
-        from: u64,
-        to: u64,
-    ) -> Result<Vec<TransferLog>, ChainError> {
-        Ok(self.logs(&addresses.iter().copied().collect::<Vec<_>>(), from, to))
-    }
-    async fn confirmation_heads(
-        &self,
-        _confirmations: topup_core::route::Confirmations,
-    ) -> Result<topup_core::route::ChainHeads, ChainError> {
-        Ok(topup_core::route::ChainHeads {
-            latest: Some(5),
-            safe: Some(5),
-            finalized: 5,
-        })
-    }
-    async fn receipt_transfer(
-        &self,
-        _tx: B256,
-        _index: u64,
-    ) -> Result<topup_adapters::chain::evm::ReceiptLookup, ChainError> {
-        Ok(topup_adapters::chain::evm::ReceiptLookup::Missing)
-    }
-    async fn nonce_at(&self, _address: Address, _block: u64) -> Result<u64, ChainError> {
-        Ok(0)
-    }
 }
 
 #[tokio::test]

@@ -1250,8 +1250,7 @@ with open(sys.argv[2], 'w') as output:
                      'TOPUP_TEST_KRAKEN_ENDPOINT': 'http://price-stub:8080/0/public/Ticker',
                      'TOPUP_TEST_BINANCE_ENDPOINT': 'http://price-stub:8080/api/v3/ticker/price'},
                  'command': ['topup', 'run', '--config', '/etc/topup/topup.yaml',
-                             '--public-origin', 'http://topup:8080',
-                             '--head-poll-interval-s', '1', '--finalized-poll-interval-s', '1']}
+                             '--public-origin', 'http://topup:8080']}
     }}, output)
 PYCHAINS
 chain_overlay=(-f "$admin_dir/chains.json")
@@ -1323,21 +1322,17 @@ for chain in sepolia base-sepolia; do
     done < <(jq -r --argjson id "$chain_id" '.routes[] | select(.chain.chain_id == $id) |
         [.asset.contract, .asset.symbol, .chain.sanctions_oracle] | @tsv' "$admin_dir/config.json")
 done
-# Replace whole groups, including all staging backup members: no external RPC is used.
-jq '
-    .rpc_companies.tenderly.domains = ["drill-a.test"]
-    | .rpc_companies.publicnode.domains = ["drill-b.test"]
-    | .rpc_companies.drpc.domains = ["drpc.test"]
-    | .rpc_groups |= with_entries(.key as $group | .value.members = [.value.members[0]]
-        | .value.members[0] |= (del(.sealed_key) | .url = (if $group == "provider-a" then "http://sepolia.drill-a.test:8545"
-              elif $group == "provider-b" then "http://sepolia.drill-b.test:18545"
-              elif $group == "base-sepolia-a" then "http://base.drill-a.test:8545"
-              elif $group == "base-sepolia-b" then "http://base.drill-b.test:18546"
-              elif $group == "mainnet-a" then "http://mainnet.drill-a.test:8545"
-              elif $group == "mainnet-b" then "http://mainnet.drpc.test:8545"
-              elif $group == "base-mainnet-a" then "http://base-mainnet.drill-a.test:8545"
-              elif $group == "base-mainnet-b" then "http://base-mainnet.drill-b.test:8545"
-              else error("unexpected RPC group") end)))' "$admin_dir/config.json" >"$admin_dir/topup.json"
+# Real independent HTTPS names and verified certificates for both local sources.
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=critical,CA:FALSE' -subj /CN=rpc.test \
+    -addext 'subjectAltName=DNS:*.rpc.test' -keyout "$admin_dir/rpc-key.pem" \
+    -out "$admin_dir/rpc-cert.pem" >/dev/null 2>&1
+cp "$admin_dir/config.json" "$admin_dir/topup.json"
+python3 "$root/deploy/local/rpc-tls.py" "$admin_dir/topup.json" "$admin_dir/rpc-tls.json" --restore-check \
+    --certificate "$admin_dir/rpc-cert.pem" --key "$admin_dir/rpc-key.pem" \
+    --image python:3.14-slim-trixie@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2 \
+    --chain 11155111=http://anvil:8545 --chain 84532=http://anvil-base:8545 \
+    --chain 1=http://anvil-mainnet-price:8545 --chain 8453=http://anvil-base-mainnet-price:8545
+chain_overlay+=(-f "$admin_dir/rpc-tls.json")
 docker run --rm -i --network none "$TOPUP_LOCAL_SERVICE_IMAGE" topup config check /dev/stdin \
     <"$admin_dir/topup.json"
 mv "$admin_dir/topup.json" "$env_dir/topup.yaml"

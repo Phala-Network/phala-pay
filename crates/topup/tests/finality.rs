@@ -44,6 +44,9 @@ struct ScriptedChain {
 }
 
 impl ChainReader for ScriptedChain {
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        Ok((block_hash(number), BLOCK_TIME))
+    }
     async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
         Ok(FinalizedHead {
             number: FINALIZED,
@@ -89,9 +92,16 @@ impl ChainReader for ScriptedChain {
             return Ok(ReceiptLookup::Missing);
         }
         let block_number = 20;
+        let nonce: u64 = U256::from_be_bytes(tx_hash.0)
+            .try_into()
+            .expect("fixture nonce");
         Ok(ReceiptLookup::Included {
             block_number,
             block_hash: block_hash(block_number),
+            status: true,
+            block_time: BLOCK_TIME,
+            tx_from: SENDER,
+            tx_nonce: nonce,
             transfer: Some(Box::new(TransferLog {
                 tx_hash,
                 receipt_log_index,
@@ -100,7 +110,7 @@ impl ChainReader for ScriptedChain {
                 block_hash: block_hash(block_number),
                 block_time: BLOCK_TIME,
                 tx_from: SENDER,
-                tx_nonce: 0,
+                tx_nonce: nonce,
                 token: TOKEN,
                 from: SENDER,
                 to: RECIPIENT,
@@ -125,7 +135,7 @@ async fn insert(pool: &sqlx::PgPool, address_id: Uuid, index: u64, block: u64) -
                 log_index: 0,
                 receipt_log_index: 0,
                 tx_from: SENDER,
-                tx_nonce: 0,
+                tx_nonce: index,
                 is_final: false,
                 block_number: block,
                 block_hash: block_hash(block),
@@ -151,6 +161,16 @@ async fn deposits_the_watch_keeps_waiting_on_do_not_starve_later_ones() -> Resul
     with_database(|context| {
         Box::pin(async move {
             let pool = &context.app_pool;
+            db::chain_reads::advance_checkpoint(
+                pool,
+                CHAIN_ID,
+                db::chain_reads::Boundary {
+                    number: 100,
+                    hash: block_hash(100),
+                    time: BLOCK_TIME,
+                },
+            )
+            .await?;
             let (_, customer) = seed::create_account_and_customer(
                 pool,
                 &NewAccount::named("finality"),

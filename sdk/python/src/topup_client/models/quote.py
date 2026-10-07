@@ -68,6 +68,8 @@ class Quote:
         terms (QuoteTerms): The terms a quote was issued with.
         treasury (str): The treasury the address pays: your treasury of the chain when the quote was created. The
             address is the factory's `CREATE2` over it and the salt.
+        cancel_requested_at (int | None | Unset): Deferred cancellation request time, Unix seconds; null before a
+            request.
         client_secret (None | str | Unset): Lets the payer's browser read the quote's public view, `ClientQuote`, from
             `GET /v1/quotes/{id}?client_secret=…` without an API key. Returned only by
             `POST /v1/quotes`; a repeat with the same `Idempotency-Key` within 24 hours replays the
@@ -95,6 +97,7 @@ class Quote:
     status: str
     terms: QuoteTerms
     treasury: str
+    cancel_requested_at: int | None | Unset = UNSET
     client_secret: None | str | Unset = UNSET
     deposit: Deposit | None | str | Unset = UNSET
     payment: None | Payment | Unset = UNSET
@@ -142,6 +145,12 @@ class Quote:
 
         treasury = self.treasury
 
+        cancel_requested_at: int | None | Unset
+        if isinstance(self.cancel_requested_at, Unset):
+            cancel_requested_at = UNSET
+        else:
+            cancel_requested_at = self.cancel_requested_at
+
         client_secret: None | str | Unset
         if isinstance(self.client_secret, Unset):
             client_secret = UNSET
@@ -188,6 +197,8 @@ class Quote:
                 "treasury": treasury,
             }
         )
+        if cancel_requested_at is not UNSET:
+            field_dict["cancel_requested_at"] = cancel_requested_at
         if client_secret is not UNSET:
             field_dict["client_secret"] = client_secret
         if deposit is not UNSET:
@@ -240,6 +251,15 @@ class Quote:
         terms = QuoteTerms.from_dict(d.pop("terms"))
 
         treasury = d.pop("treasury")
+
+        def _parse_cancel_requested_at(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        cancel_requested_at = _parse_cancel_requested_at(d.pop("cancel_requested_at", UNSET))
 
         def _parse_client_secret(data: object) -> None | str | Unset:
             if data is None:
@@ -303,6 +323,7 @@ class Quote:
             status=status,
             terms=terms,
             treasury=treasury,
+            cancel_requested_at=cancel_requested_at,
             client_secret=client_secret,
             deposit=deposit,
             payment=payment,

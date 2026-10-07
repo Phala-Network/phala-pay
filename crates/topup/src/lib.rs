@@ -15,7 +15,8 @@
 pub mod api;
 pub mod api_keys;
 pub mod audit;
-mod chain_retry;
+pub mod chain_rpc;
+pub mod checkpoint;
 pub mod client_secret;
 pub mod config;
 pub mod contracts;
@@ -38,7 +39,6 @@ pub mod refunds;
 pub mod restore;
 pub mod restore_mode;
 pub mod routes;
-pub mod rpc_groups;
 pub mod rpc_provider;
 pub mod scanner;
 pub mod steps;
@@ -47,5 +47,5 @@ pub mod treasuries;
 pub mod webhook_endpoints;
 pub mod webhook_keys;
 
-/// RPC group acceptance and recovery probes.
+/// Typed read/verify endpoint self-tests and checkpoint initialization.
 pub mod rpc_runtime;

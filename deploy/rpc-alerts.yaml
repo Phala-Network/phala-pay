@@ -2,52 +2,63 @@
 groups:
   - name: phala-pay-rpc
     rules:
-      - alert: RpcGroupUnavailable
-        expr: topup_rpc_group_eligible_members == 0
-        for: 2m
+      - alert: RpcEvidenceDisagreement
+        expr: sum by (chain_id) (increase(topup_rpc_errors_total{class="disagreement"}[5m])) > 0
         labels: { severity: critical }
         annotations:
-          summary: "RPC group {{ $labels.group }} unavailable; credit waits for A and B"
-          runbook: "deploy/RPC.md"
-      - alert: RpcFinalizedFork
-        expr: topup_rpc_chain_frozen == 1
-        labels: { severity: critical }
-        annotations:
-          summary: "Chain {{ $labels.chain_id }} is durably frozen"
-          runbook: "deploy/RPC.md"
-      - alert: RpcCursorAnchorUnavailable
-        expr: topup_rpc_chain_awaiting_anchor == 1
+          summary: "Read and verify evidence disagreed on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/provider-disagreement.md"
+      - alert: RpcEndpointUnavailable
+        expr: topup_rpc_endpoint_ready == 0
         for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "Chain {{ $labels.chain_id }} waits for an agreed cursor anchor"
-          runbook: "deploy/RPC.md"
-      - alert: RpcMemberQuarantined
-        expr: topup_rpc_member_quarantined == 1
-        for: 5m
+          summary: "Endpoint {{ $labels.provider }} unavailable on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/rpc-health.md"
+      - alert: RpcCoverageLag
+        expr: topup_coverage_lag_seconds > 2700
         labels: { severity: warning }
         annotations:
-          summary: "RPC member {{ $labels.member }} requires credential or redirect review"
-          runbook: "deploy/RPC.md"
-      - alert: RpcClassificationRequired
-        expr: increase(topup_rpc_member_failures_total{class="unclassified"}[5m]) > 0
-        for: 5m
+          summary: "Dual coverage is over 45 minutes behind on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/rpc-health.md"
+      - alert: RpcAddressBackfillLag
+        expr: topup_addresses_lagging > 0
+        for: 1h
         labels: { severity: warning }
         annotations:
-          summary: "RPC member {{ $labels.member }} returned an unmapped error; review classification"
-          runbook: "deploy/RPC.md"
-      - alert: RpcHistoricalReviewBacklog
-        expr: topup_rpc_review_pending_windows > 0
-        for: 24h
+          summary: "Address history still needs dual backfill on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/rpc-health.md"
+      - alert: RpcPriceSnapshotBudgetExhausted
+        expr: topup_daily_budget_used{name=~"price:.*"} >= 100
         labels: { severity: warning }
         annotations:
-          summary: "Historical coverage still needs a different answering member"
-          runbook: "deploy/RPC.md"
-      - alert: TopupRpcReorgReplayStalled
-        expr: topup_rpc_reorg_pending_ranges > 0
-        for: 15m
-        labels:
-          severity: warning
+          summary: "Fresh quote snapshot budget exhausted until UTC midnight"
+          runbook: "deploy/runbooks/rpc-health.md"
+      - alert: RpcAddressCapacityWarning
+        expr: topup_issued_addresses / topup_issued_address_cap >= 0.7
+        labels: { severity: warning }
         annotations:
-          summary: Nonfinal RPC reorg replay is stalled
-          description: Inspect group eligibility and complete-window replay before resuming chain progress.
+          summary: "Historical address count has reached 70% of the cap on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/address-capacity.md"
+      - alert: RpcAddressCapacityCritical
+        expr: topup_issued_addresses / topup_issued_address_cap >= 0.9
+        labels: { severity: critical }
+        annotations:
+          summary: "Historical address count has reached 90% of the cap on chain {{ $labels.chain_id }}"
+          runbook: "deploy/runbooks/address-capacity.md"
+      - record: topup_rpc_daily_calls
+        expr: sum by (provider, chain_id) (increase(topup_rpc_calls_total[1d]))
+      - record: topup_rpc_infura_daily_credits
+        expr: sum by (provider, chain_id) (increase(topup_rpc_calls_total{provider=~"infura-.*",method="eth_getLogs"}[1d])) * 255 + sum by (provider, chain_id) (increase(topup_rpc_calls_total{provider=~"infura-.*",method!="eth_getLogs"}[1d])) * 80
+      - alert: RpcInfuraQuotaPressure
+        expr: sum(topup_rpc_infura_daily_credits) > 1500000
+        labels: { severity: warning }
+        annotations:
+          summary: "Infura daily run rate exceeds half the shared quota; stop adding load"
+          runbook: "deploy/runbooks/rpc-health.md"
+      - alert: RpcAnkrQuotaPressure
+        expr: sum(sum by (provider) (increase(topup_rpc_calls_total{provider=~"ankr-.*"}[7d]))) / 7 > 25000
+        labels: { severity: warning }
+        annotations:
+          summary: "Ankr seven-day run rate exceeds 25,000 calls/day; stop adding load"
+          runbook: "deploy/runbooks/rpc-health.md"

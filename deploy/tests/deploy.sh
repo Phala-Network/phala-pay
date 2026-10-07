@@ -203,7 +203,7 @@ fi
 export STUB_SLEEP STUB_SHRED
 chmod +x "$bin"/*
 
-secrets=(operator-key-id operator-secret-key)
+secrets=(operator-key-id operator-secret-key operator-read-key operator-verify-key)
 # deploy NAME [ENV...]: in a subshell, the release's deploy.sh, piped to bash as from
 # pay.phala.com, with ENV set, from fresh stub state.
 deploy() {
@@ -216,7 +216,7 @@ deploy() {
         STUB_ROOT="$root" STUB_COMMIT="$commit" STUB_LOG="$tmp/log" STUB_STATE="$tmp/state" STUB_SDK="$sdk" \
         STUB_GH_VERSION=2.101.0 STUB_REFUSE=never CVM_NAME="$name" DEPLOY_ENVIRONMENT=staging \
         WALG_S3_PREFIX=s3://operator-backups/"$name" AWS_ENDPOINT=https://objects.operator.test \
-        AWS_ACCESS_KEY_ID="${secrets[0]}" AWS_SECRET_ACCESS_KEY="${secrets[1]}" "$@" \
+        AWS_ACCESS_KEY_ID="${secrets[0]}" AWS_SECRET_ACCESS_KEY="${secrets[1]}" TOPUP_RPC_ANKR_KEY="${secrets[2]}" TOPUP_RPC_INFURA_KEY="${secrets[3]}" "$@" \
         bash -s -- --non-interactive <"$assets/deploy.sh" >"$tmp/$name.out" 2>"$tmp/$name.err"
 }
 # run NAME [ENV...]: deploy, to its end.
@@ -269,6 +269,8 @@ AWS_ENDPOINT=https://objects.operator.test
 AWS_REGION=auto
 AWS_SECRET_ACCESS_KEY=${secrets[1]}
 TOPUP_ADMIN_PUBLIC_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=
+TOPUP_RPC_ANKR_KEY=${secrets[2]}
+TOPUP_RPC_INFURA_KEY=${secrets[3]}
 WALG_S3_PREFIX=s3://operator-backups/quick
 ENV
 grep -qx '  URL       https://abcdef0123456789abcdef0123456789abcdef01.dstack-pha-prod5.phala.network' \
@@ -295,7 +297,7 @@ grep -qx '  public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=' "$tmp/cust
 deploys | head -1 | grep -qF -- "--name custom " || fail "custom did not provision first"
 deploys | tail -1 | grep -qF -- "--cvm-id cvm-0123 " || fail "custom did not upgrade the new CVM"
 ! deploys | tail -1 | grep -qF -- " -e " || fail "custom's upgrade sent an env"
-[[ "$(cut -d= -f1 "$tmp/state/env" | tr '\n' ' ')" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY " ]] ||
+[[ "$(cut -d= -f1 "$tmp/state/env" | tr '\n' ' ')" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
     fail "custom sealed other names than the ones it was given"
 grep -q 'GATEWAY_DOMAIN: gateway.dstack-pha-prod5.phala.network' "$tmp/custom/docker-compose.custom.yml" ||
     fail "custom's compose does not name the CVM's gateway"

@@ -1,11 +1,10 @@
 # Provider disagreement
 
-**Trigger:** `TopupDepositStateAgeExceeded` with `state:detected` (the confirm step: finality and
+**Trigger:** `TopupRpcDisagreement`, `TopupSanctionsHold` (held past its confirmation window), or `TopupDepositStateAgeExceeded` with `state:detected` (the confirm step: finality and
 valuation) or `state:confirmed` (the sanctions screen).
 
 **Impact:** affected deposits keep retrying in their state; nothing is rejected or credited on
-one provider's word. A sanctions hit is different: any provider answering `Sanctioned` rejects the
-deposit at once.
+one provider's word. Sanctions decisions also require agreement at the same canonical pin, at or after the payment block. A single hit waits and alerts.
 
 ## First steps
 
@@ -15,7 +14,7 @@ deposit at once.
    `log_absent_at_finality`; `stage: "valuation"` (a price failure: [Price outage](price-outage.md));
    or, in `confirmed`, the oracle answers of `provider_a` and `provider_b`.
 2. For price evidence, compare every observation's source/company/role, scaled price, age,
-   round, heartbeat and decision in the deposit timeline. Chainlink A/B disagreement halts;
+   round, heartbeat and decision in the deposit timeline. Chainlink read/verify disagreement halts;
    no role may fail over to conceal a fresh conflicting answer. Any fresh stablecoin depeg
    halts even when another source agrees with one dollar. Mainnet observations on test routes
    must carry the explicit route-chain marker; check Base sequencer status and recovery grace.
@@ -40,10 +39,15 @@ deposit at once.
   scanner recorded as final. That is a finality violation or a scanner-provider fault: keep
   settlement paused, open incidents with both providers, and escalate.
 - One provider behind but consistent: wait within its SLA, then replace it.
-- Sanctions: `Sanctioned` from either provider → `rejected(sanctioned)`, before any pause is
-  considered; page Compliance and follow [rejected funds at treasury](rejected-funds-at-treasury.md)
-  (no refund until Compliance records a disposition). `Unavailable` from one and no `Sanctioned`
-  → the screen retries. `Clear` from both → normal.
+- Sanctions: only `Clear` from both endpoints at the verified screening block permits new credit.
+  Only `Sanctioned` from both rejects; page Compliance and follow
+  [rejected funds at treasury](rejected-funds-at-treasury.md). Disagreement or unavailability
+  holds and retries; never credit or record a sanctions hit from one answer. `TopupSanctionsHold`
+  alerts after the route's confirmation window. Preserve block number/hash and both answers.
+- Restore replay of an already delivered credit: both endpoints agreeing `Sanctioned` preserves
+  the delivered credit, records the hit and blocks sweep. Disagreement or unavailability holds
+  without a hit or any change to that credit. Follow
+  [sanctioned delivered credit](restore.md#sanctioned-delivered-credit).
 
 ## Fix
 

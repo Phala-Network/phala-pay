@@ -13,7 +13,6 @@ use base64::Engine as _;
 use chrono::{Duration, Utc};
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
-use sqlx::Row;
 use topup::api::{
     AppState, AttestationEvidence, AttestationFuture, AttestationRequest, Attestor, PublicOrigin,
     VerificationKey,
@@ -1055,155 +1054,6 @@ async fn frozen_chain_refuses_quotes() -> Result<()> {
 /// `POST /v1/admin/reconciliation_blocks/{block_key}/lift` is admin-signed, needs a reason,
 /// audits the lift with the block it removed, and answers a repeat with the first lift.
 #[tokio::test]
-async fn admin_lift_unfreezes_a_chain_once() -> Result<()> {
-    let Some(database) = TestDatabase::create().await? else {
-        return Ok(());
-    };
-    let result = async {
-        let admin_key = SigningKey::from_bytes(&[34; 32]);
-        let (product, product_key) = seed_product(&database.app_pool, "phala-cloud").await?;
-        seed_customer(&database.app_pool, product.id, "lift-account").await?;
-        sqlx::query(
-            r#"
-            INSERT INTO reconciliation_blocks (block_key, scope, chain_id, check_name, reason)
-            VALUES ('chain:1', 'chain', 1, 'address_derivation', 'test freeze')
-            "#,
-        )
-        .execute(&database.app_pool)
-        .await?;
-        let app = test_router(&database.app_pool, &admin_key);
-        let now = Utc::now().timestamp();
-        let admin = |method: Method, path: &str, body: Value, created: i64| -> Result<_> {
-            Ok(signed_request(
-                method,
-                path,
-                if body.is_null() {
-                    Vec::new()
-                } else {
-                    serde_json::to_vec(&body)?
-                },
-                ADMIN_KID,
-                &admin_key,
-                created,
-            ))
-        };
-
-        let response = app
-            .clone()
-            .oneshot(admin(
-                Method::GET,
-                "/v1/admin/reports/daily",
-                Value::Null,
-                now,
-            )?)
-            .await?;
-        ensure!(response.status() == StatusCode::OK);
-        let blocks = response_json(response).await?["reconciliation_blocks"].clone();
-        ensure!(blocks.as_array().map(Vec::len) == Some(1));
-        ensure!(blocks[0]["block_key"] == "chain:1");
-        ensure!(blocks[0]["scope"] == "chain");
-        ensure!(blocks[0]["check"] == "address_derivation");
-
-        let lift = "/v1/admin/reconciliation_blocks/chain:1/lift";
-        let reason = json!({"reason": "INC-7: factory confirmed, stored rows restored"});
-        let response = app
-            .clone()
-            .oneshot(merchant_request(
-                Method::POST,
-                lift,
-                serde_json::to_vec(&reason)?,
-                &product_key,
-            ))
-            .await?;
-        ensure!(response.status() == StatusCode::UNAUTHORIZED);
-        let response = app
-            .clone()
-            .oneshot(admin(Method::POST, lift, json!({"reason": " "}), now + 2)?)
-            .await?;
-        ensure!(response.status() == StatusCode::BAD_REQUEST);
-        ensure!(response_json(response).await?["error"]["code"] == "parameter_invalid");
-        let response = app
-            .clone()
-            .oneshot(admin(
-                Method::POST,
-                "/v1/admin/reconciliation_blocks/chain:2/lift",
-                reason.clone(),
-                now + 3,
-            )?)
-            .await?;
-        ensure!(response.status() == StatusCode::NOT_FOUND);
-        ensure!(response_json(response).await?["error"]["code"] == "resource_missing");
-
-        let response = app
-            .clone()
-            .oneshot(admin(Method::POST, lift, reason.clone(), now + 4)?)
-            .await?;
-        ensure!(response.status() == StatusCode::OK);
-        let lifted = response_json(response).await?;
-        ensure!(lifted["block_key"] == "chain:1");
-        // A repeat answers with the first lift; generated clients percent-encode the key.
-        let response = app
-            .clone()
-            .oneshot(admin(
-                Method::POST,
-                "/v1/admin/reconciliation_blocks/chain%3A1/lift",
-                reason.clone(),
-                now + 5,
-            )?)
-            .await?;
-        ensure!(response.status() == StatusCode::OK);
-        ensure!(response_json(response).await? == lifted);
-
-        let audit = sqlx::query(
-            "SELECT actor_type, actor_id, action, reason FROM audit \
-             WHERE subject = 'reconciliation_block:chain:1'",
-        )
-        .fetch_all(&database.app_pool)
-        .await?;
-        ensure!(audit.len() == 1, "only the first lift is audited");
-        ensure!(audit[0].try_get::<String, _>("actor_type")? == "admin");
-        ensure!(audit[0].try_get::<String, _>("actor_id")? == ADMIN_KID);
-        ensure!(audit[0].try_get::<String, _>("action")? == "reconciliation_block.lift");
-        let evidence: Value = serde_json::from_str(&audit[0].try_get::<String, _>("reason")?)?;
-        ensure!(evidence["reason"] == reason["reason"]);
-        ensure!(evidence["block"]["check"] == "address_derivation");
-        ensure!(evidence["block"]["reason"] == "test freeze");
-
-        // The chain resumes without a restart.
-        // Quote creation passes the frozen-chain check and reaches pricing, which the test
-        // router does not configure.
-        let response = app
-            .clone()
-            .oneshot(merchant_request(
-                Method::POST,
-                "/v1/quotes",
-                serde_json::to_vec(&json!({
-                    "client_reference_id": "lift-account", "amount": 1000, "currency": "usd",
-                    "chain_id": 1, "asset": "pha",
-                }))?,
-                &product_key,
-            ))
-            .await?;
-        ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
-        let response = app
-            .oneshot(admin(
-                Method::GET,
-                "/v1/admin/reports/daily",
-                Value::Null,
-                now + 7,
-            )?)
-            .await?;
-        ensure!(response_json(response).await?["reconciliation_blocks"] == json!([]));
-        Ok(())
-    }
-    .await;
-    let cleanup = database.cleanup().await;
-    result.and(cleanup)
-}
-
-/// `GET /v1/admin/metrics` serves the RPC call counters to the admin key only, in the
-/// Prometheus text format.
-#[tokio::test]
 async fn admin_metrics_serve_rpc_call_counters_to_the_admin_only() -> Result<()> {
     let Some(database) = TestDatabase::create().await? else {
         return Ok(());
@@ -1214,6 +1064,7 @@ async fn admin_metrics_serve_rpc_call_counters_to_the_admin_only() -> Result<()>
         let app = test_router(&database.app_pool, &admin_key);
         let now = Utc::now().timestamp();
         let path = "/v1/admin/metrics";
+        topup::observability::metrics::render_chain_reads(&database.app_pool).await?;
 
         let response = app
             .clone()

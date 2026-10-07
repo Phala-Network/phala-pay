@@ -878,17 +878,38 @@ pub async fn nudge_deposit(
 /// Lifts a reconciliation block and appends an audit row, carrying the block, in the same
 /// transaction.
 ///
-/// Lifting is manual (architecture §13): the service does not re-check the finding first. If it
-/// still reproduces, the reconciler writes the block again on its next round. A repeated lift of
-/// a lifted block returns the first lift without another audit row.
+/// Chain lifts require a fresh passing dual contract check before the audited lift. A repeated
+/// lift of a lifted block returns the first lift without another audit row.
 pub async fn lift_reconciliation_block(
     pool: &PgPool,
+    routes: &RouteSet,
     block_key: &str,
     actor: &Actor,
     reason: &str,
 ) -> Result<ReconciliationBlockLiftResponse, ApiError> {
     let mut transaction = pool.begin().await?;
     let subject = format!("reconciliation_block:{block_key}");
+    crate::db::rpc::lock_reconciliation_in(&mut transaction, block_key).await?;
+    let block=sqlx::query_as::<_,ReconciliationBlockRow>("SELECT block_key,scope,chain_id,address_id,check_name,reason,created_at FROM reconciliation_blocks WHERE block_key=$1")
+        .bind(block_key).fetch_optional(&mut *transaction).await?;
+    if let Some(block) = block
+        && block.scope == "chain"
+    {
+        let chain = u64::try_from(block.chain_id).map_err(|_| ApiError::chain_frozen())?;
+        let a = routes
+            .provider(chain, 0)
+            .map_err(|_| ApiError::chain_frozen())?;
+        let b = routes
+            .provider(chain, 1)
+            .map_err(|_| ApiError::chain_frozen())?;
+        let checked = crate::contracts::check_pair(a, b, chain, routes.routes()).await;
+        let passed = matches!(checked, Ok(crate::contracts::ContractCheck::Pass));
+        a.contract_checked(passed);
+        b.contract_checked(passed);
+        if !passed {
+            return Err(ApiError::chain_frozen());
+        }
+    }
     let lifted = sqlx::query_as::<_, ReconciliationBlockRow>(
         r#"
         DELETE FROM reconciliation_blocks

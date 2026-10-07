@@ -6,13 +6,22 @@
 //! configured chain ids, and methods outside [`METHODS`] count as `other`.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use std::task::{Context, Poll};
 use std::time::SystemTime;
 
 use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
 use alloy::transports::{TransportError, TransportFut};
 use tower::{Layer, Service};
+
+tokio::task_local! {
+    static HTTP_STATUS: std::cell::Cell<Option<u16>>;
+}
+
+/// Preserve a response's HTTP status across Alloy's JSON-RPC error-body decoding.
+pub(super) fn observe_http_status(status: u16) {
+    let _ = HTTP_STATUS.try_with(|slot| slot.set(Some(status)));
+}
 
 /// Methods counted under their own name; every other method counts as `other`.
 pub const METHODS: [&str; 16] = [
@@ -41,6 +50,56 @@ pub const UNLABELED_PROVIDER: &str = "unlabeled";
 type CallKey = (String, Option<u64>, &'static str);
 
 static CALLS: Mutex<BTreeMap<CallKey, u64>> = Mutex::new(BTreeMap::new());
+type ErrorKey = (String, Option<u64>, &'static str, &'static str);
+static ERRORS: Mutex<BTreeMap<ErrorKey, u64>> = Mutex::new(BTreeMap::new());
+type EndpointKey = (String, u64);
+static ENDPOINTS: Mutex<BTreeMap<EndpointKey, Weak<super::endpoint::EndpointState>>> =
+    Mutex::new(BTreeMap::new());
+
+/// Error counters use the same configured provider and method labels as billed calls.
+pub fn rpc_error_counts() -> Vec<(String, Option<u64>, &'static str, &'static str, u64)> {
+    ERRORS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(|((provider, chain, method, class), count)| {
+            (provider.clone(), *chain, *method, *class, *count)
+        })
+        .collect()
+}
+
+/// Readiness of currently resident configured endpoints, including a halted UTC quota.
+pub fn endpoint_readiness() -> Vec<(String, u64, bool)> {
+    let mut endpoints = ENDPOINTS.lock().unwrap_or_else(PoisonError::into_inner);
+    endpoints.retain(|_, state| state.strong_count() > 0);
+    endpoints
+        .iter()
+        .filter_map(|((provider, chain), state)| {
+            state
+                .upgrade()
+                .map(|state| (provider.clone(), *chain, state.ready()))
+        })
+        .collect()
+}
+
+pub(super) fn register(labels: &CallLabels, state: &Arc<super::endpoint::EndpointState>) {
+    if let Some(chain) = labels.chain_id {
+        ENDPOINTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert((labels.provider.clone(), chain), Arc::downgrade(state));
+    }
+}
+
+pub(super) fn record_error(labels: &CallLabels, methods: &[&'static str], class: &'static str) {
+    let mut counts = ERRORS.lock().unwrap_or_else(PoisonError::into_inner);
+    for method in methods {
+        let count = counts
+            .entry((labels.provider.clone(), labels.chain_id, *method, class))
+            .or_default();
+        *count = count.saturating_add(1);
+    }
+}
 /// When the first call was counted; rates are the counters over the time since.
 static COUNTING_SINCE: OnceLock<SystemTime> = OnceLock::new();
 
@@ -132,12 +191,15 @@ impl Default for CallLabels {
 #[derive(Clone, Debug)]
 pub(super) struct CountingLayer {
     labels: Arc<CallLabels>,
+    state: Arc<super::endpoint::EndpointState>,
 }
 
 impl CountingLayer {
-    pub(super) fn new(labels: CallLabels) -> Self {
+    pub(super) fn new(labels: CallLabels, state: Arc<super::endpoint::EndpointState>) -> Self {
+        register(&labels, &state);
         Self {
             labels: Arc::new(labels),
+            state,
         }
     }
 }
@@ -149,6 +211,7 @@ impl<S> Layer<S> for CountingLayer {
         CountingService {
             inner,
             labels: Arc::clone(&self.labels),
+            state: Arc::clone(&self.state),
         }
     }
 }
@@ -158,6 +221,7 @@ impl<S> Layer<S> for CountingLayer {
 pub(super) struct CountingService<S> {
     inner: S,
     labels: Arc<CallLabels>,
+    state: Arc<super::endpoint::EndpointState>,
 }
 
 impl<S> Service<RequestPacket> for CountingService<S>
@@ -178,10 +242,52 @@ where
     }
 
     fn call(&mut self, request: RequestPacket) -> Self::Future {
-        for method in request.method_names() {
+        if self.state.quota_exhausted() {
+            return Box::pin(async {
+                Err(alloy::transports::TransportErrorKind::non_retryable_str(
+                    "UTC daily RPC quota exhausted",
+                ))
+            });
+        }
+        let methods: Vec<_> = request.method_names().map(bounded_method).collect();
+        for method in &methods {
             record(&self.labels, method);
         }
-        self.inner.call(request)
+        let labels = self.labels.clone();
+        let future = self.inner.call(request);
+        Box::pin(HTTP_STATUS.scope(std::cell::Cell::new(None), async move {
+            let response = future.await;
+            // Alloy prefers a decoded JSON-RPC error over an HTTP error. Retain the status
+            // for the one standard retry layer, even when the error body is valid JSON-RPC.
+            let result = match HTTP_STATUS.with(std::cell::Cell::get) {
+                Some(status @ (402 | 429 | 503)) => {
+                    Err(alloy::transports::TransportErrorKind::http_error(
+                        status,
+                        "RPC endpoint refused the request".to_owned(),
+                    ))
+                }
+                _ => response,
+            };
+            let class = match &result {
+                Ok(packet) if packet.first_error_code() == Some(-32005) => Some("throughput"),
+                Ok(packet) if packet.is_error() => Some("rpc"),
+                Err(alloy::transports::RpcError::Transport(kind)) => {
+                    Some(match kind.as_http_error().map(|error| error.status) {
+                        Some(402) => "quota",
+                        Some(429) => "throughput",
+                        Some(503) => "unavailable",
+                        Some(_) => "http",
+                        None => "transport",
+                    })
+                }
+                Err(_) => Some("rpc"),
+                _ => None,
+            };
+            if let Some(class) = class {
+                record_error(&labels, &methods, class);
+            }
+            result
+        }))
     }
 }
 

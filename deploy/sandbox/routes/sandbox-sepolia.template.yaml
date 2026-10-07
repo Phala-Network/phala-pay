@@ -9,7 +9,6 @@ livemode: false
 
 chain:
   chain_id: 11155111
-  rpc_groups: { a: provider-a, b: provider-b }
   forwarder_factory: "${FORWARDER_FACTORY}"
   confirmations: 2
   # The sandbox deploys MockSanctionsOracle; there is no Chainalysis oracle on Sepolia.
@@ -21,7 +20,6 @@ asset:
   symbol: pha
   contract: "${TEST_TOKEN}"
   decimals: 18
-  backstop: token
 
 price:
   mode: volatile

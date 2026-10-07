@@ -148,7 +148,8 @@ pub(super) fn quote_terms(terms: &Terms) -> QuoteTerms {
                            minute; retry after `Retry-After` seconds",
             body = ErrorResponse
         ),
-        (status = 503, description = "Service Unavailable", body = ErrorResponse)
+        (status = 422, description = "Permanent chain `address_capacity_reached`; not retryable", body = ErrorResponse),
+        (status = 503, description = "`chain_unavailable`, `price_unavailable` or Service Unavailable", body = ErrorResponse)
     ),
     security(("api_key" = [])),
     tag = "quotes"
@@ -200,6 +201,14 @@ pub(crate) async fn create_quote(
     let customer = ensure_customer(&state, merchant.scope, &request.client_reference_id).await?;
     if crate::reconciler::chain_is_blocked(&state.pool, route.chain.chain_id).await? {
         return Err(ApiError::chain_frozen());
+    }
+    if !state.routes.chain_ready(route.chain.chain_id) {
+        return Err(ApiError::chain_unavailable());
+    }
+    if crate::db::chain_reads::issued_address_count(&state.pool, route.chain.chain_id).await?
+        >= crate::db::chain_reads::ISSUED_ADDRESS_CAP
+    {
+        return Err(ApiError::address_capacity_reached());
     }
     let route_scopes = repository::route_paused_scopes(&state.pool, &route.route).await?;
     if has_quotes_pause(&merchant.account, &customer, &route_scopes) {
@@ -556,6 +565,7 @@ async fn client_quote_view(
         address: format!("{:#x}", lock.address),
         payment_uri: payment_uri(route, &lock),
         expires_at: lock.expires_at.timestamp(),
+        cancel_requested_at: lock.cancel_requested_at.map(|at| at.timestamp()),
         payment_status: payment_status.to_owned(),
         confirmations,
         amount_credited,
@@ -692,6 +702,7 @@ fn render_quote(
         payment_uri,
         status: status(lock.status).to_owned(),
         expires_at: lock.expires_at.timestamp(),
+        cancel_requested_at: lock.cancel_requested_at.map(|at| at.timestamp()),
         created: lock.created_at.timestamp(),
         payment,
         deposit: lock
@@ -740,9 +751,9 @@ pub(super) fn map_error(error: RateLockError) -> ApiError {
         RateLockError::InvalidInput(message) => ApiError::bad_request(message),
         RateLockError::AmountTooSmall(message) => ApiError::amount_too_small("amount", message),
         RateLockError::AmountTooLarge(message) => ApiError::amount_too_large("amount", message),
-        RateLockError::PricingUnavailable => {
-            ApiError::service_unavailable("validated pricing is unavailable")
-        }
+        RateLockError::ChainUnavailable => ApiError::chain_unavailable(),
+        RateLockError::AddressCapacityReached => ApiError::address_capacity_reached(),
+        RateLockError::PricingUnavailable => ApiError::price_unavailable(),
         RateLockError::RateLimited { retry_after } => ApiError::customer_quote_limit(retry_after),
         RateLockError::TreasuryNotSet => ApiError::treasury_not_set(),
         RateLockError::AssetNotAccepted => ApiError::asset_not_accepted(Some("asset")),

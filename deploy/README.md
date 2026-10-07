@@ -286,9 +286,9 @@ hash. The sealed names are:
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, the object store's token (declared in
   [compose.yaml](compose.yaml));
 - `SENTRY_DSN`, required for production; staging and templates may leave it empty to turn Sentry off;
-- a `TOPUP_RPC_<ID>_KEY` per keyed [RPC provider](#rpc-providers), declared in the environment's
-  `compose.yaml` overlay. It is the API key topup puts in place of `{key}` in the provider's
-  attested URL. Phala's staging has keyless providers and declares none.
+- `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`, declared in each environment's
+  `compose.yaml` overlay. Each replaces `{key}` in its endpoint's attested URL, including
+  staging's route and price chains.
 
 Each line is `NAME=VALUE`, the value as is. The Phala Cloud CLI reads the file as dotenv does, which
 would cut a value at `#` and strip quotes and surrounding whitespace, so preflight refuses a value
@@ -317,13 +317,15 @@ with the keys.
 
 The CVM restarts, `/healthz` answers, and backups have started once a WAL segment younger than two
 minutes is listed (`aws s3 ls "${WALG_S3_PREFIX%/}/wal_005/" --endpoint-url "$AWS_ENDPOINT" | tail -1`).
-Re-seal the same way whenever a secret changes; never change a setting with `envs update`.
+Re-seal the complete secret set the same way whenever a secret changes, including unchanged
+names. A partial update can unset another chain's credentials. Never change an attested setting
+with `envs update`.
 
 **A new sealed name** (a new keyed provider's `TOPUP_RPC_<ID>_KEY`) is not among the CVM's allowed
 names, which Deploy `upgrade` keeps, so after the upgrade it would be unset and topup would refuse
 to start (a `{key}` without a key). Once, before that upgrade, run only the `envs update` above with
 `.env.ENV` holding the new compose's sealed names: the running compose ignores the new name, and
-preflight against it would refuse it. A new keyless provider adds no name.
+preflight against it would refuse it. Every configured endpoint requires its explicitly declared sealed key.
 
 ### Attested settings
 
@@ -335,7 +337,7 @@ are four kinds of input, each with one home ([design](../docs/design/deploy-conf
 | Kind | Home |
 |---|---|
 | Topology: the services, their mounts, ports, and flags | [compose.yaml](compose.yaml), [compose.service.yaml](compose.service.yaml), [compose.restore-check.yaml](compose.restore-check.yaml) (and [product/compose.yaml](product/compose.yaml)) |
-| The Environment's public settings | its directory in the environment repository, for example `production/topup/`: `topup.yaml` ([the configuration file](../docs/configuration.md#the-configuration-file): `public_origin`, `admin_key`, `rpc_groups`, `rpc_companies`, `rpc_budgets`, `routes`) and a `compose.yaml` overlay with the env interfaces of third-party images: WAL-G's `WALG_S3_PREFIX`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_S3_FORCE_PATH_STYLE`, dstack-ingress's `DOMAIN`, and the keyed providers' sealed key names |
+| The Environment's public settings | its directory in the environment repository, for example `production/topup/`: `topup.yaml` ([the configuration file](../docs/configuration.md#the-configuration-file): `public_origin`, `admin_key`, `rpc`, `routes`) and a `compose.yaml` overlay with the env interfaces of third-party images: WAL-G's `WALG_S3_PREFIX`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_S3_FORCE_PATH_STYLE`, dstack-ingress's `DOMAIN`, and the keyed providers' sealed key names |
 | Deploy-time facts | [render.sh](render.sh)'s three inputs: `--images` (the release's `images.json`), `--gateway-domain` (the CVM node's gateway, dstack-ingress's `GATEWAY_DOMAIN`), and, for the restore-check variant only, `--origin` (the restore instance's own origin) |
 | Secrets | the CVM's sealed env ([Sealing the secrets](#sealing-the-secrets)) |
 
@@ -381,7 +383,7 @@ renders the same way from
 `render.sh --template` renders the Phala Cloud template, a one-click testnet quick start
 ([self-hosting, "The Phala Cloud template"](../docs/self-hosting.md#the-phala-cloud-template)),
 from [environments/phala-cloud-template](environments/phala-cloud-template/topup): Phala's staging
-routes and keyless providers. Each release publishes it as `phala-cloud-template.yml`, and
+routes and the same sealed Ankr and Infura endpoint keys. Each release publishes it as `phala-cloud-template.yml`, and
 Phala Cloud's template, once published, is that file byte for byte.
 [compose.template.yaml](compose.template.yaml) removes `dstack-ingress` and `restore-check`, and
 topup publishes `80:8080`, which the Phala Cloud gateway serves as
@@ -436,31 +438,24 @@ a testnet quick start and is why an instance with merchants uses the service pat
 
 ### RPC providers
 
-Every route explicitly names `chain.rpc_groups: { a: ..., b: ... }`. A scans logs and
-reconciles; B independently confirms receipts, heads and calls. Credit still requires both.
-Top-level `rpc_groups` defines 1–8 upstream URL/credential pairs and a bounded failover or
-weighted round robin policy per group. `rpc_companies` records reviewed company ownership;
-the company sets of A and B must be disjoint. Domains support that review, and aliases/resellers
-must not create artificial independence.
+Every chain used for payments or prices has one read endpoint (Ankr) and one verify endpoint
+(Infura), configured in top-level `rpc`. Both independently derive money evidence; state calls
+use canonical EIP-1898 hash pins. There is no in-process failover.
 
-Each member's `url` is attested with `{key}` as a whole path segment or query value; its explicit
-`sealed_key` names the sealed `TOPUP_RPC_*_KEY`, declared for topup and restore-check in the
-compose overlay. The same URL template can use several credentials within one group. Explicit
-account/key budgets are shared across methods and chains; keyless members get synthetic scopes.
-All redirects are refused, and the in-process clients use no response cache or RPC sidecar.
+URLs use `{key}` placeholders and explicit `sealed_key` names. Staging uses
+`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Seal the complete secret set; both topup and
+restore-check declare these names in their compose environment mappings.
 
-`topup config check --secrets FILE` validates identities, bounds, quota references and keys
-without network access. `topup rpc check --config FILE` performs counted per-member probes;
-first acceptance needs one verified serving member in each group, while offline backups may
-remain configured. Recovery requires full identity/capability/head probes after cooldown.
-A member must support the complete numeric log range and recipient-only filters before serving A.
-An empty eligible group waits; no fallback crosses A/B or bypasses the agreement gate.
+`topup config check --secrets FILE` validates the strict public schema and keys without network
+access. `topup rpc check --config FILE` checks both endpoints, complete recipient log filters,
+typed receipts, canonical state and reviewed contracts. Deploy preflight runs it through the
+candidate rendered compose and sealed env, including restore-check. Missing keys or mappings
+block preflight. Endpoint failure pauses only its chain or affected price feature.
 
-See [configuration](../docs/configuration.md#the-configuration-file),
-[`GroupPolicy`](../crates/adapters/src/chain/evm/group/mod.rs) and [the runbook](RPC.md) for policy fields,
-staging singleton migration, historical review, alerts and owner-only recovery. Adding a chain
-requires explicit A/B groups and its normal reviewed route/contracts deployment; route versions
-are not changed just to migrate RPC configuration.
+A dual-source agreed contract-code mismatch freezes its chain with `contract_code_mismatch`.
+Disagreement or failed requests make it not-ready without freezing. A fresh passing dual contract
+check is required before the existing audited admin lift. Other chains and `/healthz` keep running.
+See [configuration](../docs/configuration.md#the-configuration-file) and [the RPC runbook](RPC.md).
 
 ### Custom domain
 
@@ -556,12 +551,15 @@ environment is `topup.yaml`'s `environment`, both attested.
 
   | Monitor | Checks in | Margin |
   |---|---|---|
-  | `topup-scanner-<chain_id>` | after each head poll (every block time), `error` while the finalized backstop fails | 5 min |
+  | `topup-fast-scanner-<chain_id>` | after fast discovery (every minute); three failures alert | 2 min |
+  | `topup-coverage-scanner-<chain_id>` | after each dual coverage round (every ten minutes), `error` while coverage fails | 2 min |
   | `topup-pump-<n>`, `topup-outbox-test`, `topup-outbox-live` | each iteration or poll, every minute | 5 min |
   | `topup-lock-expiry` | after each successful expiry scan, every minute | 5 min |
   | `topup-finality-watch` | after each `finalized` advance's passes, and every minute | 5 min |
   | `topup-reconciler` | `ok` after a complete round or one skipped because nothing newly finalized, `error` after failed checks, every 10 min | 10 min |
   | `topup-backup` | `ok` while the WAL-G success marker is at most 120 s old, else `error`; 3 errors open an issue | 2 min |
+
+  After upgrading, delete or mute the old `topup-scanner-<chain>` monitors.
 
 - **Uptime**: `/healthz` of each Environment ([One-time setup](#one-time-setup-human-only-repository-owner)).
 - **Egress**: `topup` sends HTTPS to the DSN's ingest host.
@@ -602,26 +600,13 @@ cost per day   = Σ_m n(m) × p(m)
 cost per month = 30 × cost per day
 ```
 
-The cadences of docs/architecture.md §8 predict `n(m)` for provider A with `B` scanned heads a day
-(86 400 / head poll interval: 7 200 on Ethereum; 43 200 on an OP-stack chain crediting at a depth,
-polled every 2-second block; 7 200 on one crediting at `safe` or `finalized`, polled every 12 s),
-`F` `finalized` advances a day (225 on Ethereum),
-`R` reconciliation rounds a day (at most 144, and at most `F`), `P` payments a day, `A` issued
-addresses, `U` forwarders holding unswept funds, and `L = 1` in token mode or `⌈A / 1 000⌉` in
-address mode:
-
-| Method | Calls a day, provider A | Provider B |
-|---|---|---|
-| `eth_blockNumber` | `1.1 B` (head polls) `+ P` (credit check) | `P` |
-| `eth_getBlockByNumber` | `86 400 / finalized poll interval` (1 440) `+ F` (backstop), `+ B` for a `safe` route | `≤ min(P, F)` (finality passes) |
-| `eth_getLogs` | `L × B` (per-block scan) `+ (L + 1) × F` (backstop) `+ ⌈A / 1 000⌉ × R` (missing-deposit check) | 0 |
-| `eth_getTransactionReceipt` | `3 P` (detection, credit, finality) | `2 P` (credit, finality) |
-| `eth_getTransactionByHash` | `P` (the nonce, at detection) | 0 |
-| `eth_getBlockByHash` | `≤ B` blocks with a payment, 0 on nodes returning `blockTimestamp` with logs | 0 |
-| `eth_call` | `P` (sanctions) `+ ⌈U / 200⌉ × R` (custody) `+` new addresses `/ 200` per round (derivation) | `P` (sanctions) |
-
-Retries (a lagging provider B is re-checked every 2 s; a failed read backs off) add to these;
-compare the prediction with the counters before relying on it.
+[Chain reads §5.2](../docs/design/chain-reads.md#52-worst-case-daily-budget-staging--production-combined)
+accounts for the fixed 60-second discovery and ten-minute coverage cadences, bounded backfill,
+and hourly catch-up. Compare measured call counters with each provider's dashboard. Both
+environments share keys and upstream quotas. Each fresh quote snapshot costs one read call and
+240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
+[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all twelve
+chain/token routes and the reduced combined deposit pilot bound of 100/day.
 
 ## Attestation, ingress, and egress
 
@@ -920,6 +905,19 @@ selects `declared` mode: CI skips the image smoke and prints the declaration in 
 or lower. Without a declaration, N-1 runs the real image rollback smoke. Breaking migrations raise
 the floor to the new schema's maximum; retain a tested pre-upgrade restore/reconciliation plan and
 obtain owner acceptance.
+
+Before upgrading to the read/verify pilot, run this check against a verified pre-upgrade
+restore copy with PostgreSQL access (the production CVM exposes no database port):
+
+```sh
+psql "$RESTORED_DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/check-address-capacity.sql
+```
+
+It reports every chain's historical issued-address count and the permanent 1,000-address cap,
+then refuses if any count is already over the cap. At exactly 1,000 the upgrade is safe, but new
+issuance returns `422 address_capacity_reached`. Review the
+[address capacity runbook](runbooks/address-capacity.md) at 70% and 90%. Preserve this output in
+the upgrade evidence; never delete rows to pass the check.
 
 Before upgrade, preserve the verified N-1 deploy kit, image digests and configuration and a tested
 pre-upgrade recovery point. To roll back, verify N-1's release again, render its compose/config,

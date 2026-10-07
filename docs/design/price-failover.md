@@ -7,11 +7,11 @@ Uniswap V2 TWAP is implemented with persisted service observations.
 
 ## Decision
 
-Remove Coin Metrics. Production stablecoin valuation reads Chainlink Data Feeds on the route's RPC
-groups. Public exchange adapters remain available for explicit noncommercial staging rehearsal,
+Remove Coin Metrics. Production stablecoin valuation reads Chainlink Data Feeds through the price
+chain's read and verify endpoints. Public exchange adapters remain available for explicit noncommercial staging rehearsal,
 not production defaults. Volatile prices require two fresh observations from independent
 companies to agree; an outage or disagreement
-pauses the affected quote/credit path. This is the price counterpart to [RPC failover](rpc-failover.md).
+pauses the affected quote/credit path. On-chain evidence follows [chain reads](chain-reads.md).
 
 Coin Metrics Community is unsuitable: its [package terms](https://docs.coinmetrics.io/packages/coin-metrics-community-data)
 say “**non-commercial use only**” and the [announcement](https://coinmetrics.io/?p=16175) says
@@ -46,12 +46,12 @@ company disjointness are never weakened to enable production.
 USDC and USDT are the only RedPill assets. The source set is Chainlink USDC/USD and USDT/USD on the route chain when a feed exists
 (Ethereum and Base), plus Ethereum-mainnet Chainlink as a configured fallback. Defaults contain Chainlink only;
 exchange USDC/USD and USDT/USD adapters require explicit noncommercial staging opt-in. Sepolia and Base Sepolia deliberately use mainnet feeds through a
-configured mainnet RPC group and/or exchange tickers: test tokens have no market, and config marks
+configured mainnet read/verify pair and/or exchange tickers: test tokens have no market, and config marks
 this cross-network observation explicitly. A Base route must also read the [sequencer uptime feed](https://docs.chain.link/data-feeds/l2-sequencer-feeds):
 when `answer == 1`, or the grace period after recovery has not elapsed, halt.
 
 For every observation, `updatedAt <= now`, the round is complete (`answeredInRound >= roundId`;
-reject zero answers), and RPC groups A and B return the same round/value. Chainlink freshness is
+reject zero answers), and read and verify return the same bytes at a canonical pin. Chainlink freshness is
 `now - updatedAt <= heartbeat + margin`, where heartbeat is pinned per feed and verified against
 the [Chainlink feed registry](https://data.chain.link/). A deviation update remains valid until
 the heartbeat bound: worst-case age is heartbeat plus margin, and movement is bounded by the
@@ -73,7 +73,7 @@ Store every observation and decision for audit.
 
 Each role has an ordered failover list. A role advances only on timeout, stale/malformed data or
 provider outage. Every accepted valuation needs at least two fresh, agreeing sources; `primary`
-and `check` company sets are disjoint, as in `rpc_companies` in [RPC failover](rpc-failover.md).
+and `check` company sets are disjoint, with independent read/verify companies in [chain reads](chain-reads.md).
 FX is independently checked and is required for USDT-quoted markets.
 
 | Role | Ordered sources | Rule |
@@ -99,7 +99,7 @@ explicit staging-only test source. Kraken permission and a sponsored Chainlink P
 scope, so PHA is production-ineligible until a separately reviewed Allowed source exists.
 
 The implementation reads the pair's `price0CumulativeLast`/`price1CumulativeLast` and reserves
-through independent Ethereum A/B RPC groups, verifies token ordering and requires agreement,
+through independent Ethereum read and verify endpoints, verifies token ordering and requires agreement,
 using counterfactual cumulative accumulation as defined by Uniswap V2. Pair:
 `0x8867f20c1c63baccec7617626254a060eeb0e61e`; PHA:
 `0x6c5bA91642F10282b576d91922Ae6448C9d52f4E`. Service-recorded cumulative snapshots are persisted in
@@ -128,9 +128,10 @@ check even though valuation remains capped at TWAP. The TWAP is the manipulation
 spot/TWAP difference **above 3%** pauses valuation by default in either direction, so fast markets
 fail closed. Accepted audit evidence records TWAP, spot, agreement and the chosen valuation.
 
-Every pair getter, reserve and Chainlink round/decimals call uses one numeric block: two blocks
-behind the slower A/B head. Both groups must agree on its number, hash and timestamp before and
-after reads. Stored endpoint hashes and the latest persisted sample are rechecked for reorgs.
+Every pair getter, reserve and Chainlink round/decimals call uses the canonical snapshot pin
+specified by [chain reads](chain-reads.md#24-money-evidence-both-endpoints): read supplies the latest block, state calls
+use its hash with EIP-1898 `requireCanonical`, and verify independently re-pins after read.
+Both endpoints must agree on number, hash and timestamp. Stored endpoint hashes and the latest persisted sample are rechecked for reorgs.
 This also pins the existing standalone Chainlink readers. Historical calls within the window
 must be supported; archive access to the entire chain is not required.
 
@@ -138,7 +139,7 @@ Default guard rails (under source `twap`) are:
 
 | Field | Default | Reason |
 |---|---|---|
-| `window_s` | 1800 s, configurable 1800–86400 s | prevents using a spot-sized window; at least thirty minutes |
+| `window_s` | 1800 s; window + sample age ≤2880 s | prevents using a spot-sized window; at least thirty minutes |
 | `max_sample_age_s` | 180 s, configurable 60–600 s | tolerates two missed one-minute samples; also bounds every gap and anchor slack |
 | `min_weth_reserve_usd` | $100,000 | about 100× the default $1,000 unfinalized exposure cap, on the WETH side alone |
 | `max_spot_deviation_bps` | 300 (3%) | pauses fast markets and rejects spikes/ramps inconsistent with the averaging window |
@@ -190,14 +191,13 @@ price:
   max_age_s: 90 # exchange ticker age; Chainlink uses feed heartbeat + margin
   peg_band_bps: 100
   sources: # stablecoin mode: one quorum list, never primary/check/fx
-    - { source: chainlink, feed: USDC_USD, chain_id: 8453, rpc_group: a }
-    - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a,
+    - { source: chainlink, feed: USDC_USD, chain_id: 8453 }
+    - { source: chainlink, feed: USDT_USD, chain_id: 1,
         observation_chain_id: 11155111 }
-  primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b,
+  primary: [{ source: uniswap_v2_twap,
               observation_chain_id: 11155111 }] # volatile PHA only
   check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # requires written permission in production
-  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a,
-         rpc_group_b: mainnet-b, observation_chain_id: 11155111 }]
+  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 11155111 }]
   sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
 ```
 

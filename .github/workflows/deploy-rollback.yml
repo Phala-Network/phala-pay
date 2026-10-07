@@ -17,7 +17,7 @@ concurrency:
 jobs:
   rollback:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 4
       SQLX_OFFLINE: true
@@ -28,6 +28,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/rust
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: v1.8.3
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -79,3 +82,7 @@ jobs:
         if: env.ROLLBACK_MODE == 'rollback'
         timeout-minutes: 10
         run: deploy/tests/rollback-smoke.sh "$PWD/target/debug/topup" "$PREVIOUS_IMAGE" "$RUNNER_TEMP/previous-topup.yaml"
+      - name: Published N-1 → N → N-1 → N chain read rollback drill
+        if: env.ROLLBACK_MODE == 'rollback'
+        timeout-minutes: 30
+        run: deploy/local/rollback-drill.sh "$PREVIOUS_IMAGE"

@@ -70,7 +70,7 @@ async fn a_new_account_accepts_nothing_until_it_configures_its_payment_settings(
             ensure!(assets.len() == 1, "{assets:?}");
             ensure!(assets[0]["confirmations"] == "12" && assets[0]["typical_credit_seconds"] == 150);
             ensure!(assets[0]["quote_spread_bps"] == 100 && assets[0]["quote_ttl_seconds"] == 900);
-            ensure!(fixture.quote_error().await? == "unavailable");
+            ensure!(fixture.quote_error().await? == "price_unavailable");
 
             // Each change is one revision and one `payment_settings.updated` in the key's mode, with
             // what changed; a repeat writes nothing.

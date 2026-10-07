@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from topup_client.models.known_error_code import KnownErrorCode
+
 from ._secrets import redact
+
+# Generated known values plus forward-compatible unknown service codes.
+ApiErrorCode = KnownErrorCode | str
 
 
 class TopupError(Exception):
@@ -41,7 +46,7 @@ class ApiError(TopupError):
     def __init__(
         self,
         status_code: int,
-        code: str,
+        code: ApiErrorCode,
         message: str,
         *,
         error_type: str | None = None,

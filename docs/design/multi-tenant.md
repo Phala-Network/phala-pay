@@ -513,10 +513,9 @@ and per-forwarder reconciliation (§13). A token without a route on that chain i
 reads `addresses` covers it. Its deposit has `quote: null`, `deposit_address: "da_…"`, and the
 chain and address it arrived on (`chain_id`, `address`), and `deposit.credited` carries that
 object. The set of issued addresses of a chain includes every customer's address on that chain,
-active, retired, and superseded: the per-block scan and the finalized backstop read every issued
+active, retired, and superseded: fast discovery and dual finalized coverage read every issued
 address (architecture §8), so a deposit address is credited at the route's confirmation like any
-other. With `asset.backstop: token` a transfer of a token without a route is not requested by the
-scan; the reconciler's missing-deposit pass records it after finality.
+other. Dual coverage also records unsupported tokens, after complete independent receipt agreement.
 
 **Unsupported or unlisted chain.** Funds sent to the address on a chain without a route are not
 seen or credited. They stay at that deterministic address and become sweepable once the factory

@@ -40,8 +40,8 @@ deterministic factory ([Contracts](README.md#contracts)); any test key quotes on
 
 | Chain | `confirmations` | RPC providers | Sanctions oracle (a `MockSanctionsOracle`) |
 |---|---|---|---|
-| Sepolia (11155111) | `2`, Ethereum L1's default | `provider-a`, `provider-b` | `0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6` |
-| Base Sepolia (84532) | `3`, the OP-stack default: the payment's block and two more on the sequencer's unsafe head, credited about 7 s after paying (architecture §8) | `base-sepolia-a` `https://base-sepolia.gateway.tenderly.co`, `base-sepolia-b` `https://base-sepolia-rpc.publicnode.com`, both keyless | `0x8A0C93d85a05aD30741C193068abF2e5E16e7b35` |
+| Sepolia (11155111) | `2`, Ethereum L1's default | `ankr-sepolia`, `infura-sepolia` | `0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6` |
+| Base Sepolia (84532) | `3`, the OP-stack default: the payment's block and two more on the sequencer's unsafe head, credited about 7 s after paying (architecture §8) | `ankr-base-sepolia`, `infura-base-sepolia` | `0x8A0C93d85a05aD30741C193068abF2e5E16e7b35` |
 
 Tether publishes no testnet USDT, so the USDT routes take Aave's, the testnet USDT of Aave's
 markets on both chains. Aave's app no longer lists its Sepolia market, but both faucet contracts
@@ -50,72 +50,24 @@ whose `transfer` returns `true`; Tether's no-return `transfer` is covered by the
 the demo's end-to-end test. [examples/phala-cloud-usdt.yaml](../examples/phala-cloud-usdt.yaml) is
 the mainnet template, and Tether's fee switch and blacklist are handled as
 [USDT fee switch and blacklist](runbooks/usdt-issuer-controls.md) says. USDC moves one or two
-transfers a block on both chains, so its routes set `backstop: addresses`, which puts each whole chain, PHA included, on transfer requests by recipient (architecture §8); the
-RPC cost is unchanged while staging has fewer than 1 000 addresses ([Measuring RPC
-usage](README.md#measuring-rpc-usage)). The head loop polls once per block on both chains: every
-12 s on Sepolia, and every 2 s on Base Sepolia, whose route credits at a depth, so Base Sepolia's
-provider A takes about six times Sepolia's head polls and per-block log requests (about 47 500
-`eth_blockNumber` and 43 200 `eth_getLogs` a day, half a request a second each), and its other
-calls are unchanged. `--head-poll-interval-s` overrides the interval for every chain.
-Routes are attested config: adding or changing one is a PR and an `upgrade` of `topup` with
-Deploy Phala's instance, never a reset.
+transfers a block on both chains; dual coverage therefore queries recipient-topic logs in chunks
+of at most 1,000 addresses, without a contract filter. See [chain RPC operations](RPC.md).
 
 ### RPC providers
 
-Staging's independent groups are configured in
-[topup.yaml](environments/phala-network/staging/topup/topup.yaml)
-([RPC providers](README.md#rpc-providers)). Every member is public and keyless; backups have
-priority 10 and separate synthetic key budgets. Account budgets are shared across chains.
+Staging configures one Ankr read and one independent Infura verify endpoint for Sepolia,
+Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed credentials are
+`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`; both environments share upstream quotas.
+The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
+key templates. Run compose-path preflight with the complete sealed env before an authorized
+upgrade, including restore-check. The typed self-test checks actual receipt, transaction,
+coverage-filter and canonical-state capabilities on both endpoints.
 
-| Chain | Group | Primary | Backup |
-|---|---|---|---|
-| Sepolia | A (`provider-a`) | Tenderly (`https://sepolia.gateway.tenderly.co`) | Sentio (`https://sepolia.rpc.sentio.xyz`) |
-| Sepolia | B (`provider-b`) | PublicNode (`https://ethereum-sepolia-rpc.publicnode.com`) | ethPandaOps (`https://rpc.sepolia.ethpandaops.io`) |
-| Base Sepolia | A (`base-sepolia-a`) | Tenderly (`https://base-sepolia.gateway.tenderly.co`) | Sentio (`https://base-sepolia.rpc.sentio.xyz`) |
-| Base Sepolia | B (`base-sepolia-b`) | PublicNode (`https://base-sepolia-rpc.publicnode.com`) | None (PublicNode singleton) |
-
-The branch image's real `topup rpc check` verified the retained backups on 2026-10-03 PDT: chain id,
-genesis agreement, canonical Multicall3, deployed factory/implementation, token/oracle code and
-calls, latest/safe/finalized heads, receipts and recent logs. Both Sentio A backups also passed
-address-less Transfer logs over an unsplit 2 000-block window. No route changed; the Phala Cloud
-template's routes remain byte-identical.
-
-Reviewed operator evidence for the exact configured endpoints:
-
-| Operator | Endpoint evidence | Operator evidence |
-|---|---|---|
-| Tenderly | [Sepolia gateway](https://sepolia.gateway.tenderly.co), [Base Sepolia gateway](https://base-sepolia.gateway.tenderly.co) | [Tenderly supported networks](https://docs.tenderly.co/node-rpc/rpc-reference) |
-| Allnodes (PublicNode) | [PublicNode's official endpoint list](https://www.publicnode.com/) lists `ethereum-sepolia-rpc.publicnode.com` and `base-sepolia-rpc.publicnode.com` | [PublicNode terms](https://www.publicnode.com/terms) name Allnodes Inc. as the service operator |
-| Sentio | [Official Sepolia chain page](https://app.sentio.xyz/chain/sepolia) lists `sepolia.rpc.sentio.xyz`; [official Base Sepolia chain page](https://app.sentio.xyz/chain/base-sepolia) lists `base-sepolia.rpc.sentio.xyz` (both RPC URLs redirect to these pages on GET) | [Sentio's terms](https://www.sentio.xyz/terms/) name Sentio XYZ Inc. |
-| Ethereum Foundation (ethPandaOps) | [ethPandaOps's official Sepolia page](https://sepolia.ethpandaops.io/) lists `rpc.sepolia.ethpandaops.io` | [Official ethPandaOps repository credits](https://github.com/ethpandaops/ethereum-package#credits) identify the Ethereum Foundation contributors |
-
-The registry's domain suffixes and PSL registrable domains are distinct: `tenderly.co`,
-`publicnode.com`, `sentio.xyz` and `ethpandaops.io`. Each company appears in only one group on
-each chain. The PSL check prevents domain aliases; it is **not a substitute for endpoint
-operator evidence or proof of upstream independence**. Pocket was removed: its
-[official Supplier server documentation](https://docs.pocket.network/services/servers/) says requests are served by
-third-party Suppliers, whose independence from PublicNode/Tenderly cannot be established.
-Base Sepolia B remains a PublicNode singleton: Coinbase's official `https://sepolia.base.org`,
-listed by [Base's network documentation](https://docs.base.org/get-started/connect-to-base),
-failed the real branch-image probe at genesis (pruned history). It is not an eligible backup.
-
-Other candidates were rejected by actual probes: dRPC Sepolia requires a paid plan; Ankr
-requires a key; Coinbase and dRPC Base Sepolia prune genesis history; 1RPC cannot serve the
-required log window. OnFinality repeatedly throttled complete probes even at one request per
-second. Pocket Sepolia intermittently failed genesis reads (pruned history); ethPandaOps
-passed three consecutive complete probes and replaces it. These rejected endpoints were not
-added as usable backups.
-
-Debug loops reproduced v0.7.0's failure in the second `eth_getBlockByNumber("finalized")`
-probe: load-balanced gateways can return a lower finalized height a few hundred milliseconds
-after the first answer (`stale`). Acceptance now uses one finalized snapshot for its numeric
-capability checks. Runtime and readmission still enforce persisted floors and canonical hashes;
-stale or mismatched evidence is never retried into acceptance. Same-height hashes in the
-snapshot, persisted anchors and subsequent reads must agree. Bounded transient probe retries
-also tolerate the separately observed `eth_call` oracle capability failures classified as
-`throttled` on Base Sepolia. See [the RPC runbook](RPC.md#configuration-and-acceptance).
-
-Mainnet needs paid providers from two different companies.
+Staging PHA samples every 300 seconds with `max_sample_age_s: 900` (three intervals) and
+`max_sample_jump_bps: 1100` (500 × sqrt(300/60), rounded). Defaults for 60-second sampling
+remain 180 seconds and 500 bps. The widened age applies only to test routes. The 1,800-second
+window plus 900-second age fits the 2,880-second Ethereum BLOCKHASH bound, leaving a 16-block
+margin within its 256-block reach. PHA remains production-ineligible.
 
 ## Staging reset (HUMAN-ONLY)
 
@@ -183,8 +135,8 @@ use `0x936c…4504` on Base Sepolia: a copy exists there whose owner key is dest
 4. **Reseal the service's secrets** with the commands the summary prints
    ([Sealing the secrets](README.md#sealing-the-secrets)): `.env.staging` (mode 0600) holds exactly
    the rendered compose's sealed names, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
-   `SENTRY_DSN`. Staging's providers are keyless, so it seals no `TOPUP_RPC_<ID>_KEY`, and the old
-   CVM's two empty provider names are not sealed again.
+   `SENTRY_DSN`, `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Submit the complete secret set
+   together; the Compose preflight verifies both RPC keys reach the service.
 5. **Switch DNS** for `pay-api-staging.phala.com` to the records the summary lists: the CNAME to
    the new node's gateway and the `_dstack-app-address` TXT to the new instance, DNS only
    ([Custom domain](README.md#custom-domain)).

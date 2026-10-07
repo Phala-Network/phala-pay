@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 # Shared with the preflight regression test. topup, ok, fail and redact are caller functions.
-check_rpc_groups() {
+compose_topup() {
+    local candidate=$1 rendered=$2 sealed=$3 name unset=()
+    shift 3
+    while IFS= read -r name; do
+        unset+=(-u "$name")
+    done <"$sealed"
+    env "${unset[@]}" docker compose --env-file "$candidate" -f "$rendered" \
+        run --rm --no-deps topup topup "$@" /etc/topup/topup.yaml
+}
+
+check_rpc_endpoints() {
     local probe_dir=$1 reason
     if topup rpc check --config >"$probe_dir/healthy.json" 2>"$probe_dir/probe.err"; then
-        ok "RPC groups have a fully validated serving member each"
+        ok "both RPC endpoints passed the typed self-test through compose"
     else
         # The CLI reserves stdout for JSON and emits a complete sanitized summary on stderr.
         reason=$(tool_error "$probe_dir/probe.err")
         [[ -n "$reason" ]] || reason='RPC check exited without diagnostic output'
-        fail "RPC group preflight failed: $(redact "$reason")"
+        fail "RPC endpoint preflight failed: $(redact "$reason")"
         printf '[]' >"$probe_dir/healthy.json"
     fi
 }

@@ -44,7 +44,7 @@ decisions are the [design](design/multi-tenant.md) (§16 is its PR plan), and th
 |---|---|---|
 | Mainnet PHA contract (proposed `0x6c5bA91642F10282b576d91922Ae6448C9d52f4E`) | Finance | to confirm |
 | Phala Cloud's treasury Safe per chain (owners, threshold), set by Phala Cloud through the API; not a route input | Finance | open |
-| Two independent mainnet RPC groups (public gateways rate-limit), named by `chain.rpc_groups` and configured in `topup.yaml` with `rpc_groups`, `rpc_companies`, and `rpc_budgets`; keyed members name sealed `TOPUP_RPC_*_KEY` variables ([RPC configuration and acceptance](../deploy/RPC.md#configuration-and-acceptance)) | Ops | open |
+| Independent Ankr read and Infura verify endpoints for every payment and price chain, configured with `rpc` and the sealed `TOPUP_RPC_ANKR_KEY` / `TOPUP_RPC_INFURA_KEY` ([RPC configuration and preflight](../deploy/RPC.md#configuration-and-preflight)) | Ops | open |
 | Production R2 bucket and keys for WAL-G | Ops | open |
 | Production Phala Cloud workspace and API key for the CVM (`production` Environment) | Ops | open |
 | Production admin key (the operator's RFC 9421 key) | Operator | open |

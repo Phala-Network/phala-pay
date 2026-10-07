@@ -10,7 +10,6 @@ livemode: true                     # a mainnet; test routes (testnets) are false
 
 chain:
   chain_id: 1                      # default sanctions oracle: Chainalysis 0x40C5…aC8fb
-  rpc_groups: { a: provider-a, b: provider-b }
   forwarder_factory: "0x0000000000000000000000000000000000000000" # the deterministic factory once deployed on the chain (deploy/CONTRACTS.md); the implementation is its first CREATE
   confirmations: 2                 # the floor and default (design D1): a depth, `safe` (OP-stack), or `finalized`; an account may require more
 
@@ -25,12 +24,11 @@ asset:
   # deploy/runbooks/usdt-issuer-controls.md says.
   contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
   decimals: 6
-  backstop: addresses              # many transfers per block: requests by recipient (architecture §8)
 
 price:
   mode: stablecoin
   sources:
-    - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: a }
+    - { source: chainlink, feed: USDT_USD, chain_id: 1 }
   peg_band_bps: 100
 
 merchant:

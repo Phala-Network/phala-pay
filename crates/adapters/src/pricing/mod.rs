@@ -5,6 +5,7 @@ mod decimal;
 pub mod binance;
 pub mod chainlink;
 pub mod kraken;
+pub mod snapshot;
 pub mod uniswap_v2;
 
 use std::time::Duration;
@@ -65,6 +66,22 @@ pub struct PriceQuote {
 pub trait PriceSource: Send + Sync {
     /// Fetches one current price observation.
     async fn observe(&self) -> Result<Observation, PriceError>;
+    /// Confirmation fetches fresh evidence, sharing only work completed after arrival.
+    async fn quote_fresh(&self) -> Result<PriceQuote, PriceError> {
+        self.quote().await
+    }
+    /// Fresh confirmation evidence completed after one valuation request arrived.
+    async fn quote_since(&self, _arrived: tokio::time::Instant) -> Result<PriceQuote, PriceError> {
+        self.quote_fresh().await
+    }
+    /// Sample once for a shared scheduled tick, without consuming quote snapshot capacity.
+    async fn sample_since(&self, _arrived: tokio::time::Instant) -> Result<PriceQuote, PriceError> {
+        self.sample().await
+    }
+    /// A scheduled sample is independent of quote capacity.
+    async fn sample(&self) -> Result<PriceQuote, PriceError> {
+        self.quote_fresh().await
+    }
     /// Fetch both valuation and agreement prices together; ordinary spot feeds use one price.
     async fn quote(&self) -> Result<PriceQuote, PriceError> {
         let valuation = self.observe().await?;
@@ -81,6 +98,9 @@ pub trait PriceSource: Send + Sync {
 /// Price adapter construction, transport, or response failure.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum PriceError {
+    /// The UTC daily cap on fresh quote snapshots has been reached.
+    #[error("daily price snapshot budget exhausted")]
+    SnapshotBudgetExhausted,
     /// The HTTP client could not be configured.
     #[error("price HTTP client configuration failed")]
     ClientConfiguration,
@@ -105,8 +125,8 @@ pub enum PriceError {
     /// The bounded observation deadline expired.
     #[error("price source timeout")]
     Timeout,
-    /// Existing RPC group execution failed; details remain sanitized in RPC telemetry.
-    #[error("price RPC group unavailable")]
+    /// A required endpoint failed; details remain sanitized in RPC telemetry.
+    #[error("price RPC endpoint unavailable")]
     RpcUnavailable,
     /// Sanitized numeric feed evidence for a failed round or A/B disagreement.
     #[error("on-chain price rejected: {class}")]
@@ -119,8 +139,8 @@ pub enum PriceError {
     /// Feed is outside its pinned freshness window.
     #[error("stale price source")]
     Stale,
-    /// Independent RPC groups disagree; failover must not mask this.
-    #[error("price RPC groups disagree")]
+    /// Independent read and verify endpoints disagree.
+    #[error("price RPC endpoints disagree")]
     Disagreement,
     /// Base sequencer is down or recovering.
     #[error("sequencer unavailable or in grace")]
@@ -174,19 +194,10 @@ async fn admit(source: &'static str) {
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 pub mod test_rpc {
-    use crate::{
-        chain::evm::{
-            EvmClient,
-            group::{
-                GroupPolicy, Member, RpcGroup,
-                budget::{BudgetSpec, Budgets},
-            },
-        },
-        redaction::Redacted,
-    };
+    use crate::chain::evm::EvmClient;
     use axum::{Json, Router, routing::post};
     use serde_json::{Value, json};
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::sync::Arc;
 
     /// Owns a typed RPC client and its disposable server.
     pub struct RpcFixture {
@@ -201,7 +212,7 @@ pub mod test_rpc {
             self.task.abort();
         }
     }
-    /// Serves replies through the same typed group path as production adapters.
+    /// Serves replies through the same typed endpoint path as production adapters.
     pub async fn rpc(
         id: &str,
         reply: impl Fn(Value) -> Value + Clone + Send + Sync + 'static,
@@ -216,53 +227,67 @@ pub mod test_rpc {
             async move {
                 received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let id = request["id"].clone();
-                Json(json!({"jsonrpc":"2.0","id":id,"result":reply(request)}))
+                let result = if request["method"] == "eth_call" {
+                    use crate::chain::evm::{
+                        SnapshotResult, aggregate3Call, getBlockHashCall,
+                        getCurrentBlockTimestampCall,
+                    };
+                    use alloy_sol_types::SolCall;
+                    let input = request["params"][0]["input"]
+                        .as_str()
+                        .or_else(|| request["params"][0]["data"].as_str())
+                        .unwrap();
+                    let bytes = hex::decode(input.trim_start_matches("0x")).unwrap();
+                    if let Ok(aggregate) = aggregate3Call::abi_decode_validate(&bytes) {
+                        assert_eq!(request["params"][1]["requireCanonical"], true);
+                        let head = reply(
+                            json!({"method":"eth_getBlockByNumber","params":["latest",false]}),
+                        );
+                        if request["params"][1]["blockHash"] != head["hash"] {
+                            return Json(
+                                json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"block is not canonical"}}),
+                            );
+                        }
+                        let results: Vec<_> = aggregate.calls.into_iter().map(|call| {
+                            let output = if getCurrentBlockTimestampCall::abi_decode_validate(&call.callData).is_ok() {
+                                let timestamp = u64::from_str_radix(head["timestamp"].as_str().unwrap().trim_start_matches("0x"),16).unwrap();
+                                getCurrentBlockTimestampCall::abi_encode_returns(&alloy_primitives::U256::from(timestamp))
+                            } else if let Ok(call) = getBlockHashCall::abi_decode_validate(&call.callData) {
+                                let header = reply(json!({"method":"eth_getBlockByNumber","params":[format!("0x{:x}",call.blockNumber),false]}));
+                                getBlockHashCall::abi_encode_returns(&header["hash"].as_str().unwrap().parse().unwrap())
+                            } else {
+                                let mut inner = request.clone();
+                                inner["params"][0]["to"] = json!(call.target);
+                                inner["params"][0]["input"] = json!(format!("0x{}",hex::encode(call.callData)));
+                                let result = reply(inner);
+                                hex::decode(result.as_str().unwrap().trim_start_matches("0x")).unwrap()
+                            };
+                            SnapshotResult {success:true,returnData:output.into()}
+                        }).collect();
+                        json!(format!(
+                            "0x{}",
+                            hex::encode(aggregate3Call::abi_encode_returns(&results))
+                        ))
+                    } else {
+                        reply(request)
+                    }
+                } else {
+                    reply(request)
+                };
+                Json(json!({"jsonrpc":"2.0","id":id,"result":result}))
             }
         };
         let app = Router::new().route("/", post(handler));
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        let budgets = Arc::new(
-            Budgets::new(&BTreeMap::from([
-                (
-                    "account".into(),
-                    BudgetSpec {
-                        requests_per_second: 100,
-                        burst: 100,
-                        interactive_reserve: 0,
-                    },
-                ),
-                (
-                    "key".into(),
-                    BudgetSpec {
-                        requests_per_second: 100,
-                        burst: 100,
-                        interactive_reserve: 0,
-                    },
-                ),
-            ]))
-            .unwrap(),
-        );
-        let group = RpcGroup::new(
-            id.into(),
-            1,
-            GroupPolicy::default(),
-            vec![Member {
-                id: id.into(),
-                company: id.into(),
-                endpoint: Redacted::parse(&url).unwrap(),
-                account: "account".into(),
-                key: "key".into(),
-                priority: 0,
-                weight: 1,
-            }],
-            budgets,
-        )
-        .unwrap();
-        group.verified(0, true);
         RpcFixture {
-            client: Arc::new(EvmClient::from_group(group, None).unwrap()),
+            client: Arc::new(
+                EvmClient::new(&url)
+                    .unwrap()
+                    .with_provider(id)
+                    .with_chain_id(1),
+            ),
             sends,
             task,
         }
@@ -301,8 +326,9 @@ pub mod test_rpc {
                 }
                 "eth_call" => {
                     assert_eq!(
-                        request["params"][1], "0x62",
-                        "all pair AND ETH/USD values must be pinned to min(100,102)-2"
+                        request["params"][1],
+                        json!({"blockHash":hash,"requireCanonical":true}),
+                        "all pair and ETH/USD values must use the canonical verify pin"
                     );
                     let input = request["params"][0]["input"]
                         .as_str()
@@ -380,12 +406,16 @@ pub mod test_rpc {
                 };
                 head["hash"] = json!(format!("0x{}", "11".repeat(32)));
                 head["parentHash"] = json!(format!("0x{}", "22".repeat(32)));
+                head["timestamp"] = json!(format!("0x{updated:x}"));
                 return head;
             }
             if request["method"] == "eth_blockNumber" {
                 return json!("0x64");
             }
-            assert_eq!(request["params"][1], "0x62");
+            assert_eq!(
+                request["params"][1],
+                json!({"blockHash":format!("0x{}","11".repeat(32)),"requireCanonical":true})
+            );
             let data = request["params"][0]["input"]
                 .as_str()
                 .or_else(|| request["params"][0]["data"].as_str())

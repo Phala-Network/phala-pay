@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import ssl
 from contextlib import suppress
+from functools import partial
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -49,15 +52,26 @@ async def forward(
 
 
 async def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--certificate", type=Path, default=Path("/etc/test-tls/cert.pem"))
+    parser.add_argument("--key", type=Path, default=Path("/etc/test-tls/key.pem"))
+    parser.add_argument("--upstream", default="http://topup:8080")
+    parser.add_argument("--bind", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8443)
+    args = parser.parse_args()
+    upstream = urlsplit(args.upstream)
+    if upstream.scheme != "http" or not upstream.hostname or not upstream.port:
+        parser.error("upstream must be an explicit http://host:port")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(Path("/etc/test-tls/cert.pem"), Path("/etc/test-tls/key.pem"))
+    context.load_cert_chain(args.certificate, args.key)
     server = await asyncio.start_server(
-        forward,
-        "0.0.0.0",  # noqa: S104 - private Compose network, no published port
-        8443,
+        partial(forward, upstream_host=upstream.hostname, upstream_port=upstream.port),
+        args.bind,
+        args.port,
         ssl=context,
         ssl_handshake_timeout=5,
     )
+    print(server.sockets[0].getsockname()[1], flush=True)
     async with server:
         await server.serve_forever()
 

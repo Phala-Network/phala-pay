@@ -77,6 +77,8 @@ pub(crate) async fn block_chain(
     check_name: &str,
     reason: &str,
 ) -> Result<(), ReconciliationError> {
+    let mut transaction = pool.begin().await?;
+    crate::db::rpc::lock_reconciliation_in(&mut transaction, &format!("chain:{chain_id}")).await?;
     sqlx::query(
         r#"
         INSERT INTO reconciliation_blocks
@@ -89,8 +91,9 @@ pub(crate) async fn block_chain(
     .bind(db_i64(chain_id)?)
     .bind(check_name)
     .bind(reason)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -102,7 +105,7 @@ pub async fn chain_is_blocked(pool: &PgPool, chain_id: u64) -> Result<bool, sqlx
     let chain_id =
         i64::try_from(chain_id).map_err(|error| sqlx::Error::Encode(error.to_string().into()))?;
     sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM reconciliation_blocks WHERE scope = 'chain' AND chain_id = $1) OR COALESCE((SELECT frozen OR awaiting_anchor FROM rpc_chain_state WHERE chain_id=$1),false)",
+        "SELECT EXISTS(SELECT 1 FROM reconciliation_blocks WHERE scope = 'chain' AND chain_id = $1)",
     )
     .bind(chain_id)
     .fetch_one(pool)
@@ -306,33 +309,14 @@ async fn try_lease_owner_lock(
     }))
 }
 
-/// Returns the next block of the missing-deposit scan, if one was recorded.
-pub(crate) async fn deposit_cursor(
-    pool: &PgPool,
-    chain_id: u64,
-) -> Result<Option<u64>, ReconciliationError> {
-    let next: Option<i64> = sqlx::query_scalar(
-        "SELECT next_block FROM reconciliation_deposit_cursors WHERE chain_id = $1",
-    )
-    .bind(db_i64(chain_id)?)
-    .fetch_optional(pool)
-    .await?;
-    next.map(db_u64).transpose()
-}
-
 fn parse_u256(value: &str) -> Result<U256, ReconciliationError> {
     value
         .parse()
         .map_err(|_| ReconciliationError::Invariant("stored atomic total is invalid"))
 }
-
 fn db_i64(value: u64) -> Result<i64, ReconciliationError> {
     i64::try_from(value)
         .map_err(|_| ReconciliationError::Invariant("value exceeds PostgreSQL bigint"))
-}
-
-fn db_u64(value: i64) -> Result<u64, ReconciliationError> {
-    u64::try_from(value).map_err(|_| ReconciliationError::Invariant("stored block is negative"))
 }
 
 /// Round-robin keyset position. NULL restarts a completed pass, so old rows are rechecked.

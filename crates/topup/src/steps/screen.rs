@@ -63,18 +63,31 @@ impl ScreenRoute {
             .sanctions
             .sanctions(deposit.from_address, deposit.block_number)
             .await;
-        if sanctions.block_number != deposit.block_number {
-            return invariant_result("sanctions_block_mismatch", deposit.block_number);
-        }
-        let outcome = screen(
-            deposit.amount_atomic,
-            &sanctions,
-            &bounds,
-            &pause_scopes.effective,
-            &PauseScopes::default(),
-        );
+        let outcome = if sanctions.block_number < deposit.block_number {
+            StepOutcome::Retry {
+                error: RetryError::SanctionsInconclusive,
+            }
+        } else {
+            screen(
+                deposit.amount_atomic,
+                &sanctions,
+                &bounds,
+                &pause_scopes.effective,
+                &PauseScopes::default(),
+            )
+        };
         let oracle = self.route.screening.sanctions_oracle;
-        let evidence = screening_evidence(oracle, sanctions, bounds, &pause_scopes);
+        let mut evidence = screening_evidence(oracle, sanctions, bounds, &pause_scopes);
+        if sanctions.block_number < deposit.block_number {
+            evidence["error"] = json!("sanctions_pin_before_payment");
+        }
+        if outcome
+            == (StepOutcome::Retry {
+                error: RetryError::SanctionsInconclusive,
+            })
+        {
+            evidence["sanctions_hold"] = json!(true);
+        }
         let mut result = StepResult::new(outcome, evidence);
         if let StepOutcome::Reject(_) = outcome {
             result.events.push(rejected_event(deposit));
@@ -326,6 +339,7 @@ fn screening_evidence(
     json!({
         "oracle": format!("{oracle:#x}"),
         "block_number": sanctions.block_number,
+        "block_hash": sanctions.block_hash,
         "provider_a": sanctions.provider_a,
         "provider_b": sanctions.provider_b,
         "bounds": {
@@ -452,6 +466,7 @@ mod tests {
         ScreenRoute::new(
             route,
             Arc::new(FixedSanctions(SanctionsResult {
+                block_hash: None,
                 provider_a,
                 provider_b,
                 block_number: 123,
@@ -483,24 +498,23 @@ mod tests {
                 Sanctioned,
                 StepOutcome::Reject(RejectReason::Sanctioned),
             ),
-            (
-                Sanctioned,
-                Clear,
-                StepOutcome::Reject(RejectReason::Sanctioned),
-            ),
-            (
-                Sanctioned,
-                Unavailable,
-                StepOutcome::Reject(RejectReason::Sanctioned),
-            ),
-            (
-                Clear,
-                Sanctioned,
-                StepOutcome::Reject(RejectReason::Sanctioned),
-            ),
             (Clear, Clear, StepOutcome::Advance),
             (
+                Sanctioned,
                 Clear,
+                StepOutcome::Retry {
+                    error: RetryError::SanctionsInconclusive,
+                },
+            ),
+            (
+                Clear,
+                Sanctioned,
+                StepOutcome::Retry {
+                    error: RetryError::SanctionsInconclusive,
+                },
+            ),
+            (
+                Sanctioned,
                 Unavailable,
                 StepOutcome::Retry {
                     error: RetryError::SanctionsInconclusive,
@@ -509,7 +523,16 @@ mod tests {
             (
                 Unavailable,
                 Sanctioned,
-                StepOutcome::Reject(RejectReason::Sanctioned),
+                StepOutcome::Retry {
+                    error: RetryError::SanctionsInconclusive,
+                },
+            ),
+            (
+                Clear,
+                Unavailable,
+                StepOutcome::Retry {
+                    error: RetryError::SanctionsInconclusive,
+                },
             ),
             (
                 Unavailable,
@@ -611,12 +634,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_cannot_substitute_a_different_evidence_block() {
+    async fn source_cannot_pin_before_the_payment() {
         let mut route = route(SanctionsAnswer::Clear, SanctionsAnswer::Clear);
         route.sanctions = Arc::new(FixedSanctions(SanctionsResult {
+            block_hash: None,
             provider_a: SanctionsAnswer::Clear,
             provider_b: SanctionsAnswer::Clear,
-            block_number: 124,
+            block_number: 122,
         }));
         let result = route
             .evaluate(&deposit(amount(15)), pauses(&[], &[], &[]), bounds())
@@ -624,9 +648,10 @@ mod tests {
         assert_eq!(
             result.outcome,
             StepOutcome::Retry {
-                error: RetryError::InvariantViolation,
+                error: RetryError::SanctionsInconclusive,
             }
         );
-        assert_eq!(result.evidence["error"], "sanctions_block_mismatch");
+        assert_eq!(result.evidence["error"], "sanctions_pin_before_payment");
+        assert_eq!(result.evidence["sanctions_hold"], true);
     }
 }

@@ -13,7 +13,6 @@ livemode: true                     # a mainnet; test routes (testnets) are false
 
 chain:
   chain_id: 1                      # default sanctions oracle: Chainalysis 0x40C5…aC8fb
-  rpc_groups: { a: provider-a, b: provider-b }
   forwarder_factory: "0x0000000000000000000000000000000000000000" # the deterministic factory once deployed on the chain (deploy/CONTRACTS.md); the implementation is its first CREATE
   confirmations: 2                 # the floor and default (design D1): a depth, `safe` (OP-stack), or `finalized`; an account may require more
 
@@ -21,14 +20,13 @@ asset:
   symbol: pha                      # the API's asset code
   contract: "0x6c5bA91642F10282b576d91922Ae6448C9d52f4E"
   decimals: 18
-  backstop: token                  # `token` for few transfers per block (PHA); `addresses` for busy tokens such as USDC
 
 price:
   mode: volatile
   allow_unclear_sources: true # staging/test only; production PHA is disabled (no second Allowed source)
-  primary: [{ source: uniswap_v2_twap, rpc_group: a, rpc_group_b: b }]
+  primary: [{ source: uniswap_v2_twap }]
   check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # explicit staging-only check
-  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: a, rpc_group_b: b }]
+  fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1 }]
 
 merchant:
   min_amount: { default: 100 } # USD 1.00; smaller deposits are rejected below_minimum

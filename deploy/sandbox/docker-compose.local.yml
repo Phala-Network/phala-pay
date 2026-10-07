@@ -41,10 +41,6 @@ services:
       - http://topup:8080
       - --wait-interval-s
       - "2"
-      - --head-poll-interval-s
-      - "1"
-      - --finalized-poll-interval-s
-      - "1"
     depends_on:
       anvil:
         condition: service_healthy

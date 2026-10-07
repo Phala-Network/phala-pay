@@ -183,15 +183,12 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         | "TopupCertificateExpiry"
         | "TopupCertificateProbeFailed"
         | "TopupBusinessProbeFailed" => "business-health.md",
-        "TopupRpcChainFrozen" => "chain-frozen.md",
-        "TopupRpcMetricsRefreshFailed" => "rpc-health.md#metrics-refresh-failure",
-        "TopupRpcGroupUnavailable"
-        | "TopupRpcMemberQuarantined"
-        | "TopupRpcMemberCooldown"
-        | "TopupRpcQuotaPressure"
-        | "TopupRpcUnclassifiedError"
-        | "TopupRpcAnchorUnavailable"
-        | "TopupRpcRecoveryUnavailable" => "rpc-health.md",
+        "TopupContractCodeMismatch"
+        | "TopupFinalizedCheckpointConflict"
+        | "TopupUnverifiedEvidenceMismatch" => "chain-frozen.md",
+        "TopupRpcEndpointUnavailable" => "rpc-health.md",
+        "TopupRpcDisagreement" | "TopupSanctionsHold" => "provider-disagreement.md",
+        "TopupDepositReversalUnproven" => "deposit-reversed.md",
         "TopupDepositStateAgeExceeded" => match tag("state") {
             Some("detected" | "confirmed") => "provider-disagreement.md",
             _ => "README.md#alert-and-symptom-index",
@@ -203,6 +200,7 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
             "chain-frozen.md"
         }
         "TopupReconciliationMismatch" => "reconciliation-mismatch.md",
+        "TopupAddressCapacity" => "address-capacity.md",
         "TopupLockExpiryFailing" => "lock-expiry-worker-failure.md",
         "TopupLockExposureNearCap" => "lock-exposure-near-cap.md",
         "TopupUnsupportedInflows" => "rejected-funds-at-treasury.md",
@@ -270,10 +268,24 @@ pub struct CronMonitor {
 }
 
 impl CronMonitor {
-    /// Successful finalized scanner passes of one chain: a stalled or stopped scanner.
+    /// Fast discovery: one completed round per minute, with a two-minute missed-check-in margin.
     #[must_use]
-    pub fn scanner(chain_id: u64) -> Self {
-        Self::heartbeat(format!("topup-scanner-{chain_id}"), 5)
+    pub fn fast_scanner(chain_id: u64) -> Self {
+        let mut monitor = Self::heartbeat(format!("topup-fast-scanner-{chain_id}"), 2);
+        monitor.config.failure_issue_threshold = Some(3);
+        monitor
+    }
+    /// Dual coverage: one round per ten minutes, with a two-minute missed-check-in margin.
+    #[must_use]
+    pub fn coverage_scanner(chain_id: u64) -> Self {
+        Self::new(
+            format!("topup-coverage-scanner-{chain_id}"),
+            MonitorSchedule::Interval {
+                value: 10,
+                unit: MonitorIntervalUnit::Minute,
+            },
+            2,
+        )
     }
 
     /// Polls of the finality watch.
@@ -428,6 +440,7 @@ mod tests {
             "TopupCertificateExpiry",
             "TopupCertificateProbeFailed",
             "TopupBusinessProbeFailed",
+            "TopupAddressCapacity",
         ];
         let events = with_captured_events_options(
             || {
@@ -445,6 +458,8 @@ mod tests {
             assert_eq!(event.fingerprint[0], "topup-alert");
             let expected = if alert.starts_with("TopupOutbox") {
                 "outbox-backlog.md"
+            } else if alert == "TopupAddressCapacity" {
+                "address-capacity.md"
             } else {
                 "business-health.md"
             };
@@ -614,216 +629,38 @@ mod tests {
     }
 
     #[test]
-    fn metrics_refresh_and_real_member_quarantine_deliver_sanitized_sentry_alerts() {
-        use std::{collections::BTreeMap, sync::Arc};
-        use topup_adapters::{
-            chain::evm::group::{Failure, GroupPolicy, Member, RpcGroup, budget::Budgets},
-            redaction::Redacted,
-        };
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let events = with_captured_events_options(
+    fn scanner_monitors_report_separate_per_chain_fast_and_coverage_cadences() {
+        let envelopes = with_captured_envelopes_options(
             || {
-                tracing::subscriber::with_default(log_subscriber(std::io::sink), || {
-                    runtime.block_on(async {
-                        let pool = sqlx::postgres::PgPoolOptions::new()
-                            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
-                            .unwrap();
-                        pool.close().await;
-                        crate::rpc_runtime::refresh_metrics_safely(
-                            crate::db::rpc::refresh_metrics(&pool),
-                        )
-                        .await;
-                        crate::rpc_runtime::refresh_metrics_safely(
-                            crate::db::rpc::refresh_metrics(&pool),
-                        )
-                        .await;
-                        crate::rpc_runtime::refresh_metrics_safely(async { Ok(()) }).await;
-                        let group = RpcGroup::new(
-                            "alert-test".into(),
-                            1,
-                            GroupPolicy::default(),
-                            vec![Member {
-                                id: "member-test".into(),
-                                company: "company".into(),
-                                endpoint: Redacted::parse("https://rpc.invalid/private-key")
-                                    .unwrap(),
-                                account: "provider-account-secret".into(),
-                                key: "key-secret".into(),
-                                priority: 0,
-                                weight: 1,
-                            }],
-                            Arc::new(Budgets::new(&BTreeMap::new()).unwrap()),
-                        )
-                        .unwrap();
-                        group.failed(0, Failure::Identity);
-                        assert!(group.quarantined(0));
-                    });
-                });
+                CronMonitor::fast_scanner(1).check_in(true);
+                CronMonitor::coverage_scanner(1).check_in(false);
+                CronMonitor::coverage_scanner(8453).check_in(true);
             },
-            options(),
+            options().environment("staging"),
         );
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].tags["alert"], "TopupRpcMetricsRefreshFailed");
-        assert!(events[0].tags["runbook"].ends_with("rpc-health.md#metrics-refresh-failure"));
-        assert_eq!(events[1].tags["alert"], "TopupRpcMemberQuarantined");
-        assert_eq!(events[1].tags["group"], "alert-test");
-        assert_eq!(events[1].tags["member"], "member-test");
-        let serialized = serde_json::to_string(&events).unwrap();
-        for secret in [
-            "private-key",
-            "provider-account-secret",
-            "key-secret",
-            "rpc.invalid",
-        ] {
-            assert!(
-                !serialized.contains(secret),
-                "sensitive fixture appeared in captured events"
+        let checks = envelopes
+            .iter()
+            .flat_map(|e| e.items())
+            .filter_map(|item| match item {
+                EnvelopeItem::MonitorCheckIn(check) => Some(check),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(checks.len(), 3);
+        for (check, (slug, minutes, status)) in checks.iter().zip([
+            ("topup-fast-scanner-1", 1, MonitorCheckInStatus::Ok),
+            ("topup-coverage-scanner-1", 10, MonitorCheckInStatus::Error),
+            ("topup-coverage-scanner-8453", 10, MonitorCheckInStatus::Ok),
+        ]) {
+            assert_eq!(check.monitor_slug, slug);
+            assert_eq!(check.status, status);
+            let config = serde_json::to_value(&check.monitor_config).unwrap();
+            assert_eq!(
+                config["schedule"],
+                serde_json::json!({"type":"interval","value":minutes,"unit":"minute"})
             );
+            assert_eq!(config["checkin_margin"], 2);
         }
-    }
-
-    #[test]
-    fn stalled_refresh_does_not_delay_the_running_availability_monitor() {
-        use std::{collections::BTreeMap, sync::Arc, time::Duration};
-        use tokio_util::sync::CancellationToken;
-        use topup_adapters::chain::evm::group::{GroupPolicy, RpcGroup, budget::Budgets};
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .start_paused(true)
-            .build()
-            .unwrap();
-        let events = with_captured_events_options(
-            || {
-                tracing::subscriber::with_default(log_subscriber(std::io::sink), || {
-                    runtime.block_on(async {
-                        let group = RpcGroup::new(
-                            "stalled-refresh".into(),
-                            1,
-                            GroupPolicy::default(),
-                            Vec::new(),
-                            Arc::new(Budgets::new(&BTreeMap::new()).unwrap()),
-                        )
-                        .unwrap();
-                        let cancellation = CancellationToken::new();
-                        let cancel = cancellation.clone();
-                        let entered = CancellationToken::new();
-                        let started = entered.clone();
-                        let task = tokio::spawn(async move {
-                            crate::rpc_runtime::with_availability_monitor(
-                                &[group],
-                                &cancellation,
-                                async {
-                                    crate::rpc_runtime::refresh_metrics_safely(async {
-                                        entered.cancel();
-                                        std::future::pending::<Result<(), sqlx::Error>>().await
-                                    })
-                                    .await;
-                                    Ok(())
-                                },
-                            )
-                            .await
-                        });
-                        started.cancelled().await;
-                        // The real interval/Instant monitor runs while refresh remains blocked.
-                        tokio::time::advance(Duration::from_secs(59)).await;
-                        tokio::task::yield_now().await;
-                        tokio::time::advance(Duration::from_secs(6)).await;
-                        tokio::task::yield_now().await;
-                        assert!(!task.is_finished(), "recovery should still be stalled");
-                        cancel.cancel();
-                        assert!(
-                            task.await.unwrap().is_ok(),
-                            "cancellation must drop the stalled refresh"
-                        );
-                    });
-                });
-            },
-            options(),
-        );
-        assert_eq!(
-            events.len(),
-            1,
-            "the monitor must emit during the stalled refresh"
-        );
-        assert_eq!(events[0].tags["alert"], "TopupRpcGroupUnavailable");
-        assert_eq!(events[0].tags["group"], "stalled-refresh");
-    }
-
-    #[test]
-    fn rpc_outage_alert_delivers_after_one_minute_and_recovery_resets_the_timer() {
-        use crate::rpc_runtime::report_group_availability;
-        use std::collections::BTreeMap;
-        use std::time::Duration;
-        let events = with_captured_events_options(
-            || {
-                tracing::subscriber::with_default(log_subscriber(std::io::sink), || {
-                    let start = tokio::time::Instant::now();
-                    let mut since = BTreeMap::new();
-                    report_group_availability("chain-a", 1, false, &mut since, start);
-                    report_group_availability(
-                        "chain-a",
-                        1,
-                        false,
-                        &mut since,
-                        start + Duration::from_secs(59),
-                    );
-                    report_group_availability(
-                        "chain-a",
-                        1,
-                        true,
-                        &mut since,
-                        start + Duration::from_secs(60),
-                    );
-                    report_group_availability(
-                        "chain-a",
-                        1,
-                        false,
-                        &mut since,
-                        start + Duration::from_secs(61),
-                    );
-                    report_group_availability(
-                        "chain-a",
-                        1,
-                        false,
-                        &mut since,
-                        start + Duration::from_secs(120),
-                    );
-                    report_group_availability(
-                        "chain-a",
-                        1,
-                        false,
-                        &mut since,
-                        start + Duration::from_secs(121),
-                    );
-                    report_group_availability(
-                        "chain-a",
-                        1,
-                        false,
-                        &mut since,
-                        start + Duration::from_secs(122),
-                    );
-                });
-            },
-            options(),
-        );
-        assert_eq!(events.len(), 1);
-        assert_eq!(
-            events[0].tags.get("alert").map(String::as_str),
-            Some("TopupRpcGroupUnavailable")
-        );
-        assert_eq!(
-            events[0].fingerprint.as_ref(),
-            [
-                "topup-alert",
-                "TopupRpcGroupUnavailable",
-                "chain=1",
-                "group=chain-a"
-            ]
-        );
-        assert!(events[0].tags["runbook"].ends_with("rpc-health.md"));
     }
 
     #[test]

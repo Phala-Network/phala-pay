@@ -195,6 +195,8 @@ pub struct Quote {
     pub status: String,
     /// End of the payment window, Unix seconds.
     pub expires_at: i64,
+    /// Deferred cancellation request time, Unix seconds; null before a request.
+    pub cancel_requested_at: Option<i64>,
     /// Creation time, Unix seconds.
     pub created: i64,
     /// The payment the checkout page should show, once one is seen on chain; display only.
@@ -296,6 +298,8 @@ pub struct ClientQuote {
     pub payment_uri: String,
     /// End of the payment window, Unix seconds.
     pub expires_at: i64,
+    /// Deferred cancellation request time, Unix seconds.
+    pub cancel_requested_at: Option<i64>,
     /// Progress of the payment shown on the page; display only, never a reason to deliver
     /// anything: `none`; `seen` (in a block, below the route's confirmation, and may still
     /// disappear); `confirming` (at the route's confirmation, being valued and screened);

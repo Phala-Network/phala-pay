@@ -1,939 +1,933 @@
-//! ERC-20 deposit scanners: the per-block scan of the head loop ([`head`]), which records
-//! transfers at the route's confirmation about one block time after they reach it, and the
-//! finalized backstop, which records any transfer the per-block scan missed and indexes the
-//! forwarder factory's `ForwarderCreated`, `Flushed`, and `FlushFailed` events for the same
-//! addresses, whoever called the factory (design §13), once per `finalized` advance.
-
-mod head;
-
-pub use head::{
-    DEFAULT_HEAD_POLL_INTERVAL, FinalizedHeads, HeadScan, head_poll_interval, head_scan_once,
-    scan_new_blocks,
-};
-
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
-
-use crate::chain_retry::backing_off;
-use alloy_primitives::Address;
+//! Read-only fast discovery and atomic dual-source finalized coverage (§2.1–2.2).
+use crate::{db, routes::RouteSet};
+use alloy_primitives::{Address, B256};
 use chrono::{DateTime, Utc};
+use db::chain_reads::{self, Boundary};
 use sqlx::PgPool;
-use tokio::task::JoinSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::{
-    ChainError, ChainReader, FinalizedReader, MAX_BLOCKS_PER_REQUEST, TransferLog,
+    ChainError, ChainReader, FinalizedHead, FinalizedReader, TransferLog,
 };
 use topup_core::deposit::{DepositState, RejectReason};
-use topup_core::retry::backoff;
-use topup_core::route::{Backstop, ChainConfig};
-use tracing::Instrument as _;
+use topup_core::route::{ChainConfig, Confirmations};
 
-use crate::db::{self, NewDeposit, ScanAddress, ScanCommit};
-use crate::jitter::{JitterSource as _, OsJitter};
-use crate::routes::RouteSet;
-
-/// Maximum inclusive block count scanned in one window.
-pub const MAX_SCAN_WINDOW: u64 = MAX_BLOCKS_PER_REQUEST;
-/// Maximum block windows per address page in one finalized pass.
-const MAX_WINDOWS_PER_SCAN: u64 = 64;
-
-/// Scanner timing (`topup run --head-poll-interval-s`, `--finalized-poll-interval-s`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ScanConfig {
-    /// Delay between `eth_blockNumber` polls of provider A; `None` uses each chain's
-    /// [`head_poll_interval`], one block time.
-    pub head_poll_interval: Option<Duration>,
-    /// Least delay between reads of provider A's `finalized` head, whose advance wakes the
-    /// finalized backstop, the finality watch, and the reconciler.
-    pub finalized_poll_interval: Duration,
-}
-
-impl Default for ScanConfig {
+/// Read discovery cadence; coverage is independent of fast cursor advances.
+pub const FAST_INTERVAL: Duration = Duration::from_secs(60);
+/// Complete negative evidence cadence, staggered across configured chains.
+pub const COVERAGE_INTERVAL: Duration = Duration::from_secs(600);
+/// Inclusive normal round limit.
+pub const COVERAGE_LIMIT: u64 = 3_000;
+/// Every sixth round catches up at this inclusive limit.
+pub const CATCHUP_LIMIT: u64 = 19_200;
+/// All scanner cadences are fixed by the attested design.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScanConfig;
+/// Per-chain checkpoint announcements used by finality and reconciliation.
+#[derive(Clone, Debug)]
+pub struct FinalizedHeads(Arc<tokio::sync::watch::Sender<BTreeMap<u64, FinalizedHead>>>);
+impl Default for FinalizedHeads {
     fn default() -> Self {
-        Self {
-            head_poll_interval: None,
-            finalized_poll_interval: DEFAULT_FINALIZED_POLL_INTERVAL,
-        }
+        Self(Arc::new(tokio::sync::watch::Sender::new(BTreeMap::new())))
     }
 }
-
-/// Default least delay between `finalized` reads: an Ethereum epoch (6.4 minutes) advances it,
-/// so a minute adds at most a sixth of an epoch before an advance is acted on.
-pub const DEFAULT_FINALIZED_POLL_INTERVAL: Duration = Duration::from_secs(60);
-
-/// Longest wait of the finalized backstop without an advance: a published head could be missed
-/// only if the head loop stopped, and the backstop then reads `finalized` itself.
-const BACKSTOP_FALLBACK_INTERVAL: Duration = Duration::from_secs(15 * 60);
-
-/// Scanner failure.
+impl FinalizedHeads {
+    /// Publish an agreed checkpoint advance.
+    pub fn publish(&self, chain: u64, head: FinalizedHead) -> bool {
+        self.0.send_if_modified(|heads| {
+            if heads
+                .get(&chain)
+                .is_some_and(|old| old.number >= head.number)
+            {
+                return false;
+            }
+            heads.insert(chain, head);
+            true
+        })
+    }
+    /// Last announced checkpoint.
+    pub fn get(&self, chain: u64) -> Option<FinalizedHead> {
+        self.0.borrow().get(&chain).copied()
+    }
+    /// Subscribe to checkpoint advances.
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<BTreeMap<u64, FinalizedHead>> {
+        self.0.subscribe()
+    }
+}
+/// A failed round commits no ledger, coverage, address, compatibility cursor or cleanup writes.
 #[derive(Debug, thiserror::Error)]
 pub enum ScannerError {
-    /// A route file or environment value is invalid.
+    /// Invalid route settings.
     #[error("invalid scanner configuration: {0}")]
     Configuration(String),
-    /// A chain read failed.
+    /// One endpoint could not supply complete evidence.
     #[error("{0}")]
     Chain(#[from] ChainError),
-    /// A database operation failed.
+    /// Persistence failed.
     #[error("{0}")]
     Database(#[from] sqlx::Error),
-    /// The provider finalized head is behind the durable cursor: a node that has not caught up,
-    /// such as a load-balanced gateway's after a restart; the pass is retried.
-    #[error("provider finalized head {finalized} is behind durable cursor {cursor}")]
-    FinalizedBehindCursor {
-        /// Durable fully scanned block.
-        cursor: u64,
-        /// Provider's current finalized block.
-        finalized: u64,
-    },
-    /// A transfer returned for the filter did not resolve to a tracked address.
+    /// Independently derived evidence disagreed.
+    #[error("dual-source chain evidence disagreed")]
+    Disagreement,
+    /// Addresses, coverage or the unverified deposit set changed during the read round.
+    #[error("coverage snapshot changed; retry the round")]
+    SnapshotChanged,
+    /// A transfer did not pay a snapshotted address.
     #[error("transfer recipient {0:#x} is not tracked")]
     UnknownRecipient(Address),
-    /// A per-chain scanner task stopped unexpectedly.
+    /// A supervised task stopped.
     #[error("scanner task failed: {0}")]
     Task(String),
 }
-
-impl ScannerError {
-    /// Whether the pass may succeed on a later attempt. A provider answering a finalized head below
-    /// one it answered before, or below the durable cursor, is a node that has not caught up: the
-    /// pass waits for it, with the scanner's monitor unhealthy meanwhile.
-    fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::Database(_)
-                | Self::FinalizedBehindCursor { .. }
-                | Self::Chain(
-                    ChainError::Rpc(_)
-                        | ChainError::Group(_)
-                        | ChainError::Transport(_)
-                        | ChainError::MissingField(_)
-                        | ChainError::InvalidTimestamp(_)
-                        | ChainError::InvalidTransfer(_)
-                        | ChainError::Reorganized(_)
-                        | ChainError::FinalizedHeadRegressed { .. }
-                )
-        )
-    }
-
-    fn category(&self) -> &'static str {
-        match self {
-            Self::Configuration(_) => "configuration",
-            Self::Chain(ChainError::FinalizedHeadRegressed { .. }) => "finalized_regression",
-            Self::Chain(_) => "chain_read",
-            Self::Database(_) => "database",
-            Self::FinalizedBehindCursor { .. } => "finalized_behind_cursor",
-            Self::UnknownRecipient(_) => "unknown_recipient",
-            Self::Task(_) => "task",
-        }
-    }
-}
-
-/// Active routes and chain settings for one EVM chain.
+/// Current token routing of a single payment chain.
 #[derive(Clone, Debug)]
 pub struct ChainRoutes {
-    /// Shared chain configuration.
+    /// Attested chain configuration.
     pub chain: ChainConfig,
-    routes: BTreeMap<Address, RouteSelection>,
-    backstop: Backstop,
+    routes: BTreeMap<Address, (String, u64)>,
 }
-
-impl ChainRoutes {
-    /// Whether transfers are requested token-wide and kept locally: unless a current route of the
-    /// chain asks for address mode, whose any-token requests then cover every route.
-    #[must_use]
-    pub fn token_mode(&self) -> bool {
-        self.backstop == Backstop::Token
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RouteSelection {
-    name: String,
-    version: u64,
-}
-
-/// Work completed by one polling pass.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ScanStats {
-    /// Deposits newly inserted; duplicate chain logs are excluded.
-    pub inserted: u64,
-    /// Highest cursor committed during the pass.
-    pub cursor: u64,
-    /// Finalized head observed during the pass.
-    pub finalized: u64,
-    /// Addresses whose one-time historical backfill completed.
-    pub backfilled_addresses: u64,
-    /// More address pages or block windows remain; continue without waiting for a new head.
-    pub work_remaining: bool,
-    /// Factory events recorded for known addresses.
-    pub factory: db::FactoryCommit,
-}
-
-impl ScanStats {
-    fn record_inserted(&mut self, inserted: u64) -> Result<(), ScannerError> {
-        self.inserted = self
-            .inserted
-            .checked_add(inserted)
-            .ok_or_else(|| ScannerError::Configuration("scan count overflow".to_owned()))?;
-        Ok(())
-    }
-
-    fn record_factory(&mut self, commit: db::FactoryCommit) {
-        self.factory.created = self.factory.created.saturating_add(commit.created);
-        self.factory.flushed = self.factory.flushed.saturating_add(commit.flushed);
-        self.factory.failed = self.factory.failed.saturating_add(commit.failed);
-        self.factory.swept = self.factory.swept.saturating_add(commit.swept);
-    }
-
-    fn record_backfilled(&mut self, count: usize) -> Result<(), ScannerError> {
-        let count = u64::try_from(count).map_err(|error| {
-            ScannerError::Configuration(format!("backfill count is outside u64: {error}"))
-        })?;
-        self.backfilled_addresses = self
-            .backfilled_addresses
-            .checked_add(count)
-            .ok_or_else(|| ScannerError::Configuration("backfill count overflow".to_owned()))?;
-        Ok(())
-    }
-}
-
-/// Groups the current route version of each chain asset by chain.
-#[must_use]
+/// Group current token routes by payment chain.
 pub fn chain_routes(routes: &RouteSet) -> Vec<ChainRoutes> {
     routes
         .chain_ids()
-        .filter_map(|chain_id| {
-            let chain = routes.chain(chain_id)?.clone();
-            let backstop = if routes.current().any(|route| {
-                route.chain.chain_id == chain_id && route.asset.backstop == Backstop::Addresses
-            }) {
-                Backstop::Addresses
-            } else {
-                Backstop::Token
-            };
-            let selected = routes
-                .current()
-                .filter(|route| route.chain.chain_id == chain_id)
-                .map(|route| {
-                    (
-                        route.asset.contract,
-                        RouteSelection {
-                            name: route.route.clone(),
-                            version: route.version,
-                        },
-                    )
-                })
-                .collect();
+        .filter_map(|chain| {
             Some(ChainRoutes {
-                chain,
-                routes: selected,
-                backstop,
+                chain: routes.chain(chain)?.clone(),
+                routes: routes
+                    .current()
+                    .filter(|r| r.chain.chain_id == chain)
+                    .map(|r| (r.asset.contract, (r.route.clone(), r.version)))
+                    .collect(),
             })
         })
         .collect()
 }
-
-/// Starts the finalized cursor of every configured chain that has none at provider A's current
-/// `finalized` head; `topup run` calls it before the API can issue an address on the chain.
-///
-/// Addresses are issued at their chain's committed cursor and backfilled from it (§8). Without a
-/// cursor they would be issued at block 0, and the chain's first pass would walk its whole history
-/// from genesis, so an address issued meanwhile would be created deep in that history and
-/// backfilled from there before the cursor could move (Base Sepolia on staging, 2026-09-29). A
-/// quote's address is derived when it is issued, and a deposit address's network on a chain is
-/// covered from the chain's cursor when it is issued, so no deposit precedes the chain's cursor.
-pub async fn initialize_cursors(pool: &PgPool, route_set: &RouteSet) -> Result<(), ScannerError> {
-    for chain_id in route_set.chain_ids() {
-        let client = route_set
-            .provider(chain_id, 0)
-            .map_err(|error| ScannerError::Configuration(error.to_string()))?;
-        if db::get_cursor(pool, chain_id).await?.is_some() {
+/// Counts from one committed coverage round.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScanStats {
+    /// Newly inserted receipt positions.
+    pub inserted: u64,
+    /// Actually covered end, never the distant checkpoint.
+    pub cursor: u64,
+    /// Agreed checkpoint height.
+    pub finalized: u64,
+    /// Addresses whose own dual backfill reached the cursor.
+    pub backfilled_addresses: u64,
+    /// Additional history remains for later scheduled rounds.
+    pub work_remaining: bool,
+    /// Independently reverified factory events.
+    pub factory: db::FactoryCommit,
+}
+/// Initialize every healthy chain before the API can issue on it. Failed chains retry in their loop.
+pub async fn initialize_cursors(pool: &PgPool, routes: &RouteSet) -> Result<(), ScannerError> {
+    db::rpc::check_start(pool, &routes.chain_ids().collect::<Vec<_>>()).await?;
+    for chain in routes.chain_ids() {
+        let a = routes
+            .provider(chain, 0)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?;
+        let b = routes
+            .provider(chain, 1)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?;
+        if (!a.contract_ready() || !b.contract_ready())
+            && !crate::contracts::check_and_enforce(pool, a, b, chain, routes.routes()).await?
+        {
             continue;
         }
-        if let Some(a) = client.group() {
-            let b = route_set
-                .provider(chain_id, 1)
+        let read = FinalizedReader::new(
+            routes
+                .provider(chain, 0)
                 .map_err(|e| ScannerError::Configuration(e.to_string()))?
-                .group()
-                .ok_or_else(|| ScannerError::Configuration("RPC B group missing".to_owned()))?;
-            let (Ok(ai), Ok(bi)) = (
-                a.select(&Default::default(), None),
-                b.select(&Default::default(), None),
-            ) else {
-                continue;
-            };
-            let deadline = tokio::time::Instant::now()
-                .checked_add(Duration::from_millis(
-                    a.policy.total_deadline_ms.min(b.policy.total_deadline_ms),
-                ))
-                .unwrap_or_else(tokio::time::Instant::now);
-            let height = a
-                .head(ai, "finalized", deadline)
-                .await
-                .map_err(ChainError::Group)?
-                .number
-                .min(
-                    b.head(bi, "finalized", deadline)
-                        .await
-                        .map_err(ChainError::Group)?
-                        .number,
-                );
-            let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":[format!("0x{height:x}"),false]});
-            let av = a
-                .send(ai, &request, deadline)
-                .await
-                .map_err(ChainError::Group)?;
-            let bv = b
-                .send(bi, &request, deadline)
-                .await
-                .map_err(ChainError::Group)?;
-            let ah = topup_adapters::chain::evm::group::HeadAnchor::parse(av.get("result").ok_or(
-                ChainError::Group(topup_adapters::chain::evm::group::Failure::Malformed),
-            )?)
-            .map_err(ChainError::Group)?;
-            let bh = topup_adapters::chain::evm::group::HeadAnchor::parse(bv.get("result").ok_or(
-                ChainError::Group(topup_adapters::chain::evm::group::Failure::Malformed),
-            )?)
-            .map_err(ChainError::Group)?;
-            if ah != bh {
-                a.freeze().await.map_err(ChainError::Group)?;
-                return Err(
-                    ChainError::Group(topup_adapters::chain::evm::group::Failure::Fork).into(),
-                );
-            }
-            a.persist_cursor(ai, &ah).await.map_err(ChainError::Group)?;
-            b.persist_cursor(bi, &ah).await.map_err(ChainError::Group)?;
-            let timestamp = av
-                .get("result")
-                .and_then(|v| v.get("timestamp"))
-                .and_then(serde_json::Value::as_str)
-                .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
-                .and_then(|n| i64::try_from(n).ok())
-                .and_then(|n| DateTime::from_timestamp(n, 0))
-                .ok_or(ChainError::Group(
-                    topup_adapters::chain::evm::group::Failure::Malformed,
-                ))?;
-            db::initialize_cursor(pool, chain_id, height, timestamp).await?;
-        } else {
-            initialize_cursor(pool, &FinalizedReader::new(Arc::clone(client)), chain_id).await?;
+                .clone(),
+        );
+        let verify = FinalizedReader::new(
+            routes
+                .provider(chain, 1)
+                .map_err(|e| ScannerError::Configuration(e.to_string()))?
+                .clone(),
+        );
+        if let Err(error) = initialize_chain(pool, chain, &read, &verify).await {
+            tracing::warn!(chain_id=chain,%error,"chain initialization waits for both endpoints");
         }
     }
     Ok(())
 }
-
-/// Starts `chain_id`'s finalized cursor at `reader`'s `finalized` head unless it has one; returns
-/// the cursor it started.
-pub async fn initialize_cursor<R: ChainReader>(
-    pool: &PgPool,
-    reader: &R,
-    chain_id: u64,
-) -> Result<Option<u64>, ScannerError> {
-    if db::get_cursor(pool, chain_id).await?.is_some() {
-        return Ok(None);
-    }
-    let head = reader.finalized_head().await?;
-    if !db::initialize_cursor(pool, chain_id, head.number, head.time).await? {
-        return Ok(None);
-    }
-    tracing::info!(
-        chain_id,
-        cursor = head.number,
-        "finalized cursor started at the provider's finalized head"
-    );
-    Ok(Some(head.number))
-}
-
-/// Scans one chain through its current finalized head and commits durable progress.
-///
-/// Each window records the transfers to every address and the factory's events about them before
-/// the cursor passes it, so everything at or below the cursor is indexed at finality. A window
-/// costs one transfer request (token mode, or one per 1 000 addresses in address mode) and one
-/// factory request, whatever the number of addresses.
-pub async fn scan_once<R: ChainReader>(
-    pool: &PgPool,
-    reader: &R,
-    routes: &ChainRoutes,
-) -> Result<ScanStats, ScannerError> {
-    let chain_id = routes.chain.chain_id;
-    let cursor = db::get_cursor(pool, chain_id).await?.unwrap_or(0);
-    if crate::reconciler::chain_is_blocked(pool, chain_id).await? {
-        tracing::warn!(
-            chain_id,
-            "finalized chain scan paused because reconciliation froze the chain"
-        );
-        return Ok(ScanStats {
-            cursor,
-            ..ScanStats::default()
-        });
-    }
-    let head = reader.finalized_head().await?;
-    let finalized = head.number;
-    if finalized < cursor {
-        return Err(ScannerError::FinalizedBehindCursor { cursor, finalized });
-    }
-    let sweep = db::address_sweep(pool, chain_id, "finalized", cursor).await?;
-    let epoch = db::sweep_epoch(pool, chain_id).await?;
-    let target = match &sweep {
-        Some(sweep) => u64::try_from(sweep.through_block)
-            .map_err(|_| ScannerError::Configuration("invalid sweep height".into()))?,
-        None => finalized.min(cursor.saturating_add(MAX_SCAN_WINDOW * MAX_WINDOWS_PER_SCAN)),
-    };
-    if target > finalized {
-        return Err(ScannerError::FinalizedBehindCursor {
-            cursor: target,
-            finalized,
-        });
-    }
-    let target_time = sweep
-        .as_ref()
-        .map_or((target == finalized).then_some(head.time), |s| s.block_time);
-    let (addresses, more) =
-        db::scan_address_page(pool, chain_id, sweep.as_ref().map(|s| s.last_id)).await?;
-    let sweep_progress = if more {
-        Some(db::AddressSweep {
-            epoch,
-            anchor: i64::try_from(cursor)
-                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
-            from_block: i64::try_from(cursor.saturating_add(1))
-                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
-            through_block: i64::try_from(target)
-                .map_err(|_| ScannerError::Configuration("cursor overflow".into()))?,
-            block_time: target_time,
-            horizon: None,
-            last_id: addresses
-                .last()
-                .ok_or_else(|| ScannerError::Configuration("empty address page".into()))?
-                .id,
-        })
-    } else {
-        None
-    };
-    let mut stats = ScanStats {
-        cursor,
-        finalized,
-        work_remaining: more || target < finalized,
-        ..ScanStats::default()
-    };
-
-    for (id, mut request, answering) in db::rpc::due_reviews(pool, chain_id).await? {
-        if request.to > finalized {
-            continue;
-        }
-        request.finalized = true;
-        // A singleton still replays; independent coverage stays pending until another member exists.
-        request.exclude_member = if reader.independent_review_available(&answering) {
-            Some(answering)
-        } else {
-            None
-        };
-        match reader.read_window(&request).await {
-            Ok(window) => {
-                let review_addresses =
-                    addresses_for_logs(pool, chain_id, &window.transfers).await?;
-                let index = address_index(&review_addresses);
-                let deposits = resolve_logs(window.transfers, &index, routes)?;
-                db::rpc::commit_window(
-                    pool,
-                    chain_id,
-                    &deposits,
-                    &window.factory_logs,
-                    window.proof.as_ref(),
-                    db::rpc::WindowProgress {
-                        reviewed: Some(id),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-                break;
-            }
-            Err(ChainError::Group(topup_adapters::chain::evm::group::Failure::Unavailable)) => {
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    // Addresses issued at or below the cursor are read once from their creation block to the
-    // cursor, together. Each committed window is kept, so a failed pass or a restart resumes the
-    // backfill where it stopped: the cursor waits for it, and one that restarted from its creation
-    // block after every failure would never complete once it outlasts a provider's budget.
-    let pending_backfills = addresses
-        .iter()
-        .filter(|address| !address.backfilled && address.created_block <= cursor)
-        .cloned()
-        .collect::<Vec<_>>();
-    if let Some(from) = pending_backfills
-        .iter()
-        .map(ScanAddress::backfill_start)
-        .min()
-    {
-        let through = cursor.min(finalized);
-        let windows = if from <= through {
-            scan_windows(
-                from,
-                through.min(from.saturating_add(MAX_SCAN_WINDOW * MAX_WINDOWS_PER_SCAN - 1)),
-            )?
-        } else {
-            Vec::new()
-        };
-        for (from_block, to_block) in windows {
-            let window = pending_backfills
-                .iter()
-                .filter(|address| address.backfill_start() <= to_block)
-                .cloned()
-                .collect::<Vec<_>>();
-            let committed = scan_window(
-                pool,
-                reader,
-                routes,
-                &window,
-                from_block,
-                to_block,
-                db::rpc::WindowProgress {
-                    through: Some((window.iter().map(|a| a.id).collect(), to_block)),
-                    backfilled: if to_block == through {
-                        window.iter().map(|a| a.id).collect()
-                    } else {
-                        Vec::new()
-                    },
-                    ..Default::default()
-                },
-            )
-            .await?;
-            record_committed(chain_id, &mut stats, &committed.0)?;
-            stats.record_factory(committed.1);
-        }
-        let ids = pending_backfills
-            .iter()
-            .map(|address| address.id)
-            .collect::<Vec<_>>();
-
-        if from <= through && through.saturating_sub(from) >= MAX_SCAN_WINDOW * MAX_WINDOWS_PER_SCAN
-        {
-            stats.work_remaining = true;
-            return Ok(stats);
-        }
-        stats.record_backfilled(ids.len())?;
-    }
-
-    let mut pending_backfill_marks = addresses
-        .iter()
-        .filter(|address| !address.backfilled)
-        .map(|address| (address.id, address.created_block))
-        .collect::<BTreeMap<_, _>>();
-    for address in &pending_backfills {
-        pending_backfill_marks.remove(&address.id);
-    }
-    let Some(start) = cursor.checked_add(1) else {
-        return Ok(stats);
-    };
-    if start > target {
-        db::save_address_sweep(pool, chain_id, "finalized", sweep_progress.as_ref()).await?;
-        return Ok(stats);
-    }
-
-    for (from_block, to_block) in scan_windows(start, target)? {
-        let backfilled = pending_backfill_marks
-            .iter()
-            .filter(|(_, created)| **created <= to_block)
-            .map(|(id, _)| *id)
-            .collect::<Vec<_>>();
-        let progress = db::rpc::WindowProgress {
-            scanned: (!more).then_some((
-                to_block,
-                (to_block == target).then_some(target_time).flatten(),
-            )),
-            backfilled: backfilled.clone(),
-            ..Default::default()
-        };
-        let committed = scan_window(
-            pool, reader, routes, &addresses, from_block, to_block, progress,
-        )
-        .await?;
-        record_committed(chain_id, &mut stats, &committed.0)?;
-        stats.record_factory(committed.1);
-        stats.record_backfilled(backfilled.len())?;
-        for id in &backfilled {
-            pending_backfill_marks.remove(id);
-        }
-        if !more {
-            stats.cursor = to_block;
-        }
-    }
-    db::save_address_sweep(pool, chain_id, "finalized", sweep_progress.as_ref()).await?;
-    Ok(stats)
-}
-
-/// Historical reviews resolve only recipients actually returned by the bounded RPC window.
-async fn addresses_for_logs(
+/// New chains start at the agreed checkpoint; upgrades include the oldest address's creation block.
+pub async fn initialize_chain<R: ChainReader, V: ChainReader>(
     pool: &PgPool,
     chain: u64,
-    logs: &[TransferLog],
-) -> Result<Vec<ScanAddress>, ScannerError> {
-    let recipients = logs
-        .iter()
-        .map(|log| log.to)
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut addresses = Vec::new();
-    for recipient in recipients {
-        if let Some(address) = db::find_scan_address(pool, chain, recipient).await? {
-            addresses.push(address);
+    read: &R,
+    verify: &V,
+) -> Result<Boundary, ScannerError> {
+    let checkpoint = crate::checkpoint::advance(pool, chain, read, verify).await?;
+    let chain_key = i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?;
+    for _ in 0..3 {
+        let existing = chain_reads::coverage(pool, chain).await?;
+        let first: Option<i64> =
+            sqlx::query_scalar("SELECT min(created_block) FROM addresses WHERE chain_id=$1")
+                .bind(chain_key)
+                .fetch_one(pool)
+                .await?;
+        let boundary = if let Some(existing) = existing {
+            existing
+        } else {
+            let start = first
+                .map(|n| u64::try_from(n).map(|n| n.saturating_sub(1)))
+                .transpose()
+                .map_err(|_| ScannerError::SnapshotChanged)?
+                .unwrap_or(checkpoint.number)
+                .min(checkpoint.number);
+            let (a, b) = tokio::try_join!(read.header(start), verify.header(start))?;
+            if a != b {
+                return Err(ScannerError::Disagreement);
+            }
+            Boundary {
+                number: start,
+                hash: a.0,
+                time: a.1,
+            }
+        };
+        let mut tx = pool.begin().await?;
+        db::rpc::guard_in(&mut tx, chain).await?;
+        let durable: Option<i64> =
+            sqlx::query_scalar("SELECT through_block FROM chain_coverage WHERE chain_id=$1")
+                .bind(chain_key)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let current_first: Option<i64> =
+            sqlx::query_scalar("SELECT min(created_block) FROM addresses WHERE chain_id=$1")
+                .bind(chain_key)
+                .fetch_one(&mut *tx)
+                .await?;
+        if durable.and_then(|n| u64::try_from(n).ok()) != existing.map(|b| b.number)
+            || current_first != first
+        {
+            tx.rollback().await?;
+            continue;
+        }
+        chain_reads::initialize_coverage_in(&mut tx, chain, boundary).await?;
+        tx.commit().await?;
+        return Ok(boundary);
+    }
+    Err(ScannerError::SnapshotChanged)
+}
+/// Fast candidates remain provisional; PR 3 uses the same public insertion boundary and receipt key.
+pub async fn fast_once<R: ChainReader>(
+    pool: &PgPool,
+    read: &R,
+    routes: &ChainRoutes,
+) -> Result<db::ScanCommit, ScannerError> {
+    let chain = routes.chain.chain_id;
+    let coverage = chain_reads::coverage(pool, chain)
+        .await?
+        .ok_or(ScannerError::SnapshotChanged)?;
+    let latest = read.latest_header().await?.number;
+    let heads = match routes.chain.confirmations {
+        Confirmations::Depth(_) => topup_core::route::ChainHeads {
+            latest: Some(latest),
+            safe: None,
+            finalized: coverage.number,
+        },
+        Confirmations::Finalized => topup_core::route::ChainHeads {
+            latest: Some(latest),
+            safe: None,
+            finalized: coverage.number,
+        },
+        Confirmations::Safe => read.confirmation_heads(routes.chain.confirmations).await?,
+    };
+    let cursor = db::get_confirmed_cursor(pool, chain)
+        .await?
+        .unwrap_or(coverage.number);
+    let from = cursor.saturating_add(1);
+    let addresses = db::list_scan_addresses(pool, chain).await?;
+    let index: BTreeMap<_, _> = addresses.into_iter().map(|a| (a.address, a)).collect();
+    tracing::debug!(
+        chain_id = chain,
+        from,
+        latest,
+        addresses = index.len(),
+        "fast discovery range"
+    );
+    let mut deposits = Vec::new();
+    let mut pending = Vec::new();
+    if from <= latest {
+        let recipients: Vec<_> = index.keys().copied().collect();
+        for log in read.transfer_logs_to(&recipients, from, latest).await? {
+            let Some(address) = index.get(&log.to) else {
+                return Err(ScannerError::UnknownRecipient(log.to));
+            };
+            if !routes.routes.contains_key(&log.token)
+                || log.block_number < address.created_block
+                || log.amount.value().is_zero()
+            {
+                continue;
+            }
+            if routes.chain.confirmations.reached(log.block_number, heads) {
+                deposits.push(resolve_log(log, address, routes, Utc::now()));
+            } else if log.block_number > coverage.number {
+                pending.push(db::NewPendingTransfer {
+                    chain_id: chain,
+                    tx_hash: log.tx_hash,
+                    receipt_log_index: log.receipt_log_index,
+                    log_index: log.log_index,
+                    block_number: log.block_number,
+                    block_hash: log.block_hash,
+                    block_time: log.block_time,
+                    address_id: address.id,
+                    asset_contract: log.token,
+                    from_address: log.from,
+                    amount_atomic: log.amount,
+                });
+            }
         }
     }
-    Ok(addresses)
+    let mut tx = pool.begin().await?;
+    tracing::debug!(
+        chain_id = chain,
+        deposits = deposits.len(),
+        pending = pending.len(),
+        "fast discovery candidates"
+    );
+    db::rpc::guard_in(&mut tx, chain).await?;
+    let commit = db::scanner::commit_confirmed_scan_in(
+        &mut tx,
+        chain,
+        &deposits,
+        routes.chain.confirmations.horizon(heads),
+    )
+    .await?;
+    if from <= latest {
+        db::pending::commit_head_scan_in(&mut tx, chain, from, latest, &pending).await?;
+    }
+    tx.commit().await?;
+    Ok(commit)
 }
-
-/// Fixed selectors shared by finalized, head and historical review reads.
-pub(crate) fn window_request(
-    routes: &ChainRoutes,
-    addresses: &[ScanAddress],
+struct Range {
+    addresses: Vec<db::CoveredAddress>,
     from: u64,
-    to: u64,
-    finalized: bool,
-) -> topup_adapters::chain::evm::window::WindowRequest {
-    topup_adapters::chain::evm::window::WindowRequest {
-        from,
-        to,
-        recipients: addresses.iter().map(|a| a.address).collect(),
-        tokens: if routes.token_mode() {
-            routes.routes.keys().copied().collect()
-        } else {
-            Vec::new()
-        },
-        factory: finalized.then_some(routes.chain.contracts.forwarder_factory),
-        finalized,
-        exclude_member: None,
-    }
+    end: u64,
 }
-/// Records one window's transfers to `addresses` at or above each address's creation block, and
-/// the factory's events about them.
-async fn scan_window<R: ChainReader>(
-    pool: &PgPool,
-    reader: &R,
-    routes: &ChainRoutes,
-    addresses: &[ScanAddress],
-    from_block: u64,
-    to_block: u64,
-    progress: db::rpc::WindowProgress,
-) -> Result<(ScanCommit, db::FactoryCommit), ScannerError> {
-    let chain_id = routes.chain.chain_id;
-    let span = crate::observability::scanner_window_span(chain_id, from_block, to_block);
-    async {
-        let index = address_index(addresses);
-        let created = |address: Address| index.get(&address).map(|known| known.created_block);
-        let request = window_request(routes, addresses, from_block, to_block, true);
-        let window = backing_off(|| reader.read_window(&request)).await?;
-        let logs = window
-            .transfers
-            .into_iter()
-            .filter(|log| created(log.to).is_some_and(|block| log.block_number >= block))
-            .collect();
-        let deposits = resolve_logs(logs, &index, routes)?;
-        let factory_logs = window
-            .factory_logs
-            .into_iter()
-            .filter(|log| {
-                created(log.event.forwarder()).is_some_and(|block| log.block_number >= block)
+impl Range {
+    fn start(&self, address: &db::CoveredAddress) -> u64 {
+        address
+            .through
+            .map_or(address.address.created_block, |n| {
+                n.saturating_add(1).max(address.address.created_block)
             })
-            .collect::<Vec<_>>();
-        let (committed, indexed) = db::rpc::commit_window(
-            pool,
-            chain_id,
-            &deposits,
-            &factory_logs,
-            window.proof.as_ref(),
-            progress,
-        )
-        .await?;
-        Ok((committed, indexed))
+            .max(self.from)
     }
-    .instrument(span)
-    .await
 }
 
-/// Runs every configured chain scanner until cancellation or all chains stop, publishing each
-/// chain's `finalized` advances to `finalized_heads`.
-pub async fn run(
-    pool: PgPool,
-    route_set: &RouteSet,
-    config: ScanConfig,
-    finalized_heads: FinalizedHeads,
-    cancellation: CancellationToken,
-) -> Result<(), ScannerError> {
-    let scanners = cancellation.child_token();
-    let mut tasks = JoinSet::new();
-    for routes in chain_routes(route_set) {
-        let chain_id = routes.chain.chain_id;
-        let client = route_set
-            .provider(chain_id, 0)
-            .map_err(|error| ScannerError::Configuration(error.to_string()))?;
-        let reader = FinalizedReader::new(Arc::clone(client));
-        let chain_pool = pool.clone();
-        let chain_cancellation = scanners.child_token();
-        let chain_heads = finalized_heads.clone();
-        tasks.spawn(async move {
-            let result = run_chain(
-                chain_pool,
-                reader,
-                routes,
-                config,
-                chain_heads,
-                chain_cancellation,
-            )
-            .await;
-            (chain_id, result)
+fn same_transfer_evidence(existing: &db::Deposit, deposit: &db::NewDeposit) -> bool {
+    existing.address_id == deposit.address_id
+        && existing.block_number == deposit.block_number
+        && existing.block_hash == deposit.block_hash
+        && existing.block_time == deposit.block_time
+        && existing.log_index == deposit.log_index
+        && existing.asset_contract == deposit.asset_contract
+        && existing.from_address == deposit.from_address
+        && existing.amount_atomic == deposit.amount_atomic
+        && existing.tx_from == Some(deposit.tx_from)
+        && existing.tx_nonce == Some(deposit.tx_nonce)
+}
+
+/// One bounded coverage round. Every sixth round uses the approved hourly catch-up bound.
+pub async fn coverage_once<R: ChainReader, V: ChainReader>(
+    pool: &PgPool,
+    read: &R,
+    verify: &V,
+    routes: &ChainRoutes,
+    round: u64,
+) -> Result<ScanStats, ScannerError> {
+    let chain = routes.chain.chain_id;
+    let checkpoint = crate::checkpoint::advance(pool, chain, read, verify).await?;
+    let cursor = match chain_reads::coverage(pool, chain).await? {
+        Some(cursor) => cursor,
+        None => initialize_chain(pool, chain, read, verify).await?,
+    };
+    let limit = if round.is_multiple_of(6) {
+        CATCHUP_LIMIT
+    } else {
+        COVERAGE_LIMIT
+    };
+    let end = checkpoint.number.min(cursor.number.saturating_add(limit));
+    if end < cursor.number {
+        return Err(ScannerError::Disagreement);
+    }
+    let (a, b) = tokio::try_join!(read.header(end), verify.header(end))?;
+    if a != b {
+        return Err(ScannerError::Disagreement);
+    }
+    let chain_key = i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?;
+    let address_snapshot: Vec<(uuid::Uuid, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id,created_block,dual_covered_through FROM addresses WHERE chain_id=$1 ORDER BY id",
+    )
+    .bind(chain_key)
+    .fetch_all(pool)
+    .await?;
+    let caught = db::coverage_addresses(pool, chain, cursor.number, false).await?;
+    let lagging = db::coverage_addresses(pool, chain, cursor.number, true).await?;
+    let mut ranges = Vec::new();
+    if end > cursor.number {
+        ranges.push(Range {
+            addresses: caught,
+            from: cursor.number.saturating_add(1),
+            end,
         });
     }
-
-    if tasks.is_empty() {
-        return Err(ScannerError::Configuration(
-            "no chain scanners were configured".to_owned(),
-        ));
+    if let Some(start) = lagging
+        .iter()
+        .map(|a| {
+            a.through.map_or(a.address.created_block, |n| {
+                n.saturating_add(1).max(a.address.created_block)
+            })
+        })
+        .min()
+    {
+        ranges.push(Range {
+            addresses: lagging,
+            from: start,
+            end: end.min(start.saturating_add(limit).saturating_sub(1)),
+        });
     }
-    supervise(tasks, &scanners).await
-}
-
-/// Waits for the chain tasks until `scanners` is cancelled. The first chain to stop before then
-/// stops every other chain and returns its error, so the scanner's service task fails and the
-/// process exits to be restarted, instead of reporting healthy while one chain is not scanned.
-async fn supervise(
-    mut tasks: JoinSet<(u64, Result<(), ScannerError>)>,
-    scanners: &CancellationToken,
-) -> Result<(), ScannerError> {
-    let mut failure = None;
-    while let Some(joined) = tasks.join_next().await {
-        let (chain_id, error) = match joined {
-            Ok((_, Ok(()))) if scanners.is_cancelled() => continue,
-            Ok((chain_id, Ok(()))) => (
-                Some(chain_id),
-                ScannerError::Task("chain scanner exited unexpectedly".to_owned()),
+    let mut candidates = BTreeSet::new();
+    let mut factory_candidates = BTreeSet::new();
+    let mut index: BTreeMap<_, _> = db::list_scan_addresses(pool, chain)
+        .await?
+        .into_iter()
+        .map(|a| (a.address, a))
+        .collect();
+    for range in &ranges {
+        if range.from > range.end {
+            continue;
+        }
+        let recipients: Vec<_> = range.addresses.iter().map(|a| a.address.address).collect();
+        let (a, b) = tokio::try_join!(
+            read.coverage_logs(
+                routes.chain.contracts.forwarder_factory,
+                &recipients,
+                range.from,
+                range.end
             ),
-            Ok((chain_id, Err(error))) => (Some(chain_id), error),
-            Err(error) => (None, ScannerError::Task(error.to_string())),
-        };
-        tracing::error!(
-            chain_id,
-            error_category = error.category(),
-            %error,
-            "chain scanner task stopped; stopping every chain scanner"
-        );
-        scanners.cancel();
-        failure.get_or_insert(error);
-    }
-    failure.map_or(Ok(()), Err)
-}
-
-/// Runs one chain's head loop and finalized backstop on provider A's `reader` until
-/// cancellation, or until the backstop stops on a non-retryable failure.
-pub async fn run_chain(
-    pool: PgPool,
-    reader: FinalizedReader,
-    routes: ChainRoutes,
-    config: ScanConfig,
-    finalized_heads: FinalizedHeads,
-    cancellation: CancellationToken,
-) -> Result<(), ScannerError> {
-    let chain_id = routes.chain.chain_id;
-    let backstop_healthy = AtomicBool::new(true);
-    // The published head when the last pass started; the next pass waits for a higher one.
-    let scanned_from = AtomicU64::new(0);
-    let finalized_scan = run_scan_loop(
-        chain_id,
-        &backstop_healthy,
-        cancellation.clone(),
-        || {
-            let published = finalized_heads.get(chain_id).map_or(0, |head| head.number);
-            scanned_from.store(published, Ordering::Relaxed);
-            let (pool, reader, routes, scanned_from) = (&pool, &reader, &routes, &scanned_from);
-            async move {
-                let result = scan_once(pool, reader, routes).await;
-                if let Ok(stats) = &result {
-                    scanned_from.fetch_max(stats.finalized, Ordering::Relaxed);
-                }
-                result
+            verify.coverage_logs(
+                routes.chain.contracts.forwarder_factory,
+                &recipients,
+                range.from,
+                range.end
+            )
+        )?;
+        for address in &range.addresses {
+            index.insert(address.address.address, address.address.clone());
+            let start = range.start(address);
+            // Insert-only factory evidence is reverified even when both getLogs responses omit it.
+            let hashes: Vec<String> = sqlx::query_scalar("SELECT tx_hash FROM flushed WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4 UNION SELECT tx_hash FROM flush_failures WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4")
+                .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(address.address.id).bind(i64::try_from(start).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(range.end).map_err(|_|ScannerError::SnapshotChanged)?).fetch_all(pool).await?;
+            for hash in hashes {
+                factory_candidates.insert(
+                    hash.parse::<B256>()
+                        .map_err(|_| ScannerError::SnapshotChanged)?,
+                );
             }
-        },
-        |delay| {
-            let mut advances = finalized_heads.subscribe();
-            let known = scanned_from.load(Ordering::Relaxed);
-            async move {
-                let advanced = async {
-                    let waited = advances
-                        .wait_for(|heads| {
-                            heads.get(&chain_id).is_some_and(|head| head.number > known)
-                        })
-                        .await
-                        .is_ok();
-                    if !waited {
-                        std::future::pending::<()>().await;
-                    }
-                };
-                tokio::select! {
-                    () = tokio::time::sleep(delay) => {}
-                    () = advanced => {}
+        }
+        for (transfers, factory) in [a, b] {
+            for log in transfers {
+                if range
+                    .addresses
+                    .iter()
+                    .any(|a| a.address.address == log.to && log.block_number >= range.start(a))
+                {
+                    candidates.insert((log.tx_hash, log.receipt_log_index));
                 }
             }
-        },
-        || OsJitter.next_u64(),
-    );
-    let head_loop = head::run_head_loop(
-        &pool,
-        &reader,
-        &routes,
-        &config,
-        &finalized_heads,
-        &backstop_healthy,
-        cancellation,
-    );
-    // The head loop returns only on cancellation; the finalized loop's result is the chain's.
-    tokio::select! {
-        result = finalized_scan => result,
-        () = head_loop => Ok(()),
-    }
-}
-
-/// Runs the finalized backstop after every `finalized` advance `sleep` waits for, or after
-/// [`BACKSTOP_FALLBACK_INTERVAL`]; a transient failure retries with backoff and marks the
-/// backstop unhealthy for the scanner's monitor until a pass succeeds.
-async fn run_scan_loop<Scan, ScanFuture, Sleep, SleepFuture, Jitter>(
-    chain_id: u64,
-    healthy: &AtomicBool,
-    cancellation: CancellationToken,
-    mut scan: Scan,
-    mut sleep: Sleep,
-    mut jitter: Jitter,
-) -> Result<(), ScannerError>
-where
-    Scan: FnMut() -> ScanFuture,
-    ScanFuture: Future<Output = Result<ScanStats, ScannerError>>,
-    Sleep: FnMut(Duration) -> SleepFuture,
-    SleepFuture: Future<Output = ()>,
-    Jitter: FnMut() -> u64,
-{
-    let mut retry_attempt = 0_u32;
-    loop {
-        let result = tokio::select! {
-            () = cancellation.cancelled() => return Ok(()),
-            result = scan() => result,
-        };
-        let delay = match result {
-            Ok(stats) => {
-                retry_attempt = 0;
-                healthy.store(true, Ordering::Relaxed);
-                tracing::info!(
-                    chain_id,
-                    cursor = stats.cursor,
-                    inserted = stats.inserted,
-                    backfilled_addresses = stats.backfilled_addresses,
-                    flushed = stats.factory.flushed,
-                    flush_failed = stats.factory.failed,
-                    swept = stats.factory.swept,
-                    "finalized chain scan committed"
-                );
-                if stats.work_remaining {
-                    Duration::from_millis(100)
-                } else {
-                    BACKSTOP_FALLBACK_INTERVAL
+            for log in factory {
+                if range.addresses.iter().any(|a| {
+                    a.address.address == log.event.forwarder() && log.block_number >= range.start(a)
+                }) {
+                    factory_candidates.insert(log.tx_hash);
                 }
             }
-            Err(error) if error.is_retryable() => {
-                healthy.store(false, Ordering::Relaxed);
-                let delay = backoff(retry_attempt, jitter());
-                retry_attempt = retry_attempt.saturating_add(1);
-                tracing::warn!(
-                    chain_id,
-                    error_category = error.category(),
-                    %error,
-                    retry_after_seconds = delay.as_secs(),
-                    "finalized chain scan failed transiently"
-                );
-                delay
-            }
-            Err(error) => {
-                healthy.store(false, Ordering::Relaxed);
-                tracing::error!(
-                    chain_id,
-                    error_category = error.category(),
-                    %error,
-                    "finalized chain scanner stopped"
-                );
-                return Err(error);
-            }
-        };
-        tokio::select! {
-            () = cancellation.cancelled() => return Ok(()),
-            () = sleep(delay) => {}
         }
     }
-}
-
-fn record_committed(
-    chain_id: u64,
-    stats: &mut ScanStats,
-    committed: &ScanCommit,
-) -> Result<(), ScannerError> {
-    stats.record_inserted(committed.inserted)?;
-    report_unsupported_inflows(chain_id, committed.unsupported_inserted);
-    Ok(())
-}
-
-/// Raises `TopupUnsupportedInflows` for newly recorded transfers of unrouted tokens.
-pub(crate) fn report_unsupported_inflows(chain_id: u64, count: u64) {
-    if count > 0 {
-        tracing::warn!(
-            tags.alert = "TopupUnsupportedInflows",
-            tags.chain_id = chain_id,
-            count,
-            "unsupported finalized inflows observed"
+    // The prospective common boundary includes every address, including those outside
+    // this bounded backfill page. Fetch its header before taking the DB-only commit lock.
+    let common = address_snapshot
+        .iter()
+        .try_fold(end, |common, (id, created, through)| {
+            let created = u64::try_from(*created).map_err(|_| ScannerError::SnapshotChanged)?;
+            let proposed = ranges
+                .iter()
+                .filter(|r| {
+                    r.addresses
+                        .iter()
+                        .any(|a| a.address.id == *id && r.start(a) <= r.end)
+                })
+                .map(|r| r.end)
+                .max();
+            let through = through
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| ScannerError::SnapshotChanged)?;
+            Ok::<_, ScannerError>(
+                common.min(
+                    proposed
+                        .or(through)
+                        .unwrap_or(created.saturating_sub(1))
+                        .max(created.saturating_sub(1)),
+                ),
+            )
+        })?;
+    let common_time = if common == end {
+        a.1
+    } else {
+        let (a, b) = tokio::try_join!(read.header(common), verify.header(common))?;
+        if a != b {
+            return Err(ScannerError::Disagreement);
+        }
+        a.1
+    };
+    let mut factory_receipts = Vec::new();
+    for hash in factory_candidates {
+        let (a, b) = tokio::try_join!(
+            read.factory_receipt(hash, routes.chain.contracts.forwarder_factory),
+            verify.factory_receipt(hash, routes.chain.contracts.forwarder_factory)
+        )?;
+        if a != b {
+            return Err(ScannerError::Disagreement);
+        }
+        factory_receipts.push((hash, a.ok_or(ScannerError::Disagreement)?));
+    }
+    let mut evidence = BTreeMap::new();
+    // Any change to the unverified set invalidates this round's RPC evidence.
+    // Abandon the round after the DB-only lock recheck; the next round reads afresh.
+    let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL AND state <> 'reversed'",
+    ).bind(chain_key).fetch_all(pool).await?;
+    for (_, deposit) in db::deposits_by_ids(pool, &ids).await? {
+        let deposit = deposit?;
+        candidates.insert((deposit.tx_hash, deposit.receipt_log_index));
+    }
+    for &(hash, position) in &candidates {
+        let marker: Option<Option<DateTime<Utc>>> = sqlx::query_scalar(
+            "SELECT dual_verified_at FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3 AND state <> 'reversed'",
+        ).bind(chain_key).bind(format!("{hash:#x}")).bind(i64::try_from(position).map_err(|_|ScannerError::SnapshotChanged)?)
+            .fetch_optional(pool).await?;
+        if marker.flatten().is_some() {
+            continue;
+        }
+        let (a, b) = tokio::try_join!(
+            read.receipt_transfer(hash, position),
+            verify.receipt_transfer(hash, position)
+        )?;
+        if a != b {
+            return Err(ScannerError::Disagreement);
+        }
+        evidence.insert((hash, position), a);
+    }
+    let mut tx = pool.begin().await?;
+    db::rpc::guard_in(&mut tx, chain).await?;
+    let durable: i64 =
+        sqlx::query_scalar("SELECT through_block FROM chain_coverage WHERE chain_id=$1 FOR UPDATE")
+            .bind(chain_key)
+            .fetch_one(&mut *tx)
+            .await?;
+    let current_addresses: Vec<(uuid::Uuid, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id,created_block,dual_covered_through FROM addresses WHERE chain_id=$1 ORDER BY id",
+    )
+    .bind(chain_key)
+    .fetch_all(&mut *tx)
+    .await?;
+    if u64::try_from(durable).ok() != Some(cursor.number) || current_addresses != address_snapshot {
+        return Err(ScannerError::SnapshotChanged);
+    }
+    let locked_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL AND state <> 'reversed' FOR UPDATE",
+    ).bind(chain_key).fetch_all(&mut *tx).await?;
+    if ids.iter().collect::<BTreeSet<_>>() != locked_ids.iter().collect::<BTreeSet<_>>() {
+        tx.rollback().await?;
+        return Err(ScannerError::SnapshotChanged);
+    }
+    let mut unverified = BTreeMap::<_, Vec<db::Deposit>>::new();
+    for (_, deposit) in db::deposits_by_ids(&mut *tx, &locked_ids).await? {
+        let deposit = deposit?;
+        unverified
+            .entry((deposit.tx_hash, deposit.receipt_log_index))
+            .or_default()
+            .push(deposit);
+    }
+    let mut deposits = Vec::new();
+    let mut corrections = Vec::new();
+    for (&(hash, position), evidence) in &evidence {
+        let Some(log) = evidence.transfer() else {
+            continue;
+        }; // absence never releases a held quote
+        if log.block_number > end {
+            continue;
+        }
+        // A provisional identity keeps its original recipient until the dual finality
+        // reversal/successor transaction releases that receipt position.
+        if let Some(records) = unverified.get(&(hash, position)) {
+            let changed_recipient = records.iter().any(|existing| {
+                index
+                    .get(&log.to)
+                    .is_none_or(|address| existing.address_id != address.id)
+            });
+            if changed_recipient {
+                if records
+                    .iter()
+                    .any(|existing| existing.state != DepositState::Detected)
+                {
+                    tx.rollback().await?;
+                    chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
+                    tracing::error!(
+                        tags.alert = "TopupUnverifiedEvidenceMismatch",
+                        chain_id = chain,
+                        "agreed evidence contradicts a permanent record; chain frozen"
+                    );
+                    return Err(ScannerError::Disagreement);
+                }
+                let next = index
+                    .get(&log.to)
+                    .filter(|address| log.block_number >= address.created_block)
+                    .map(|address| resolve_log(log.clone(), address, routes, Utc::now()));
+                for existing in records {
+                    let mut evidence = serde_json::json!({"stage":"coverage","result":"reversed","reason":"recipient_changed"});
+                    if crate::finality::reverse_in(
+                        &mut tx,
+                        existing.id,
+                        existing.state,
+                        existing.attempt,
+                        &mut evidence,
+                        next.as_ref(),
+                    )
+                    .await?
+                    .is_none()
+                    {
+                        return Err(ScannerError::SnapshotChanged);
+                    }
+                }
+                continue;
+            }
+        }
+        let address = index
+            .get(&log.to)
+            .ok_or(ScannerError::UnknownRecipient(log.to))?;
+        let covered_end = ranges
+            .iter()
+            .filter(|range| {
+                range
+                    .addresses
+                    .iter()
+                    .any(|a| a.address.id == address.id && range.start(a) <= range.end)
+            })
+            .map(|range| range.end)
+            .max();
+        let already_covered: Option<i64> =
+            sqlx::query_scalar("SELECT dual_covered_through FROM addresses WHERE id=$1")
+                .bind(address.id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let target = covered_end
+            .into_iter()
+            .chain(already_covered.and_then(|n| u64::try_from(n).ok()))
+            .max();
+        if target.is_none_or(|target| log.block_number > target) {
+            continue;
+        }
+        let deposit = resolve_log(log.clone(), address, routes, Utc::now());
+        if let Some(records) = unverified.get(&(hash, position)) {
+            for existing in records {
+                let equal = same_transfer_evidence(existing, &deposit);
+                if !equal && existing.state != DepositState::Detected {
+                    tx.rollback().await?;
+                    chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
+                    tracing::error!(
+                        tags.alert = "TopupUnverifiedEvidenceMismatch",
+                        chain_id = chain,
+                        "agreed evidence contradicts a permanent record; chain frozen"
+                    );
+                    return Err(ScannerError::Disagreement);
+                }
+                corrections.push((existing.id, existing.state, deposit.clone()));
+            }
+        } else {
+            deposits.push(deposit);
+        }
+    }
+    let mut factory = Vec::new();
+    for (hash, receipt) in &factory_receipts {
+        if !db::sweeps::stored_factory_evidence_matches(&mut *tx, chain, *hash, &receipt.logs)
+            .await?
+        {
+            tx.rollback().await?;
+            chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
+            tracing::error!(
+                tags.alert = "TopupUnverifiedEvidenceMismatch",
+                chain_id = chain,
+                "agreed evidence contradicts a permanent record; chain frozen"
+            );
+            return Err(ScannerError::Disagreement);
+        }
+        factory.extend(
+            receipt
+                .logs
+                .iter()
+                .filter(|log| log.block_number <= end && index.contains_key(&log.event.forwarder()))
+                .cloned(),
         );
+    }
+    let mut stats = ScanStats {
+        cursor: end,
+        finalized: checkpoint.number,
+        work_remaining: end < checkpoint.number,
+        ..ScanStats::default()
+    };
+    for deposit in &deposits {
+        // An insert followed by a reversal during RPC leaves the active-id snapshot
+        // unchanged. Inspect all position history under the lock before recording cached
+        // evidence, so a reversed payment can never re-enter as a fresh finalized revision.
+        let history_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT id FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3 ORDER BY revision DESC FOR UPDATE",
+        ).bind(chain_key).bind(format!("{:#x}", deposit.tx_hash))
+            .bind(i64::try_from(deposit.receipt_log_index).map_err(|_| ScannerError::SnapshotChanged)?)
+            .fetch_all(&mut *tx).await?;
+        let mut history = BTreeMap::new();
+        for (id, record) in db::deposits_by_ids(&mut *tx, &history_ids).await? {
+            history.insert(id, record?);
+        }
+        let reversed: Vec<_> = history_ids
+            .iter()
+            .filter_map(|id| history.get(id))
+            .filter(|record| record.state == DepositState::Reversed)
+            .collect();
+        if reversed
+            .iter()
+            .any(|record| same_transfer_evidence(record, deposit))
+        {
+            continue;
+        }
+        let inserted = match reversed.first() {
+            Some(record) => crate::finality::successor_in(&mut tx, record.id, deposit).await?,
+            None => {
+                let inserted =
+                    db::insert_scanned_deposit_in(&mut tx, deposit, db::Evidence::Finalized)
+                        .await?;
+                if let Some(id) = inserted {
+                    sqlx::query("UPDATE deposits SET dual_verified_at=now() WHERE id=$1")
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                inserted
+            }
+        };
+        if inserted.is_some() {
+            stats.inserted = stats.inserted.saturating_add(1);
+        }
+    }
+    for (id, state, deposit) in corrections {
+        let changed = sqlx::query("UPDATE deposits SET log_index=$2,block_number=$3,block_hash=$4,block_time=$5,asset_contract=$6,from_address=$7,amount_atomic=$8::text::numeric,tx_from=$9,tx_nonce=$10::text::numeric,route=$11,route_version=$12,dual_verified_at=now(),updated_at=now() WHERE id=$1 AND state=$13 AND dual_verified_at IS NULL")
+        .bind(id).bind(i64::try_from(deposit.log_index).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(deposit.block_number).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{:#x}",deposit.block_hash)).bind(deposit.block_time).bind(format!("{:#x}",deposit.asset_contract)).bind(format!("{:#x}",deposit.from_address)).bind(deposit.amount_atomic.value().to_string()).bind(format!("{:#x}",deposit.tx_from)).bind(deposit.tx_nonce.to_string()).bind(deposit.route).bind(deposit.route_version.map(i64::try_from).transpose().map_err(|_|ScannerError::SnapshotChanged)?).bind(db::state_code(state)).execute(&mut *tx).await?.rows_affected();
+        if changed != 1 {
+            return Err(ScannerError::SnapshotChanged);
+        }
+    }
+    stats.factory = db::sweeps::commit_factory_logs_in(&mut tx, chain, &factory).await?;
+    for range in &ranges {
+        for address in &range.addresses {
+            if range.start(address) > range.end {
+                continue;
+            }
+            let caught_up = range.end == end;
+            let changed = sqlx::query("UPDATE addresses SET dual_covered_through=$2,backfilled=CASE WHEN $3 THEN true ELSE backfilled END,backfilled_through=CASE WHEN $3 THEN $2 ELSE backfilled_through END WHERE id=$1 AND created_block=$4 AND dual_covered_through IS NOT DISTINCT FROM $5")
+            .bind(address.address.id).bind(i64::try_from(range.end).map_err(|_|ScannerError::SnapshotChanged)?).bind(caught_up).bind(i64::try_from(address.address.created_block).map_err(|_|ScannerError::SnapshotChanged)?).bind(address.through.map(i64::try_from).transpose().map_err(|_|ScannerError::SnapshotChanged)?).execute(&mut *tx).await?.rows_affected();
+            if changed != 1 {
+                return Err(ScannerError::SnapshotChanged);
+            }
+            if caught_up {
+                stats.backfilled_addresses = stats.backfilled_addresses.saturating_add(1);
+            }
+        }
+    }
+    sqlx::query("UPDATE chain_coverage SET through_block=$2,through_hash=$3,through_time=$4,updated_at=now() WHERE chain_id=$1 AND through_block < $2")
+    .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(end).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{:#x}",a.0)).bind(a.1).execute(&mut *tx).await?;
+    if chain_reads::common_coverage_in(&mut tx, chain).await? != common {
+        return Err(ScannerError::SnapshotChanged);
+    }
+    chain_reads::set_compat_cursor_in(&mut tx, chain, common, Some(common_time)).await?;
+    db::pending::delete_finalized_in(
+        &mut tx,
+        i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?,
+        i64::try_from(end).map_err(|_| ScannerError::SnapshotChanged)?,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(stats)
+}
+/// Runs one scheduled coverage round, retrying an invalidated snapshot once with fresh RPCs.
+pub async fn coverage_round<R: ChainReader, V: ChainReader>(
+    pool: &PgPool,
+    read: &R,
+    verify: &V,
+    routes: &ChainRoutes,
+    round: u64,
+) -> Result<ScanStats, ScannerError> {
+    match coverage_once(pool, read, verify, routes, round).await {
+        Err(ScannerError::SnapshotChanged) => {
+            coverage_once(pool, read, verify, routes, round).await
+        }
+        result => result,
     }
 }
 
-fn address_index(addresses: &[ScanAddress]) -> BTreeMap<Address, ScanAddress> {
-    addresses
+/// Supervise independent per-chain cadences without stopping the API on an endpoint error.
+pub async fn run(
+    pool: PgPool,
+    routes: &RouteSet,
+    _config: ScanConfig,
+    heads: FinalizedHeads,
+    cancellation: CancellationToken,
+) -> Result<(), ScannerError> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for pair in routes.rpc().values() {
+        let pair = pair.clone();
+        let token = cancellation.clone();
+        tasks.spawn(async move {
+            crate::rpc_runtime::recover(pair, token).await;
+        });
+    }
+    for (offset, chain) in chain_routes(routes).into_iter().enumerate() {
+        let read = FinalizedReader::new(
+            routes
+                .provider(chain.chain.chain_id, 0)
+                .map_err(|e| ScannerError::Configuration(e.to_string()))?
+                .clone(),
+        );
+        let verify = FinalizedReader::new(
+            routes
+                .provider(chain.chain.chain_id, 1)
+                .map_err(|e| ScannerError::Configuration(e.to_string()))?
+                .clone(),
+        );
+        let contract_routes = routes.routes().to_vec();
+        let contract_read = routes
+            .provider(chain.chain.chain_id, 0)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?
+            .clone();
+        let contract_verify = routes
+            .provider(chain.chain.chain_id, 1)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?
+            .clone();
+        let fast_pool = pool.clone();
+        let fast_read = FinalizedReader::new(
+            routes
+                .provider(chain.chain.chain_id, 0)
+                .map_err(|e| ScannerError::Configuration(e.to_string()))?
+                .clone(),
+        );
+        let fast_chain = chain.clone();
+        let fast_token = cancellation.clone();
+        tasks.spawn(async move {
+            let monitor = crate::observability::CronMonitor::fast_scanner(fast_chain.chain.chain_id);
+            let mut interval = tokio::time::interval(FAST_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! { _ = fast_token.cancelled() => break, _ = interval.tick() => {} }
+                if crate::reconciler::chain_is_blocked(&fast_pool,fast_chain.chain.chain_id).await.unwrap_or(true) {monitor.check_in(false); continue;}
+                if !contract_read.contract_ready() || !contract_verify.contract_ready() {
+                    let checked=tokio::select! {
+                        _=fast_token.cancelled()=>break,
+                        result=crate::contracts::check_and_enforce(&fast_pool,&contract_read,&contract_verify,fast_chain.chain.chain_id,&contract_routes)=>result,
+                    };
+                    if !matches!(checked,Ok(true)) {monitor.check_in(false); continue;}
+                }
+                let result = tokio::select! {
+                    _ = fast_token.cancelled() => break,
+                    result = fast_once(&fast_pool,&fast_read,&fast_chain) => result,
+                };
+                monitor.check_in(result.is_ok());
+                if let Err(error) = result { tracing::warn!(chain_id=fast_chain.chain.chain_id,%error,"fast discovery waits"); }
+            }
+        });
+        let coverage_read = routes
+            .provider(chain.chain.chain_id, 0)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?
+            .clone();
+        let coverage_verify = routes
+            .provider(chain.chain.chain_id, 1)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?
+            .clone();
+        let pool = pool.clone();
+        let heads = heads.clone();
+        let token = cancellation.clone();
+        tasks.spawn(async move {
+            let monitor = crate::observability::CronMonitor::coverage_scanner(chain.chain.chain_id);
+            let mut interval = tokio::time::interval_at(tokio::time::Instant::now()+Duration::from_secs(u64::try_from(offset).unwrap_or(0).saturating_mul(30)),COVERAGE_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut round = 0_u64;
+            loop {
+                tokio::select! { _ = token.cancelled() => break, _ = interval.tick() => {} }
+                if !coverage_read.contract_ready() || !coverage_verify.contract_ready() {monitor.check_in(false); continue;}
+                round = round.saturating_add(1);
+                let result = tokio::select! {
+                    _ = token.cancelled() => break,
+                    result = async {
+                        if chain_reads::coverage(&pool,chain.chain.chain_id).await?.is_none() { initialize_chain(&pool,chain.chain.chain_id,&read,&verify).await?; }
+                        coverage_round(&pool,&read,&verify,&chain,round).await
+                    } => result,
+                };
+                monitor.check_in(result.is_ok());
+                match result {
+                    Ok(stats) => {
+                        if let Ok(Some(checkpoint)) = chain_reads::checkpoint(&pool,chain.chain.chain_id).await { heads.publish(chain.chain.chain_id,FinalizedHead {number:checkpoint.number,time:checkpoint.time}); }
+                        tracing::debug!(chain_id=chain.chain.chain_id,?stats,"dual coverage committed");
+                    }
+                    Err(ScannerError::Disagreement) => tracing::warn!(tags.alert="TopupRpcDisagreement",chain_id=chain.chain.chain_id,"coverage evidence disagreed; no range committed"),
+                    Err(error) => tracing::warn!(chain_id=chain.chain.chain_id,%error,"coverage waits; no range committed"),
+                }
+            }
+        });
+    }
+    for (chain, pair) in routes
+        .rpc()
         .iter()
-        .cloned()
-        .map(|address| (address.address, address))
-        .collect()
+        .filter(|(chain, _)| routes.chain(**chain).is_none())
+    {
+        let chain = *chain;
+        let pair = pair.clone();
+        let pool = pool.clone();
+        let token = cancellation.clone();
+        let contracts = routes.routes().to_vec();
+        tasks.spawn(async move {
+            let mut interval=tokio::time::interval(FAST_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {_=token.cancelled()=>break,_=interval.tick()=>{}}
+                if pair.read.contract_ready() && pair.verify.contract_ready() {continue;}
+                if crate::reconciler::chain_is_blocked(&pool,chain).await.unwrap_or(true) {continue;}
+                tokio::select! {
+                    _=token.cancelled()=>break,
+                    result=crate::contracts::check_and_enforce(&pool,&pair.read,&pair.verify,chain,&contracts)=>{
+                        if let Err(error)=result {tracing::warn!(chain_id=chain,%error,"price chain contract check waits");}
+                    }
+                }
+            }
+        });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.map_err(|e| ScannerError::Task(e.to_string()))?;
+    }
+    Ok(())
 }
-
-pub(crate) fn resolve_logs_for_reconciliation(
-    logs: Vec<TransferLog>,
-    addresses: &[ScanAddress],
-    routes: &ChainRoutes,
-) -> Result<Vec<NewDeposit>, ScannerError> {
-    resolve_logs(logs, &address_index(addresses), routes)
-}
-
-fn resolve_logs(
-    logs: Vec<TransferLog>,
-    addresses: &BTreeMap<Address, ScanAddress>,
-    routes: &ChainRoutes,
-) -> Result<Vec<NewDeposit>, ScannerError> {
-    let next_attempt_at = Utc::now();
-    logs.into_iter()
-        .map(|log| {
-            let address = addresses
-                .get(&log.to)
-                .ok_or(ScannerError::UnknownRecipient(log.to))?;
-            Ok(resolve_log(log, address, routes, next_attempt_at))
-        })
-        .collect()
-}
-
-/// The deposit a transfer to the issued `address` is recorded as: `detected` on the route of its
-/// token, or `rejected(unsupported_asset)` for a token without one.
+/// Decode the agreed/provisional transfer into the existing deposit insertion rules.
 pub(crate) fn resolve_log(
     log: TransferLog,
-    address: &ScanAddress,
+    address: &db::ScanAddress,
     routes: &ChainRoutes,
     next_attempt_at: DateTime<Utc>,
-) -> NewDeposit {
+) -> db::NewDeposit {
     let selected = routes.routes.get(&log.token);
-    NewDeposit {
+    db::NewDeposit {
         chain_id: routes.chain.chain_id,
         tx_hash: log.tx_hash,
         receipt_log_index: log.receipt_log_index,
@@ -942,8 +936,8 @@ pub(crate) fn resolve_log(
         block_hash: log.block_hash,
         block_time: log.block_time,
         address_id: address.id,
-        route: selected.map(|route| route.name.clone()),
-        route_version: selected.map(|route| route.version),
+        route: selected.map(|r| r.0.clone()),
+        route_version: selected.map(|r| r.1),
         asset_contract: log.token,
         from_address: log.from,
         amount_atomic: log.amount,
@@ -957,385 +951,5 @@ pub(crate) fn resolve_log(
         tx_from: log.tx_from,
         tx_nonce: log.tx_nonce,
         is_final: false,
-    }
-}
-
-fn scan_windows(from_block: u64, to_block: u64) -> Result<Vec<(u64, u64)>, ScannerError> {
-    if from_block > to_block {
-        return Err(ScannerError::Configuration(format!(
-            "scan range starts at {from_block} after {to_block}"
-        )));
-    }
-    let mut windows = Vec::new();
-    let mut start = from_block;
-    loop {
-        let end = start
-            .saturating_add(MAX_SCAN_WINDOW.saturating_sub(1))
-            .min(to_block);
-        windows.push((start, end));
-        if end == to_block {
-            break;
-        }
-        start = end
-            .checked_add(1)
-            .ok_or_else(|| ScannerError::Configuration("scan block range overflow".to_owned()))?;
-    }
-    Ok(windows)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::VecDeque;
-    use std::future;
-    use std::sync::Mutex;
-
-    use alloy_primitives::{B256, U256};
-    use chrono::DateTime;
-    use topup_core::money::AtomicAmount;
-    use topup_core::route::RouteFile;
-    use uuid::Uuid;
-
-    use super::*;
-
-    #[test]
-    fn scanner_windows_are_inclusive_and_bounded() {
-        assert_eq!(
-            scan_windows(1, 4_001).expect("valid range"),
-            vec![(1, 2_000), (2_001, 4_000), (4_001, 4_001)]
-        );
-    }
-
-    #[tokio::test]
-    async fn unfinished_pages_continue_without_waiting_for_a_new_finalized_head() {
-        let mut results = VecDeque::from([
-            Ok(ScanStats {
-                work_remaining: true,
-                ..ScanStats::default()
-            }),
-            Err(ScannerError::UnknownRecipient(Address::ZERO)),
-        ]);
-        let delays = Mutex::new(Vec::new());
-        let result = run_scan_loop(
-            1,
-            &AtomicBool::new(true),
-            CancellationToken::new(),
-            || std::future::ready(results.pop_front().expect("one next page")),
-            |delay| {
-                delays.lock().unwrap().push(delay);
-                std::future::ready(())
-            },
-            || 0,
-        )
-        .await;
-        assert!(result.is_err());
-        assert_eq!(*delays.lock().unwrap(), vec![Duration::from_millis(100)]);
-    }
-
-    #[tokio::test]
-    async fn scan_loop_retries_transient_failures_and_a_stale_finalized_head() {
-        let results = Mutex::new(VecDeque::from([
-            Err(ScannerError::Database(sqlx::Error::PoolTimedOut)),
-            // A gateway node behind the one answered before, then behind the committed cursor
-            // after a restart: the Base Sepolia incident of 2026-09-29.
-            Err(ScannerError::Chain(ChainError::FinalizedHeadRegressed {
-                previous: 47_446_696,
-                current: 47_446_540,
-            })),
-            Err(ScannerError::FinalizedBehindCursor {
-                cursor: 47_446_696,
-                finalized: 47_446_540,
-            }),
-            Ok(ScanStats {
-                inserted: 1,
-                cursor: 2,
-                finalized: 2,
-                backfilled_addresses: 0,
-                work_remaining: false,
-                factory: db::FactoryCommit::default(),
-            }),
-            Err(ScannerError::UnknownRecipient(Address::ZERO)),
-        ]));
-        let sleeps = Mutex::new(Vec::new());
-        let health = Mutex::new(Vec::new());
-
-        let healthy = AtomicBool::new(true);
-        let error = run_scan_loop(
-            1,
-            &healthy,
-            CancellationToken::new(),
-            || {
-                health
-                    .lock()
-                    .expect("health lock")
-                    .push(healthy.load(Ordering::Relaxed));
-                future::ready(
-                    results
-                        .lock()
-                        .expect("results lock")
-                        .pop_front()
-                        .expect("scripted scan result"),
-                )
-            },
-            |duration| {
-                sleeps.lock().expect("sleeps lock").push(duration);
-                future::ready(())
-            },
-            || u64::MAX,
-        )
-        .await
-        .expect_err("a non-retryable failure stops the loop");
-
-        assert!(matches!(error, ScannerError::UnknownRecipient(_)));
-        assert_eq!(
-            *sleeps.lock().expect("sleeps lock"),
-            vec![
-                backoff(0, u64::MAX),
-                backoff(1, u64::MAX),
-                backoff(2, u64::MAX),
-                BACKSTOP_FALLBACK_INTERVAL
-            ]
-        );
-        // Unhealthy for the monitor while retrying, healthy again after the pass that succeeded.
-        assert_eq!(
-            *health.lock().expect("health lock"),
-            vec![true, false, false, false, true]
-        );
-        assert!(!healthy.load(Ordering::Relaxed));
-        assert!(results.lock().expect("results lock").is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_provider_that_never_answers_is_retried_instead_of_stalling_the_chain() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("local listener binds");
-        let address = listener.local_addr().expect("listener address");
-        let node = axum::Router::new().route("/", axum::routing::post(future::pending::<String>));
-        let server = tokio::spawn(async move { axum::serve(listener, node).await });
-        let reader = FinalizedReader::new(Arc::new(
-            topup_adapters::chain::evm::EvmClient::with_timeout(
-                &format!("http://{address}/"),
-                Duration::from_millis(100),
-            )
-            .expect("local URL")
-            .with_provider("provider-a"),
-        ));
-        let healthy = AtomicBool::new(true);
-        let cancellation = CancellationToken::new();
-        let sleeps = Mutex::new(Vec::new());
-
-        let result = tokio::time::timeout(
-            Duration::from_secs(10),
-            run_scan_loop(
-                84_532,
-                &healthy,
-                cancellation.clone(),
-                || async {
-                    reader.finalized_head().await?;
-                    Ok(ScanStats::default())
-                },
-                |duration| {
-                    sleeps.lock().expect("sleeps lock").push(duration);
-                    cancellation.cancel();
-                    future::ready(())
-                },
-                || u64::MAX,
-            ),
-        )
-        .await;
-        server.abort();
-
-        result
-            .expect("the backstop's read is bounded")
-            .expect("a timed-out read is retried, not fatal");
-        assert_eq!(
-            *sleeps.lock().expect("sleeps lock"),
-            vec![backoff(0, u64::MAX)]
-        );
-        assert!(!healthy.load(Ordering::Relaxed));
-    }
-
-    #[tokio::test]
-    async fn one_stopped_chain_stops_every_chain_and_fails_the_scanner() {
-        let scanners = CancellationToken::new();
-        let mut tasks = JoinSet::new();
-        let healthy = scanners.child_token();
-        tasks.spawn(async move {
-            healthy.cancelled().await;
-            (11_155_111, Ok(()))
-        });
-        tasks.spawn(async { (84_532, Err(ScannerError::UnknownRecipient(Address::ZERO))) });
-
-        let error = tokio::time::timeout(Duration::from_secs(5), supervise(tasks, &scanners))
-            .await
-            .expect("the healthy chain is stopped instead of keeping the scanner alive")
-            .expect_err("a stopped chain fails the scanner");
-
-        assert!(matches!(error, ScannerError::UnknownRecipient(_)));
-        assert!(scanners.is_cancelled());
-    }
-
-    #[tokio::test]
-    async fn chains_stopped_by_shutdown_end_the_scanner_cleanly() {
-        let scanners = CancellationToken::new();
-        let mut tasks = JoinSet::new();
-        for chain_id in [1, 84_532] {
-            let chain = scanners.child_token();
-            tasks.spawn(async move {
-                chain.cancelled().await;
-                (chain_id, Ok(()))
-            });
-        }
-        scanners.cancel();
-
-        supervise(tasks, &scanners)
-            .await
-            .expect("shutdown is not a failure");
-    }
-
-    #[test]
-    fn highest_route_version_is_current_for_an_asset() {
-        let token = Address::from([7_u8; 20]);
-        let mut older = test_route_file(token);
-        older.version = 1;
-        let mut newer = older.clone();
-        newer.version = 2;
-
-        let chains = chain_routes(&RouteSet::new(vec![newer, older]).expect("versioned routes"));
-        let chain = chains.first().expect("one chain");
-        let selected = chain.routes.get(&token).expect("selected route");
-
-        assert_eq!(selected.version, 2);
-    }
-
-    #[test]
-    fn unsupported_asset_is_born_rejected() {
-        let recipient = Address::from([1_u8; 20]);
-        let address = ScanAddress {
-            id: Uuid::new_v4(),
-            address: recipient,
-            created_block: 0,
-            backfilled: false,
-            backfilled_through: None,
-        };
-        let routes = test_routes(Address::from([2_u8; 20]));
-        let log = TransferLog {
-            tx_hash: B256::from([3_u8; 32]),
-            receipt_log_index: 0,
-            log_index: 0,
-            block_number: 1,
-            block_hash: B256::from([4_u8; 32]),
-            block_time: DateTime::from_timestamp(1, 0).expect("timestamp"),
-            tx_from: Address::from([6_u8; 20]),
-            tx_nonce: 0,
-            token: Address::from([5_u8; 20]),
-            from: Address::from([6_u8; 20]),
-            to: recipient,
-            amount: AtomicAmount::new(U256::from(7)),
-        };
-        let deposits =
-            resolve_logs(vec![log], &address_index(&[address]), &routes).expect("resolve log");
-        let deposit = deposits.first().expect("one deposit");
-        assert_eq!(deposit.state, DepositState::Rejected);
-        assert_eq!(deposit.reason, Some(RejectReason::UnsupportedAsset));
-        assert_eq!(deposit.route, None);
-    }
-
-    #[test]
-    fn every_supported_asset_sent_to_one_address_selects_its_route() {
-        // A deposit address takes every token of its chain: each transfer selects the route of its
-        // token, and only a token without one is rejected.
-        let recipient = Address::from([1_u8; 20]);
-        let address = ScanAddress {
-            id: Uuid::new_v4(),
-            address: recipient,
-            created_block: 0,
-            backfilled: false,
-            backfilled_through: None,
-        };
-        let pha = Address::from([2_u8; 20]);
-        let usdc = Address::from([3_u8; 20]);
-        let mut second = test_route_file(usdc);
-        second.route = "phala-cloud-ethereum-usdc-usd".to_owned();
-        second.asset.symbol = "usdc".to_owned();
-        second.pricing.mode = topup_core::route::PricingMode::Stablecoin;
-        second.pricing.primary.clear();
-        second.pricing.check.clear();
-        second.pricing.fx.clear();
-        second.pricing.sources = vec![
-            topup_core::price::Source::Chainlink {
-                feed: "USDC_USD".into(),
-                chain_id: 1,
-                rpc_group: "a".into(),
-                rpc_group_b: None,
-                observation_chain_id: None,
-            },
-            topup_core::price::Source::Kraken {
-                symbol: "USDCUSD".into(),
-                company: "kraken".into(),
-            },
-        ];
-        let chains = chain_routes(
-            &RouteSet::new(vec![test_route_file(pha), second]).expect("two assets on one chain"),
-        );
-        let routes = chains.first().expect("one chain");
-        let log = |token: Address, index: u64| TransferLog {
-            tx_hash: B256::from([3_u8; 32]),
-            receipt_log_index: index,
-            log_index: index,
-            block_number: 1,
-            block_hash: B256::from([4_u8; 32]),
-            block_time: DateTime::from_timestamp(1, 0).expect("timestamp"),
-            tx_from: Address::from([6_u8; 20]),
-            tx_nonce: 0,
-            token,
-            from: Address::from([6_u8; 20]),
-            to: recipient,
-            amount: AtomicAmount::new(U256::from(7)),
-        };
-        let deposits = resolve_logs(
-            vec![log(pha, 0), log(usdc, 1), log(Address::from([5_u8; 20]), 2)],
-            &address_index(&[address]),
-            routes,
-        )
-        .expect("resolve logs");
-        let selected: Vec<_> = deposits
-            .iter()
-            .map(|deposit| (deposit.route.as_deref(), deposit.state))
-            .collect();
-        assert_eq!(
-            selected,
-            vec![
-                (Some("phala-cloud-ethereum-pha-usd"), DepositState::Detected),
-                (
-                    Some("phala-cloud-ethereum-usdc-usd"),
-                    DepositState::Detected
-                ),
-                (None, DepositState::Rejected),
-            ]
-        );
-    }
-
-    fn test_routes(token: Address) -> ChainRoutes {
-        let route = test_route_file(token);
-        ChainRoutes {
-            chain: route.chain,
-            routes: BTreeMap::from([(
-                token,
-                RouteSelection {
-                    name: route.route,
-                    version: route.version,
-                },
-            )]),
-            backstop: Backstop::Token,
-        }
-    }
-
-    fn test_route_file(token: Address) -> RouteFile {
-        let yaml = include_str!("../../tests/fixtures/phala-cloud-pha.yaml").replace(
-            "0x6c5bA91642F10282b576d91922Ae6448C9d52f4E",
-            &format!("{token:#x}"),
-        );
-        serde_saphyr::from_str(&yaml).expect("route fixture")
     }
 }

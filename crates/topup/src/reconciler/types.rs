@@ -9,8 +9,6 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckName {
-    /// A finalized transfer was absent from the deposit ledger.
-    MissingDeposit,
     /// Stored credit disagreed with deterministic recomputation.
     CreditRecomputation,
     /// A deposit was not linked to a later confirmed flush.
@@ -23,8 +21,7 @@ pub enum CheckName {
 
 impl CheckName {
     /// Every check, in metric registration order.
-    pub const ALL: [Self; 5] = [
-        Self::MissingDeposit,
+    pub const ALL: [Self; 4] = [
         Self::CreditRecomputation,
         Self::MissingFlushLink,
         Self::CustodyBalance,
@@ -35,7 +32,6 @@ impl CheckName {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
-            Self::MissingDeposit => "missing_deposit",
             Self::CreditRecomputation => "credit_recomputation",
             Self::MissingFlushLink => "missing_flush_link",
             Self::CustodyBalance => "custody_balance",

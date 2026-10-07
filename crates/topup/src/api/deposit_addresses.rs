@@ -55,6 +55,7 @@ const MAX_LIMIT: i64 = 100;
     ),
     request_body = CreateDepositAddressRequest,
     responses(
+        (status = 422, description = "Permanent chain `address_capacity_reached`; not retryable", body = ErrorResponse),
         (status = 200, description = "OK", body = DepositAddress),
         (
             status = 400,
@@ -308,6 +309,7 @@ pub(crate) async fn update_deposit_address(
         )
     ),
     responses(
+        (status = 422, description = "Permanent chain `address_capacity_reached`; not retryable", body = ErrorResponse),
         (status = 200, description = "OK: the new active address", body = DepositAddress),
         (status = 401, description = "Unauthorized", body = ErrorResponse),
         (status = 404, description = "Not Found", body = ErrorResponse),
@@ -373,12 +375,14 @@ pub(crate) async fn rotate_deposit_address(
 struct Issuable {
     chains: Vec<ChainContracts>,
     frozen: bool,
+    unavailable: bool,
 }
 
 impl Issuable {
     /// Maps a failure, naming why no chain accepted a new address when none did.
     fn map_error(&self, error: DepositAddressError) -> ApiError {
         match error {
+            DepositAddressError::NoChain if self.unavailable => ApiError::chain_unavailable(),
             DepositAddressError::NoChain if self.frozen => ApiError::chain_frozen(),
             DepositAddressError::NoChain => ApiError::paused("new addresses are paused"),
             error => map_error(error),
@@ -420,10 +424,15 @@ async fn issuable_chains(
     let mut issuable = Issuable {
         chains: Vec::new(),
         frozen: false,
+        unavailable: false,
     };
     for (chain_id, routes) in by_chain {
         if crate::reconciler::chain_is_blocked(&state.pool, chain_id).await? {
             issuable.frozen = true;
+            continue;
+        }
+        if !state.routes.chain_ready(chain_id) {
+            issuable.unavailable = true;
             continue;
         }
         let mut open = None;
@@ -873,6 +882,8 @@ fn parse_filter(pairs: &[(String, String)]) -> ApiResult<ListFilter> {
 pub(super) fn map_error(error: DepositAddressError) -> ApiError {
     match error {
         DepositAddressError::NotFound => ApiError::not_found(),
+        DepositAddressError::AddressCapacityReached => ApiError::address_capacity_reached(),
+        DepositAddressError::ChainUnavailable => ApiError::chain_unavailable(),
         DepositAddressError::Retired => ApiError::deposit_address_retired(),
         error @ DepositAddressError::CapReached(_) => {
             ApiError::deposit_address_cap(error.to_string())

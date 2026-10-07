@@ -22,7 +22,7 @@ class ErrorDetail:
     """Stable error fields safe to expose to callers.
 
     Attributes:
-        code (str): Stable machine-readable code.
+        code (str): Stable machine-readable error code; clients accept future codes.
         message (str): Human-readable summary without internal details; it may change.
         type_ (ErrorType): Error category of [`ErrorDetail`].
         doc_url (str | Unset): The documentation of `code` in the API reference. Every error of this service carries it;

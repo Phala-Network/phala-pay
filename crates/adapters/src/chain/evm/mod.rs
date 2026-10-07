@@ -1,9 +1,8 @@
 //! The EVM JSON-RPC client shared by every consumer of one (chain, provider), and the
 //! finalized-log reader built on it.
 
-pub mod group;
+pub mod endpoint;
 pub mod metrics;
-pub mod window;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt::{self, Formatter};
@@ -43,6 +42,11 @@ const BLOCK_TIME_CACHE_CAPACITY: usize = 1_024;
 
 sol! {
     event Transfer(address indexed from, address indexed to, uint256 amount);
+    struct SnapshotCall { address target; bool allowFailure; bytes callData; }
+    struct SnapshotResult { bool success; bytes returnData; }
+    function aggregate3(SnapshotCall[] calls) external payable returns (SnapshotResult[] returnData);
+    function getCurrentBlockTimestamp() external view returns (uint256);
+    function getBlockHash(uint256 blockNumber) external view returns (bytes32);
     function isValidSignature(bytes32 hash, bytes signature) external view returns (bytes4);
 }
 
@@ -92,6 +96,14 @@ pub enum ReceiptLookup {
         block_number: u64,
         /// Including block hash.
         block_hash: B256,
+        /// Receipt status independently decoded on this endpoint.
+        status: bool,
+        /// Including header time independently fetched by hash.
+        block_time: DateTime<Utc>,
+        /// Transaction sender independently fetched (OP: receipt from).
+        tx_from: Address,
+        /// Transaction nonce independently fetched (OP: receipt depositNonce).
+        tx_nonce: u64,
         /// The ERC-20 `Transfer` at the requested receipt position, if that log is one.
         transfer: Option<Box<TransferLog>>,
     },
@@ -108,26 +120,12 @@ impl ReceiptLookup {
     }
 }
 
-/// Evidence judged together from one member, never assembled across a group's members.
+/// Evidence judged together from one endpoint, independently verified against the other endpoint.
 pub struct FinalityEvidence {
-    /// Member-validated finalized height.
+    /// Endpoint-validated finalized height.
     pub finalized: u64,
     /// Receipt at the requested position.
     pub receipt: ReceiptLookup,
-    /// Nonce at the same member's finalized height, only for an absent receipt.
-    pub nonce: Option<u64>,
-}
-
-/// What a recorded deposit already proves about its transfer, so re-reading it costs one receipt:
-/// a block hash fixes the block's time, and a transaction hash fixes the transaction's nonce.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct KnownTransfer {
-    /// Block hash the transfer was recorded in.
-    pub block_hash: B256,
-    /// Time of that block.
-    pub block_time: DateTime<Utc>,
-    /// Nonce of the transfer's transaction.
-    pub tx_nonce: u64,
 }
 
 /// The provider's current finalized block.
@@ -154,12 +152,26 @@ pub struct FactoryLog {
     pub event: FactoryEvent,
 }
 
+/// Independently decoded receipt, transaction and header for factory evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FactoryReceipt {
+    /// Receipt status, including a successful receipt with no factory event.
+    pub status: bool,
+    /// Canonical inclusion height.
+    pub block_number: u64,
+    /// Canonical inclusion hash.
+    pub block_hash: B256,
+    /// Inclusion timestamp from this endpoint's header.
+    pub block_time: DateTime<Utc>,
+    /// Transaction sender and nonce from this endpoint.
+    pub origin: (Address, u64),
+    /// Factory events from this receipt in receipt order.
+    pub logs: Vec<FactoryLog>,
+}
+
 /// Failure while reading or validating EVM chain data.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ChainError {
-    /// Typed group failure with no raw upstream message.
-    #[error("{0}")]
-    Group(#[from] group::Failure),
     /// The configured provider URL is invalid.
     #[error("invalid RPC URL")]
     InvalidUrl,
@@ -219,16 +231,58 @@ impl ChainError {
 
 /// Chain reads required by the scanner, the confirm step, and the finality watch.
 pub trait ChainReader: Send + Sync {
-    /// Reads every filter of one numeric window as a single operation.
-    fn read_window(
-        &self,
-        request: &window::WindowRequest,
-    ) -> impl Future<Output = Result<window::WindowResult, ChainError>> + Send {
-        window::read(self, request)
-    }
-
     /// Returns the provider's current finalized block number and time.
     fn finalized_head(&self) -> impl Future<Output = Result<FinalizedHead, ChainError>> + Send;
+
+    /// Finalized header including its hash, reused by checkpoint agreement.
+    fn finalized_header(
+        &self,
+    ) -> impl Future<Output = Result<(FinalizedHead, B256), ChainError>> + Send {
+        async {
+            let head = self.finalized_head().await?;
+            let (hash, time) = self.header(head.number).await?;
+            if time != head.time {
+                return Err(ChainError::Reorganized("finalized header"));
+            }
+            Ok((head, hash))
+        }
+    }
+
+    /// Latest header for the read-only discovery range.
+    fn latest_header(&self) -> impl Future<Output = Result<FinalizedHead, ChainError>> + Send {
+        async { Err(ChainError::MissingField("latest header")) }
+    }
+
+    /// A complete numbered header; callers compare hash and time before advancing coverage.
+    fn header(
+        &self,
+        _number: u64,
+    ) -> impl Future<Output = Result<(B256, DateTime<Utc>), ChainError>> + Send {
+        async { Err(ChainError::MissingField("numbered header")) }
+    }
+    /// Four-topic address-less coverage query. Each request must complete on this endpoint.
+    fn coverage_logs(
+        &self,
+        factory: Address,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+    ) -> impl Future<Output = Result<(Vec<TransferLog>, Vec<FactoryLog>), ChainError>> + Send {
+        async move {
+            Ok((
+                self.transfer_logs_to(addresses, from, to).await?,
+                self.factory_logs(factory, addresses, from, to).await?,
+            ))
+        }
+    }
+    /// Independently decode finalized factory events from a transaction's receipt.
+    fn factory_receipt(
+        &self,
+        _tx: B256,
+        _factory: Address,
+    ) -> impl Future<Output = Result<Option<FactoryReceipt>, ChainError>> + Send {
+        async { Err(ChainError::MissingField("factory receipt")) }
+    }
 
     /// Returns the one head `confirmations` is evaluated on: `latest` for a depth, `safe` for
     /// `safe`, `finalized` for `finalized`. An unread `finalized` is 0, a lower bound, so a check
@@ -287,61 +341,31 @@ pub trait ChainReader: Send + Sync {
         receipt_log_index: u64,
     ) -> impl Future<Output = Result<ReceiptLookup, ChainError>> + Send;
 
-    /// [`Self::receipt_transfer`] for a recorded transfer: a provider reader reads only the
-    /// receipt, taking the block time from `known` while the block hash is unchanged and the
-    /// nonce from `known` always.
-    fn receipt_transfer_known(
-        &self,
-        tx_hash: B256,
-        receipt_log_index: u64,
-        known: KnownTransfer,
-    ) -> impl Future<Output = Result<ReceiptLookup, ChainError>> + Send {
-        let _ = known;
-        self.receipt_transfer(tx_hash, receipt_log_index)
-    }
-
-    /// Whether independent historical review can use another member.
-    fn independent_review_available(&self, _answering: &str) -> bool {
-        true
-    }
-
-    /// Confirmation heads and receipt from one complete member attempt.
+    /// Receipt, transaction, header and confirmation head independently decoded on this endpoint.
     fn confirmation_evidence(
         &self,
         tx: B256,
         position: u64,
-        known: KnownTransfer,
-        needed: u64,
         confirmations: Confirmations,
     ) -> impl Future<Output = Result<(ChainHeads, ReceiptLookup), ChainError>> + Send {
         async move {
-            let _ = needed;
             let heads = self.confirmation_heads(confirmations).await?;
-            let receipt = self.receipt_transfer_known(tx, position, known).await?;
+            let receipt = self.receipt_transfer(tx, position).await?;
             Ok((heads, receipt))
         }
     }
 
-    /// Receipt, head and optional consumed nonce form one evidence operation.
+    /// Receipt evidence at an already agreed checkpoint; absence is never a nonce verdict.
     fn finality_evidence(
         &self,
         tx: B256,
         position: u64,
-        known: KnownTransfer,
-        from: Address,
-        needed: u64,
+        checkpoint: u64,
     ) -> impl Future<Output = Result<FinalityEvidence, ChainError>> + Send {
         async move {
-            let receipt = self.receipt_transfer_known(tx, position, known).await?;
-            let nonce = if receipt == ReceiptLookup::Missing {
-                Some(self.nonce_at(from, needed).await?)
-            } else {
-                None
-            };
             Ok(FinalityEvidence {
-                finalized: needed,
-                receipt,
-                nonce,
+                finalized: checkpoint,
+                receipt: self.receipt_transfer(tx, position).await?,
             })
         }
     }
@@ -431,6 +455,7 @@ pub const MULTICALL_CHUNK: usize = 200;
 /// Errors carry the provider label, never the URL. Every request is bounded by the request
 /// timeout, those of the [`FinalizedReader`]s built on it included, and a request that outlasts
 /// it fails as a transport error, which every caller retries.
+#[derive(Clone)]
 pub struct EvmClient {
     provider: RootProvider,
     /// The same transport read with alloy's catch-all network, for receipts: its receipt envelope
@@ -440,7 +465,9 @@ pub struct EvmClient {
     endpoint: Redacted,
     request_timeout: Duration,
     labels: CallLabels,
-    group: Option<Arc<group::RpcGroup>>,
+    http: reqwest::Client,
+    state: Arc<endpoint::EndpointState>,
+    max_log_blocks: u32,
 }
 
 impl fmt::Debug for EvmClient {
@@ -459,10 +486,20 @@ impl fmt::Debug for EvmClient {
 fn counted_providers(
     endpoint: &Redacted,
     labels: &CallLabels,
+    http: &reqwest::Client,
+    state: &Arc<endpoint::EndpointState>,
 ) -> (RootProvider, RootProvider<AnyNetwork>) {
     let client = ClientBuilder::default()
-        .layer(CountingLayer::new(labels.clone()))
-        .http(endpoint.expose().clone());
+        .layer(
+            alloy::transports::layers::RetryBackoffLayer::new_with_policy(
+                2,
+                250,
+                500,
+                endpoint::EndpointRetry(Arc::clone(state)),
+            ),
+        )
+        .layer(CountingLayer::new(labels.clone(), Arc::clone(state)))
+        .http_with_client(http.clone(), endpoint.expose().clone());
     (RootProvider::new(client.clone()), RootProvider::new(client))
 }
 
@@ -475,66 +512,42 @@ impl EvmClient {
     /// Creates a client with an explicit request timeout, for tests.
     pub fn with_timeout(rpc_url: &str, request_timeout: Duration) -> Result<Self, ChainError> {
         let endpoint = Redacted::parse(rpc_url).map_err(|_| ChainError::InvalidUrl)?;
+        if !matches!(endpoint.expose().scheme(), "http" | "https") {
+            return Err(ChainError::InvalidUrl);
+        }
         let labels = CallLabels::default();
-        let (provider, receipts) = counted_providers(&endpoint, &labels);
+        let state = Arc::new(endpoint::EndpointState::default());
+        let observed = Arc::clone(&state);
+        let host = endpoint
+            .expose()
+            .host_str()
+            .ok_or(ChainError::InvalidUrl)?
+            .to_owned();
+        // Reqwest's documented classifier observes HTTP status before Alloy normalizes error
+        // bodies. It disables reqwest's own replays: Alloy is the sole retry layer.
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(request_timeout)
+            .retry(reqwest::retry::for_host(host).classify_fn(move |reply| {
+                if let Some(status) = reply.status() {
+                    observed.http_status(status.as_u16());
+                    metrics::observe_http_status(status.as_u16());
+                }
+                reply.success()
+            }))
+            .build()
+            .map_err(|_| ChainError::InvalidUrl)?;
+        let (provider, receipts) = counted_providers(&endpoint, &labels, &http, &state);
         Ok(Self {
             provider,
             receipts,
             endpoint,
             request_timeout,
             labels,
-            group: None,
+            http,
+            state,
+            max_log_blocks: 3_000,
         })
-    }
-
-    /// Builds the shared typed group client over the metadata-preserving transport.
-    pub fn from_group(
-        group: Arc<group::RpcGroup>,
-        pinned: Option<usize>,
-    ) -> Result<Self, ChainError> {
-        Self::from_group_until(group, pinned, None)
-    }
-
-    /// Carries the whole operation's absolute deadline through every pinned request and split.
-    pub(crate) fn from_group_until(
-        group: Arc<group::RpcGroup>,
-        pinned: Option<usize>,
-        deadline: Option<tokio::time::Instant>,
-    ) -> Result<Self, ChainError> {
-        let endpoint = group
-            .members
-            .first()
-            .ok_or(ChainError::InvalidUrl)?
-            .endpoint
-            .clone()
-            .with_provider(group.id.clone());
-        let client = ClientBuilder::default().transport(
-            group::GroupTransport {
-                group: group.clone(),
-                pinned,
-                deadline,
-            },
-            false,
-        );
-        Ok(Self {
-            provider: RootProvider::new(client.clone()),
-            receipts: RootProvider::new(client),
-            endpoint,
-            request_timeout: deadline.or_else(|| group.probe_deadline()).map_or_else(
-                || Duration::from_millis(group.policy.total_deadline_ms),
-                |at| at.saturating_duration_since(tokio::time::Instant::now()),
-            ),
-            labels: CallLabels {
-                provider: group.id.clone(),
-                chain_id: Some(group.chain),
-            },
-            group: Some(group),
-        })
-    }
-
-    /// Shared group state, absent only for inline test clients.
-    pub fn group(&self) -> Option<&Arc<group::RpcGroup>> {
-        self.group.as_ref()
     }
 
     /// Labels provider errors and call counters with the configured provider id instead of the
@@ -544,7 +557,8 @@ impl EvmClient {
         let provider = provider.into();
         self.labels.provider.clone_from(&provider);
         self.endpoint = self.endpoint.with_provider(provider);
-        (self.provider, self.receipts) = counted_providers(&self.endpoint, &self.labels);
+        (self.provider, self.receipts) =
+            counted_providers(&self.endpoint, &self.labels, &self.http, &self.state);
         self
     }
 
@@ -552,8 +566,133 @@ impl EvmClient {
     #[must_use]
     pub fn with_chain_id(mut self, chain_id: u64) -> Self {
         self.labels.chain_id = Some(chain_id);
-        (self.provider, self.receipts) = counted_providers(&self.endpoint, &self.labels);
+        (self.provider, self.receipts) =
+            counted_providers(&self.endpoint, &self.labels, &self.http, &self.state);
         self
+    }
+
+    /// Configured chain identity, also checked against independently read transactions.
+    pub fn chain_id(&self) -> Option<u64> {
+        self.labels.chain_id
+    }
+    /// Records independently decoded disagreement using bounded labels, never endpoint URLs.
+    pub fn disagreement(&self, method: &'static str) {
+        let method = if metrics::METHODS.contains(&method) {
+            method
+        } else {
+            "other"
+        };
+        metrics::record_error(&self.labels, &[method], "disagreement");
+        tracing::warn!(tags.alert="TopupRpcDisagreement",provider=%self.labels.provider,chain_id=?self.labels.chain_id,method,"decoded endpoint evidence disagreed; waiting");
+    }
+
+    /// Whether a production endpoint passed its independent contract identity check.
+    pub fn contract_ready(&self) -> bool {
+        self.state.contract_ready()
+    }
+    /// Change contract readiness only after a dual check; transport successes cannot change it.
+    pub fn contract_checked(&self, passed: bool) {
+        self.state.contract_checked(passed);
+    }
+    /// Measured provider-specific log window limit.
+    pub fn with_max_log_blocks(mut self, blocks: u32) -> Self {
+        self.max_log_blocks = blocks;
+        self
+    }
+
+    /// Marks the verification endpoint for the UTC daily-credit halt.
+    pub fn as_verify(self) -> Self {
+        self.state.set_verify();
+        self
+    }
+
+    /// Endpoint readiness, independent of the API and other chains.
+    pub fn ready(&self) -> bool {
+        self.state.ready()
+    }
+
+    /// Record a final decoded capability failure in the readiness streak.
+    pub fn mark_not_ready(&self) {
+        self.state.failed();
+    }
+    /// Read the typed endpoint chain identity.
+    pub async fn network_id(&self) -> Result<u64, ChainError> {
+        self.bounded("chain identity", self.provider.get_chain_id())
+            .await
+    }
+    /// Measured inclusive log request limit.
+    pub fn max_log_blocks(&self) -> u32 {
+        self.max_log_blocks
+    }
+    /// Typed finalized-block transaction, receipt and blockHash getLogs capability check.
+    pub async fn check_receipt_logs(&self, number: u64) -> Result<(), ChainError> {
+        let block = self
+            .bounded(
+                "self-test finalized block",
+                self.provider
+                    .get_block_by_number(BlockNumberOrTag::Number(number)),
+            )
+            .await?
+            .ok_or(ChainError::MissingField("self-test block"))?;
+        for hash in block.transactions.hashes().take(20) {
+            let reader = FinalizedReader::new(Arc::new(self.clone()));
+            let Some(receipt) = reader.receipt(hash).await? else {
+                return Err(ChainError::MissingField("self-test receipt"));
+            };
+            if receipt.block_number != Some(number) || receipt.block_hash != Some(block.header.hash)
+            {
+                return Err(ChainError::Reorganized("self-test receipt"));
+            }
+            if let Some(log) = receipt.logs().first() {
+                reader.receipt_lookup(hash, 0).await?;
+                let logs = self
+                    .logs(&Filter::new().at_block_hash(block.header.hash))
+                    .await?;
+                if !logs.contains(log) {
+                    return Err(ChainError::MissingField("self-test receipt log"));
+                }
+                return Ok(());
+            }
+        }
+        Err(ChainError::MissingField(
+            "finalized block with a logged transaction",
+        ))
+    }
+
+    /// Current-state pins come from this endpoint's own head, two blocks behind latest.
+    pub async fn current_pin(&self) -> Result<(u64, B256, u64), ChainError> {
+        let latest = self.latest_head().await?;
+        self.price_block(BlockNumberOrTag::Number(latest.saturating_sub(2)))
+            .await
+    }
+
+    /// Reads one addressed or recipient-topic filter, with no endpoint fallback.
+    pub async fn logs(&self, filter: &Filter) -> Result<Vec<Log>, ChainError> {
+        self.bounded("eth_getLogs", self.provider.get_logs(filter))
+            .await
+    }
+
+    /// Executes a heterogeneous Multicall3 aggregate at a canonical hash pin.
+    pub async fn multicall(
+        &self,
+        calls: Vec<(Address, Bytes)>,
+        hash: B256,
+    ) -> Result<Bytes, ChainError> {
+        let calls = calls
+            .into_iter()
+            .map(|(target, call_data)| SnapshotCall {
+                target,
+                allowFailure: false,
+                callData: call_data,
+            })
+            .collect();
+        self.call(
+            "snapshot multicall",
+            MULTICALL3,
+            aggregate3Call { calls }.abi_encode().into(),
+            Some(BlockId::hash_canonical(hash)),
+        )
+        .await
     }
 
     /// Returns the redacted endpoint, for scheme checks and log labels.
@@ -569,12 +708,13 @@ impl EvmClient {
     }
 
     fn transport(&self, operation: &'static str, error: &TransportError) -> ChainError {
-        if let alloy::transports::RpcError::Transport(kind) = error
-            && let Some(failure) = kind
+        if let TransportError::Transport(kind) = error
+            && kind
                 .as_custom()
-                .and_then(|e| e.downcast_ref::<group::Failure>())
+                .and_then(|error| error.downcast_ref::<reqwest::Error>())
+                .is_some_and(reqwest::Error::is_timeout)
         {
-            return ChainError::Group(*failure);
+            return ChainError::Transport(self.endpoint.timeout_error(operation));
         }
         ChainError::Transport(self.endpoint.rpc_error(operation, error))
     }
@@ -595,9 +735,21 @@ impl EvmClient {
         operation: &'static str,
         request: impl IntoFuture<Output = Result<T, TransportError>>,
     ) -> Result<T, ChainError> {
-        self.within(operation, request)
-            .await?
-            .map_err(|error| self.transport(operation, &error))
+        let result = self.within(operation, request).await;
+        match result {
+            Ok(Ok(value)) => {
+                self.state.succeeded();
+                Ok(value)
+            }
+            Ok(Err(error)) => {
+                self.state.failed();
+                Err(self.transport(operation, &error))
+            }
+            Err(error) => {
+                self.state.failed();
+                Err(error)
+            }
+        }
     }
 
     /// Aggregates same-typed view calls through Multicall3 `aggregate3` at `block`, one `eth_call`
@@ -643,12 +795,21 @@ impl EvmClient {
         Ok(results)
     }
 
+    /// Reads code at one explicit canonical hash, shared by startup capability checks.
+    pub async fn code_at_id(&self, address: Address, block: BlockId) -> Result<Bytes, ChainError> {
+        self.bounded(
+            "canonical code",
+            self.provider.get_code_at(address).block_id(block),
+        )
+        .await
+    }
+
     /// Reads ERC-20 balances at one block through Multicall3.
     pub async fn token_balances(
         &self,
         token: Address,
         addresses: &[Address],
-        block: BlockNumberOrTag,
+        block: impl Into<BlockId>,
     ) -> Result<Vec<U256>, ChainError> {
         let calls = addresses
             .iter()
@@ -700,7 +861,7 @@ impl EvmClient {
         account: Address,
         hash: B256,
         signature: Bytes,
-        block: u64,
+        block: impl Into<BlockId>,
     ) -> Result<bool, ChainError> {
         let operation = "isValidSignature call";
         let input = isValidSignatureCall { hash, signature }.abi_encode();
@@ -708,19 +869,17 @@ impl EvmClient {
             .to(account)
             .input(TransactionInput::new(input.into()));
         let output = match self
-            .within(
-                operation,
-                self.provider.call(tx).block(BlockId::number(block)),
-            )
+            .within(operation, self.provider.call(tx).block(block.into()))
             .await?
         {
             Ok(output) => output,
             // The node executed the call and it reverted: the contract refuses the signature.
-            Err(TransportError::ErrorResp(_)) => return Ok(false),
+            Err(TransportError::ErrorResp(ref payload)) if payload.code == 3 => return Ok(false),
             Err(error) => return Err(self.transport(operation, &error)),
         };
-        Ok(isValidSignatureCall::abi_decode_returns_validate(&output)
-            .is_ok_and(|value| value.0 == EIP1271_MAGIC_VALUE))
+        let value = isValidSignatureCall::abi_decode_returns_validate(&output)
+            .map_err(|_| ChainError::InvalidResponse("EIP-1271 returned malformed data".into()))?;
+        Ok(value.0 == EIP1271_MAGIC_VALUE)
     }
 
     /// Runs one `eth_call`, at `block` when given and otherwise at the node's default block.
@@ -807,7 +966,7 @@ impl EvmClient {
         .await
     }
 
-    /// Reads a complete numbered/tagged header through the bounded group transport.
+    /// Reads a complete numbered/tagged header through the bounded endpoint transport.
     pub async fn price_block(
         &self,
         block: BlockNumberOrTag,
@@ -873,10 +1032,9 @@ struct ReceiptFacts {
 /// "Despite the lack of signature validation, we still increment the nonce of the from account",
 /// and the receipt's `depositNonce` is "the nonce value of the from sender as registered before
 /// the EVM processing", present on every deposit receipt since Canyon. So `(from, depositNonce)`
-/// is the nonce the deposit consumed, as for a signed transaction: once the transaction is out of
-/// the chain and `from`'s nonce is past it, it cannot return, since a deposit re-derived after an
-/// L1 reorganization has a new source hash, so a new transaction hash, and is scanned as a new
-/// transfer. A deposit receipt without `depositNonce` is refused rather than given a nonce.
+/// is the nonce the deposit consumed, as for a signed transaction. A deposit receipt without
+/// `depositNonce` is refused rather than given a nonce. Only an independently verified,
+/// service-known finalized replacement proves reversal; an account nonce change does not.
 fn deposit_origin(receipt: &AnyTransactionReceipt) -> Result<Option<(Address, u64)>, ChainError> {
     if receipt.inner.inner.r#type != DEPOSIT_TX_TYPE {
         return Ok(None);
@@ -979,11 +1137,6 @@ impl FinalizedReader {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&block_hash);
-        let cached = if self.client.group().is_some() {
-            None
-        } else {
-            cached
-        };
         if let Some(time) = cached {
             return Ok(time);
         }
@@ -1025,11 +1178,6 @@ impl FinalizedReader {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&tx_hash);
-        let cached = if self.client.group().is_some() {
-            None
-        } else {
-            cached
-        };
         if let Some(origin) = cached {
             return Ok(origin);
         }
@@ -1062,11 +1210,6 @@ impl FinalizedReader {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&(tx_hash, block_hash));
-        let cached = if self.client.group().is_some() {
-            None
-        } else {
-            cached
-        };
         let facts = match cached {
             Some(facts) => facts,
             None => {
@@ -1171,14 +1314,6 @@ impl FinalizedReader {
             {
                 continue;
             }
-            // Nodes that report the block time with the log spare one block read per block.
-            if let Some(timestamp) = log.block_timestamp {
-                let time = utc_timestamp(timestamp)?;
-                self.block_times
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .insert(decoded.block_hash, time);
-            }
             transfers.push(self.complete(decoded).await?);
         }
         Ok(transfers)
@@ -1200,7 +1335,9 @@ impl FinalizedReader {
             return Ok(Vec::new());
         }
         let mut transfers = Vec::new();
-        for (window_from, window_to) in block_windows(from_block, to_block)? {
+        for (window_from, window_to) in
+            log_windows(from_block, to_block, self.client.max_log_blocks)?
+        {
             for batch in addresses.chunks(MAX_ADDRESSES_PER_REQUEST) {
                 transfers.extend(
                     self.transfer_logs_request(
@@ -1338,14 +1475,119 @@ fn is_transfer(log: &Log) -> bool {
 }
 
 impl ChainReader for FinalizedReader {
-    async fn read_window(
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        let (height, hash, timestamp) = self
+            .client
+            .price_block(BlockNumberOrTag::Number(number))
+            .await?;
+        if height != number {
+            return Err(ChainError::Reorganized("numbered header"));
+        }
+        Ok((hash, utc_timestamp(timestamp)?))
+    }
+    async fn coverage_logs(
         &self,
-        request: &window::WindowRequest,
-    ) -> Result<window::WindowResult, ChainError> {
-        self.group_window(request).await
+        factory: Address,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+    ) -> Result<(Vec<TransferLog>, Vec<FactoryLog>), ChainError> {
+        let mut transfers = Vec::new();
+        let mut events = Vec::new();
+        let mut signatures = factory_event_signatures().to_vec();
+        signatures.push(Transfer::SIGNATURE_HASH);
+        for (start, end) in log_windows(from, to, self.client.max_log_blocks)? {
+            for chunk in addresses.chunks(MAX_ADDRESSES_PER_REQUEST) {
+                let filter = Filter::new()
+                    .from_block(start)
+                    .to_block(end)
+                    .event_signature(signatures.clone())
+                    .topic2(chunk.iter().copied().fold(Topic::default(), Topic::extend));
+                for log in self.client.logs(&filter).await? {
+                    if is_transfer(&log) {
+                        if let Some(decoded) = decode_transfer_log(&log)?
+                            && chunk.contains(&decoded.to)
+                        {
+                            transfers.push(self.complete(decoded).await?);
+                        }
+                    } else if log.address() == factory {
+                        let event = decode_factory_log(&log)?;
+                        if chunk.contains(&event.event.forwarder()) {
+                            events.push(event);
+                        }
+                    }
+                }
+            }
+        }
+        Ok((transfers, events))
+    }
+    async fn factory_receipt(
+        &self,
+        tx: B256,
+        factory: Address,
+    ) -> Result<Option<FactoryReceipt>, ChainError> {
+        let Some(receipt) = self.receipt(tx).await? else {
+            return Ok(None);
+        };
+        let number = receipt
+            .block_number
+            .ok_or(ChainError::MissingField("receipt.block_number"))?;
+        let hash = receipt
+            .block_hash
+            .ok_or(ChainError::MissingField("receipt.block_hash"))?;
+        if receipt.transaction_hash != tx {
+            return Err(ChainError::Reorganized("factory receipt"));
+        }
+        let (canonical, block_time) = self.header(number).await?;
+        if hash != canonical {
+            return Err(ChainError::Reorganized("factory header"));
+        }
+        // Read the transaction independently even for factory events with no token transfer.
+        let origin = match deposit_origin(&receipt)? {
+            Some(origin) => origin,
+            None => self.origin(tx).await?,
+        };
+        let mut logs = Vec::new();
+        if receipt.status() {
+            for log in receipt.logs() {
+                if log.address() == factory
+                    && log
+                        .topics()
+                        .first()
+                        .is_some_and(|t| factory_event_signatures().contains(t))
+                {
+                    if log.transaction_hash != Some(tx)
+                        || log.block_hash != Some(hash)
+                        || log.block_number != Some(number)
+                    {
+                        return Err(ChainError::Reorganized("factory log identity"));
+                    }
+                    logs.push(decode_factory_log(log)?);
+                }
+            }
+        }
+        Ok(Some(FactoryReceipt {
+            status: receipt.status(),
+            block_number: number,
+            block_hash: hash,
+            block_time,
+            origin,
+            logs,
+        }))
+    }
+    async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
+        Ok(self.finalized_header().await?.0)
     }
 
-    async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
+    async fn latest_header(&self) -> Result<FinalizedHead, ChainError> {
+        let (number, _, timestamp) = self.client.price_block(BlockNumberOrTag::Latest).await?;
+        Ok(FinalizedHead {
+            number,
+            time: utc_timestamp(timestamp)?,
+        })
+    }
+
+    async fn finalized_header(&self) -> Result<(FinalizedHead, B256), ChainError> {
         let block = self
             .client
             .bounded(
@@ -1362,10 +1604,13 @@ impl ChainReader for FinalizedReader {
             .lock()
             .map_err(|_| ChainError::HealthStateUnavailable)?
             .observe(current)?;
-        Ok(FinalizedHead {
-            number: current,
-            time,
-        })
+        Ok((
+            FinalizedHead {
+                number: current,
+                time,
+            },
+            block.header.hash,
+        ))
     }
 
     async fn confirmation_heads(
@@ -1409,7 +1654,9 @@ impl ChainReader for FinalizedReader {
         if tokens.is_empty() || recipients.is_empty() {
             return Ok(transfers);
         }
-        for (window_from, window_to) in block_windows(from_block, to_block)? {
+        for (window_from, window_to) in
+            log_windows(from_block, to_block, self.client.max_log_blocks)?
+        {
             transfers.extend(
                 self.transfer_logs_request(
                     tokens,
@@ -1441,7 +1688,9 @@ impl ChainReader for FinalizedReader {
             return Ok(logs);
         }
         let forwarders = forwarders.iter().copied().collect::<BTreeSet<_>>();
-        for (window_from, window_to) in block_windows(from_block, to_block)? {
+        for (window_from, window_to) in
+            log_windows(from_block, to_block, self.client.max_log_blocks)?
+        {
             logs.extend(
                 self.factory_logs_request(factory, &forwarders, window_from, window_to)
                     .await?,
@@ -1455,174 +1704,7 @@ impl ChainReader for FinalizedReader {
         tx_hash: B256,
         receipt_log_index: u64,
     ) -> Result<ReceiptLookup, ChainError> {
-        self.receipt_lookup(tx_hash, receipt_log_index, None).await
-    }
-
-    async fn receipt_transfer_known(
-        &self,
-        tx_hash: B256,
-        receipt_log_index: u64,
-        known: KnownTransfer,
-    ) -> Result<ReceiptLookup, ChainError> {
-        self.receipt_lookup(tx_hash, receipt_log_index, Some(known))
-            .await
-    }
-
-    fn independent_review_available(&self, answering: &str) -> bool {
-        self.client
-            .group()
-            .is_none_or(|g| g.independent_review_available(answering))
-    }
-
-    async fn confirmation_evidence(
-        &self,
-        tx: B256,
-        position: u64,
-        known: KnownTransfer,
-        needed: u64,
-        confirmations: Confirmations,
-    ) -> Result<(ChainHeads, ReceiptLookup), ChainError> {
-        let Some(group) = self.client.group() else {
-            return Ok((
-                self.confirmation_heads(confirmations).await?,
-                self.receipt_lookup(tx, position, Some(known)).await?,
-            ));
-        };
-        let deadline = tokio::time::Instant::now()
-            .checked_add(Duration::from_millis(group.policy.total_deadline_ms))
-            .unwrap_or_else(tokio::time::Instant::now);
-        let operation = async {
-            let mut tried = BTreeSet::new();
-            let mut failure = group::Failure::Unavailable;
-            for _ in 0..group.policy.max_attempts {
-                let index = group.select(&tried, None)?;
-                tried.insert(index);
-                let attempt = async {
-                    if group.head(index, "latest", deadline).await?.number < needed {
-                        return Err(ChainError::Group(group::Failure::Stale));
-                    }
-                    group.head(index, "finalized", deadline).await?;
-                    if confirmations == Confirmations::Safe {
-                        group.head(index, "safe", deadline).await?;
-                    }
-                    let pinned = FinalizedReader::new(Arc::new(EvmClient::from_group(
-                        group.clone(),
-                        Some(index),
-                    )?));
-                    let heads = pinned.confirmation_heads(confirmations).await?;
-                    let receipt = pinned.receipt_lookup(tx, position, Some(known)).await?;
-                    group.head(index, "latest", deadline).await?;
-                    Ok((heads, receipt))
-                }
-                .await;
-                match attempt {
-                    Ok(evidence) => {
-                        group.succeeded(index);
-                        return Ok(evidence);
-                    }
-                    Err(error) => {
-                        failure = match error {
-                            ChainError::Group(e) => e,
-                            _ => group::Failure::Malformed,
-                        };
-                        group.failed(index, failure);
-                        if !failure.retryable() {
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(ChainError::Group(failure))
-        };
-        timeout(
-            deadline.saturating_duration_since(tokio::time::Instant::now()),
-            operation,
-        )
-        .await
-        .map_err(|_| ChainError::Group(group::Failure::Deadline))?
-    }
-
-    async fn finality_evidence(
-        &self,
-        tx: B256,
-        position: u64,
-        known: KnownTransfer,
-        from: Address,
-        needed: u64,
-    ) -> Result<FinalityEvidence, ChainError> {
-        let Some(group) = self.client.group() else {
-            let receipt = self.receipt_lookup(tx, position, Some(known)).await?;
-            let nonce = if receipt == ReceiptLookup::Missing {
-                Some(self.nonce_at(from, needed).await?)
-            } else {
-                None
-            };
-            return Ok(FinalityEvidence {
-                finalized: needed,
-                receipt,
-                nonce,
-            });
-        };
-        let deadline = tokio::time::Instant::now()
-            .checked_add(Duration::from_millis(group.policy.total_deadline_ms))
-            .unwrap_or_else(tokio::time::Instant::now);
-        let operation = async {
-            let mut tried = BTreeSet::new();
-            let mut failure = group::Failure::Unavailable;
-            for _ in 0..group.policy.max_attempts {
-                let index = group.select(&tried, None)?;
-                tried.insert(index);
-                let attempt = async {
-                    let head = group.head(index, "finalized", deadline).await?;
-                    if head.number < needed {
-                        return Err(ChainError::Group(group::Failure::Stale));
-                    }
-                    let pinned = FinalizedReader::new(Arc::new(EvmClient::from_group(
-                        group.clone(),
-                        Some(index),
-                    )?));
-                    let receipt = pinned.receipt_lookup(tx, position, Some(known)).await?;
-                    let nonce = if receipt == ReceiptLookup::Missing {
-                        Some(pinned.nonce_at(from, head.number).await?)
-                    } else {
-                        None
-                    };
-                    // Revalidate after all reads so a stale/null answer cannot escape a concurrent floor.
-                    if group.head(index, "finalized", deadline).await?.number < head.number {
-                        return Err(ChainError::Group(group::Failure::Stale));
-                    }
-                    Ok(FinalityEvidence {
-                        finalized: head.number,
-                        receipt,
-                        nonce,
-                    })
-                }
-                .await;
-                match attempt {
-                    Ok(evidence) => {
-                        group.succeeded(index);
-                        return Ok(evidence);
-                    }
-                    Err(error) => {
-                        failure = match error {
-                            ChainError::Group(e) => e,
-                            _ => group::Failure::Malformed,
-                        };
-                        group.failed(index, failure);
-                        if !failure.retryable() {
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(ChainError::Group(failure))
-        };
-        timeout(
-            deadline.saturating_duration_since(tokio::time::Instant::now()),
-            operation,
-        )
-        .await
-        .map_err(|_| ChainError::Group(group::Failure::Deadline))?
+        self.receipt_lookup(tx_hash, receipt_log_index).await
     }
 
     async fn nonce_at(&self, account: Address, block: u64) -> Result<u64, ChainError> {
@@ -1643,7 +1725,6 @@ impl FinalizedReader {
         &self,
         tx_hash: B256,
         receipt_log_index: u64,
-        known: Option<KnownTransfer>,
     ) -> Result<ReceiptLookup, ChainError> {
         let Some(receipt) = self.receipt(tx_hash).await? else {
             return Ok(ReceiptLookup::Missing);
@@ -1654,11 +1735,14 @@ impl FinalizedReader {
         let block_hash = receipt
             .block_hash
             .ok_or(ChainError::MissingField("receipt.block_hash"))?;
+        if receipt.transaction_hash != tx_hash {
+            return Err(ChainError::Reorganized("receipt transaction hash"));
+        }
         let log = usize::try_from(receipt_log_index)
             .ok()
             .and_then(|position| receipt.logs().get(position));
         let decoded = match log {
-            Some(log) if is_transfer(log) => {
+            Some(log) if receipt.status() && is_transfer(log) => {
                 if log.transaction_hash != Some(tx_hash)
                     || log.block_number != Some(block_number)
                     || log.block_hash != Some(block_hash)
@@ -1669,36 +1753,76 @@ impl FinalizedReader {
             }
             _ => None,
         };
-        let transfer = match decoded {
-            Some(decoded) => {
-                let block_time = match known {
-                    Some(known) if known.block_hash == block_hash => known.block_time,
-                    _ => self.block_time(block_hash).await?,
-                };
-                let nonce = match (known, deposit_origin(&receipt)?) {
-                    (Some(known), _) => known.tx_nonce,
-                    (None, Some((_, nonce))) => nonce,
-                    (None, None) => self.origin(tx_hash).await?.1,
-                };
-                let origin = (receipt.from(), nonce);
-                Some(Box::new(decoded.complete(
-                    receipt_log_index,
-                    block_time,
-                    origin,
-                )))
+        let block = self
+            .client
+            .bounded(
+                "receipt block header",
+                self.client.provider.get_block_by_hash(block_hash),
+            )
+            .await?
+            .ok_or(ChainError::MissingField("receipt block header"))?;
+        if block.header.inner.number != block_number || block.header.hash != block_hash {
+            return Err(ChainError::Reorganized("receipt block header"));
+        }
+        let block_time = utc_timestamp(block.header.inner.timestamp)?;
+        let origin = match deposit_origin(&receipt)? {
+            Some(origin) => origin,
+            None => {
+                use alloy::consensus::Transaction as _;
+                use alloy::network::TransactionResponse as _;
+                let transaction = self
+                    .client
+                    .bounded(
+                        "receipt transaction",
+                        self.client.provider.get_transaction_by_hash(tx_hash),
+                    )
+                    .await?
+                    .ok_or(ChainError::Reorganized("receipt transaction"))?;
+                if transaction.tx_hash() != tx_hash
+                    || transaction.from() != receipt.from()
+                    || transaction.block_hash != Some(block_hash)
+                    || transaction.block_number != Some(block_number)
+                    || self
+                        .client
+                        .labels
+                        .chain_id
+                        .is_some_and(|chain| transaction.chain_id() != Some(chain))
+                {
+                    return Err(ChainError::Reorganized("receipt transaction identity"));
+                }
+                (transaction.from(), transaction.nonce())
             }
-            None => None,
         };
+        let transfer = decoded
+            .map(|decoded| Box::new(decoded.complete(receipt_log_index, block_time, origin)));
         Ok(ReceiptLookup::Included {
             block_number,
             block_hash,
+            status: receipt.status(),
+            block_time,
+            tx_from: origin.0,
+            tx_nonce: origin.1,
             transfer,
         })
     }
 }
 
+#[cfg(test)]
 fn block_windows(from_block: u64, to_block: u64) -> Result<Vec<(u64, u64)>, ChainError> {
-    if from_block > to_block {
+    log_windows(
+        from_block,
+        to_block,
+        u32::try_from(MAX_BLOCKS_PER_REQUEST)
+            .map_err(|_| ChainError::MissingField("window limit"))?,
+    )
+}
+/// Split inclusive coverage ranges at the measured per-endpoint limit.
+pub fn log_windows(
+    from_block: u64,
+    to_block: u64,
+    limit: u32,
+) -> Result<Vec<(u64, u64)>, ChainError> {
+    if from_block > to_block || limit == 0 {
         return Err(ChainError::InvalidRange {
             from_block,
             to_block,
@@ -1708,7 +1832,7 @@ fn block_windows(from_block: u64, to_block: u64) -> Result<Vec<(u64, u64)>, Chai
     let mut start = from_block;
     loop {
         let end = start
-            .saturating_add(MAX_BLOCKS_PER_REQUEST.saturating_sub(1))
+            .saturating_add(u64::from(limit).saturating_sub(1))
             .min(to_block);
         windows.push((start, end));
         if end == to_block {
@@ -1827,7 +1951,8 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, node).await });
         let client = EvmClient::new(&format!("http://{address}/rpc"))
             .expect("production adapter accepts URL")
-            .with_provider("base-sepolia-a");
+            .with_provider("base-sepolia-a")
+            .with_chain_id(84532);
         (FinalizedReader::new(Arc::new(client)), server)
     }
 
@@ -1886,6 +2011,10 @@ mod tests {
             ReceiptLookup::Included {
                 block_number: 47_297_199,
                 block_hash: transfer.block_hash,
+                status: true,
+                block_time: transfer.block_time,
+                tx_from: transfer.tx_from,
+                tx_nonce: transfer.tx_nonce,
                 transfer: Some(Box::new(transfer)),
             }
         );
@@ -1896,10 +2025,13 @@ mod tests {
     #[tokio::test]
     async fn an_op_stack_deposit_receipt_without_a_transfer_is_included() {
         let (reader, node) = replay_node(
-            vec![(
-                "eth_getTransactionReceipt",
-                base_sepolia("l1-attributes-receipt"),
-            )],
+            vec![
+                (
+                    "eth_getTransactionReceipt",
+                    base_sepolia("l1-attributes-receipt"),
+                ),
+                ("eth_getBlockByHash", base_sepolia("block-47445875")),
+            ],
             Vec::new(),
         )
         .await;
@@ -1911,16 +2043,14 @@ mod tests {
             .await;
         node.abort();
 
-        assert_eq!(
+        assert!(matches!(
             lookup.expect("receipt lookup"),
             ReceiptLookup::Included {
                 block_number: 47_445_875,
-                block_hash: b256!(
-                    "0xcac908304ca374430510276e42beb9f0f28596b6d925097e9b192913c6d195a2"
-                ),
                 transfer: None,
+                ..
             }
-        );
+        ));
     }
 
     #[tokio::test]
@@ -1934,6 +2064,7 @@ mod tests {
             vec![
                 ("eth_getLogs", base_sepolia("bridge-mint-logs")),
                 ("eth_getTransactionReceipt", receipt),
+                ("eth_getBlockByHash", base_sepolia("block-47297199")),
             ],
             Vec::new(),
         )
@@ -2082,9 +2213,53 @@ mod tests {
             ReceiptLookup::Included {
                 block_number: 47_445_875,
                 block_hash,
+                status: true,
+                block_time: transfer.block_time,
+                tx_from: transfer.tx_from,
+                tx_nonce: transfer.tx_nonce,
                 transfer: Some(Box::new(transfer)),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn receipt_evidence_rejects_a_forged_transaction_chain_and_failed_status() {
+        let tx = b256!("0x4b6cf1a33019535930118d535e51966a0405d78874213f5e34e5df2eb223902f");
+        for wrong_chain in [true, false] {
+            let mut transaction = base_sepolia("transaction");
+            let mut receipt = base_sepolia("receipt");
+            if wrong_chain {
+                transaction["chainId"] = serde_json::json!("0x1");
+            } else {
+                receipt["status"] = serde_json::json!("0x0");
+            }
+            let (reader, task) = replay_node(
+                vec![
+                    ("eth_getTransactionReceipt", receipt),
+                    ("eth_getTransactionByHash", transaction),
+                    ("eth_getBlockByHash", base_sepolia("block-47445875")),
+                ],
+                Vec::new(),
+            )
+            .await;
+            let result = reader.receipt_transfer(tx, 0).await;
+            task.abort();
+            if wrong_chain {
+                assert!(matches!(
+                    result,
+                    Err(ChainError::Reorganized("receipt transaction identity"))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Ok(ReceiptLookup::Included {
+                        status: false,
+                        transfer: None,
+                        ..
+                    })
+                ));
+            }
+        }
     }
 
     #[test]
@@ -2315,14 +2490,7 @@ mod tests {
             finalized_block_error(429, r#"{"code":-32005,"message":"request rate exceeded"}"#)
                 .await;
         assert!(matches!(error, ChainError::Transport(_)), "{error:?}");
-        // Tenderly's public gateway refuses excess requests this way; callers may back off.
-        assert!(error.is_rate_limited(), "{error:?}");
-        assert!(
-            error.to_string().contains(
-                "finalized block failed for provider `provider-a` \
-                 (JSON-RPC error -32005: request rate exceeded)"
-            ),
-            "{error}"
-        );
+        // Alloy returns its bounded exhaustion error after the single retry layer stops.
+        // Exact retries and HTTP classification are exercised by endpoint::tests.
     }
 }

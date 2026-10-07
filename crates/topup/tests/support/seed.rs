@@ -395,3 +395,27 @@ pub async fn schedule_treasury(
     .await?;
     Ok(id)
 }
+
+/// Initializes a fixture chain as startup would, without marking any address backfilled.
+pub async fn initialize_dual_chain(pool: &PgPool, chain: u64) -> Result<(), sqlx::Error> {
+    topup::db::chain_reads::initialize_coverage(
+        pool,
+        chain,
+        topup::db::chain_reads::Boundary {
+            number: 0,
+            hash: B256::ZERO,
+            time: chrono::DateTime::UNIX_EPOCH,
+        },
+    )
+    .await?;
+    topup::db::chain_reads::advance_checkpoint(
+        pool,
+        chain,
+        topup::db::chain_reads::Boundary {
+            number: 0,
+            hash: B256::ZERO,
+            time: chrono::DateTime::UNIX_EPOCH,
+        },
+    )
+    .await
+}

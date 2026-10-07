@@ -78,7 +78,6 @@ enforces absolute ceilings that no operator bound may exceed.
 | `chain.sanctions_oracle` | Operator | Screening evidence (compliance is the operator's, 2026-10-01). |
 | `chain.confirmations` | Operator **floor**; the merchant may require more | The floor is the operator's reorg-risk judgment (D1). The merchant's requirement is bound with the deposit, and an uncredited deposit waits for the stricter of it and the **current** floor (§7). |
 | `asset.symbol`, `contract`, `decimals` | Operator | Token identity. Credit arithmetic depends on `decimals`. |
-| `asset.backstop` | Operator | Scanner strategy and RPC cost. |
 | `pricing.mode` (`spot` or `stablecoin`) | Operator | A property of the asset's valuation. |
 | `pricing.primary`, `check`, `fx` | Operator | Price evidence sources. |
 | `pricing.max_age_s`, `max_deviation_bps`, `max_fx_deviation_bps` (depeg guard) | Operator | Guards on the evidence the attestation vouches for. |
@@ -400,7 +399,7 @@ known only after confirmation.
 | Case | Binding |
 |---|---|
 | Same transfer re-included (the finality watch follows it) | Keep the original binding |
-| Rescan of the same deposit (scanner, backstop, reconciler, restore-check) | Unchanged |
+| Rescan of the same deposit (fast discovery, dual coverage, restore-check) | Unchanged |
 | Successor or new revision after a reversal | Record-time revision of the actual recipient address's account and mode |
 | Payment of a valid quote (§8) | The quote's terms |
 | In-place token, amount, or route correction before credit (confirm step) | Keep the settings revision; re-resolve `accepted`, `terms`, and `handling` on the corrected facts |

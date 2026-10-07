@@ -160,7 +160,13 @@ def test_only_documented_retry_statuses_and_409_code_retry(status: int) -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "code"), [(400, "idempotency_key_in_use"), (409, "conflict"), (501, "unavailable")]
+    ("status", "code"),
+    [
+        (400, "idempotency_key_in_use"),
+        (409, "conflict"),
+        (422, "address_capacity_reached"),
+        (501, "unavailable"),
+    ],
 )
 def test_other_statuses_and_conflicts_are_terminal(status: int, code: str) -> None:
     requests: list[httpx.Request] = []
@@ -169,9 +175,12 @@ def test_other_statuses_and_conflicts_are_terminal(status: int, code: str) -> No
         requests.append(request)
         return error(status, code)
 
-    with pay(handler) as client, pytest.raises(ApiError):
+    with pay(handler) as client, pytest.raises(ApiError) as raised:
         client.quotes.retrieve(QUOTE_ID)
     assert len(requests) == 1
+    assert raised.value.code == code
+    assert raised.value.status_code == status
+    assert raised.value.retry_after is None
 
 
 @pytest.mark.parametrize("upgrade_tolerance", [False, True])

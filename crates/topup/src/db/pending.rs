@@ -315,7 +315,7 @@ impl TryFrom<PendingRecord> for PendingTransfer {
 }
 
 // A receipt position with a reversed deposit is final (a deposit is reversed only by final
-// evidence, §7), so a row there is a stale read the finalized backstop has not deleted yet: it is
+// evidence, §7), so a row there is a stale read dual coverage has not deleted yet: it is
 // not shown. Every row shown is at a position with no deposit, or with the revision-0 deposit the
 // fast scan recorded from it, so its deposit id is the position's revision-0 id.
 const PENDING_SELECT: &str = r#"

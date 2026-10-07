@@ -12,7 +12,7 @@ use uuid::Uuid;
 /// Route-version-indexed thresholds for state-age alerts.
 #[derive(Clone, Debug)]
 pub struct AgeAlertConfig {
-    thresholds: BTreeMap<(String, u64), StuckAfterConfig>,
+    thresholds: BTreeMap<(String, u64), (StuckAfterConfig, u64)>,
 }
 
 impl AgeAlertConfig {
@@ -22,7 +22,16 @@ impl AgeAlertConfig {
         for route in routes {
             let key = (route.route.clone(), route.version);
             if thresholds
-                .insert(key.clone(), route.alerts.stuck_after_s.clone())
+                .insert(
+                    key.clone(),
+                    (
+                        route.alerts.stuck_after_s.clone(),
+                        route
+                            .chain
+                            .confirmations
+                            .typical_credit_seconds(route.chain.chain_id),
+                    ),
+                )
                 .is_some()
             {
                 return Err(AgeAlertConfigError {
@@ -34,8 +43,18 @@ impl AgeAlertConfig {
         Ok(Self { thresholds })
     }
 
-    fn threshold(&self, route: &str, version: u64, state: DepositState) -> Option<u64> {
-        let stuck_after = self.thresholds.get(&(route.to_owned(), version))?;
+    fn threshold(
+        &self,
+        route: &str,
+        version: u64,
+        state: DepositState,
+        sanctions_hold: bool,
+    ) -> Option<u64> {
+        let (stuck_after, confirmation_window) =
+            self.thresholds.get(&(route.to_owned(), version))?;
+        if sanctions_hold && state == DepositState::Confirmed {
+            return Some(*confirmation_window);
+        }
         match state {
             DepositState::Detected => Some(stuck_after.detected),
             DepositState::Confirmed => Some(stuck_after.confirmed),
@@ -111,7 +130,10 @@ impl AgeAlerter {
                           AND transition.to_state = deposit.state
                     ),
                     deposit.created_at
-                ) AS entered_at
+                ) AS entered_at,
+                COALESCE((SELECT transition.evidence->>'sanctions_hold' = 'true'
+                          FROM transitions AS transition WHERE transition.deposit_id=deposit.id
+                          ORDER BY transition.created_at DESC, transition.id DESC LIMIT 1), false) AS sanctions_hold
             FROM deposits AS deposit
             WHERE deposit.state IN ('detected', 'confirmed')
             "#,
@@ -133,7 +155,10 @@ impl AgeAlerter {
             let Some(state) = parse_active_state(&row.state) else {
                 continue;
             };
-            let Some(threshold) = self.config.threshold(route, version, state) else {
+            let Some(threshold) = self
+                .config
+                .threshold(route, version, state, row.sanctions_hold)
+            else {
                 continue;
             };
             let age_seconds = now.signed_duration_since(row.entered_at).num_seconds();
@@ -142,7 +167,7 @@ impl AgeAlerter {
             };
             if age_seconds > threshold_seconds {
                 tracing::warn!(
-                    tags.alert = "TopupDepositStateAgeExceeded",
+                    tags.alert = if row.sanctions_hold { "TopupSanctionsHold" } else { "TopupDepositStateAgeExceeded" },
                     tags.route = route,
                     tags.state = state_code(state),
                     deposit_id = %crate::ids::format(crate::ids::DEPOSIT, row.id),
@@ -178,6 +203,7 @@ struct DepositAgeRow {
     route_version: Option<i64>,
     state: String,
     entered_at: DateTime<Utc>,
+    sanctions_hold: bool,
 }
 
 fn parse_active_state(state: &str) -> Option<DepositState> {

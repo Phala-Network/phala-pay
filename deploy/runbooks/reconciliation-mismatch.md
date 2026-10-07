@@ -3,16 +3,15 @@
 **Trigger:** `TopupReconciliationMismatch` (tagged with its `check`), or the `topup-reconciler`
 Crons monitor checking in `error` (a check could not complete) or missing its check-in.
 
-**Impact:** the reconciler runs the architecture §13 checks every 10 minutes (when `finalized` has
-advanced since the last round) and stores each first
-observation once. Safe repairs raise no alert. By check:
+**Impact:** the reconciler runs the architecture §13 checks every 10 minutes and stores each first
+observation once. Dual coverage records missing transfers; reconciliation checks the resulting
+ledger. By check:
 
 | `check` | Automatic action | Blast radius |
 |---|---|---|
 | `address_derivation` | freezes the chain: [Chain frozen](chain-frozen.md) | whole chain |
 | `custody_balance` | freezes the chain: [Chain frozen](chain-frozen.md) | whole chain |
 | `credit_recomputation` | alert only | one deposit |
-| `missing_deposit`, `missing_flush_link` | repair: insert the deposit, or link it to its sweep's `Flushed` event | one deposit |
 
 In the restore check's post-restore round, a finding the round could not verify keeps the check
 `incomplete` ([RESTORE.md](../RESTORE.md#the-restore-check-variant)).
@@ -34,7 +33,8 @@ In the restore check's post-restore round, a finding the round could not verify 
 ## Fix
 
 Fix the cause, not the finding. A chain freeze is lifted as [Chain frozen](chain-frozen.md)
-describes; the lift does not re-check, so while the mismatch persists every round freezes again.
+describes. The lift requires a fresh passing dual-source contract check before the audited
+unfreeze; a persistent ledger mismatch freezes again on the next reconciliation round.
 
 ## Done when
 

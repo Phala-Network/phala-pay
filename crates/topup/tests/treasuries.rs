@@ -872,10 +872,13 @@ async fn real_safe_v1_4_1_owners_prove_a_treasury_as_the_safe_sdk_signs() -> Res
     let anvil = &anvil;
     let result = async {
         let client = Arc::new(EvmClient::new(&anvil.rpc_url)?);
-        let contracts = EvmContractSignatures::new(BTreeMap::from([(
-            CHAIN_ID,
-            [Arc::clone(&client), Arc::clone(&client)],
-        )]));
+        let contracts = EvmContractSignatures::new(
+            database.app_pool.clone(),
+            BTreeMap::from([(CHAIN_ID, [Arc::clone(&client), Arc::clone(&client)])]),
+        );
+        anvil.mine(70)?;
+        let reader = topup_adapters::chain::evm::FinalizedReader::new(client.clone());
+        topup::scanner::initialize_chain(&database.app_pool, CHAIN_ID, &reader, &reader).await?;
         let fixture =
             Fixture::new(&database.app_pool, Contracts::Anvil(Arc::new(contracts))).await?;
         let safe = SafeDeployment::deploy(anvil, &client).await?;
@@ -908,6 +911,8 @@ async fn real_safe_v1_4_1_owners_prove_a_treasury_as_the_safe_sdk_signs() -> Res
             .await?;
         // 64 blocks bring the Safes and the approval to Anvil's `finalized`.
         anvil.mine(70)?;
+        let reader = topup_adapters::chain::evm::FinalizedReader::new(client.clone());
+        topup::checkpoint::advance(&database.app_pool, CHAIN_ID, &reader, &reader).await?;
         // Deployed above `finalized`: not yet deployed as far as the proof is concerned.
         let unfinalized = safe.create(anvil, &client, &[first], 1, 6).await?;
 
@@ -1250,6 +1255,7 @@ struct Fixture {
 
 impl Fixture {
     async fn new(pool: &sqlx::PgPool, contracts: Contracts) -> Result<Self> {
+        seed::initialize_dual_chain(pool, 1).await?;
         let account = seed::create_account(
             pool,
             &NewAccount {
@@ -1309,6 +1315,9 @@ impl Fixture {
             route.merchant.max_deposit_atomic =
                 topup_core::route::Bounded::at(AtomicAmount::new(U256::from(1_000_000_u64)));
             route.merchant.min_amount = topup_core::route::Bounded::at(1);
+        }
+        for route in &routes {
+            seed::initialize_dual_chain(pool, route.chain.chain_id).await?;
         }
         let route_set = RouteSet::new(routes.clone()).map_err(anyhow::Error::msg)?;
         for livemode in [false, true] {
@@ -1632,6 +1641,7 @@ struct ClearPayers;
 impl SanctionsSource for ClearPayers {
     async fn sanctions(&self, _address: Address, block_number: u64) -> SanctionsResult {
         SanctionsResult {
+            block_hash: None,
             provider_a: SanctionsAnswer::Clear,
             provider_b: SanctionsAnswer::Clear,
             block_number,

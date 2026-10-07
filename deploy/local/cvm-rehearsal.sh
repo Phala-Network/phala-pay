@@ -49,6 +49,7 @@ done
 
 project="topup-cvm-rehearsal-$$"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/topup-cvm-rehearsal.XXXXXX")
+printf '%s\n' '{"services":{}}' >"$tmp/rpc-tls.json"
 cvm="$tmp/cvm"
 mkdir -p "$cvm"
 : >"$cvm/.env"
@@ -85,15 +86,6 @@ mkdir "$environment"
         sed -e 's|WALG_S3_PREFIX: .*|WALG_S3_PREFIX: s3://topup-backups/postgres|' \
             -e 's|AWS_ENDPOINT: .*|AWS_ENDPOINT: http://s3:3900|' \
             -e 's|AWS_REGION: .*|AWS_REGION: us-east-1|'
-    # Staging's providers are keyless; the rehearsal's provider B is keyed (below), so its
-    # environment declares that key's sealed name, as a keyed provider's environment does.
-    cat <<'OVERLAY'
-  topup:
-    environment: &rpc-keys
-      TOPUP_RPC_PROVIDER_B_KEY: ${TOPUP_RPC_PROVIDER_B_KEY:-}
-  restore-check:
-    environment: *rpc-keys
-OVERLAY
 } >"$environment/compose.yaml"
 cp "$root/deploy/environments/phala-network/staging/topup/topup.yaml" "$environment/topup.yaml"
 
@@ -108,7 +100,7 @@ dc() {
     env "${unset[@]}" docker compose --progress quiet -p "$project" --project-directory "$root/deploy/local" \
         --env-file "$cvm/.env" -f "$compose_file" \
         -f "$root/deploy/local/cvm-rehearsal.compose.yml" \
-        -f "$root/deploy/local/test-tls.compose.yml" "$@"
+        -f "$root/deploy/local/test-tls.compose.yml" -f "$tmp/rpc-tls.json" "$@"
 }
 
 # The reference-product CVM: its rendered compose with its own `.env`, joined to the rehearsal
@@ -149,6 +141,16 @@ cleanup() {
     if [[ -n "${compose_file:-}" ]]; then
         dc down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1
     fi
+    # A malformed overlay can prevent Compose from parsing even for `down`. Labels still
+    # identify only this run's resources, including containers created before rendering.
+    for owned_project in "$project" "$product_project"; do
+        mapfile -t owned_containers < <(docker ps -aq --filter "label=com.docker.compose.project=$owned_project")
+        ((${#owned_containers[@]} == 0)) || docker rm -fv "${owned_containers[@]}" >/dev/null 2>&1
+        mapfile -t owned_volumes < <(docker volume ls -q --filter "label=com.docker.compose.project=$owned_project")
+        ((${#owned_volumes[@]} == 0)) || docker volume rm "${owned_volumes[@]}" >/dev/null 2>&1
+        mapfile -t owned_networks < <(docker network ls -q --filter "label=com.docker.compose.project=$owned_project")
+        ((${#owned_networks[@]} == 0)) || docker network rm "${owned_networks[@]}" >/dev/null 2>&1
+    done
     docker rm -f -v "$registry" >/dev/null 2>&1
     # Failures show up in leftovers() below.
     docker image rm "${local_images[@]}" "$TOPUP_LOCAL_DSTACK_IMAGE" >/dev/null 2>&1
@@ -168,8 +170,8 @@ trap 'exit 143' TERM
 
 # Trust only this run's certificate; HTTPS checks stay enabled in the SDK and HTTPX.
 mkdir "$TOPUP_TEST_TLS_DIR"
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=topup-tls \
-    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub \
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=critical,CA:FALSE' -subj /CN=topup-tls \
+    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub,DNS:*.rpc.test \
     -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
     -out "$TOPUP_TEST_TLS_DIR/cert.pem" >/dev/null 2>&1
 python3 - "$TOPUP_TEST_TLS_DIR/cert.pem" "$TOPUP_TEST_TLS_DIR/ca.pem" <<'PYTHON'
@@ -330,9 +332,7 @@ install_anvil_price_fixtures "$mainnet_price_rpc_url" "$base_mainnet_price_rpc_u
 echo "== writing the configuration and rendering the staging compose"
 # Phala's staging configuration with this network's addresses: on each chain the test token stands
 # in for PHA, the reference product's asset, a six-decimal mock token for USDC, and a USDT-like one
-# for USDT. Provider A is keyless, as staging's; provider B is attested with a `{key}`, as a paid
-# provider is, and Anvil ignores the query that carries the key. Base Sepolia's two providers are
-# keyless, at two URLs of its Anvil.
+# for USDT. Each role has its own certificate-verified relay and sealed fixture key.
 second_token=$(rehearsal_token UsdcLikeToken "$rpc_url")
 third_token=$(rehearsal_token UsdtLikeToken "$rpc_url")
 # The owner's admin key, in the PEM form deploy/runbooks/sign-admin-request.sh signs with.
@@ -358,15 +358,6 @@ write_config() {
                     "phala-cloud-base-sepolia-usdc-usd": [$base_usdc, $base_oracle],
                     "phala-cloud-base-sepolia-usdt-usd": [$base_usdt, $base_oracle]}')" '
             .admin_key = {id: $id, public_key: $key}
-            | .rpc_companies |= with_entries(.value.domains = [.key + ".test"])
-            # Match sandbox-local fixture budgets: public-provider throttling must not race
-            # the five-second reference product request deadline on our own Anvils.
-            | .rpc_budgets |= with_entries(.value = {requests_per_second: 100, burst: 100})
-            | .rpc_groups |= with_entries(.value.members |= map(
-                .url = ("http://" + .id + "." + .company + ".test:8545")
-                | del(.sealed_key)))
-            | .rpc_groups["provider-b"].members[0].url += "/?key={key}"
-            | .rpc_groups["provider-b"].members[0].sealed_key = "TOPUP_RPC_PROVIDER_B_KEY"
             | .routes |= map(($assets[.route] // error("no rehearsal token for \(.route)")) as $asset
                 | .chain.forwarder_factory = $factory | .chain.implementation = $implementation
                 | .asset.contract = $asset[0] | .chain.sanctions_oracle = $asset[1]
@@ -376,6 +367,11 @@ write_config() {
                     end
                   else . end)' \
         >"$environment/topup.yaml"
+    python3 "$root/deploy/local/rpc-tls.py" "$environment/topup.yaml" "$tmp/rpc-tls.json" \
+        --certificate "$TOPUP_TEST_TLS_DIR/cert.pem" --key "$TOPUP_TEST_TLS_DIR/key.pem" \
+        --image "$client_image" --chain 11155111=http://anvil:8545 \
+        --chain 84532=http://anvil-base-sepolia:8545 --chain 1=http://anvil-mainnet-price:8545 \
+        --chain 8453=http://anvil-base-mainnet-price:8545
     docker run --rm -i --network none "$TOPUP_IMAGE" topup config check /dev/stdin \
         <"$environment/topup.yaml" >/dev/null || die "the rehearsal configuration is invalid"
 }
@@ -398,8 +394,9 @@ declare -A values=(
     [AWS_SECRET_ACCESS_KEY]=topup-s3-secret-key
     # Empty: the rehearsal proves the service runs unchanged with Sentry reporting off.
     [SENTRY_DSN]=''
-    # Provider A's URL is keyless; topup reaches provider B only with its key in place of `{key}`.
-    [TOPUP_RPC_PROVIDER_B_KEY]=rehearsal-rpc-key
+    # Both endpoint roles receive their sealed fixture keys through the rendered Compose path.
+    [TOPUP_RPC_ANKR_KEY]=rehearsal-rpc-key
+    [TOPUP_RPC_INFURA_KEY]=rehearsal-rpc-key
 )
 ((${#values[@]} == ${#env_names[@]})) || die "the rehearsal .env and the compose's sealed names differ"
 for name in "${env_names[@]}"; do
@@ -455,20 +452,30 @@ echo "ok: migrate exited 0"
 echo "== seeding the hermetic thirty-minute TWAP window"
 # Keep the sampler out of the compressed history; resume it against the completed window.
 dc stop --timeout 10 topup >/dev/null
-# The production sampler persists one sample per minute. Rehearsal time is compressed by mining
+# The staging sampler persists one sample per five minutes. Rehearsal time is compressed by mining
 # those timestamps on the local production-chain-id Anvil; every row still carries a real local
 # block hash, so the reader's restart/reorg checks remain exercised.
-twap_policy='{"window_s":1800,"max_sample_age_s":180,"min_weth_reserve_usd":100000,"max_spot_deviation_bps":300,"max_sample_jump_bps":500}'
+twap_policy=$(jq -c '[.routes[].price | (.primary // [])[] | select(.source == "uniswap_v2_twap") | .twap] | unique | if length == 1 then .[0] else error("inconsistent rehearsal TWAP policies") end' "$environment/topup.yaml")
 twap_sql="$tmp/twap.sql"
 : >"$twap_sql"
 pair_timestamp_last=$((ANVIL_PRICE_PAIR_TIMESTAMP - 1800))
-window_start=$(($(date +%s) - 1860))
+# The first seeded block must follow Anvil's real head, even when setup is fast.
+seed_head_timestamp=$(cast block latest --field timestamp --rpc-url "$mainnet_price_rpc_url")
+window_start=$(python3 - "$seed_head_timestamp" <<'PY'
+import sys, time
+now = int(time.time())
+start = max(int(sys.argv[1], 0) + 1, now - 2100)
+if start + 1800 > now:
+    raise ValueError("price fixture must begin at least thirty minutes before the wall clock")
+print(start)
+PY
+)
 twap_spot=$(python3 - <<'PY'
 print((100 * 10**18 << 112) // (100_000 * 10**18))
 PY
 )
-for i in $(seq 1 31); do
-    sample_timestamp=$((window_start + (i - 1) * 60))
+for i in $(seq 1 7); do
+    sample_timestamp=$((window_start + (i - 1) * 300))
     cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setNextBlockTimestamp "$sample_timestamp" >/dev/null
     cast rpc --rpc-url "$mainnet_price_rpc_url" evm_mine >/dev/null
     # Capture number/hash/timestamp together, from the block actually mined.
@@ -508,7 +515,7 @@ cast rpc --rpc-url "$base_mainnet_price_rpc_url" evm_mine >/dev/null
 cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setIntervalMining 1 >/dev/null
 cast rpc --rpc-url "$base_mainnet_price_rpc_url" anvil_setIntervalMining 1 >/dev/null
 dc start topup >/dev/null
-echo "ok: persisted 31 local samples covering the minimum TWAP window"
+echo "ok: persisted seven 300-second samples covering the minimum TWAP window"
 
 http_status() {
     product_python -c 'import sys, httpx; print(httpx.get(sys.argv[1], timeout=5).status_code)' "$1"

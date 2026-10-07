@@ -1,11 +1,12 @@
 //! Periodic custody and credit reconciliation.
 //!
-//! Every §13 check runs on every round, independently of the others. Per-deposit failures are
+//! Regular ledger checks run each round; scheduled dual custody runs on startup and hourly,
+//! independently per chain and token route. Per-deposit failures are
 //! recorded as findings; a check that cannot complete is reported in
 //! [`ReconciliationReport::failed_checks`] and withholds the round heartbeat.
 //!
-//! Chain reads stay proportional to what changed: the service's rounds run only after provider
-//! A's `finalized` advanced, reuse the head the scanner published, verify each stored
+//! Chain reads stay proportional to what changed: the service's rounds run only after the
+//! agreed checkpoint advances or custody is due, reuse the published head, verify each stored
 //! `(address, salt, treasury)` against the factory with a bounded LRU cache, and read balances only of
 //! forwarders that hold unswept funds by the ledger.
 
@@ -20,7 +21,7 @@ use std::time::Duration;
 use alloy_primitives::Address;
 use serde_json::json;
 use sqlx::PgPool;
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::time::{Instant, MissedTickBehavior, interval, sleep_until};
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::FinalizedReader;
 use topup_core::money::{PRICE_SCALE, ScaledPrice, credit};
@@ -29,22 +30,15 @@ use uuid::Uuid;
 
 use crate::db::{self, ApplyTransitionError};
 use crate::routes::RouteSet;
-use crate::scanner::{
-    ChainRoutes, FinalizedHeads, MAX_SCAN_WINDOW, ScannerError, chain_routes,
-    report_unsupported_inflows, resolve_logs_for_reconciliation,
-};
+use crate::scanner::FinalizedHeads;
 
 pub use chain::ReconciliationChain;
 pub use store::{LeaseOwnerLock, chain_is_blocked, frozen_chains, hold_lease_owner_lock};
 pub use types::{CheckName, Finding, ReconciliationReport};
 
-/// Maximum `eth_getLogs` windows one incremental scan advances per chain and round.
-const MAX_WINDOWS_PER_ROUND: usize = 64;
-
 /// Order in which a round runs its checks; derivation runs first so a freeze lands early.
-const REGULAR_CHECKS: [CheckName; 5] = [
+const REGULAR_CHECKS: [CheckName; 4] = [
     CheckName::AddressDerivation,
-    CheckName::MissingDeposit,
     CheckName::CreditRecomputation,
     CheckName::MissingFlushLink,
     CheckName::CustodyBalance,
@@ -90,12 +84,6 @@ impl ReconciliationError {
 
 impl From<topup_adapters::chain::evm::ChainError> for ReconciliationError {
     fn from(error: topup_adapters::chain::evm::ChainError) -> Self {
-        Self::Chain(error.to_string())
-    }
-}
-
-impl From<ScannerError> for ReconciliationError {
-    fn from(error: ScannerError) -> Self {
         Self::Chain(error.to_string())
     }
 }
@@ -149,14 +137,14 @@ impl VerifiedCache {
 pub struct Reconciler {
     pool: PgPool,
     routes: Arc<RouteSet>,
-    scanner_routes: BTreeMap<u64, ChainRoutes>,
     chains: BTreeMap<u64, Arc<dyn ReconciliationChain>>,
+    verifiers: BTreeMap<u64, Arc<dyn ReconciliationChain>>,
     /// Derivations already confirmed on chain; a changed row is a new key and is read again.
     verified: Mutex<VerifiedCache>,
 }
 
 impl Reconciler {
-    /// Builds production reconciliation dependencies on each chain's provider A.
+    /// Builds production reconciliation dependencies on each chain's read and verify endpoints.
     pub fn from_routes(pool: PgPool, routes: Arc<RouteSet>) -> Result<Self, ReconciliationError> {
         let mut chains = BTreeMap::<u64, Arc<dyn ReconciliationChain>>::new();
         for chain_id in routes.chain_ids() {
@@ -165,7 +153,25 @@ impl Reconciler {
             })?;
             chains.insert(chain_id, Arc::new(FinalizedReader::new(Arc::clone(client))));
         }
-        Ok(Self::with_dependencies(pool, routes, chains))
+        let mut verifiers = BTreeMap::<u64, Arc<dyn ReconciliationChain>>::new();
+        for chain in routes.chain_ids() {
+            verifiers.insert(
+                chain,
+                Arc::new(FinalizedReader::new(
+                    routes
+                        .provider(chain, 1)
+                        .map_err(|e| ReconciliationError::Configuration(e.to_string()))?
+                        .clone(),
+                )),
+            );
+        }
+        Ok(Self {
+            pool,
+            routes,
+            chains,
+            verifiers,
+            verified: Mutex::default(),
+        })
     }
 
     /// Builds a reconciler with explicit dependencies for integration tests.
@@ -175,17 +181,22 @@ impl Reconciler {
         routes: Arc<RouteSet>,
         chains: BTreeMap<u64, Arc<dyn ReconciliationChain>>,
     ) -> Self {
-        let scanner_routes = chain_routes(&routes)
-            .into_iter()
-            .map(|route| (route.chain.chain_id, route))
-            .collect();
         Self {
             pool,
             routes,
-            scanner_routes,
+            verifiers: chains.clone(),
             chains,
             verified: Mutex::default(),
         }
+    }
+
+    /// Inject independent verification reads for custody disagreement tests.
+    pub fn with_verifiers(
+        mut self,
+        verifiers: BTreeMap<u64, Arc<dyn ReconciliationChain>>,
+    ) -> Self {
+        self.verifiers = verifiers;
+        self
     }
 
     /// Runs all regular reconciliation checks once.
@@ -193,7 +204,7 @@ impl Reconciler {
     /// Check failures are reported in [`ReconciliationReport::failed_checks`]; the other checks
     /// still run. The `Result` is kept for callers of the library entry point.
     pub async fn run_once(&self) -> Result<ReconciliationReport, ReconciliationError> {
-        crate::rpc_runtime::ensure_anchors(&self.pool, &self.routes)
+        crate::rpc_runtime::ensure_checkpoints(&self.pool, &self.routes)
             .await
             .map_err(ReconciliationError::Chain)?;
         Ok(self.run_checks(false).await)
@@ -207,7 +218,7 @@ impl Reconciler {
     pub async fn post_restore_once(&self) -> Result<ReconciliationReport, ReconciliationError> {
         let lock = store::exclusive_lease_owner_lock(&self.pool).await?;
         let result = async {
-            crate::rpc_runtime::ensure_anchors(&self.pool, &self.routes)
+            crate::rpc_runtime::ensure_checkpoints(&self.pool, &self.routes)
                 .await
                 .map_err(ReconciliationError::Chain)?;
             Ok(self.run_checks(true).await)
@@ -222,11 +233,11 @@ impl Reconciler {
     /// Runs one bounded check page without persisting its findings. Repeated calls resume
     /// the durable cursor; completed row passes wrap so old rows are checked again.
     ///
-    /// Safe repairs and freezes still apply: `missing_deposit` and `missing_flush_link` write the
+    /// Safe repairs and freezes still apply: `missing_flush_link` writes the
     /// ledger, and `address_derivation` and `custody_balance` freeze a chain, exactly as a full
     /// round does.
     pub async fn check(&self, check: CheckName) -> Result<Vec<Finding>, ReconciliationError> {
-        crate::rpc_runtime::ensure_anchors(&self.pool, &self.routes)
+        crate::rpc_runtime::ensure_checkpoints(&self.pool, &self.routes)
             .await
             .map_err(ReconciliationError::Chain)?;
         let mut findings = Vec::new();
@@ -236,7 +247,8 @@ impl Reconciler {
     }
 
     async fn run_checks(&self, post_restore: bool) -> ReconciliationReport {
-        self.run_checks_at(post_restore, RoundHeads::new()).await
+        self.run_checks_at(post_restore, RoundHeads::new(), true)
+            .await
     }
 
     /// Runs a round with finalized heads already known for some chains; the others are read.
@@ -244,9 +256,13 @@ impl Reconciler {
         &self,
         post_restore: bool,
         mut heads: RoundHeads,
+        custody_due: bool,
     ) -> ReconciliationReport {
         let mut report = ReconciliationReport::default();
         for check in REGULAR_CHECKS {
+            if check == CheckName::CustodyBalance && !custody_due {
+                continue;
+            }
             let mut findings = Vec::new();
             let mut result = async {
                 if post_restore {
@@ -300,7 +316,6 @@ impl Reconciler {
     ) -> Result<(), ReconciliationError> {
         match check {
             CheckName::AddressDerivation => self.address_derivation(findings).await,
-            CheckName::MissingDeposit => self.missing_deposits(heads, findings).await,
             CheckName::CreditRecomputation => self.credit_recomputation(findings).await,
             CheckName::MissingFlushLink => self.missing_flush_links(findings).await,
             CheckName::CustodyBalance => self.custody_balances(heads, findings).await,
@@ -317,7 +332,6 @@ impl Reconciler {
                 .iter()
                 .map(|r| format!("custody:{:#x}", r.asset.contract))
                 .collect(),
-            CheckName::MissingDeposit => Vec::new(),
         }
     }
     async fn reset_check_cursor(&self, check: CheckName) -> Result<(), ReconciliationError> {
@@ -334,25 +348,6 @@ impl Reconciler {
         Ok(())
     }
     async fn check_pending(&self, check: CheckName) -> Result<bool, ReconciliationError> {
-        if check == CheckName::MissingDeposit {
-            return Ok(sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 \
-                 FROM scan_address_sweeps s \
-                 WHERE lane='missing' \
-                 AND chain_id=ANY($1) \
-                 AND epoch=COALESCE((SELECT epoch \
-                 FROM rpc_chain_state \
-                 WHERE chain_id=s.chain_id),0) \
-                 AND anchor=COALESCE((SELECT next_block \
-                 FROM reconciliation_deposit_cursors \
-                 WHERE chain_id=s.chain_id),(SELECT min(created_block) \
-                 FROM addresses \
-                 WHERE chain_id=s.chain_id)))",
-            )
-            .bind(self.chain_keys()?)
-            .fetch_one(&self.pool)
-            .await?);
-        }
         let mut chains = self.chain_keys()?;
         chains.push(0);
         Ok(sqlx::query_scalar(
@@ -384,9 +379,9 @@ impl Reconciler {
         Ok(false)
     }
 
-    /// Runs a round every `every` in which provider A's `finalized`, as `heads` publishes it,
-    /// advanced on some chain since the last complete round, until cancellation. A round without
-    /// an advance would read the same finalized state, so it is skipped and reported healthy.
+    /// Runs a round every `every` in which the agreed checkpoint, as `heads` publishes it,
+    /// advanced on some chain since the last complete round, until cancellation. Without an
+    /// advance or pending work, rounds are skipped unless the hourly custody check is due.
     pub async fn run_loop(
         &self,
         every: Duration,
@@ -397,17 +392,24 @@ impl Reconciler {
         let mut ticks = interval(every);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut reconciled: Option<RoundHeads> = None;
+        let custody_interval = Duration::from_secs(3_600);
+        let started = Instant::now();
+        let mut last_custody_run: Option<Instant> = None;
         loop {
+            let next_custody = last_custody_run.unwrap_or(started) + custody_interval;
             tokio::select! {
                 () = cancellation.cancelled() => return,
-                _ = ticks.tick() => {}
+                _ = ticks.tick() => {},
+                () = sleep_until(next_custody) => {},
             }
+            let custody_due =
+                last_custody_run.is_none_or(|last| last.elapsed() >= custody_interval);
             let published = self
                 .chains
                 .keys()
                 .filter_map(|chain_id| Some((*chain_id, heads.get(*chain_id)?.number)))
                 .collect::<RoundHeads>();
-            if !published.is_empty() && reconciled.as_ref() == Some(&published) {
+            if !custody_due && !published.is_empty() && reconciled.as_ref() == Some(&published) {
                 match self.work_pending().await {
                     Ok(false) => {
                         monitor.check_in(true);
@@ -419,9 +421,12 @@ impl Reconciler {
                     }
                 }
             }
+            if custody_due {
+                last_custody_run = Some(Instant::now());
+            }
             tokio::select! {
                 () = cancellation.cancelled() => return,
-                report = self.run_checks_at(false, published.clone()) => {
+                report = self.run_checks_at(false, published.clone(), custody_due) => {
                     monitor.check_in(report.succeeded());
                     if report.succeeded() {
                         reconciled = Some(published);
@@ -548,173 +553,7 @@ impl Reconciler {
         Ok(())
     }
 
-    /// Repairs finalized transfers missing from the deposit ledger through the scanner path.
-    async fn missing_deposits(
-        &self,
-        heads: &mut RoundHeads,
-        findings: &mut Vec<Finding>,
-    ) -> Result<(), ReconciliationError> {
-        let mut failure = None;
-        for (chain_id, routes) in &self.scanner_routes {
-            if let Err(error) = self
-                .missing_deposits_for_chain(*chain_id, routes, heads, findings)
-                .await
-            {
-                tracing::error!(chain_id, %error, "missing-deposit check failed for chain");
-                failure.get_or_insert(error);
-            }
-        }
-        failure.map_or(Ok(()), Err)
-    }
-
-    /// Scans incrementally from a durable cursor, at most [`MAX_WINDOWS_PER_ROUND`] windows.
-    ///
-    /// Each window reads every issued address's transfers of any contract, one request per
-    /// [`MAX_ADDRESSES_PER_REQUEST`] addresses, whatever the chain's backstop mode: in token mode
-    /// this is the only read that finds transfers of unrouted tokens, which it records as
-    /// `rejected(unsupported_asset)`. A durable keyset sweep reads at most 1,000 addresses per round and pins its
-    /// block range until every page commits. Old and retired addresses remain in the sweep.
-    ///
-    /// The scan never passes the range the scanner has committed, so a transfer the scanner has
-    /// not reached yet is not reported as missing, and a frozen chain's scan stops with its
-    /// scanner. The address list is read after the finalized head and the scanner cursor, so an
-    /// address issued later can only receive transfers above the scanned range.
-    async fn missing_deposits_for_chain(
-        &self,
-        chain_id: u64,
-        routes: &ChainRoutes,
-        heads: &mut RoundHeads,
-        findings: &mut Vec<Finding>,
-    ) -> Result<(), ReconciliationError> {
-        let chain = Arc::clone(self.chain(chain_id)?);
-        let finalized = self.finalized(heads, chain_id).await?;
-        let Some(scanned) = db::get_cursor(&self.pool, chain_id).await? else {
-            tracing::warn!(
-                chain_id,
-                reason = "no_cursor",
-                "missing-deposit check skipped: the scanner has not committed a range"
-            );
-            return Ok(());
-        };
-        let first: Option<i64> =
-            sqlx::query_scalar("SELECT min(created_block) FROM addresses WHERE chain_id=$1")
-                .bind(
-                    i64::try_from(chain_id)
-                        .map_err(|_| ReconciliationError::Invariant("chain overflow"))?,
-                )
-                .fetch_one(&self.pool)
-                .await?;
-        let pending: Option<i64> = sqlx::query_scalar(
-            "SELECT min(created_block) FROM addresses WHERE chain_id=$1 AND NOT backfilled",
-        )
-        .bind(
-            i64::try_from(chain_id)
-                .map_err(|_| ReconciliationError::Invariant("chain overflow"))?,
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        let Some(through) = pending
-            .map(|p| u64::try_from(p).ok().and_then(|p| p.checked_sub(1)))
-            .unwrap_or(Some(finalized.min(scanned)))
-            .map(|p| p.min(finalized.min(scanned)))
-        else {
-            return Ok(());
-        };
-        let mut cursor = store::deposit_cursor(&self.pool, chain_id).await?;
-        let Some(start) = cursor.or(first.and_then(|p| u64::try_from(p).ok())) else {
-            return Ok(());
-        };
-        if start > through {
-            return Ok(());
-        }
-        let sweep = db::address_sweep(&self.pool, chain_id, "missing", start).await?;
-        let epoch = db::sweep_epoch(&self.pool, chain_id).await?;
-        let through = match &sweep {
-            Some(sweep) => u64::try_from(sweep.through_block)
-                .map_err(|_| ReconciliationError::Invariant("invalid sweep height"))?,
-            None => through
-                .min(start.saturating_add(MAX_SCAN_WINDOW * MAX_WINDOWS_PER_ROUND as u64 - 1)),
-        };
-        let (addresses, more) =
-            db::scan_address_page(&self.pool, chain_id, sweep.as_ref().map(|s| s.last_id)).await?;
-        let physical = addresses
-            .iter()
-            .map(|address| address.address)
-            .collect::<Vec<_>>();
-        for (from_block, to_block) in bounded_windows(start, through)? {
-            let request = topup_adapters::chain::evm::window::WindowRequest {
-                from: from_block,
-                to: to_block,
-                recipients: physical.clone(),
-                tokens: Vec::new(),
-                factory: None,
-                finalized: true,
-                exclude_member: None,
-            };
-            let window = chain.read_window(&request).await?;
-            let deposits = resolve_logs_for_reconciliation(window.transfers, &addresses, routes)?;
-            let next_block = next_block(to_block)?;
-            let (committed, _) = db::rpc::commit_window(
-                &self.pool,
-                chain_id,
-                &deposits,
-                &[],
-                window.proof.as_ref(),
-                db::rpc::WindowProgress {
-                    reconciliation: (!more).then_some((cursor, next_block)),
-                    ..Default::default()
-                },
-            )
-            .await?;
-            report_unsupported_inflows(chain_id, committed.unsupported_inserted);
-            for deposit in deposits {
-                if !committed
-                    .inserted_positions
-                    .contains(&(deposit.tx_hash, deposit.receipt_log_index))
-                {
-                    continue;
-                }
-                findings.push(Finding::new(
-                    CheckName::MissingDeposit,
-                    subjects([
-                        ("chain_id", chain_id.to_string()),
-                        ("tx_hash", format!("{:#x}", deposit.tx_hash)),
-                        ("log_index", deposit.log_index.to_string()),
-                    ]),
-                    json!({"deposit_state": "detected"}),
-                    json!({"deposit_row": null}),
-                    true,
-                    false,
-                )?);
-            }
-            if !more {
-                cursor = Some(next_block);
-            }
-        }
-        let progress = if more {
-            Some(db::AddressSweep {
-                epoch,
-                anchor: i64::try_from(start)
-                    .map_err(|_| ReconciliationError::Invariant("cursor overflow"))?,
-                from_block: i64::try_from(start)
-                    .map_err(|_| ReconciliationError::Invariant("cursor overflow"))?,
-                through_block: i64::try_from(through)
-                    .map_err(|_| ReconciliationError::Invariant("cursor overflow"))?,
-                block_time: None,
-                horizon: None,
-                last_id: addresses
-                    .last()
-                    .ok_or(ReconciliationError::Invariant("empty page"))?
-                    .id,
-            })
-        } else {
-            None
-        };
-        db::save_address_sweep(&self.pool, chain_id, "missing", progress.as_ref()).await?;
-        Ok(())
-    }
-
-    /// Recomputes one durable page of stored credit; completed passes wrap to recheck old rows.
+    /// Recomputes credits from their recorded valuation evidence.
     async fn credit_recomputation(
         &self,
         findings: &mut Vec<Finding>,
@@ -940,24 +779,47 @@ impl Reconciler {
     async fn custody_for_route(
         &self,
         route: &RouteFile,
-        heads: &mut RoundHeads,
+        _heads: &mut RoundHeads,
         findings: &mut Vec<Finding>,
     ) -> Result<(), ReconciliationError> {
         let chain_id = route.chain.chain_id;
         let token = route.asset.contract;
         let chain = Arc::clone(self.chain(chain_id)?);
-        let finalized = self.finalized(heads, chain_id).await?;
-        let Some(scanned) = db::get_cursor(&self.pool, chain_id).await? else {
+        let Some(checkpoint) = db::chain_reads::checkpoint(&self.pool, chain_id).await? else {
             return Ok(());
         };
-        let block = finalized.min(scanned);
+        let Some(coverage) = db::chain_reads::coverage(&self.pool, chain_id).await? else {
+            return Ok(());
+        };
+        let block = checkpoint.number.min(coverage.number);
+        let hash = if block == coverage.number {
+            coverage.hash
+        } else {
+            checkpoint.hash
+        };
         let check = format!("custody:{token:#x}");
         let chain_key = i64::try_from(chain_id)
             .map_err(|_| ReconciliationError::Invariant("chain overflow"))?;
         let cursor = store::work_cursor(&self.pool, &check, chain_key).await?;
         let (page, more) = db::scan_address_page(&self.pool, chain_id, cursor).await?;
         let last = page.last().map(|a| a.id);
-        let ids = page.iter().map(|a| a.id).collect::<Vec<_>>();
+        let mut ids = Vec::new();
+        for address in &page {
+            let caught: bool = sqlx::query_scalar::<_, Option<bool>>(
+                "SELECT dual_covered_through=$2 FROM addresses WHERE id=$1",
+            )
+            .bind(address.id)
+            .bind(
+                i64::try_from(coverage.number)
+                    .map_err(|_| ReconciliationError::Invariant("coverage overflow"))?,
+            )
+            .fetch_one(&self.pool)
+            .await?
+            .unwrap_or(false);
+            if caught {
+                ids.push(address.id);
+            }
+        }
         let ledgers = store::forwarder_ledgers(&self.pool, chain_id, token, block, &ids).await?;
         if ledgers.is_empty() {
             store::save_work_cursor(
@@ -973,10 +835,22 @@ impl Reconciler {
             .iter()
             .map(|ledger| ledger.address)
             .collect::<Vec<_>>();
-        let balances = chain.token_balances(token, &physical, block).await?;
+        let verifier = self
+            .verifiers
+            .get(&chain_id)
+            .ok_or(ReconciliationError::Invariant("custody verifier missing"))?;
+        let (balances, verified) = tokio::try_join!(
+            chain.token_balances_pinned(token, &physical, hash),
+            verifier.token_balances_pinned(token, &physical, hash)
+        )?;
         if balances.len() != ledgers.len() {
             return Err(ReconciliationError::Invariant(
                 "balance response length did not match address count",
+            ));
+        }
+        if verified != balances {
+            return Err(ReconciliationError::Chain(
+                "dual custody evidence disagreed".into(),
             ));
         }
         for (ledger, observed) in ledgers.iter().zip(balances) {
@@ -1015,19 +889,6 @@ impl Reconciler {
         )
         .await?;
         Ok(())
-    }
-
-    async fn finalized(
-        &self,
-        heads: &mut RoundHeads,
-        chain_id: u64,
-    ) -> Result<u64, ReconciliationError> {
-        if let Some(head) = heads.get(&chain_id) {
-            return Ok(*head);
-        }
-        let head = self.chain(chain_id)?.finalized_head().await?;
-        heads.insert(chain_id, head);
-        Ok(head)
     }
 
     fn chain(&self, chain_id: u64) -> Result<&Arc<dyn ReconciliationChain>, ReconciliationError> {
@@ -1092,29 +953,6 @@ fn log_finding(finding: &Finding, inserted: bool) {
             "reconciliation mismatch"
         );
     }
-}
-
-/// Splits `[from, to]` into scan windows, capped at [`MAX_WINDOWS_PER_ROUND`].
-fn bounded_windows(from: u64, to: u64) -> Result<Vec<(u64, u64)>, ReconciliationError> {
-    let mut windows = Vec::new();
-    let mut start = from;
-    while start <= to && windows.len() < MAX_WINDOWS_PER_ROUND {
-        let end = start
-            .saturating_add(MAX_SCAN_WINDOW.saturating_sub(1))
-            .min(to);
-        windows.push((start, end));
-        if end == to {
-            break;
-        }
-        start = next_block(end)?;
-    }
-    Ok(windows)
-}
-
-fn next_block(block: u64) -> Result<u64, ReconciliationError> {
-    block.checked_add(1).ok_or(ReconciliationError::Invariant(
-        "reconciliation block range overflowed",
-    ))
 }
 
 fn subjects<const N: usize>(pairs: [(&str, String); N]) -> BTreeMap<String, String> {

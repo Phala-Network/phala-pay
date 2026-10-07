@@ -30,7 +30,7 @@ env_file() {
     "$("$root/deploy/pinned-compose.sh")" -f "$2" config --variables |
         awk 'NR > 1 && NF > 0 { print $1 }' | sort | while read -r name; do
         case "$name" in
-            *AWS_ACCESS_KEY_ID | *AWS_SECRET_ACCESS_KEY) echo "$name=staging-value" ;;
+            *AWS_ACCESS_KEY_ID | *AWS_SECRET_ACCESS_KEY | TOPUP_RPC_ANKR_KEY | TOPUP_RPC_INFURA_KEY) echo "$name=staging-value" ;;
             *) echo "$name=" ;;
         esac
     done >"$file"
@@ -111,7 +111,7 @@ expect_failure service-as-restore-check "restore-check runs exactly" \
 # The example environment's placeholders are refused.
 example="$root/deploy/environments/example/topup"
 render example "$example"
-env_file example-values "$tmp/example.yml" TOPUP_RPC_ALCHEMY_SEPOLIA_KEY=sealed-key-0123456789
+env_file example-values "$tmp/example.yml" TOPUP_RPC_ANKR_KEY=sealed-key-0123456789
 expect_failure example "still holds values of deploy/environments/example" \
     --env "$tmp/example-values.env" --compose "$tmp/example.yml" --environment-dir "$example"
 
@@ -125,42 +125,25 @@ edited_environment() {
     fi
     render "$1" "$tmp/$1"
 }
-# A keyed provider is attested with {key}, and its sealed key must fit it: checked with --secrets,
-# skipped with --unsealed, and never printed.
-edited_environment keyed 's|url: https://sepolia.gateway.tenderly.co|url: https://sepolia.gateway.tenderly.co/{key}\n      sealed_key: TOPUP_RPC_PROVIDER_A_KEY|' \
-    TOPUP_RPC_PROVIDER_A_KEY
-env_file keyed "$tmp/keyed.yml" TOPUP_RPC_PROVIDER_A_KEY=sealed-key-0123456789
-passes --env "$tmp/keyed.env" --compose "$tmp/keyed.yml" --environment-dir "$tmp/keyed"
-env_file keyless "$tmp/keyed.yml"
-expect_failure missing-key "TOPUP_RPC_PROVIDER_A_KEY is required by the {key} placeholder" \
-    --env "$tmp/keyless.env" --compose "$tmp/keyed.yml" --environment-dir "$tmp/keyed"
-passes --env "$tmp/keyless.env" --compose "$tmp/keyed.yml" --environment-dir "$tmp/keyed" --unsealed
-edited_environment stray '' TOPUP_RPC_PROVIDER_A_KEY
-env_file stray-key "$tmp/stray.yml" TOPUP_RPC_PROVIDER_A_KEY=sealed-key-0123456789
-expect_failure stray-key "TOPUP_RPC_PROVIDER_A_KEY is set, but the URL has no {key} placeholder" \
-    --env "$tmp/stray-key.env" --compose "$tmp/stray.yml" --environment-dir "$tmp/stray"
-env_file bad-key "$tmp/keyed.yml" TOPUP_RPC_PROVIDER_A_KEY=sealed/key
-expect_failure bad-key "TOPUP_RPC_PROVIDER_A_KEY must be at least 8 characters" \
-    --env "$tmp/bad-key.env" --compose "$tmp/keyed.yml" --environment-dir "$tmp/keyed"
-# A URL that carries its key would publish it; a placeholder in the host is refused by topup.
-edited_environment embedded 's|url: https://sepolia.gateway.tenderly.co|url: https://sepolia.gateway.tenderly.co/aB3dEfGhIjKlMnOpQrStUvWxYz012345|'
-expect_failure embedded "RPC provider provider-a's URL seems to embed an API key" \
-    --env "$tmp/complete.env" --compose "$tmp/embedded.yml" --environment-dir "$tmp/embedded"
-edited_environment host-key 's|url: https://sepolia.gateway.tenderly.co|url: https://{key}.example.net/rpc|'
+# Both declared keys must arrive through the candidate env and compose mapping.
+for key in TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY; do
+    grep -v "^$key=" "$tmp/complete.env" >"$tmp/missing-$key.env"
+    expect_failure "missing-$key" "$key" \
+        --env "$tmp/missing-$key.env" --compose "$tmp/service.yml" --environment-dir "$staging"
+done
+passes --env "$tmp/unsealed.env" --compose "$tmp/service.yml" --environment-dir "$staging" --unsealed
+edited_environment host-key 's|https://rpc.ankr.com/eth_sepolia/{key}|https://{key}.example.net/rpc|'
 expect_failure host-key "may have {key} only as a whole path segment or a whole query value" \
     --env "$tmp/complete.env" --compose "$tmp/host-key.yml" --environment-dir "$tmp/host-key"
-if grep -rqE 'aB3dEfGhIjKlMnOpQrStUvWxYz012345|sealed-key-0123456789|sealed/key' "$tmp"/*.out "$tmp"/*.err; then
-    echo "preflight printed an RPC key" >&2
-    exit 1
-fi
-
-# Configurations topup refuses: a zero-address route, and a provider on two chains.
+edited_environment same-host 's|https://sepolia.infura.io/v3/{key}|https://rpc.ankr.com/verify/{key}|'
+expect_failure same-host "read and verify endpoints must have different hosts" \
+    --env "$tmp/complete.env" --compose "$tmp/same-host.yml" --environment-dir "$tmp/same-host"
 edited_environment zero-route 's|forwarder_factory: "0x[0-9a-fA-F]*"|forwarder_factory: "0x0000000000000000000000000000000000000000"|'
 expect_failure zero-route "must not be the zero address" \
     --env "$tmp/complete.env" --compose "$tmp/zero-route.yml" --environment-dir "$tmp/zero-route"
-edited_environment two-chains 's|rpc_groups: { a: base-sepolia-a, b: base-sepolia-b }|rpc_groups: { a: provider-a, b: base-sepolia-b }|'
-expect_failure two-chains "RPC group chain mismatch" \
-    --env "$tmp/complete.env" --compose "$tmp/two-chains.yml" --environment-dir "$tmp/two-chains"
+if grep -rqF 'sealed-key-0123456789' "$tmp"/*.out "$tmp"/*.err; then
+    echo "preflight printed an RPC key" >&2; exit 1
+fi
 
 # Only the approved production image passes.
 for image in dstack-0.6.0-rc5 dstack-dev-0.5.9 dstack-nvidia-0.5.9 dstack-0.5.8; do
@@ -190,14 +173,14 @@ source "$root/deploy/contracts/common.sh"
 source "$root/deploy/preflight-phala.sh"
 source "$root/deploy/preflight-rpc.sh"
 (
-    topup() { printf '%s\n' '{"level":"ERROR","message":"RPC group base-sepolia-a has no verified member [tenderly: finalized head: RPC transport failure]"}' >&2; return 1; }
+    topup() { printf '%s\n' '{"level":"ERROR","message":"endpoint infura-sepolia finalized head: RPC transport failure"}' >&2; return 1; }
     ok() { :; }
     fail() { printf 'FAIL: %s\n' "$*" >&2; }
     redact() { printf '%s' "$1"; }
-    check_rpc_groups "$tmp"
+    check_rpc_endpoints "$tmp"
 ) >"$tmp/rpc.out" 2>"$tmp/rpc.err"
-grep -Fq 'FAIL: RPC group preflight failed:' "$tmp/rpc.err"
-grep -Fq 'tenderly: finalized head: RPC transport failure' "$tmp/rpc.err"
+grep -Fq 'FAIL: RPC endpoint preflight failed:' "$tmp/rpc.err"
+grep -Fq 'infura-sepolia finalized head: RPC transport failure' "$tmp/rpc.err"
 jq -e '. == []' "$tmp/healthy.json" >/dev/null
 [[ ! -s "$tmp/rpc.out" ]]
 echo "preflight local checks and RPC diagnostics tests passed"

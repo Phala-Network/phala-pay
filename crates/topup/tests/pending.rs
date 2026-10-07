@@ -20,7 +20,7 @@ use topup::db::NewPendingTransfer;
 use topup::locks::QuoteProvider;
 use topup::locks::pricing::ValidatedQuote;
 use topup::routes::RouteSet;
-use topup::scanner::{chain_routes, head_scan_once, scan_once};
+use topup::scanner::{chain_routes, coverage_once, fast_once};
 use topup_adapters::attestation::DstackAttestor;
 use topup_adapters::chain::evm::{EvmClient, FinalizedReader};
 use topup_core::money::{AtomicAmount, PRICE_SCALE, ScaledPrice};
@@ -105,7 +105,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         quotes: std::sync::Mutex::default(),
     };
     let reader = FinalizedReader::new(Arc::new(EvmClient::new(&anvil.rpc_url)?));
-    scan_once(pool, &reader, &chain_routes).await?;
+    coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
 
     let lock_address = api.lock("checkout-1").await?;
     ensure!(
@@ -122,11 +122,9 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     transfer(&anvil.rpc_url, token, other_quote, 7)?;
     transfer(&anvil.rpc_url, token, other_quote, 0)?;
 
-    let scan = head_scan_once(pool, &reader, &chain_routes)
-        .await?
-        .context("chain is not frozen")?;
+    fast_once(pool, &reader, &chain_routes).await?;
     // Only non-zero transfers of the routed token are requested and stored.
-    ensure!(scan.commit.seen == 2, "unexpected head scan {scan:?}");
+    ensure!(pending_rows(pool).await? == 2);
     ensure!(
         outbox_rows(pool).await? == 0,
         "the head scan wrote an event"
@@ -173,19 +171,15 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         "{other}"
     );
 
-    let again = head_scan_once(pool, &reader, &chain_routes)
-        .await?
-        .context("chain is not frozen")?;
-    ensure!(again.commit.seen == 2);
+    let _again = fast_once(pool, &reader, &chain_routes).await?;
+    ensure!(pending_rows(pool).await? == 2);
 
     // A reorg that drops the transfers removes them from the pending view.
     revert(anvil, &snapshot)?;
     anvil.mine(8)?;
-    let reorged = head_scan_once(pool, &reader, &chain_routes)
-        .await?
-        .context("chain is not frozen")?;
+    let reorged = fast_once(pool, &reader, &chain_routes).await?;
     ensure!(
-        reorged.commit.removed == 2,
+        pending_rows(pool).await? == 0,
         "unexpected reorg scan {reorged:?}"
     );
     ensure!(pending_rows(pool).await? == 0);
@@ -197,14 +191,14 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     // Once final, the finalized scanner records the deposit and clears its pending row in the same
     // transaction, and the lock shows the finalized payment.
     transfer(&anvil.rpc_url, token, lock_address, 100)?;
-    head_scan_once(pool, &reader, &chain_routes).await?;
+    fast_once(pool, &reader, &chain_routes).await?;
     ensure!(pending_rows(pool).await? == 1);
     ensure!(
         outbox_rows(pool).await? == 0,
         "the head scan wrote an event"
     );
     anvil.mine(FINALITY_LAG)?;
-    let finalized = scan_once(pool, &reader, &chain_routes).await?;
+    let finalized = coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
     ensure!(
         finalized.inserted == 1,
         "unexpected finalized scan {finalized:?}"
@@ -228,13 +222,13 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let underpaid = api.lock("checkout-2").await?;
     transfer(&anvil.rpc_url, token, underpaid, 50)?;
     anvil.mine(FINALITY_LAG)?;
-    scan_once(pool, &reader, &chain_routes).await?;
+    coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
     transfer(&anvil.rpc_url, token, underpaid, 100)?;
     // Dust first, then the exact amount, both still pending.
     let dusted = api.lock("checkout-3").await?;
     transfer(&anvil.rpc_url, token, dusted, 1)?;
     transfer(&anvil.rpc_url, token, dusted, 100)?;
-    head_scan_once(pool, &reader, &chain_routes).await?;
+    fast_once(pool, &reader, &chain_routes).await?;
     for lock_ref in ["checkout-2", "checkout-3"] {
         let payment = api.payment(lock_ref).await?;
         ensure!(
@@ -250,7 +244,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     // with the exact payment) used only to show the consuming deposit wins over the first
     // qualifying one.
     anvil.mine(FINALITY_LAG)?;
-    scan_once(pool, &reader, &chain_routes).await?;
+    coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
     let underpayment: Uuid =
         sqlx::query_scalar("SELECT id FROM deposits WHERE address_id = $1 AND amount_atomic = 50")
             .bind(api.address_id(pool, "checkout-2").await?)
@@ -307,9 +301,11 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         Value::Null,
     )
     .await?;
+    rpc(anvil, "evm_increaseTime", &["2"])?;
     transfer(&anvil.rpc_url, token, cancelled, 100)?;
     anvil.mine(FINALITY_LAG)?;
-    scan_once(pool, &reader, &chain_routes).await?;
+    coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
+    topup::locks::expire_once(pool, &route_set).await?;
     let lock = api.quote("checkout-4").await?;
     ensure!(lock["status"] == "canceled", "unexpected {lock}");
     ensure!(

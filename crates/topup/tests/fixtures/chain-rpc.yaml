@@ -1,0 +1,12 @@
+rpc:
+  - chain_id: 1
+    read:
+      id: ankr-ethereum
+      url: "https://rpc.ankr.com/eth/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-ethereum
+      url: "https://mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000

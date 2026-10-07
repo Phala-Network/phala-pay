@@ -2,6 +2,7 @@
 
 pub mod chain;
 pub mod seed;
+pub mod tls;
 
 use std::env;
 use std::future::{Future, poll_fn};
@@ -70,6 +71,11 @@ pub async fn ensure_app_role(admin_pool: &PgPool) -> Result<()> {
 
 impl TestDatabase {
     pub async fn create() -> Result<Option<Self>> {
+        Self::create_with_migrations(true).await
+    }
+
+    /// The published-image drill starts with N-1's own migration entrypoint.
+    pub async fn create_with_migrations(migrate: bool) -> Result<Option<Self>> {
         let Some(owner_template) = required_url("OWNER_DATABASE_URL")? else {
             return Ok(None);
         };
@@ -102,7 +108,9 @@ impl TestDatabase {
         let mut owner_url = Url::parse(&owner_template)?;
         owner_url.set_path(&format!("/{database_name}"));
         let owner_pool = topup::db::connect(owner_url.as_str(), "migrate", 4).await?;
-        topup::db::migrate(&owner_pool).await?;
+        if migrate {
+            topup::db::migrate(&owner_pool).await?;
+        }
 
         admin_pool
             .execute(AssertSqlSafe(format!(

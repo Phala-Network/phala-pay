@@ -584,7 +584,7 @@ async fn the_public_view_states_each_networks_credit_time() -> Result<()> {
             let mut base = fixture.other_route.clone();
             base.route = "phala-cloud-base-pha-usd".to_owned();
             base.chain.chain_id = BASE;
-            base.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {feed:"BASE_SEQUENCER_UPTIME".into(),grace_s:3600,rpc_group:"a".into(),rpc_group_b:"b".into()});
+            base.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {feed:"BASE_SEQUENCER_UPTIME".into(),grace_s:3600});
             base.chain.confirmations = ChainFamily::OpStack.default_confirmations();
             let fixture = fixture.with_routes(vec![ethereum, base, fixture.test_route.clone()])?;
             let (object, secret) = fixture
@@ -961,6 +961,9 @@ struct Fixture {
 
 impl Fixture {
     async fn new(pool: &sqlx::PgPool) -> Result<Self> {
+        for chain in [1, OTHER_CHAIN, TEST_CHAIN, 8453] {
+            seed::initialize_dual_chain(pool, chain).await?;
+        }
         let account = seed::create_account(pool, &NewAccount::named("merchant")).await?;
         let live_key = seed::create_api_key(pool, account.id, true).await?;
         let test_key = seed::create_api_key(pool, account.id, false).await?;
@@ -996,8 +999,6 @@ impl Fixture {
             topup_core::price::Source::Chainlink {
                 feed: "USDC_USD".into(),
                 chain_id: 1,
-                rpc_group: "a".into(),
-                rpc_group_b: None,
                 observation_chain_id: None,
             },
             topup_core::price::Source::Kraken {

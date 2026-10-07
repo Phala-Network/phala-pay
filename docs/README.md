@@ -47,9 +47,9 @@ For the operator who runs an instance, onboards merchants, and handles incidents
 | [How Phala Pay works](overview.md) | The model, the payment lifecycle, and who owns what. |
 | [Design: multi-tenant Phala Pay](design/multi-tenant.md) | The decision record behind the current design, with its amendments. |
 | [Design: per-account payment settings](design/payment-settings.md) | The decision record for payment settings (v0.6.0); current usage is in the integration guide. |
-| [Design: deployment configuration](design/deploy-config.md) | The configuration decision record (v0.3.0); its RPC schema is superseded by RPC groups. |
+| [Design: deployment configuration](design/deploy-config.md) | The configuration decision record (v0.3.0); its RPC schema is superseded by chain reads. |
 | [Design: zero-downtime planned upgrades](design/zero-downtime-upgrades.md) | Not adopted (owner: no second CVM, 2026-10-05); maintenance 503 and SDK upgrade tolerance implemented instead. |
-| [Design: RPC groups](design/rpc-failover.md) | The failover decision record (v0.7.0); current operations are in the [RPC runbook](../deploy/RPC.md). |
+| [Design: chain reads](design/chain-reads.md) | Read/verify endpoints, dual coverage, checkpoints and operator compatibility; current operations are in the [RPC runbook](../deploy/RPC.md). |
 | [Design: SDK ergonomics](design/sdk-ergonomics.md) | Phases 1–2 implemented in 0.9.0; phase 3 (setup CLI) pending: server client, pins, setup, checkout handoff, ledger recipes, and the owner’s compatibility decision. |
 | [Plan: Go SDK](design/go-sdk.md) | Proposed backend scope, security parity, generation and release decisions, and acceptance gates; not implemented. |
 | [Plan to production](plan.md) | What remains before Phala's own instance goes live. |
@@ -60,4 +60,4 @@ For the operator who runs an instance, onboards merchants, and handles incidents
 releases. Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 
 RPC queue performance evidence and concurrent migration behavior are recorded in
-[RPC queue query plans](design/db-api-query-plans.md).
+[Concurrent migration recovery](design/db-api-query-plans.md).

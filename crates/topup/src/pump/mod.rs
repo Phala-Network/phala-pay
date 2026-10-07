@@ -74,6 +74,7 @@ impl StepResult {
             evidence,
             events: Vec::new(),
             effects: db::TransitionEffects {
+                dual_verified: false,
                 canonical_evidence: None,
                 valuation: None,
                 lock_consumption: None,
@@ -305,6 +306,13 @@ impl Pump {
                     reason: WaitReason::Paused,
                 },
                 json!({"outcome": "wait", "reason": "chain_frozen"}),
+            )
+        } else if !self.routes.chain_ready(deposit.chain_id) {
+            StepResult::new(
+                StepOutcome::Wait {
+                    reason: WaitReason::Paused,
+                },
+                json!({"outcome":"wait","reason":"chain_not_ready"}),
             )
         } else {
             self.run_step(&deposit).await

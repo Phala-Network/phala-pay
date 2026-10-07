@@ -23,6 +23,8 @@ export interface ClientQuote {
   payment_uri: string;
   /** Unix seconds; after this the address must no longer be shown. */
   expires_at: number;
+  /** Unix seconds of a cancellation request; the quote stays open until dual coverage closes it. */
+  cancel_requested_at?: number | null;
   /**
    * `seen` once in a block (a reorg can remove it), `confirming` while a payment at the route's
    * confirmation is valued and screened, `credited` once it is credited (typically
@@ -66,6 +68,7 @@ export function parseClientQuote(value: unknown): ClientQuote {
   const v = value as Record<string, unknown>;
   const confirmations = v["confirmations"];
   const amountCredited = v["amount_credited"];
+  const cancelRequestedAt = v["cancel_requested_at"];
   if (
     typeof v["id"] !== "string" ||
     v["object"] !== "quote" ||
@@ -82,6 +85,7 @@ export function parseClientQuote(value: unknown): ClientQuote {
     !/^0x[0-9a-fA-F]{40}$/.test(v["address"]) ||
     typeof v["payment_uri"] !== "string" ||
     !isSafeInteger(v["expires_at"]) ||
+    !(cancelRequestedAt === undefined || cancelRequestedAt === null || isSafeInteger(cancelRequestedAt)) ||
     !oneOf(v["payment_status"], PAYMENT_STATUSES) ||
     !(confirmations === null || isSafeInteger(confirmations)) ||
     !(amountCredited === null || isSafeInteger(amountCredited)) ||
@@ -103,6 +107,7 @@ export function parseClientQuote(value: unknown): ClientQuote {
     address: v["address"],
     payment_uri: v["payment_uri"],
     expires_at: v["expires_at"],
+    ...(cancelRequestedAt === undefined ? {} : { cancel_requested_at: cancelRequestedAt }),
     payment_status: v["payment_status"],
     confirmations,
     amount_credited: amountCredited,

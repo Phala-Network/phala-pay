@@ -692,6 +692,7 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
                     "currency": "usd", "asset": "pha", "decimals": route.asset.decimals,
                     "chain_id": 1, "amount_atomic": "100", "address": created["address"],
                     "payment_uri": created["payment_uri"], "expires_at": created["expires_at"],
+                    "cancel_requested_at": null,
                     "payment_status": "none", "confirmations": null,
                     "amount_credited": null, "typical_credit_seconds": 900,
                 }),
@@ -939,7 +940,29 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
         };
         let canceled = app.clone().oneshot(cancel(&quote_id)).await?;
         ensure!(canceled.status() == StatusCode::OK);
-        ensure!(response_json(canceled).await?["status"] == "canceled");
+        let cancel_response = response_json(canceled).await?;
+        ensure!(
+            cancel_response["status"] == "open"
+                && cancel_response["cancel_requested_at"].is_number()
+        );
+        // Completion waits for this address's own complete dual coverage.
+        ensure!(
+            topup::locks::expire_once(
+                &database.app_pool,
+                &topup::routes::RouteSet::new(vec![route.clone()]).unwrap()
+            )
+            .await?
+                == 0
+        );
+        finalize_chain_past_now(&database.app_pool).await?;
+        ensure!(
+            topup::locks::expire_once(
+                &database.app_pool,
+                &topup::routes::RouteSet::new(vec![route.clone()]).unwrap()
+            )
+            .await?
+                == 1
+        );
         // Canceling again returns the canceled quote.
         let again = app.clone().oneshot(cancel(&quote_id)).await?;
         ensure!(again.status() == StatusCode::OK);
@@ -1396,6 +1419,8 @@ async fn caps_are_per_account_and_mode_and_expiry_releases_them() -> Result<()> 
             })
         ));
         cancel_lock(&database.app_pool, &first, customer_lock.id).await?;
+        finalize_chain_past_now(&database.app_pool).await?;
+        ensure!(locks::expire_once(&database.app_pool, &test_routes()).await? == 1);
 
         // The account's open credit is capped per mode, and a test quote never uses live
         // headroom: the test cap fills first, and the live cap then still admits its own.
@@ -1585,7 +1610,7 @@ async fn new_lock_addresses_start_scanning_at_the_chain_cursor() -> Result<()> {
         let route = test_route();
         let quotes: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
         let before_cursor = create_lock(&database, &quotes, &product, &account, &route).await?;
-        sqlx::query("INSERT INTO cursors (chain_id, scanned_block) VALUES (1, 1234)")
+        sqlx::query("UPDATE chain_coverage SET through_block=1234 WHERE chain_id=1")
             .execute(&database.app_pool)
             .await?;
         let after_cursor = create_lock(&database, &quotes, &product, &account, &route).await?;
@@ -1699,14 +1724,13 @@ async fn the_client_view_reports_the_credit_of_a_spot_valued_underpayment() -> R
         let (product, product_key) = seed_product(pool, "phala-cloud").await?;
         seed_account(pool, product.id, "underpaid").await?;
         const BASE: u64 = 8_453;
+        seed::initialize_dual_chain(pool, BASE).await?;
         seed::set_treasury(pool, product.id, true, BASE, seed::FIXTURE_TREASURY).await?;
         let mut route = test_route();
         route.chain.chain_id = BASE;
         route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
             feed: "BASE_SEQUENCER_UPTIME".into(),
             grace_s: 3600,
-            rpc_group: "a".into(),
-            rpc_group_b: "b".into(),
         });
         route.chain.confirmations = topup_core::route::ChainFamily::OpStack.default_confirmations();
         seed::accept_routes(pool, product.id, true, &[&route]).await?;
@@ -2142,9 +2166,14 @@ async fn exposure_is_exact_after_concurrent_create_consume_cancel_and_expire() -
         {
             let pool = database.app_pool.clone();
             tasks.spawn(async move {
-                let mut expired = 0;
-                while expired < ACCOUNTS as u64 {
-                    expired += locks::expire_once(&pool, &test_routes()).await?;
+                while sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM quotes WHERE status='expired'",
+                )
+                .fetch_one(&pool)
+                .await?
+                    < ACCOUNTS as i64
+                {
+                    locks::expire_once(&pool, &test_routes()).await?;
                 }
                 anyhow::Ok(())
             });
@@ -2157,6 +2186,16 @@ async fn exposure_is_exact_after_concurrent_create_consume_cancel_and_expire() -
         })
         .await
         .context("lifecycle operations never completed")??;
+
+        // Cancellation reserves exposure until the dual scan catches up after the request.
+        finalize_chain_past_now(&database.app_pool).await?;
+        locks::expire_once(&database.app_pool, &test_routes()).await?;
+        ensure!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM quotes WHERE status='cancelled'")
+                .fetch_one(&database.app_pool)
+                .await?
+                == ACCOUNTS as i64
+        );
 
         // Per account: "keep" plus three new locks remain reserved.
         let open = exposure(&database.app_pool, "global").await?;
@@ -2179,6 +2218,13 @@ async fn finalize_chain_past_now(pool: &sqlx::PgPool) -> Result<()> {
 }
 
 async fn set_finalized_time(pool: &sqlx::PgPool, time: chrono::DateTime<Utc>) -> Result<()> {
+    sqlx::query(
+        "UPDATE chain_coverage SET through_time=$1,through_block=through_block+1 WHERE chain_id=1",
+    )
+    .bind(time)
+    .execute(pool)
+    .await?;
+    sqlx::query("UPDATE addresses SET dual_covered_through=(SELECT through_block FROM chain_coverage WHERE chain_id=1) WHERE chain_id=1").execute(pool).await?;
     sqlx::query(
         r#"
         INSERT INTO cursors (chain_id, scanned_block, scanned_block_time)
@@ -2453,6 +2499,7 @@ fn test_route() -> RouteFile {
 
 /// A live account with a treasury on chain 1, and its live secret key.
 async fn seed_product(pool: &sqlx::PgPool, name: &str) -> Result<(Account, String)> {
+    seed::initialize_dual_chain(pool, 1).await?;
     let account = seed::create_account(
         pool,
         &NewAccount {
@@ -2669,4 +2716,132 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
         })
     })
     .await
+}
+
+#[tokio::test]
+async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let pool = &database.app_pool;
+            let (account, key) = seed_product(pool, "phala-cloud").await?;
+            seed_account(pool, account.id, "budget-checkout").await?;
+            let mut route = test_route();
+            route.pricing.mode = topup_core::route::PricingMode::Stablecoin;
+            route.asset.symbol = "usdc".into();
+            route.pricing.primary.clear();
+            route.pricing.check.clear();
+            route.pricing.fx.clear();
+            route.pricing.sources = vec![topup_core::price::Source::Chainlink {
+                feed: "USDC_USD".into(), chain_id: 1, observation_chain_id: None,
+            }];
+            route.validate()?;
+            seed::accept_routes(pool, account.id, true, &[&route]).await?;
+            sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES ((now() AT TIME ZONE 'UTC')::date,'price:1',60)")
+                .execute(pool).await?;
+            // An exhausted budget must fail before contacting either endpoint.
+            let requests=Arc::new(AtomicUsize::new(0));
+            let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let url=format!("http://{}",listener.local_addr()?);
+            let mock=axum::Router::new().route("/",axum::routing::post({let requests=requests.clone();move |axum::Json(body):axum::Json<Value>| {
+                let requests=requests.clone();async move {requests.fetch_add(1,Ordering::SeqCst);axum::Json(json!({"jsonrpc":"2.0","id":body["id"],"result":"0x1"}))}
+            }}));
+            let server=tokio::spawn(async move {axum::serve(listener,mock).await});
+            let endpoint = Arc::new(topup_adapters::chain::evm::EvmClient::new(&url)?.with_chain_id(1));
+            endpoint.latest_head().await?;
+            ensure!(endpoint.ready());
+            let routes = Arc::new(topup::routes::RouteSet::with_rpc(vec![route], std::collections::BTreeMap::from([
+                (1, topup::chain_rpc::ChainRpc { read: endpoint.clone(), verify: endpoint }),
+            ])).map_err(anyhow::Error::msg)?);
+            let runtimes = locks::pricing::PricingRuntime::build_all(&routes, pool.clone()).map_err(anyhow::Error::msg)?;
+            let admin = SigningKey::from_bytes(&[44;32]);
+            let app = topup::api::router(AppState {
+                pool:pool.clone(), routes,
+                admin_key:VerificationKey::from_base64(ADMIN_KID.into(), &public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
+                maintenance_keys:Vec::new(), public_origin:PublicOrigin::parse(TEST_ORIGIN)?,
+                attestor:Arc::new(DstackAttestor::new()), rate_lock_quotes:Arc::new(locks::ConfiguredQuoteProvider::from_runtimes(runtimes)),
+                client_reads:Arc::default(),rate_limits:Arc::default(),
+                screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+                contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
+            }).0;
+            let response = app.oneshot(merchant_request_with_key(Method::POST,"/v1/quotes",serde_json::to_vec(&json!({
+                "client_reference_id":"budget-checkout","amount":100,"currency":"usd","chain_id":1,"asset":"usdc",
+            }))?,&key,"snapshot-cap")).await?;
+            ensure!(response.status()==StatusCode::SERVICE_UNAVAILABLE);
+            ensure!(response_json(response).await?["error"]["code"]=="price_unavailable");
+            ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==0);
+            ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='price:1'").fetch_one(pool).await?==60);
+            ensure!(requests.load(Ordering::SeqCst)==1,"the exhausted budget must refuse before any price RPC");
+            server.abort();let _=server.await;
+            Ok(())
+        })
+    }).await
+}
+
+#[tokio::test]
+async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretryable_error()
+-> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool=&database.app_pool;
+        let (account,key)=seed_product(pool,"capacity merchant").await?;
+        let customer=seed_account(pool,account.id,"historical").await?;
+        for number in 1..=1000_u64 {
+            seed::insert_address(pool,&seed::NewAddress {id:Uuid::new_v4(),customer_id:customer.id,
+                chain_id:1,route:test_route().route,salt:B256::from(U256::from(number)),
+                address:Address::from_word(B256::from(U256::from(number)))}).await?;
+        }
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes WHERE status='cancelled'").fetch_one(pool).await?==1000);
+        let admin=SigningKey::from_bytes(&[44;32]);
+        let app=topup::api::router(AppState {
+            pool:pool.clone(),routes:Arc::new(test_routes()),maintenance_keys:Vec::new(),
+            admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
+            public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
+            rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
+            screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+            contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
+        }).0;
+        for (path,body) in [("/v1/quotes",json!({"client_reference_id":"capacity-quote","amount":100,"currency":"usd","chain_id":1,"asset":"pha"})),
+            ("/v1/deposit_addresses",json!({"client_reference_id":"capacity-address"}))] {
+            let response=app.clone().oneshot(merchant_request(Method::POST,path,serde_json::to_vec(&body)?,&key)).await?;
+            ensure!(response.status()==StatusCode::UNPROCESSABLE_ENTITY,"{path}: {}",response.status());
+            ensure!(!response.headers().contains_key("retry-after"));
+            let body=response_json(response).await?;
+            ensure!(body["error"]["code"]=="address_capacity_reached");
+            ensure!(body["error"]["type"]=="invalid_request_error");
+        }
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM addresses").fetch_one(pool).await?==1000);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==1000);
+        let metrics=topup::observability::metrics::render_chain_reads(pool).await?;
+        ensure!(metrics.contains("topup_issued_addresses{chain_id=\"1\"} 1000"));
+        ensure!(metrics.contains("topup_issued_address_cap{chain_id=\"1\"} 1000"));
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn routed_chain_not_ready_returns_chain_unavailable_for_both_issuance_paths() -> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool=&database.app_pool;
+        let (_,key)=seed_product(pool,"unready merchant").await?;
+        let endpoint=Arc::new(topup_adapters::chain::evm::EvmClient::new("http://127.0.0.1:1")?);
+        let routes=topup::routes::RouteSet::with_rpc(vec![test_route()],std::collections::BTreeMap::from([
+            (1,topup::chain_rpc::ChainRpc {read:endpoint.clone(),verify:endpoint})
+        ])).map_err(anyhow::Error::msg)?;
+        let admin=SigningKey::from_bytes(&[44;32]);
+        let app=topup::api::router(AppState {
+            pool:pool.clone(),routes:Arc::new(routes),maintenance_keys:Vec::new(),
+            admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
+            public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
+            rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
+            screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+            contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
+        }).0;
+        for (path,body) in [("/v1/quotes",json!({"client_reference_id":"unready-quote","amount":100,"currency":"usd","chain_id":1,"asset":"pha"})),
+            ("/v1/deposit_addresses",json!({"client_reference_id":"unready-address"}))] {
+            let response=app.clone().oneshot(merchant_request(Method::POST,path,serde_json::to_vec(&body)?,&key)).await?;
+            ensure!(response.status()==StatusCode::SERVICE_UNAVAILABLE);
+            ensure!(response.headers()["retry-after"]=="30");
+            ensure!(response_json(response).await?["error"]["code"]=="chain_unavailable");
+        }
+        Ok(())
+    })).await
 }

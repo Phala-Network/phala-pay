@@ -16,10 +16,11 @@ done
 
 project="topup-sandbox-$$"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/topup-sandbox.XXXXXX")
+printf '%s\n' '{"services":{}}' >"$tmp/rpc-tls.json"
 environment="$tmp/environment"
 compose=("$root/deploy/local/compose.sh" --environment-dir "$environment" -p "$project"
     -f "$root/deploy/sandbox/docker-compose.local.yml"
-    -f "$root/deploy/local/test-tls.compose.yml")
+    -f "$root/deploy/local/test-tls.compose.yml" -f "$tmp/rpc-tls.json")
 # The product side (example, reference product, and scenarios) runs in this image on the compose
 # network, so the service reaches its endpoints as http://product:8089 even where a host firewall
 # drops traffic from containers to the host.
@@ -43,8 +44,8 @@ trap cleanup EXIT INT TERM
 
 # Trust only this run's certificate; HTTPS checks stay enabled in the SDK and HTTPX.
 mkdir "$TOPUP_TEST_TLS_DIR"
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=topup-tls \
-    -addext subjectAltName=DNS:topup-tls -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=critical,CA:FALSE' -subj /CN=topup-tls \
+    -addext subjectAltName=DNS:topup-tls,DNS:*.rpc.test -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
     -out "$TOPUP_TEST_TLS_DIR/cert.pem" >/dev/null 2>&1
 python3 - "$TOPUP_TEST_TLS_DIR/cert.pem" "$TOPUP_TEST_TLS_DIR/ca.pem" <<'PYTHON'
 import ssl, sys
@@ -122,26 +123,21 @@ public_origin: https://topup.localhost
 admin_key:
   id: $admin_key_id
   public_key: $admin_public_key
-rpc_companies:
-  simulated-a: { domains: [anvil] }
-  simulated-b: { domains: [anvil-b] }
-rpc_budgets:
-  account-a: { requests_per_second: 100, burst: 100 }
-  key-a: { requests_per_second: 100, burst: 100 }
-  account-b: { requests_per_second: 100, burst: 100 }
-  key-b: { requests_per_second: 100, burst: 100 }
-rpc_groups:
-  provider-a:
-    chain_id: 11155111
-    members: [{ id: provider-a, company: simulated-a, url: 'http://anvil:8545', account_budget: account-a, key_budget: key-a }]
-  provider-b:
-    chain_id: 11155111
-    members: [{ id: provider-b, company: simulated-b, url: 'http://anvil-b:8545', account_budget: account-b, key_budget: key-b }]
+rpc:
+  - chain_id: 11155111
+    read: {id: ankr-sepolia, url: 'https://rpc-read.rpc.test/{key}', sealed_key: TOPUP_RPC_ANKR_KEY, max_log_blocks: 3000}
+    verify: {id: infura-sepolia, url: 'https://rpc-verify.rpc.test/{key}', sealed_key: TOPUP_RPC_INFURA_KEY, max_log_blocks: 3000}
 routes:
 YAML
     awk 'NR == 1 { print "  - " $0; next } { print ($0 == "" ? "" : "    " $0) }' \
         <(grep -v '^#' "$tmp/sandbox-route.yaml")
 } >"$environment/topup.yaml"
+# Resolve YAML before the relay writer rewrites the public test URLs.
+docker run --rm -i --network none "${TOPUP_LOCAL_SERVICE_IMAGE:-phala-pay:local}" topup config show /dev/stdin <"$environment/topup.yaml" >"$tmp/resolved.json"
+python3 "$root/deploy/local/rpc-tls.py" "$tmp/resolved.json" "$tmp/rpc-tls.json" \
+    --certificate "$TOPUP_TEST_TLS_DIR/cert.pem" --key "$TOPUP_TEST_TLS_DIR/key.pem" \
+    --image "$client_image" --chain 11155111=http://anvil:8545
+cp "$tmp/resolved.json" "$environment/topup.yaml"
 "${compose[@]}" run --rm --no-deps topup topup config check /etc/topup/topup.yaml
 
 echo "== starting the service"

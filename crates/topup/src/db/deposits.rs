@@ -166,6 +166,10 @@ pub struct CanonicalEvidence {
     pub from_address: Address,
     /// Canonical transfer amount.
     pub amount_atomic: AtomicAmount,
+    /// Independently derived transaction sender.
+    pub tx_from: Address,
+    /// Independently derived sender nonce (receipt depositNonce for OP deposits).
+    pub tx_nonce: u64,
     /// Route selected for the canonical token, when supported.
     pub route: Option<String>,
     /// Version selected for the canonical token, when supported.
@@ -199,6 +203,8 @@ pub struct LockConsumption {
 /// Additional writes atomically applied with one state transition.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TransitionEffects {
+    /// Every decision field was independently agreed on both endpoints.
+    pub dual_verified: bool,
     /// Optional correction to provisional scanner evidence.
     pub canonical_evidence: Option<CanonicalEvidence>,
     /// Optional valuation columns.
@@ -393,7 +399,7 @@ pub enum Evidence {
     /// Read at the route's confirmation, before finality (the per-block scan): only a position
     /// that never had a deposit. Such a read may be of a log a reorganization has since removed.
     Confirmed,
-    /// Read at or below `finalized` (the finalized backstop, the reconciler, restore rescans).
+    /// Read at or below `finalized` (dual coverage, finality successor evidence, restore rescans).
     Finalized,
     /// The transfer the finality watch found final at the position of `replaces`, which it
     /// reversed in the same transaction.
@@ -555,8 +561,8 @@ pub async fn get_deposit(pool: &PgPool, id: Uuid) -> Result<Option<Deposit>, sql
 
 /// Reads a bounded ID batch using the existing deposit decoder. Row decoding failures remain
 /// associated with their IDs so reconciliation can report one corrupt row and keep progressing.
-pub(crate) async fn deposits_by_ids(
-    pool: &PgPool,
+pub(crate) async fn deposits_by_ids<'e>(
+    executor: impl PgExecutor<'e>,
     ids: &[Uuid],
 ) -> Result<Vec<(Uuid, Result<Deposit, sqlx::Error>)>, sqlx::Error> {
     let records = sqlx::query_as::<_, DepositRecord>(
@@ -568,7 +574,7 @@ pub(crate) async fn deposits_by_ids(
          quote,created_at,updated_at FROM deposits WHERE id=ANY($1)",
     )
     .bind(ids)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     Ok(records
         .into_iter()
@@ -654,11 +660,19 @@ pub async fn apply_transition(
         .bind(deposit_id)
         .fetch_one(&mut **transaction)
         .await?;
-    super::rpc::guard_in(
-        transaction,
-        u64::try_from(chain).map_err(|e| sqlx::Error::Encode(e.into()))?,
-    )
-    .await?;
+    if update.transition.to == expected_state
+        && *writes.effects == TransitionEffects::default()
+        && writes.outbox_events.is_empty()
+    {
+        // A frozen chain can record a wait/retry and release its worker lease.
+        super::rpc::lock_reconciliation_in(transaction, &format!("chain:{chain}")).await?;
+    } else {
+        super::rpc::guard_in(
+            transaction,
+            u64::try_from(chain).map_err(|e| sqlx::Error::Encode(e.into()))?,
+        )
+        .await?;
+    }
     let expected = state_code(expected_state);
     let target = state_code(update.transition.to);
     let reason = update.rejection_reason.map(RejectReason::code);
@@ -715,6 +729,8 @@ pub async fn apply_transition(
                 route = $8,
                 route_version = $9,
                 log_index = $10,
+                tx_from = $11,
+                tx_nonce = $12::text::numeric,
                 updated_at = now()
             WHERE id = $1
             "#,
@@ -734,6 +750,17 @@ pub async fn apply_transition(
                 .transpose()?,
         )
         .bind(to_i64(canonical.log_index, "deposits.log_index")?)
+        .bind(address_hex(canonical.tx_from))
+        .bind(canonical.tx_nonce.to_string())
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    if writes.effects.dual_verified {
+        sqlx::query(
+            "UPDATE deposits SET dual_verified_at = COALESCE(dual_verified_at, now()) WHERE id=$1",
+        )
+        .bind(deposit_id)
         .execute(&mut **transaction)
         .await?;
     }

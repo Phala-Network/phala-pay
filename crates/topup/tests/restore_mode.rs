@@ -32,7 +32,7 @@ use topup::deposit_addresses::REISSUE_VERSIONS_AHEAD;
 use topup::finality::FinalityWatch;
 use topup::pump::{Pump, PumpConfig, RunOnceResult, StepSet};
 use topup::restore_mode;
-use topup::scanner::{chain_routes, scan_once};
+use topup::scanner::{chain_routes, coverage_once};
 use topup::steps::confirm::ConfirmStep;
 use topup_adapters::attestation::AttestedWebhookKey;
 use topup_adapters::chain::evm::{
@@ -108,6 +108,7 @@ struct Answer {
 impl Harness {
     async fn new(database: &TestDatabase) -> Result<Self> {
         let pool = database.app_pool.clone();
+        seed::initialize_dual_chain(&pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[91; 32]);
         let client_reads = Arc::new(topup::api::ClientReadLimiter::new(
             topup::client_secret::ClientSecretKey::new(topup_core::SecretKey32::new(
@@ -241,6 +242,16 @@ impl Harness {
         .bind(block_time)
         .execute(&self.pool)
         .await?;
+        sqlx::query("UPDATE chain_coverage SET through_block=$1,through_time=$2,updated_at=now() WHERE chain_id=1").bind(block).bind(block_time).execute(&self.pool).await?;
+        sqlx::query("UPDATE chain_checkpoints SET block_number=$1,block_time=$2 WHERE chain_id=1")
+            .bind(block)
+            .bind(block_time)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("UPDATE addresses SET dual_covered_through=$1 WHERE chain_id=1")
+            .bind(block)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -370,6 +381,7 @@ impl topup_adapters::risk::oracle::SanctionsSource for ClearSanctions {
         block_number: u64,
     ) -> topup_core::screening::SanctionsResult {
         topup_core::screening::SanctionsResult {
+            block_hash: None,
             provider_a: topup_core::screening::SanctionsAnswer::Clear,
             provider_b: topup_core::screening::SanctionsAnswer::Clear,
             block_number,
@@ -698,6 +710,10 @@ impl ChainReader for FinalChain {
         Ok(ReceiptLookup::Included {
             block_number: self.0.block_number,
             block_hash: self.0.block_hash,
+            block_time: self.0.block_time,
+            status: true,
+            tx_from: self.0.tx_from,
+            tx_nonce: self.0.tx_nonce,
             transfer: Some(Box::new(self.0.clone())),
         })
     }
@@ -1018,7 +1034,7 @@ async fn unfreeze_needs_the_rescan_and_the_checklist_and_is_audited() -> Result<
                 .await?;
             ensure!(status.body["rescan"][0]["pending_backfills"] == 1);
             ensure!(status.body["rescan"][0]["complete"] == false);
-            sqlx::query("UPDATE addresses SET backfilled = true WHERE id = $1")
+            sqlx::query("UPDATE addresses SET backfilled = true,dual_covered_through=(SELECT through_block FROM chain_coverage WHERE chain_id=addresses.chain_id) WHERE id = $1")
                 .bind(address.id)
                 .execute(&harness.pool)
                 .await?;
@@ -2568,6 +2584,8 @@ struct ScriptedState {
     head: u64,
     finalized: u64,
     transfer: Option<TransferLog>,
+    receipt: Option<TransferLog>,
+    time: DateTime<Utc>,
 }
 
 impl ScriptedChain {
@@ -2575,7 +2593,9 @@ impl ScriptedChain {
         *self.0.lock().expect("chain state") = ScriptedState {
             head,
             finalized,
+            receipt: transfer.clone(),
             transfer,
+            time: Utc::now(),
         };
     }
 
@@ -2585,6 +2605,13 @@ impl ScriptedChain {
 }
 
 impl ChainReader for ScriptedChain {
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        Ok(self.state(|state| match &state.transfer {
+            Some(log) if log.block_number == number => (log.block_hash, log.block_time),
+            _ => (B256::ZERO, state.time),
+        }))
+    }
+
     async fn factory_logs(
         &self,
         _factory: Address,
@@ -2598,7 +2625,7 @@ impl ChainReader for ScriptedChain {
     async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
         Ok(FinalizedHead {
             number: self.state(|state| state.finalized),
-            time: Utc::now(),
+            time: self.state(|state| state.time),
         })
     }
 
@@ -2637,20 +2664,26 @@ impl ChainReader for ScriptedChain {
         tx_hash: B256,
         receipt_log_index: u64,
     ) -> Result<ReceiptLookup, ChainError> {
-        Ok(self.state(|state| match &state.transfer {
+        Ok(self.state(|state| match &state.receipt {
             Some(log) if log.tx_hash == tx_hash => ReceiptLookup::Included {
                 block_number: log.block_number,
                 block_hash: log.block_hash,
-                transfer: (log.receipt_log_index == receipt_log_index)
-                    .then(|| Box::new(log.clone())),
+                block_time: log.block_time,
+                status: true,
+                tx_from: log.tx_from,
+                tx_nonce: log.tx_nonce,
+                transfer: state
+                    .transfer
+                    .as_ref()
+                    .filter(|transfer| transfer.receipt_log_index == receipt_log_index)
+                    .map(|transfer| Box::new(transfer.clone())),
             },
             _ => ReceiptLookup::Missing,
         }))
     }
 
-    // Past the router transaction's nonce: a transaction no longer on chain was replaced.
     async fn nonce_at(&self, _account: Address, _block: u64) -> Result<u64, ChainError> {
-        Ok(8)
+        panic!("finality never searches sender nonces")
     }
 }
 
@@ -2688,6 +2721,21 @@ struct Pipeline {
 }
 
 impl Pipeline {
+    async fn watch_once(&self, harness: &Harness) -> Result<topup::finality::WatchStats> {
+        let head = self.chain.finalized_head().await?;
+        db::chain_reads::advance_checkpoint(
+            &harness.pool,
+            1,
+            db::chain_reads::Boundary {
+                number: head.number,
+                hash: B256::ZERO,
+                time: head.time,
+            },
+        )
+        .await?;
+        Ok(self.watch.watch_once(1).await?)
+    }
+
     fn new(harness: &Harness) -> Result<Self> {
         let mut route = harness.route.clone();
         route.chain.confirmations = Confirmations::Depth(2);
@@ -2788,9 +2836,11 @@ impl Pipeline {
             .into_iter()
             .next()
             .context("the chain's routes")?;
-        Ok(scan_once(&harness.pool, &self.chain, &routes)
-            .await?
-            .inserted)
+        Ok(
+            coverage_once(&harness.pool, &self.chain, &self.chain, &routes, 1)
+                .await?
+                .inserted,
+        )
     }
 
     /// Runs the pump until nothing is due.
@@ -2898,8 +2948,7 @@ fn delivered_body(delivery: &Value) -> Result<Value> {
 }
 
 #[tokio::test]
-async fn a_reversed_deposit_and_its_successor_keep_their_identities_through_a_restore() -> Result<()>
-{
+async fn a_restored_unverified_reversed_record_preserves_its_canonical_successor() -> Result<()> {
     support::with_database(|database| {
         Box::pin(async move {
             let harness = Harness::new(database).await?;
@@ -2920,7 +2969,7 @@ async fn a_reversed_deposit_and_its_successor_keep_their_identities_through_a_re
             ensure!(valuation(&harness, old).await?.0 == "credited");
             let second = router_transfer(harness.route.asset.contract, forwarder, 11, 0xbb, 90);
             pipeline.chain.set(30, 20, Some(second));
-            ensure!(pipeline.watch.watch_once(1).await?.reversed == 1);
+            ensure!(pipeline.watch_once(&harness).await?.reversed == 1);
             pipeline.settle().await?;
             let new = topup_core::identity::deposit_revision_id(1, ROUTER_TX, 0, 1);
             let credited = valuation(&harness, new).await?;
@@ -2961,9 +3010,18 @@ async fn a_reversed_deposit_and_its_successor_keep_their_identities_through_a_re
                 imported.body
             );
 
-            // The rescan reads only the final transfer at the position: it is the second deposit
-            // again, with its id and link, and the first is the reversed deposit it replaced.
+            // Historical reversed evidence reconstructed from delivered events has no dual
+            // marker. It must not be compared with the active canonical successor.
+            let historical: bool = sqlx::query_scalar(
+                "SELECT state='reversed' AND dual_verified_at IS NULL FROM deposits WHERE id=$1",
+            ).bind(old).fetch_one(&harness.pool).await?;
+            ensure!(historical);
             ensure!(pipeline.finalized_scan(&harness).await? == 1);
+            ensure!(db::chain_reads::coverage(&harness.pool,1).await?.context("coverage")?.number == 20);
+            let frozen: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM reconciliation_blocks WHERE scope='chain' AND chain_id=1)",
+            ).fetch_one(&harness.pool).await?;
+            ensure!(!frozen, "historical restored reversal froze its canonical successor");
             let recorded: Vec<(Uuid, String, i64, Option<Uuid>)> = sqlx::query_as(
                 "SELECT id, state, revision, replaces FROM deposits \
                  WHERE chain_id = 1 AND tx_hash = $1 ORDER BY revision",
@@ -3036,13 +3094,14 @@ async fn a_rejected_deposit_reversed_before_finality_round_trips_through_a_resto
             harness.scan_to(5, Utc::now()).await?;
             let pipeline = Pipeline::new(&harness)?;
 
-            // A token without a route is rejected unvalued; its transaction leaves the chain
-            // before finality, so the rejected deposit is reversed, still unvalued.
+            // A token without a route is rejected unvalued; its final receipt no longer has
+            // that transfer, so the rejected deposit is reversed, still unvalued.
             let transfer = router_transfer(UNROUTED_TOKEN, forwarder, 10, 0xaa, 100);
             pipeline.chain.set(12, 5, Some(transfer.clone()));
             pipeline.fast_scan(&harness, &transfer, address_id).await?;
-            pipeline.chain.set(30, 20, None);
-            ensure!(pipeline.watch.watch_once(1).await?.reversed == 1);
+            pipeline.chain.set(30, 20, Some(transfer));
+            pipeline.chain.0.lock().expect("chain state").transfer = None;
+            ensure!(pipeline.watch_once(&harness).await?.reversed == 1);
             harness.deliver().await?;
             let deposit = deposit_id(1, ROUTER_TX, 0);
             let public_id = topup::ids::format(topup::ids::DEPOSIT, deposit);
@@ -4678,6 +4737,7 @@ impl topup_adapters::risk::oracle::SanctionsSource for NamesSender {
             topup_core::screening::SanctionsAnswer::Clear
         };
         topup_core::screening::SanctionsResult {
+            block_hash: None,
             provider_a: answer,
             provider_b: answer,
             block_number,
@@ -4725,6 +4785,28 @@ async fn a_sanctions_hit_keeps_a_delivered_credit_and_blocks_its_sweep() -> Resu
                 .bind(deposit)
                 .execute(&harness.pool)
                 .await?;
+
+            // A disagreement on replay cannot undo delivered value or create a sanctions hit.
+            struct SplitSanctions;
+            #[async_trait]
+            impl topup_adapters::risk::oracle::SanctionsSource for SplitSanctions {
+                async fn sanctions(&self,_:Address,block_number:u64)->topup_core::screening::SanctionsResult {
+                    topup_core::screening::SanctionsResult {provider_a:topup_core::screening::SanctionsAnswer::Clear,
+                        provider_b:topup_core::screening::SanctionsAnswer::Sanctioned,block_number,block_hash:Some(B256::repeat_byte(7))}
+                }
+            }
+            let before=topup::db::get_deposit(&harness.pool,deposit).await?.context("replayed deposit")?.credit_minor;
+            let split=topup::steps::screen::ScreenStep::new(harness.pool.clone(),[
+                topup::steps::screen::ScreenRoute::new(harness.route.clone(),Arc::new(SplitSanctions))])?;
+            run_pump(&harness,deposit,StepSet::new(Box::new(Unreached),Box::new(split))).await?;
+            let held=topup::db::get_deposit(&harness.pool,deposit).await?.context("held replay")?;
+            ensure!(held.state==topup_core::deposit::DepositState::Confirmed);
+            ensure!(held.credit_minor==before);
+            let hit: bool = sqlx::query_scalar("SELECT sanctions_hit_at IS NOT NULL FROM deposits WHERE id=$1").bind(deposit).fetch_one(&harness.pool).await?;
+            ensure!(!hit);
+            let recorded:Value=sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1").bind(deposit).fetch_one(&harness.pool).await?;
+            ensure!(recorded["sanctions_hold"]==true);
+            sqlx::query("UPDATE deposits SET next_attempt_at=now()-interval '1 second' WHERE id=$1").bind(deposit).execute(&harness.pool).await?;
 
             // The list now names the sender.
             let screen = topup::steps::screen::ScreenStep::new(

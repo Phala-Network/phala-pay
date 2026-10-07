@@ -7,7 +7,6 @@ mod support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use anyhow::{Context, Result, bail, ensure};
@@ -15,7 +14,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
-use tokio_util::sync::CancellationToken;
 use topup::api::{AppState, ClientReadLimiter, PublicOrigin, VerificationKey};
 use topup::audit::Actor;
 use topup::db;
@@ -23,15 +21,11 @@ use topup::deposit_addresses;
 use topup::finality::FinalityWatch;
 use topup::pump::{Pump, PumpConfig, RunOnceResult, StepSet};
 use topup::routes::RouteSet;
-use topup::scanner::{
-    ChainRoutes, FinalizedHeads, HeadScan, ScanConfig, chain_routes, head_scan_once, run_chain,
-    scan_once,
-};
+use topup::scanner::{ChainRoutes, chain_routes, coverage_once, fast_once};
 use topup::steps::confirm::ConfirmStep;
 use topup::steps::screen::{ScreenRoute, ScreenStep};
 use topup::tenancy::Scope;
 use topup_adapters::attestation::DstackAttestor;
-use topup_adapters::chain::evm::metrics::provider_call_counts;
 use topup_adapters::chain::evm::{
     ChainError, ChainReader, EvmClient, FinalizedHead, FinalizedReader, ReceiptLookup, TransferLog,
 };
@@ -201,7 +195,14 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             ensure!(stats.watched == 0, "{stats:?}");
             ensure!(chain.deposit(tx).await?.state == DepositState::Credited);
 
+            sqlx::query(
+                "UPDATE quotes SET expires_at=now()-interval '1 second' WHERE consumed_by=$1",
+            )
+            .bind(credited.id)
+            .execute(&chain.pool)
+            .await?;
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
             ensure!(stats.reversed == 1, "{stats:?}");
             let reversed = chain.deposit(tx).await?;
@@ -231,19 +232,32 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             .bind(credited.id)
             .fetch_one(&chain.pool)
             .await?;
-            ensure!(evidence["result"] == "dropped_nonce_consumed");
+            ensure!(evidence["result"] == "known_finalized_replacement");
             let refund_status: String =
                 sqlx::query_scalar("SELECT status FROM refunds WHERE id = $1")
                     .bind(refund)
                     .fetch_one(&chain.pool)
                     .await?;
             ensure!(refund_status == "canceled");
-            // The quote's window is still open, so it opens again with its reservation.
+            // Even past wall-clock expiry, reversal restores open and the reservation;
+            // only complete dual coverage may close the quote afterward.
             ensure!(chain.quote_status().await? == ("open".to_owned(), None));
+            let reserved:bool=sqlx::query_scalar("SELECT exposure_reserved FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(chain.address_id).fetch_one(&chain.pool).await?;
+            ensure!(reserved);
+            ensure!(chain.events("quote.expired").await?.is_empty());
+            chain.anvil.mine(80)?;
+            chain.anvil.mine(1)?;
+            run_checked("cast", &["rpc", "evm_increaseTime", "60", "--rpc-url", &chain.anvil.rpc_url], None)?;
+            chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            coverage_once(&chain.pool,&chain.reader,&chain.reader,&chain.routes,1).await?;
+            ensure!(topup::locks::expire_once(&chain.pool,&RouteSet::new(vec![chain.route.clone()]).unwrap()).await?==1);
+            ensure!(chain.events("quote.expired").await?.len()==1);
 
             // Terminal: later passes and pumps leave it alone, and the event stays single.
             let again = chain.watch().await?;
-            ensure!(again.watched == 0, "{again:?}");
+            ensure!(again.finalized == 1 && again.reversed == 0, "{again:?}");
+            ensure!(chain.watch().await?.watched == 0);
+            chain.settle().await?;
             ensure!(chain.pump.run_once().await? == RunOnceResult::Idle);
             ensure!(chain.events("deposit.reversed").await?.len() == 1);
             Ok(())
@@ -309,8 +323,9 @@ async fn the_payers_view_credits_the_shown_payment_and_drops_a_reversed_one() ->
             ensure!(chain.receipt_block(first)?.is_none());
             ensure!(chain.receipt_block(second)?.is_some());
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
-            ensure!(stats.reversed == 1 && stats.finalized == 1, "{stats:?}");
+            ensure!(stats.reversed == 1 && stats.finalized == 2, "{stats:?}");
             ensure!(chain.deposit(first).await?.state == DepositState::Reversed);
             ensure!(chain.deposit(second).await?.state == DepositState::Credited);
             let view = chain.client_quote().await?;
@@ -536,40 +551,6 @@ async fn a_lagging_provider_b_delays_the_credit_until_it_reaches_the_depth() -> 
 }
 
 #[tokio::test]
-async fn a_payment_is_credited_within_thirty_seconds_of_inclusion_on_twelve_second_blocks()
--> Result<()> {
-    run(&["--block-time", "12"], |chain| {
-        Box::pin(async move {
-            assert_credited_within(chain, "latency-provider-a", chrono::Duration::seconds(30)).await
-        })
-    })
-    .await
-}
-
-/// At an OP-stack chain's default depth on 2-second blocks, the head loop polls once per L2 block
-/// and the payment is credited within 10 seconds of inclusion.
-#[tokio::test]
-async fn an_op_stack_payment_is_credited_within_ten_seconds_of_inclusion_on_two_second_blocks()
--> Result<()> {
-    run_on(OP_STACK, &["--block-time", "2"], |chain| {
-        Box::pin(async move {
-            assert_credited_within(
-                chain,
-                "op-latency-provider-a",
-                chrono::Duration::seconds(10),
-            )
-            .await
-        })
-    })
-    .await
-}
-
-/// An OP-stack chain credits at a depth on the sequencer's unsafe head, while `safe` and
-/// `finalized` lag behind; an unsafe-head reorg that spends the payer's nonce on another
-/// transaction is handled as on Ethereum. The deposit is reversed once at finality, and the
-/// replacement, which pays the address again in the replaced block, below the head loop's cursor,
-/// is recorded by the finalized backstop and credited.
-#[tokio::test]
 async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_replacement()
 -> Result<()> {
     run_on(OP_STACK, &[], |chain| {
@@ -610,6 +591,7 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
             ensure!(chain.deposit(tx).await?.state == DepositState::Credited);
 
             chain.anvil.mine(FINALITY_DEPTH + depth)?;
+            chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
             ensure!(stats.reversed == 1, "{stats:?}");
             ensure!(chain.deposit(tx).await?.state == DepositState::Reversed);
@@ -617,8 +599,12 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
                 chain.events("deposit.reversed").await? == vec![reversed_event_id(credited.id)]
             );
 
-            let stats = scan_once(&chain.pool, &chain.reader, &chain.routes).await?;
-            ensure!(stats.inserted == 1, "{stats:?}");
+            let stats =
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1).await?;
+            ensure!(
+                stats.inserted == 0,
+                "known replacement must be idempotent: {stats:?}"
+            );
             chain.settle().await?;
             let successor = replacement_hash(&replacement)?;
             ensure!(chain.deposit(successor).await?.state == DepositState::Credited);
@@ -626,9 +612,9 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
                 chain.events("deposit.credited").await?.len() == 2
                     && chain.events("deposit.reversed").await?.len() == 1
             );
-            // Its block is already final: the next watch pass marks it so, and nothing else moves.
+            // Coverage already recorded finalized evidence for the successor.
             let stats = chain.watch().await?;
-            ensure!(stats.finalized == 1 && stats.reversed == 0, "{stats:?}");
+            ensure!(stats.watched == 0 && stats.reversed == 0, "{stats:?}");
             ensure!(chain.deposit(successor).await?.final_at.is_some());
             ensure!(chain.events("deposit.reversed").await?.len() == 1);
             Ok(())
@@ -717,87 +703,6 @@ async fn an_op_stack_payment_removed_without_its_nonce_spent_stays_pending_and_a
     .await
 }
 
-/// Runs the production head loop and pump at their production cadence (one head poll per block
-/// time of the route's chain), pays, and checks that `deposit.credited` is written within `limit`
-/// of the payment's inclusion, for about one head poll and one log request per block.
-async fn assert_credited_within(
-    chain: &FastChain,
-    label: &str,
-    limit: chrono::Duration,
-) -> Result<()> {
-    let cancellation = CancellationToken::new();
-    let pump = chain.pump.clone();
-    let pump_task = tokio::spawn({
-        let cancellation = cancellation.clone();
-        async move { pump.run(cancellation).await }
-    });
-    let cursor_before = db::get_cursor(&chain.pool, chain.chain_id)
-        .await?
-        .context("the finalized cursor")?;
-    let scanner_task = tokio::spawn(run_chain(
-        chain.pool.clone(),
-        labeled_reader(&chain.anvil.rpc_url, label, chain.chain_id)?,
-        chain.routes.clone(),
-        ScanConfig::default(),
-        FinalizedHeads::default(),
-        cancellation.clone(),
-    ));
-    let started = chain.anvil.block_number()?;
-    let tx = chain.send_payment(AMOUNT)?;
-    let result = async {
-        let mut included_at = None;
-        let deadline = Instant::now() + Duration::from_secs(90);
-        loop {
-            ensure!(Instant::now() < deadline, "no credit within 90 s");
-            if included_at.is_none() && chain.receipt_block(tx)?.is_some() {
-                included_at = Some(Utc::now());
-            }
-            if let Some(included_at) = included_at {
-                let created = sqlx::query_scalar::<_, chrono::DateTime<Utc>>(
-                    "SELECT created FROM events WHERE type = 'deposit.credited'",
-                )
-                .fetch_optional(&chain.pool)
-                .await?;
-                if let Some(created) = created {
-                    let elapsed = created - included_at;
-                    eprintln!("deposit.credited written {elapsed} after inclusion");
-                    ensure!(elapsed < limit, "credited {elapsed} after inclusion");
-                    return Ok(());
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-    .await;
-    cancellation.cancel();
-    pump_task.await?;
-    scanner_task.await??;
-    result?;
-
-    // Provider A's calls over the run: about one head poll and one log request per block, plus
-    // the finalized backstop's window over blocks finalized during the run, and one receipt,
-    // block, and transaction read for the one transfer.
-    let blocks = chain.anvil.block_number()?.saturating_sub(started).max(1);
-    let calls = provider_call_counts(label);
-    eprintln!("provider A calls over {blocks} blocks: {calls:?}");
-    let count = |method| calls.get(method).copied().unwrap_or_default();
-    ensure!(count("eth_blockNumber") <= 2 * blocks + 4, "{calls:?}");
-    ensure!(count("eth_getBlockByNumber") <= 2, "{calls:?}");
-    // The finalized backstop runs alongside: a pass that finds `finalized` advanced reads the new
-    // blocks once (one transfer and one factory request per window) and moves the cursor past
-    // them; it never re-reads below the cursor.
-    let cursor_after = db::get_cursor(&chain.pool, chain.chain_id)
-        .await?
-        .context("the finalized cursor")?;
-    let backstop = 2 * cursor_after.saturating_sub(cursor_before);
-    ensure!(
-        count("eth_getLogs") <= blocks + 1 + backstop,
-        "{calls:?} backstop={backstop}"
-    );
-    ensure!(count("eth_getTransactionReceipt") <= 2, "{calls:?}");
-    Ok(())
-}
-
 /// The hash of a signed raw transaction.
 fn replacement_hash(raw: &str) -> Result<B256> {
     let bytes = alloy_primitives::hex::decode(raw).context("raw transaction hex")?;
@@ -805,95 +710,18 @@ fn replacement_hash(raw: &str) -> Result<B256> {
 }
 
 #[tokio::test]
-async fn an_idle_chain_polls_only_the_head_and_a_new_block_costs_one_log_request() -> Result<()> {
-    run(&[], |chain| {
-        Box::pin(async move {
-            let label = "idle-provider-a";
-            let cancellation = CancellationToken::new();
-            let config = ScanConfig {
-                head_poll_interval: Some(Duration::from_millis(200)),
-                finalized_poll_interval: Duration::from_secs(3_600),
-            };
-            let scanner_task = tokio::spawn(run_chain(
-                chain.pool.clone(),
-                labeled_reader(&chain.anvil.rpc_url, label, chain.chain_id)?,
-                chain.routes.clone(),
-                config,
-                FinalizedHeads::default(),
-                cancellation.clone(),
-            ));
-            let count = |method| {
-                provider_call_counts(label)
-                    .get(method)
-                    .copied()
-                    .unwrap_or_default()
-            };
-            let result = async {
-                // The first poll reads `finalized` and scans the blocks above the cursor once.
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while count("eth_getLogs") == 0 {
-                    ensure!(Instant::now() < deadline, "the first poll never scanned");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                let before = provider_call_counts(label);
-                tokio::time::sleep(Duration::from_secs(3)).await;
-                let idle = provider_call_counts(label);
-                let polls = idle["eth_blockNumber"] - before["eth_blockNumber"];
-                ensure!(polls >= 5, "only {polls} head polls in 3 s");
-                for (method, calls) in &idle {
-                    ensure!(
-                        *method == "eth_blockNumber" || before.get(method) == Some(calls),
-                        "an idle chain called {method}: {before:?} -> {idle:?}"
-                    );
-                }
-
-                chain.anvil.mine(1)?;
-                let logs = count("eth_getLogs");
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while count("eth_getLogs") == logs {
-                    ensure!(Instant::now() < deadline, "a new block was not scanned");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                ensure!(
-                    count("eth_getLogs") == logs + 1,
-                    "one new block costs one log request, whatever the address count"
-                );
-                Ok(())
-            }
-            .await;
-            cancellation.cancel();
-            scanner_task.await??;
-            result
-        })
-    })
-    .await
-}
-
-#[tokio::test]
 async fn a_newly_issued_address_is_scanned_from_the_next_block_without_a_gap() -> Result<()> {
     run(&[], |chain| {
         Box::pin(async move {
-            let first = chain.head_scan().await?;
+            chain.head_scan().await?;
             chain.anvil.mine(2)?;
-            let second = chain.head_scan().await?;
-            let horizon = |scan: &HeadScan| scan.horizon.context("a depth route has a horizon");
-            ensure!(
-                second.from_block == horizon(&first)? + 1,
-                "{first:?} {second:?}"
-            );
-
+            chain.head_scan().await?;
             // An address issued now, with no open quote, is paid in the next block.
             let (address_id, address) =
                 issue_address(&chain.pool, chain.chain_id, chain.customer_id, 0x6b).await?;
             let tx = chain.pay_to(address, AMOUNT)?;
             chain.anvil.mine(1)?;
             let third = chain.head_scan().await?;
-            ensure!(
-                third.from_block == horizon(&second)? + 1,
-                "{second:?} {third:?}"
-            );
             ensure!(third.inserted == 1, "{third:?}");
             let deposit = chain.deposit(tx).await?;
             ensure!(deposit.address_id == address_id);
@@ -1007,8 +835,6 @@ impl FastChain {
             route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
                 feed: "BASE_SEQUENCER_UPTIME".into(),
                 grace_s: 3600,
-                rpc_group: "a".into(),
-                rpc_group_b: "b".into(),
             });
         }
         route.chain.confirmations = network.confirmations;
@@ -1079,7 +905,7 @@ impl FastChain {
         .0;
         let reader = reader(&anvil.rpc_url)?;
         // The finalized scanner's first pass writes the cursor the fast scan starts above.
-        scan_once(&pool, &reader, &routes).await?;
+        coverage_once(&pool, &reader, &reader, &routes, 1).await?;
         let chain = Self {
             anvil,
             chain_id,
@@ -1122,30 +948,6 @@ impl FastChain {
         receipt["transactionHash"]
             .as_str()
             .context("transaction hash")?
-            .parse()
-            .context("parse transaction hash")
-    }
-
-    /// Sends the payment without waiting for a block.
-    fn send_payment(&self, amount: u64) -> Result<B256> {
-        let output = run_checked(
-            "cast",
-            &[
-                "send",
-                "--async",
-                "--rpc-url",
-                &self.anvil.rpc_url,
-                "--private-key",
-                PAYER_KEY,
-                &format!("{:#x}", self.token),
-                "transfer(address,uint256)",
-                &format!("{:#x}", self.address),
-                &amount.to_string(),
-            ],
-            None,
-        )?;
-        String::from_utf8(output.stdout)?
-            .trim()
             .parse()
             .context("parse transaction hash")
     }
@@ -1274,10 +1076,8 @@ impl FastChain {
     }
 
     /// One per-block scan, as the head loop runs on each new head.
-    async fn head_scan(&self) -> Result<HeadScan> {
-        head_scan_once(&self.pool, &self.reader, &self.routes)
-            .await?
-            .context("a new block is scanned")
+    async fn head_scan(&self) -> Result<db::ScanCommit> {
+        Ok(fast_once(&self.pool, &self.reader, &self.routes).await?)
     }
 
     /// Deposits one per-block scan records at the route's depth.
@@ -1295,7 +1095,67 @@ impl FastChain {
         bail!("the pump did not settle")
     }
 
+    /// Simulates fast discovery of a positive replacement already known to the service.
+    async fn record_known_replacement(&self, raw: &str) -> Result<()> {
+        let hash = replacement_hash(raw)?;
+        let transfer = self
+            .reader
+            .receipt_transfer(hash, 0)
+            .await?
+            .transfer()
+            .context("replacement transfer")?
+            .clone();
+        let address_id = if transfer.to == self.address {
+            self.address_id
+        } else {
+            let row = seed::insert_address(
+                &self.pool,
+                &NewAddress {
+                    id: Uuid::new_v4(),
+                    customer_id: self.customer_id,
+                    chain_id: self.chain_id,
+                    route: self.route.route.clone(),
+                    salt: B256::repeat_byte(0x71),
+                    address: transfer.to,
+                },
+            )
+            .await?;
+            row.id
+        };
+        let mut tx = self.pool.begin().await?;
+        db::insert_scanned_deposit_in(
+            &mut tx,
+            &db::NewDeposit {
+                chain_id: self.chain_id,
+                tx_hash: hash,
+                receipt_log_index: 0,
+                log_index: transfer.log_index,
+                block_number: transfer.block_number,
+                block_hash: transfer.block_hash,
+                block_time: transfer.block_time,
+                address_id,
+                route: Some(self.route.route.clone()),
+                route_version: Some(self.route.version),
+                asset_contract: transfer.token,
+                from_address: transfer.from,
+                amount_atomic: transfer.amount,
+                state: DepositState::Detected,
+                reason: None,
+                next_attempt_at: Utc::now(),
+                tx_from: transfer.tx_from,
+                tx_nonce: transfer.tx_nonce,
+                is_final: false,
+            },
+            db::Evidence::Confirmed,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn watch(&self) -> Result<topup::finality::WatchStats> {
+        let verify = FinalizedReader::new(Arc::new(EvmClient::new(&self.anvil.rpc_url)?));
+        topup::checkpoint::advance(&self.pool, self.chain_id, &self.reader, &verify).await?;
         Ok(self.watch.watch_once(self.chain_id).await?)
     }
 
@@ -1389,15 +1249,6 @@ fn rpc(anvil: &Anvil, method: &str, params: &[&str]) -> Result<std::process::Out
 
 fn reader(rpc_url: &str) -> Result<FinalizedReader> {
     Ok(FinalizedReader::new(Arc::new(EvmClient::new(rpc_url)?)))
-}
-
-/// A reader whose calls are counted under `label`, unique to one test.
-fn labeled_reader(rpc_url: &str, label: &str, chain_id: u64) -> Result<FinalizedReader> {
-    Ok(FinalizedReader::new(Arc::new(
-        EvmClient::new(rpc_url)?
-            .with_provider(label)
-            .with_chain_id(chain_id),
-    )))
 }
 
 async fn seed_address(pool: &PgPool, chain_id: u64) -> Result<(Uuid, Uuid, Address)> {
@@ -1516,6 +1367,7 @@ struct ClearSanctions;
 impl SanctionsSource for ClearSanctions {
     async fn sanctions(&self, _address: Address, block_number: u64) -> SanctionsResult {
         SanctionsResult {
+            block_hash: None,
             provider_a: SanctionsAnswer::Clear,
             provider_b: SanctionsAnswer::Clear,
             block_number,

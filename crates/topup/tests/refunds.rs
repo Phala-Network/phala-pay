@@ -21,7 +21,7 @@ use sqlx::Connection as _;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use topup::api::{AppState, ClientReadLimiter, PublicOrigin, VerificationKey};
-use topup::db::{Account, NewDeposit};
+use topup::db::{self, Account, NewDeposit};
 use topup::deposit_addresses::{self, ChainContracts};
 use topup::outbox::{DeliveryConfig, DeliveryWorker};
 use topup::refunds::{
@@ -108,6 +108,7 @@ async fn a_pending_refund_cannot_be_marked_paid_after_a_sanctions_hit() -> Resul
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
             let (merchant, deposit, id, refund) = pending_credited_refund(pool).await?;
             let mut hit = database.owner_pool.begin().await?;
             sqlx::query("UPDATE deposits SET sanctions_hit_at = now() WHERE id = $1")
@@ -153,6 +154,7 @@ async fn a_paid_pending_refund_is_not_claimed_after_a_sanctions_hit() -> Result<
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
             let (merchant, deposit, id, refund) = pending_credited_refund(pool).await?;
             merchant.mark_paid(&id, REFUND_TX).await?;
             let paying = finalized(vec![transfer(
@@ -210,13 +212,6 @@ impl RefundChainReader for ReceiptGate {
     ) -> Result<Option<(Address, u64)>, RefundReadError> {
         Ok(None)
     }
-    async fn finalized_nonce(
-        &self,
-        _chain_id: u64,
-        _account: Address,
-    ) -> Result<u64, RefundReadError> {
-        Ok(0)
-    }
 }
 
 #[tokio::test]
@@ -225,6 +220,7 @@ async fn a_sanctions_hit_during_verification_keeps_the_refund_pending() -> Resul
         support::with_database(|database| {
             Box::pin(async move {
                 let pool = &database.app_pool;
+                seed::initialize_dual_chain(pool, 1).await?;
                 let (merchant, deposit, id, refund) = pending_credited_refund(pool).await?;
                 merchant.mark_paid(&id, REFUND_TX).await?;
                 let paying = finalized(vec![transfer(
@@ -289,6 +285,7 @@ async fn a_missing_bound_route_version_never_uses_the_current_refund_floor() -> 
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
             let app = test_router(pool, &SigningKey::from_bytes(&[43; 32]));
             let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
             let deposit = seed_deposit(
@@ -352,6 +349,7 @@ async fn a_refund_paid_from_the_address_treasury_succeeds_at_finality() -> Resul
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[43; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -547,6 +545,7 @@ async fn a_refused_or_repeated_refund_call_holds_no_lock_once_it_answers() -> Re
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[49; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -634,6 +633,7 @@ async fn transfers_that_do_not_pay_the_refund_fail_it_and_release_the_reservatio
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[44; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -776,6 +776,7 @@ async fn a_deposit_address_refund_is_paid_from_that_networks_own_treasury() -> R
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[49; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -890,6 +891,7 @@ async fn a_transfer_log_pays_only_one_refund() -> Result<()> {
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[46; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -968,12 +970,14 @@ async fn a_transfer_log_pays_only_one_refund() -> Result<()> {
 }
 
 #[tokio::test]
-async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Result<()> {
+async fn only_an_unpaid_refund_is_canceled_and_missing_receipts_keep_the_reservation() -> Result<()>
+{
     let Some(database) = TestDatabase::create().await? else {
         return Ok(());
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[48; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -1038,12 +1042,11 @@ async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Resu
         ensure!(status == StatusCode::BAD_REQUEST, "{error}");
         ensure!(error["error"]["code"] == "amount_too_large", "{error}");
 
-        // Its transaction is dropped: no provider has a receipt, and at `finalized` both show the
-        // sender's nonce used by another transaction. Until then it waits; then it fails, which
-        // releases the deposit for a new refund.
+        // Missing receipts cannot prove a drop, even after a sender and nonce were recorded.
+        // Keep the reservation: a replacement may increment the nonce without paying a refund.
         let sender = Address::repeat_byte(0x5e);
         let missing = || vec![RefundReceipt::Missing];
-        let worker = test_worker_with(pool, missing(), missing(), Some((sender, 7)), 7);
+        let worker = test_worker_with(pool, missing(), missing(), Some((sender, 7)));
         ensure!(worker.check_once().await? == Verification::Waiting);
         let second_id = topup::ids::parse(topup::ids::REFUND, &second).context("re_ id")?;
         ensure!(refund_status(pool, second_id).await? == "pending");
@@ -1053,18 +1056,23 @@ async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Resu
                 .fetch_one(pool)
                 .await?;
         ensure!(origin == (Some(format!("{sender:#x}")), Some("7".to_owned())));
-        // The nonce kept when the transaction was first seen proves the drop, even once no
-        // provider returns the transaction any more.
-        let worker = test_worker_with(pool, missing(), missing(), None, 8);
-        ensure!(worker.check_once().await? == Verification::Failed);
+        // Losing the transaction after its origin was recorded still cannot release funds.
+        let worker = test_worker_with(pool, missing(), missing(), None);
+        ensure!(worker.check_once().await? == Verification::Waiting);
         let (_, dropped) = merchant
             .call(Method::GET, &format!("/v1/refunds/{second}"), Vec::new())
             .await?;
         ensure!(
-            dropped["status"] == "failed" && dropped["failure_reason"] == "transaction_dropped",
+            dropped["status"] == "pending" && dropped["failure_reason"].is_null(),
             "{dropped}"
         );
-        let third = merchant.refund(deposit, "150").await?;
+        let (status, error) = merchant
+            .post(
+                "/v1/refunds",
+                refund_body(deposit, REFUND_DESTINATION, "1")?,
+            )
+            .await?;
+        ensure!(status == StatusCode::BAD_REQUEST && error["error"]["code"] == "amount_too_large");
         // The list pages newest first and filters by deposit and status.
         let deposit_id = format!("dep_{}", deposit.simple());
         let (status, list) = merchant
@@ -1081,10 +1089,7 @@ async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Resu
             .iter()
             .filter_map(|refund| refund["id"].as_str())
             .collect();
-        ensure!(
-            ids == [third.as_str(), second.as_str(), first.as_str()],
-            "{list}"
-        );
+        ensure!(ids == [second.as_str(), first.as_str()], "{list}");
         let (_, canceled) = merchant
             .call(
                 Method::GET,
@@ -1097,7 +1102,7 @@ async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Resu
             .call(Method::GET, "/v1/refunds?status=failed", Vec::new())
             .await?;
         ensure!(
-            failed["has_more"] == false && failed["data"][0]["id"] == second,
+            failed["has_more"] == false && failed["data"] == json!([]),
             "{failed}"
         );
         let (status, _) = merchant
@@ -1137,6 +1142,7 @@ async fn a_refund_transaction_no_provider_ever_returned_fails_after_a_day() -> R
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[49; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -1180,6 +1186,7 @@ async fn refunds_take_back_the_credit_pro_rata_in_each_deposit_snapshot() -> Res
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[51; 32]);
         let client_reads = Arc::new(ClientReadLimiter::default());
         let app = test_router_with(
@@ -1297,6 +1304,7 @@ async fn only_a_refundable_deposit_to_a_screened_destination_is_refunded() -> Re
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[61; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -1394,6 +1402,7 @@ async fn a_raised_refund_floor_does_not_strand_a_deposit_recorded_before() -> Re
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[62; 32]);
         // The account accepts nothing: the deposit is `asset_not_accepted` on version 1, whose
         // floor of 20 its 100 clears.
@@ -1536,6 +1545,7 @@ async fn refund_lists_page_with_stripe_cursors_and_match_individual_reads() -> R
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
             let admin_key = SigningKey::from_bytes(&[49; 32]);
             let app = test_router(pool, &admin_key);
             let merchant = Merchant::seed(pool, &app, "refund-pages").await?;
@@ -1734,18 +1744,34 @@ async fn deposit_lists_page_with_stripe_cursors() -> Result<()> {
 
 #[tokio::test]
 async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Result<()> {
+    let Some(database) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    db::chain_reads::advance_checkpoint(
+        &database.app_pool,
+        1,
+        db::chain_reads::Boundary {
+            number: 100,
+            hash: B256::from(U256::from(100_u64)),
+            time: Utc::now(),
+        },
+    )
+    .await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(async move {
         axum::serve(listener, Router::new().route("/", post(refund_rpc))).await
     });
-    let reader = EvmRefundChainReader::new(BTreeMap::from([(
-        1,
-        Arc::new(EvmClient::with_timeout(
-            &format!("http://{address}"),
-            StdDuration::from_millis(50),
-        )?),
-    )]));
+    let reader = EvmRefundChainReader::new(
+        database.app_pool.clone(),
+        BTreeMap::from([(
+            1,
+            Arc::new(EvmClient::with_timeout(
+                &format!("http://{address}"),
+                StdDuration::from_millis(50),
+            )?),
+        )]),
+    );
     let token = route_fixture().asset.contract;
     // Scenario 1 transfers another token, 4 is above `finalized`, 5 reverted.
     for scenario in [1_u64, 2, 3, 5] {
@@ -1779,12 +1805,6 @@ async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Res
             .await?
             .is_none()
     );
-    ensure!(
-        reader
-            .finalized_nonce(1, Address::from_str(REFUND_SENDER)?)
-            .await?
-            == 6
-    );
     ensure!(matches!(
         reader.receipt(1, B256::from(U256::from(6_u64))).await,
         Err(RefundReadError::Rpc(_))
@@ -1805,6 +1825,7 @@ async fn worker_shutdown_cancels_a_hung_read() -> Result<()> {
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[50; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -1854,6 +1875,7 @@ async fn admin_nudge_reschedules_only_a_deposit_the_pump_claims() -> Result<()> 
         let admin_key = SigningKey::from_bytes(&[53; 32]);
         let (product, _) = seed_product(&database.app_pool, "phala-cloud").await?;
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let seed = |customer: &'static str, state| {
             seed_deposit(pool, product.id, customer, 100, state, None)
         };
@@ -2130,11 +2152,12 @@ async fn refund_rpc(Json(request): Json<Value>) -> Json<Value> {
             "result": receipt,
         }));
     }
-    Json(json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": finalized_block(),
-    }))
+    let mut block = finalized_block();
+    if request["params"][0] == "0x5a" {
+        block["number"] = json!("0x5a");
+        block["hash"] = json!(format!("{:#x}", B256::from(U256::from(900_u64))));
+    }
+    Json(json!({"jsonrpc":"2.0","id":id,"result":block}))
 }
 
 fn refund_receipt(tx_hash: &str) -> Value {
@@ -2332,7 +2355,6 @@ async fn refund_status(pool: &sqlx::PgPool, id: Uuid) -> Result<String> {
 struct ScriptedReader {
     receipts: Mutex<VecDeque<RefundReceipt>>,
     origin: Option<(Address, u64)>,
-    finalized_nonce: u64,
 }
 
 #[async_trait]
@@ -2358,17 +2380,6 @@ impl RefundChainReader for ScriptedReader {
     ) -> Result<Option<(Address, u64)>, RefundReadError> {
         Ok(self.origin)
     }
-
-    async fn finalized_nonce(
-        &self,
-        _chain_id: u64,
-        account: Address,
-    ) -> Result<u64, RefundReadError> {
-        if let Some((from, _)) = self.origin {
-            assert_eq!(account, from);
-        }
-        Ok(self.finalized_nonce)
-    }
 }
 
 struct HangingReader {
@@ -2393,14 +2404,6 @@ impl RefundChainReader for HangingReader {
     ) -> Result<Option<(Address, u64)>, RefundReadError> {
         std::future::pending().await
     }
-
-    async fn finalized_nonce(
-        &self,
-        _chain_id: u64,
-        _account: Address,
-    ) -> Result<u64, RefundReadError> {
-        std::future::pending().await
-    }
 }
 
 fn test_worker(
@@ -2408,7 +2411,7 @@ fn test_worker(
     primary: Vec<RefundReceipt>,
     secondary: Vec<RefundReceipt>,
 ) -> RefundVerificationWorker<ScriptedReader, ScriptedReader> {
-    test_worker_with(pool, primary, secondary, None, 0)
+    test_worker_with(pool, primary, secondary, None)
 }
 
 /// [`test_worker`] whose providers both return the transaction as sent by `origin`, and the
@@ -2418,12 +2421,10 @@ fn test_worker_with(
     primary: Vec<RefundReceipt>,
     secondary: Vec<RefundReceipt>,
     origin: Option<(Address, u64)>,
-    finalized_nonce: u64,
 ) -> RefundVerificationWorker<ScriptedReader, ScriptedReader> {
     let reader = |receipts: Vec<RefundReceipt>| ScriptedReader {
         receipts: Mutex::new(receipts.into()),
         origin,
-        finalized_nonce,
     };
     RefundVerificationWorker::new(
         pool.clone(),

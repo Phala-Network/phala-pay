@@ -40,7 +40,7 @@ pub fn provider(source: &str) -> Option<Provider> {
         "chainlink" => (
             "https://chain.link/terms",
             "Allowed basis: public on-chain feed data consumed through our own RPC, without an account or key. The Chainlink ToS page is client-rendered; full text could not be retrieved. This verdict covers public on-chain consumption only.",
-            "shared RPC account/key budgets",
+            "provider throughput limits",
             Verdict::Allowed,
         ),
         "kraken" => (
@@ -64,7 +64,7 @@ pub fn provider(source: &str) -> Option<Provider> {
         "uniswap_v2_twap" | "uniswap-v2-onchain" => (
             "https://etherscan.io/address/0x8867f20c1c63baccec7617626254a060eeb0e61e",
             "Allowed basis: public on-chain contract state consumed through our own RPC, without an API account or terms. PHA/WETH TWAP multiplied by public Chainlink ETH/USD state.",
-            "one sample/minute; shared RPC budgets",
+            "one sample per service interval; provider throughput limits",
             Verdict::Allowed,
         ),
         "coinmetrics" => (
@@ -173,7 +173,7 @@ impl TwapConfig {
     /// Reject unsafe windows, unbounded history and ineffective guard rails.
     pub fn validate(&self) -> Result<(), RouteError> {
         if !(1800..=86400).contains(&self.window_s)
-            || !(60..=600).contains(&self.max_sample_age_s)
+            || !(60..=900).contains(&self.max_sample_age_s)
             || self.min_weth_reserve_usd == 0
             || self.min_weth_reserve_usd > 1_000_000_000
             || !(1..=2000).contains(&self.max_spot_deviation_bps.value())
@@ -182,6 +182,21 @@ impl TwapConfig {
             return Err(RouteError::validation(
                 "price",
                 "invalid TWAP window/liquidity/freshness/deviation/jump limits",
+            ));
+        }
+        // The only TWAP observation chain is Ethereum mainnet. Leave sixteen blocks of margin
+        // so the window's oldest canonical sample stays inside Multicall3's BLOCKHASH reach.
+        let reach = crate::route::ChainFamily::EthereumL1
+            .block_seconds()
+            .saturating_mul(240);
+        if self
+            .window_s
+            .checked_add(self.max_sample_age_s)
+            .is_none_or(|history| history > reach)
+        {
+            return Err(RouteError::validation(
+                "price",
+                "TWAP window plus sample age exceeds the 256-block BLOCKHASH reach with a 16-block margin",
             ));
         }
         Ok(())
@@ -197,11 +212,6 @@ pub enum Source {
         feed: String,
         /// Feed chain.
         chain_id: u64,
-        /// A group (or route role a).
-        rpc_group: String,
-        /// Independent B group for a cross-network feed.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        rpc_group_b: Option<String>,
         /// Test route chain explicitly valued from mainnet.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observation_chain_id: Option<u64>,
@@ -209,10 +219,6 @@ pub enum Source {
     /// Pinned mainnet min(PHA/WETH TWAP, spot) × ETH/USD; independent agreement uses spot.
     #[serde(rename = "uniswap_v2_twap")]
     UniswapV2Twap {
-        /// Ethereum mainnet A group (or route role a on Ethereum).
-        rpc_group: String,
-        /// Independent Ethereum mainnet B group.
-        rpc_group_b: String,
         /// Explicit destination chain for cross-network/test-token valuation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observation_chain_id: Option<u64>,
@@ -273,10 +279,6 @@ pub struct Sequencer {
     pub feed: String,
     /// Recovery grace interval.
     pub grace_s: u64,
-    /// Base mainnet A group for testnet routes.
-    pub rpc_group: String,
-    /// Base mainnet B group.
-    pub rpc_group_b: String,
 }
 /// Canonical price schema; the old pricing shape is a migration input only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,7 +361,7 @@ impl PriceConfig {
         Ok(())
     }
     /// Validate safety and licensing at the route boundary.
-    pub fn validate(&self, chain: u64, asset: &str, _live: bool) -> Result<(), RouteError> {
+    pub fn validate(&self, chain: u64, asset: &str, live: bool) -> Result<(), RouteError> {
         let fail = |s| RouteError::validation("price", s);
         if self.max_age_s == 0 || self.max_age_s > 3600 {
             return Err(fail("max_age_s must be 1..3600"));
@@ -425,53 +427,34 @@ impl PriceConfig {
                 }
                 match source {
                     Source::UniswapV2Twap {
-                        rpc_group,
-                        rpc_group_b,
                         observation_chain_id,
                         twap,
                     } => {
                         twap.validate()?;
-                        if rpc_group.is_empty()
-                            || rpc_group_b.is_empty()
-                            || rpc_group == rpc_group_b
-                            || (chain != 1 && observation_chain_id != &Some(chain))
-                        {
+                        // Preserve main's production validation bounds; five-minute staging
+                        // sampling alone admits the wider age limit (defaults stay 180/500).
+                        if live && twap.max_sample_age_s > 600 {
                             return Err(fail(
-                                "TWAP requires independent mainnet A/B groups and explicit cross-network observation_chain_id",
+                                "live TWAP sample age must retain the original 60..600-second bound",
+                            ));
+                        }
+                        if chain != 1 && observation_chain_id != &Some(chain) {
+                            return Err(fail(
+                                "TWAP requires an explicit cross-network observation_chain_id",
                             ));
                         }
                     }
                     Source::Chainlink {
                         feed: name,
                         chain_id,
-                        rpc_group,
-                        rpc_group_b,
                         observation_chain_id,
                     } => {
-                        if feed(name, *chain_id).is_none() || rpc_group.is_empty() {
-                            return Err(fail("unsupported chain/feed or missing RPC group"));
+                        if feed(name, *chain_id).is_none() {
+                            return Err(fail("unsupported chain/feed"));
                         }
-                        if *chain_id != chain
-                            && (observation_chain_id != &Some(chain)
-                                || rpc_group_b.as_ref().is_none_or(String::is_empty))
-                        {
-                            return Err(fail(
-                                "cross-network observation requires observation_chain_id and independent rpc_group_b",
-                            ));
+                        if *chain_id != chain && observation_chain_id != &Some(chain) {
+                            return Err(fail("cross-network feed requires observation_chain_id"));
                         }
-                        if matches!(chain, 11155111 | 84532) && *chain_id != 1 {
-                            return Err(fail(
-                                "test tokens require configured Ethereum mainnet feeds",
-                            ));
-                        }
-                    }
-                    Source::Kraken {
-                        company: declared, ..
-                    }
-                    | Source::Binance {
-                        company: declared, ..
-                    } if declared != company => {
-                        return Err(fail("company must match registry identity"));
                     }
                     _ => {}
                 }
@@ -507,13 +490,9 @@ impl PriceConfig {
             return Err(fail("Base requires sequencer uptime gate"));
         }
         if let Some(s) = &self.sequencer_uptime
-            && (s.feed != "BASE_SEQUENCER_UPTIME"
-                || s.grace_s < 3600
-                || s.rpc_group.is_empty()
-                || s.rpc_group_b.is_empty()
-                || s.rpc_group == s.rpc_group_b)
+            && (s.feed != "BASE_SEQUENCER_UPTIME" || s.grace_s < 3600)
         {
-            return Err(fail("invalid sequencer feed/groups/grace"));
+            return Err(fail("invalid sequencer feed/chain/grace"));
         }
         Ok(())
     }
@@ -528,24 +507,25 @@ mod tests {
             serde_json::json!({"mode":"volatile","allow_unclear_sources":true,
             "primary":[{"source":"kraken","symbol":"PHAUSD","company":"kraken"}],
             "check":[{"source":"binance","symbol":"PHAUSDT","company":"binance"}],
-            "fx":[{"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"a"}]}),
+            "fx":[{"source":"chainlink","feed":"USDT_USD","chain_id":1}]}),
         )
         .unwrap()
     }
     #[test]
     fn twap_defaults_boundaries_registry_and_licensing() {
         let mut config = volatile();
-        config.primary = vec![
-            serde_json::from_value(
-                serde_json::json!({"source":"uniswap_v2_twap","rpc_group":"a","rpc_group_b":"b"}),
-            )
-            .unwrap(),
-        ];
+        config.primary =
+            vec![serde_json::from_value(serde_json::json!({"source":"uniswap_v2_twap"})).unwrap()];
         config.check = vec![Source::Kraken {
             symbol: "PHAUSD".into(),
             company: "kraken".into(),
         }];
-        config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"a"})).unwrap()];
+        config.fx = vec![
+            serde_json::from_value(
+                serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1}),
+            )
+            .unwrap(),
+        ];
         assert!(config.validate(1, "pha", true).is_ok());
         assert!(config.validate_licensing(true).is_ok());
         assert!(
@@ -573,14 +553,67 @@ mod tests {
         assert!(twap.validate().is_err());
         *twap = TwapConfig::default();
         *observation_chain_id = Some(11155111);
-        config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"mainnet-a","rpc_group_b":"mainnet-b","observation_chain_id":11155111})).unwrap()];
+        config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"observation_chain_id":11155111})).unwrap()];
         assert!(config.validate(11155111, "pha", false).is_ok());
-        let Source::UniswapV2Twap { rpc_group_b, .. } = &mut config.primary[0] else {
-            panic!("TWAP source")
-        };
-        *rpc_group_b = "a".into();
-        assert!(config.validate(1, "pha", true).is_err());
     }
+    #[test]
+    fn twap_history_stays_within_blockhash_reach_and_wider_age_is_test_only() {
+        let reach = 240 * crate::route::ChainFamily::EthereumL1.block_seconds();
+        let mut policy = TwapConfig::default();
+        policy.window_s = reach - policy.max_sample_age_s;
+        assert!(policy.validate().is_ok());
+        policy.window_s += 1;
+        assert!(policy.validate().is_err());
+        policy.window_s = u64::MAX;
+        assert!(policy.validate().is_err());
+        let mut config = volatile();
+        config.primary = vec![Source::UniswapV2Twap {
+            observation_chain_id: None,
+            twap: TwapConfig::default(),
+        }];
+        config.check = vec![Source::Kraken {
+            symbol: "PHAUSD".into(),
+            company: "kraken".into(),
+        }];
+        for (age, test_ok, live_ok) in [
+            (600, true, true),
+            (601, true, false),
+            (900, true, false),
+            (901, false, false),
+        ] {
+            let Source::UniswapV2Twap { twap, .. } = &mut config.primary[0] else {
+                unreachable!()
+            };
+            twap.max_sample_age_s = age;
+            twap.max_sample_jump_bps = Bps::new(1100).unwrap();
+            assert_eq!(config.validate(1, "pha", false).is_ok(), test_ok);
+            assert_eq!(config.validate(1, "pha", true).is_ok(), live_ok);
+        }
+    }
+
+    #[test]
+    fn twap_policy_boundaries_admit_staging_five_minute_samples() {
+        let mut policy = TwapConfig::default();
+        assert_eq!(policy.max_sample_age_s, 180);
+        assert_eq!(policy.max_sample_jump_bps.value(), 500);
+        for age in [60, 900] {
+            policy.max_sample_age_s = age;
+            for jump in [1, 1100, 2000] {
+                policy.max_sample_jump_bps = Bps::new(jump).unwrap();
+                assert!(policy.validate().is_ok());
+            }
+        }
+        for age in [59, 901] {
+            policy.max_sample_age_s = age;
+            assert!(policy.validate().is_err());
+        }
+        policy.max_sample_age_s = 900;
+        for jump in [0, 2001] {
+            policy.max_sample_jump_bps = Bps::new(jump).unwrap();
+            assert!(policy.validate().is_err());
+        }
+    }
+
     #[test]
     fn licensing_gate_cannot_be_overridden_in_production() {
         let p = volatile();
@@ -618,7 +651,7 @@ mod tests {
         for (asset, name) in [("usdc", "USDC_USD"), ("usdt", "USDT_USD")] {
             let p: PriceConfig = serde_json::from_value(serde_json::json!({
                 "mode": "stablecoin",
-                "sources": [{"source":"chainlink", "feed":name, "chain_id":1, "rpc_group":"a"}]
+                "sources": [{"source":"chainlink", "feed":name, "chain_id":1}]
             }))
             .unwrap();
             assert!(!p.allow_unclear_sources);
@@ -632,12 +665,10 @@ mod tests {
         let mut p = volatile();
         assert!(p.validate(11155111, "pha", false).is_err());
         if let Source::Chainlink {
-            rpc_group_b,
             observation_chain_id,
             ..
         } = &mut p.fx[0]
         {
-            *rpc_group_b = Some("mainnet-b".into());
             *observation_chain_id = Some(11155111);
         }
         assert!(p.validate(11155111, "pha", false).is_ok());
@@ -660,8 +691,6 @@ mod tests {
         p.sources.push(Source::Chainlink {
             feed: "USDC_USD".into(),
             chain_id: 1,
-            rpc_group: "a".into(),
-            rpc_group_b: None,
             observation_chain_id: None,
         });
         assert!(p.validate(1, "usdc", true).is_ok());

@@ -19,7 +19,6 @@ use topup::db::{
 };
 use topup::reconciler::{CheckName, Reconciler, ReconciliationChain, ReconciliationError};
 use topup::{heartbeat, restore};
-use topup_adapters::chain::evm::TransferLog;
 use topup_core::deposit::{DepositState, StepOutcome, WaitReason, next};
 use topup_core::identity::deposit_id;
 use topup_core::money::AtomicAmount;
@@ -315,6 +314,8 @@ async fn restore_check_rejects_failed_rpc_with_current_schema_and_fresh_heartbea
             assert_session_budgets(&restore_pool, ("5min", "30s", "5min")).await?;
             let heartbeat = heartbeat::record(&context.app_pool).await?;
 
+            seed::initialize_dual_chain(&context.owner_pool, 1).await?;
+            seed_account(&context.app_pool, 11).await?;
             let reconciler = restore_reconciler(&restore_pool)?;
             let expectations = restore_expectations(&heartbeat);
             let report = restore::check(&restore_pool, &expectations, &reconciler)
@@ -359,6 +360,8 @@ async fn restore_check_without_a_source_lsn_flags_heartbeat_only_rpo() -> Result
     with_database(|context| {
         Box::pin(async move {
             let heartbeat = heartbeat::record(&context.app_pool).await?;
+            seed::initialize_dual_chain(&context.owner_pool, 1).await?;
+            seed_account(&context.app_pool, 11).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore::RestoreExpectations {
                 failure_at: Some(heartbeat.recorded_at),
@@ -385,6 +388,8 @@ async fn restore_check_at_boot_reports_an_unanchored_rpo() -> Result<()> {
     with_database(|context| {
         Box::pin(async move {
             let heartbeat = heartbeat::record(&context.app_pool).await?;
+            seed::initialize_dual_chain(&context.owner_pool, 1).await?;
+            seed_account(&context.app_pool, 11).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore::RestoreExpectations {
                 failure_at: None,
@@ -443,28 +448,6 @@ impl UnavailableChain {
 
 #[async_trait]
 impl ReconciliationChain for UnavailableChain {
-    async fn finalized_head(&self) -> Result<u64, ReconciliationError> {
-        Self::error()
-    }
-
-    async fn transfer_logs_to(
-        &self,
-        _addresses: &[Address],
-        _from_block: u64,
-        _to_block: u64,
-    ) -> Result<Vec<TransferLog>, ReconciliationError> {
-        Self::error()
-    }
-
-    async fn token_balances(
-        &self,
-        _token: Address,
-        _addresses: &[Address],
-        _block: u64,
-    ) -> Result<Vec<U256>, ReconciliationError> {
-        Self::error()
-    }
-
     async fn factory_addresses(
         &self,
         _factory: Address,
@@ -507,6 +490,7 @@ async fn restore_check_asks_the_product_nothing_and_keeps_recorded_credits() -> 
             .bind(credited)
             .execute(&context.owner_pool)
             .await?;
+            seed::initialize_dual_chain(&context.owner_pool, 1).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore_expectations(&heartbeat);
 
@@ -524,13 +508,13 @@ async fn restore_check_asks_the_product_nothing_and_keeps_recorded_credits() -> 
                 report
                     .post_restore_reconciliation
                     .failed_checks
-                    .contains(&CheckName::CustodyBalance)
+                    .contains(&CheckName::AddressDerivation)
             );
             ensure!(
                 report
                     .failures
                     .iter()
-                    .any(|failure| failure.contains("custody_balance"))
+                    .any(|failure| failure.contains("address_derivation"))
             );
             let deposit = db::get_deposit(&context.app_pool, credited)
                 .await?
@@ -730,6 +714,9 @@ const DOCUMENTED_GRANTS: &[(&str, &[&str])] = &[
     ("_sqlx_migrations", &["SELECT"]),
     ("topup_migration_compatibility", &[]),
     ("price_twap_observations", &["SELECT", "INSERT"]),
+    ("chain_checkpoints", &["SELECT", "INSERT", "UPDATE"]),
+    ("chain_coverage", &["SELECT", "INSERT", "UPDATE"]),
+    ("daily_budgets", &["SELECT", "INSERT", "UPDATE"]),
     ("accounts", OPERATIONAL),
     ("payment_settings_revisions", &["SELECT", "INSERT"]),
     ("payment_settings_state", OPERATIONAL),
@@ -1488,6 +1475,7 @@ async fn restore_check_counts_failure_time_and_does_not_grant_sampling_tolerance
     with_database(|context| {
         Box::pin(async move {
             let heartbeat = heartbeat::record(&context.app_pool).await?;
+            seed::initialize_dual_chain(&context.owner_pool, 1).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore::RestoreExpectations {
                 failure_at: Some(heartbeat.recorded_at + chrono::TimeDelta::milliseconds(60_100)),
@@ -1536,9 +1524,9 @@ async fn restore_check_counts_failure_time_and_does_not_grant_sampling_tolerance
 /// available throughout the additive cutover.
 #[tokio::test]
 async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
-    with_database(|context| Box::pin(async move {
+    with_legacy_database(|context| Box::pin(async move {
         let pool=&context.owner_pool;
-        db::MIGRATOR.undo(pool,20261028000002).await?;
+        undo_legacy_indexes(pool,20261028000002).await?;
         for sql in [
             include_str!("../migrations/20261029030001_address_pages.up.sql"),
             include_str!("../migrations/20261029030002_credit_pages.up.sql"),
@@ -1563,12 +1551,12 @@ async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
         .fetch_one(pool)
         .await?;
         ensure!(compatible == 6, "scale migrations must retain the N-1 compatibility floor");
-        db::MIGRATOR.undo(pool,20261028000002).await?;
+        undo_legacy_indexes(pool,20261028000002).await?;
         ensure!(objects().await?.is_empty());
         // Queries shipped by the previous release still work with the old or new schema.
         db::list_scan_addresses(&context.app_pool,1).await?;
         db::list_chain_addresses(&context.app_pool,1).await?;
-        db::migrate(pool).await?;
+        legacy_migrations().await?.run(pool).await?;
         db::list_scan_addresses(&context.app_pool,1).await?;
         ensure!(objects().await?.len()==5);
         Ok(())
@@ -1579,16 +1567,10 @@ async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
 /// compatibility ledger entries intact across rollback and migration retries.
 #[tokio::test]
 async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
-    with_database(|context| {
+    with_legacy_database(|context| {
         Box::pin(async move {
             let pool = &context.owner_pool;
-            let ledger: Vec<(i64, Vec<u8>, i64)> = sqlx::query_as(
-                "SELECT version, checksum, compatibility_floor FROM topup_migration_compatibility \
-                 WHERE version <= 20261029030005 ORDER BY version",
-            )
-            .fetch_all(pool)
-            .await?;
-            db::MIGRATOR.undo(pool, 20261029030005).await?;
+            undo_legacy_indexes(pool, 20261029030005).await?;
             for sql in [
                 include_str!("../migrations/20261029040000_quote_list.up.sql"),
                 include_str!("../migrations/20261029040001_refund_list.up.sql"),
@@ -1615,6 +1597,12 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
             let before = objects().await?;
             ensure!(before.len() == 4 && before.iter().all(|(_, _, valid)| *valid));
             db::migrate(pool).await?;
+            let ledger: Vec<(i64, Vec<u8>, i64)> = sqlx::query_as(
+                "SELECT version, checksum, compatibility_floor FROM topup_migration_compatibility \
+                 WHERE version <= 20261029030005 ORDER BY version",
+            )
+            .fetch_all(pool)
+            .await?;
             ensure!(objects().await? == before, "completed index was rebuilt");
             let compatible: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM _sqlx_migrations m \
@@ -1625,9 +1613,9 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
             .fetch_one(pool)
             .await?;
             ensure!(compatible == 4, "service indexes must retain the N-1 floor");
-            db::MIGRATOR.undo(pool, 20261029030005).await?;
+            undo_legacy_indexes(pool, 20261029030005).await?;
             ensure!(objects().await?.is_empty());
-            db::migrate(pool).await?;
+            legacy_migrations().await?.run(pool).await?;
             ensure!(objects().await?.len() == 4);
             let retained: Vec<(i64, Vec<u8>, i64)> = sqlx::query_as(
                 "SELECT version, checksum, compatibility_floor FROM topup_migration_compatibility \
@@ -1640,4 +1628,43 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
         })
     })
     .await
+}
+
+async fn legacy_migrations() -> Result<sqlx::migrate::Migrator> {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let mut migrations = sqlx::migrate::Migrator::new(directory.as_path()).await?;
+    migrations
+        .migrations
+        .to_mut()
+        .retain(|m| m.version < 20261030000000);
+    migrations.set_ignore_missing(true);
+    Ok(migrations)
+}
+async fn with_legacy_database<F>(test: F) -> Result<()>
+where
+    F: for<'a> FnOnce(&'a support::TestDatabase) -> support::TestFuture<'a>,
+{
+    let Some(database) = support::TestDatabase::create_with_migrations(false).await? else {
+        return Ok(());
+    };
+    let result = async {
+        legacy_migrations().await?.run(&database.owner_pool).await?;
+        test(&database).await
+    }
+    .await;
+    result.and(database.cleanup().await)
+}
+
+// Binary rollback keeps the expand-only evidence migration registered. Index tests undo only
+// their historical index migrations, preserving the compatibility ledger and expanded schema.
+async fn undo_legacy_indexes(pool: &PgPool, target: i64) -> Result<()> {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let mut migrations = sqlx::migrate::Migrator::new(directory.as_path()).await?;
+    migrations
+        .migrations
+        .to_mut()
+        .retain(|m| m.version < 20261030000000);
+    migrations.set_ignore_missing(true);
+    migrations.undo(pool, target).await?;
+    Ok(())
 }

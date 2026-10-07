@@ -170,7 +170,7 @@ comes from a release.
 
    | File | Settings |
    |---|---|
-   | `topup.yaml` ([reference](configuration.md#the-configuration-file)) | `environment` (the Sentry environment), `public_origin` (`https://` + your domain), `admin_key` (step 2), `rpc_groups`, `rpc_companies` and `rpc_budgets` (each chain's A/B members, with `{key}` in place of an API key; the first must serve `eth_getLogs` over 2 000 blocks and with no contract address, [deploy/README.md, "RPC providers"](../deploy/README.md#rpc-providers)), and `routes` (section 3) |
+   | `topup.yaml` ([reference](configuration.md#the-configuration-file)) | `environment` (the Sentry environment), `public_origin` (`https://` + your domain), `admin_key` (step 2), `rpc` (each payment and price chain's independent read/verify endpoints, with `{key}` in place of a sealed key, [deploy/README.md, "RPC providers"](../deploy/README.md#rpc-providers)), and `routes` (section 3) |
    | `compose.yaml` | `WALG_S3_PREFIX` (`s3://BUCKET/PATH`, empty and used by no other app), `AWS_ENDPOINT`, `AWS_REGION`, `AWS_S3_FORCE_PATH_STYLE`, dstack-ingress's `DOMAIN` (your domain), and one `TOPUP_RPC_<ID>_KEY` line per keyed provider |
 
    The kit renders it and the release's image checks it, so you can check it before committing:
@@ -272,16 +272,17 @@ Deploy `upgrade`, never a runtime setting.
   not list. A chain is added there, and to [networks.json](../deploy/contracts/networks.json) for
   the contract scripts, by a pull request to Phala Pay and ships in its next release. A chain without a Chainalysis sanctions oracle needs
   `chain.sanctions_oracle`.
-- **Its RPC providers.** Require explicit `chain.rpc_groups: { a: ..., b: ... }` and
-  company-disjoint reviewed groups. Configure every member URL/credential, shared budget and
-  bounded selection policy in the attested public configuration; keep credentials sealed under
-  the explicit member key names. See [RPC configuration](../deploy/README.md#rpc-providers) and
+- **Its RPC providers.** Require explicit `rpc` read/verify pairs and
+  distinct endpoint hosts. Configure each endpoint URL, `sealed_key` and measured `max_log_blocks`
+  in the attested public configuration; keep credentials sealed under their explicit key names. See [RPC configuration](../deploy/README.md#rpc-providers) and
   [the RPC runbook](../deploy/RPC.md) for startup checks, outage recovery and migration.
 
 - **The contracts.** The `ForwarderFactory` has no owner, no roles, and no admin, and is deployed
   deterministically through the Arachnid proxy at `0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747`,
   with its implementation at `0x49F2F1F1a25269Ea0C6FF2AB1C7B09dCBE9c5bA9`, on every chain. Reuse it;
-  `topup run` refuses to start unless the chain holds exactly that code. Check a chain with the
+  A dual-source agreed code mismatch freezes that chain; disagreement or an unavailable endpoint
+  keeps it not-ready. The API and other chains continue. An audited lift requires a fresh passing
+  dual-source check. Check a chain with the
   kit's read-only `deploy/contracts/verify-deployment.sh --rpc NETWORK/a=URL_A --rpc NETWORK/b=URL_B`
   (`NETWORK` from `networks.json`, the URLs with their keys), which compares it with the release's
   reference deployment.

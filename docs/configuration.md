@@ -8,7 +8,7 @@ environment directory in the operator's environment repository, for example
 compose. A change is therefore a pull request and a Deploy `upgrade`
 ([deploy/README.md, "Attested settings"](../deploy/README.md#attested-settings)). The only
 environment variables are the database login's and the two kinds of secret the owner seals into
-the CVM's encrypted environment: `SENTRY_DSN` and each `TOPUP_RPC_<ID>_KEY`
+the CVM's encrypted environment: `SENTRY_DSN` and each `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`
 ([deploy/README.md, "Sealing the secrets"](../deploy/README.md#sealing-the-secrets)). The design
 is in [design/deploy-config.md](design/deploy-config.md).
 
@@ -39,10 +39,9 @@ Carrying real client IPs via PROXY protocol is future work: it requires the dsta
 |---|---|
 | `topup run --config FILE` | The service: the HTTP API and every worker loop. |
 | `topup migrate` | Applies migrations as the database owner. Incomplete payment settings cutovers must be completed on 0.9.x before upgrading. |
-| `topup config check [--secrets] FILE`, `topup config show FILE` | Validates a configuration file without any secret; prints it resolved, as JSON with every route default written out and each keyed provider's URL still carrying its `{key}`. `--secrets` also checks each provider's sealed key (`TOPUP_RPC_<ID>_KEY`) against its URL and prints no value. |
+| `topup config check [--secrets] FILE`, `topup config show FILE` | Validates a configuration file without any secret; prints it resolved, as JSON with every route default written out and each keyed provider's URL still carrying its `{key}`. `--secrets` also checks each provider's sealed key (`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`) against its URL and prints no value. |
 | `topup route validate FILE`, `topup route show FILE` | The same for one route file (`examples/`, the sandbox template). `--template` permits the zero factory and implementation placeholders of a deployment template. |
-| `topup rpc check --config FILE` | Probes RPC members with their sealed credentials; prints validated member ids. |
-| `topup rpc recover --config FILE --chain N --block N --actor NAME --reason TEXT`, `topup rpc resume --config FILE --chain N [--max-windows N]` | Stopped-service owner recovery and bounded replay; see [RPC recovery](../deploy/RPC.md#wrong-watermark-recovery). |
+| `topup rpc check --config FILE` | Checks both endpoints with typed production calls through their sealed credentials; prints endpoint ids. |
 | `topup reconcile --config FILE` | Runs one reconciliation pass and exits. |
 | `topup attest --nonce HEX --account acct_… [--live] [--version N]` | Prints the attestation evidence that `GET /v1/attestation` returns to that account. |
 | `topup keys` | Derives the backup key and the database credentials from dstack into tmpfs files. |
@@ -60,25 +59,18 @@ public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1                     # the key id admin requests sign with
   public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=   # standard base64 ed25519
-rpc_companies:
-  tenderly: { domains: [tenderly.co] }
-  publicnode: { domains: [publicnode.com] }
-rpc_budgets:
-  tenderly-account: { requests_per_second: 10, burst: 10 }
-  tenderly-public: { requests_per_second: 10, burst: 5 }
-  publicnode-account: { requests_per_second: 10, burst: 10 }
-  publicnode-public: { requests_per_second: 10, burst: 5 }
-rpc_groups:
-  sepolia-a:
-    chain_id: 11155111
-    policy: { probe: { attempts: 3, deadline: 30000 } }
-    members: [{id: provider-a, company: tenderly, url: 'https://sepolia.gateway.tenderly.co',
-               account_budget: tenderly-account, key_budget: tenderly-public}]
-  sepolia-b:
-    chain_id: 11155111
-    policy: { probe: { attempts: 3, deadline: 30000 } }
-    members: [{id: provider-b, company: publicnode, url: 'https://ethereum-sepolia-rpc.publicnode.com',
-               account_budget: publicnode-account, key_budget: publicnode-public}]
+rpc:
+  - chain_id: 11155111
+    read:
+      id: ankr-sepolia
+      url: "https://rpc.ankr.com/eth_sepolia/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-sepolia
+      url: "https://sepolia.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
 routes:                                    # every enabled route version, as route files are written
   - route: phala-cloud-sepolia-pha-usd
     version: 3
@@ -104,28 +96,17 @@ routes:                                    # every enabled route version, as rou
   The same RFC 9421 origin, freshness, digest and single-use replay protections apply. The
   operator's admin key retains full access. For generation, CI configuration and overlapping
   rotation, see [planned upgrades](../deploy/README.md#planned-upgrade-admission-and-downtime).
-- **`rpc_groups`** configures independent A/B groups. Each route explicitly names
-  `chain.rpc_groups: { a: sepolia-a, b: sepolia-b }`; there is no implicit provider list.
-  Members have unique ids, reviewed `company`, `url`, optional `sealed_key`, `account_budget`
-  and `key_budget`, plus priority/weight. Companies must be disjoint between A and B.
-  Each `{key}` is a whole path segment or query value and cannot change authority. Keys stay
-  sealed under the explicit `TOPUP_RPC_*_KEY` name, with at least 8 URL-safe characters.
-  Repeated templates with different credentials are allowed; identical URL/credential identities
-  and conflicting shared quota scopes are refused. Keyless endpoints still have synthetic key
-  budgets. Public policies resolve to bounded failover defaults; weighted round robin is optional.
-  `policy.probe: { attempts: 3, deadline: 30000 }` is the default acceptance/readmission policy:
-  attempts includes the first send of each RPC; deadline is milliseconds for the complete member
-  probe, including all calls, quota admission, backoff and `Retry-After`. Attempts must be 1–16
-  and deadline 1–120000, at least `attempt_timeout_ms` and greater than `retry_delay_ms`.
-  Only transport/timeouts, classified server errors and throttling retry on the same member,
-  with exponential backoff starting at `retry_delay_ms` (100 ms by default). A 429 honors
-  `Retry-After`; a pause beyond the deadline fails without another send. Identity/genesis/code
-  mismatches, capability failures, stale heads and malformed replies do not retry or admit.
-  `recovery_successes` (default 2) counts consecutive complete successful probes, independently
-  of the per-RPC attempt count.
-  See [the RPC runbook](../deploy/RPC.md) for preflight, recovery and migration; the policy
-  fields and validation bounds are defined in
-  [`GroupPolicy`](../crates/adapters/src/chain/evm/group/mod.rs).
+- **`rpc`** configures exactly one read/verify pair per route or price chain. Read is Ankr;
+  verify is Infura. IDs are globally unique `[a-z0-9-]{1,40}` labels, chain IDs are unique,
+  both endpoints use HTTPS and their hosts differ. Each URL has one `{key}` as a whole path
+  segment or query value; `sealed_key` names an explicit `TOPUP_RPC_[A-Z0-9_]+_KEY` variable.
+  `max_log_blocks` is positive and measured per endpoint. Every configured sealed key must be
+  present in the candidate sealed environment and in the topup/restore-check compose mapping.
+  `topup config check --secrets` checks them without printing their values.
+  Cadences, range limits and budgets are code constants. No in-process endpoint selection or
+  failover exists. The single Alloy retry layer retries HTTP 429/503 and JSON-RPC throughput
+  errors; Infura HTTP 402 stops verify until the next UTC midnight.
+  See [the RPC runbook](../deploy/RPC.md) and [chain reads](design/chain-reads.md).
 - **`routes`** are route files, one list item each; their fields and defaults are in
   [architecture §14](architecture.md#14-configuration-and-deployment).
 
@@ -141,9 +122,9 @@ The files it refuses include:
 
 - an invalid origin or admin key;
 - a route that fails validation, or routes that disagree on a chain;
-- an unknown or unused RPC group, or a group assigned to the wrong chain;
-- overlapping company ownership between A and B;
-- duplicate member ids or URL/credential identities, or invalid quota references;
+- a missing or unused read/verify chain pair;
+- read and verify endpoints on the same host;
+- duplicate chain or endpoint ids, an invalid sealed key name, or unknown fields;
 - a misplaced `{key}`.
 
 ## Flags
@@ -160,8 +141,6 @@ The files it refuses include:
 | `--public-origin URL` | the file's | Replaces `public_origin`: the restore instance's own origin, or a local stack's. The attested service compose never sets it. |
 | `--public-origin-host-env NAME` | none | When the file leaves `public_origin` out: the environment variable holding the origin's host, a lowercase DNS name served as `https://HOST` (the template's `DSTACK_APP_DOMAIN`). |
 | `--admin-public-key-env NAME` | none | When the file leaves `admin_key.public_key` out: the environment variable holding the admin public key, standard base64 ed25519 (the template's `TOPUP_ADMIN_PUBLIC_KEY`). |
-| `--head-poll-interval-s` | one block time: 12 s, or 2 s on an OP-stack chain whose route credits at a depth | Delay between `eth_blockNumber` polls of provider A, for every chain when set. Each new block's transfers to every issued address are read in one request. |
-| `--finalized-poll-interval-s` | 60 | Least delay between reads of the `finalized` head. Its advances drive the finalized backstop, the finality watch, and reconciliation. |
 | `--reconcile-interval-s` | 600 | Least delay between reconciliation rounds; a round runs only after `finalized` advanced. |
 | `--wait-interval-s` | 60 | Delay before retrying an expected wait outcome. |
 
@@ -179,7 +158,7 @@ privileges but no `TRUNCATE`. Append-only tables (among them `transitions`, `aud
 the finalized chain facts `flushed` and `flush_failures`) permit only `SELECT` and `INSERT`. The
 [migrations README](../crates/topup/migrations/README.md#roles-and-privileges) lists every grant.
 
-`migrate`, `restore-check`, `rpc recover`, and `rpc resume` require the trusted database owner;
+`migrate` and `restore-check` require the trusted database owner;
 `migrate` also needs permission to create roles and schema objects. These commands refuse the
 application role. Recovery and restore checks require stopped writers.
 
@@ -188,8 +167,7 @@ application role. Recovery and restore checks require stopped writers.
 | Variable | Read by | Meaning |
 |---|---|---|
 | `DATABASE_URL` | database commands | The login above; its password is in `PGPASSFILE`. |
-| `TOPUP_RPC_*_KEY` | `run`, `reconcile`, `restore-check`, `config check --secrets`, `rpc` | Each member's explicit `sealed_key`, which fills its URL's `{key}`. |
-| `TOPUP_RPC_PROBE_DEBUG` | RPC commands and service startup | Set to `1` for sanitized probe diagnostics ([RPC runbook](../deploy/RPC.md#configuration-and-acceptance)). |
+| `TOPUP_RPC_*_KEY` | `run`, `reconcile`, `restore-check`, `config check --secrets`, `rpc` | Each endpoint's explicit `sealed_key`, which fills its URL's `{key}`. |
 | `DSTACK_APP_DOMAIN`, `TOPUP_ADMIN_PUBLIC_KEY` | `run`, only when named by the flags above | The Phala Cloud template's origin host and admin key. |
 | `SENTRY_DSN` | `run` | Sentry reporting, off while unset or empty ([deploy/README.md, "Sentry"](../deploy/README.md#sentry)). The environment is the file's `environment`; the release is the source commit compiled into the image. |
 
@@ -217,27 +195,17 @@ lists, with disjoint primary/check company identities. PHA uses `uniswap_v2_twap
 Missing either company pauses PHA; the Kraken check is staging/noncommercial only.
 
 Source descriptors are `source: kraken`/`binance`, `symbol`, and the canonical `company`, or
-`source: chainlink`, `feed`, `chain_id`, `rpc_group`, and an independent `rpc_group_b` for explicit
-cross-network groups. Role ids `a`/`b` resolve the route's groups. Testnet mainnet observations
-also require `observation_chain_id` equal to the test route chain. Supported pinned feeds are
-USDC_USD and USDT_USD on Ethereum (1) and Base (8453), plus Ethereum ETH_USD for the TWAP
-composite source. See the
-[feed evidence](design/price-feed-registry.json) and [accepted design](design/price-failover.md).
+`source: chainlink`, `feed`, `chain_id`, and `observation_chain_id` for explicit cross-network
+observations. Each price chain resolves its shared `rpc` read/verify pair. Supported pinned feeds
+are USDC_USD and USDT_USD on Ethereum (1) and Base (8453), plus Ethereum ETH_USD for the TWAP
+composite. See [feed evidence](design/price-feed-registry.json).
 
-Base and Base Sepolia require `sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600,
-rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }`. Observation-only groups use existing
-shared RPC budgets, counted transports, independent company validation, and recovery probes;
-they do not scan payment contracts. Their capability probes read pinned feed decimals instead of
-payment receipts or logs. Staging includes `mainnet-a`/`mainnet-b` (chain 1) for price
-feeds and `base-mainnet-a`/`base-mainnet-b` (8453) for uptime. Feed addresses and heartbeat values
-are pinned in the image; operators configure group references, not arbitrary feed addresses.
+Base and Base Sepolia require `sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }`.
+Configure Ethereum and Base endpoint pairs in `rpc` for staging's price observations; these chains
+do not scan payment contracts. Feed addresses and heartbeat values are pinned in the image.
 Chainlink freshness allows heartbeat + **600 s** for publication delay: the last eight Ethereum
 round intervals were already up to 36 s late in calm conditions (see the feed evidence and design
 above). Deviation-triggered updates and all agreement/peg checks remain in effect.
-Ethereum B uses `https://eth.drpc.org` (company `drpc`): PublicNode Ethereum prunes genesis
-history and cannot pass group identity acceptance. Base B remains PublicNode. Both groups require
-numeric-block feed state and recent historical calls across the configured TWAP window.
-
 Chainlink public on-chain consumption is Allowed; stablecoin defaults are Chainlink-only and
 production-eligible without `allow_unclear_sources`. Kraken public market data is
 PermissionRequired; Binance, Coinbase and Coin Metrics are Prohibited for commercial use under
@@ -254,10 +222,20 @@ CoinGecko is dropped. See the
 [on-chain plan](design/price-failover.md#pha-on-chain-follow-up). `topup config check` prints ordered
 sources, verdicts, pinned feed metadata and testnet markers; `config show` emits resolved `price`.
 
-For PHA, configure `source: uniswap_v2_twap`, `rpc_group`, `rpc_group_b` (independent Ethereum
-mainnet groups) and `observation_chain_id` for cross-network routes. The fixed pair and tokens
+For PHA, configure `source: uniswap_v2_twap` and `observation_chain_id` for cross-network routes. The fixed pair and tokens
 are pinned in the image. Optional `twap` settings default to `window_s: 1800`,
 `max_sample_age_s: 180`, `min_weth_reserve_usd: 100000`, `max_spot_deviation_bps: 300`,
 and `max_sample_jump_bps: 500`. Windows below thirty minutes are rejected. The service samples
-once/minute into PostgreSQL even without quote traffic; startup and gaps require a continuous
+once/minute into PostgreSQL even without quote traffic (300 seconds on staging PHA); startup and gaps require a continuous
 window before prices become available. `config show` includes the resolved guard rails.
+
+The staging PHA routes use 300 s TWAP samples with `max_sample_age_s: 900` and
+`max_sample_jump_bps: 1100`. The gap bound retains three sample intervals, tolerating two
+missed samples. The jump bound scales the existing 500 bps per minute by
+√(300/60) under the random-walk assumption, rounded to 1100 bps. Code defaults remain
+180 s and 500 bps. Only `livemode: false` routes allow sample ages up to 900 s. Live routes
+retain their original validation bounds: age 60–600 s and jump 1–2000 bps. These are bounds,
+not the defaults. Both modes reject `window_s + max_sample_age_s > 2880 s`: the pinned TWAP
+observation chain is Ethereum (12 s blocks), and Multicall3's `BLOCKHASH` can reach only 256
+blocks. The limit leaves a 16-block margin (240 × 12 s) for the oldest sample. A longer window
+cannot be verified by that contract and is refused at config validation.

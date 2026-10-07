@@ -1,7 +1,6 @@
 //! Chainlink AggregatorV3 reader over the existing bounded A/B RPC clients.
 use super::{PriceError, PriceQuote, PriceSource, unix_now};
 use crate::chain::evm::EvmClient;
-use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_primitives::{Address, B256, Bytes};
 use alloy_sol_types::{SolCall, sol};
 use async_trait::async_trait;
@@ -30,7 +29,7 @@ pub struct Round {
     /// Completed round identifier.
     pub answered_in_round: u128,
 }
-/// A single block agreed by both groups, including timestamp and canonical hash.
+/// A single block agreed by both endpoints, including timestamp and canonical hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PriceBlock {
     /// Ethereum block height.
@@ -40,108 +39,85 @@ pub struct PriceBlock {
     /// Full Unix timestamp (the pair uses its low 32 bits).
     pub timestamp: u64,
 }
-/// Compare both headers at one explicit block number.
-pub async fn confirm_block(
-    a: &EvmClient,
-    b: &EvmClient,
-    number: u64,
-) -> Result<PriceBlock, PriceError> {
-    let (a, b) = tokio::try_join!(
-        a.price_block(BlockNumberOrTag::Number(number)),
-        b.price_block(BlockNumberOrTag::Number(number))
-    )
-    .map_err(|_| PriceError::RpcUnavailable)?;
-    if a != b || a.0 != number {
-        return Err(PriceError::Disagreement);
-    }
-    Ok(PriceBlock {
-        number,
-        hash: a.1,
-        timestamp: a.2,
-    })
-}
-/// Pin two blocks behind the slower head, then require identical numeric headers.
-pub async fn agreed_block(a: &EvmClient, b: &EvmClient) -> Result<PriceBlock, PriceError> {
-    let (ha, hb) = tokio::try_join!(a.latest_head(), b.latest_head())
-        .map_err(|_| PriceError::RpcUnavailable)?;
-    confirm_block(a, b, ha.min(hb).saturating_sub(2)).await
-}
-/// Shared independent group clients; no alternate direct HTTP endpoint.
+/// Shared independent endpoint clients; no alternate direct HTTP endpoint.
 pub struct Chainlink {
-    a: Arc<EvmClient>,
-    b: Arc<EvmClient>,
+    snapshots: Arc<super::snapshot::Snapshots>,
     feed: Feed,
 }
 impl Chainlink {
-    /// Constructs a reader for pinned metadata.
-    pub fn new(a: Arc<EvmClient>, b: Arc<EvmClient>, feed: Feed) -> Self {
-        Self { a, b, feed }
-    }
-    async fn read(&self, client: &EvmClient, block: u64) -> Result<Round, PriceError> {
-        let address: Address = self
-            .feed
-            .address
-            .parse()
-            .map_err(|_| PriceError::InvalidPrice)?;
-        let (data, precision) = tokio::try_join!(
-            client.call(
-                "price round",
-                address,
-                Bytes::from(latestRoundDataCall {}.abi_encode()),
-                Some(BlockId::number(block))
-            ),
-            client.call(
-                "price decimals",
-                address,
-                Bytes::from(decimalsCall {}.abi_encode()),
-                Some(BlockId::number(block))
-            )
-        )
-        .map_err(|_| PriceError::RpcUnavailable)?;
-        let precision = decimalsCall::abi_decode_returns_validate(&precision)
-            .map_err(|_| PriceError::MalformedResponse("decimals"))?;
-        if precision != self.feed.decimals {
-            return Err(PriceError::MalformedResponse("decimals"));
-        }
-        let r = latestRoundDataCall::abi_decode_returns_validate(&data)
-            .map_err(|_| PriceError::MalformedResponse("round"))?;
-        Ok(Round {
-            id: r.roundId.to::<u128>(),
-            answer: r.answer,
-            started_at: r
-                .startedAt
-                .try_into()
-                .map_err(|_| PriceError::InvalidTimestamp)?,
-            updated_at: r
-                .updatedAt
-                .try_into()
-                .map_err(|_| PriceError::InvalidTimestamp)?,
-            answered_in_round: r.answeredInRound.to::<u128>(),
+    /// Constructs a single-feed snapshot reader, primarily for isolated adapter tests.
+    pub fn new(a: Arc<EvmClient>, b: Arc<EvmClient>, feed: Feed) -> Result<Self, PriceError> {
+        let calls = calls(feed)?;
+        Ok(Self {
+            snapshots: Arc::new(super::snapshot::Snapshots::new(
+                feed.chain_id,
+                a,
+                b,
+                calls,
+                None,
+            )),
+            feed,
         })
     }
-    /// Read both groups and reject different rounds, values or timestamps.
-    pub async fn round(&self) -> Result<Round, PriceError> {
-        let block = agreed_block(&self.a, &self.b).await?;
-        let round = self.round_at(block.number).await?;
-        if confirm_block(&self.a, &self.b, block.number).await? != block {
-            return Err(PriceError::Disagreement);
-        }
-        Ok(round)
+    /// Uses the complete shared snapshot of all configured feeds on this chain.
+    pub fn with_snapshots(snapshots: Arc<super::snapshot::Snapshots>, feed: Feed) -> Self {
+        Self { snapshots, feed }
     }
-    /// Read round and decimals at the same numeric block as a composite on-chain source.
-    pub async fn round_at(&self, block: u64) -> Result<Round, PriceError> {
-        let (a, b) = tokio::try_join!(self.read(&self.a, block), self.read(&self.b, block))?;
-        if a != b {
-            return Err(PriceError::Feed {
-                class: "divergent",
-                evidence: serde_json::json!({"a":round_evidence(&a,self.feed),"b":round_evidence(&b,self.feed)}),
-            });
-        }
-        Ok(a)
+    /// Current quote round, pinned by verify and independently derived on both endpoints.
+    pub async fn round(&self) -> Result<Round, PriceError> {
+        let snapshot = self
+            .snapshots
+            .fetch(super::snapshot::SnapshotUse::Quote)
+            .await?;
+        round(&snapshot, self.feed)
+    }
+    async fn quote_for(
+        &self,
+        purpose: super::snapshot::SnapshotUse,
+        arrived: tokio::time::Instant,
+    ) -> Result<PriceQuote, PriceError> {
+        let snapshot = self.snapshots.fetch_since(purpose, arrived).await?;
+        let r = round(&snapshot, self.feed)?;
+        let o = validate_round(&r, self.feed, unix_now()?.value()).map_err(|error| {
+            PriceError::Feed {
+                class: if error == PriceError::Stale {
+                    "stale"
+                } else {
+                    "malformed"
+                },
+                evidence: round_evidence(&r, self.feed),
+            }
+        })?;
+        Ok(PriceQuote {
+            agreement_price: o.price,
+            spread_bps: None,
+            valuation: o,
+            evidence: round_evidence(&r, self.feed),
+            reuse_until: Some(UnixSeconds::new(
+                r.updated_at
+                    .saturating_add(self.feed.heartbeat_s)
+                    .saturating_add(self.feed.margin_s),
+            )),
+        })
     }
     /// Halts on sequencer down, malformed uptime or recovery grace.
     pub async fn sequencer(&self, grace_s: u64) -> Result<serde_json::Value, PriceError> {
-        let round = self.round().await?;
+        self.sequencer_since(
+            grace_s,
+            super::snapshot::SnapshotUse::Quote,
+            tokio::time::Instant::now(),
+        )
+        .await
+    }
+    /// Screen sequencer uptime from the same snapshot as this request's other price reads.
+    pub async fn sequencer_since(
+        &self,
+        grace_s: u64,
+        purpose: super::snapshot::SnapshotUse,
+        arrived: tokio::time::Instant,
+    ) -> Result<serde_json::Value, PriceError> {
+        let snapshot = self.snapshots.fetch_since(purpose, arrived).await?;
+        let round = round(&snapshot, self.feed)?;
         let evidence =
             serde_json::json!({"round":round_evidence(&round, self.feed),"grace_s":grace_s});
         validate_sequencer(&round, unix_now()?.value(), grace_s).map_err(|_| PriceError::Feed {
@@ -198,34 +174,63 @@ pub fn validate_sequencer(round: &Round, now: u64, grace_s: u64) -> Result<(), P
     }
     Ok(())
 }
+/// The feed's two reads are combined with all other configured price state in one multicall.
+pub fn calls(feed: Feed) -> Result<Vec<(Address, Bytes)>, PriceError> {
+    let address = feed.address.parse().map_err(|_| PriceError::InvalidPrice)?;
+    Ok(vec![
+        (address, latestRoundDataCall {}.abi_encode().into()),
+        (address, decimalsCall {}.abi_encode().into()),
+    ])
+}
+/// Decode a complete independently agreed round and its configured precision.
+pub fn round(snapshot: &super::snapshot::Snapshot, feed: Feed) -> Result<Round, PriceError> {
+    let address = feed.address.parse().map_err(|_| PriceError::InvalidPrice)?;
+    let precision =
+        decimalsCall::abi_decode_returns_validate(snapshot.get(address, decimalsCall {})?)
+            .map_err(|_| PriceError::MalformedResponse("decimals"))?;
+    if precision != feed.decimals {
+        return Err(PriceError::MalformedResponse("decimals"));
+    }
+    let r = latestRoundDataCall::abi_decode_returns_validate(
+        snapshot.get(address, latestRoundDataCall {})?,
+    )
+    .map_err(|_| PriceError::MalformedResponse("round"))?;
+    Ok(Round {
+        id: r.roundId.to::<u128>(),
+        answer: r.answer,
+        started_at: r
+            .startedAt
+            .try_into()
+            .map_err(|_| PriceError::InvalidTimestamp)?,
+        updated_at: r
+            .updatedAt
+            .try_into()
+            .map_err(|_| PriceError::InvalidTimestamp)?,
+        answered_in_round: r.answeredInRound.to::<u128>(),
+    })
+}
 #[async_trait]
 impl PriceSource for Chainlink {
+    async fn quote_since(&self, arrived: tokio::time::Instant) -> Result<PriceQuote, PriceError> {
+        self.quote_for(super::snapshot::SnapshotUse::Confirm, arrived)
+            .await
+    }
     async fn observe(&self) -> Result<Observation, PriceError> {
-        validate_round(&self.round().await?, self.feed, unix_now()?.value())
+        self.quote().await.map(|q| q.valuation)
     }
     async fn quote(&self) -> Result<PriceQuote, PriceError> {
-        let r = self.round().await?;
-        let o = validate_round(&r, self.feed, unix_now()?.value()).map_err(|error| {
-            PriceError::Feed {
-                class: if error == PriceError::Stale {
-                    "stale"
-                } else {
-                    "malformed"
-                },
-                evidence: round_evidence(&r, self.feed),
-            }
-        })?;
-        Ok(PriceQuote {
-            agreement_price: o.price,
-            spread_bps: None,
-            valuation: o,
-            evidence: round_evidence(&r, self.feed),
-            reuse_until: Some(UnixSeconds::new(
-                r.updated_at
-                    .saturating_add(self.feed.heartbeat_s)
-                    .saturating_add(self.feed.margin_s),
-            )),
-        })
+        self.quote_for(
+            super::snapshot::SnapshotUse::Quote,
+            tokio::time::Instant::now(),
+        )
+        .await
+    }
+    async fn quote_fresh(&self) -> Result<PriceQuote, PriceError> {
+        self.quote_for(
+            super::snapshot::SnapshotUse::Confirm,
+            tokio::time::Instant::now(),
+        )
+        .await
     }
 }
 
@@ -243,11 +248,12 @@ mod tests {
             a.client.clone(),
             b.client.clone(),
             topup_core::price::feed("USDC_USD", 1).unwrap(),
-        );
+        )
+        .unwrap();
         reader.round().await.unwrap();
         let sends = a.sends.load(Ordering::SeqCst) + b.sends.load(Ordering::SeqCst);
         println!("Chainlink::round stationary-head sends: {sends}");
-        assert_eq!(sends, 10);
+        assert_eq!(sends, 4);
     }
     fn round() -> Round {
         Round {
@@ -330,7 +336,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn typed_group_round_agreement_and_fault_injection() {
+    async fn typed_endpoint_round_agreement_and_fault_injection() {
         let now = unix_now().unwrap().value();
         let a = rpc("price-test-a", 100_000_000, 20, 20, now, false).await;
         for (answer, round_id, complete, updated, malformed, healthy) in [
@@ -353,7 +359,8 @@ mod tests {
                 a.client.clone(),
                 b.client.clone(),
                 topup_core::price::feed("USDC_USD", 1).unwrap(),
-            );
+            )
+            .unwrap();
             let observation = reader.quote().await;
             assert_eq!(observation.is_ok(), healthy, "{observation:?}");
         }
@@ -364,12 +371,11 @@ mod tests {
             a.client.clone(),
             b.client.clone(),
             topup_core::price::feed("USDC_USD", 1).unwrap(),
-        );
+        )
+        .unwrap();
         assert!(matches!(
             reader.quote().await,
             Err(PriceError::Feed { class: "stale", .. })
         ));
-        b.client.group().unwrap().verified(0, false);
-        assert!(reader.observe().await.is_err());
     }
 }

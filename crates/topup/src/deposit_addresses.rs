@@ -189,6 +189,12 @@ pub enum DepositAddressError {
     /// can be issued.
     #[error("no chain accepts new deposit addresses")]
     NoChain,
+    /// The chain's permanent pilot quota counts every address ever issued.
+    #[error("permanent chain address capacity reached")]
+    AddressCapacityReached,
+    /// The chain's dual coverage is not ready for issuance yet.
+    #[error("chain is not ready")]
+    ChainUnavailable,
     /// The account has no treasury on any chain that accepts new networks.
     #[error("no treasury is set on a chain that accepts new deposit addresses")]
     NoTreasury,
@@ -735,6 +741,20 @@ async fn keep_network(
         .transpose()
         .map_err(|_| DepositAddressError::DatabaseInvariant)?;
     let address = forwarder_address(chain.factory, chain.implementation, chain.treasury, salt);
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM addresses WHERE deposit_address_id=$1 AND chain_id=$2 AND address=$3)")
+        .bind(id).bind(chain_id).bind(format!("{address:#x}")).fetch_one(&mut **transaction).await?;
+    if exists {
+        return Ok(());
+    }
+    match crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
+        crate::db::chain_reads::AddressAdmission::Admitted => {}
+        crate::db::chain_reads::AddressAdmission::NotReady => {
+            return Err(DepositAddressError::ChainUnavailable);
+        }
+        crate::db::chain_reads::AddressAdmission::CapacityReached => {
+            return Err(DepositAddressError::AddressCapacityReached);
+        }
+    }
     sqlx::query(
         r#"
         INSERT INTO addresses (
@@ -745,7 +765,7 @@ async fn keep_network(
                LEAST(cursor.block, COALESCE($9::bigint, cursor.block)),
                now()
         FROM (
-            SELECT COALESCE((SELECT scanned_block FROM cursors WHERE chain_id = $4), 0) AS block
+            SELECT (SELECT through_block FROM chain_coverage WHERE chain_id = $4) AS block
         ) AS cursor
         WHERE NOT EXISTS (
             SELECT 1 FROM addresses
@@ -1150,6 +1170,7 @@ pub async fn sync_networks(
         }
         // The chain's treasury may be one an earlier network of this address paid: that forwarder
         // is the chain's current one again.
+        crate::db::rpc::guard_in(transaction, chain.chain_id).await?;
         let restored = sqlx::query(
             "UPDATE addresses SET superseded_at = NULL \
              WHERE deposit_address_id = $1 AND chain_id = $2 AND address = $3",
@@ -1163,6 +1184,15 @@ pub async fn sync_networks(
         if restored > 0 {
             continue;
         }
+        match crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
+            crate::db::chain_reads::AddressAdmission::Admitted => {}
+            crate::db::chain_reads::AddressAdmission::NotReady => {
+                return Err(DepositAddressError::ChainUnavailable);
+            }
+            crate::db::chain_reads::AddressAdmission::CapacityReached => {
+                return Err(DepositAddressError::AddressCapacityReached);
+            }
+        }
         // A newly derived forwarder cannot hold earlier payments to this salt and treasury unless
         // someone sent to the address before its network existed (on a chain added later, or
         // before a treasury change); as for quote addresses, the scanner covers it from the
@@ -1175,7 +1205,7 @@ pub async fn sync_networks(
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8,
-                COALESCE((SELECT scanned_block FROM cursors WHERE chain_id = $4), 0)
+                (SELECT through_block FROM chain_coverage WHERE chain_id = $4)
             )
             "#,
         )
@@ -1273,6 +1303,15 @@ pub(crate) async fn replace_networks(
             new_addresses.push(address.clone());
         }
     }
+    match crate::db::chain_reads::admit_addresses(transaction, chain.chain_id, ids.len()).await? {
+        crate::db::chain_reads::AddressAdmission::Admitted => {}
+        crate::db::chain_reads::AddressAdmission::NotReady => {
+            return Err(DepositAddressError::ChainUnavailable);
+        }
+        crate::db::chain_reads::AddressAdmission::CapacityReached => {
+            return Err(DepositAddressError::AddressCapacityReached);
+        }
+    }
     // As in `sync_networks`, the scanner covers a new forwarder from the chain's committed cursor.
     sqlx::query(
         r#"
@@ -1281,7 +1320,7 @@ pub(crate) async fn replace_networks(
             created_block
         )
         SELECT next.id, $5, $6, $7, next.owner, next.salt, $8, next.address,
-               COALESCE((SELECT scanned_block FROM cursors WHERE chain_id = $7), 0)
+               (SELECT through_block FROM chain_coverage WHERE chain_id = $7)
         FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[])
             AS next(id, owner, salt, address)
         "#,

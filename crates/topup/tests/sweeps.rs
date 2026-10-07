@@ -19,7 +19,7 @@ use topup::db::{self, Deposit};
 use topup::pump::{Pump, PumpConfig, RunOnceResult, Step, StepResult, StepSet};
 use topup::reconciler::{CheckName, Reconciler, ReconciliationChain, chain_is_blocked};
 use topup::routes::RouteSet;
-use topup::scanner::{ChainRoutes, chain_routes, scan_once};
+use topup::scanner::{ChainRoutes, chain_routes, coverage_once};
 use topup_adapters::chain::evm::{EvmClient, FactoryLog, FinalizedReader};
 use topup_adapters::chain::flush::{
     DecodedFlushFailed, DecodedFlushed, DecodedForwarderCreated, FactoryEvent,
@@ -368,7 +368,7 @@ async fn a_forwarder_mismatch_freezes_crediting_on_the_chain() -> Result<()> {
             let third = chain.seed_address(8).await?;
             chain.pay(third.forwarder)?;
             chain.finalize()?;
-            chain.scan().await?;
+            ensure!(chain.scan().await.is_err(), "frozen chain accepted a scan");
             ensure!(chain.count("SELECT count(*) FROM deposits").await? == 2);
             Ok(())
         })
@@ -546,7 +546,7 @@ impl<'a> Chain<'a> {
     }
 
     async fn scan(&self) -> Result<topup::scanner::ScanStats> {
-        Ok(scan_once(self.pool(), &self.reader, &self.routes).await?)
+        Ok(coverage_once(self.pool(), &self.reader, &self.reader, &self.routes, 1).await?)
     }
 
     async fn deposit_of(&self, address: &SeededAddress) -> Result<Uuid> {

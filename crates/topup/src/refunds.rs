@@ -99,23 +99,21 @@ pub trait RefundChainReader: Send + Sync {
         chain_id: u64,
         tx_hash: B256,
     ) -> Result<Option<(Address, u64)>, RefundReadError>;
-
-    /// Reads `account`'s nonce at the provider's `finalized` block.
-    async fn finalized_nonce(
-        &self,
-        chain_id: u64,
-        account: Address,
-    ) -> Result<u64, RefundReadError>;
 }
 
 /// Refund reads through one provider of each chain.
 pub struct EvmRefundChainReader {
     clients: BTreeMap<u64, Arc<EvmClient>>,
+    pool: PgPool,
 }
 
 impl EvmRefundChainReader {
     /// Reads every configured chain through its provider at `index` (0 is A, 1 is B).
-    pub fn from_routes(routes: &RouteSet, index: usize) -> Result<Self, RefundReadError> {
+    pub fn from_routes(
+        pool: PgPool,
+        routes: &RouteSet,
+        index: usize,
+    ) -> Result<Self, RefundReadError> {
         let mut clients = BTreeMap::new();
         for chain_id in routes.chain_ids() {
             let client = routes
@@ -123,13 +121,13 @@ impl EvmRefundChainReader {
                 .map_err(|error| RefundReadError::Configuration(error.to_string()))?;
             clients.insert(chain_id, Arc::clone(client));
         }
-        Ok(Self::new(clients))
+        Ok(Self::new(pool, clients))
     }
 
     /// Reads through explicit per-chain clients.
     #[must_use]
-    pub const fn new(clients: BTreeMap<u64, Arc<EvmClient>>) -> Self {
-        Self { clients }
+    pub const fn new(pool: PgPool, clients: BTreeMap<u64, Arc<EvmClient>>) -> Self {
+        Self { clients, pool }
     }
 
     fn client(&self, chain_id: u64) -> Result<&EvmClient, RefundReadError> {
@@ -138,14 +136,6 @@ impl EvmRefundChainReader {
             .map(AsRef::as_ref)
             .ok_or(RefundReadError::UnknownChain(chain_id))
     }
-}
-
-async fn finalized_block(client: &EvmClient) -> Result<u64, RefundReadError> {
-    client
-        .finalized_block()
-        .await
-        .map_err(|_| RefundReadError::Rpc("finalized head fetch"))?
-        .ok_or(RefundReadError::MissingField("finalized block"))
 }
 
 #[async_trait]
@@ -169,8 +159,26 @@ impl RefundChainReader for EvmRefundChainReader {
         let block_hash = receipt
             .block_hash
             .ok_or(RefundReadError::MissingField("receipt.block_hash"))?;
-        if block_number > finalized_block(client).await? {
+        let checkpoint = crate::db::chain_reads::checkpoint(&self.pool, chain_id)
+            .await
+            .map_err(|_| RefundReadError::Rpc("checkpoint persistence"))?
+            .ok_or(RefundReadError::MissingField("checkpoint"))?;
+        let pin = client
+            .price_block(alloy::eips::BlockNumberOrTag::Number(checkpoint.number))
+            .await
+            .map_err(|_| RefundReadError::Rpc("checkpoint header"))?;
+        if pin.1 != checkpoint.hash {
+            return Err(RefundReadError::Rpc("checkpoint conflict"));
+        }
+        if block_number > checkpoint.number {
             return Ok(RefundReceipt::Pending);
+        }
+        let header = client
+            .price_block(alloy::eips::BlockNumberOrTag::Number(block_number))
+            .await
+            .map_err(|_| RefundReadError::Rpc("receipt header"))?;
+        if header.1 != block_hash || receipt.transaction_hash != tx_hash {
+            return Err(RefundReadError::Rpc("receipt identity"));
         }
         let mut transfers = Vec::new();
         for (position, log) in (0_u64..).zip(receipt.logs()) {
@@ -202,19 +210,6 @@ impl RefundChainReader for EvmRefundChainReader {
             .transaction_origin(tx_hash)
             .await
             .map_err(|_| RefundReadError::Rpc("transaction fetch"))
-    }
-
-    async fn finalized_nonce(
-        &self,
-        chain_id: u64,
-        account: Address,
-    ) -> Result<u64, RefundReadError> {
-        let client = self.client(chain_id)?;
-        let finalized = finalized_block(client).await?;
-        client
-            .nonce_at(account, finalized)
-            .await
-            .map_err(|_| RefundReadError::Rpc("nonce fetch"))
     }
 }
 
@@ -264,17 +259,13 @@ impl OracleDestinationScreener {
         let chain_id = route.chain.chain_id;
         let primary = self.routes.provider(chain_id, 0).ok()?;
         let secondary = self.routes.provider(chain_id, 1).ok()?;
-        let block = match primary.finalized_block().await {
-            Ok(Some(block)) => block,
-            Ok(None) | Err(_) => return None,
-        };
         let oracle = SanctionsOracle::new(
             Arc::clone(primary),
             Arc::clone(secondary),
             route.screening.sanctions_oracle,
         )
         .ok()?;
-        let result = oracle.sanctions(destination, block).await;
+        let result = oracle.sanctions(destination, 0).await;
         Some([result.provider_a, result.provider_b])
     }
 }
@@ -283,7 +274,7 @@ impl OracleDestinationScreener {
 impl DestinationScreener for OracleDestinationScreener {
     async fn screen(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
         match self.answers(route, destination).await {
-            Some(answers) if answers.contains(&SanctionsAnswer::Sanctioned) => {
+            Some([SanctionsAnswer::Sanctioned, SanctionsAnswer::Sanctioned]) => {
                 DestinationScreening::Sanctioned
             }
             Some([SanctionsAnswer::Clear, SanctionsAnswer::Clear]) => DestinationScreening::Clear,
@@ -491,7 +482,7 @@ where
             _ => {
                 persist_evidence(&self.pool, &check, &json!({"result": "providers_disagree"}))
                     .await?;
-                tracing::warn!(refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "providers disagree on a finalized refund transaction");
+                tracing::warn!(tags.alert="TopupRpcDisagreement",chain_id=check.chain_id,refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "providers disagree on a finalized refund transaction");
                 return Ok(Verification::Waiting);
             }
         };
@@ -560,8 +551,10 @@ where
     /// providers, or as `transaction_not_found` when no provider has returned it for
     /// [`NOT_FOUND_AFTER`] since it was attached; otherwise it waits.
     async fn not_included(&self, check: &mut RefundCheck) -> Result<Verification, sqlx::Error> {
-        self.remember_origin(check).await?;
-        let Some((from, nonce)) = check.origin else {
+        if !self.remember_origin(check).await? {
+            return Ok(Verification::Waiting);
+        }
+        if check.origin.is_none() {
             if Utc::now().signed_duration_since(check.paid_at) < NOT_FOUND_AFTER {
                 persist_evidence(&self.pool, check, &json!({"result": "not_found"})).await?;
                 return Ok(Verification::Waiting);
@@ -576,78 +569,37 @@ where
             }
             tracing::warn!(refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "no provider ever returned the refund transaction");
             return Ok(Verification::Failed);
-        };
-        let reads = async {
-            tokio::join!(
-                self.primary.finalized_nonce(check.chain_id, from),
-                self.secondary.finalized_nonce(check.chain_id, from)
-            )
-        };
-        let (primary, secondary) = match tokio::time::timeout(self.config.observe_timeout, reads)
-            .await
-        {
-            Ok((Ok(primary), Ok(secondary))) => (primary, secondary),
-            Ok((Err(error), _) | (_, Err(error))) => {
-                tracing::warn!(refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), %error, "refund nonce read failed");
-                return Ok(Verification::Waiting);
-            }
-            Err(_) => {
-                persist_evidence(&self.pool, check, &json!({"result": "observe_timeout"})).await?;
-                return Ok(Verification::Waiting);
-            }
-        };
-        let evidence = |result: &str| {
-            json!({
-                "result": result,
-                "tx_from": format!("{from:#x}"),
-                "tx_nonce": nonce,
-                "provider_a_finalized_nonce": primary,
-                "provider_b_finalized_nonce": secondary,
-            })
-        };
-        if primary <= nonce || secondary <= nonce {
-            persist_evidence(&self.pool, check, &evidence("not_included")).await?;
-            return Ok(Verification::Waiting);
         }
-        let reason = RefundFailure::TransactionDropped;
-        if !fail(
+        persist_evidence(
             &self.pool,
-            &self.routes,
             check,
-            reason.code(),
-            &evidence(reason.code()),
+            &json!({"result":"not_included","reversal":"unproven"}),
         )
-        .await?
-        {
-            return Ok(Verification::Waiting);
-        }
-        tracing::warn!(refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "the refund transaction was dropped and its nonce consumed");
-        Ok(Verification::Failed)
+        .await?;
+        Ok(Verification::Waiting)
     }
 
     /// Keeps the transaction's sender and nonce the first time a provider returns it, so that a
     /// transaction dropped later can be proven dropped. A failed read leaves it unknown.
-    async fn remember_origin(&self, check: &mut RefundCheck) -> Result<(), sqlx::Error> {
+    async fn remember_origin(&self, check: &mut RefundCheck) -> Result<bool, sqlx::Error> {
         if check.origin.is_some() {
-            return Ok(());
+            return Ok(true);
         }
-        let mut origin = None;
-        for reader in [
-            &self.primary as &dyn RefundChainReader,
-            &self.secondary as &dyn RefundChainReader,
-        ] {
-            let read = tokio::time::timeout(
-                self.config.observe_timeout,
-                reader.origin(check.chain_id, check.tx_hash),
+        let reads = async {
+            tokio::join!(
+                self.primary.origin(check.chain_id, check.tx_hash),
+                self.secondary.origin(check.chain_id, check.tx_hash)
             )
-            .await;
-            if let Ok(Ok(Some(found))) = read {
-                origin = Some(found);
-                break;
-            }
+        };
+        let Ok((Ok(a), Ok(b))) = tokio::time::timeout(self.config.observe_timeout, reads).await
+        else {
+            return Ok(false);
+        };
+        if a != b {
+            return Ok(false);
         }
-        let Some((from, nonce)) = origin else {
-            return Ok(());
+        let Some((from, nonce)) = a else {
+            return Ok(true);
         };
         sqlx::query(
             r#"
@@ -663,7 +615,7 @@ where
         .execute(&self.pool)
         .await?;
         check.origin = Some((from, nonce));
-        Ok(())
+        Ok(true)
     }
 
     /// Runs until cancellation, retrying database and chain failures indefinitely.

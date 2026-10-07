@@ -4,6 +4,7 @@ services:
   topup-tls:
     image: ${TOPUP_TEST_TLS_IMAGE:?}
     entrypoint: [python, /etc/test-tls/proxy.py]
+    command: ["--bind", "0.0.0.0"]
     configs:
       - source: test_tls_proxy
         target: /etc/test-tls/proxy.py

@@ -4,7 +4,8 @@ use std::process::{Command, Output};
 
 fn topup(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args(args)
         .output()
         .expect("topup process should start")
@@ -34,7 +35,7 @@ impl ConfigFile {
             format!(
                 "environment: staging\npublic_origin: {origin}\nadmin_key:\n  id: admin/v1\n  \
                  public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n{rpc}\nroutes:\n  -\n{route}\n",
-            rpc=include_str!("fixtures/rpc-groups.yaml")
+            rpc=include_str!("fixtures/chain-rpc.yaml")
             ),
         )
         .expect("write the configuration");
@@ -63,7 +64,8 @@ fn output_text(output: &Output) -> String {
 #[test]
 fn heartbeat_requires_a_database_url() {
     let output = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .arg("heartbeat")
         .env_remove("DATABASE_URL")
         .output()
@@ -76,7 +78,8 @@ fn heartbeat_requires_a_database_url() {
 fn run_requires_a_database_url() {
     let config = ConfigFile::new("https://topup.example");
     let output = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args(["run", "--config", config.path()])
         .env_remove("DATABASE_URL")
         .output()
@@ -89,7 +92,8 @@ fn run_requires_a_database_url() {
 fn run_refuses_an_invalid_configuration_or_origin() {
     let config = ConfigFile::new("https://topup.example/v1");
     let output = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args(["run", "--config", config.path()])
         .env("DATABASE_URL", "postgres://unused@127.0.0.1:1/unused")
         .output()
@@ -103,7 +107,8 @@ fn run_refuses_an_invalid_configuration_or_origin() {
 
     let config = ConfigFile::new("https://topup.example");
     let output = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args([
             "run",
             "--config",
@@ -140,7 +145,8 @@ fn restore_check_reports_failures() {
         std::env::temp_dir().join(format!("topup-restore-check-{}.json", std::process::id()));
     let _ = std::fs::remove_file(&report);
     let output = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args(["restore-check", "--config", config.path(), "--report"])
         .arg(&report)
         .args(["--failure-at", "2026-10-06T00:00:00Z"])
@@ -178,24 +184,26 @@ fn restore_check_needs_a_failure_instant_for_an_lsn() {
 fn config_commands_validate_without_secrets_and_check_them_on_request() {
     let config = ConfigFile::new("https://topup.example");
     let checked = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args(["config", "check", config.path()])
-        .env_remove("TOPUP_RPC_ALCHEMY_KEY")
+        .env_remove("TOPUP_RPC_ANKR_KEY")
         .output()
         .expect("topup process should start");
     assert!(checked.status.success(), "{}", output_text(&checked));
 
     let shown = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args(["config", "show", config.path()])
-        .env("TOPUP_RPC_ALCHEMY_KEY", "sealed-key-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "sealed-key-0123456789")
         .output()
         .expect("topup process should start");
     assert!(shown.status.success());
     let resolved: serde_json::Value = serde_json::from_slice(&shown.stdout).expect("JSON");
     assert_eq!(
-        resolved["rpc_groups"]["alchemy"]["members"][0]["url"],
-        "https://eth-mainnet.g.alchemy.com/v2/{key}"
+        resolved["rpc"][0]["read"]["url"],
+        "https://rpc.ankr.com/eth/{key}"
     );
     assert_eq!(
         resolved["routes"][0]["merchant"]["quote_ttl_seconds"]["default"],
@@ -204,19 +212,20 @@ fn config_commands_validate_without_secrets_and_check_them_on_request() {
     assert!(!String::from_utf8_lossy(&shown.stdout).contains("sealed-key"));
 
     let missing = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args(["config", "check", "--secrets", config.path()])
-        .env_remove("TOPUP_RPC_ALCHEMY_KEY")
+        .env_remove("TOPUP_RPC_ANKR_KEY")
         .output()
         .expect("topup process should start");
     assert!(!missing.status.success());
-    assert!(output_text(&missing).contains("TOPUP_RPC_ALCHEMY_KEY is required"));
+    assert!(output_text(&missing).contains("TOPUP_RPC_ANKR_KEY is required"));
 
     let sealed = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .args(["config", "check", "--secrets", config.path()])
-        .env("TOPUP_RPC_ALCHEMY_KEY", "sealed-key-0123456789")
-        .env_remove("TOPUP_RPC_QUICKNODE_KEY")
+        .env("TOPUP_RPC_ANKR_KEY", "sealed-key-0123456789")
         .output()
         .expect("topup process should start");
     assert!(sealed.status.success(), "{}", output_text(&sealed));
@@ -362,7 +371,8 @@ fn dev_attestation_binds_the_nonce_account_mode_and_keys_like_the_api() {
 #[test]
 fn migrate_requires_a_database_url() {
     let output = Command::new(env!("CARGO_BIN_EXE_topup"))
-        .env("TOPUP_RPC_ALCHEMY_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_ANKR_KEY", "test-sealed-0123456789")
+        .env("TOPUP_RPC_INFURA_KEY", "test-sealed-0123456789")
         .arg("migrate")
         .env_remove("DATABASE_URL")
         .output()

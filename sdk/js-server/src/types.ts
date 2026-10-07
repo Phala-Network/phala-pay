@@ -48,6 +48,7 @@ export type ExpandableDeposit = components["schemas"]["ExpandableDeposit"];
 export type ExpandableQuote = components["schemas"]["ExpandableQuote"];
 export type Forwarder = components["schemas"]["Forwarder"];
 export type ForwarderList = components["schemas"]["ForwarderList"];
+export type KnownErrorCode = components["schemas"]["KnownErrorCode"];
 export type MarkRefundPaidRequest = components["schemas"]["MarkRefundPaidRequest"];
 export type MetadataClear = components["schemas"]["MetadataClear"];
 export type MetadataParam = components["schemas"]["MetadataParam"];

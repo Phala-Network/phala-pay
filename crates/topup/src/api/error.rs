@@ -1,7 +1,7 @@
 //! Stable API error responses, Stripe's error object (<https://docs.stripe.com/api/errors>): the
 //! HTTP status says what kind of failure it is (`400` the request cannot succeed in the objects'
 //! current state, `401` authentication, `403` permission, `404` a missing object, `409` only an
-//! `Idempotency-Key` still in use, `429` too many requests, with `Retry-After`, `5xx` the
+//! `Idempotency-Key` still in use, `422` permanent chain address capacity, `429` too many requests, with `Retry-After`, `5xx` the
 //! service), and `code` which one.
 
 use axum::Json;
@@ -17,6 +17,21 @@ pub const DOCS_URL: &str = "https://phala-network.github.io/phala-pay/#section/E
 /// Every error code the merchant API returns, with its HTTP status and what to do about it: the
 /// `Errors` section of the API reference, which each error's `doc_url` points into.
 pub const ERROR_CODES: &[(&str, u16, &str)] = &[
+    (
+        "address_capacity_reached",
+        422,
+        "The chain has reached its permanent pilot limit of 1,000 issued addresses, including retired and expired addresses. This is not retryable; the operator must upgrade the scanning/provider plan before issuing more.",
+    ),
+    (
+        "chain_unavailable",
+        503,
+        "The requested chain is temporarily not ready. Retry after the indicated delay.",
+    ),
+    (
+        "price_unavailable",
+        503,
+        "Fresh dual-source prices are unavailable or the UTC daily snapshot cap is exhausted. Retry after the indicated delay; no stale price is returned.",
+    ),
     (
         "parameter_invalid",
         400,
@@ -839,6 +854,36 @@ impl ApiError {
         )
     }
 
+    /// Permanent per-chain pilot quota; no automatic retry can recover capacity.
+    #[must_use]
+    pub fn address_capacity_reached() -> Self {
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "address_capacity_reached",
+            "the chain's permanent issued-address capacity is reached; contact the operator",
+        )
+    }
+    /// Temporarily unavailable chain, independently of current price availability.
+    #[must_use]
+    pub fn chain_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "chain_unavailable",
+            "the chain is not ready; retry",
+        )
+        .with_retry_after(30)
+    }
+
+    /// Fresh quote evidence is unavailable or its UTC price-chain snapshot cap is exhausted.
+    pub fn price_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "price_unavailable",
+            "validated pricing is unavailable; retry",
+        )
+        .with_retry_after(60)
+    }
+
     /// Returns a temporary dependency failure; retry.
     #[must_use]
     pub fn service_unavailable(message: impl Into<String>) -> Self {
@@ -1082,6 +1127,9 @@ mod tests {
             ApiError::deposit_unexpected_state("credited"),
             ApiError::paused(""),
             ApiError::chain_frozen(),
+            ApiError::address_capacity_reached(),
+            ApiError::chain_unavailable(),
+            ApiError::price_unavailable(),
             ApiError::service_unavailable(""),
             ApiError::request_deadline_exceeded(),
             ApiError::service_restoring(300),
