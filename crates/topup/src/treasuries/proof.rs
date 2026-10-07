@@ -286,9 +286,11 @@ impl ContractSignatures for EvmContractSignatures {
             (ContractAnswer::Unavailable, _) | (_, ContractAnswer::Unavailable) => {
                 ContractAnswer::Unavailable
             }
-            // A provider whose contract refuses the signature: not proven.
-            (ContractAnswer::Invalid, _) | (_, ContractAnswer::Invalid) => ContractAnswer::Invalid,
-            _ => ContractAnswer::Unavailable,
+            _ => {
+                primary.disagreement("eth_call");
+                secondary.disagreement("eth_call");
+                ContractAnswer::Unavailable
+            }
         }
     }
 }

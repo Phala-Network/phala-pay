@@ -1,5 +1,5 @@
-mod support;
 //! The CLI preserves sanitized endpoint failures on stderr, leaving stdout for JSON.
+mod support;
 use anyhow::{Context, Result, ensure};
 use axum::{Json, Router, routing::post};
 use serde_json::{Value, json};
@@ -40,23 +40,28 @@ async fn rpc_check_reports_every_wrong_chain_endpoint_without_retry_or_secrets()
                 .resolved_json()
                 .map_err(anyhow::Error::msg)?,
         )?;
-        let tls=support::tls::RpcTlsProxy::start(&format!("http://127.0.0.1:{port}"))?;
-        let mut expected_endpoint_ids=Vec::new();
+        let tls = support::tls::RpcTlsProxy::start(&format!("http://127.0.0.1:{port}"))?;
+        let mut expected_endpoint_ids = Vec::new();
         for chain in config["rpc"].as_array_mut().context("RPC chains")? {
-            for (role,url) in [("read",&tls.read_url),("verify",&tls.verify_url)] {
-                chain[role]["url"]=json!(format!("{url}/{{key}}"));
-                expected_endpoint_ids.push(chain[role]["id"].as_str().context("endpoint id")?.to_owned());
+            for (role, url) in [("read", &tls.read_url), ("verify", &tls.verify_url)] {
+                chain[role]["url"] = json!(format!("{url}/{{key}}"));
+                expected_endpoint_ids.push(
+                    chain[role]["id"]
+                        .as_str()
+                        .context("endpoint id")?
+                        .to_owned(),
+                );
             }
         }
-        let certificate=tls.certificate.clone();
+        let certificate = tls.certificate.clone();
         let encoded = serde_json::to_vec(&config)?;
         let output = tokio::task::spawn_blocking(move || -> Result<_> {
             use std::io::Write;
             let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_topup"))
                 .args(["rpc", "check", "--config", "/dev/stdin"])
-                .env("TOPUP_RPC_ANKR_KEY","secret-key")
-                .env("TOPUP_RPC_INFURA_KEY","secret-key")
-                .env("SSL_CERT_FILE",certificate)
+                .env("TOPUP_RPC_ANKR_KEY", "secret-key")
+                .env("TOPUP_RPC_INFURA_KEY", "secret-key")
+                .env("SSL_CERT_FILE", certificate)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -70,9 +75,7 @@ async fn rpc_check_reports_every_wrong_chain_endpoint_without_retry_or_secrets()
         let stderr = String::from_utf8(output.stderr)?;
         for member in &expected_endpoint_ids {
             ensure!(
-                stderr.contains(&format!(
-                    "{member}: chain id: endpoint identity mismatch"
-                )),
+                stderr.contains(&format!("{member}: chain id: endpoint identity mismatch")),
                 "{stderr}"
             );
         }

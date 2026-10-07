@@ -160,6 +160,122 @@ pub(crate) async fn verify_on(client: &EvmClient, route: &RouteFile) -> Result<(
     Ok(())
 }
 
+/// Result of a fresh independent check at one canonical finalized block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContractCheck {
+    /// Both endpoints report exactly the reviewed bytecode and immutable addresses.
+    Pass,
+    /// A complete agreed observation differs from the reviewed deployment.
+    Mismatch,
+    /// Endpoints disagree; no permanent conclusion is justified.
+    Disagreement,
+}
+/// Derive each endpoint's code independently; failed requests remain errors.
+pub async fn check_pair(
+    read: &EvmClient,
+    verify: &EvmClient,
+    chain: u64,
+    routes: &[RouteFile],
+) -> Result<ContractCheck, ChainError> {
+    use alloy::eips::{BlockId, BlockNumberOrTag};
+    let (a, b) = tokio::try_join!(read.network_id(), verify.network_id())?;
+    if a != chain || b != chain {
+        return Ok(ContractCheck::Disagreement);
+    }
+    let (a, b) = tokio::try_join!(
+        read.price_block(BlockNumberOrTag::Finalized),
+        verify.price_block(BlockNumberOrTag::Finalized)
+    )?;
+    if a.0 > b.0 {
+        return Ok(ContractCheck::Disagreement);
+    }
+    let target = verify.price_block(BlockNumberOrTag::Number(a.0)).await?;
+    if a != target {
+        return Ok(ContractCheck::Disagreement);
+    }
+    let mut addresses = BTreeSet::from([MULTICALL3]);
+    for route in routes.iter().filter(|r| r.chain.chain_id == chain) {
+        addresses.extend([
+            route.chain.contracts.forwarder_factory,
+            route.chain.contracts.implementation,
+        ]);
+    }
+    let pin = BlockId::hash_canonical(a.1);
+    let observe = async |client: &EvmClient| {
+        let mut codes = std::collections::BTreeMap::new();
+        for address in &addresses {
+            codes.insert(*address, client.code_at_id(*address, pin).await?);
+        }
+        Ok::<_, ChainError>(codes)
+    };
+    let (a, b) = tokio::try_join!(observe(read), observe(verify))?;
+    if a != b {
+        return Ok(ContractCheck::Disagreement);
+    }
+    let reviewed = a
+        .get(&MULTICALL3)
+        .is_some_and(|code| keccak256(code) == MULTICALL3_RUNTIME_CODE_HASH)
+        && routes
+            .iter()
+            .filter(|r| r.chain.chain_id == chain)
+            .all(|route| {
+                let c = &route.chain.contracts;
+                a.get(&c.forwarder_factory).is_some_and(|code| {
+                    verify_code(
+                        code,
+                        &[(c.implementation, FACTORY_IMPLEMENTATION_OFFSETS)],
+                        FACTORY_RUNTIME_TEMPLATE_HASH,
+                    )
+                    .is_ok()
+                }) && a.get(&c.implementation).is_some_and(|code| {
+                    verify_code(
+                        code,
+                        &[(c.forwarder_factory, FORWARDER_FACTORY_OFFSETS)],
+                        FORWARDER_RUNTIME_TEMPLATE_HASH,
+                    )
+                    .is_ok()
+                })
+            });
+    Ok(if reviewed {
+        ContractCheck::Pass
+    } else {
+        ContractCheck::Mismatch
+    })
+}
+/// Update readiness and freeze only on a complete agreed mismatch, without stopping other chains.
+pub async fn check_and_enforce(
+    pool: &sqlx::PgPool,
+    read: &EvmClient,
+    verify: &EvmClient,
+    chain: u64,
+    routes: &[RouteFile],
+) -> Result<bool, sqlx::Error> {
+    let result = check_pair(read, verify, chain, routes).await;
+    let passed = matches!(result, Ok(ContractCheck::Pass));
+    read.contract_checked(passed);
+    verify.contract_checked(passed);
+    match result {
+        Ok(ContractCheck::Pass) => {}
+        Ok(ContractCheck::Mismatch) => {
+            crate::db::chain_reads::freeze(pool, chain, "contract_code_mismatch").await?;
+            tracing::error!(
+                tags.alert = "TopupContractCodeMismatch",
+                chain_id = chain,
+                "both endpoints agree deployed code differs from the reviewed code; chain frozen"
+            );
+        }
+        Ok(ContractCheck::Disagreement) => tracing::warn!(
+            tags.alert = "TopupRpcDisagreement",
+            chain_id = chain,
+            "contract evidence disagreed; chain not-ready"
+        ),
+        Err(error) => {
+            tracing::warn!(tags.alert="TopupRpcEndpointUnavailable",chain_id=chain,%error,"dual contract check waits; chain not-ready")
+        }
+    }
+    Ok(passed)
+}
+
 /// Checks runtime code against a build whose immutable words are zeroed.
 ///
 /// Each immutable word must hold the route's expected address at exactly the recorded offsets;

@@ -497,8 +497,14 @@ pub(crate) async fn lift_reconciliation_block(
 ) -> ApiResult<Json<ReconciliationBlockLiftResponse>> {
     validate_reason(&request.reason)?;
     Ok(Json(
-        repository::lift_reconciliation_block(&state.pool, &block_key, &actor, &request.reason)
-            .await?,
+        repository::lift_reconciliation_block(
+            &state.pool,
+            &state.routes,
+            &block_key,
+            &actor,
+            &request.reason,
+        )
+        .await?,
     ))
 }
 

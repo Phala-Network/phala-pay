@@ -122,7 +122,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     transfer(&anvil.rpc_url, token, other_quote, 7)?;
     transfer(&anvil.rpc_url, token, other_quote, 0)?;
 
-    let _scan = fast_once(pool, &reader, &chain_routes).await?;
+    let scan = fast_once(pool, &reader, &chain_routes).await?;
     // Only non-zero transfers of the routed token are requested and stored.
     ensure!(
         pending_rows(pool).await? == 2,

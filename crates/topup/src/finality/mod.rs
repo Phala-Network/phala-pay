@@ -252,8 +252,7 @@ impl FinalityWatch {
         Ok(stats)
     }
 
-    /// Reads one deposit's receipt on both providers, and the sender's nonces when neither has
-    /// it, and applies the verdict.
+    /// Reads independent receipts and service-known replacement evidence, then applies the verdict.
     async fn watch_deposit(
         &self,
         chain: &WatchChain,
@@ -552,8 +551,7 @@ enum Verdict {
     Wait,
 }
 
-/// Decides what the providers' receipts mean for a deposit; `nonces` are the sender's nonces at
-/// each provider's `finalized`, read only when neither provider has a receipt.
+/// Decides from complete agreed receipts or positive service-known replacement evidence.
 fn decide(
     deposit: &WatchedDeposit,
     primary: Observed<'_>,
@@ -621,7 +619,14 @@ fn decide(
         ),
         (ReceiptLookup::Missing, ReceiptLookup::Missing) => Verdict::Pending,
 
-        _ => Verdict::Wait,
+        _ => {
+            tracing::warn!(
+                tags.alert = "TopupRpcDisagreement",
+                deposit_id = %deposit.id,
+                "finality receipt evidence disagreed; waiting"
+            );
+            Verdict::Wait
+        }
     }
 }
 

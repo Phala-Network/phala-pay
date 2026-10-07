@@ -482,7 +482,7 @@ where
             _ => {
                 persist_evidence(&self.pool, &check, &json!({"result": "providers_disagree"}))
                     .await?;
-                tracing::warn!(refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "providers disagree on a finalized refund transaction");
+                tracing::warn!(tags.alert="TopupRpcDisagreement",chain_id=check.chain_id,refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "providers disagree on a finalized refund transaction");
                 return Ok(Verification::Waiting);
             }
         };

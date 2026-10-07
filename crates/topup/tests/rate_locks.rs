@@ -939,7 +939,29 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
         };
         let canceled = app.clone().oneshot(cancel(&quote_id)).await?;
         ensure!(canceled.status() == StatusCode::OK);
-        ensure!(response_json(canceled).await?["status"] == "canceled");
+        let cancel_response = response_json(canceled).await?;
+        ensure!(
+            cancel_response["status"] == "open"
+                && cancel_response["cancel_requested_at"].is_number()
+        );
+        // Completion waits for this address's own complete dual coverage.
+        ensure!(
+            topup::locks::expire_once(
+                &database.app_pool,
+                &topup::routes::RouteSet::new(vec![route.clone()]).unwrap()
+            )
+            .await?
+                == 0
+        );
+        finalize_chain_past_now(&database.app_pool).await?;
+        ensure!(
+            topup::locks::expire_once(
+                &database.app_pool,
+                &topup::routes::RouteSet::new(vec![route.clone()]).unwrap()
+            )
+            .await?
+                == 1
+        );
         // Canceling again returns the canceled quote.
         let again = app.clone().oneshot(cancel(&quote_id)).await?;
         ensure!(again.status() == StatusCode::OK);
@@ -1585,7 +1607,7 @@ async fn new_lock_addresses_start_scanning_at_the_chain_cursor() -> Result<()> {
         let route = test_route();
         let quotes: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
         let before_cursor = create_lock(&database, &quotes, &product, &account, &route).await?;
-        sqlx::query("INSERT INTO cursors (chain_id, scanned_block) VALUES (1, 1234)")
+        sqlx::query("UPDATE chain_coverage SET through_block=1234 WHERE chain_id=1")
             .execute(&database.app_pool)
             .await?;
         let after_cursor = create_lock(&database, &quotes, &product, &account, &route).await?;
@@ -2178,6 +2200,13 @@ async fn finalize_chain_past_now(pool: &sqlx::PgPool) -> Result<()> {
 
 async fn set_finalized_time(pool: &sqlx::PgPool, time: chrono::DateTime<Utc>) -> Result<()> {
     sqlx::query(
+        "UPDATE chain_coverage SET through_time=$1,through_block=through_block+1 WHERE chain_id=1",
+    )
+    .bind(time)
+    .execute(pool)
+    .await?;
+    sqlx::query("UPDATE addresses SET dual_covered_through=(SELECT through_block FROM chain_coverage WHERE chain_id=1) WHERE chain_id=1").execute(pool).await?;
+    sqlx::query(
         r#"
         INSERT INTO cursors (chain_id, scanned_block, scanned_block_time)
         VALUES (1, 0, $1)
@@ -2451,6 +2480,7 @@ fn test_route() -> RouteFile {
 
 /// A live account with a treasury on chain 1, and its live secret key.
 async fn seed_product(pool: &sqlx::PgPool, name: &str) -> Result<(Account, String)> {
+    seed::initialize_dual_chain(pool, 1).await?;
     let account = seed::create_account(
         pool,
         &NewAccount {

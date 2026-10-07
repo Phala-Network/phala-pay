@@ -10,6 +10,7 @@ use chrono::Utc;
 #[derive(Debug, Default)]
 pub struct EndpointState {
     ready: AtomicBool,
+    contract_pending: AtomicBool,
     quota_until: AtomicI64,
     verify: AtomicBool,
 }
@@ -25,7 +26,15 @@ impl EndpointState {
     }
     /// Readiness is false after an error until an operation succeeds, including after UTC reset.
     pub fn ready(&self) -> bool {
-        self.ready.load(Ordering::Relaxed) && !self.quota_exhausted()
+        self.ready.load(Ordering::Relaxed) && !self.quota_exhausted() && self.contract_ready()
+    }
+    /// Code identity is checked independently of transport success.
+    pub fn contract_ready(&self) -> bool {
+        !self.contract_pending.load(Ordering::Relaxed)
+    }
+    /// A missing or failed dual code check cannot be cleared by an unrelated successful RPC.
+    pub fn contract_checked(&self, passed: bool) {
+        self.contract_pending.store(!passed, Ordering::Relaxed);
     }
     /// Records a fully decoded successful operation.
     pub fn succeeded(&self) {

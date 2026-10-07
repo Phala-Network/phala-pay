@@ -124,6 +124,17 @@ pub struct ScanStats {
 pub async fn initialize_cursors(pool: &PgPool, routes: &RouteSet) -> Result<(), ScannerError> {
     db::rpc::check_start(pool, &routes.chain_ids().collect::<Vec<_>>()).await?;
     for chain in routes.chain_ids() {
+        let a = routes
+            .provider(chain, 0)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?;
+        let b = routes
+            .provider(chain, 1)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?;
+        if (!a.contract_ready() || !b.contract_ready())
+            && !crate::contracts::check_and_enforce(pool, a, b, chain, routes.routes()).await?
+        {
+            continue;
+        }
         let read = FinalizedReader::new(
             routes
                 .provider(chain, 0)
@@ -346,7 +357,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         for address in &range.addresses {
             index.insert(address.address.address, address.address.clone());
             let start = range.start(address);
-            let ids: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM deposits WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4 AND dual_verified_at IS NULL AND state != 'reversed'")
+            let ids: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM deposits WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4 AND dual_verified_at IS NULL")
                 .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(address.address.id).bind(i64::try_from(start).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(range.end).map_err(|_|ScannerError::SnapshotChanged)?).fetch_all(pool).await?;
             for (_, deposit) in db::deposits_by_ids(pool, &ids).await? {
                 let deposit = deposit?;
@@ -385,7 +396,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     let mut deposits = Vec::new();
     let mut corrections = Vec::new();
     for (hash, position) in candidates {
-        let marker: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT dual_verified_at FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3 AND state != 'reversed'")
+        let marker: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT dual_verified_at FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3")
             .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{hash:#x}")).bind(i64::try_from(position).map_err(|_|ScannerError::SnapshotChanged)?).fetch_optional(pool).await?;
         if marker.flatten().is_some() {
             continue;
@@ -420,6 +431,11 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                 && existing.tx_nonce == Some(deposit.tx_nonce);
             if !equal && existing.state != DepositState::Detected {
                 chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
+                tracing::error!(
+                    tags.alert = "TopupUnverifiedEvidenceMismatch",
+                    chain_id = chain,
+                    "agreed evidence contradicts a permanent record; chain frozen"
+                );
                 return Err(ScannerError::Disagreement);
             }
             // Recipient changes retain the existing provisional rule: finality records successors.
@@ -445,6 +461,11 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         };
         if !db::sweeps::stored_factory_evidence_matches(pool, chain, hash, &receipt.logs).await? {
             chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
+            tracing::error!(
+                tags.alert = "TopupUnverifiedEvidenceMismatch",
+                chain_id = chain,
+                "agreed evidence contradicts a permanent record; chain frozen"
+            );
             return Err(ScannerError::Disagreement);
         }
         factory.extend(
@@ -539,6 +560,15 @@ pub async fn run(
                 .map_err(|e| ScannerError::Configuration(e.to_string()))?
                 .clone(),
         );
+        let contract_routes = routes.routes().to_vec();
+        let contract_read = routes
+            .provider(chain.chain.chain_id, 0)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?
+            .clone();
+        let contract_verify = routes
+            .provider(chain.chain.chain_id, 1)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?
+            .clone();
         let fast_pool = pool.clone();
         let fast_read = FinalizedReader::new(
             routes
@@ -553,6 +583,14 @@ pub async fn run(
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! { _ = fast_token.cancelled() => break, _ = interval.tick() => {} }
+                if crate::reconciler::chain_is_blocked(&fast_pool,fast_chain.chain.chain_id).await.unwrap_or(true) {continue;}
+                if !contract_read.contract_ready() || !contract_verify.contract_ready() {
+                    let checked=tokio::select! {
+                        _=fast_token.cancelled()=>break,
+                        result=crate::contracts::check_and_enforce(&fast_pool,&contract_read,&contract_verify,fast_chain.chain.chain_id,&contract_routes)=>result,
+                    };
+                    if !matches!(checked,Ok(true)) {continue;}
+                }
                 let result = tokio::select! {
                     _ = fast_token.cancelled() => break,
                     result = fast_once(&fast_pool,&fast_read,&fast_chain) => result,
@@ -560,6 +598,14 @@ pub async fn run(
                 if let Err(error) = result { tracing::warn!(chain_id=fast_chain.chain.chain_id,%error,"fast discovery waits"); }
             }
         });
+        let coverage_read = routes
+            .provider(chain.chain.chain_id, 0)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?
+            .clone();
+        let coverage_verify = routes
+            .provider(chain.chain.chain_id, 1)
+            .map_err(|e| ScannerError::Configuration(e.to_string()))?
+            .clone();
         let pool = pool.clone();
         let heads = heads.clone();
         let token = cancellation.clone();
@@ -569,6 +615,7 @@ pub async fn run(
             let mut round = 0_u64;
             loop {
                 tokio::select! { _ = token.cancelled() => break, _ = interval.tick() => {} }
+                if !coverage_read.contract_ready() || !coverage_verify.contract_ready() {continue;}
                 round = round.saturating_add(1);
                 let result = tokio::select! {
                     _ = token.cancelled() => break,
@@ -584,6 +631,32 @@ pub async fn run(
                     }
                     Err(ScannerError::Disagreement) => tracing::warn!(tags.alert="TopupRpcDisagreement",chain_id=chain.chain.chain_id,"coverage evidence disagreed; no range committed"),
                     Err(error) => tracing::warn!(chain_id=chain.chain.chain_id,%error,"coverage waits; no range committed"),
+                }
+            }
+        });
+    }
+    for (chain, pair) in routes
+        .rpc()
+        .iter()
+        .filter(|(chain, _)| routes.chain(**chain).is_none())
+    {
+        let chain = *chain;
+        let pair = pair.clone();
+        let pool = pool.clone();
+        let token = cancellation.clone();
+        let contracts = routes.routes().to_vec();
+        tasks.spawn(async move {
+            let mut interval=tokio::time::interval(FAST_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {_=token.cancelled()=>break,_=interval.tick()=>{}}
+                if pair.read.contract_ready() && pair.verify.contract_ready() {continue;}
+                if crate::reconciler::chain_is_blocked(&pool,chain).await.unwrap_or(true) {continue;}
+                tokio::select! {
+                    _=token.cancelled()=>break,
+                    result=crate::contracts::check_and_enforce(&pool,&pair.read,&pair.verify,chain,&contracts)=>{
+                        if let Err(error)=result {tracing::warn!(chain_id=chain,%error,"price chain contract check waits");}
+                    }
                 }
             }
         });

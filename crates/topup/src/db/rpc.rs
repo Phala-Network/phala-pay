@@ -20,6 +20,7 @@ pub async fn guard_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     chain: u64,
 ) -> Result<(), sqlx::Error> {
+    lock_reconciliation_in(tx, &format!("chain:{chain}")).await?;
     let chain = to_i64(chain, "chain id")?;
     sqlx::query("SELECT chain_id FROM chain_coverage WHERE chain_id=$1 FOR UPDATE")
         .bind(chain)
@@ -36,6 +37,17 @@ pub async fn guard_in(
             "chain reconciliation block is active".into(),
         ));
     }
+    Ok(())
+}
+/// Serialize freeze, lift and ledger admission without widening append-only table privileges.
+pub async fn lock_reconciliation_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    key: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 704202))")
+        .bind(key)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 /// Read N-1's sweep epoch without changing its state.

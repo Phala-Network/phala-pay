@@ -307,6 +307,13 @@ impl Pump {
                 },
                 json!({"outcome": "wait", "reason": "chain_frozen"}),
             )
+        } else if !self.routes.chain_ready(deposit.chain_id) {
+            StepResult::new(
+                StepOutcome::Wait {
+                    reason: WaitReason::Paused,
+                },
+                json!({"outcome":"wait","reason":"chain_not_ready"}),
+            )
         } else {
             self.run_step(&deposit).await
         };

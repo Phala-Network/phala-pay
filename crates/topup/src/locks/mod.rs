@@ -700,6 +700,9 @@ pub async fn reissue(
         transaction.commit().await?;
         return Ok((existing, false));
     }
+    if !crate::db::chain_reads::admit_address(&mut transaction, route.chain.chain_id).await? {
+        return Err(RateLockError::ChainUnavailable);
+    }
     let tolerance = crate::treasuries::IN_FORCE_TOLERANCE;
     // A quote the restored database holds was returned above, whenever it was created.
     if terms.created_at < restore_point - tolerance {

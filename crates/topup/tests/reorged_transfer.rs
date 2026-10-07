@@ -55,7 +55,7 @@ async fn a_changed_amount_reverses_the_deposit_and_credits_the_new_transfer_once
 
             // The router's transaction is re-included one block later against other state: the
             // same receipt position now pays 90.
-            let new = chain.reorg(transfer(chain.recipient, 11, 0xbb, 90));
+            let _new = chain.reorg(transfer(chain.recipient, 11, 0xbb, 90));
 
             // The finalized scanner and the reconciler read the new transfer while the old deposit
             // still holds the position: nothing is recorded.
@@ -85,7 +85,7 @@ async fn a_recipient_moved_to_another_issued_address_is_credited_there_once() ->
     run(|chain| {
         Box::pin(async move {
             let old = chain.credit_first(chain.recipient).await?;
-            let new = chain.reorg(transfer(chain.other, 11, 0xbb, 100));
+            let _new = chain.reorg(transfer(chain.other, 11, 0xbb, 100));
 
             // The watch reaches finality before the scanners reach the new block.
             let stats = chain.watch().await?;
@@ -135,7 +135,7 @@ async fn a_successor_of_an_unsupported_token_is_rejected_once() -> Result<()> {
         Box::pin(async move {
             let old = chain.credit_first(chain.recipient).await?;
             // The swap now pays out another token, which has no route.
-            let new = chain.reorg(TransferLog {
+            let _new = chain.reorg(TransferLog {
                 token: OTHER_TOKEN,
                 ..transfer(chain.recipient, 11, 0xbb, 100)
             });

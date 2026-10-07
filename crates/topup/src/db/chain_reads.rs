@@ -79,6 +79,7 @@ pub async fn initialize_coverage(
 /// Record a chain-wide conflict using the existing audited freeze/lift gate.
 pub async fn freeze(pool: &PgPool, chain: u64, check: &str) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
+    super::rpc::lock_reconciliation_in(&mut tx, &format!("chain:{chain}")).await?;
     sqlx::query("SELECT chain_id FROM chain_coverage WHERE chain_id=$1 FOR UPDATE")
         .bind(to_i64(chain, "chain id")?)
         .fetch_optional(&mut *tx)
@@ -95,6 +96,14 @@ pub async fn admit_address(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     chain: u64,
 ) -> Result<bool, sqlx::Error> {
+    admit_addresses(tx, chain, 1).await
+}
+/// Admit a batch atomically against the same chain boundary and pilot cap.
+pub async fn admit_addresses(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    chain: u64,
+    additional: usize,
+) -> Result<bool, sqlx::Error> {
     super::rpc::guard_in(tx, chain).await?;
     let boundary: Option<i64> =
         sqlx::query_scalar("SELECT through_block FROM chain_coverage WHERE chain_id=$1 FOR UPDATE")
@@ -108,5 +117,9 @@ pub async fn admit_address(
         .bind(to_i64(chain, "chain id")?)
         .fetch_one(&mut **tx)
         .await?;
-    Ok(count < ISSUED_ADDRESS_CAP)
+    let additional = i64::try_from(additional)
+        .map_err(|_| sqlx::Error::Protocol("address count overflow".into()))?;
+    Ok(count
+        .checked_add(additional)
+        .is_some_and(|total| total <= ISSUED_ADDRESS_CAP))
 }

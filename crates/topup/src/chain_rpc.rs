@@ -147,6 +147,7 @@ impl ChainRpcSpec {
                 .with_provider(&endpoint.id)
                 .with_chain_id(self.chain_id)
                 .with_max_log_blocks(endpoint.max_log_blocks);
+            client.contract_checked(false);
             if verify {
                 client = client.as_verify();
             }

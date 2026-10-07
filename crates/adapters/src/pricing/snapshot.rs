@@ -100,6 +100,9 @@ impl Snapshots {
         purpose: SnapshotUse,
         arrived: Instant,
     ) -> Result<Arc<Snapshot>, PriceError> {
+        if !self.read.contract_ready() || !self.verify.contract_ready() {
+            return Err(PriceError::RpcUnavailable);
+        }
         let mut latest = self.latest.lock().await;
         if let Some((completed, snapshot)) = &*latest {
             let usable = if purpose == SnapshotUse::Quote {
@@ -147,6 +150,8 @@ impl Snapshots {
         )
         .map_err(|_| PriceError::RpcUnavailable)?;
         if read != verify {
+            self.read.disagreement("eth_call");
+            self.verify.disagreement("eth_call");
             return Err(PriceError::Disagreement);
         }
         let values = aggregate3Call::abi_decode_returns_validate(&read)

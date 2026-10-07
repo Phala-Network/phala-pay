@@ -154,6 +154,12 @@ impl RouteSet {
         })
     }
 
+    /// An explicitly configured pair is usable only after both endpoints pass their checks.
+    pub fn chain_ready(&self, chain: u64) -> bool {
+        self.rpc
+            .get(&chain)
+            .is_none_or(|pair| pair.read.ready() && pair.verify.ready())
+    }
     /// Returns every loaded route version, in load order.
     #[must_use]
     pub fn routes(&self) -> &[RouteFile] {
@@ -368,7 +374,10 @@ mod tests {
             confirmations.map_or_else(String::new, |value| format!("  confirmations: {value}\n"));
         serde_saphyr::from_str(
             &include_str!("../tests/fixtures/phala-cloud-pha.yaml")
-                .replace("price:\n", "price:\n  sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: a, rpc_group_b: b }\n")
+                .replace(
+                    "price:\n",
+                    "price:\n  sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }\n",
+                )
                 .replace("chain_id: 1\n", "chain_id: 8453\n")
                 .replace("phala-cloud-ethereum-pha-usd", route)
                 .replace("  confirmations: finalized\n", &written)

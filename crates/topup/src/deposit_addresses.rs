@@ -735,6 +735,14 @@ async fn keep_network(
         .transpose()
         .map_err(|_| DepositAddressError::DatabaseInvariant)?;
     let address = forwarder_address(chain.factory, chain.implementation, chain.treasury, salt);
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM addresses WHERE deposit_address_id=$1 AND chain_id=$2 AND address=$3)")
+        .bind(id).bind(chain_id).bind(format!("{address:#x}")).fetch_one(&mut **transaction).await?;
+    if exists {
+        return Ok(());
+    }
+    if !crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
+        return Err(DepositAddressError::NoChain);
+    }
     sqlx::query(
         r#"
         INSERT INTO addresses (
@@ -1150,6 +1158,7 @@ pub async fn sync_networks(
         }
         // The chain's treasury may be one an earlier network of this address paid: that forwarder
         // is the chain's current one again.
+        crate::db::rpc::guard_in(transaction, chain.chain_id).await?;
         let restored = sqlx::query(
             "UPDATE addresses SET superseded_at = NULL \
              WHERE deposit_address_id = $1 AND chain_id = $2 AND address = $3",
@@ -1275,6 +1284,9 @@ pub(crate) async fn replace_networks(
             new_salts.push(salt.clone());
             new_addresses.push(address.clone());
         }
+    }
+    if !crate::db::chain_reads::admit_addresses(transaction, chain.chain_id, ids.len()).await? {
+        return Err(DepositAddressError::NoChain);
     }
     // As in `sync_networks`, the scanner covers a new forwarder from the chain's committed cursor.
     sqlx::query(

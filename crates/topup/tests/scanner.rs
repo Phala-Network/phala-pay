@@ -201,6 +201,26 @@ async fn first_scan_includes_creation_and_all_boundaries_end_at_scanned_e() -> R
             let verify = Reader::new(10000);
             let start = scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             ensure!(start.number == 99);
+            let pending: Vec<_> = [3099, 3100]
+                .into_iter()
+                .map(|number| {
+                    let log = transfer(&address, number);
+                    db::NewPendingTransfer {
+                        chain_id: 1,
+                        tx_hash: hash(number),
+                        receipt_log_index: 0,
+                        log_index: log.log_index,
+                        block_number: number,
+                        block_hash: log.block_hash,
+                        block_time: log.block_time,
+                        address_id: address.id,
+                        asset_contract: log.token,
+                        from_address: log.from,
+                        amount_atomic: log.amount,
+                    }
+                })
+                .collect();
+            db::pending::commit_head_scan(&d.app_pool, 1, 100, 10000, &pending).await?;
             let result = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
             ensure!(result.cursor == 3099 && result.finalized == 10000);
             let coverage = db::chain_reads::coverage(&d.app_pool, 1).await?.unwrap();
@@ -216,6 +236,12 @@ async fn first_scan_includes_creation_and_all_boundaries_end_at_scanned_e() -> R
             .await?;
             ensure!(compat == (3099, time(3099)));
             ensure!(marker(d, address.id).await? == Some(3099));
+            let pending_blocks: Vec<i64> = sqlx::query_scalar(
+                "SELECT block_number FROM pending_transfers ORDER BY block_number",
+            )
+            .fetch_all(&d.app_pool)
+            .await?;
+            ensure!(pending_blocks == vec![3100]);
             for reader in [&read, &verify] {
                 ensure!(
                     reader
@@ -357,7 +383,9 @@ async fn fast_and_n_minus_one_rows_are_reverified_even_if_both_logs_omit_them() 
             read.receipt = Some(log.clone());
             verify.receipt = Some(log);
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
-            scanner::fast_once(&d.app_pool, &read, &chain()).await?;
+            let mut fast_chain = chain();
+            fast_chain.chain.confirmations = Confirmations::Depth(2);
+            scanner::fast_once(&d.app_pool, &read, &fast_chain).await?;
             let marked: bool =
                 sqlx::query_scalar("SELECT dual_verified_at IS NOT NULL FROM deposits")
                     .fetch_one(&d.app_pool)
@@ -388,7 +416,8 @@ async fn progressed_unverified_mismatch_freezes_and_prevents_coverage_advance() 
         let mut read=Reader::new(200);let mut verify=Reader::new(200);
         read.logs.push(log.clone());read.receipt=Some(log.clone());verify.receipt=Some(log);
         scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
-        scanner::fast_once(&d.app_pool,&read,&chain()).await?;
+        let mut fast_chain=chain();fast_chain.chain.confirmations=topup_core::route::Confirmations::Depth(2);
+        scanner::fast_once(&d.app_pool,&read,&fast_chain).await?;
         sqlx::query("UPDATE deposits SET state='rejected',reason='out_of_bounds',block_time=to_timestamp(101)").execute(&d.owner_pool).await?;
         read.logs.clear();
         ensure!(scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),1).await.is_err());
@@ -451,4 +480,24 @@ async fn checkpoint_conflict_freezes_instead_of_replacing_durable_hash() -> Resu
         })
     })
     .await
+}
+
+#[tokio::test]
+async fn lagging_chunk_is_bounded_and_never_bulk_marks_unscanned_addresses() -> Result<()> {
+    with_database(|d|Box::pin(async move {
+        let first=address(d,100).await?;
+        let customer:Uuid=sqlx::query_scalar("SELECT customer_id FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(first.id).fetch_one(&d.app_pool).await?;
+        for n in 1..=1000_u64 {
+            seed::insert_address(&d.app_pool,&NewAddress {id:Uuid::new_v4(),customer_id:customer,chain_id:1,route:route().route,salt:hash(n),address:Address::from_word(hash(n))}).await?;
+        }
+        let read=Reader::new(4000);let verify=Reader::new(4000);
+        scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),1).await?;
+        let marked:i64=sqlx::query_scalar("SELECT count(*) FROM addresses WHERE dual_covered_through IS NOT NULL").fetch_one(&d.app_pool).await?;
+        ensure!(marked==1000);
+        ensure!(read.requests.lock().unwrap().iter().all(|(addresses,_,_)|addresses.len()<=1000));
+        ensure!(verify.requests.lock().unwrap().iter().all(|(addresses,_,_)|addresses.len()<=1000));
+        let mut tx=d.app_pool.begin().await?;ensure!(!db::chain_reads::admit_address(&mut tx,1).await?);tx.rollback().await?;
+        Ok(())
+    })).await
 }

@@ -77,6 +77,8 @@ pub(crate) async fn block_chain(
     check_name: &str,
     reason: &str,
 ) -> Result<(), ReconciliationError> {
+    let mut transaction = pool.begin().await?;
+    crate::db::rpc::lock_reconciliation_in(&mut transaction, &format!("chain:{chain_id}")).await?;
     sqlx::query(
         r#"
         INSERT INTO reconciliation_blocks
@@ -89,8 +91,9 @@ pub(crate) async fn block_chain(
     .bind(db_i64(chain_id)?)
     .bind(check_name)
     .bind(reason)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
+    transaction.commit().await?;
     Ok(())
 }
 

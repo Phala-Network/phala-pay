@@ -916,6 +916,11 @@ async fn apply(
             .bind(id)
             .fetch_one(&mut **transaction)
             .await?;
+    let chain = u64::try_from(chain_id).map_err(|_| TreasuryError::DatabaseInvariant)?;
+    if !routes.chain_ready(chain) {
+        return Err(TreasuryError::Unavailable);
+    }
+    crate::db::rpc::guard_in(transaction, chain).await?;
     let former: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM treasuries \
          WHERE account_id = $1 AND livemode = $2 AND chain_id = $3 \

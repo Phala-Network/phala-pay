@@ -195,7 +195,14 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             ensure!(stats.watched == 0, "{stats:?}");
             ensure!(chain.deposit(tx).await?.state == DepositState::Credited);
 
+            sqlx::query(
+                "UPDATE quotes SET expires_at=now()-interval '1 second' WHERE consumed_by=$1",
+            )
+            .bind(credited.id)
+            .execute(&chain.pool)
+            .await?;
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
             ensure!(stats.reversed == 1, "{stats:?}");
             let reversed = chain.deposit(tx).await?;
@@ -225,7 +232,7 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             .bind(credited.id)
             .fetch_one(&chain.pool)
             .await?;
-            ensure!(evidence["result"] == "dropped_nonce_consumed");
+            ensure!(evidence["result"] == "known_finalized_replacement");
             let refund_status: String =
                 sqlx::query_scalar("SELECT status FROM refunds WHERE id = $1")
                     .bind(refund)
@@ -234,10 +241,18 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             ensure!(refund_status == "canceled");
             // The quote's window is still open, so it opens again with its reservation.
             ensure!(chain.quote_status().await? == ("open".to_owned(), None));
+            let reserved:bool=sqlx::query_scalar("SELECT exposure_reserved FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(chain.address_id).fetch_one(&chain.pool).await?;
+            ensure!(reserved);
+            ensure!(chain.events("quote.expired").await?.is_empty());
+            chain.anvil.mine(80)?;
+            coverage_once(&chain.pool,&chain.reader,&chain.reader,&chain.routes,1).await?;
+            ensure!(topup::locks::expire_once(&chain.pool,&RouteSet::new(vec![chain.route.clone()]).unwrap()).await?==1);
+            ensure!(chain.events("quote.expired").await?.len()==1);
 
             // Terminal: later passes and pumps leave it alone, and the event stays single.
             let again = chain.watch().await?;
             ensure!(again.watched == 0, "{again:?}");
+            chain.settle().await?;
             ensure!(chain.pump.run_once().await? == RunOnceResult::Idle);
             ensure!(chain.events("deposit.reversed").await?.len() == 1);
             Ok(())
@@ -303,6 +318,7 @@ async fn the_payers_view_credits_the_shown_payment_and_drops_a_reversed_one() ->
             ensure!(chain.receipt_block(first)?.is_none());
             ensure!(chain.receipt_block(second)?.is_some());
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
             ensure!(stats.reversed == 1 && stats.finalized == 1, "{stats:?}");
             ensure!(chain.deposit(first).await?.state == DepositState::Reversed);
@@ -570,6 +586,7 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
             ensure!(chain.deposit(tx).await?.state == DepositState::Credited);
 
             chain.anvil.mine(FINALITY_DEPTH + depth)?;
+            chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
             ensure!(stats.reversed == 1, "{stats:?}");
             ensure!(chain.deposit(tx).await?.state == DepositState::Reversed);
@@ -927,30 +944,6 @@ impl FastChain {
             .context("parse transaction hash")
     }
 
-    /// Sends the payment without waiting for a block.
-    fn send_payment(&self, amount: u64) -> Result<B256> {
-        let output = run_checked(
-            "cast",
-            &[
-                "send",
-                "--async",
-                "--rpc-url",
-                &self.anvil.rpc_url,
-                "--private-key",
-                PAYER_KEY,
-                &format!("{:#x}", self.token),
-                "transfer(address,uint256)",
-                &format!("{:#x}", self.address),
-                &amount.to_string(),
-            ],
-            None,
-        )?;
-        String::from_utf8(output.stdout)?
-            .trim()
-            .parse()
-            .context("parse transaction hash")
-    }
-
     fn raw_transaction(&self, tx: B256) -> Result<String> {
         let output = rpc(
             &self.anvil,
@@ -1094,6 +1087,64 @@ impl FastChain {
         bail!("the pump did not settle")
     }
 
+    /// Simulates fast discovery of a positive replacement already known to the service.
+    async fn record_known_replacement(&self, raw: &str) -> Result<()> {
+        let hash = replacement_hash(raw)?;
+        let transfer = self
+            .reader
+            .receipt_transfer(hash, 0)
+            .await?
+            .transfer()
+            .context("replacement transfer")?
+            .clone();
+        let address_id = if transfer.to == self.address {
+            self.address_id
+        } else {
+            let row = seed::insert_address(
+                &self.pool,
+                &NewAddress {
+                    id: Uuid::new_v4(),
+                    customer_id: self.customer_id,
+                    chain_id: self.chain_id,
+                    route: self.route.route.clone(),
+                    salt: B256::repeat_byte(0x71),
+                    address: transfer.to,
+                },
+            )
+            .await?;
+            row.id
+        };
+        let mut tx = self.pool.begin().await?;
+        db::insert_scanned_deposit_in(
+            &mut tx,
+            &db::NewDeposit {
+                chain_id: self.chain_id,
+                tx_hash: hash,
+                receipt_log_index: 0,
+                log_index: transfer.log_index,
+                block_number: transfer.block_number,
+                block_hash: transfer.block_hash,
+                block_time: transfer.block_time,
+                address_id,
+                route: Some(self.route.route.clone()),
+                route_version: Some(self.route.version),
+                asset_contract: transfer.token,
+                from_address: transfer.from,
+                amount_atomic: transfer.amount,
+                state: DepositState::Detected,
+                reason: None,
+                next_attempt_at: Utc::now(),
+                tx_from: transfer.tx_from,
+                tx_nonce: transfer.tx_nonce,
+                is_final: false,
+            },
+            db::Evidence::Confirmed,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn watch(&self) -> Result<topup::finality::WatchStats> {
         Ok(self.watch.watch_once(self.chain_id).await?)
     }
@@ -1188,15 +1239,6 @@ fn rpc(anvil: &Anvil, method: &str, params: &[&str]) -> Result<std::process::Out
 
 fn reader(rpc_url: &str) -> Result<FinalizedReader> {
     Ok(FinalizedReader::new(Arc::new(EvmClient::new(rpc_url)?)))
-}
-
-/// A reader whose calls are counted under `label`, unique to one test.
-fn labeled_reader(rpc_url: &str, label: &str, chain_id: u64) -> Result<FinalizedReader> {
-    Ok(FinalizedReader::new(Arc::new(
-        EvmClient::new(rpc_url)?
-            .with_provider(label)
-            .with_chain_id(chain_id),
-    )))
 }
 
 async fn seed_address(pool: &PgPool, chain_id: u64) -> Result<(Uuid, Uuid, Address)> {

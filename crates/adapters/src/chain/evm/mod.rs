@@ -575,7 +575,25 @@ impl EvmClient {
     pub fn chain_id(&self) -> Option<u64> {
         self.labels.chain_id
     }
+    /// Records independently decoded disagreement using bounded labels, never endpoint URLs.
+    pub fn disagreement(&self, method: &'static str) {
+        let method = if metrics::METHODS.contains(&method) {
+            method
+        } else {
+            "other"
+        };
+        metrics::record_error(&self.labels, &[method], "disagreement");
+        tracing::warn!(tags.alert="TopupRpcDisagreement",provider=%self.labels.provider,chain_id=?self.labels.chain_id,method,"decoded endpoint evidence disagreed; waiting");
+    }
 
+    /// Whether a production endpoint passed its independent contract identity check.
+    pub fn contract_ready(&self) -> bool {
+        self.state.contract_ready()
+    }
+    /// Change contract readiness only after a dual check; transport successes cannot change it.
+    pub fn contract_checked(&self, passed: bool) {
+        self.state.contract_checked(passed);
+    }
     /// Measured provider-specific log window limit.
     pub fn with_max_log_blocks(mut self, blocks: u32) -> Self {
         self.max_log_blocks = blocks;

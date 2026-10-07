@@ -91,7 +91,7 @@ pub(super) fn register(labels: &CallLabels, state: &Arc<super::endpoint::Endpoin
     }
 }
 
-fn record_error(labels: &CallLabels, methods: &[&'static str], class: &'static str) {
+pub(super) fn record_error(labels: &CallLabels, methods: &[&'static str], class: &'static str) {
     let mut counts = ERRORS.lock().unwrap_or_else(PoisonError::into_inner);
     for method in methods {
         let count = counts

@@ -54,6 +54,17 @@ pub async fn preflight(routes: &RouteSet) -> Result<Vec<String>, String> {
             Ok(a)
         }
         .await;
+        let contract_check =
+            crate::contracts::check_pair(&pair.read, &pair.verify, *chain, routes.routes()).await;
+        let passed = matches!(contract_check, Ok(crate::contracts::ContractCheck::Pass));
+        pair.read.contract_checked(passed);
+        pair.verify.contract_checked(passed);
+        if !passed {
+            errors.push(format!(
+                "chain {chain}: dual contract identity check failed"
+            ));
+            continue;
+        }
         let a = match boundary {
             Ok(a) => a,
             Err(error) => {

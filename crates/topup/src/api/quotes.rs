@@ -201,6 +201,9 @@ pub(crate) async fn create_quote(
     if crate::reconciler::chain_is_blocked(&state.pool, route.chain.chain_id).await? {
         return Err(ApiError::chain_frozen());
     }
+    if !state.routes.chain_ready(route.chain.chain_id) {
+        return Err(ApiError::price_unavailable());
+    }
     let route_scopes = repository::route_paused_scopes(&state.pool, &route.route).await?;
     if has_quotes_pause(&merchant.account, &customer, &route_scopes) {
         return Err(ApiError::paused("quotes are paused"));

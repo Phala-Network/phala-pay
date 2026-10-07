@@ -118,6 +118,10 @@ impl SanctionsSource for SanctionsOracle {
             self.answer(&self.provider_a, address, hash),
             self.answer(&self.provider_b, address, hash)
         );
+        if provider_a != provider_b {
+            self.provider_a.disagreement("eth_call");
+            self.provider_b.disagreement("eth_call");
+        }
         SanctionsResult {
             provider_a,
             provider_b,

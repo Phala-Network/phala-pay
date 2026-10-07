@@ -183,15 +183,12 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         | "TopupCertificateExpiry"
         | "TopupCertificateProbeFailed"
         | "TopupBusinessProbeFailed" => "business-health.md",
-        "TopupRpcChainFrozen" => "chain-frozen.md",
-        "TopupRpcMetricsRefreshFailed" => "rpc-health.md#metrics-refresh-failure",
-        "TopupRpcGroupUnavailable"
-        | "TopupRpcMemberQuarantined"
-        | "TopupRpcMemberCooldown"
-        | "TopupRpcQuotaPressure"
-        | "TopupRpcUnclassifiedError"
-        | "TopupRpcAnchorUnavailable"
-        | "TopupRpcRecoveryUnavailable" => "rpc-health.md",
+        "TopupContractCodeMismatch"
+        | "TopupFinalizedCheckpointConflict"
+        | "TopupUnverifiedEvidenceMismatch" => "chain-frozen.md",
+        "TopupRpcEndpointUnavailable" => "rpc-health.md",
+        "TopupRpcDisagreement" => "provider-disagreement.md",
+        "TopupDepositReversalUnproven" => "deposit-reversed.md",
         "TopupDepositStateAgeExceeded" => match tag("state") {
             Some("detected" | "confirmed") => "provider-disagreement.md",
             _ => "README.md#alert-and-symptom-index",

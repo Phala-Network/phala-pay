@@ -600,11 +600,11 @@ pub(crate) async fn reissue_deposit_address(
                 })
         })
         .transpose()?;
-    // Every chain of the mode with a current route, paused or frozen or not: nothing new is
-    // given out, the address was issued already.
+    // Reconstruction still requires healthy chain evidence and honors the chain freeze.
     let chains: Vec<ChainContracts> = state
         .routes
         .current_in(request.livemode)
+        .filter(|route| state.routes.chain_ready(route.chain.chain_id))
         .map(|route| (route.chain.chain_id, ChainContracts::of(route)))
         .collect::<std::collections::BTreeMap<_, _>>()
         .into_values()
@@ -727,6 +727,9 @@ pub(crate) async fn reissue_quote(
                 && route.asset.symbol.eq_ignore_ascii_case(&request.asset)
         })
         .ok_or_else(|| ApiError::invalid_param("asset", "no route has the chain and asset"))?;
+    if !state.routes.chain_ready(route.chain.chain_id) {
+        return Err(ApiError::price_unavailable());
+    }
     let (lock, issued) = locks::reissue(
         &state.pool,
         &account,

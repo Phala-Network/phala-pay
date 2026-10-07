@@ -961,6 +961,9 @@ struct Fixture {
 
 impl Fixture {
     async fn new(pool: &sqlx::PgPool) -> Result<Self> {
+        for chain in [1, OTHER_CHAIN, TEST_CHAIN, 8453] {
+            seed::initialize_dual_chain(pool, chain).await?;
+        }
         let account = seed::create_account(pool, &NewAccount::named("merchant")).await?;
         let live_key = seed::create_api_key(pool, account.id, true).await?;
         let test_key = seed::create_api_key(pool, account.id, false).await?;

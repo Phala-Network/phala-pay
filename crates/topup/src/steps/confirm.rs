@@ -918,15 +918,22 @@ async fn confirmed_evidence(
             "provider_a_receipt": receipt_block(&primary_receipt),
             "provider_b_receipt": receipt_block(&secondary_receipt),
         })),
-        (primary, secondary) => FinalityResult::Retry(
-            RetryError::RpcDisagreement,
-            json!({
-                "stage": "finality",
-                "error": "rpc_disagreement",
-                "provider_a": primary.map(provider_evidence),
-                "provider_b": secondary.map(provider_evidence),
-            }),
-        ),
+        (primary, secondary) => {
+            tracing::warn!(
+                tags.alert = "TopupRpcDisagreement",
+                chain_id = deposit.chain_id,
+                "confirmation decision fields disagreed; waiting"
+            );
+            FinalityResult::Retry(
+                RetryError::RpcDisagreement,
+                json!({
+                    "stage": "finality",
+                    "error": "rpc_disagreement",
+                    "provider_a": primary.map(provider_evidence),
+                    "provider_b": secondary.map(provider_evidence),
+                }),
+            )
+        }
     }
 }
 

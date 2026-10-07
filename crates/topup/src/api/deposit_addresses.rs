@@ -426,6 +426,9 @@ async fn issuable_chains(
             issuable.frozen = true;
             continue;
         }
+        if !state.routes.chain_ready(chain_id) {
+            continue;
+        }
         let mut open = None;
         for route in routes {
             let scopes = repository::route_paused_scopes(&state.pool, &route.route).await?;

@@ -15,6 +15,11 @@ pub async fn advance<R: ChainReader, V: ChainReader>(
             tokio::try_join!(read.header(previous.number), verify.header(previous.number))?;
         if a.0 != previous.hash || b.0 != previous.hash {
             chain_reads::freeze(pool, chain, "finalized_checkpoint_conflict").await?;
+            tracing::error!(
+                tags.alert = "TopupFinalizedCheckpointConflict",
+                chain_id = chain,
+                "stored finalized checkpoint hash changed; chain frozen"
+            );
             return Err(crate::scanner::ScannerError::Disagreement);
         }
     }
@@ -25,6 +30,11 @@ pub async fn advance<R: ChainReader, V: ChainReader>(
     let bh = verify.header(a.number).await?;
     if ah != bh.0 || bh.1 != a.time {
         chain_reads::freeze(pool, chain, "finalized_checkpoint_conflict").await?;
+        tracing::error!(
+            tags.alert = "TopupFinalizedCheckpointConflict",
+            chain_id = chain,
+            "stored finalized checkpoint hash changed; chain frozen"
+        );
         return Err(crate::scanner::ScannerError::Disagreement);
     }
     let boundary = Boundary {
