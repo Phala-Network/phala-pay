@@ -461,11 +461,201 @@ async fn coverage_requeries_fast_inserts_after_taking_the_chain_lock() -> Result
             tx.commit().await?;
             Ok::<_,anyhow::Error>(())
         };
-        tokio::try_join!(async {Ok::<_,anyhow::Error>(coverage.await?)},fast)?;
+        let (outcome, fast) = tokio::join!(coverage, fast);
+        fast?;
+        ensure!(matches!(outcome, Err(scanner::ScannerError::SnapshotChanged)),
+            "concurrent fast insertion did not invalidate the RPC snapshot");
+        let row:(i64,bool)=sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits").fetch_one(&d.app_pool).await?;
+        ensure!(row==(5000,false), "invalidated round changed the concurrent fast insert");
+        ensure!(marker(d,address.id).await?.is_none(), "invalidated round published coverage");
+        read.logs_gate = None;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain,2).await?;
         let row:(i64,bool)=sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits").fetch_one(&d.app_pool).await?;
         ensure!(row==(100,true), "concurrent fast insertion escaped dual verification");
         Ok(())
     })).await
+}
+
+#[tokio::test]
+async fn reversal_during_coverage_rpc_discards_the_snapshot_without_reinserting() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 100).await?;
+            let mut read = Reader::new(200);
+            let mut verify = Reader::new(200);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let scan_address = db::list_scan_addresses(&d.app_pool, 1).await?.remove(0);
+            let old = transfer(&address, 100);
+            let id = topup_core::identity::deposit_id(1, old.tx_hash, old.receipt_log_index);
+            db::commit_confirmed_scan(
+                &d.app_pool,
+                1,
+                &[provisional(old.clone(), &scan_address)],
+                100,
+            )
+            .await?;
+            let before = db::chain_reads::coverage(&d.app_pool, 1).await?;
+            let compat_before: (i64, Option<DateTime<Utc>>) = sqlx::query_as(
+                "SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1",
+            )
+            .fetch_one(&d.app_pool)
+            .await?;
+            // Coverage cached the old payment, but finality sees an untracked recipient.
+            read.receipt = Some(old.clone());
+            verify.receipt = Some(old.clone());
+            let started = Arc::new(Notify::new());
+            let resume = Arc::new(Notify::new());
+            read.receipt_gate = Some((started.clone(), resume.clone()));
+            let mut canonical = old;
+            canonical.to = Address::repeat_byte(0x99);
+            let mut finality_read = Reader::new(200);
+            let mut finality_verify = Reader::new(200);
+            finality_read.receipt = Some(canonical.clone());
+            finality_verify.receipt = Some(canonical);
+            let watch = topup::finality::FinalityWatch::single(
+                d.app_pool.clone(),
+                Arc::new(routes()),
+                1,
+                finality_read,
+                finality_verify,
+            );
+            let chain = chain();
+            let coverage = scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 1);
+            let reversal = async {
+                started.notified().await;
+                let result = watch.watch_once(1).await;
+                resume.notify_one();
+                ensure!(
+                    result?.reversed == 1,
+                    "concurrent finality did not reverse the payment"
+                );
+                Ok::<_, anyhow::Error>(())
+            };
+            let (outcome, reversal) = tokio::join!(coverage, reversal);
+            reversal?;
+            ensure!(
+                matches!(outcome, Err(scanner::ScannerError::SnapshotChanged)),
+                "a reversal during RPC did not discard cached evidence"
+            );
+            let records: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits")
+                .fetch_one(&d.app_pool)
+                .await?;
+            ensure!(
+                records == 1,
+                "cached evidence reinserted a reversed payment"
+            );
+            ensure!(
+                db::get_deposit(&d.app_pool, id).await?.unwrap().state
+                    == topup_core::deposit::DepositState::Reversed
+            );
+            ensure!(
+                db::chain_reads::coverage(&d.app_pool, 1).await? == before,
+                "invalidated round advanced coverage"
+            );
+            ensure!(marker(d, address.id).await?.is_none());
+            let compat_after: (i64, Option<DateTime<Utc>>) = sqlx::query_as(
+                "SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1",
+            )
+            .fetch_one(&d.app_pool)
+            .await?;
+            ensure!(
+                compat_after == compat_before,
+                "invalidated round advanced the compat cursor"
+            );
+            // The next full round must read the now-absent receipt again on both endpoints.
+            read.receipt_gate = None;
+            read.receipt = None;
+            verify.receipt = None;
+            read.logs.clear();
+            read.logs.push(transfer(&address, 100));
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 2).await?;
+            ensure!(
+                *read.receipt_reads.lock().unwrap() == 2
+                    && *verify.receipt_reads.lock().unwrap() == 2,
+                "the next round reused invalidated receipt evidence"
+            );
+            let records: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits")
+                .fetch_one(&d.app_pool)
+                .await?;
+            ensure!(records == 1, "fresh absence reinserted a reversed payment");
+            ensure!(marker(d, address.id).await? == Some(200));
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn changed_address_snapshot_retries_once_immediately_with_fresh_logs() -> Result<()> {
+    for changes in [1, 2] {
+        with_database(|d| {
+            Box::pin(async move {
+                let original = address(d, 100).await?;
+                let started = Arc::new(Notify::new());
+                let resume = Arc::new(Notify::new());
+                let mut read = Reader::new(200);
+                let verify = Reader::new(200);
+                scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+                read.logs_gate = Some((started.clone(), resume.clone()));
+                let chain = chain();
+                let coverage = scanner::coverage_round(&d.app_pool, &read, &verify, &chain, 1);
+                let issuance = async {
+                    for attempt in 0..2 {
+                        started.notified().await;
+                        let changed = if attempt < changes {
+                            address(d, 100).await.map(|_| ())
+                        } else {
+                            Ok(())
+                        };
+                        resume.notify_one();
+                        changed?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                };
+                let (outcome, issuance) =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                        tokio::join!(coverage, issuance)
+                    })
+                    .await
+                    .context("immediate snapshot retry did not finish")?;
+                issuance?;
+                ensure!(
+                    read.requests
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|(addresses, _, _)| !addresses.is_empty())
+                        .count()
+                        == 2
+                        && verify
+                            .requests
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|(addresses, _, _)| !addresses.is_empty())
+                            .count()
+                            == 2,
+                    "snapshot retry must repeat both endpoints' recipient log RPCs exactly once"
+                );
+                if changes == 1 {
+                    ensure!(
+                        outcome?.cursor == 200,
+                        "fresh retry did not commit immediately"
+                    );
+                    ensure!(marker(d, original.id).await? == Some(200));
+                } else {
+                    ensure!(
+                        matches!(outcome, Err(scanner::ScannerError::SnapshotChanged)),
+                        "coverage retries must stop after one fresh retry"
+                    );
+                    ensure!(marker(d, original.id).await?.is_none());
+                }
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
