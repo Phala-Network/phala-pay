@@ -3,8 +3,8 @@
 **Trigger:** `TopupContractCodeMismatch`, `TopupFinalizedCheckpointConflict`,
 `TopupUnverifiedEvidenceMismatch`, or `TopupReconciliationMismatch` with `check:address_derivation` or
 `check:custody_balance`; merchants report
-`400 chain_frozen` from address issuance or quote creation; `topup-scanner-<chain_id>` misses
-its check-ins because the frozen chain's scanner has paused.
+`400 chain_frozen` from address issuance or quote creation; `topup-fast-scanner-<chain_id>` and `topup-coverage-scanner-<chain_id>` report failed
+check-ins because the frozen chain's scanner has paused.
 
 **Impact:** the service can no longer vouch for its ledger on the chain: either the factory's
 `addressOf(treasury, salt)` disagrees with a stored address (`address_derivation`), so it cannot

@@ -351,10 +351,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
-- Quote types expose `cancel_requested_at`.
-- Generated error-code types include `address_capacity_reached` and `chain_unavailable`;
-  unknown future codes remain accepted.
-
 - Opt-in `upgradeTolerance` in `@phala/pay-server` for GET and idempotent POST retries across
   maintenance, connection failures, and gateway 502/503/504 for up to five minutes. Explicit
   deadlines and cancellation remain effective; keys and bodies stay fixed. Browser core checkout

@@ -12,12 +12,12 @@ failing batch rolls back and the same oldest locks are picked again, so nothing 
 the cause is fixed. Payments are unaffected: the confirm step judges them by `expires_at`.
 
 A lock past `expires_at` by wall clock is not overdue until finality, about 15 minutes; a stalled
-scanner holds locks open by design and pages as `topup-scanner-<chain_id>`, not as this alert.
+scanner holds locks open by design and pages as `topup-coverage-scanner-<chain_id>`, not as this alert.
 
 ## First steps
 
 1. Read the error in the Sentry event.
-2. Check `topup-scanner-<chain_id>` and, for locks with an in-window payment, a
+2. Check `topup-coverage-scanner-<chain_id>` and, for locks with an in-window payment, a
    `TopupDepositStateAgeExceeded` `state:detected` alert: either holds locks open by design.
 3. Watch `exposure_minor` in the daily report across a few minutes.
 

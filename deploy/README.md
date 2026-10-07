@@ -559,6 +559,8 @@ environment is `topup.yaml`'s `environment`, both attested.
   | `topup-reconciler` | `ok` after a complete round or one skipped because nothing newly finalized, `error` after failed checks, every 10 min | 10 min |
   | `topup-backup` | `ok` while the WAL-G success marker is at most 120 s old, else `error`; 3 errors open an issue | 2 min |
 
+  After upgrading, delete or mute the old `topup-scanner-<chain>` monitors.
+
 - **Uptime**: `/healthz` of each Environment ([One-time setup](#one-time-setup-human-only-repository-owner)).
 - **Egress**: `topup` sends HTTPS to the DSN's ingest host.
 

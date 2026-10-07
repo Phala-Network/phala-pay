@@ -92,7 +92,7 @@ and the goods it sells).
 1. **Addresses have no keys and no service state.** Every address is a CREATE2 forwarder that
    can only pay the treasury, and every salt derives from identifiers the merchant holds.
 2. **Fast credit, recoverable reversal.** A deposit is recorded once its block reaches the
-   route's confirmation on provider A and credited once both providers show the same log there
+   route's confirmation on the read endpoint and credited once both providers show the same log there
    (§8). A watch re-reads every deposit by its receipt until it is final: a re-included
    transaction is followed, and only a known same-sender, same-nonce replacement independently
    agreed finalized by both endpoints, or a transfer missing at finality makes a deposit `reversed`. The display-only pending view shows
@@ -393,7 +393,7 @@ monotone; splitting into `n` parts loses at most `n − 1` minor units.
 stateDiagram-v2
     [*] --> detected: transfer of the route's token at the route's confirmation
     [*] --> rejected: transfer of another token (unsupported)
-    detected --> confirmed: provider B agrees at the confirmation, valued
+    detected --> confirmed: verify endpoint agrees at the confirmation, valued
     detected --> rejected: below the minimum credit, or an asset its settings do not accept
     confirmed --> credited: screened, deposit.credited written
     confirmed --> rejected: sanctioned or out of bounds
@@ -545,16 +545,27 @@ hash. A conflict freezes the chain. Coverage ends at `e = min(checkpoint, cursor
 Caught-up addresses scan `(cursor, e]`; at most 1,000 lagging addresses backfill from their own
 `dual_covered_through + 1`, or `created_block` when NULL. Every log request must succeed.
 The union of both candidate sets is resolved independently by receipt, transaction and header.
-Existing unmarked deposits are reverified even when omitted from both sets, including block time
-and nonce; differing agreed evidence corrects a `detected` row, and freezes a progressed row.
+After taking the chain lock, all unmarked identities are re-read without trusting their stored
+block numbers, including those inserted by fast discovery during the RPC reads. Independently
+agreed block time and nonce correct an existing `detected` row; canonical receipts beyond the
+address's scanned range wait for a later round. A changed provisional recipient stays with the
+finality reversal/successor flow; a dual reversal marks its old revision verified. Differing
+agreed evidence freezes a progressed row.
 Factory events are always reverified. Only configured-factory events count.
 
-One transaction writes evidence, dual markers, coverage and the N-1 compatibility cursor at `e`,
-address progress at its actual backfill end, and deletes pending rows at or below `e`. Only
+One transaction writes evidence, dual markers, coverage at `e`, address progress at its actual
+backfill end, and the N-1 compatibility cursor at the boundary reached by every address. The
+cursor's header is read on both endpoints when it differs from `e`. It deletes pending rows at or below `e`. Only
 caught-up addresses become `backfilled`. Issuance requires initialized dual coverage and respects
 the 1,000-address chain cap. Empty chains start at the agreed checkpoint; an upgraded or restored
-chain starts at `min(created_block) - 1`. Lowering `created_block` clears its dual marker.
+chain starts at `min(min(created_block).saturating_sub(1), checkpoint)`, with its header read on
+both endpoints. Startup rebases an old cursor above dual coverage. Lowering `created_block`
+atomically clears its dual marker, lowers the compatibility cursor as needed and clears its time.
 Negative decisions require both chain coverage and the address's own caught-up marker.
+
+Custody reads the full balance vector on both endpoints at the same EIP-1898 canonical hash at
+`min(checkpoint, coverage)`. Errors and mismatches wait; only dual agreement can report a clean
+ledger or freeze a discrepant chain.
 
 See [chain reads](design/chain-reads.md) for complete evidence fields, boundaries and budgets.
 
@@ -722,7 +733,7 @@ row keeps the treasury it was issued over, so a quote created before a change ke
 authority of the configured `public_origin` and `URI` the origin, the statement names the account and mode,
 `Chain ID` is the chain, the nonce is single-use and bound to the account, mode, chain, and
 address, and the message expires after 10 minutes, or 24 hours when the address holds code at
-provider A's latest block (a Safe's owners collect signatures, or approve on chain and wait for
+the read endpoint's latest block (a Safe's owners collect signatures, or approve on chain and wait for
 `finalized`). `POST /v1/treasuries {chain_id, message,
 signature}` requires the message exactly as issued and proves the address when the signature is an
 EOA's EIP-191 `personal_sign` signature recovering to it (checked with Alloy), or when a contract
@@ -1701,7 +1712,7 @@ restore check that asks the merchant nothing and keeps recorded credits; restore
 freeze, `503 service_restoring`, and each reconciliation action); fast credit with `anvil_reorg` (a depth-1 reorg before credit changes
 nothing; a transaction re-included in a later block keeps its deposit id and is followed, not
 reversed, when its block-wide `log_index` changes; a transaction replaced with the same nonce is
-reversed with one `deposit.reversed` and its quote reopened; a lagging provider B delays the
+reversed with one `deposit.reversed` and its quote reopened; a lagging verify endpoint delays the
 credit; independent receipt fields agree before credit; the 60-second discovery cadence and
 bounded dual coverage commit only scanned ranges, with errors aborting the range and address
 reissues catching up before negative decisions). Tenancy
