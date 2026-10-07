@@ -180,6 +180,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Python SDK (`phala-pay`)
 
+#### Added
+
+- Quote objects expose `cancel_requested_at` for deferred cancellation requests.
+
 #### Removed
 
 - **Breaking:** the legacy `PhalaPay` constructor (deprecated in 0.9.2); use pins or
