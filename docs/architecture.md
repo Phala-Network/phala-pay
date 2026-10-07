@@ -545,11 +545,13 @@ hash. A conflict freezes the chain. Coverage ends at `e = min(checkpoint, cursor
 Caught-up addresses scan `(cursor, e]`; at most 1,000 lagging addresses backfill from their own
 `dual_covered_through + 1`, or `created_block` when NULL. Every log request must succeed.
 The union of both candidate sets is resolved independently by receipt, transaction and header.
-After taking the chain lock, all unmarked identities are re-read without trusting their stored
+After taking the chain lock, all active unmarked identities are re-read without trusting their stored
 block numbers, including those inserted by fast discovery during the RPC reads. Independently
 agreed block time and nonce correct an existing `detected` row; canonical receipts beyond the
 address's scanned range wait for a later round. A changed provisional recipient stays with the
-finality reversal/successor flow; a dual reversal marks its old revision verified. Differing
+finality reversal/successor flow; that coverage round rolls back all markers and cursors until the
+reversal and successor commit atomically. Historical `reversed` revisions, including unmarked
+N-1 writes, are excluded from re-verification; a dual reversal marks its old revision verified. Differing
 agreed evidence freezes a progressed row.
 Factory events are always reverified. Only configured-factory events count.
 

@@ -436,7 +436,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         return Err(ScannerError::SnapshotChanged);
     }
     let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL FOR UPDATE",
+        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL AND state <> 'reversed' FOR UPDATE",
     )
     .bind(i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?)
     .fetch_all(&mut *tx)
@@ -492,7 +492,10 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                     );
                     return Err(ScannerError::Disagreement);
                 }
-                continue;
+                // Until finality atomically records the reversal and successor, even an
+                // agreed log cannot authorize negative decisions at the new recipient.
+                // Abort the round so neither address coverage nor the compat cursor moves.
+                return Err(ScannerError::SnapshotChanged);
             }
         }
         let address = index

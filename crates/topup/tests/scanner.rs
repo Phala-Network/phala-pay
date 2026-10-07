@@ -510,7 +510,10 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
                     );
                     return Ok(());
                 }
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+                ensure!(matches!(
+                    scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await,
+                    Err(scanner::ScannerError::SnapshotChanged)
+                ));
                 let id = topup_core::identity::deposit_id(1, old.tx_hash, 0);
                 let provisional = db::get_deposit(&d.app_pool, id).await?.unwrap();
                 ensure!(
@@ -556,6 +559,126 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
             })
         })
         .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn pending_recipient_successor_holds_expiry_and_cancel_until_finality() -> Result<()> {
+    for cancelled in [false, true] {
+        with_database(|d| {
+            Box::pin(async move {
+                let original = address(d, 100).await?;
+                let recipient = address(d, 100).await?;
+                sqlx::query("UPDATE quotes SET status='open',exposure_reserved=true,closed_at=NULL,created_at=$2,expires_at=$3,cancel_requested_at=CASE WHEN $4 THEN $3 END WHERE id=$1")
+                    .bind(recipient.quote_id).bind(time(90)).bind(time(150)).bind(cancelled)
+                    .execute(&d.app_pool).await?;
+                let mut read = Reader::new(200);
+                let mut verify = Reader::new(200);
+                scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+                let scan_address = db::list_scan_addresses(&d.app_pool, 1)
+                    .await?.into_iter().find(|a| a.id == original.id).unwrap();
+                let old = transfer(&original, 100);
+                db::commit_confirmed_scan(&d.app_pool, 1, &[provisional(old.clone(), &scan_address)], 100).await?;
+                let mut canonical = old.clone();
+                canonical.to = recipient.address;
+                canonical.block_number = 101;
+                canonical.block_hash = hash(101);
+                canonical.block_time = time(101);
+                read.logs.push(canonical.clone());
+                read.receipt = Some(canonical.clone());
+                verify.receipt = Some(canonical.clone());
+
+                let coverage = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await;
+                // Run the real expiry/cancel worker before finality has recorded B's payment.
+                topup::locks::expire_once(&d.app_pool, &routes()).await?;
+                let quote: (String, bool, String) = sqlx::query_as(
+                    "SELECT status,exposure_reserved,price_scaled::text FROM quotes WHERE id=$1",
+                ).bind(recipient.quote_id).fetch_one(&d.app_pool).await?;
+                ensure!(quote == ("open".into(), true, "100000000".into()),
+                    "pending successor lost its recipient's reserved quote: {quote:?}; cancelled={cancelled}");
+                ensure!(matches!(coverage, Err(scanner::ScannerError::SnapshotChanged)));
+                ensure!(marker(d, original.id).await?.is_none());
+                ensure!(marker(d, recipient.id).await?.is_none());
+                ensure!(compat(d).await? == (99, Some(time(99))));
+                ensure!(db::chain_reads::coverage(&d.app_pool, 1).await?.unwrap().number == 99);
+                let missing: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM deposits WHERE address_id=$1)")
+                    .bind(recipient.id).fetch_one(&d.app_pool).await?;
+                ensure!(missing, "test did not exercise the pending-successor gap");
+
+                let watch = topup::finality::FinalityWatch::single(
+                    d.app_pool.clone(), Arc::new(routes()), 1, read, verify,
+                );
+                ensure!(watch.watch_once(1).await?.reversed == 1);
+                let mut read = Reader::new(201);
+                let mut verify = Reader::new(201);
+                read.receipt = Some(canonical.clone());
+                verify.receipt = Some(canonical);
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+                ensure!(topup::locks::expire_once(&d.app_pool, &routes()).await? == 0);
+                let successor: (String, DateTime<Utc>, bool) = sqlx::query_as(
+                    "SELECT state,block_time,dual_verified_at IS NOT NULL FROM deposits WHERE address_id=$1 AND state <> 'reversed'",
+                ).bind(recipient.id).fetch_one(&d.app_pool).await?;
+                ensure!(successor == ("detected".into(), time(101), true));
+                let held: bool = sqlx::query_scalar("SELECT status='open' AND exposure_reserved FROM quotes WHERE id=$1")
+                    .bind(recipient.quote_id).fetch_one(&d.app_pool).await?;
+                ensure!(held, "recorded in-window successor lost locked-price eligibility");
+                Ok(())
+            })
+        }).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn n_minus_one_unmarked_reversed_revision_does_not_freeze_its_successor() -> Result<()> {
+    for marked_successor in [false, true] {
+        with_database(|d| {
+            Box::pin(async move {
+                let original = address(d, 100).await?;
+                let recipient = address(d, 100).await?;
+                let mut read = Reader::new(200);
+                let mut verify = Reader::new(200);
+                scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+                let index = db::list_scan_addresses(&d.app_pool, 1).await?;
+                let old = transfer(&original, 100);
+                let source = index.iter().find(|a| a.id == original.id).unwrap();
+                db::commit_confirmed_scan(&d.app_pool, 1, &[provisional(old.clone(), source)], 100).await?;
+                // N-1 reverses without knowing the new dual marker column.
+                sqlx::query("UPDATE deposits SET state='reversed',reason=NULL WHERE tx_hash=$1")
+                    .bind(format!("{:#x}", old.tx_hash)).execute(&d.app_pool).await?;
+                let mut canonical = old.clone();
+                canonical.to = recipient.address;
+                canonical.block_number = 101;
+                canonical.block_hash = hash(101);
+                canonical.block_time = time(101);
+                let target = index.iter().find(|a| a.id == recipient.id).unwrap();
+                let mut tx = d.app_pool.begin().await?;
+                let successor = db::insert_scanned_deposit_in(
+                    &mut tx, &provisional(canonical.clone(), target), db::Evidence::Finalized,
+                ).await?.unwrap();
+                if marked_successor {
+                    sqlx::query("UPDATE deposits SET dual_verified_at=now() WHERE id=$1")
+                        .bind(successor).execute(&mut *tx).await?;
+                }
+                tx.commit().await?;
+                read.logs.push(canonical.clone());
+                read.receipt = Some(canonical.clone());
+                verify.receipt = Some(canonical);
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+                let frozen: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM reconciliation_blocks)")
+                    .fetch_one(&d.app_pool).await?;
+                ensure!(!frozen, "N-1 reversed history froze the current successor");
+                let old_untouched: bool = sqlx::query_scalar("SELECT state='reversed' AND dual_verified_at IS NULL FROM deposits WHERE id=$1")
+                    .bind(topup_core::identity::deposit_id(1, old.tx_hash, 0)).fetch_one(&d.app_pool).await?;
+                ensure!(old_untouched, "coverage rewrote historical N-1 evidence");
+                let current: (String, bool) = sqlx::query_as("SELECT state,dual_verified_at IS NOT NULL FROM deposits WHERE id=$1")
+                    .bind(successor).fetch_one(&d.app_pool).await?;
+                ensure!(current == ("detected".into(), true));
+                ensure!(db::chain_reads::coverage(&d.app_pool, 1).await?.unwrap().number == 200);
+                Ok(())
+            })
+        }).await?;
     }
     Ok(())
 }
