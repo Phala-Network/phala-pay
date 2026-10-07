@@ -221,13 +221,25 @@ fn redundant_staging_preserves_roles_and_rejects_old_schema() -> Result<()> {
             } else {
                 ensure!(group.members.len() >= 2);
             }
-            ensure!(
-                group
-                    .members
-                    .iter()
-                    .all(|member| member.sealed_key.is_none())
-            );
-            ensure!(group.members[0].company == if role == 0 { "tenderly" } else { "publicnode" });
+            if role == 0 {
+                ensure!(group.members[0].company == "alchemy");
+                ensure!(group.members[0].sealed_key.as_deref() == Some("TOPUP_RPC_ALCHEMY_KEY"));
+                ensure!(
+                    group
+                        .members
+                        .iter()
+                        .skip(1)
+                        .all(|member| member.sealed_key.is_none())
+                );
+            } else {
+                ensure!(group.members[0].company == "publicnode");
+                ensure!(
+                    group
+                        .members
+                        .iter()
+                        .all(|member| member.sealed_key.is_none())
+                );
+            }
         }
     }
     let route: topup_core::route::RouteFile =
@@ -461,7 +473,11 @@ fn repeated_templates_allow_distinct_credentials_and_aliases_share_quota_scopes(
         .get_mut("provider-a")
         .context("Tenderly A")?;
     let original_members = group.members.len();
-    let member = group.members.first_mut().context("member")?;
+    let member = group
+        .members
+        .iter_mut()
+        .find(|member| member.id == "provider-a")
+        .context("member")?;
     member.url.push_str("/{key}");
     member.sealed_key = Some("TOPUP_RPC_FIRST_KEY".into());
     let mut second = member.clone();
@@ -481,6 +497,7 @@ fn repeated_templates_allow_distinct_credentials_and_aliases_share_quota_scopes(
     )
     .map_err(anyhow::Error::msg)?;
     let secrets = BTreeMap::from([
+        ("TOPUP_RPC_ALCHEMY_KEY", "alchemy-test-key"),
         ("TOPUP_RPC_FIRST_KEY", "first-test-key"),
         ("TOPUP_RPC_SECOND_KEY", "second-test-key"),
     ]);

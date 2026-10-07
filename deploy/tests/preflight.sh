@@ -24,13 +24,14 @@ render() {
     [[ "${3:-}" != --restore-check ]] || inputs=(--restore-check --origin https://0123-8081.example.net)
     "$root/deploy/render.sh" "${inputs[@]}" --images "$tmp/images.json" "$2" >"$tmp/$1.yml"
 }
-# env_file NAME COMPOSE [NAME=VALUE...]: the compose's sealed names, the storage ones filled.
+# env_file NAME COMPOSE [NAME=VALUE...]: the compose's sealed names, the storage and RPC key ones filled.
 env_file() {
     local file=$tmp/$1.env name
     "$("$root/deploy/pinned-compose.sh")" -f "$2" config --variables |
         awk 'NR > 1 && NF > 0 { print $1 }' | sort | while read -r name; do
         case "$name" in
             *AWS_ACCESS_KEY_ID | *AWS_SECRET_ACCESS_KEY) echo "$name=staging-value" ;;
+            TOPUP_RPC_*_KEY) echo "$name=sealed-key-0123456789" ;;
             *) echo "$name=" ;;
         esac
     done >"$file"
@@ -85,7 +86,7 @@ expect_failure replace-me "AWS_ACCESS_KEY_ID still contains replace-me" \
     --env "$tmp/example.env" --compose "$tmp/service.yml" --environment-dir "$staging"
 
 # Deploy's unsealed env file (every secret empty) passes only with --unsealed.
-env_file unsealed "$tmp/service.yml" AWS_ACCESS_KEY_ID= AWS_SECRET_ACCESS_KEY=
+env_file unsealed "$tmp/service.yml" AWS_ACCESS_KEY_ID= AWS_SECRET_ACCESS_KEY= TOPUP_RPC_ALCHEMY_KEY=
 expect_failure unsealed "AWS_ACCESS_KEY_ID is empty" \
     --env "$tmp/unsealed.env" --compose "$tmp/service.yml" --environment-dir "$staging"
 passes --env "$tmp/unsealed.env" --compose "$tmp/service.yml" --environment-dir "$staging" --unsealed
@@ -121,7 +122,14 @@ edited_environment() {
     cp -r "$staging" "$tmp/$1"
     sed -i "$2" "$tmp/$1/topup.yaml"
     if [[ -n "${3:-}" ]]; then
-        printf '  topup:\n    environment:\n      %s: ${%s:-}\n' "$3" "$3" >>"$tmp/$1/compose.yaml"
+        local compose="$tmp/$1/compose.yaml"
+        local anchor='      TOPUP_RPC_ALCHEMY_KEY: ${TOPUP_RPC_ALCHEMY_KEY:-}'
+        grep -Fqx "$anchor" "$compose" || {
+            echo "edited_environment: $compose is missing the TOPUP_RPC_ALCHEMY_KEY anchor" >&2
+            exit 1
+        }
+        sed -i "/^      TOPUP_RPC_ALCHEMY_KEY: \${TOPUP_RPC_ALCHEMY_KEY:-}$/a\\      $3: \${$3:-}" \
+            "$compose"
     fi
     render "$1" "$tmp/$1"
 }
@@ -131,7 +139,7 @@ edited_environment keyed 's|url: https://sepolia.gateway.tenderly.co|url: https:
     TOPUP_RPC_PROVIDER_A_KEY
 env_file keyed "$tmp/keyed.yml" TOPUP_RPC_PROVIDER_A_KEY=sealed-key-0123456789
 passes --env "$tmp/keyed.env" --compose "$tmp/keyed.yml" --environment-dir "$tmp/keyed"
-env_file keyless "$tmp/keyed.yml"
+env_file keyless "$tmp/keyed.yml" TOPUP_RPC_PROVIDER_A_KEY=
 expect_failure missing-key "TOPUP_RPC_PROVIDER_A_KEY is required by the {key} placeholder" \
     --env "$tmp/keyless.env" --compose "$tmp/keyed.yml" --environment-dir "$tmp/keyed"
 passes --env "$tmp/keyless.env" --compose "$tmp/keyed.yml" --environment-dir "$tmp/keyed" --unsealed
