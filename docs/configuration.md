@@ -122,9 +122,9 @@ The files it refuses include:
 
 - an invalid origin or admin key;
 - a route that fails validation, or routes that disagree on a chain;
-- an unknown or unused RPC group, or a group assigned to the wrong chain;
-- overlapping company ownership between A and B;
-- duplicate member ids or URL/credential identities, or invalid quota references;
+- a missing or unused read/verify chain pair;
+- read and verify endpoints on the same host;
+- duplicate chain or endpoint ids, an invalid sealed key name, or unknown fields;
 - a misplaced `{key}`.
 
 ## Flags

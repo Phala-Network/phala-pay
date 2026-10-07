@@ -46,12 +46,12 @@ company disjointness are never weakened to enable production.
 USDC and USDT are the only RedPill assets. The source set is Chainlink USDC/USD and USDT/USD on the route chain when a feed exists
 (Ethereum and Base), plus Ethereum-mainnet Chainlink as a configured fallback. Defaults contain Chainlink only;
 exchange USDC/USD and USDT/USD adapters require explicit noncommercial staging opt-in. Sepolia and Base Sepolia deliberately use mainnet feeds through a
-configured mainnet RPC group and/or exchange tickers: test tokens have no market, and config marks
+configured mainnet read/verify pair and/or exchange tickers: test tokens have no market, and config marks
 this cross-network observation explicitly. A Base route must also read the [sequencer uptime feed](https://docs.chain.link/data-feeds/l2-sequencer-feeds):
 when `answer == 1`, or the grace period after recovery has not elapsed, halt.
 
 For every observation, `updatedAt <= now`, the round is complete (`answeredInRound >= roundId`;
-reject zero answers), and RPC groups A and B return the same round/value. Chainlink freshness is
+reject zero answers), and read and verify return the same bytes at a canonical pin. Chainlink freshness is
 `now - updatedAt <= heartbeat + margin`, where heartbeat is pinned per feed and verified against
 the [Chainlink feed registry](https://data.chain.link/). A deviation update remains valid until
 the heartbeat bound: worst-case age is heartbeat plus margin, and movement is bounded by the
@@ -99,7 +99,7 @@ explicit staging-only test source. Kraken permission and a sponsored Chainlink P
 scope, so PHA is production-ineligible until a separately reviewed Allowed source exists.
 
 The implementation reads the pair's `price0CumulativeLast`/`price1CumulativeLast` and reserves
-through independent Ethereum A/B RPC groups, verifies token ordering and requires agreement,
+through independent Ethereum read and verify endpoints, verifies token ordering and requires agreement,
 using counterfactual cumulative accumulation as defined by Uniswap V2. Pair:
 `0x8867f20c1c63baccec7617626254a060eeb0e61e`; PHA:
 `0x6c5bA91642F10282b576d91922Ae6448C9d52f4E`. Service-recorded cumulative snapshots are persisted in
