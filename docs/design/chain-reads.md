@@ -1,7 +1,7 @@
 # Chain reads: final design
 
 Status: accepted 2026-10-07; not yet implemented. Supersedes
-[the RPC failover design](rpc-failover.md). Provider capabilities measured with the real keys on
+[the RPC failover design](https://github.com/Phala-Network/phala-pay/blob/5f585cca2073b81fd7d016192940e906fef8c13e/docs/design/rpc-failover.md). Provider capabilities measured with the real keys on
 2026-10-07 (§5.1).
 
 Binding requirements: $0 for staging and the production pilot; simplest standard design, exactly

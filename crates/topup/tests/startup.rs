@@ -15,12 +15,13 @@ const FIXTURE: &str = include_str!("fixtures/phala-cloud-pha.yaml");
 
 #[tokio::test]
 async fn dual_contract_check_detects_route_build_and_multicall_mismatches() -> Result<()> {
-    let Some(anvil) = Anvil::start_if_available(&[]).await? else {
+    let Some(anvil) = Anvil::start_on_chain_if_available(1, &[]).await? else {
         return Ok(());
     };
     let rpc_url = anvil.rpc_url.clone();
     let factory = forge_create(&rpc_url, "src/ForwarderFactory.sol:ForwarderFactory", &[])?;
     let implementation = implementation_of(&rpc_url, factory)?;
+    anvil.mine(16)?;
 
     let yaml = route_yaml(&anvil, factory, TREASURY);
     let mut route: RouteFile = serde_saphyr::from_str(&yaml)?;
@@ -343,8 +344,9 @@ fn set_code(rpc_url: &str, contract: Address, code: &str) -> Result<()> {
         "anvil_setCode",
         &format!("{contract:#x}"),
         code,
-    ])
-    .map(drop)
+    ])?;
+    cast(&["rpc", "--rpc-url", rpc_url, "anvil_mine", "0x10"])?;
+    Ok(())
 }
 
 fn cast(arguments: &[&str]) -> Result<String> {

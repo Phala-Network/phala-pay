@@ -5,7 +5,3 @@ include_fragments = "full"
 hidden = true
 extensions = ["md"]
 exclude_path = ["(^|/)contracts/lib/"]
-
-# The approved chain-reads spec is kept byte-for-byte from main. Its historical predecessor
-# link names the design explicitly deleted by section 7; do not resurrect that obsolete file.
-exclude = ["^file://.*/docs/design/rpc-failover\\.md$"]
