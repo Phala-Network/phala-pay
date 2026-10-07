@@ -46,11 +46,15 @@ receipt status, transaction, inclusion, log position and contents, block time, s
 Scheduled custody reads each chain/token route on the first reconciliation tick and at most
 once per hour thereafter, independently of the configured reconciliation interval, on both endpoints at the same canonical hash. Manual
 `reconcile`, post-restore checks and process restarts run custody immediately. During steady
-operation, with the 1,000-address cap, a
-nonempty route uses one balance multicall per endpoint: 24 Ankr calls and 24 × 80 = 1,920
-Infura credits per route per day, additional to the approved §5.2 budget. Four route chains
-add 96 Ankr calls and 7,680 Infura credits per day; empty or unsettled ledgers use no balance
-RPC. These checks count toward the existing shared provider stop lines.
+operation, balances are batched in 200-address multicalls: a nonempty route with at most
+200 eligible addresses adds 24 Ankr calls and 1,920 Infura credits/day; at the 1,000-address
+cap it adds up to 120 Ankr calls and 9,600 Infura credits/day. Four full routes add 480 Ankr
+calls and 38,400 Infura credits/day, additional to the approved §5.2 budget; empty or
+unsettled ledgers use no balance RPC. These checks count toward the existing shared provider
+stop lines. The maximum takes §5.2's combined typical Infura estimate to
+1,383,360 credits/day, or 1,521,696 with its ten-percent allowance (above the 1,500,000 stop
+line), so operators must bound added load using the existing usage alerts
+and paid-provider upgrade path rather than treating that original estimate as inclusive.
 
 Coverage commits only after every request succeeds, and every boundary and pending cleanup ends
 at the scanned block, even when the checkpoint is farther ahead.
