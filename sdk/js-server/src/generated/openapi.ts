@@ -3435,7 +3435,13 @@ export interface components {
              */
             readonly expires_in?: number;
         };
-        /** @description The deposit address must already have a network for this chain. */
+        /**
+         * @description The deposit address must already have a network for this chain.
+         * @example {
+         *       "chain_id": 84532,
+         *       "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+         *     }
+         */
         readonly SubmitDepositAddressTransactionRequest: {
             /**
              * Format: int64
@@ -3445,7 +3451,12 @@ export interface components {
             /** @description Transaction hash, exactly 32 hexadecimal bytes prefixed by `0x`. */
             readonly transaction_hash: string;
         };
-        /** @description A quote's chain is derived from its stored terms. */
+        /**
+         * @description A quote's chain is derived from its stored terms.
+         * @example {
+         *       "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+         *     }
+         */
         readonly SubmitQuoteTransactionRequest: {
             /** @description Transaction hash, exactly 32 hexadecimal bytes prefixed by `0x`. */
             readonly transaction_hash: string;
@@ -3539,7 +3550,14 @@ export interface components {
             /** @description The list's path, `/v1/sweeps`. */
             readonly url: string;
         };
-        /** @description A quiet acknowledgement, including for ignored hints. */
+        /**
+         * @description A quiet acknowledgement, including for ignored hints.
+         * @example {
+         *       "object": "transaction_submission",
+         *       "status": "received",
+         *       "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+         *     }
+         */
         readonly TransactionSubmission: {
             /** @description Object discriminator. */
             readonly object: components["schemas"]["TransactionSubmissionObject"];

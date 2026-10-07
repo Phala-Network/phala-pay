@@ -16,6 +16,9 @@ T = TypeVar("T", bound="SubmitDepositAddressTransactionRequest")
 class SubmitDepositAddressTransactionRequest:
     """The deposit address must already have a network for this chain.
 
+    Example:
+        {'chain_id': 84532, 'transaction_hash': '0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e'}
+
     Attributes:
         chain_id (int): One of this object's issued network identifiers.
         transaction_hash (str): Transaction hash, exactly 32 hexadecimal bytes prefixed by `0x`.

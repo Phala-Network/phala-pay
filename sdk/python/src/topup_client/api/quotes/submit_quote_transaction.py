@@ -82,6 +82,8 @@ def sync_detailed(
         id (str):
         client_secret (str | Unset):
         body (SubmitQuoteTransactionRequest): A quote's chain is derived from its stored terms.
+            Example: {'transaction_hash':
+            '0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e'}.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -117,6 +119,8 @@ def sync(
         id (str):
         client_secret (str | Unset):
         body (SubmitQuoteTransactionRequest): A quote's chain is derived from its stored terms.
+            Example: {'transaction_hash':
+            '0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e'}.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -147,6 +151,8 @@ async def asyncio_detailed(
         id (str):
         client_secret (str | Unset):
         body (SubmitQuoteTransactionRequest): A quote's chain is derived from its stored terms.
+            Example: {'transaction_hash':
+            '0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e'}.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -180,6 +186,8 @@ async def asyncio(
         id (str):
         client_secret (str | Unset):
         body (SubmitQuoteTransactionRequest): A quote's chain is derived from its stored terms.
+            Example: {'transaction_hash':
+            '0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e'}.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

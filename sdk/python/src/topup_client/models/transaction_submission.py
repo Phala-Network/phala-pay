@@ -22,6 +22,10 @@ T = TypeVar("T", bound="TransactionSubmission")
 class TransactionSubmission:
     """A quiet acknowledgement, including for ignored hints.
 
+    Example:
+        {'object': 'transaction_submission', 'status': 'received', 'transaction_hash':
+            '0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e'}
+
     Attributes:
         object_ (TransactionSubmissionObject): Constant submission object discriminator.
         status (TransactionSubmissionStatus): Received acknowledges submission only, never detection or verification.

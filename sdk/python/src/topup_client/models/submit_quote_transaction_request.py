@@ -16,6 +16,9 @@ T = TypeVar("T", bound="SubmitQuoteTransactionRequest")
 class SubmitQuoteTransactionRequest:
     """A quote's chain is derived from its stored terms.
 
+    Example:
+        {'transaction_hash': '0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e'}
+
     Attributes:
         transaction_hash (str): Transaction hash, exactly 32 hexadecimal bytes prefixed by `0x`.
     """
