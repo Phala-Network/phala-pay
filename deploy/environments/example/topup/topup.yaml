@@ -7,63 +7,52 @@ admin_key:                                # from `topup-sdk keygen`; the seed ne
   public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=
 # Two providers per chain, from different companies; the first a route names makes every log
 # request. A key goes in `{key}` and is sealed as TOPUP_RPC_<ID>_KEY (compose.yaml).
-rpc_companies:
-  tenderly:
-    domains: [tenderly.co]
-  drpc:
-    domains: [drpc.org]
-  alchemy:
-    domains:
-    - alchemy.com
-  publicnode:
-    domains:
-    - publicnode.com
-rpc_budgets:
-  price-tenderly-account: { requests_per_second: 5, burst: 5 }
-  price-drpc-account: { requests_per_second: 5, burst: 5 }
-  price-mainnet-a-key: { requests_per_second: 5, burst: 2 }
-  price-mainnet-b-key: { requests_per_second: 5, burst: 2 }
-  alchemy-account:
-    requests_per_second: 10
-    burst: 10
-  alchemy-sepolia-key:
-    requests_per_second: 10
-    burst: 5
-  publicnode-account:
-    requests_per_second: 10
-    burst: 10
-  publicnode-sepolia-key:
-    requests_per_second: 10
-    burst: 5
-rpc_groups:
-  mainnet-a:
-    chain_id: 1
-    members:
-    - { id: mainnet-a, company: tenderly, url: https://mainnet.gateway.tenderly.co, account_budget: price-tenderly-account, key_budget: price-mainnet-a-key }
-  mainnet-b:
-    chain_id: 1
-    members:
-    - { id: mainnet-b, company: drpc, url: https://eth.drpc.org, account_budget: price-drpc-account, key_budget: price-mainnet-b-key }
-  alchemy-sepolia:
-    chain_id: 11155111
-    members:
-    - id: alchemy-sepolia
-      company: alchemy
-      url: https://eth-sepolia.g.alchemy.com/v2/{key}
-      account_budget: alchemy-account
-      key_budget: alchemy-sepolia-key
-      sealed_key: TOPUP_RPC_ALCHEMY_SEPOLIA_KEY
-  publicnode-sepolia:
-    chain_id: 11155111
-    members:
-    - id: publicnode-sepolia
-      company: publicnode
-      url: https://ethereum-sepolia-rpc.publicnode.com
-      account_budget: publicnode-account
-      key_budget: publicnode-sepolia-key
-# The fields and their defaults are in docs/architecture.md §14; `topup config show` prints them.
-# Production-eligible Chainlink stablecoins only. PHA is staging/noncommercial only:
-# docs/configuration.md#price-sources.
+rpc:
+  - chain_id: 11155111
+    read:
+      id: ankr-sepolia
+      url: "https://rpc.ankr.com/eth_sepolia/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-sepolia
+      url: "https://sepolia.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 84532
+    read:
+      id: ankr-base-sepolia
+      url: "https://rpc.ankr.com/base_sepolia/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-base-sepolia
+      url: "https://base-sepolia.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 1
+    read:
+      id: ankr-mainnet
+      url: "https://rpc.ankr.com/eth/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-mainnet
+      url: "https://mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 8453
+    read:
+      id: ankr-base-mainnet
+      url: "https://rpc.ankr.com/base/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-base-mainnet
+      url: "https://base-mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+
 routes:
   - route: example-sepolia-usdc-usd
     version: 1
@@ -72,18 +61,16 @@ routes:
       chain_id: 11155111
       forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
       confirmations: 2
-      rpc_groups: { a: alchemy-sepolia, b: publicnode-sepolia }
       sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
     asset:
       symbol: usdc
       # Circle Sepolia USDC (https://faucet.circle.com).
       contract: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
       decimals: 6
-      backstop: addresses
     price:
       mode: stablecoin
       sources:
-        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 11155111 }
       peg_band_bps: 100
     merchant:
       min_amount: { default: 100 }
@@ -97,18 +84,16 @@ routes:
       chain_id: 11155111
       forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
       confirmations: 2
-      rpc_groups: { a: alchemy-sepolia, b: publicnode-sepolia }
       sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
     asset:
       symbol: usdt
       # Aave testnet USDT (AaveV3Sepolia.USDT_UNDERLYING); faucet: 0xC959483DBa39aa9E78757139af0e9a2EDEb3f42D (mint(token, to, amount)).
       contract: "0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0"
       decimals: 6
-      backstop: addresses
     price:
       mode: stablecoin
       sources:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 11155111 }
       peg_band_bps: 100
     merchant:
       min_amount: { default: 100 }

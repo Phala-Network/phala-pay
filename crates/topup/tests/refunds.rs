@@ -210,13 +210,6 @@ impl RefundChainReader for ReceiptGate {
     ) -> Result<Option<(Address, u64)>, RefundReadError> {
         Ok(None)
     }
-    async fn finalized_nonce(
-        &self,
-        _chain_id: u64,
-        _account: Address,
-    ) -> Result<u64, RefundReadError> {
-        Ok(0)
-    }
 }
 
 #[tokio::test]
@@ -968,7 +961,8 @@ async fn a_transfer_log_pays_only_one_refund() -> Result<()> {
 }
 
 #[tokio::test]
-async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Result<()> {
+async fn only_an_unpaid_refund_is_canceled_and_missing_receipts_keep_the_reservation() -> Result<()>
+{
     let Some(database) = TestDatabase::create().await? else {
         return Ok(());
     };
@@ -1038,12 +1032,11 @@ async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Resu
         ensure!(status == StatusCode::BAD_REQUEST, "{error}");
         ensure!(error["error"]["code"] == "amount_too_large", "{error}");
 
-        // Its transaction is dropped: no provider has a receipt, and at `finalized` both show the
-        // sender's nonce used by another transaction. Until then it waits; then it fails, which
-        // releases the deposit for a new refund.
+        // Missing receipts cannot prove a drop, even after a sender and nonce were recorded.
+        // Keep the reservation: a replacement may increment the nonce without paying a refund.
         let sender = Address::repeat_byte(0x5e);
         let missing = || vec![RefundReceipt::Missing];
-        let worker = test_worker_with(pool, missing(), missing(), Some((sender, 7)), 7);
+        let worker = test_worker_with(pool, missing(), missing(), Some((sender, 7)));
         ensure!(worker.check_once().await? == Verification::Waiting);
         let second_id = topup::ids::parse(topup::ids::REFUND, &second).context("re_ id")?;
         ensure!(refund_status(pool, second_id).await? == "pending");
@@ -1053,18 +1046,23 @@ async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Resu
                 .fetch_one(pool)
                 .await?;
         ensure!(origin == (Some(format!("{sender:#x}")), Some("7".to_owned())));
-        // The nonce kept when the transaction was first seen proves the drop, even once no
-        // provider returns the transaction any more.
-        let worker = test_worker_with(pool, missing(), missing(), None, 8);
-        ensure!(worker.check_once().await? == Verification::Failed);
+        // Losing the transaction after its origin was recorded still cannot release funds.
+        let worker = test_worker_with(pool, missing(), missing(), None);
+        ensure!(worker.check_once().await? == Verification::Waiting);
         let (_, dropped) = merchant
             .call(Method::GET, &format!("/v1/refunds/{second}"), Vec::new())
             .await?;
         ensure!(
-            dropped["status"] == "failed" && dropped["failure_reason"] == "transaction_dropped",
+            dropped["status"] == "pending" && dropped["failure_reason"].is_null(),
             "{dropped}"
         );
-        let third = merchant.refund(deposit, "150").await?;
+        let (status, error) = merchant
+            .post(
+                "/v1/refunds",
+                refund_body(deposit, REFUND_DESTINATION, "1")?,
+            )
+            .await?;
+        ensure!(status == StatusCode::BAD_REQUEST && error["error"]["code"] == "amount_too_large");
         // The list pages newest first and filters by deposit and status.
         let deposit_id = format!("dep_{}", deposit.simple());
         let (status, list) = merchant
@@ -1081,10 +1079,7 @@ async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Resu
             .iter()
             .filter_map(|refund| refund["id"].as_str())
             .collect();
-        ensure!(
-            ids == [third.as_str(), second.as_str(), first.as_str()],
-            "{list}"
-        );
+        ensure!(ids == [second.as_str(), first.as_str()], "{list}");
         let (_, canceled) = merchant
             .call(
                 Method::GET,
@@ -1097,7 +1092,7 @@ async fn only_an_unpaid_refund_is_canceled_and_a_dropped_payment_fails() -> Resu
             .call(Method::GET, "/v1/refunds?status=failed", Vec::new())
             .await?;
         ensure!(
-            failed["has_more"] == false && failed["data"][0]["id"] == second,
+            failed["has_more"] == false && failed["data"] == json!([]),
             "{failed}"
         );
         let (status, _) = merchant
@@ -1734,18 +1729,24 @@ async fn deposit_lists_page_with_stripe_cursors() -> Result<()> {
 
 #[tokio::test]
 async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Result<()> {
+    let Some(database) = TestDatabase::create().await? else {
+        return Ok(());
+    };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(async move {
         axum::serve(listener, Router::new().route("/", post(refund_rpc))).await
     });
-    let reader = EvmRefundChainReader::new(BTreeMap::from([(
-        1,
-        Arc::new(EvmClient::with_timeout(
-            &format!("http://{address}"),
-            StdDuration::from_millis(50),
-        )?),
-    )]));
+    let reader = EvmRefundChainReader::new(
+        database.app_pool.clone(),
+        BTreeMap::from([(
+            1,
+            Arc::new(EvmClient::with_timeout(
+                &format!("http://{address}"),
+                StdDuration::from_millis(50),
+            )?),
+        )]),
+    );
     let token = route_fixture().asset.contract;
     // Scenario 1 transfers another token, 4 is above `finalized`, 5 reverted.
     for scenario in [1_u64, 2, 3, 5] {
@@ -1778,12 +1779,6 @@ async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Res
             .origin(1, B256::from(U256::from(7_u64)))
             .await?
             .is_none()
-    );
-    ensure!(
-        reader
-            .finalized_nonce(1, Address::from_str(REFUND_SENDER)?)
-            .await?
-            == 6
     );
     ensure!(matches!(
         reader.receipt(1, B256::from(U256::from(6_u64))).await,
@@ -2332,7 +2327,6 @@ async fn refund_status(pool: &sqlx::PgPool, id: Uuid) -> Result<String> {
 struct ScriptedReader {
     receipts: Mutex<VecDeque<RefundReceipt>>,
     origin: Option<(Address, u64)>,
-    finalized_nonce: u64,
 }
 
 #[async_trait]
@@ -2358,17 +2352,6 @@ impl RefundChainReader for ScriptedReader {
     ) -> Result<Option<(Address, u64)>, RefundReadError> {
         Ok(self.origin)
     }
-
-    async fn finalized_nonce(
-        &self,
-        _chain_id: u64,
-        account: Address,
-    ) -> Result<u64, RefundReadError> {
-        if let Some((from, _)) = self.origin {
-            assert_eq!(account, from);
-        }
-        Ok(self.finalized_nonce)
-    }
 }
 
 struct HangingReader {
@@ -2393,14 +2376,6 @@ impl RefundChainReader for HangingReader {
     ) -> Result<Option<(Address, u64)>, RefundReadError> {
         std::future::pending().await
     }
-
-    async fn finalized_nonce(
-        &self,
-        _chain_id: u64,
-        _account: Address,
-    ) -> Result<u64, RefundReadError> {
-        std::future::pending().await
-    }
 }
 
 fn test_worker(
@@ -2408,7 +2383,7 @@ fn test_worker(
     primary: Vec<RefundReceipt>,
     secondary: Vec<RefundReceipt>,
 ) -> RefundVerificationWorker<ScriptedReader, ScriptedReader> {
-    test_worker_with(pool, primary, secondary, None, 0)
+    test_worker_with(pool, primary, secondary, None)
 }
 
 /// [`test_worker`] whose providers both return the transaction as sent by `origin`, and the
@@ -2418,12 +2393,10 @@ fn test_worker_with(
     primary: Vec<RefundReceipt>,
     secondary: Vec<RefundReceipt>,
     origin: Option<(Address, u64)>,
-    finalized_nonce: u64,
 ) -> RefundVerificationWorker<ScriptedReader, ScriptedReader> {
     let reader = |receipts: Vec<RefundReceipt>| ScriptedReader {
         receipts: Mutex::new(receipts.into()),
         origin,
-        finalized_nonce,
     };
     RefundVerificationWorker::new(
         pool.clone(),

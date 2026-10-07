@@ -27,6 +27,8 @@ pub struct SanctionsResult {
     pub provider_a: SanctionsAnswer,
     /// The answer returned by provider B.
     pub provider_b: SanctionsAnswer,
+    /// Canonical EIP-1898 pin; test sources may omit the hash.
+    pub block_hash: Option<alloy_primitives::B256>,
     /// The block number at which both providers performed the check.
     pub block_number: u64,
 }
@@ -133,12 +135,12 @@ impl ParsePauseScopeError {
 /// | Provider A | Provider B | Decision |
 /// | --- | --- | --- |
 /// | `Sanctioned` | `Sanctioned` | reject |
-/// | `Sanctioned` | `Clear` | reject |
-/// | `Sanctioned` | `Unavailable` | reject |
-/// | `Clear` | `Sanctioned` | reject |
+/// | `Sanctioned` | `Clear` | retry |
+/// | `Sanctioned` | `Unavailable` | retry |
+/// | `Clear` | `Sanctioned` | retry |
 /// | `Clear` | `Clear` | continue |
 /// | `Clear` | `Unavailable` | retry |
-/// | `Unavailable` | `Sanctioned` | reject |
+/// | `Unavailable` | `Sanctioned` | retry |
 /// | `Unavailable` | `Clear` | retry |
 /// | `Unavailable` | `Unavailable` | retry |
 #[must_use]
@@ -149,18 +151,15 @@ pub fn screen(
     customer_scopes: &PauseScopes,
     account_scopes: &PauseScopes,
 ) -> StepOutcome {
-    if matches!(sanctions.provider_a, SanctionsAnswer::Sanctioned)
-        || matches!(sanctions.provider_b, SanctionsAnswer::Sanctioned)
-    {
-        return StepOutcome::Reject(RejectReason::Sanctioned);
-    }
-
-    if matches!(sanctions.provider_a, SanctionsAnswer::Unavailable)
-        || matches!(sanctions.provider_b, SanctionsAnswer::Unavailable)
+    if sanctions.provider_a != sanctions.provider_b
+        || sanctions.provider_a == SanctionsAnswer::Unavailable
     {
         return StepOutcome::Retry {
             error: RetryError::SanctionsInconclusive,
         };
+    }
+    if sanctions.provider_a == SanctionsAnswer::Sanctioned {
+        return StepOutcome::Reject(RejectReason::Sanctioned);
     }
 
     if amount < bounds.min_atomic || amount > bounds.max_atomic {
@@ -193,6 +192,7 @@ mod tests {
             provider_a,
             provider_b,
             block_number: 21_000_000,
+            block_hash: None,
         }
     }
 
@@ -261,12 +261,12 @@ mod tests {
         };
         let cases = [
             (Sanctioned, Sanctioned, reject),
-            (Sanctioned, Clear, reject),
-            (Sanctioned, Unavailable, reject),
-            (Clear, Sanctioned, reject),
+            (Sanctioned, Clear, retry),
+            (Sanctioned, Unavailable, retry),
+            (Clear, Sanctioned, retry),
             (Clear, Clear, StepOutcome::Advance),
             (Clear, Unavailable, retry),
-            (Unavailable, Sanctioned, reject),
+            (Unavailable, Sanctioned, retry),
             (Unavailable, Clear, retry),
             (Unavailable, Unavailable, retry),
         ];

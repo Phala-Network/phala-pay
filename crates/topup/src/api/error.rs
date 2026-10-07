@@ -18,6 +18,11 @@ pub const DOCS_URL: &str = "https://phala-network.github.io/phala-pay/#section/E
 /// `Errors` section of the API reference, which each error's `doc_url` points into.
 pub const ERROR_CODES: &[(&str, u16, &str)] = &[
     (
+        "price_unavailable",
+        503,
+        "Fresh dual-source prices are unavailable or the UTC daily snapshot cap is exhausted. Retry after the indicated delay; no stale price is returned.",
+    ),
+    (
         "parameter_invalid",
         400,
         "A parameter is malformed or out of range; `param` names it. Fix the request.",
@@ -837,6 +842,16 @@ impl ApiError {
             "chain_frozen",
             "the route chain is frozen pending reconciliation review",
         )
+    }
+
+    /// Fresh quote evidence is unavailable or its UTC price-chain snapshot cap is exhausted.
+    pub fn price_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "price_unavailable",
+            "validated pricing is unavailable; retry",
+        )
+        .with_retry_after(60)
     }
 
     /// Returns a temporary dependency failure; retry.

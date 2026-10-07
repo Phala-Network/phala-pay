@@ -556,6 +556,7 @@ async fn client_quote_view(
         address: format!("{:#x}", lock.address),
         payment_uri: payment_uri(route, &lock),
         expires_at: lock.expires_at.timestamp(),
+        cancel_requested_at: lock.cancel_requested_at.map(|at| at.timestamp()),
         payment_status: payment_status.to_owned(),
         confirmations,
         amount_credited,
@@ -692,6 +693,7 @@ fn render_quote(
         payment_uri,
         status: status(lock.status).to_owned(),
         expires_at: lock.expires_at.timestamp(),
+        cancel_requested_at: lock.cancel_requested_at.map(|at| at.timestamp()),
         created: lock.created_at.timestamp(),
         payment,
         deposit: lock
@@ -740,9 +742,10 @@ pub(super) fn map_error(error: RateLockError) -> ApiError {
         RateLockError::InvalidInput(message) => ApiError::bad_request(message),
         RateLockError::AmountTooSmall(message) => ApiError::amount_too_small("amount", message),
         RateLockError::AmountTooLarge(message) => ApiError::amount_too_large("amount", message),
-        RateLockError::PricingUnavailable => {
-            ApiError::service_unavailable("validated pricing is unavailable")
+        RateLockError::ChainUnavailable => {
+            ApiError::service_unavailable("chain is not ready to issue an address")
         }
+        RateLockError::PricingUnavailable => ApiError::price_unavailable(),
         RateLockError::RateLimited { retry_after } => ApiError::customer_quote_limit(retry_after),
         RateLockError::TreasuryNotSet => ApiError::treasury_not_set(),
         RateLockError::AssetNotAccepted => ApiError::asset_not_accepted(Some("asset")),

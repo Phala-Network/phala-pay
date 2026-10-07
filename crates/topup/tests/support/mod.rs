@@ -2,6 +2,7 @@
 
 pub mod chain;
 pub mod seed;
+pub mod tls;
 
 use std::env;
 use std::future::{Future, poll_fn};

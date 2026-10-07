@@ -1,38 +1,29 @@
-# RPC health
+# RPC endpoint health
 
-**Trigger:** `TopupRpcGroupUnavailable` after one minute without a serving A or B candidate,
-`TopupRpcChainFrozen`, `TopupRpcMemberQuarantined`, `TopupRpcMemberCooldown`,
-`TopupRpcQuotaPressure`, `TopupRpcUnclassifiedError`, `TopupRpcAnchorUnavailable`, `TopupRpcRecoveryUnavailable`, or
-`TopupRpcMetricsRefreshFailed`. These are Sentry events, grouped only by configured chain,
-group, member and failure class. The client suppresses repeats of an issue for ten minutes.
-
-**Impact:** unavailable independent evidence holds credit and cursor progress pending. A fork
-freeze requires audited recovery; an endpoint repair cannot unfreeze the chain.
+Use this procedure for an endpoint unavailable for five minutes, dual evidence disagreement,
+coverage lag over 45 minutes, or provider quota pressure. [RPC operations](../RPC.md) lists the
+fixed cadences and shared quotas.
 
 ## First steps
 
-1. Read the Sentry grouping tags. Fetch `admin GET /v1/admin/metrics` and
-   `admin GET /v1/admin/reports/daily` through the signed admin helper in the
-   [runbook index](README.md#environment). There is no deployed Prometheus collector.
-2. Compare group eligibility, member quarantine, failure classes, budget wait, accepted heads,
-   chain epoch and replay backlog. Do not infer zero usage from an absent or stale snapshot.
-   Recovery failures appear as "RPC member recovery probe failed" warn logs on the first and every
-   tenth consecutive failure per member.
-3. For a fork freeze follow [Chain frozen](chain-frozen.md). For a stopped scanner follow
-   [Scanner lag](scanner-lag.md); for divergent providers follow
-   [Provider disagreement](provider-disagreement.md).
-4. Repair a credential or endpoint through an attested configuration upgrade. Check the sealed
-   credential assignment and provider account quota; never share a company between A and B or
-   bypass independent verification. Unknown RPC errors require a reviewed classification rule.
-5. Confirm complete recovery probes readmit candidates, pending replay drains and reconciliation
-   succeeds. Do not manually advance watermarks or treat one provider's answer as agreement.
+1. Check `topup_rpc_endpoint_ready` by provider and chain and sanitized error classes in
+   `topup_rpc_errors_total`. Compare the provider dashboard's status and quota with both
+   environments' billed call counters. Keep keys and complete request URLs out of incident logs.
+2. Run `topup rpc check --config /etc/topup/topup.yaml` through the deployment's compose env
+   path. It validates both endpoints independently, including canonical state and complete logs.
+3. For a credential failure, submit the complete sealed secret set, preserving all unchanged
+   secrets. Run compose-path preflight before an owner-authorized upgrade.
+4. HTTP 402 waits until UTC midnight. Do not create extra free accounts, switch endpoints or
+   enlarge budgets. Fresh quote snapshots also have a hard 100/day/price-chain cap; exhaustion
+   returns retryable `price_unavailable`, and the UTC day resets that budget.
+5. On disagreement, preserve decoded evidence and wait. Never pick one source or manually
+   advance coverage. A checkpoint conflict or progressed evidence mismatch uses the existing
+   [chain freeze gate](chain-frozen.md) and audited lift.
+6. Verify readiness restored, coverage advancing at its actual scanned end, lagging addresses
+   catching up, and finality and credit resuming. Other chains and the API remain available.
 
 ## Metrics refresh failure
 
-`TopupRpcMetricsRefreshFailed` means the durable snapshot could not be refreshed. Its last
-successful gauges and `topup_rpc_metrics_refreshed_at_seconds` remain available; they are stale,
-not proof that the current chain is healthy. Before the first success these gauges are absent.
-HTTP request and RPC dispatch counters continue independently. The recovery worker continues
-probing and retries collection on subsequent passes. Check other Sentry database errors and
-health monitors; repair the database through the existing recovery procedure if necessary.
-Never restart only to make counters look fresh.
+Coverage and daily budget gauges are read from durable tables on authenticated metrics scrapes.
+An encoding or database failure fails the scrape; inspect database availability and capacity.
+Do not replace an unavailable sample with zero or infer negative payment evidence from metrics.

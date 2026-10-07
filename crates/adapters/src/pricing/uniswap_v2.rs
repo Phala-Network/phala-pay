@@ -1,11 +1,10 @@
 //! Pinned PHA/WETH Uniswap V2 cumulative oracle, with durable service observations.
 use super::{
     Observation, PriceError, PriceQuote, PriceSource,
-    chainlink::{Chainlink, PriceBlock, agreed_block, confirm_block, validate_round},
+    chainlink::{PriceBlock, validate_round},
     unix_now,
 };
 use crate::chain::evm::EvmClient;
-use alloy_eips::BlockId;
 use alloy_primitives::{Address, B256, Bytes, U256, U512, address};
 use alloy_sol_types::{SolCall, sol};
 use async_trait::async_trait;
@@ -24,8 +23,8 @@ pub const PAIR: Address = address!("8867f20c1c63baccec7617626254a060eeb0e61e");
 pub const PHA: Address = address!("6c5ba91642f10282b576d91922ae6448c9d52f4e");
 /// Mainnet WETH, with 18 decimals.
 pub const WETH: Address = address!("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
-/// Sample no more often than once per minute, shared across quote/credit workers.
-pub const SAMPLE_INTERVAL_S: u64 = 60;
+/// Staging-only PHA samples, shared across quote, credit and sampler workers.
+pub const SAMPLE_INTERVAL_S: u64 = 300;
 sol! {
     function token0() external view returns (address);
     function token1() external view returns (address);
@@ -70,6 +69,8 @@ pub struct Sample {
 pub trait ObservationStore: Send + Sync {
     /// Last accepted observation, checked for canonicality before appending after a restart.
     async fn latest(&self, policy: &TwapConfig) -> Result<Option<Sample>, PriceError>;
+    /// Persisted window whose canonical hashes must be checked in the same price snapshot.
+    async fn history(&self, policy: &TwapConfig) -> Result<Vec<Sample>, PriceError>;
     /// Atomically check the last sample's jump, append at most once/minute, and return
     /// chronological history covering window + freshness. Failures never become prices.
     async fn record(&self, sample: &Sample, policy: &TwapConfig)
@@ -266,11 +267,42 @@ pub fn average<'a>(
     }
     Ok((twap, start, end))
 }
+/// Configured pair state, included with ETH/USD and the block clock in one snapshot.
+pub fn calls() -> Vec<(Address, Bytes)> {
+    vec![
+        (PAIR, token0Call {}.abi_encode().into()),
+        (PAIR, token1Call {}.abi_encode().into()),
+        (PAIR, price0CumulativeLastCall {}.abi_encode().into()),
+        (PAIR, price1CumulativeLastCall {}.abi_encode().into()),
+        (PAIR, getReservesCall {}.abi_encode().into()),
+    ]
+}
+fn pair_state(snapshot: &super::snapshot::Snapshot) -> Result<PairState, PriceError> {
+    let error = |_| PriceError::MalformedResponse("pair state");
+    let reserves =
+        getReservesCall::abi_decode_returns_validate(snapshot.get(PAIR, getReservesCall {})?)
+            .map_err(error)?;
+    Ok(PairState {
+        token0: token0Call::abi_decode_returns_validate(snapshot.get(PAIR, token0Call {})?)
+            .map_err(error)?,
+        token1: token1Call::abi_decode_returns_validate(snapshot.get(PAIR, token1Call {})?)
+            .map_err(error)?,
+        cumulative0: price0CumulativeLastCall::abi_decode_returns_validate(
+            snapshot.get(PAIR, price0CumulativeLastCall {})?,
+        )
+        .map_err(error)?,
+        cumulative1: price1CumulativeLastCall::abi_decode_returns_validate(
+            snapshot.get(PAIR, price1CumulativeLastCall {})?,
+        )
+        .map_err(error)?,
+        reserve0: U256::from(reserves.reserve0),
+        reserve1: U256::from(reserves.reserve1),
+        timestamp_last: reserves.blockTimestampLast,
+    })
+}
 /// On-chain composite source using the existing A/B transports and shared durable history.
 pub struct UniswapV2 {
-    a: Arc<EvmClient>,
-    b: Arc<EvmClient>,
-    eth: Chainlink,
+    snapshots: Arc<super::snapshot::Snapshots>,
     policy: TwapConfig,
     store: Arc<dyn ObservationStore>,
 }
@@ -283,70 +315,37 @@ impl UniswapV2 {
         store: Arc<dyn ObservationStore>,
     ) -> Result<Self, PriceError> {
         policy.validate().map_err(|_| PriceError::InvalidPrice)?;
-        let (ga, gb) = (
-            a.group().ok_or(PriceError::RpcUnavailable)?,
-            b.group().ok_or(PriceError::RpcUnavailable)?,
-        );
-        if ga.chain != 1
-            || gb.chain != 1
-            || ga.id == gb.id
-            || ga
-                .members
-                .iter()
-                .any(|a| gb.members.iter().any(|b| a.company == b.company))
-        {
+        if a.chain_id() != Some(1) || b.chain_id() != Some(1) || Arc::ptr_eq(&a, &b) {
             return Err(PriceError::Disagreement);
         }
-        let eth = Chainlink::new(
-            a.clone(),
-            b.clone(),
+        let mut calls = calls();
+        calls.extend(super::chainlink::calls(
             feed("ETH_USD", 1).ok_or(PriceError::InvalidPrice)?,
-        );
+        )?);
+        let snapshots = super::snapshot::Snapshots::new(1, a, b, calls, None)
+            .with_twap_guard(policy.clone(), store.clone());
+        Self::with_snapshots(Arc::new(snapshots), policy, store)
+    }
+    /// Uses the complete snapshot shared with every other feed of Ethereum mainnet.
+    pub fn with_snapshots(
+        snapshots: Arc<super::snapshot::Snapshots>,
+        policy: TwapConfig,
+        store: Arc<dyn ObservationStore>,
+    ) -> Result<Self, PriceError> {
+        policy.validate().map_err(|_| PriceError::InvalidPrice)?;
         Ok(Self {
-            a,
-            b,
-            eth,
+            snapshots,
             policy,
             store,
         })
     }
-    async fn read(&self, client: &EvmClient, block: u64) -> Result<PairState, PriceError> {
-        async fn call<C: SolCall>(
-            client: &EvmClient,
-            call: C,
-            block: u64,
-        ) -> Result<C::Return, PriceError> {
-            let data = client
-                .call(
-                    "Uniswap V2 price",
-                    PAIR,
-                    Bytes::from(call.abi_encode()),
-                    Some(BlockId::number(block)),
-                )
-                .await
-                .map_err(|_| PriceError::RpcUnavailable)?;
-            C::abi_decode_returns_validate(&data)
-                .map_err(|_| PriceError::MalformedResponse("pair state"))
-        }
-        let (t0, t1, c0, c1, reserves) = tokio::try_join!(
-            call(client, token0Call {}, block),
-            call(client, token1Call {}, block),
-            call(client, price0CumulativeLastCall {}, block),
-            call(client, price1CumulativeLastCall {}, block),
-            call(client, getReservesCall {}, block)
-        )?;
-        Ok(PairState {
-            token0: t0,
-            token1: t1,
-            cumulative0: c0,
-            cumulative1: c1,
-            reserve0: U256::from(reserves.reserve0),
-            reserve1: U256::from(reserves.reserve1),
-            timestamp_last: reserves.blockTimestampLast,
-        })
-    }
-    async fn fetch(&self) -> Result<PriceQuote, PriceError> {
-        let block = agreed_block(&self.a, &self.b).await?;
+    async fn fetch(
+        &self,
+        purpose: super::snapshot::SnapshotUse,
+        arrived: tokio::time::Instant,
+    ) -> Result<PriceQuote, PriceError> {
+        let snapshot = self.snapshots.fetch_since(purpose, arrived).await?;
+        let block = snapshot.block;
         let now = unix_now()?.value();
         if now
             .checked_sub(block.timestamp)
@@ -357,17 +356,11 @@ impl UniswapV2 {
                 json!({"block":block.number,"timestamp":block.timestamp,"now":now}),
             ));
         }
-        let (a, b, round) = tokio::try_join!(
-            self.read(&self.a, block.number),
-            self.read(&self.b, block.number),
-            self.eth.round_at(block.number)
+        let a = pair_state(&snapshot)?;
+        let round = super::chainlink::round(
+            &snapshot,
+            feed("ETH_USD", 1).ok_or(PriceError::InvalidPrice)?,
         )?;
-        if a != b {
-            return Err(PriceError::Disagreement);
-        }
-        if confirm_block(&self.a, &self.b, block.number).await? != block {
-            return Err(PriceError::Disagreement);
-        }
         let eth = validate_round(
             &round,
             feed("ETH_USD", 1).ok_or(PriceError::InvalidPrice)?,
@@ -377,13 +370,32 @@ impl UniswapV2 {
         liquidity(weth, eth.price, &self.policy)?;
         if let Some(previous) = self.store.latest(&self.policy).await? {
             check_sample(&previous, &sample, &self.policy)?;
-            if confirm_block(&self.a, &self.b, previous.block).await?.hash != previous.hash {
-                return Err(refusal(
-                    "twap_reorg",
-                    json!({"block":previous.block,"stored_hash":previous.hash}),
-                ));
+            // A baseline within the continuity window must still be canonical. Multicall3's
+            // BLOCKHASH read proves it at the same current pin without extra provider calls.
+            if sample.timestamp.saturating_sub(previous.timestamp) <= self.policy.max_sample_age_s {
+                let hash = if previous.block == block.number {
+                    block.hash
+                } else {
+                    use crate::chain::evm::{MULTICALL3, getBlockHashCall};
+                    getBlockHashCall::abi_decode_returns_validate(snapshot.get(
+                        MULTICALL3,
+                        getBlockHashCall {
+                            blockNumber: U256::from(previous.block),
+                        },
+                    )?)
+                    .map_err(|_| PriceError::MalformedResponse("TWAP baseline hash"))?
+                };
+                if hash != previous.hash {
+                    return Err(refusal(
+                        "twap_reorg",
+                        json!({"block":previous.block,"stored_hash":previous.hash}),
+                    ));
+                }
             }
+            // After a longer gap no price can use the old history. Recording the independently
+            // agreed current sample starts a new continuous window; average rejects the gap.
         }
+
         let mut history = self.store.record(&sample, &self.policy).await?;
         // Quotes between scheduled samples still end their TWAP at the very same pinned
         // block as ETH/USD. The current endpoint need not create an extra database row.
@@ -395,11 +407,23 @@ impl UniswapV2 {
         }
         let (ratio, start, end) = average(&history, &sample, now, &self.policy)?;
         // Detect reorged persisted endpoints, including after a restart. Never silently rebase.
-        for sample in [start, end] {
-            if confirm_block(&self.a, &self.b, sample.block).await?.hash != sample.hash {
+        for anchor in [start, end] {
+            let hash = if anchor.block == block.number {
+                block.hash
+            } else {
+                use crate::chain::evm::{MULTICALL3, getBlockHashCall};
+                getBlockHashCall::abi_decode_returns_validate(snapshot.get(
+                    MULTICALL3,
+                    getBlockHashCall {
+                        blockNumber: U256::from(anchor.block),
+                    },
+                )?)
+                .map_err(|_| PriceError::MalformedResponse("TWAP history hash"))?
+            };
+            if hash != anchor.hash {
                 return Err(refusal(
                     "twap_reorg",
-                    json!({"block":sample.block,"stored_hash":sample.hash}),
+                    json!({"block":anchor.block,"stored_hash":anchor.hash}),
                 ));
             }
         }
@@ -428,11 +452,38 @@ impl UniswapV2 {
 }
 #[async_trait]
 impl PriceSource for UniswapV2 {
+    async fn quote_since(&self, arrived: tokio::time::Instant) -> Result<PriceQuote, PriceError> {
+        self.fetch(super::snapshot::SnapshotUse::Confirm, arrived)
+            .await
+    }
+    async fn sample(&self) -> Result<PriceQuote, PriceError> {
+        self.fetch(
+            super::snapshot::SnapshotUse::Sample,
+            tokio::time::Instant::now(),
+        )
+        .await
+    }
+    async fn quote_fresh(&self) -> Result<PriceQuote, PriceError> {
+        self.fetch(
+            super::snapshot::SnapshotUse::Confirm,
+            tokio::time::Instant::now(),
+        )
+        .await
+    }
     async fn observe(&self) -> Result<Observation, PriceError> {
-        self.fetch().await.map(|q| q.valuation)
+        self.fetch(
+            super::snapshot::SnapshotUse::Quote,
+            tokio::time::Instant::now(),
+        )
+        .await
+        .map(|q| q.valuation)
     }
     async fn quote(&self) -> Result<PriceQuote, PriceError> {
-        self.fetch().await
+        self.fetch(
+            super::snapshot::SnapshotUse::Quote,
+            tokio::time::Instant::now(),
+        )
+        .await
     }
 }
 
@@ -744,6 +795,9 @@ mod tests {
     struct Memory(tokio::sync::Mutex<Vec<Sample>>);
     #[async_trait]
     impl ObservationStore for Memory {
+        async fn history(&self, _: &TwapConfig) -> Result<Vec<Sample>, PriceError> {
+            Ok(self.0.lock().await.clone())
+        }
         async fn latest(&self, _: &TwapConfig) -> Result<Option<Sample>, PriceError> {
             Ok(self.0.lock().await.last().cloned())
         }
@@ -788,8 +842,9 @@ mod tests {
                 }
                 "eth_call" => {
                     assert_eq!(
-                        request["params"][1], "0x62",
-                        "all pair AND ETH/USD values must be pinned to min(100,102)-2"
+                        request["params"][1],
+                        json!({"blockHash":hash,"requireCanonical":true}),
+                        "all pair and ETH/USD values use the canonical verify pin"
                     );
                     let input = request["params"][0]["input"]
                         .as_str()
@@ -897,10 +952,10 @@ mod tests {
             Arc::new(Memory(tokio::sync::Mutex::new(history))),
         )
         .unwrap();
-        reader.fetch().await.unwrap();
-        let sends = sends.load(Ordering::SeqCst);
+        reader.quote_fresh().await.unwrap();
+        let sends = a.sends.load(Ordering::SeqCst) + b.sends.load(Ordering::SeqCst);
         println!("UniswapV2::fetch stationary-head sends: {sends}");
-        assert_eq!(sends, 26);
+        assert_eq!(sends, 4);
     }
     #[tokio::test]
     async fn quote_between_samples_ends_at_the_eth_usd_block_without_an_extra_row() {
@@ -985,7 +1040,7 @@ mod tests {
             assert_eq!(o.source.as_str(), "uniswap_v2_twap");
             assert_eq!(o.observed_at.value(), now);
             assert_eq!(o.price, valuation_price(ratio, spot, eth).unwrap());
-            assert_eq!(evidence["window_end_block"], 98);
+            assert_eq!(evidence["window_end_block"], 100);
             assert_eq!(
                 store.0.lock().await.len(),
                 31,
@@ -1100,6 +1155,7 @@ mod tests {
                     matches!(
                         result,
                         Err(PriceError::Disagreement)
+                            | Err(PriceError::RpcUnavailable)
                             | Err(PriceError::Feed {
                                 class: "divergent",
                                 ..

@@ -461,7 +461,6 @@ mod tests {
                     contract: asset,
                     decimals: 18,
                     quote_amount_decimals: 4,
-                    backstop: crate::route::Backstop::Token,
                 },
                 min_credit_minor,
                 tolerance_bps: bps(tolerance_bps),

@@ -92,6 +92,10 @@ impl ChainReader for ScriptedChain {
         Ok(ReceiptLookup::Included {
             block_number,
             block_hash: block_hash(block_number),
+            status: true,
+            block_time: BLOCK_TIME,
+            tx_from: SENDER,
+            tx_nonce: 0,
             transfer: Some(Box::new(TransferLog {
                 tx_hash,
                 receipt_log_index,

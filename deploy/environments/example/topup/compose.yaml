@@ -16,6 +16,7 @@ services:
   # One sealed key per keyed RPC provider of topup.yaml (a `{key}` in its URL), in both services.
   topup:
     environment: &rpc-keys
-      TOPUP_RPC_ALCHEMY_SEPOLIA_KEY: ${TOPUP_RPC_ALCHEMY_SEPOLIA_KEY:-}
+      TOPUP_RPC_ANKR_KEY: ${TOPUP_RPC_ANKR_KEY:-}
+      TOPUP_RPC_INFURA_KEY: ${TOPUP_RPC_INFURA_KEY:-}
   restore-check:
     environment: *rpc-keys

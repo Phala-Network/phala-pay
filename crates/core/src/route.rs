@@ -1,7 +1,5 @@
 //! Serde schemas and pure validation for attested chain and route files.
 
-use std::collections::BTreeSet;
-
 use alloy_primitives::{Address, address, keccak256};
 use serde::{Deserialize, Serialize};
 
@@ -88,7 +86,6 @@ impl RouteFile {
             "alerts.stuck_after_s.confirmed",
             self.alerts.stuck_after_s.confirmed,
         )?;
-        validate_rpc_providers(&self.chain.rpc_providers)?;
         Ok(())
     }
 }
@@ -365,23 +362,6 @@ pub struct AssetConfig {
     /// rounding up at a low precision costs the payer more than any spread (design
     /// payment-settings §3).
     pub quote_amount_decimals: u8,
-    /// How the chain's transfer logs of this token are requested.
-    pub backstop: Backstop,
-}
-
-/// How a route's transfers are requested from provider A, by the per-block scan and the
-/// finalized backstop alike (architecture §8).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Backstop {
-    /// Every `Transfer` of the token contract, kept locally when its recipient is an issued
-    /// address: one request per block range whatever the address count. For tokens with few
-    /// transfers per block, such as PHA.
-    #[default]
-    Token,
-    /// `Transfer`s of any token to issued addresses, 1 000 addresses per request. For tokens with
-    /// many transfers per block, such as USDC, whose token-wide logs would be large.
-    Addresses,
 }
 
 /// Canonical price configuration.
@@ -589,14 +569,6 @@ pub struct ChainSpec {
     /// Sanctions oracle; default [`default_sanctions_oracle`] for the chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sanctions_oracle: Option<Address>,
-    /// Explicit independent A/B group ids; no implicit defaults.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(
-        rename = "rpc_groups",
-        deserialize_with = "deserialize_groups",
-        serialize_with = "serialize_groups"
-    )]
-    pub rpc_providers: Option<Vec<String>>,
 }
 
 /// Deposited asset of a route file.
@@ -613,9 +585,6 @@ pub struct AssetSpec {
     /// or `decimals` if fewer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quote_amount_decimals: Option<u8>,
-    /// How transfers are requested; default [`Backstop::Token`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backstop: Option<Backstop>,
 }
 
 /// One merchant parameter of a route file: the operator's default and bounds, each left out for
@@ -824,9 +793,7 @@ impl TryFrom<RouteSpec> for RouteFile {
             chain: ChainConfig {
                 chain_id,
                 confirmations,
-                rpc_providers: spec.chain.rpc_providers.ok_or_else(|| {
-                    RouteError::validation("chain.rpc_groups", "explicit A/B groups are required")
-                })?,
+                rpc_providers: vec!["read".to_owned(), "verify".to_owned()],
                 contracts: ChainContracts {
                     forwarder_factory: spec.chain.forwarder_factory,
                     implementation: spec
@@ -845,7 +812,6 @@ impl TryFrom<RouteSpec> for RouteFile {
                     .asset
                     .quote_amount_decimals
                     .unwrap_or(DEFAULT_QUOTE_AMOUNT_DECIMALS.min(spec.asset.decimals)),
-                backstop: spec.asset.backstop.unwrap_or_default(),
             },
             livemode: spec.livemode,
             pricing: spec.price,
@@ -874,14 +840,12 @@ impl From<RouteFile> for RouteSpec {
                 confirmations: Some(route.chain.confirmations),
                 implementation: Some(route.chain.contracts.implementation),
                 sanctions_oracle: Some(route.screening.sanctions_oracle),
-                rpc_providers: Some(route.chain.rpc_providers),
             },
             asset: AssetSpec {
                 symbol: route.asset.symbol,
                 contract: route.asset.contract,
                 decimals: route.asset.decimals,
                 quote_amount_decimals: Some(route.asset.quote_amount_decimals),
-                backstop: Some(route.asset.backstop),
             },
             price: route.pricing,
             merchant: MerchantSpec {
@@ -1049,47 +1013,6 @@ fn validate_positive(field: &'static str, value: u64) -> Result<(), RouteError> 
     Ok(())
 }
 
-/// Each entry is a provider id, which names the provider's attested URL in the configuration's
-/// `rpc_providers` and sealed key `TOPUP_RPC_<ID>_KEY` (the id upper-cased, `-` as `_`), or, for
-/// local development and tests, an inline URL. Ids are lowercase letters, digits, and `-`, so distinct ids never share
-/// a variable.
-fn validate_rpc_providers(providers: &[String]) -> Result<(), RouteError> {
-    if providers.len() != 2 {
-        return Err(RouteError::validation(
-            "chain.rpc_groups",
-            "must contain exactly two groups",
-        ));
-    }
-
-    let mut unique = BTreeSet::new();
-    for provider in providers {
-        let provider = provider.trim();
-        if provider.is_empty() {
-            return Err(RouteError::validation(
-                "chain.rpc_groups",
-                "provider ids must not be empty",
-            ));
-        }
-        if !provider.contains("://")
-            && !provider
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        {
-            return Err(RouteError::validation(
-                "chain.rpc_groups",
-                "provider ids must be lowercase letters, digits, and -",
-            ));
-        }
-        if !unique.insert(provider) {
-            return Err(RouteError::validation(
-                "chain.rpc_groups",
-                "provider ids must be unique",
-            ));
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1135,40 +1058,6 @@ mod tests {
                 .to_string()
                 .contains("must be false")
         );
-    }
-
-    #[test]
-    fn rpc_providers_must_be_distinct_and_non_empty() {
-        assert!(
-            validate_rpc_providers(&["alchemy".to_owned()])
-                .expect_err("one provider must fail")
-                .to_string()
-                .contains("exactly two")
-        );
-        assert!(
-            validate_rpc_providers(&["alchemy".to_owned(), "alchemy".to_owned()])
-                .expect_err("duplicate providers must fail")
-                .to_string()
-                .contains("unique")
-        );
-        assert!(
-            validate_rpc_providers(&[String::new(), String::new()])
-                .expect_err("empty providers must fail")
-                .to_string()
-                .contains("must not be empty")
-        );
-        // `provider-a` and `provider_a` would both name TOPUP_RPC_PROVIDER_A_KEY.
-        assert!(
-            validate_rpc_providers(&["provider-a".to_owned(), "provider_a".to_owned()])
-                .expect_err("an id outside the charset must fail")
-                .to_string()
-                .contains("lowercase letters, digits, and -")
-        );
-        validate_rpc_providers(&[
-            "base-sepolia-1".to_owned(),
-            "http://127.0.0.1:8545".to_owned(),
-        ])
-        .expect("ids and inline URLs pass");
     }
 
     #[test]
@@ -1275,37 +1164,4 @@ mod tests {
             }
         }
     }
-}
-
-/// Explicit A/B roles in the public route configuration.
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RpcGroups {
-    a: String,
-    b: String,
-}
-fn deserialize_groups<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Vec<String>>, D::Error> {
-    let refs = RpcGroups::deserialize(d)?;
-    Ok(Some(vec![refs.a, refs.b]))
-}
-fn serialize_groups<S: serde::Serializer>(
-    groups: &Option<Vec<String>>,
-    s: S,
-) -> Result<S::Ok, S::Error> {
-    let groups = groups
-        .as_ref()
-        .ok_or_else(|| serde::ser::Error::custom("A/B groups required"))?;
-    let a = groups
-        .first()
-        .ok_or_else(|| serde::ser::Error::custom("A required"))?;
-    let b = groups
-        .get(1)
-        .ok_or_else(|| serde::ser::Error::custom("B required"))?;
-    RpcGroups {
-        a: a.clone(),
-        b: b.clone(),
-    }
-    .serialize(s)
 }

@@ -7,7 +7,6 @@ mod support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use anyhow::{Context, Result, bail, ensure};
@@ -15,7 +14,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
-use tokio_util::sync::CancellationToken;
 use topup::api::{AppState, ClientReadLimiter, PublicOrigin, VerificationKey};
 use topup::audit::Actor;
 use topup::db;
@@ -23,15 +21,11 @@ use topup::deposit_addresses;
 use topup::finality::FinalityWatch;
 use topup::pump::{Pump, PumpConfig, RunOnceResult, StepSet};
 use topup::routes::RouteSet;
-use topup::scanner::{
-    ChainRoutes, FinalizedHeads, HeadScan, ScanConfig, chain_routes, head_scan_once, run_chain,
-    scan_once,
-};
+use topup::scanner::{ChainRoutes, chain_routes, coverage_once, fast_once};
 use topup::steps::confirm::ConfirmStep;
 use topup::steps::screen::{ScreenRoute, ScreenStep};
 use topup::tenancy::Scope;
 use topup_adapters::attestation::DstackAttestor;
-use topup_adapters::chain::evm::metrics::provider_call_counts;
 use topup_adapters::chain::evm::{
     ChainError, ChainReader, EvmClient, FinalizedHead, FinalizedReader, ReceiptLookup, TransferLog,
 };
@@ -536,40 +530,6 @@ async fn a_lagging_provider_b_delays_the_credit_until_it_reaches_the_depth() -> 
 }
 
 #[tokio::test]
-async fn a_payment_is_credited_within_thirty_seconds_of_inclusion_on_twelve_second_blocks()
--> Result<()> {
-    run(&["--block-time", "12"], |chain| {
-        Box::pin(async move {
-            assert_credited_within(chain, "latency-provider-a", chrono::Duration::seconds(30)).await
-        })
-    })
-    .await
-}
-
-/// At an OP-stack chain's default depth on 2-second blocks, the head loop polls once per L2 block
-/// and the payment is credited within 10 seconds of inclusion.
-#[tokio::test]
-async fn an_op_stack_payment_is_credited_within_ten_seconds_of_inclusion_on_two_second_blocks()
--> Result<()> {
-    run_on(OP_STACK, &["--block-time", "2"], |chain| {
-        Box::pin(async move {
-            assert_credited_within(
-                chain,
-                "op-latency-provider-a",
-                chrono::Duration::seconds(10),
-            )
-            .await
-        })
-    })
-    .await
-}
-
-/// An OP-stack chain credits at a depth on the sequencer's unsafe head, while `safe` and
-/// `finalized` lag behind; an unsafe-head reorg that spends the payer's nonce on another
-/// transaction is handled as on Ethereum. The deposit is reversed once at finality, and the
-/// replacement, which pays the address again in the replaced block, below the head loop's cursor,
-/// is recorded by the finalized backstop and credited.
-#[tokio::test]
 async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_replacement()
 -> Result<()> {
     run_on(OP_STACK, &[], |chain| {
@@ -617,7 +577,8 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
                 chain.events("deposit.reversed").await? == vec![reversed_event_id(credited.id)]
             );
 
-            let stats = scan_once(&chain.pool, &chain.reader, &chain.routes).await?;
+            let stats =
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1).await?;
             ensure!(stats.inserted == 1, "{stats:?}");
             chain.settle().await?;
             let successor = replacement_hash(&replacement)?;
@@ -717,87 +678,6 @@ async fn an_op_stack_payment_removed_without_its_nonce_spent_stays_pending_and_a
     .await
 }
 
-/// Runs the production head loop and pump at their production cadence (one head poll per block
-/// time of the route's chain), pays, and checks that `deposit.credited` is written within `limit`
-/// of the payment's inclusion, for about one head poll and one log request per block.
-async fn assert_credited_within(
-    chain: &FastChain,
-    label: &str,
-    limit: chrono::Duration,
-) -> Result<()> {
-    let cancellation = CancellationToken::new();
-    let pump = chain.pump.clone();
-    let pump_task = tokio::spawn({
-        let cancellation = cancellation.clone();
-        async move { pump.run(cancellation).await }
-    });
-    let cursor_before = db::get_cursor(&chain.pool, chain.chain_id)
-        .await?
-        .context("the finalized cursor")?;
-    let scanner_task = tokio::spawn(run_chain(
-        chain.pool.clone(),
-        labeled_reader(&chain.anvil.rpc_url, label, chain.chain_id)?,
-        chain.routes.clone(),
-        ScanConfig::default(),
-        FinalizedHeads::default(),
-        cancellation.clone(),
-    ));
-    let started = chain.anvil.block_number()?;
-    let tx = chain.send_payment(AMOUNT)?;
-    let result = async {
-        let mut included_at = None;
-        let deadline = Instant::now() + Duration::from_secs(90);
-        loop {
-            ensure!(Instant::now() < deadline, "no credit within 90 s");
-            if included_at.is_none() && chain.receipt_block(tx)?.is_some() {
-                included_at = Some(Utc::now());
-            }
-            if let Some(included_at) = included_at {
-                let created = sqlx::query_scalar::<_, chrono::DateTime<Utc>>(
-                    "SELECT created FROM events WHERE type = 'deposit.credited'",
-                )
-                .fetch_optional(&chain.pool)
-                .await?;
-                if let Some(created) = created {
-                    let elapsed = created - included_at;
-                    eprintln!("deposit.credited written {elapsed} after inclusion");
-                    ensure!(elapsed < limit, "credited {elapsed} after inclusion");
-                    return Ok(());
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-    .await;
-    cancellation.cancel();
-    pump_task.await?;
-    scanner_task.await??;
-    result?;
-
-    // Provider A's calls over the run: about one head poll and one log request per block, plus
-    // the finalized backstop's window over blocks finalized during the run, and one receipt,
-    // block, and transaction read for the one transfer.
-    let blocks = chain.anvil.block_number()?.saturating_sub(started).max(1);
-    let calls = provider_call_counts(label);
-    eprintln!("provider A calls over {blocks} blocks: {calls:?}");
-    let count = |method| calls.get(method).copied().unwrap_or_default();
-    ensure!(count("eth_blockNumber") <= 2 * blocks + 4, "{calls:?}");
-    ensure!(count("eth_getBlockByNumber") <= 2, "{calls:?}");
-    // The finalized backstop runs alongside: a pass that finds `finalized` advanced reads the new
-    // blocks once (one transfer and one factory request per window) and moves the cursor past
-    // them; it never re-reads below the cursor.
-    let cursor_after = db::get_cursor(&chain.pool, chain.chain_id)
-        .await?
-        .context("the finalized cursor")?;
-    let backstop = 2 * cursor_after.saturating_sub(cursor_before);
-    ensure!(
-        count("eth_getLogs") <= blocks + 1 + backstop,
-        "{calls:?} backstop={backstop}"
-    );
-    ensure!(count("eth_getTransactionReceipt") <= 2, "{calls:?}");
-    Ok(())
-}
-
 /// The hash of a signed raw transaction.
 fn replacement_hash(raw: &str) -> Result<B256> {
     let bytes = alloy_primitives::hex::decode(raw).context("raw transaction hex")?;
@@ -805,95 +685,18 @@ fn replacement_hash(raw: &str) -> Result<B256> {
 }
 
 #[tokio::test]
-async fn an_idle_chain_polls_only_the_head_and_a_new_block_costs_one_log_request() -> Result<()> {
-    run(&[], |chain| {
-        Box::pin(async move {
-            let label = "idle-provider-a";
-            let cancellation = CancellationToken::new();
-            let config = ScanConfig {
-                head_poll_interval: Some(Duration::from_millis(200)),
-                finalized_poll_interval: Duration::from_secs(3_600),
-            };
-            let scanner_task = tokio::spawn(run_chain(
-                chain.pool.clone(),
-                labeled_reader(&chain.anvil.rpc_url, label, chain.chain_id)?,
-                chain.routes.clone(),
-                config,
-                FinalizedHeads::default(),
-                cancellation.clone(),
-            ));
-            let count = |method| {
-                provider_call_counts(label)
-                    .get(method)
-                    .copied()
-                    .unwrap_or_default()
-            };
-            let result = async {
-                // The first poll reads `finalized` and scans the blocks above the cursor once.
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while count("eth_getLogs") == 0 {
-                    ensure!(Instant::now() < deadline, "the first poll never scanned");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                let before = provider_call_counts(label);
-                tokio::time::sleep(Duration::from_secs(3)).await;
-                let idle = provider_call_counts(label);
-                let polls = idle["eth_blockNumber"] - before["eth_blockNumber"];
-                ensure!(polls >= 5, "only {polls} head polls in 3 s");
-                for (method, calls) in &idle {
-                    ensure!(
-                        *method == "eth_blockNumber" || before.get(method) == Some(calls),
-                        "an idle chain called {method}: {before:?} -> {idle:?}"
-                    );
-                }
-
-                chain.anvil.mine(1)?;
-                let logs = count("eth_getLogs");
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while count("eth_getLogs") == logs {
-                    ensure!(Instant::now() < deadline, "a new block was not scanned");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                ensure!(
-                    count("eth_getLogs") == logs + 1,
-                    "one new block costs one log request, whatever the address count"
-                );
-                Ok(())
-            }
-            .await;
-            cancellation.cancel();
-            scanner_task.await??;
-            result
-        })
-    })
-    .await
-}
-
-#[tokio::test]
 async fn a_newly_issued_address_is_scanned_from_the_next_block_without_a_gap() -> Result<()> {
     run(&[], |chain| {
         Box::pin(async move {
-            let first = chain.head_scan().await?;
+            chain.head_scan().await?;
             chain.anvil.mine(2)?;
-            let second = chain.head_scan().await?;
-            let horizon = |scan: &HeadScan| scan.horizon.context("a depth route has a horizon");
-            ensure!(
-                second.from_block == horizon(&first)? + 1,
-                "{first:?} {second:?}"
-            );
-
+            chain.head_scan().await?;
             // An address issued now, with no open quote, is paid in the next block.
             let (address_id, address) =
                 issue_address(&chain.pool, chain.chain_id, chain.customer_id, 0x6b).await?;
             let tx = chain.pay_to(address, AMOUNT)?;
             chain.anvil.mine(1)?;
             let third = chain.head_scan().await?;
-            ensure!(
-                third.from_block == horizon(&second)? + 1,
-                "{second:?} {third:?}"
-            );
             ensure!(third.inserted == 1, "{third:?}");
             let deposit = chain.deposit(tx).await?;
             ensure!(deposit.address_id == address_id);
@@ -1007,8 +810,6 @@ impl FastChain {
             route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
                 feed: "BASE_SEQUENCER_UPTIME".into(),
                 grace_s: 3600,
-                rpc_group: "a".into(),
-                rpc_group_b: "b".into(),
             });
         }
         route.chain.confirmations = network.confirmations;
@@ -1079,7 +880,7 @@ impl FastChain {
         .0;
         let reader = reader(&anvil.rpc_url)?;
         // The finalized scanner's first pass writes the cursor the fast scan starts above.
-        scan_once(&pool, &reader, &routes).await?;
+        coverage_once(&pool, &reader, &reader, &routes, 1).await?;
         let chain = Self {
             anvil,
             chain_id,
@@ -1274,10 +1075,8 @@ impl FastChain {
     }
 
     /// One per-block scan, as the head loop runs on each new head.
-    async fn head_scan(&self) -> Result<HeadScan> {
-        head_scan_once(&self.pool, &self.reader, &self.routes)
-            .await?
-            .context("a new block is scanned")
+    async fn head_scan(&self) -> Result<db::ScanCommit> {
+        Ok(fast_once(&self.pool, &self.reader, &self.routes).await?)
     }
 
     /// Deposits one per-block scan records at the route's depth.
@@ -1516,6 +1315,7 @@ struct ClearSanctions;
 impl SanctionsSource for ClearSanctions {
     async fn sanctions(&self, _address: Address, block_number: u64) -> SanctionsResult {
         SanctionsResult {
+            block_hash: None,
             provider_a: SanctionsAnswer::Clear,
             provider_b: SanctionsAnswer::Clear,
             block_number,

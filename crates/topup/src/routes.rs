@@ -17,7 +17,8 @@ use crate::rpc_provider::{ProviderUrl, environment_key, provider_label};
 #[derive(Debug, Default)]
 pub struct RouteSet {
     routes: Vec<RouteFile>,
-    groups: BTreeMap<String, Arc<EvmClient>>,
+    environment: String,
+    rpc: BTreeMap<u64, crate::chain_rpc::ChainRpc>,
     current: BTreeMap<(u64, Address), usize>,
     chains: BTreeMap<u64, ChainEntry>,
 }
@@ -92,26 +93,19 @@ impl RouteSet {
         })
     }
 
-    /// Constructs A/B clients resolved from the attested typed group configuration.
-    pub fn with_groups(
+    /// Uses the validated read/verify clients, including observation-only price chains.
+    pub fn with_rpc(
         routes: Vec<RouteFile>,
-        clients: BTreeMap<String, Arc<EvmClient>>,
+        rpc: BTreeMap<u64, crate::chain_rpc::ChainRpc>,
     ) -> Result<Self, String> {
-        let (current, chains) = index(&routes, |chain| {
-            chain
-                .rpc_providers
-                .iter()
-                .map(|id| {
-                    clients
-                        .get(id)
-                        .cloned()
-                        .ok_or_else(|| ProviderError::MissingUrl { label: id.clone() })
-                })
-                .collect()
+        let (current, chains) = index(&routes, |chain| match rpc.get(&chain.chain_id) {
+            Some(pair) => vec![Ok(pair.read.clone()), Ok(pair.verify.clone())],
+            None => Vec::new(),
         })?;
         Ok(Self {
             routes,
-            groups: clients,
+            environment: String::new(),
+            rpc,
             current,
             chains,
         })
@@ -123,31 +117,18 @@ impl RouteSet {
         index(routes, |_| Vec::new()).map(drop)
     }
 
-    /// Shared clients including observation-only mainnet groups.
-    pub fn groups(&self) -> &BTreeMap<String, Arc<EvmClient>> {
-        &self.groups
+    /// Attach the attested environment for staging-only sampler cadence.
+    pub fn with_environment(mut self, environment: String) -> Self {
+        self.environment = environment;
+        self
     }
-    /// Resolves explicit observation groups or route A/B roles.
-    pub fn price_group(&self, route: &RouteFile, id: &str) -> Result<Arc<EvmClient>, String> {
-        match id {
-            "a" => self
-                .provider(route.chain.chain_id, 0)
-                .cloned()
-                .map_err(|e| e.to_string()),
-            "b" => self
-                .provider(route.chain.chain_id, 1)
-                .cloned()
-                .map_err(|e| e.to_string()),
-            _ => self.resolved_price_group(id),
-        }
+    /// Staging alone uses five-minute PHA sampling; default routes retain one-minute sampling.
+    pub fn staging(&self) -> bool {
+        self.environment == "staging"
     }
-
-    /// Looks up an already resolved group identity without reinterpreting A/B aliases.
-    pub(crate) fn resolved_price_group(&self, id: &str) -> Result<Arc<EvmClient>, String> {
-        self.groups
-            .get(id)
-            .cloned()
-            .ok_or_else(|| format!("price RPC group {id} missing"))
+    /// All explicitly configured endpoints, including price-only chains.
+    pub fn rpc(&self) -> &BTreeMap<u64, crate::chain_rpc::ChainRpc> {
+        &self.rpc
     }
 
     fn from_resolver(
@@ -166,7 +147,8 @@ impl RouteSet {
         })?;
         Ok(Self {
             routes,
-            groups: BTreeMap::new(),
+            environment: String::new(),
+            rpc: BTreeMap::new(),
             current,
             chains,
         })
@@ -198,21 +180,19 @@ impl RouteSet {
 
     /// Returns the shared client of the provider at `index` in the chain's `rpc_providers`.
     pub fn provider(&self, chain_id: u64, index: usize) -> Result<&Arc<EvmClient>, ProviderError> {
+        if let Some(pair) = self.rpc.get(&chain_id) {
+            return match index {
+                0 => Ok(&pair.read),
+                1 => Ok(&pair.verify),
+                _ => Err(ProviderError::Unconfigured { chain_id, index }),
+            };
+        }
         self.chains
             .get(&chain_id)
             .and_then(|chain| chain.providers.get(index))
             .ok_or(ProviderError::Unconfigured { chain_id, index })?
             .as_ref()
             .map_err(Clone::clone)
-    }
-
-    /// Typed production groups need durable cursor anchoring; legacy test dependencies do not.
-    pub(crate) fn has_rpc_groups(&self) -> bool {
-        self.chains
-            .values()
-            .flat_map(|chain| &chain.providers)
-            .filter_map(|client| client.as_ref().ok())
-            .any(|client| client.group().is_some())
     }
 
     /// Returns the current routes of one mode: a test-mode key quotes only on test routes, a

@@ -562,7 +562,7 @@ fn router_from_routes(
 }
 
 async fn interactive_rpc(request: Request, next: Next) -> Response {
-    topup_adapters::chain::evm::group::budget::interactive(next.run(request)).await
+    next.run(request).await
 }
 
 async fn unrecognized_request() -> Response {
@@ -700,8 +700,6 @@ mod tests {
 
     async fn assert_interactive_route(path: &str) {
         async fn priority_handler() -> StatusCode {
-            use topup_adapters::chain::evm::group::budget::Priority;
-            assert_eq!(Priority::current(), Priority::Interactive);
             StatusCode::NO_CONTENT
         }
         let merchant =

@@ -7,7 +7,9 @@ use prometheus::{
     TextEncoder, core::Collector,
 };
 use sqlx::PgPool;
-use topup_adapters::chain::evm::metrics::{counting_since, rpc_call_counts};
+use topup_adapters::chain::evm::metrics::{
+    counting_since, endpoint_readiness, rpc_call_counts, rpc_error_counts,
+};
 
 /// Prometheus text media type.
 pub const CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
@@ -159,6 +161,33 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     let timeouts = pool_timeouts()
         .map_err(|_| prometheus::Error::Msg("database pool metrics unavailable".into()))?;
     let mut families = calls.collect();
+    let errors = IntCounterVec::new(
+        Opts::new(
+            "topup_rpc_errors_total",
+            "Failed endpoint requests by bounded class.",
+        ),
+        &["provider", "chain_id", "method", "class"],
+    )?;
+    for (provider, chain, method, class, count) in rpc_error_counts() {
+        let chain = chain.map_or_else(|| "unknown".to_owned(), |chain| chain.to_string());
+        errors
+            .with_label_values(&[&provider, &chain, method, class])
+            .inc_by(count);
+    }
+    let ready = IntGaugeVec::new(
+        Opts::new(
+            "topup_rpc_endpoint_ready",
+            "Endpoint is ready for its next operation.",
+        ),
+        &["provider", "chain_id"],
+    )?;
+    for (provider, chain, value) in endpoint_readiness() {
+        ready
+            .with_label_values(&[&provider, &chain.to_string()])
+            .set(i64::from(value));
+    }
+    families.extend(errors.collect());
+    families.extend(ready.collect());
     families.extend(connections.collect());
     families.extend(max_connections.collect());
     families.extend(timeouts.collect());
@@ -170,9 +199,7 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
         since.set(i64::try_from(seconds.as_secs()).unwrap_or(i64::MAX));
         families.extend(since.collect());
     }
-    families.extend(topup_adapters::chain::evm::group::metrics::collect()?);
-    families.extend(topup_adapters::chain::evm::group::metrics::events()?);
-    families.extend(crate::db::rpc::metrics());
+
     families.extend(super::capacity::collect()?);
     families.extend(super::price_metrics::collect()?);
     families.extend(http.requests.collect());
@@ -181,6 +208,48 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     // Like Registry::gather, omit families with no observed series rather than inventing zeros.
     families.retain(|family| !family.get_metric().is_empty());
     TextEncoder::new().encode_to_string(&families)
+}
+
+/// Durable coverage and daily budget gauges are reloaded on authenticated scrapes, including
+/// after restart; no RPC request or address-wide backfill is issued here.
+pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> {
+    let (coverage,budgets)=tokio::try_join!(
+        sqlx::query_as::<_,(i64,i64,i64)>("SELECT c.chain_id,GREATEST(0,extract(epoch FROM now()-c.through_time)::bigint),(SELECT count(*) FROM addresses a WHERE a.chain_id=c.chain_id AND (a.dual_covered_through IS NULL OR a.dual_covered_through < c.through_block)) FROM chain_coverage c").fetch_all(pool),
+        sqlx::query_as::<_,(String,i32)>("SELECT name,used FROM daily_budgets WHERE day=(now() AT TIME ZONE 'UTC')::date").fetch_all(pool)
+    )?;
+    let lag = IntGaugeVec::new(
+        Opts::new(
+            "topup_coverage_lag_seconds",
+            "Time since the dual covered boundary.",
+        ),
+        &["chain_id"],
+    )?;
+    let addresses = IntGaugeVec::new(
+        Opts::new(
+            "topup_addresses_lagging",
+            "Issued addresses awaiting dual backfill.",
+        ),
+        &["chain_id"],
+    )?;
+    let used = IntGaugeVec::new(
+        Opts::new(
+            "topup_daily_budget_used",
+            "Units claimed during the current UTC day.",
+        ),
+        &["name"],
+    )?;
+    for (chain, seconds, count) in coverage {
+        let chain = chain.to_string();
+        lag.with_label_values(&[&chain]).set(seconds);
+        addresses.with_label_values(&[&chain]).set(count);
+    }
+    for (name, count) in budgets {
+        used.with_label_values(&[&name]).set(i64::from(count));
+    }
+    let mut families = lag.collect();
+    families.extend(addresses.collect());
+    families.extend(used.collect());
+    Ok(TextEncoder::new().encode_to_string(&families)?)
 }
 
 #[cfg(test)]

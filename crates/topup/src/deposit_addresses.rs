@@ -745,7 +745,7 @@ async fn keep_network(
                LEAST(cursor.block, COALESCE($9::bigint, cursor.block)),
                now()
         FROM (
-            SELECT COALESCE((SELECT scanned_block FROM cursors WHERE chain_id = $4), 0) AS block
+            SELECT (SELECT through_block FROM chain_coverage WHERE chain_id = $4) AS block
         ) AS cursor
         WHERE NOT EXISTS (
             SELECT 1 FROM addresses
@@ -1163,6 +1163,9 @@ pub async fn sync_networks(
         if restored > 0 {
             continue;
         }
+        if !crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
+            return Err(DepositAddressError::NoChain);
+        }
         // A newly derived forwarder cannot hold earlier payments to this salt and treasury unless
         // someone sent to the address before its network existed (on a chain added later, or
         // before a treasury change); as for quote addresses, the scanner covers it from the
@@ -1175,7 +1178,7 @@ pub async fn sync_networks(
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8,
-                COALESCE((SELECT scanned_block FROM cursors WHERE chain_id = $4), 0)
+                (SELECT through_block FROM chain_coverage WHERE chain_id = $4)
             )
             "#,
         )
@@ -1281,7 +1284,7 @@ pub(crate) async fn replace_networks(
             created_block
         )
         SELECT next.id, $5, $6, $7, next.owner, next.salt, $8, next.address,
-               COALESCE((SELECT scanned_block FROM cursors WHERE chain_id = $7), 0)
+               (SELECT through_block FROM chain_coverage WHERE chain_id = $7)
         FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[])
             AS next(id, owner, salt, address)
         "#,

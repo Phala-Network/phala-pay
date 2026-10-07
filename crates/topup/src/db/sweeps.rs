@@ -9,6 +9,63 @@ use uuid::Uuid;
 
 use super::types::{address_hex, b256_hex, to_i64};
 
+/// Insert-only factory records must still match complete dual receipt evidence on re-coverage.
+pub(crate) async fn stored_factory_evidence_matches(
+    pool: &PgPool,
+    chain: u64,
+    hash: alloy_primitives::B256,
+    logs: &[FactoryLog],
+) -> Result<bool, sqlx::Error> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT f.log_index,f.block_number,f.block_hash,a.address AS forwarder,f.token,\
+         f.treasury,f.amount_atomic::text AS amount,NULL::text AS reason FROM flushed f \
+         JOIN addresses a ON a.id=f.address_id WHERE f.chain_id=$1 AND f.tx_hash=$2 \
+         UNION ALL SELECT f.log_index,f.block_number,f.block_hash,a.address,f.token,\
+         NULL::text,NULL::text,f.reason FROM flush_failures f JOIN addresses a \
+         ON a.id=f.address_id WHERE f.chain_id=$1 AND f.tx_hash=$2",
+    )
+    .bind(to_i64(chain, "factory evidence chain")?)
+    .bind(b256_hex(hash))
+    .fetch_all(pool)
+    .await?;
+    for row in rows {
+        let position: i64 = row.try_get("log_index")?;
+        let Some(log) = logs
+            .iter()
+            .find(|log| i64::try_from(log.log_index).ok() == Some(position))
+        else {
+            return Ok(false);
+        };
+        if i64::try_from(log.block_number).ok() != Some(row.try_get("block_number")?)
+            || b256_hex(log.block_hash) != row.try_get::<String, _>("block_hash")?
+            || address_hex(log.event.forwarder()) != row.try_get::<String, _>("forwarder")?
+        {
+            return Ok(false);
+        }
+        let token: String = row.try_get("token")?;
+        let reason: Option<String> = row.try_get("reason")?;
+        let matches = match &log.event {
+            FactoryEvent::Flushed(event) => {
+                reason.is_none()
+                    && token == address_hex(event.token)
+                    && row.try_get::<Option<String>, _>("treasury")?
+                        == Some(address_hex(event.treasury))
+                    && row.try_get::<Option<String>, _>("amount")? == Some(event.amount.to_string())
+            }
+            FactoryEvent::FlushFailed(event) => {
+                token == address_hex(event.token)
+                    && reason == Some(format!("0x{}", hex::encode(&event.reason)))
+            }
+            FactoryEvent::ForwarderCreated(_) => false,
+        };
+        if !matches {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Factory events recorded by one commit; events about unknown pairs are not counted.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FactoryCommit {

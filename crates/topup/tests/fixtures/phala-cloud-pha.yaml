@@ -11,7 +11,6 @@ chain:
   forwarder_factory: "0xe8A9Ab1AbC7651A5b7C2ED5B662F2f80BF5C446d"
   confirmations: finalized
   sanctions_oracle: "0x40C57923924B5c5c5455c48D93317139ADDaC8fb"
-  rpc_groups: { a: alchemy, b: quicknode }
 
 asset:
   symbol: pha

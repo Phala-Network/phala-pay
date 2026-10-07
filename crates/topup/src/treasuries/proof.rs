@@ -200,11 +200,12 @@ pub trait ContractSignatures: Send + Sync {
 /// EIP-1271 checks on both RPC providers of each chain, each at its own `finalized` block.
 pub struct EvmContractSignatures {
     clients: BTreeMap<u64, [Arc<EvmClient>; 2]>,
+    pool: PgPool,
 }
 
 impl EvmContractSignatures {
     /// Checks through providers A and B of every chain of `routes`.
-    pub fn from_routes(routes: &RouteSet) -> Result<Self, String> {
+    pub fn from_routes(pool: PgPool, routes: &RouteSet) -> Result<Self, String> {
         let mut clients = BTreeMap::new();
         for chain_id in routes.chain_ids() {
             let provider = |index| {
@@ -215,13 +216,13 @@ impl EvmContractSignatures {
             };
             clients.insert(chain_id, [provider(0)?, provider(1)?]);
         }
-        Ok(Self::new(clients))
+        Ok(Self { clients, pool })
     }
 
     /// Checks through explicit per-chain providers A and B.
     #[must_use]
-    pub const fn new(clients: BTreeMap<u64, [Arc<EvmClient>; 2]>) -> Self {
-        Self { clients }
+    pub const fn new(pool: PgPool, clients: BTreeMap<u64, [Arc<EvmClient>; 2]>) -> Self {
+        Self { clients, pool }
     }
 }
 
@@ -230,11 +231,9 @@ async fn provider_answer(
     account: Address,
     hash: B256,
     signature: Bytes,
+    block: alloy::eips::BlockId,
 ) -> ContractAnswer {
-    let Ok(Some(block)) = client.finalized_block().await else {
-        return ContractAnswer::Unavailable;
-    };
-    match client.code_at_block(account, block).await {
+    match client.code_at_id(account, block).await {
         Ok(code) if code.is_empty() => return ContractAnswer::NotDeployed,
         Ok(_) => {}
         Err(_) => return ContractAnswer::Unavailable,
@@ -274,9 +273,13 @@ impl ContractSignatures for EvmContractSignatures {
         let Some([primary, secondary]) = self.clients.get(&chain_id) else {
             return ContractAnswer::Unavailable;
         };
+        let block = match crate::db::chain_reads::checkpoint(&self.pool, chain_id).await {
+            Ok(Some(boundary)) => alloy::eips::BlockId::hash_canonical(boundary.hash),
+            _ => return ContractAnswer::Unavailable,
+        };
         let (a, b) = tokio::join!(
-            provider_answer(primary, account, hash, signature.clone()),
-            provider_answer(secondary, account, hash, signature)
+            provider_answer(primary, account, hash, signature.clone(), block),
+            provider_answer(secondary, account, hash, signature, block)
         );
         match (a, b) {
             (a, b) if a == b => a,

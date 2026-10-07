@@ -1,4 +1,5 @@
-//! The CLI preserves sanitized member failures on stderr, leaving stdout for JSON.
+mod support;
+//! The CLI preserves sanitized endpoint failures on stderr, leaving stdout for JSON.
 use anyhow::{Context, Result, ensure};
 use axum::{Json, Router, routing::post};
 use serde_json::{Value, json};
@@ -9,7 +10,7 @@ use std::sync::{
 };
 
 #[tokio::test]
-async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -> Result<()> {
+async fn rpc_check_reports_every_wrong_chain_endpoint_without_retry_or_secrets() -> Result<()> {
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -39,32 +40,23 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
                 .resolved_json()
                 .map_err(anyhow::Error::msg)?,
         )?;
-        config["rpc_companies"] =
-            json!({"local-a":{"domains":["localhost"]},"local-b":{"domains":["127.0.0.1"]}});
-        for (id, group) in config["rpc_groups"].as_object_mut().context("groups")? {
-            let a = id.ends_with('a');
-            let host = if a { "localhost" } else { "127.0.0.1" };
-            let member = group["members"][0].clone();
-            group["members"] = json!([member]);
-            group["members"][0]["company"] = json!(if a { "local-a" } else { "local-b" });
-            group["members"][0]["url"] = json!(format!("http://{host}:{port}/secret-key"));
+        let tls=support::tls::RpcTlsProxy::start(&format!("http://127.0.0.1:{port}"))?;
+        let mut expected_endpoint_ids=Vec::new();
+        for chain in config["rpc"].as_array_mut().context("RPC chains")? {
+            for (role,url) in [("read",&tls.read_url),("verify",&tls.verify_url)] {
+                chain[role]["url"]=json!(format!("{url}/{{key}}"));
+                expected_endpoint_ids.push(chain[role]["id"].as_str().context("endpoint id")?.to_owned());
+            }
         }
-        let expected_member_ids = config["rpc_groups"]
-            .as_object()
-            .context("groups")?
-            .values()
-            .map(|g| {
-                g["members"][0]["id"]
-                    .as_str()
-                    .context("member id")
-                    .map(str::to_owned)
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let certificate=tls.certificate.clone();
         let encoded = serde_json::to_vec(&config)?;
         let output = tokio::task::spawn_blocking(move || -> Result<_> {
             use std::io::Write;
             let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_topup"))
                 .args(["rpc", "check", "--config", "/dev/stdin"])
+                .env("TOPUP_RPC_ANKR_KEY","secret-key")
+                .env("TOPUP_RPC_INFURA_KEY","secret-key")
+                .env("SSL_CERT_FILE",certificate)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -76,10 +68,10 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
         ensure!(!output.status.success());
         ensure!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr)?;
-        for member in &expected_member_ids {
+        for member in &expected_endpoint_ids {
             ensure!(
                 stderr.contains(&format!(
-                    "{member}: chain id: RPC member identity invalid (mismatch)"
+                    "{member}: chain id: endpoint identity mismatch"
                 )),
                 "{stderr}"
             );
@@ -89,7 +81,7 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
             "{stderr}"
         );
         ensure!(
-            calls.load(Ordering::SeqCst) == expected_member_ids.len(),
+            calls.load(Ordering::SeqCst) == expected_endpoint_ids.len(),
             "wrong chain must never retry"
         );
         Ok(())

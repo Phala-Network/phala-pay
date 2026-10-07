@@ -56,7 +56,6 @@ utoipa-axum.workspace = true
 url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
-psl = "2.1.215"
 x509-parser = "=0.18.1"
 
 [dev-dependencies]

@@ -166,6 +166,10 @@ pub struct CanonicalEvidence {
     pub from_address: Address,
     /// Canonical transfer amount.
     pub amount_atomic: AtomicAmount,
+    /// Independently derived transaction sender.
+    pub tx_from: Address,
+    /// Independently derived sender nonce (receipt depositNonce for OP deposits).
+    pub tx_nonce: u64,
     /// Route selected for the canonical token, when supported.
     pub route: Option<String>,
     /// Version selected for the canonical token, when supported.
@@ -199,6 +203,8 @@ pub struct LockConsumption {
 /// Additional writes atomically applied with one state transition.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TransitionEffects {
+    /// Every decision field was independently agreed on both endpoints.
+    pub dual_verified: bool,
     /// Optional correction to provisional scanner evidence.
     pub canonical_evidence: Option<CanonicalEvidence>,
     /// Optional valuation columns.
@@ -715,6 +721,8 @@ pub async fn apply_transition(
                 route = $8,
                 route_version = $9,
                 log_index = $10,
+                tx_from = $11,
+                tx_nonce = $12::text::numeric,
                 updated_at = now()
             WHERE id = $1
             "#,
@@ -734,6 +742,17 @@ pub async fn apply_transition(
                 .transpose()?,
         )
         .bind(to_i64(canonical.log_index, "deposits.log_index")?)
+        .bind(address_hex(canonical.tx_from))
+        .bind(canonical.tx_nonce.to_string())
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    if writes.effects.dual_verified {
+        sqlx::query(
+            "UPDATE deposits SET dual_verified_at = COALESCE(dual_verified_at, now()) WHERE id=$1",
+        )
+        .bind(deposit_id)
         .execute(&mut **transaction)
         .await?;
     }

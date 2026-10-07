@@ -872,10 +872,10 @@ async fn real_safe_v1_4_1_owners_prove_a_treasury_as_the_safe_sdk_signs() -> Res
     let anvil = &anvil;
     let result = async {
         let client = Arc::new(EvmClient::new(&anvil.rpc_url)?);
-        let contracts = EvmContractSignatures::new(BTreeMap::from([(
-            CHAIN_ID,
-            [Arc::clone(&client), Arc::clone(&client)],
-        )]));
+        let contracts = EvmContractSignatures::new(
+            database.app_pool.clone(),
+            BTreeMap::from([(CHAIN_ID, [Arc::clone(&client), Arc::clone(&client)])]),
+        );
         let fixture =
             Fixture::new(&database.app_pool, Contracts::Anvil(Arc::new(contracts))).await?;
         let safe = SafeDeployment::deploy(anvil, &client).await?;
@@ -1632,6 +1632,7 @@ struct ClearPayers;
 impl SanctionsSource for ClearPayers {
     async fn sanctions(&self, _address: Address, block_number: u64) -> SanctionsResult {
         SanctionsResult {
+            block_hash: None,
             provider_a: SanctionsAnswer::Clear,
             provider_b: SanctionsAnswer::Clear,
             block_number,

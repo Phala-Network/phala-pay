@@ -105,21 +105,19 @@ topup_image=$(jq -r '.services.topup.image' "$tmp/compose.json")
 jq -j --arg target /etc/topup/topup.yaml \
     '. as $root | [.services.topup.configs[] | select(.target == $target) | .source][0] as $name
     | $root.configs[$name].content' "$tmp/compose.json" | sed 's/[$][$]/$/g' >"$tmp/topup.yaml"
-# topup ARGS...: the pinned image's topup, offline, with topup.yaml on stdin. Only the DSN and RPC keys
-# reach it, by name; nothing secret is printed.
+# RPC checks always use the rendered compose and candidate env, exactly as the CVM does.
 topup() {
-    local name keys=() values=() rpc_network_args=(--network none)
-    [[ "$1" == rpc ]] && rpc_network_args=()
+    local name values=() unset=()
     for name in "${!env[@]}"; do
+        unset+=(-u "$name")
         [[ "$name" == SENTRY_DSN || "$name" == TOPUP_RPC_*_KEY ]] || continue
-        keys+=(-e "$name")
         values+=("$name=${env[$name]}")
     done
-    if [[ -n "${TOPUP:-}" ]]; then
+    if [[ -n "${TOPUP:-}" && "$1" != rpc ]]; then
         env -i PATH="$PATH" "${values[@]}" "$TOPUP" "$@" /dev/stdin <"$tmp/topup.yaml"
     else
-        env "${values[@]}" docker run --rm -i --pull never "${rpc_network_args[@]}" "${keys[@]}" \
-            "$topup_image" topup "$@" /dev/stdin <"$tmp/topup.yaml"
+        env "${unset[@]}" docker compose --env-file "$env_file" -f "$compose" \
+            run --rm --no-deps topup topup "$@" /etc/topup/topup.yaml
     fi
 }
 secrets=()
@@ -151,7 +149,18 @@ while IFS=$'\t' read -r id url configured_key; do
     key=${env[$key_name]-}
     [[ -z "$key" ]] || url=${url//"{key}"/"$key"}
     provider_url[$id]=$url
-done < <(jq -r '.rpc_groups[].members[] | [.id, .url, (.sealed_key // "")] | @tsv' "$tmp/config.json")
+    for service in topup restore-check; do
+        # The rendered restore variant retains the topup service; its command is overridden above.
+        if jq -e --arg service "$service" '.services[$service] != null' "$tmp/compose.json" >/dev/null; then
+            jq -e --arg service "$service" --arg key "$key_name" \
+                '.services[$service].environment | has($key)' "$tmp/compose.json" >/dev/null ||
+                fail "configured sealed_key $key_name is missing from $service compose mapping"
+        fi
+    done
+    if ((unsealed == 0)) && [[ -z "$key" ]]; then
+        fail "configured sealed_key $key_name is missing from candidate sealed env"
+    fi
+done < <(jq -r '.rpc[] | .read,.verify | [.id, .url, .sealed_key] | @tsv' "$tmp/config.json")
 while IFS=$'\t' read -r route factory implementation; do
     for key in "$factory" "$implementation"; do
         if ! is_address "$key" || grep -Eiq '^0x([0-9a-f])\1{39}$' <<<"$key"; then
@@ -195,8 +204,8 @@ else
         ETH_RPC_URL=$url cast "$@" 2>"$tmp/cast.err" ||
             printf 'error: %s' "$(redact "$(tool_error "$tmp/cast.err")")"
     }
-    check_rpc_groups "$tmp"
-    # Manifest checks only use fully validated members; failing backups do not block startup.
+    check_rpc_endpoints "$tmp"
+    # Both endpoints must pass the typed self-test before manifest validation.
     while IFS=$'\t' read -r name chain_id factory implementation contract oracle decimals providers; do
         read -ra configured_ids <<<"$providers"
         ids=()
@@ -254,7 +263,7 @@ else
             fail "route $name: asset decimals() is $reported, the route says $decimals"
     done < <(jq -r '. as $config | .routes[] | [.route, .chain.chain_id, .chain.forwarder_factory,
         .chain.implementation, .asset.contract, .chain.sanctions_oracle, .asset.decimals,
-        ([.chain.rpc_groups.a, .chain.rpc_groups.b] | map($config.rpc_groups[.].members[].id) | join(" "))] | @tsv' "$tmp/config.json")
+        (.chain.chain_id as $chain | [$config.rpc[] | select(.chain_id == $chain) | .read.id,.verify.id] | join(" "))] | @tsv' "$tmp/config.json")
 fi
 
 check_phala_cloud "$workspace" "$os_image"

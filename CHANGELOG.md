@@ -14,6 +14,20 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Breaking (operators)
+
+- Replace RPC company, budget and group registries with one strict `rpc` read/verify pair per
+  route or price chain. Seal the complete secret set with `TOPUP_RPC_ANKR_KEY` and
+  `TOPUP_RPC_INFURA_KEY`. Deploy preflight checks the actual compose environment path.
+- Quote cancellation requests keep the quote open and its exposure reserved until its address
+  catches up to dual finalized coverage past `expires_at`. Quote objects add
+  `cancel_requested_at`; completion emits `quote.canceled`. Expiry uses the same evidence gate.
+- Fresh quote price snapshots are capped at 100 per price chain/environment/UTC day. Exhaustion
+  returns retryable `503 price_unavailable`; the twelve-second reuse limit is unchanged.
+- Remove RPC recovery/resume commands, member pools, review sweeps, single-source backstops and
+  custom head-poll flags. The expand-only migration preserves rollback to the prior stable
+  release, whose RPC frozen/anchor/recovery state must be resolved before starting this version.
+
 ### Added
 
 - API-key authentication uses a database slot gate sized to half the pool (at least one slot).

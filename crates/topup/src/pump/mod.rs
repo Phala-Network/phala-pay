@@ -74,6 +74,7 @@ impl StepResult {
             evidence,
             events: Vec::new(),
             effects: db::TransitionEffects {
+                dual_verified: false,
                 canonical_evidence: None,
                 valuation: None,
                 lock_consumption: None,

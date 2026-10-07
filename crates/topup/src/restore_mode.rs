@@ -331,9 +331,11 @@ pub async fn rescan_progress(
             i64,
         ) = sqlx::query_as(
             r#"
-            SELECT (SELECT scanned_block FROM cursors WHERE chain_id = $1),
-                   (SELECT scanned_block_time FROM cursors WHERE chain_id = $1),
-                   (SELECT count(*) FROM addresses WHERE chain_id = $1 AND NOT backfilled)
+            SELECT (SELECT through_block FROM chain_coverage WHERE chain_id = $1),
+                   (SELECT through_time FROM chain_coverage WHERE chain_id = $1),
+                   (SELECT count(*) FROM addresses a LEFT JOIN chain_coverage c ON c.chain_id=a.chain_id
+                    WHERE a.chain_id = $1 AND (a.dual_covered_through IS NULL
+                        OR a.dual_covered_through IS DISTINCT FROM c.through_block))
             "#,
         )
         .bind(key)

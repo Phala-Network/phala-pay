@@ -153,170 +153,6 @@ struct Seed {
 }
 
 #[tokio::test]
-async fn repairs_missing_deposits_incrementally_and_sweeps_with_audit() -> Result<()> {
-    with_database(|pool| async move {
-        let route = route()?;
-        let seed = seed_identity(&pool, &route, 1).await?;
-        let chain = Arc::new(MockChain::at(5));
-        chain.derive(&[&seed]);
-        chain.logs.lock().unwrap().push(transfer(
-            11,
-            2,
-            3,
-            route.asset.contract,
-            Address::from([13; 20]),
-            seed.address,
-            500,
-        ));
-        let reconciler = reconciler(&pool, route.clone(), chain.clone())?;
-        scanned_through(&pool, 5).await?;
-
-        let missing = reconciler.check(CheckName::MissingDeposit).await?;
-        ensure!(missing.len() == 1 && missing[0].repair_applied);
-        let requests = chain.log_requests.lock().unwrap().clone();
-        ensure!(requests == [(0, 5)]);
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().len() == 1);
-        chain.finalized.store(9, Ordering::SeqCst);
-        scanned_through(&pool, 9).await?;
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().last() == Some(&(6, 9)));
-        let repaired = deposit(&pool, deposit_id(CHAIN_ID, B256::from([11; 32]), 2)).await?;
-        ensure!(repaired.state == DepositState::Detected);
-
-        let linked_id = seed_deposit(
-            &pool,
-            &route,
-            &seed,
-            DepositSeed::new(21, DepositState::Credited).block(4),
-        )
-        .await?;
-        // Indexed without the sweep, as by a scanner that stopped between the two writes.
-        seed_flushed(&pool, &route, &seed, 101, 1, 1_500).await?;
-        let report = reconciler.run_once().await?;
-        ensure!(report.succeeded());
-        ensure!(report.findings.iter().any(|finding| {
-            finding.check == CheckName::MissingFlushLink && finding.repair_applied
-        }));
-        ensure!(deposit(&pool, linked_id).await?.state == DepositState::Swept);
-        ensure!(
-            reconciler
-                .check(CheckName::MissingFlushLink)
-                .await?
-                .is_empty()
-        );
-        let repairs: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM audit WHERE actor_type = 'system' AND actor_id = 'reconciler' \
-             AND action = 'reconciliation_repair'",
-        )
-        .fetch_one(&pool)
-        .await?;
-        ensure!(repairs >= 1);
-        Ok(())
-    })
-    .await
-}
-
-/// In token mode the scanner requests only routed tokens, so the missing-deposit check is what
-/// finds another token sent to an issued address.
-#[tokio::test]
-async fn missing_deposit_check_records_unrouted_tokens_in_token_mode() -> Result<()> {
-    with_database(|pool| async move {
-        let route = route()?;
-        ensure!(route.asset.backstop == topup_core::route::Backstop::Token);
-        let seed = seed_identity(&pool, &route, 1).await?;
-        let chain = Arc::new(MockChain::at(5));
-        chain.derive(&[&seed]);
-        let other_token = Address::from([201; 20]);
-        chain.logs.lock().unwrap().push(transfer(
-            12,
-            0,
-            3,
-            other_token,
-            Address::from([13; 20]),
-            seed.address,
-            500,
-        ));
-        let reconciler = reconciler(&pool, route.clone(), chain.clone())?;
-        scanned_through(&pool, 5).await?;
-
-        let missing = reconciler.check(CheckName::MissingDeposit).await?;
-        ensure!(missing.len() == 1 && missing[0].repair_applied);
-        let recorded = deposit(&pool, deposit_id(CHAIN_ID, B256::from([12; 32]), 0)).await?;
-        ensure!(recorded.state == DepositState::Rejected);
-        ensure!(recorded.reason == Some(topup_core::deposit::RejectReason::UnsupportedAsset));
-        Ok(())
-    })
-    .await
-}
-
-#[tokio::test]
-async fn missing_deposit_scan_never_passes_the_scanner() -> Result<()> {
-    with_database(|pool| async move {
-        let route = route()?;
-        let seed = seed_identity(&pool, &route, 2).await?;
-        let chain = Arc::new(MockChain::at(9));
-        chain.derive(&[&seed]);
-        chain.logs.lock().unwrap().push(transfer(
-            12,
-            0,
-            7,
-            route.asset.contract,
-            Address::from([13; 20]),
-            seed.address,
-            500,
-        ));
-        let reconciler = reconciler(&pool, route, chain.clone())?;
-
-        // Nothing is compared before the scanner commits a range.
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().is_empty());
-
-        // The scanner cursor does not cover an address still awaiting its backfill.
-        db::commit_scan(&pool, CHAIN_ID, &[], &[], Some(6), None).await?;
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().is_empty());
-
-        // A transfer the scanner has not reached yet is not reported as missing.
-        db::commit_scan(&pool, CHAIN_ID, &[], &[seed.address_id], None, None).await?;
-        ensure!(
-            reconciler
-                .check(CheckName::MissingDeposit)
-                .await?
-                .is_empty()
-        );
-        ensure!(chain.log_requests.lock().unwrap().as_slice() == [(0, 6)]);
-
-        db::commit_scan(&pool, CHAIN_ID, &[], &[], Some(9), None).await?;
-        let missing = reconciler.check(CheckName::MissingDeposit).await?;
-        ensure!(missing.len() == 1 && missing[0].repair_applied);
-        ensure!(chain.log_requests.lock().unwrap().last() == Some(&(7, 9)));
-        Ok(())
-    })
-    .await
-}
-
-#[tokio::test]
 async fn post_restore_refuses_to_preempt_a_running_lease_owner() -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
@@ -702,11 +538,6 @@ async fn first_round_after_restart_completes_against_a_rate_limiting_provider() 
             node.refused.load(Ordering::SeqCst) > 0,
             "the provider never refused"
         );
-        ensure!(report.findings.iter().any(|finding| {
-            finding.check == CheckName::MissingDeposit
-                && finding.repair_applied
-                && finding.subjects.get("tx_hash") == Some(&format!("{:#x}", B256::from([93; 32])))
-        }));
         ensure!(report.findings.iter().any(|finding| {
             finding.check == CheckName::CustodyBalance
                 && finding.observed["balance_atomic"] == json!("1501")
@@ -1196,9 +1027,7 @@ async fn frozen_chain_gates_startup_pumps_and_scanner() -> Result<()> {
         ensure!(reason.as_deref() == Some("chain_frozen"));
 
         let scanner_routes = topup::scanner::chain_routes(&*route_set(route)?);
-        let stats =
-            topup::scanner::scan_once(&pool, &UnreachableReader, &scanner_routes[0]).await?;
-        ensure!(stats.inserted == 0);
+        ensure!(topup::scanner::coverage_once(&pool, &UnreachableReader, &UnreachableReader, &scanner_routes[0], 1).await.is_err());
         Ok(())
     })
     .await
@@ -1395,7 +1224,19 @@ async fn scanned_through(pool: &PgPool, block: u64) -> Result<()> {
         .into_iter()
         .map(|address| address.id)
         .collect::<Vec<_>>();
-    db::commit_scan(pool, CHAIN_ID, &[], &ids, Some(block), None).await?;
+    let boundary = topup::db::chain_reads::Boundary {
+        number: block,
+        hash: B256::repeat_byte(24),
+        time: Utc::now(),
+    };
+    topup::db::chain_reads::advance_checkpoint(pool, CHAIN_ID, boundary).await?;
+    topup::db::chain_reads::initialize_coverage(pool, CHAIN_ID, boundary).await?;
+    sqlx::query("UPDATE chain_coverage SET through_block=$2,through_hash=$3,through_time=$4 WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).bind(i64::try_from(block)?).bind(format!("{:#x}",boundary.hash)).bind(boundary.time).execute(pool).await?;
+    sqlx::query("UPDATE addresses SET backfilled=true,dual_covered_through=$2 WHERE id=ANY($1)")
+        .bind(ids)
+        .bind(i64::try_from(block)?)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -1673,31 +1514,6 @@ async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposit
         ensure!(findings.len()==1 && findings[0].subjects["deposit_id"]==original.to_string(),"old credit was skipped: {findings:?}");
         println!("SCALE credit_round_max={max_credit_round:?} old_work_per_round=200000 new_work_per_round=1000");
 
-        let old_payment=transfer(222,0,3,route.asset.contract,Address::from([13;20]),seed.address,500);
-        let (first_page,_)=db::scan_address_page(&pool,CHAIN_ID,None).await?;
-        let early=transfer(224,0,5,route.asset.contract,Address::from([13;20]),first_page[0].address,500);
-        let reader=ScaleReader {payments:vec![old_payment,early],requests:AtomicUsize::new(0),max_addresses:AtomicUsize::new(0)};
-        let configured_routes=route_set(route.clone())?;
-        let routes=topup::scanner::chain_routes(&configured_routes).remove(0);
-        db::initialize_cursor(&pool,CHAIN_ID,0,Utc::now()).await?;
-        let mut head_routes=routes.clone();
-        head_routes.chain.confirmations=topup_core::route::Confirmations::Depth(1);
-        for round in 0..200 {
-            let heads=topup_core::route::ChainHeads {latest:Some(5),safe:Some(5),finalized:5};
-            topup::scanner::scan_new_blocks(&pool,&reader,&head_routes,heads).await?.context("head page should run")?;
-            ensure!(db::get_confirmed_cursor(&pool,CHAIN_ID).await?==Some(if round<199 {0}else{5}),"confirmation cursor advanced before every page committed");
-            let pending:i64=sqlx::query_scalar("SELECT count(*) FROM pending_transfers WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
-            ensure!(pending==if round<199 {1}else{2},"head page deleted another page's pending transfer");
-        }
-        for round in 0..200 {
-            let started=std::time::Instant::now();
-            let stats=topup::scanner::scan_once(&pool,&reader,&routes).await?;
-            ensure!(stats.cursor==if round<199 {0}else{5},"scanner skipped an address page");
-            ensure!(started.elapsed()<StdDuration::from_secs(5),"unbounded scan round {round}");
-        }
-        ensure!(reader.max_addresses.load(Ordering::Relaxed)<=1_000);
-        ensure!(deposit(&pool,deposit_id(CHAIN_ID,B256::from([222;32]),0)).await?.address_id==seed.address_id);
-        println!("SCALE scanner_rounds=200 max_addresses={} rpc_requests={}",reader.max_addresses.load(Ordering::Relaxed),reader.requests.load(Ordering::Relaxed));
         let (first_page,_)=db::scan_address_page(&pool,CHAIN_ID,None).await?;
         for address in first_page {chain.balances.lock().unwrap().insert(address.address,U256::from(10_u64).pow(U256::from(18_u8)));}
         let custody_started=std::time::Instant::now();
@@ -1705,95 +1521,8 @@ async fn scale_rounds_are_bounded_and_eventually_cover_old_addresses_and_deposit
         ensure!(chain.balance_reads.lock().unwrap().iter().all(|(_,a)|a.len()<=1_000));
         ensure!(custody_started.elapsed()<StdDuration::from_secs(5));
         println!("SCALE custody_round={:?}",custody_started.elapsed());
-        chain.logs.lock().unwrap().push(transfer(223,0,4,route.asset.contract,Address::from([13;20]),seed.address,500));
-        for round in 0..200 {
-            let reconciler=reconciler(&pool,route.clone(),chain.clone())?;
-            if round==100 {
-                *chain.fail_logs_from.lock().unwrap()=Some(0);
-                ensure!(reconciler.check(CheckName::MissingDeposit).await.is_err());
-                *chain.fail_logs_from.lock().unwrap()=None;
-            }
-            reconciler.check(CheckName::MissingDeposit).await?;
-        }
-        ensure!(deposit(&pool,deposit_id(CHAIN_ID,B256::from([223;32]),0)).await?.address_id==seed.address_id,"old address omitted by paged reconciliation");
-        let next:i64=sqlx::query_scalar("SELECT next_block FROM reconciliation_deposit_cursors WHERE chain_id=$1").bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
-        ensure!(next==6);
         Ok(())
     })).await
-}
-
-struct ScaleReader {
-    payments: Vec<TransferLog>,
-    requests: AtomicUsize,
-    max_addresses: AtomicUsize,
-}
-impl ScaleReader {
-    fn logs(&self, addresses: &[Address], from: u64, to: u64) -> Vec<TransferLog> {
-        self.requests.fetch_add(1, Ordering::Relaxed);
-        self.max_addresses
-            .fetch_max(addresses.len(), Ordering::Relaxed);
-        self.payments
-            .iter()
-            .filter(|payment| {
-                addresses.contains(&payment.to) && (from..=to).contains(&payment.block_number)
-            })
-            .cloned()
-            .collect()
-    }
-}
-impl ChainReader for ScaleReader {
-    async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
-        Ok(FinalizedHead {
-            number: 5,
-            time: Utc::now(),
-        })
-    }
-    async fn factory_logs(
-        &self,
-        _factory: Address,
-        _addresses: &[Address],
-        _from: u64,
-        _to: u64,
-    ) -> Result<Vec<topup_adapters::chain::evm::FactoryLog>, ChainError> {
-        Ok(Vec::new())
-    }
-    async fn transfer_logs_to(
-        &self,
-        addresses: &[Address],
-        from: u64,
-        to: u64,
-    ) -> Result<Vec<TransferLog>, ChainError> {
-        Ok(self.logs(addresses, from, to))
-    }
-    async fn token_transfers(
-        &self,
-        _tokens: &[Address],
-        addresses: &std::collections::BTreeSet<Address>,
-        from: u64,
-        to: u64,
-    ) -> Result<Vec<TransferLog>, ChainError> {
-        Ok(self.logs(&addresses.iter().copied().collect::<Vec<_>>(), from, to))
-    }
-    async fn confirmation_heads(
-        &self,
-        _confirmations: topup_core::route::Confirmations,
-    ) -> Result<topup_core::route::ChainHeads, ChainError> {
-        Ok(topup_core::route::ChainHeads {
-            latest: Some(5),
-            safe: Some(5),
-            finalized: 5,
-        })
-    }
-    async fn receipt_transfer(
-        &self,
-        _tx: B256,
-        _index: u64,
-    ) -> Result<topup_adapters::chain::evm::ReceiptLookup, ChainError> {
-        Ok(topup_adapters::chain::evm::ReceiptLookup::Missing)
-    }
-    async fn nonce_at(&self, _address: Address, _block: u64) -> Result<u64, ChainError> {
-        Ok(0)
-    }
 }
 
 #[tokio::test]

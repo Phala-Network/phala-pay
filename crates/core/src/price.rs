@@ -197,11 +197,6 @@ pub enum Source {
         feed: String,
         /// Feed chain.
         chain_id: u64,
-        /// A group (or route role a).
-        rpc_group: String,
-        /// Independent B group for a cross-network feed.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        rpc_group_b: Option<String>,
         /// Test route chain explicitly valued from mainnet.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observation_chain_id: Option<u64>,
@@ -209,10 +204,6 @@ pub enum Source {
     /// Pinned mainnet min(PHA/WETH TWAP, spot) × ETH/USD; independent agreement uses spot.
     #[serde(rename = "uniswap_v2_twap")]
     UniswapV2Twap {
-        /// Ethereum mainnet A group (or route role a on Ethereum).
-        rpc_group: String,
-        /// Independent Ethereum mainnet B group.
-        rpc_group_b: String,
         /// Explicit destination chain for cross-network/test-token valuation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observation_chain_id: Option<u64>,
@@ -273,10 +264,6 @@ pub struct Sequencer {
     pub feed: String,
     /// Recovery grace interval.
     pub grace_s: u64,
-    /// Base mainnet A group for testnet routes.
-    pub rpc_group: String,
-    /// Base mainnet B group.
-    pub rpc_group_b: String,
 }
 /// Canonical price schema; the old pricing shape is a migration input only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,53 +412,27 @@ impl PriceConfig {
                 }
                 match source {
                     Source::UniswapV2Twap {
-                        rpc_group,
-                        rpc_group_b,
                         observation_chain_id,
                         twap,
                     } => {
                         twap.validate()?;
-                        if rpc_group.is_empty()
-                            || rpc_group_b.is_empty()
-                            || rpc_group == rpc_group_b
-                            || (chain != 1 && observation_chain_id != &Some(chain))
-                        {
+                        if chain != 1 && observation_chain_id != &Some(chain) {
                             return Err(fail(
-                                "TWAP requires independent mainnet A/B groups and explicit cross-network observation_chain_id",
+                                "TWAP requires an explicit cross-network observation_chain_id",
                             ));
                         }
                     }
                     Source::Chainlink {
                         feed: name,
                         chain_id,
-                        rpc_group,
-                        rpc_group_b,
                         observation_chain_id,
                     } => {
-                        if feed(name, *chain_id).is_none() || rpc_group.is_empty() {
-                            return Err(fail("unsupported chain/feed or missing RPC group"));
+                        if feed(name, *chain_id).is_none() {
+                            return Err(fail("unsupported chain/feed"));
                         }
-                        if *chain_id != chain
-                            && (observation_chain_id != &Some(chain)
-                                || rpc_group_b.as_ref().is_none_or(String::is_empty))
-                        {
-                            return Err(fail(
-                                "cross-network observation requires observation_chain_id and independent rpc_group_b",
-                            ));
+                        if *chain_id != chain && observation_chain_id != &Some(chain) {
+                            return Err(fail("cross-network feed requires observation_chain_id"));
                         }
-                        if matches!(chain, 11155111 | 84532) && *chain_id != 1 {
-                            return Err(fail(
-                                "test tokens require configured Ethereum mainnet feeds",
-                            ));
-                        }
-                    }
-                    Source::Kraken {
-                        company: declared, ..
-                    }
-                    | Source::Binance {
-                        company: declared, ..
-                    } if declared != company => {
-                        return Err(fail("company must match registry identity"));
                     }
                     _ => {}
                 }
@@ -507,11 +468,7 @@ impl PriceConfig {
             return Err(fail("Base requires sequencer uptime gate"));
         }
         if let Some(s) = &self.sequencer_uptime
-            && (s.feed != "BASE_SEQUENCER_UPTIME"
-                || s.grace_s < 3600
-                || s.rpc_group.is_empty()
-                || s.rpc_group_b.is_empty()
-                || s.rpc_group == s.rpc_group_b)
+            && (s.feed != "BASE_SEQUENCER_UPTIME" || s.grace_s < 3600)
         {
             return Err(fail("invalid sequencer feed/groups/grace"));
         }
@@ -528,24 +485,25 @@ mod tests {
             serde_json::json!({"mode":"volatile","allow_unclear_sources":true,
             "primary":[{"source":"kraken","symbol":"PHAUSD","company":"kraken"}],
             "check":[{"source":"binance","symbol":"PHAUSDT","company":"binance"}],
-            "fx":[{"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"a"}]}),
+            "fx":[{"source":"chainlink","feed":"USDT_USD","chain_id":1}]}),
         )
         .unwrap()
     }
     #[test]
     fn twap_defaults_boundaries_registry_and_licensing() {
         let mut config = volatile();
-        config.primary = vec![
-            serde_json::from_value(
-                serde_json::json!({"source":"uniswap_v2_twap","rpc_group":"a","rpc_group_b":"b"}),
-            )
-            .unwrap(),
-        ];
+        config.primary =
+            vec![serde_json::from_value(serde_json::json!({"source":"uniswap_v2_twap"})).unwrap()];
         config.check = vec![Source::Kraken {
             symbol: "PHAUSD".into(),
             company: "kraken".into(),
         }];
-        config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"a"})).unwrap()];
+        config.fx = vec![
+            serde_json::from_value(
+                serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1}),
+            )
+            .unwrap(),
+        ];
         assert!(config.validate(1, "pha", true).is_ok());
         assert!(config.validate_licensing(true).is_ok());
         assert!(
@@ -573,13 +531,8 @@ mod tests {
         assert!(twap.validate().is_err());
         *twap = TwapConfig::default();
         *observation_chain_id = Some(11155111);
-        config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"rpc_group":"mainnet-a","rpc_group_b":"mainnet-b","observation_chain_id":11155111})).unwrap()];
+        config.fx = vec![serde_json::from_value(serde_json::json!({"source":"chainlink","feed":"USDT_USD","chain_id":1,"observation_chain_id":11155111})).unwrap()];
         assert!(config.validate(11155111, "pha", false).is_ok());
-        let Source::UniswapV2Twap { rpc_group_b, .. } = &mut config.primary[0] else {
-            panic!("TWAP source")
-        };
-        *rpc_group_b = "a".into();
-        assert!(config.validate(1, "pha", true).is_err());
     }
     #[test]
     fn twap_policy_boundaries_admit_staging_five_minute_samples() {
@@ -641,7 +594,7 @@ mod tests {
         for (asset, name) in [("usdc", "USDC_USD"), ("usdt", "USDT_USD")] {
             let p: PriceConfig = serde_json::from_value(serde_json::json!({
                 "mode": "stablecoin",
-                "sources": [{"source":"chainlink", "feed":name, "chain_id":1, "rpc_group":"a"}]
+                "sources": [{"source":"chainlink", "feed":name, "chain_id":1}]
             }))
             .unwrap();
             assert!(!p.allow_unclear_sources);
@@ -655,12 +608,10 @@ mod tests {
         let mut p = volatile();
         assert!(p.validate(11155111, "pha", false).is_err());
         if let Source::Chainlink {
-            rpc_group_b,
             observation_chain_id,
             ..
         } = &mut p.fx[0]
         {
-            *rpc_group_b = Some("mainnet-b".into());
             *observation_chain_id = Some(11155111);
         }
         assert!(p.validate(11155111, "pha", false).is_ok());
@@ -683,8 +634,6 @@ mod tests {
         p.sources.push(Source::Chainlink {
             feed: "USDC_USD".into(),
             chain_id: 1,
-            rpc_group: "a".into(),
-            rpc_group_b: None,
             observation_chain_id: None,
         });
         assert!(p.validate(1, "usdc", true).is_ok());

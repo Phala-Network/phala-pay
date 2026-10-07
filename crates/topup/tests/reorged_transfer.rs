@@ -18,7 +18,7 @@ use topup::db::{self, NewDeposit};
 use topup::finality::{FinalityWatch, WatchStats};
 use topup::pump::{Pump, PumpConfig, RunOnceResult, StepSet};
 use topup::routes::RouteSet;
-use topup::scanner::{ChainRoutes, chain_routes, scan_once};
+use topup::scanner::{ChainRoutes, chain_routes, coverage_once};
 use topup::steps::confirm::ConfirmStep;
 use topup::steps::screen::{ScreenRoute, ScreenStep};
 use topup_adapters::chain::evm::{
@@ -60,7 +60,6 @@ async fn a_changed_amount_reverses_the_deposit_and_credits_the_new_transfer_once
             // The finalized scanner and the reconciler read the new transfer while the old deposit
             // still holds the position: nothing is recorded.
             ensure!(chain.finalized_scan().await? == 0);
-            ensure!(chain.reconciler_scan(&new).await? == 0);
 
             // At finality the watch reverses the old deposit and records the new transfer.
             let stats = chain.watch().await?;
@@ -72,7 +71,6 @@ async fn a_changed_amount_reverses_the_deposit_and_credits_the_new_transfer_once
                 .await?;
 
             // Read again, the transfer is a duplicate of the new deposit.
-            ensure!(chain.reconciler_scan(&new).await? == 0);
             ensure!(chain.watch().await?.reversed == 0);
             chain
                 .assert_replaced(old, successor, chain.recipient_id, 90)
@@ -94,7 +92,6 @@ async fn a_recipient_moved_to_another_issued_address_is_credited_there_once() ->
             ensure!(stats.reversed == 1, "{stats:?}");
             let successor = chain.successor(chain.other_id, 100).await?;
             ensure!(chain.finalized_scan().await? == 0);
-            ensure!(chain.reconciler_scan(&new).await? == 0);
             chain.settle().await?;
             chain
                 .assert_replaced(old, successor, chain.other_id, 100)
@@ -112,7 +109,6 @@ async fn an_unchanged_re_inclusion_keeps_its_deposit() -> Result<()> {
             let new = chain.reorg(transfer(chain.recipient, 11, 0xbb, 100));
 
             ensure!(chain.finalized_scan().await? == 0);
-            ensure!(chain.reconciler_scan(&new).await? == 0);
             let stats = chain.watch().await?;
             ensure!(stats.finalized == 1 && stats.reversed == 0, "{stats:?}");
             chain.settle().await?;
@@ -153,7 +149,6 @@ async fn a_successor_of_an_unsupported_token_is_rejected_once() -> Result<()> {
 
             // Read again by the scanners, the transfer is a duplicate.
             ensure!(chain.finalized_scan().await? == 0);
-            ensure!(chain.reconciler_scan(&new).await? == 0);
             chain.settle().await?;
             ensure!(chain.count("SELECT count(*) FROM deposits").await? == 2);
             ensure!(
@@ -276,6 +271,18 @@ impl ScriptedChain {
 }
 
 impl ChainReader for ScriptedChain {
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        Ok((
+            self.state(|state| {
+                state
+                    .transfer
+                    .as_ref()
+                    .filter(|log| log.block_number == number)
+                    .map_or(B256::repeat_byte(0x55), |log| log.block_hash)
+            }),
+            BLOCK_TIME,
+        ))
+    }
     async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
         Ok(FinalizedHead {
             number: self.state(|state| state.finalized),
@@ -332,6 +339,10 @@ impl ChainReader for ScriptedChain {
             Some(log) if log.tx_hash == tx_hash => ReceiptLookup::Included {
                 block_number: log.block_number,
                 block_hash: log.block_hash,
+                block_time: log.block_time,
+                status: true,
+                tx_from: log.tx_from,
+                tx_nonce: log.tx_nonce,
                 transfer: (log.receipt_log_index == receipt_log_index)
                     .then(|| Box::new(log.clone())),
             },
@@ -502,9 +513,11 @@ impl Scenario {
 
     /// The chain's finalized scanner pass; returns the deposits it recorded.
     async fn finalized_scan(&self) -> Result<u64> {
-        Ok(scan_once(&self.pool, &self.chain, &self.routes)
-            .await?
-            .inserted)
+        Ok(
+            coverage_once(&self.pool, &self.chain, &self.chain, &self.routes, 1)
+                .await?
+                .inserted,
+        )
     }
 
     /// The per-block scan's commit of `transfer`, read at the route's confirmation; returns the
@@ -513,16 +526,6 @@ impl Scenario {
         let deposit = self.deposit_of(transfer)?;
         Ok(
             db::commit_confirmed_scan(&self.pool, CHAIN_ID, &[deposit], transfer.block_number)
-                .await?
-                .inserted,
-        )
-    }
-
-    /// The reconciler's missing-deposit repair of `transfer`; returns the deposits it recorded.
-    async fn reconciler_scan(&self, transfer: &TransferLog) -> Result<u64> {
-        let deposit = self.deposit_of(transfer)?;
-        Ok(
-            db::commit_scan(&self.pool, CHAIN_ID, &[deposit], &[], None, None)
                 .await?
                 .inserted,
         )
@@ -743,6 +746,7 @@ struct ClearSanctions;
 impl SanctionsSource for ClearSanctions {
     async fn sanctions(&self, _address: Address, block_number: u64) -> SanctionsResult {
         SanctionsResult {
+            block_hash: None,
             provider_a: SanctionsAnswer::Clear,
             provider_b: SanctionsAnswer::Clear,
             block_number,

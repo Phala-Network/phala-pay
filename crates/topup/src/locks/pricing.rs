@@ -1,9 +1,5 @@
 //! Shared fail-closed pricing for quotes and deposit credit.
-use crate::{
-    observability::price_metrics,
-    routes::RouteSet,
-    rpc_groups::{BASE_CHAIN_ID, price_pair},
-};
+use crate::{observability::price_metrics, routes::RouteSet};
 use chrono::Utc;
 use futures_util::{
     FutureExt,
@@ -67,6 +63,7 @@ fn fresh(bound: u64, observed_at: UnixSeconds, now: UnixSeconds) -> bool {
         .is_some_and(|age| age <= bound)
 }
 // One Ethereum slot; each cached use still checks the source freshness limits.
+const BASE_CHAIN_ID: u64 = 8453;
 const SOURCE_REUSE: Duration = Duration::from_secs(12);
 // Bound an individual source on long-running confirm steps, capped by its caller deadline.
 const SOURCE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -286,9 +283,15 @@ impl SharedSource {
             .get(reuse, arrived, deadline, reusable, || {
                 let inner = self.inner.clone();
                 async move {
-                    tokio::time::timeout_at(deadline, inner.quote())
-                        .await
-                        .map_err(|_| PriceError::Timeout)?
+                    tokio::time::timeout_at(deadline, async {
+                        if reuse.is_zero() {
+                            inner.quote_since(arrived).await
+                        } else {
+                            inner.quote().await
+                        }
+                    })
+                    .await
+                    .map_err(|_| PriceError::Timeout)?
                 }
                 .boxed()
             })
@@ -306,7 +309,29 @@ struct SharedSequencer {
     coalesced: Coalesced<Value>,
 }
 impl SharedSequencer {
+    #[cfg(test)]
     async fn evidence(&self, deadline: tokio::time::Instant) -> Result<Value, PriceError> {
+        self.evidence_for(Reuse::Ttl, deadline).await
+    }
+    async fn evidence_for(
+        &self,
+        reuse: Reuse,
+        deadline: tokio::time::Instant,
+    ) -> Result<Value, PriceError> {
+        let (purpose, arrived) = match reuse {
+            Reuse::Ttl => (
+                topup_adapters::pricing::snapshot::SnapshotUse::Quote,
+                tokio::time::Instant::now(),
+            ),
+            Reuse::Fresh => (
+                topup_adapters::pricing::snapshot::SnapshotUse::Confirm,
+                tokio::time::Instant::now(),
+            ),
+            Reuse::Since(arrived) => (
+                topup_adapters::pricing::snapshot::SnapshotUse::Confirm,
+                arrived,
+            ),
+        };
         self.coalesced
             .get(
                 Duration::ZERO,
@@ -317,9 +342,12 @@ impl SharedSequencer {
                     let inner = self.inner.clone();
                     let grace_s = self.grace_s;
                     async move {
-                        tokio::time::timeout_at(deadline, inner.sequencer(grace_s))
-                            .await
-                            .map_err(|_| PriceError::Timeout)?
+                        tokio::time::timeout_at(
+                            deadline,
+                            inner.sequencer_since(grace_s, purpose, arrived),
+                        )
+                        .await
+                        .map_err(|_| PriceError::Timeout)?
                     }
                     .boxed()
                 },
@@ -339,19 +367,13 @@ enum SourceKey {
     Chainlink {
         feed: String,
         chain_id: u64,
-        group_a: String,
-        group_b: String,
     },
     UniswapV2Twap {
-        a: String,
-        b: String,
         config: topup_core::price::TwapConfig,
     },
     Sequencer {
         feed: String,
         chain_id: u64,
-        group_a: usize,
-        group_b: usize,
         grace_s: u64,
     },
 }
@@ -379,13 +401,91 @@ pub type PricingRuntimes = Arc<BTreeMap<(String, u64), Arc<PricingRuntime>>>;
 impl PricingRuntime {
     /// Builds one shared pricing runtime for every attested route version.
     pub fn build_all(routes: &RouteSet, pool: sqlx::PgPool) -> Result<PricingRuntimes, String> {
+        let mut calls =
+            BTreeMap::<u64, Vec<(alloy_primitives::Address, alloy_primitives::Bytes)>>::new();
+        let mut policies = std::collections::BTreeSet::new();
+        for route in routes.routes() {
+            for (_, list) in route.pricing.roles() {
+                for source in list {
+                    match source {
+                        Source::Chainlink {
+                            feed: name,
+                            chain_id,
+                            ..
+                        } => calls.entry(*chain_id).or_default().extend(
+                            topup_adapters::pricing::chainlink::calls(
+                                feed(name, *chain_id).ok_or("unsupported feed")?,
+                            )
+                            .map_err(|e| e.to_string())?,
+                        ),
+                        Source::UniswapV2Twap { twap, .. } => {
+                            calls
+                                .entry(1)
+                                .or_default()
+                                .extend(topup_adapters::pricing::uniswap_v2::calls());
+                            calls.entry(1).or_default().extend(
+                                topup_adapters::pricing::chainlink::calls(
+                                    feed("ETH_USD", 1).ok_or("unsupported feed")?,
+                                )
+                                .map_err(|e| e.to_string())?,
+                            );
+                            policies.insert(twap.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if let Some(sequencer) = &route.pricing.sequencer_uptime {
+                calls.entry(BASE_CHAIN_ID).or_default().extend(
+                    topup_adapters::pricing::chainlink::calls(
+                        feed(&sequencer.feed, BASE_CHAIN_ID).ok_or("unsupported sequencer")?,
+                    )
+                    .map_err(|e| e.to_string())?,
+                );
+            }
+        }
+        let store: Arc<dyn topup_adapters::pricing::uniswap_v2::ObservationStore> =
+            Arc::new(if routes.staging() {
+                crate::db::pricing::TwapStore::staging(pool.clone())
+            } else {
+                crate::db::pricing::TwapStore::new(pool.clone())
+            });
+        let budget: Arc<dyn topup_adapters::pricing::snapshot::SnapshotBudget> =
+            Arc::new(crate::db::pricing::PriceBudget(pool));
+        let mut snapshots = BTreeMap::new();
+        for (chain, calls) in calls {
+            let mut snapshot = topup_adapters::pricing::snapshot::Snapshots::new(
+                chain,
+                routes
+                    .provider(chain, 0)
+                    .map_err(|e| e.to_string())?
+                    .clone(),
+                routes
+                    .provider(chain, 1)
+                    .map_err(|e| e.to_string())?
+                    .clone(),
+                calls,
+                Some(budget.clone()),
+            );
+            if chain == 1 {
+                for policy in &policies {
+                    snapshot = snapshot.with_twap_guard(policy.clone(), store.clone());
+                }
+            }
+            snapshots.insert(chain, Arc::new(snapshot));
+        }
         let mut runtimes = BTreeMap::new();
         let mut sources = BTreeMap::new();
         let mut sequencers = BTreeMap::new();
         for route in routes.routes() {
             let key = (route.route.clone(), route.version);
-            let runtime =
-                Self::configured(route, routes, pool.clone(), &mut sources, &mut sequencers)?;
+            let runtime = Self::configured(
+                route,
+                &snapshots,
+                store.clone(),
+                &mut sources,
+                &mut sequencers,
+            )?;
             if runtimes.insert(key.clone(), Arc::new(runtime)).is_some() {
                 return Err(format!(
                     "duplicate pricing runtime for route `{}` version {}",
@@ -398,8 +498,8 @@ impl PricingRuntime {
     /// Constructs only explicitly configured sources, never a restricted default.
     fn configured(
         route: &RouteFile,
-        routes: &RouteSet,
-        pool: sqlx::PgPool,
+        snapshots: &BTreeMap<u64, Arc<topup_adapters::pricing::snapshot::Snapshots>>,
+        store: Arc<dyn topup_adapters::pricing::uniswap_v2::ObservationStore>,
         sources: &mut BTreeMap<SourceKey, Arc<SharedSource>>,
         sequencers: &mut BTreeMap<SourceKey, Arc<SharedSequencer>>,
     ) -> Result<Self, String> {
@@ -443,53 +543,51 @@ impl PricingRuntime {
                                 ))
                             },
                         )?,
-                        Source::UniswapV2Twap { twap, .. } => {
-                            let (a, b, _) = price_pair(route, s)?;
-                            SharedSource::get_or_build(
-                                sources,
-                                SourceKey::UniswapV2Twap {
-                                    a: a.clone(),
-                                    b: b.clone(),
-                                    config: twap.clone(),
-                                },
-                                SOURCE_REUSE,
-                                source_id,
-                                s.company(),
-                                || {
-                                    Ok(Arc::new(
-                                        UniswapV2::new(
-                                            routes.resolved_price_group(&a)?,
-                                            routes.resolved_price_group(&b)?,
-                                            twap.clone(),
-                                            Arc::new(crate::db::pricing::TwapStore(pool.clone())),
-                                        )
-                                        .map_err(|e| e.to_string())?,
-                                    ))
-                                },
-                            )?
-                        }
-                        Source::Chainlink { feed: name, .. } => {
-                            let (a, b, chain) = price_pair(route, s)?;
-                            SharedSource::get_or_build(
-                                sources,
-                                SourceKey::Chainlink {
-                                    feed: name.clone(),
-                                    chain_id: chain,
-                                    group_a: a.clone(),
-                                    group_b: b.clone(),
-                                },
-                                SOURCE_REUSE,
-                                source_id,
-                                s.company(),
-                                || {
-                                    Ok(Arc::new(Chainlink::new(
-                                        routes.resolved_price_group(&a)?,
-                                        routes.resolved_price_group(&b)?,
-                                        feed(name, chain).ok_or("unsupported feed")?,
-                                    )))
-                                },
-                            )?
-                        }
+                        Source::UniswapV2Twap { twap, .. } => SharedSource::get_or_build(
+                            sources,
+                            SourceKey::UniswapV2Twap {
+                                config: twap.clone(),
+                            },
+                            SOURCE_REUSE,
+                            source_id,
+                            s.company(),
+                            || {
+                                Ok(Arc::new(
+                                    UniswapV2::with_snapshots(
+                                        snapshots
+                                            .get(&1)
+                                            .ok_or("missing Ethereum snapshots")?
+                                            .clone(),
+                                        twap.clone(),
+                                        store.clone(),
+                                    )
+                                    .map_err(|e| e.to_string())?,
+                                ))
+                            },
+                        )?,
+                        Source::Chainlink {
+                            feed: name,
+                            chain_id: chain,
+                            ..
+                        } => SharedSource::get_or_build(
+                            sources,
+                            SourceKey::Chainlink {
+                                feed: name.clone(),
+                                chain_id: *chain,
+                            },
+                            SOURCE_REUSE,
+                            source_id,
+                            s.company(),
+                            || {
+                                Ok(Arc::new(Chainlink::with_snapshots(
+                                    snapshots
+                                        .get(chain)
+                                        .ok_or("missing chain snapshots")?
+                                        .clone(),
+                                    feed(name, *chain).ok_or("unsupported feed")?,
+                                )))
+                            },
+                        )?,
                     };
                     let max_age_s = match s {
                         Source::UniswapV2Twap { twap, .. } => Some(twap.max_sample_age_s),
@@ -522,22 +620,20 @@ impl PricingRuntime {
             .sequencer_uptime
             .as_ref()
             .map(|s| -> Result<_, String> {
-                let a = routes.price_group(route, &s.rpc_group)?;
-                let b = routes.price_group(route, &s.rpc_group_b)?;
                 let key = SourceKey::Sequencer {
                     feed: s.feed.clone(),
                     chain_id: BASE_CHAIN_ID,
-                    group_a: Arc::as_ptr(&a) as usize,
-                    group_b: Arc::as_ptr(&b) as usize,
                     grace_s: s.grace_s,
                 };
                 if let Some(sequencer) = sequencers.get(&key) {
                     return Ok(sequencer.clone());
                 }
                 let sequencer = Arc::new(SharedSequencer {
-                    inner: Arc::new(Chainlink::new(
-                        a,
-                        b,
+                    inner: Arc::new(Chainlink::with_snapshots(
+                        snapshots
+                            .get(&BASE_CHAIN_ID)
+                            .ok_or("missing Base snapshots")?
+                            .clone(),
                         feed(&s.feed, BASE_CHAIN_ID).ok_or("unsupported sequencer feed")?,
                     )),
                     grace_s: s.grace_s,
@@ -557,25 +653,21 @@ impl PricingRuntime {
         })
     }
     /// Accumulate TWAP history even when no merchant requests a quote.
-    pub async fn sample_twaps(&self, route: &RouteFile, arrived: tokio::time::Instant) {
-        for (role, entries) in [("primary", &self.primary), ("check", &self.check)] {
-            for entry in entries.iter().filter(|e| e.company == "uniswap-v2-onchain") {
-                let mut audit = Audit::default();
-                if let Err(failure) = observe(
-                    entry,
-                    route,
-                    role,
-                    &mut audit,
-                    Reuse::Since(arrived),
-                    tokio::time::Instant::now() + SOURCE_TIMEOUT,
-                )
-                .await
-                {
-                    price_metrics::failure(route, &failure);
-                }
+    pub async fn sample_twaps(&self, route: &RouteFile, _arrived: tokio::time::Instant) {
+        for entry in self
+            .primary
+            .iter()
+            .chain(&self.check)
+            .filter(|e| e.company == "uniswap-v2-onchain")
+        {
+            let deadline = tokio::time::Instant::now() + SOURCE_TIMEOUT;
+            match tokio::time::timeout_at(deadline, entry.source.inner.sample()).await {
+                Ok(Ok(_)) => {}
+                _ => price_metrics::failure(route, &PricingFailure::new("price_unavailable")),
             }
         }
     }
+
     /// Injects independent adapters for deterministic tests.
     pub fn injected(
         primary: Arc<dyn PriceSource>,
@@ -649,6 +741,11 @@ impl PricingRuntime {
         reuse: Reuse,
         deadline: tokio::time::Instant,
     ) -> Result<ValidatedQuote, PricingFailure> {
+        let reuse = if matches!(reuse, Reuse::Fresh) {
+            Reuse::Since(tokio::time::Instant::now())
+        } else {
+            reuse
+        };
         let result = self.fetch_inner(route, reuse, deadline).await;
         if let Err(evidence) = &result {
             price_metrics::failure(route, evidence);
@@ -679,7 +776,10 @@ impl PricingRuntime {
         };
         if let Some(sequencer) = &self.sequencer {
             match sequencer
-                .evidence(deadline.min(tokio::time::Instant::now() + SOURCE_TIMEOUT))
+                .evidence_for(
+                    reuse,
+                    deadline.min(tokio::time::Instant::now() + SOURCE_TIMEOUT),
+                )
                 .await
             {
                 Ok(evidence) => audit.sequencer = Some(evidence),
@@ -916,6 +1016,10 @@ async fn observe(
             (evidence, Some(quote))
         }
         Err(error) => {
+            if error == PriceError::SnapshotBudgetExhausted {
+                audit.decision = Some("price_unavailable");
+                return Err(PricingFailure::with_audit("price_unavailable", audit));
+            }
             let code = error_code(&error);
             let mut evidence = json!({"role":role,"company":entry.company,"source":entry.source_id,"descriptor":entry.descriptor,"error":code,"data": match &error {PriceError::Feed {evidence,..} => evidence.clone(), _ => Value::Null}});
             if let Some(age_ms) = cached_age_ms {
@@ -1126,112 +1230,6 @@ mod tests {
             ))
             .unwrap(),
             golden_failure("depeg", &golden_audit("stablecoin", "depeg", &stable)).as_bytes()
-        );
-    }
-
-    fn reversed_group_route() -> RouteFile {
-        let mut route = route();
-        route.chain.rpc_providers = vec!["b".into(), "a".into()];
-        route.pricing.fx = vec![Source::Chainlink {
-            feed: "USDT_USD".into(),
-            chain_id: 1,
-            rpc_group: "a".into(),
-            rpc_group_b: None,
-            observation_chain_id: None,
-        }];
-        route
-    }
-
-    #[tokio::test]
-    async fn runtime_reads_the_reversed_pair_validation_approved() {
-        let route = reversed_group_route();
-        let now = validation_time().unwrap().value();
-        let a = topup_adapters::pricing::test_rpc::chainlink("a", 101_000_000, 20, 20, now, false)
-            .await;
-        let b = topup_adapters::pricing::test_rpc::chainlink("b", 100_000_000, 20, 20, now, false)
-            .await;
-        let expected = ("b".into(), "a".into(), 1);
-        assert_eq!(price_pair(&route, &route.pricing.fx[0]).unwrap(), expected);
-        assert_eq!(
-            crate::rpc_groups::price_pairs(&route).unwrap(),
-            vec![expected]
-        );
-        let clients = BTreeMap::from([
-            ("a".into(), a.client.clone()),
-            ("b".into(), b.client.clone()),
-        ]);
-        let routes = RouteSet::with_groups(vec![route.clone()], clients).unwrap();
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/pricing-regression")
-            .unwrap();
-        let runtime = PricingRuntime::configured(
-            &route,
-            &routes,
-            pool,
-            &mut BTreeMap::new(),
-            &mut BTreeMap::new(),
-        )
-        .unwrap();
-        let error = runtime.fx[0]
-            .source
-            .quote_shared(test_deadline())
-            .await
-            .unwrap_err();
-        let PriceError::Feed { class, evidence } = error else {
-            panic!("expected A/B disagreement, got {error:?}");
-        };
-        assert_eq!(class, "divergent");
-        // Distinct answers pin both the identity and the order of the groups actually read.
-        assert_eq!(evidence["a"]["answer"], "100000000");
-        assert_eq!(evidence["b"]["answer"], "101000000");
-
-        let mut route = route;
-        route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
-            feed: "BASE_SEQUENCER_UPTIME".into(),
-            grace_s: 3600,
-            rpc_group: "a".into(),
-            rpc_group_b: "b".into(),
-        });
-        let (a, b, chain) = crate::rpc_groups::price_pairs(&route)
-            .unwrap()
-            .pop()
-            .unwrap();
-        assert!(
-            chain == BASE_CHAIN_ID
-                && Arc::ptr_eq(
-                    &routes.resolved_price_group(&a).unwrap(),
-                    &routes.price_group(&route, "a").unwrap()
-                )
-                && Arc::ptr_eq(
-                    &routes.resolved_price_group(&b).unwrap(),
-                    &routes.price_group(&route, "b").unwrap()
-                )
-        );
-    }
-
-    #[test]
-    fn validation_rejects_a_price_pair_resolving_to_one_group() {
-        let mut route = reversed_group_route();
-        let Source::Chainlink { rpc_group_b, .. } = &mut route.pricing.fx[0] else {
-            unreachable!();
-        };
-        *rpc_group_b = Some("a".into());
-        let fixture: Value = serde_saphyr::from_str(
-            &include_str!("../../tests/fixtures/rpc-groups.yaml")
-                .replace("alchemy", "a")
-                .replace("quicknode", "b"),
-        )
-        .unwrap();
-        let groups = serde_json::from_value(fixture["rpc_groups"].clone()).unwrap();
-        let companies = serde_json::from_value(fixture["rpc_companies"].clone()).unwrap();
-        let budgets = serde_json::from_value(fixture["rpc_budgets"].clone()).unwrap();
-        assert_eq!(
-            crate::rpc_groups::price_pairs(&route).unwrap(),
-            vec![("b".into(), "b".into(), 1)]
-        );
-        assert_eq!(
-            crate::rpc_groups::validate(&[route], &groups, &companies, &budgets).unwrap_err(),
-            "price RPC A/B must have matching chain and disjoint companies"
         );
     }
 
@@ -2182,8 +2180,6 @@ mod tests {
         let mut a = route();
         a.chain.rpc_providers = vec!["a".into(), "b".into()];
         a.pricing.primary = vec![Source::UniswapV2Twap {
-            rpc_group: "a".into(),
-            rpc_group_b: "b".into(),
             observation_chain_id: None,
             twap: topup_core::price::TwapConfig::default(),
         }];
@@ -2194,8 +2190,7 @@ mod tests {
         a.pricing.fx = vec![Source::Chainlink {
             feed: "USDT_USD".into(),
             chain_id: 1,
-            rpc_group: "a".into(),
-            rpc_group_b: Some("b".into()),
+
             observation_chain_id: None,
         }];
         let mut b = a.clone();
@@ -2226,12 +2221,15 @@ mod tests {
             .await;
         let rb = topup_adapters::pricing::test_rpc::chainlink("b", 100_000_000, 20, 20, now, false)
             .await;
-        let routes = RouteSet::with_groups(
+        let routes = RouteSet::with_rpc(
             vec![a.clone(), b.clone()],
-            BTreeMap::from([
-                ("a".into(), ra.client.clone()),
-                ("b".into(), rb.client.clone()),
-            ]),
+            BTreeMap::from([(
+                1,
+                crate::chain_rpc::ChainRpc {
+                    read: ra.client.clone(),
+                    verify: rb.client.clone(),
+                },
+            )]),
         )
         .unwrap();
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -2248,271 +2246,6 @@ mod tests {
             assert!(Arc::ptr_eq(&a.source, &b.source));
         }
         assert_ne!(a.primary[0].descriptor, b.primary[0].descriptor);
-    }
-    #[tokio::test]
-    async fn different_adapter_identities_do_not_share_sources() {
-        let now = validation_time().unwrap().value();
-        let a_rpc =
-            topup_adapters::pricing::test_rpc::chainlink("a", 100_000_000, 20, 20, now, false)
-                .await;
-        let b_rpc =
-            topup_adapters::pricing::test_rpc::chainlink("b", 100_000_000, 20, 20, now, false)
-                .await;
-        let c_rpc =
-            topup_adapters::pricing::test_rpc::chainlink("c", 100_000_000, 20, 20, now, false)
-                .await;
-        let clients = BTreeMap::from([
-            ("a".into(), a_rpc.client.clone()),
-            ("b".into(), b_rpc.client.clone()),
-            ("c".into(), c_rpc.client.clone()),
-        ]);
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/shared-pricing")
-            .unwrap();
-        for case in ["policy", "group_a", "group_b", "swapped"] {
-            let [a, mut b] = pha_routes();
-            if let Source::UniswapV2Twap {
-                rpc_group,
-                rpc_group_b,
-                twap,
-                ..
-            } = &mut b.pricing.primary[0]
-            {
-                match case {
-                    "policy" => twap.window_s = 3600,
-                    "group_a" => *rpc_group = "c".into(),
-                    "group_b" => *rpc_group_b = "c".into(),
-                    _ => std::mem::swap(rpc_group, rpc_group_b),
-                }
-            }
-            if case != "policy"
-                && let Source::Chainlink {
-                    rpc_group,
-                    rpc_group_b,
-                    ..
-                } = &mut b.pricing.fx[0]
-            {
-                match case {
-                    "group_a" => *rpc_group = "c".into(),
-                    "group_b" => *rpc_group_b = Some("c".into()),
-                    _ => {
-                        *rpc_group = "b".into();
-                        *rpc_group_b = Some("a".into());
-                    }
-                }
-            }
-            let routes =
-                RouteSet::with_groups(vec![a.clone(), b.clone()], clients.clone()).unwrap();
-            let runtimes = PricingRuntime::build_all(&routes, pool.clone()).unwrap();
-            let a = &runtimes[&(a.route.clone(), a.version)];
-            let b = &runtimes[&(b.route.clone(), b.version)];
-            assert!(
-                !Arc::ptr_eq(&a.primary[0].source, &b.primary[0].source),
-                "{case}"
-            );
-            if case != "policy" {
-                assert!(!Arc::ptr_eq(&a.fx[0].source, &b.fx[0].source), "{case}");
-            }
-        }
-        let mut symbol_sources = BTreeMap::new();
-        for (kind, first, second) in [
-            ("kraken", "PHAUSD", "USDTUSD"),
-            ("binance", "PHAUSDT", "USDTUSD"),
-        ] {
-            let key = |symbol: &str| {
-                if kind == "kraken" {
-                    SourceKey::Kraken {
-                        symbol: symbol.into(),
-                    }
-                } else {
-                    SourceKey::Binance {
-                        symbol: symbol.into(),
-                    }
-                }
-            };
-            let a = SharedSource::get_or_build(
-                &mut symbol_sources,
-                key(first),
-                Duration::ZERO,
-                "symbol",
-                kind,
-                || Ok(CountingSource::new(Duration::ZERO)),
-            )
-            .unwrap();
-            let b = SharedSource::get_or_build(
-                &mut symbol_sources,
-                key(second),
-                Duration::ZERO,
-                "symbol",
-                kind,
-                || Ok(CountingSource::new(Duration::ZERO)),
-            )
-            .unwrap();
-            assert!(!Arc::ptr_eq(&a, &b), "{kind} symbol");
-        }
-        let mut a = route();
-        a.route = "symbol-a".into();
-        a.asset.symbol = "usdt".into();
-        a.pricing.mode = PricingMode::Stablecoin;
-        a.pricing.primary.clear();
-        a.pricing.check.clear();
-        a.pricing.fx.clear();
-        a.pricing.sources = vec![
-            Source::Kraken {
-                symbol: "USDCUSD".into(),
-                company: "kraken".into(),
-            },
-            Source::Kraken {
-                symbol: "USDTUSD".into(),
-                company: "kraken".into(),
-            },
-        ];
-        let mut b = a.clone();
-        b.route = "symbol-b".into();
-        b.asset.contract = alloy_primitives::Address::repeat_byte(2);
-        b.pricing.sources.swap(0, 1);
-        let routes = RouteSet::with_groups(vec![a.clone(), b.clone()], clients.clone()).unwrap();
-        let runtimes = PricingRuntime::build_all(&routes, pool.clone()).unwrap();
-        let a = &runtimes[&(a.route.clone(), a.version)];
-        let b = &runtimes[&(b.route.clone(), b.version)];
-        assert!(
-            !Arc::ptr_eq(&a.sources[0].source, &b.sources[0].source),
-            "configured symbol"
-        );
-        for (label, grace_s, group_a) in [("grace", 3601, "a"), ("group_a", 3600, "c")] {
-            let [mut a, mut b] = pha_routes();
-            for (index, route) in [&mut a, &mut b].into_iter().enumerate() {
-                route.chain.rpc_providers = vec!["a".into(), "b".into()];
-                route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
-                    feed: "BASE_SEQUENCER_UPTIME".into(),
-                    rpc_group: if label == "group_a" && index == 1 {
-                        group_a
-                    } else {
-                        "a"
-                    }
-                    .into(),
-                    rpc_group_b: "b".into(),
-                    grace_s: if label == "grace" && index == 1 {
-                        grace_s
-                    } else {
-                        3600
-                    },
-                });
-            }
-            let routes =
-                RouteSet::with_groups(vec![a.clone(), b.clone()], clients.clone()).unwrap();
-            let runtimes = PricingRuntime::build_all(&routes, pool.clone()).unwrap();
-            let a = runtimes[&(a.route.clone(), a.version)]
-                .sequencer
-                .as_ref()
-                .unwrap();
-            let b = runtimes[&(b.route.clone(), b.version)]
-                .sequencer
-                .as_ref()
-                .unwrap();
-            assert!(!Arc::ptr_eq(a, b), "sequencer {label}");
-        }
-        let mut a = route();
-        a.chain.chain_id = 1;
-        a.chain.rpc_providers = vec!["a".into(), "b".into()];
-        a.asset.symbol = "usdt".into();
-        a.pricing.mode = PricingMode::Stablecoin;
-        a.pricing.primary.clear();
-        a.pricing.check.clear();
-        a.pricing.fx.clear();
-        a.pricing.sources = ["USDC_USD", "USDT_USD"]
-            .map(|name| Source::Chainlink {
-                feed: name.into(),
-                chain_id: 1,
-                rpc_group: "a".into(),
-                rpc_group_b: Some("b".into()),
-                observation_chain_id: None,
-            })
-            .to_vec();
-        let mut b = a.clone();
-        b.version += 1;
-        if let Source::Chainlink {
-            chain_id,
-            observation_chain_id,
-            ..
-        } = &mut b.pricing.sources[1]
-        {
-            *chain_id = 8453;
-            *observation_chain_id = Some(1);
-        }
-        let routes = RouteSet::with_groups(vec![a.clone(), b.clone()], clients).unwrap();
-        let runtimes = PricingRuntime::build_all(&routes, pool).unwrap();
-        let a = &runtimes[&(a.route.clone(), a.version)];
-        let b = &runtimes[&(b.route.clone(), b.version)];
-        assert!(
-            !Arc::ptr_eq(&a.sources[0].source, &a.sources[1].source),
-            "different feed"
-        );
-        assert!(
-            !Arc::ptr_eq(&a.sources[1].source, &b.sources[1].source),
-            "different feed chain"
-        );
-    }
-    #[tokio::test]
-    async fn sequencer_aliases_do_not_share_clients_across_chains() {
-        let [mut a, mut b] = pha_routes();
-        a.chain.chain_id = 8453;
-        b.chain.chain_id = 84532;
-        for route in [&mut a, &mut b] {
-            route.chain.rpc_providers = vec!["provider-a".into(), "provider-b".into()];
-            route.pricing.primary = vec![Source::Kraken {
-                symbol: "PHAUSD".into(),
-                company: "kraken".into(),
-            }];
-            route.pricing.check = vec![Source::Binance {
-                symbol: "PHAUSDT".into(),
-                company: "binance".into(),
-            }];
-            route.pricing.fx = vec![Source::Kraken {
-                symbol: "USDTUSD".into(),
-                company: "kraken".into(),
-            }];
-            route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
-                feed: "BASE_SEQUENCER_UPTIME".into(),
-                rpc_group: "a".into(),
-                rpc_group_b: "b".into(),
-                grace_s: 3600,
-            });
-        }
-        let routes = RouteSet::with_providers(
-            vec![a.clone(), b.clone()],
-            &BTreeMap::from([
-                (
-                    "provider-a".into(),
-                    crate::rpc_provider::ProviderUrl::parse("http://127.0.0.1:1").unwrap(),
-                ),
-                (
-                    "provider-b".into(),
-                    crate::rpc_provider::ProviderUrl::parse("http://127.0.0.1:2").unwrap(),
-                ),
-            ]),
-        )
-        .unwrap();
-        assert!(!Arc::ptr_eq(
-            &routes.price_group(&a, "a").unwrap(),
-            &routes.price_group(&b, "a").unwrap()
-        ));
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/shared-pricing")
-            .unwrap();
-        let runtimes = PricingRuntime::build_all(&routes, pool).unwrap();
-        let a = runtimes[&(a.route.clone(), a.version)]
-            .sequencer
-            .as_ref()
-            .unwrap();
-        let b = runtimes[&(b.route.clone(), b.version)]
-            .sequencer
-            .as_ref()
-            .unwrap();
-        assert!(
-            !Arc::ptr_eq(a, b),
-            "per-chain alias clients cannot share a sequencer"
-        );
     }
     #[tokio::test(start_paused = true)]
     async fn sampler_fetches_pair_once_per_interval_across_routes() {
@@ -2724,6 +2457,12 @@ mod tests {
     }
     #[async_trait]
     impl topup_adapters::pricing::uniswap_v2::ObservationStore for CountingStore {
+        async fn history(
+            &self,
+            _: &topup_core::price::TwapConfig,
+        ) -> Result<Vec<topup_adapters::pricing::uniswap_v2::Sample>, PriceError> {
+            Ok(self.history.lock().await.clone())
+        }
         async fn latest(
             &self,
             _: &topup_core::price::TwapConfig,
@@ -2830,11 +2569,14 @@ mod tests {
                 "uniswap-v2-onchain",
             ));
             let fx = Arc::new(SharedSource::new(
-                Arc::new(Chainlink::new(
-                    a.client.clone(),
-                    b.client.clone(),
-                    feed("USDT_USD", 1).unwrap(),
-                )),
+                Arc::new(
+                    Chainlink::new(
+                        a.client.clone(),
+                        b.client.clone(),
+                        feed("USDT_USD", 1).unwrap(),
+                    )
+                    .unwrap(),
+                ),
                 SOURCE_REUSE,
                 "chainlink",
                 "chainlink",
@@ -2909,11 +2651,14 @@ mod tests {
                 let a = fixture("sequencer-a").await;
                 let b = fixture("sequencer-b").await;
                 cold.sequencer = Some(Arc::new(SharedSequencer {
-                    inner: Arc::new(Chainlink::new(
-                        a.client.clone(),
-                        b.client.clone(),
-                        feed("BASE_SEQUENCER_UPTIME", BASE_CHAIN_ID).unwrap(),
-                    )),
+                    inner: Arc::new(
+                        Chainlink::new(
+                            a.client.clone(),
+                            b.client.clone(),
+                            feed("BASE_SEQUENCER_UPTIME", BASE_CHAIN_ID).unwrap(),
+                        )
+                        .unwrap(),
+                    ),
                     grace_s: 3600,
                     coalesced: Coalesced::new("sequencer", "chainlink"),
                 }));
@@ -3006,11 +2751,14 @@ mod tests {
             "uniswap-v2-onchain",
         ));
         let fx = Arc::new(SharedSource::new(
-            Arc::new(Chainlink::new(
-                a.client.clone(),
-                b.client.clone(),
-                feed("USDT_USD", 1).unwrap(),
-            )),
+            Arc::new(
+                Chainlink::new(
+                    a.client.clone(),
+                    b.client.clone(),
+                    feed("USDT_USD", 1).unwrap(),
+                )
+                .unwrap(),
+            ),
             SOURCE_REUSE,
             "chainlink",
             "chainlink",
@@ -3142,11 +2890,14 @@ mod tests {
         let a = fixture("sequencer-a").await;
         let b = fixture("sequencer-b").await;
         let sequencer = SharedSequencer {
-            inner: Arc::new(Chainlink::new(
-                a.client.clone(),
-                b.client.clone(),
-                feed("BASE_SEQUENCER_UPTIME", BASE_CHAIN_ID).unwrap(),
-            )),
+            inner: Arc::new(
+                Chainlink::new(
+                    a.client.clone(),
+                    b.client.clone(),
+                    feed("BASE_SEQUENCER_UPTIME", BASE_CHAIN_ID).unwrap(),
+                )
+                .unwrap(),
+            ),
             grace_s: 3600,
             coalesced: Coalesced::new("sequencer", "chainlink"),
         };

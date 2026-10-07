@@ -94,30 +94,6 @@ enum RpcCommand {
         #[arg(long)]
         config: PathBuf,
     },
-    /// Verify an agreed lower finalized anchor and repair derived address/cursor progress.
-    /// Requires an owner DATABASE_URL and the running service stopped; leaves the chain frozen.
-    Recover {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        chain: u64,
-        #[arg(long)]
-        block: u64,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        reason: String,
-    },
-    /// Replay a bounded number of windows, verify credited branches, then unfreeze when complete.
-    /// Requires the owner DATABASE_URL and an audited recovery with the service stopped.
-    Resume {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        chain: u64,
-        #[arg(long,default_value_t=16,value_parser=clap::value_parser!(u32).range(1..=128))]
-        max_windows: u32,
-    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -196,15 +172,6 @@ struct RunArgs {
     /// Delay before retrying an expected wait outcome.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     wait_interval_s: u64,
-    /// Delay between `eth_blockNumber` polls of each chain's provider A; defaults to one block
-    /// time for a route crediting at a depth (12 s on Ethereum, 2 s on an OP-stack chain), 12 s
-    /// otherwise.
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
-    head_poll_interval_s: Option<u64>,
-    /// Least delay between reads of each chain's `finalized` head on provider A; its advances
-    /// drive the finalized backstop, the finality watch, and reconciliation.
-    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
-    finalized_poll_interval_s: u64,
     /// Least delay between reconciliation rounds; a round runs only after `finalized` advanced.
     #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..))]
     reconcile_interval_s: u64,
@@ -544,15 +511,6 @@ async fn run_restore_check(
     topup::rpc_runtime::preflight(&routes)
         .await
         .map_err(anyhow::Error::msg)?;
-    topup::rpc_runtime::verify_persisted_genesis(&pool, &routes)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    topup::rpc_runtime::bind_durable_state(
-        &pool,
-        &routes,
-        &config.resolved_json().map_err(anyhow::Error::msg)?,
-    )
-    .map_err(anyhow::Error::msg)?;
     let reconciler = topup::reconciler::Reconciler::from_routes(pool.clone(), Arc::new(routes))
         .context("failed to configure the post-restore reconciler")?;
     let expectations = topup::restore::RestoreExpectations {
@@ -764,23 +722,13 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let Some(lease_owner) = wait_for_lease_owner_lock(&pool).await? else {
         return Ok(ExitCode::SUCCESS);
     };
-    topup::rpc_runtime::accept(
-        &pool,
-        &routes,
-        &config.resolved_json().map_err(anyhow::Error::msg)?,
-    )
-    .await
-    .map_err(anyhow::Error::msg)
-    .context("RPC group acceptance failed")?;
-    // A chain added since the last start gets its cursor at its `finalized` head before the API
-    // issues an address on it (architecture §8). After a restore, a chain without a restored
-    // cursor is rescanned from genesis instead, so addresses re-issued on it find the payments
-    // made since the restore point.
-    if restore.is_none() {
-        topup::scanner::initialize_cursors(&pool, &routes)
-            .await
-            .context("failed to start the cursor of a new chain")?;
+    topup::db::rpc::check_start(&pool, &routes.chain_ids().collect::<Vec<_>>()).await?;
+    if let Err(error) = topup::rpc_runtime::preflight(&routes).await {
+        tracing::warn!(%error,"RPC self-test failed; affected endpoints remain not-ready while the API starts");
     }
+    topup::scanner::initialize_cursors(&pool, &routes)
+        .await
+        .context("failed to initialize chain coverage")?;
     let signer = Arc::new(spawn_signer().context("failed to start signer actor")?);
     let delivery_config = topup::outbox::DeliveryConfig {
         proxy: webhook_proxy(args.webhook_proxy.as_ref(), &public_origin)?,
@@ -829,7 +777,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     )
     .context("invalid pump configuration")?;
     let refund_reader = |index| {
-        topup::refunds::EvmRefundChainReader::from_routes(&routes, index)
+        topup::refunds::EvmRefundChainReader::from_routes(pool.clone(), &routes, index)
             .context("failed to configure refund verification chain reader")
     };
     let refund_worker = topup::refunds::RefundVerificationWorker::new(
@@ -862,7 +810,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         rate_limits: Arc::default(),
         screening: Arc::clone(&screening) as Arc<dyn topup::refunds::DestinationScreener>,
         contract_signatures: Arc::new(
-            topup::treasuries::EvmContractSignatures::from_routes(&routes)
+            topup::treasuries::EvmContractSignatures::from_routes(pool.clone(), &routes)
                 .map_err(anyhow::Error::msg)
                 .context("failed to configure treasury proof checks")?,
         ),
@@ -879,18 +827,6 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     });
     tracing::info!(bind = %args.bind, "API listening");
 
-    let recovery_digest =
-        topup::db::rpc::digest(&config.resolved_json().map_err(anyhow::Error::msg)?);
-    let recovery_pool = pool.clone();
-    let recovery_routes = Arc::clone(&routes);
-    tasks.spawn("RPC recovery probes", move |cancellation| {
-        topup::rpc_runtime::recover_members(
-            recovery_pool,
-            recovery_routes,
-            cancellation,
-            recovery_digest,
-        )
-    });
     let price_routes = Arc::clone(&routes);
     tasks.spawn("TWAP price sampler", |cancellation| async move {
         price_provider
@@ -899,10 +835,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     });
     let scanner_pool = pool.clone();
     let scanner_routes = Arc::clone(&routes);
-    let scan_config = topup::scanner::ScanConfig {
-        head_poll_interval: args.head_poll_interval_s.map(Duration::from_secs),
-        finalized_poll_interval: Duration::from_secs(args.finalized_poll_interval_s),
-    };
+    let scan_config = topup::scanner::ScanConfig;
     let finalized_heads = topup::scanner::FinalizedHeads::default();
     let scanner_heads = finalized_heads.clone();
     tasks.spawn("scanner", |cancellation| async move {
@@ -1219,46 +1152,16 @@ async fn serve_read_only_until(
 }
 
 async fn rpc_command(command: RpcCommand) -> anyhow::Result<ExitCode> {
-    let file = match &command {
-        RpcCommand::Check { config }
-        | RpcCommand::Recover { config, .. }
-        | RpcCommand::Resume { config, .. } => config,
-    };
-    let config = load_config(file)?;
+    let RpcCommand::Check { config: file } = command;
+    let config = load_config(&file)?;
     config
         .check_secrets(|name| std::env::var(name).ok())
         .map_err(anyhow::Error::msg)?;
     let routes = config.route_set().map_err(anyhow::Error::msg)?;
-    if matches!(&command, RpcCommand::Check { .. }) {
-        let ids = topup::rpc_runtime::preflight(&routes)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        println!("{}", serde_json::to_string(&ids)?);
-        return Ok(ExitCode::SUCCESS);
-    }
-    let pool = connect("RPC recovery", 4).await?;
-    let result = match command {
-        RpcCommand::Recover {
-            chain,
-            block,
-            actor,
-            reason,
-            ..
-        } => topup::rpc_runtime::recover_watermark(&pool, &routes, chain, block, &actor, &reason)
-            .await
-            .map(|()| true),
-        RpcCommand::Resume {
-            chain, max_windows, ..
-        } => topup::rpc_runtime::resume_recovery(&pool, &routes, chain, max_windows).await,
-        RpcCommand::Check { .. } => Err("unexpected RPC check dispatch".to_owned()),
-    };
-    pool.close().await;
-    let complete = result.map_err(anyhow::Error::msg)?;
-    if !complete {
-        tracing::info!(
-            "recovery replay retained progress; run rpc resume again with the service stopped"
-        );
-    }
+    let ids = topup::rpc_runtime::preflight(&routes)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    println!("{}", serde_json::to_string(&ids)?);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1275,15 +1178,6 @@ async fn reconcile(args: &ReconcileArgs) -> anyhow::Result<ExitCode> {
     topup::rpc_runtime::preflight(&routes)
         .await
         .map_err(anyhow::Error::msg)?;
-    topup::rpc_runtime::verify_persisted_genesis(&pool, &routes)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    topup::rpc_runtime::bind_durable_state(
-        &pool,
-        &routes,
-        &config.resolved_json().map_err(anyhow::Error::msg)?,
-    )
-    .map_err(anyhow::Error::msg)?;
     let reconciler = topup::reconciler::Reconciler::from_routes(pool.clone(), Arc::new(routes))
         .context("failed to configure reconciler")?;
     let result = match topup::reconciler::hold_lease_owner_lock(&pool).await {
@@ -1656,7 +1550,7 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
                 "configuration `{}` is valid: {} routes, {} RPC providers{}{}",
                 file.display(),
                 config.routes.len(),
-                config.rpc_providers.len(),
+                config.rpc.len().saturating_mul(2),
                 if secrets {
                     ", every provider key fits its URL"
                 } else {
@@ -1722,7 +1616,7 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
                     println!(
                         "  sequencer: {:?}; {:?}",
                         sequencer,
-                        topup_core::price::feed(&sequencer.feed, topup::rpc_groups::BASE_CHAIN_ID)
+                        topup_core::price::feed(&sequencer.feed, 8453)
                     );
                 }
             }

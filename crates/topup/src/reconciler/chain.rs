@@ -24,26 +24,16 @@ pub trait ReconciliationChain: Send + Sync {
         to_block: u64,
     ) -> Result<Vec<TransferLog>, ReconciliationError>;
 
-    /// Complete numeric window, without partial commit across address batches.
-    async fn read_window(
+    /// Token state at one EIP-1898 canonical hash; no numeric or latest fallback.
+    async fn token_balances_pinned(
         &self,
-        request: &topup_adapters::chain::evm::window::WindowRequest,
-    ) -> Result<topup_adapters::chain::evm::window::WindowResult, ReconciliationError> {
-        let mut transfers = Vec::new();
-        for batch in request
-            .recipients
-            .chunks(topup_adapters::chain::evm::MAX_ADDRESSES_PER_REQUEST)
-        {
-            transfers.extend(
-                self.transfer_logs_to(batch, request.from, request.to)
-                    .await?,
-            );
-        }
-        Ok(topup_adapters::chain::evm::window::WindowResult {
-            transfers,
-            factory_logs: Vec::new(),
-            proof: None,
-        })
+        _token: Address,
+        _addresses: &[Address],
+        _hash: B256,
+    ) -> Result<Vec<U256>, ReconciliationError> {
+        Err(ReconciliationError::Invariant(
+            "canonical balance pin unavailable",
+        ))
     }
     /// Returns token balances at one block in bounded JSON-RPC batches.
     async fn token_balances(
@@ -99,13 +89,17 @@ impl ReconciliationChain for FinalizedReader {
         .await?)
     }
 
-    async fn read_window(
+    async fn token_balances_pinned(
         &self,
-        request: &topup_adapters::chain::evm::window::WindowRequest,
-    ) -> Result<topup_adapters::chain::evm::window::WindowResult, ReconciliationError> {
-        Ok(backing_off(|| ChainReader::read_window(self, request)).await?)
+        token: Address,
+        addresses: &[Address],
+        hash: B256,
+    ) -> Result<Vec<U256>, ReconciliationError> {
+        Ok(self
+            .client()
+            .token_balances(token, addresses, alloy::eips::BlockId::hash_canonical(hash))
+            .await?)
     }
-
     async fn token_balances(
         &self,
         token: Address,

@@ -2,15 +2,16 @@
 
 mod accounts;
 mod addresses;
+pub mod chain_reads;
 pub mod daily_budgets;
 mod deposits;
 pub(crate) mod migrations;
 mod outbox;
-mod pending;
+pub(crate) mod pending;
 pub mod pricing;
 pub mod rpc;
-mod scanner;
-mod sweeps;
+pub(crate) mod scanner;
+pub(crate) mod sweeps;
 mod types;
 
 use sqlx::PgPool;
@@ -34,14 +35,11 @@ pub use pending::{
     HeadCommit, NewPendingTransfer, PendingTransfer, commit_head_scan, list_address_pending,
     list_addresses_pending,
 };
+pub(crate) use scanner::find_scan_address;
 pub use scanner::{
-    ADDRESS_PAGE_SIZE, ScanAddress, ScanCommit, commit_confirmed_scan, commit_scan,
-    get_confirmed_cursor, get_cursor, initialize_cursor, list_scan_addresses,
-    record_backfill_progress, scan_address_page,
-};
-pub(crate) use scanner::{
-    AddressSweep, address_sweep, find_scan_address, insert_scanned_deposit_in, save_address_sweep,
-    sweep_epoch,
+    ADDRESS_PAGE_SIZE, CoveredAddress, ScanAddress, ScanCommit, commit_confirmed_scan,
+    coverage_addresses, get_confirmed_cursor, get_cursor, initialize_cursor,
+    insert_scanned_deposit_in, list_scan_addresses, scan_address_page,
 };
 pub(crate) use sweeps::mark_swept;
 pub use sweeps::{FactoryCommit, commit_factory_logs};

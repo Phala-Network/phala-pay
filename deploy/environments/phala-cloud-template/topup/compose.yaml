@@ -2,7 +2,7 @@
 # `deploy/render.sh --template`: a one-click testnet instance at the app's gateway domain. Its
 # backup location is the deploy form's, in the CVM's env and so not attested; the policy allows a
 # runtime value here and nowhere else (deploy/compose-policy.jq), and the postgres-walg entrypoint
-# checks its format at startup. Path-style addressing is fixed; the providers are keyless.
+# checks its format at startup. Path-style addressing is fixed; both RPC keys are sealed.
 services:
   postgres:
     environment: &walg
@@ -12,3 +12,9 @@ services:
       AWS_S3_FORCE_PATH_STYLE: "true"
   backup:
     environment: *walg
+  topup:
+    environment: &rpc-keys
+      TOPUP_RPC_ANKR_KEY: ${TOPUP_RPC_ANKR_KEY:-}
+      TOPUP_RPC_INFURA_KEY: ${TOPUP_RPC_INFURA_KEY:-}
+  restore-check:
+    environment: *rpc-keys

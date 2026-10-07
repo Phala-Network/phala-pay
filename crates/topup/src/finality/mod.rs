@@ -40,11 +40,10 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::{
-    ChainError, ChainReader, FinalizedHead, FinalizedReader, KnownTransfer, ReceiptLookup,
-    TransferLog,
+    ChainError, ChainReader, FinalizedHead, FinalizedReader, ReceiptLookup, TransferLog,
 };
 use topup_core::deposit::{DepositState, reverse};
-use topup_core::identity::{event_id, reversed_event_id};
+use topup_core::identity::reversed_event_id;
 use topup_core::money::AtomicAmount;
 use uuid::Uuid;
 
@@ -80,32 +79,23 @@ pub enum FinalityError {
 
 #[async_trait]
 trait WatchReader: Send + Sync {
-    async fn finalized(&self) -> Result<u64, ChainError>;
     async fn evidence(
         &self,
         tx: B256,
         position: u64,
-        known: KnownTransfer,
-        from: Address,
         needed: u64,
     ) -> Result<topup_adapters::chain::evm::FinalityEvidence, ChainError>;
 }
 
 #[async_trait]
 impl<R: ChainReader + Send + Sync> WatchReader for R {
-    async fn finalized(&self) -> Result<u64, ChainError> {
-        Ok(ChainReader::finalized_head(self).await?.number)
-    }
-
     async fn evidence(
         &self,
         tx: B256,
         position: u64,
-        known: KnownTransfer,
-        from: Address,
         needed: u64,
     ) -> Result<topup_adapters::chain::evm::FinalityEvidence, ChainError> {
-        ChainReader::finality_evidence(self, tx, position, known, from, needed).await
+        ChainReader::finality_evidence(self, tx, position, needed).await
     }
 }
 
@@ -192,11 +182,10 @@ impl FinalityWatch {
     /// Reads provider A's `finalized` and re-reads every deposit of `chain_id` that is neither
     /// final nor reversed and whose recorded block is at or below it.
     pub async fn watch_once(&self, chain_id: u64) -> Result<WatchStats, FinalityError> {
-        let chain = self
-            .chains
-            .get(&chain_id)
-            .ok_or(FinalityError::UnknownChain(chain_id))?;
-        let finalized = chain.primary.finalized().await?;
+        let Some(checkpoint) = db::chain_reads::checkpoint(&self.pool, chain_id).await? else {
+            return Ok(WatchStats::default());
+        };
+        let finalized = checkpoint.number;
         self.watch_at(chain_id, finalized).await
     }
 
@@ -211,20 +200,20 @@ impl FinalityWatch {
             .get(&chain_id)
             .ok_or(FinalityError::UnknownChain(chain_id))?;
         let mut stats = WatchStats::default();
+        let Some(checkpoint) = db::chain_reads::checkpoint(&self.pool, chain_id).await? else {
+            return Ok(stats);
+        };
+        let primary_finalized = primary_finalized.min(checkpoint.number);
         if crate::reconciler::chain_is_blocked(&self.pool, chain_id).await? {
             return Ok(stats);
         }
-        let mut secondary_finalized = None;
         for _ in 0..WATCH_PAGES_PER_PASS {
             let deposits = claim_unfinal_deposits(&self.pool, chain_id, primary_finalized).await?;
             let Some(last) = deposits.len().checked_sub(1) else {
                 return Ok(stats);
             };
             let full = last + 1 == usize::try_from(WATCH_PAGE).unwrap_or(usize::MAX);
-            let secondary_finalized = match secondary_finalized {
-                Some(finalized) => finalized,
-                None => *secondary_finalized.insert(chain.secondary.finalized().await?),
-            };
+            let secondary_finalized = primary_finalized;
             for deposit in deposits {
                 stats.watched = stats.watched.saturating_add(1);
                 let watched = self
@@ -273,29 +262,26 @@ impl FinalityWatch {
         primary_finalized: u64,
         secondary_finalized: u64,
     ) -> Result<Applied, FinalityError> {
-        let (from, tx_nonce) = deposit.origin;
-        let known = KnownTransfer {
-            block_hash: deposit.block_hash,
-            block_time: deposit.block_time,
-            tx_nonce,
-        };
         let (primary_evidence, secondary_evidence) = tokio::try_join!(
             chain.primary.evidence(
                 deposit.tx_hash,
                 deposit.receipt_log_index,
-                known,
-                from,
                 primary_finalized
             ),
             chain.secondary.evidence(
                 deposit.tx_hash,
                 deposit.receipt_log_index,
-                known,
-                from,
                 secondary_finalized
             ),
         )?;
-        let nonces = primary_evidence.nonce.zip(secondary_evidence.nonce);
+        let replacement = self
+            .known_replacement(
+                chain,
+                chain_id,
+                deposit,
+                primary_finalized.min(secondary_finalized),
+            )
+            .await?;
         let primary_finalized = primary_evidence.finalized;
         let secondary_finalized = secondary_evidence.finalized;
         let primary = primary_evidence.receipt;
@@ -310,9 +296,44 @@ impl FinalityWatch {
                 finalized: secondary_finalized,
                 receipt: &secondary,
             },
-            nonces,
+            replacement,
         );
         self.apply(deposit, verdict, chain_id).await
+    }
+
+    async fn known_replacement(
+        &self,
+        chain: &WatchChain,
+        chain_id: u64,
+        deposit: &WatchedDeposit,
+        checkpoint: u64,
+    ) -> Result<bool, FinalityError> {
+        let hashes: Vec<String> = sqlx::query_scalar("SELECT DISTINCT tx_hash FROM deposits WHERE chain_id=$1 AND tx_from=$2 AND tx_nonce=$3::text::numeric AND tx_hash != $4")
+            .bind(i64::try_from(chain_id).map_err(|_|sqlx::Error::Protocol("chain overflow".into()))?).bind(format!("{:#x}",deposit.origin.0)).bind(deposit.origin.1.to_string()).bind(format!("{:#x}",deposit.tx_hash)).fetch_all(&self.pool).await?;
+        for hash in hashes {
+            let hash = hash
+                .parse()
+                .map_err(|_| sqlx::Error::Protocol("replacement hash invalid".into()))?;
+            let (a, b) = tokio::try_join!(
+                chain.primary.evidence(hash, 0, checkpoint),
+                chain.secondary.evidence(hash, 0, checkpoint)
+            )?;
+            if a.receipt != b.receipt {
+                continue;
+            }
+            if let ReceiptLookup::Included {
+                block_number,
+                tx_from,
+                tx_nonce,
+                ..
+            } = a.receipt
+            {
+                if block_number <= checkpoint && (tx_from, tx_nonce) == deposit.origin {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Runs a pass per chain whenever `heads` publishes an advance of provider A's `finalized`,
@@ -537,7 +558,7 @@ fn decide(
     deposit: &WatchedDeposit,
     primary: Observed<'_>,
     secondary: Observed<'_>,
-    nonces: Option<(u64, u64)>,
+    replacement: bool,
 ) -> Verdict {
     match (primary.receipt, secondary.receipt) {
         (
@@ -545,13 +566,14 @@ fn decide(
                 block_number,
                 block_hash,
                 transfer: primary_transfer,
+                ..
             },
             ReceiptLookup::Included {
                 block_hash: secondary_hash,
                 transfer: secondary_transfer,
                 ..
             },
-        ) if block_hash == secondary_hash && primary_transfer == secondary_transfer => {
+        ) if block_hash == secondary_hash && primary.receipt == secondary.receipt => {
             let is_final =
                 *block_number <= primary.finalized && *block_number <= secondary.finalized;
             match primary_transfer.as_deref() {
@@ -593,26 +615,12 @@ fn decide(
                 _ => Verdict::Wait,
             }
         }
-        (ReceiptLookup::Missing, ReceiptLookup::Missing) => match (deposit.origin, nonces) {
-            ((from, nonce), Some((primary_nonce, secondary_nonce)))
-                if primary_nonce > nonce && secondary_nonce > nonce =>
-            {
-                Verdict::Reverse(
-                    json!({
-                        "stage": "finality",
-                        "result": "dropped_nonce_consumed",
-                        "tx_from": format!("{from:#x}"),
-                        "tx_nonce": nonce,
-                        "provider_a_nonce": primary_nonce,
-                        "provider_b_nonce": secondary_nonce,
-                        "provider_a_finalized": primary.finalized,
-                        "provider_b_finalized": secondary.finalized,
-                    }),
-                    None,
-                )
-            }
-            _ => Verdict::Pending,
-        },
+        (ReceiptLookup::Missing, ReceiptLookup::Missing) if replacement => Verdict::Reverse(
+            json!({"stage":"finality","result":"known_finalized_replacement"}),
+            None,
+        ),
+        (ReceiptLookup::Missing, ReceiptLookup::Missing) => Verdict::Pending,
+
         _ => Verdict::Wait,
     }
 }
@@ -768,7 +776,6 @@ async fn reverse_deposit(
     let Ok(transition) = reverse(deposit.state) else {
         return Ok(None);
     };
-    let successor_to = successor.map(|transfer| transfer.to);
     let from = db::state_code(transition.from);
     let to = db::state_code(transition.to);
     let mut transaction = pool.begin().await?;
@@ -799,7 +806,6 @@ async fn reverse_deposit(
     // successor's confirm step, which consumes it if the successor pays it; otherwise it expires
     // as any quote does once no payment to its address is left unconfirmed (§9). So the quote
     // does not expire on the way, and the merchant sees no `quote.expired` before the credit.
-    let successor_keeps_quote = successor.is_some() && successor_to == Some(deposit.address);
     if let (Some(id), Some(evidence)) = (successor, evidence.as_object_mut()) {
         evidence.insert("successor_deposit_id".to_owned(), json!(id));
     }
@@ -830,33 +836,8 @@ async fn reverse_deposit(
         let event = NewOutboxEvent::system(Uuid::new_v4(), "refund.updated", scope, object);
         db::enqueue_in(&mut transaction, routes, &event, Some(&before)).await?;
     }
-    let reopened = sqlx::query(
-        r#"
-        UPDATE quotes
-        SET consumed_by = NULL,
-            status = CASE WHEN $2 OR expires_at > now() THEN 'open' ELSE 'expired' END,
-            exposure_reserved = $2 OR expires_at > now(),
-            closed_at = CASE WHEN $2 OR expires_at > now() THEN NULL ELSE now() END
-        WHERE consumed_by = $1
-        RETURNING id, status
-        "#,
-    )
-    .bind(deposit.id)
-    .bind(successor_keeps_quote)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if let Some(row) = reopened
-        && row.try_get::<String, _>("status")? == "expired"
-    {
-        let quote_id: Uuid = row.try_get("id")?;
-        let event = NewOutboxEvent::system(
-            event_id("quote.expired", quote_id),
-            "quote.expired",
-            scope,
-            EventObject::Quote(quote_id),
-        );
-        db::enqueue_in(&mut transaction, routes, &event, None).await?;
-    }
+    sqlx::query("UPDATE quotes SET consumed_by=NULL,status='open',exposure_reserved=true,closed_at=NULL WHERE consumed_by=$1")
+        .bind(deposit.id).execute(&mut *transaction).await?;
     // Rendered last, so the object shows the deposit, its refunds, and its quote as the reversal
     // leaves them.
     if matches!(
@@ -996,6 +977,10 @@ mod tests {
         ReceiptLookup::Included {
             block_number,
             block_hash: B256::repeat_byte(byte),
+            status: true,
+            block_time: DateTime::UNIX_EPOCH,
+            tx_from: Address::repeat_byte(6),
+            tx_nonce: 9,
             transfer: transfer.map(Box::new),
         }
     }
@@ -1009,12 +994,12 @@ mod tests {
         let deposit = deposit(DepositState::Credited);
         let receipt = included(Some(transfer(&deposit, 100, 2)), 100, 2);
         assert!(matches!(
-            decide(&deposit, observed(100, &receipt), observed(120, &receipt), None),
+            decide(&deposit, observed(100, &receipt), observed(120, &receipt), false),
             Verdict::Final(block) if block.block_hash == deposit.block_hash
         ));
         let moved = included(Some(transfer(&deposit, 104, 8)), 104, 8);
         assert!(matches!(
-            decide(&deposit, observed(110, &moved), observed(110, &moved), None),
+            decide(&deposit, observed(110, &moved), observed(110, &moved), false),
             Verdict::Final(block) if block.block_number == 104
         ));
     }
@@ -1026,38 +1011,32 @@ mod tests {
         later.log_index = 11;
         let receipt = included(Some(later), 103, 8);
         assert!(matches!(
-            decide(&deposit, observed(90, &receipt), observed(90, &receipt), None),
+            decide(&deposit, observed(90, &receipt), observed(90, &receipt), false),
             Verdict::Follow(block) if block.block_number == 103 && block.log_index == 11
         ));
         // Unchanged evidence below finality: nothing to write.
         let same = included(Some(transfer(&deposit, 100, 2)), 100, 2);
         assert_eq!(
-            decide(&deposit, observed(90, &same), observed(99, &same), None),
+            decide(&deposit, observed(90, &same), observed(99, &same), false),
             Verdict::Wait
         );
     }
 
     #[test]
-    fn a_dropped_transaction_is_reversed_only_when_both_providers_prove_its_nonce_consumed() {
+    fn missing_receipts_require_a_known_finalized_replacement() {
         let deposit = deposit(DepositState::Credited);
         let missing = ReceiptLookup::Missing;
-        assert!(matches!(
-            decide(
-                &deposit,
-                observed(200, &missing),
-                observed(200, &missing),
-                Some((10, 10))
-            ),
-            Verdict::Reverse(evidence, None) if evidence["result"] == "dropped_nonce_consumed"
-        ));
         assert_eq!(
             decide(
                 &deposit,
                 observed(200, &missing),
                 observed(200, &missing),
-                Some((10, 9))
+                false
             ),
             Verdict::Pending
+        );
+        assert!(
+            matches!(decide(&deposit,observed(200,&missing),observed(200,&missing),true),Verdict::Reverse(evidence,None) if evidence["result"] == "known_finalized_replacement")
         );
     }
 
@@ -1066,7 +1045,7 @@ mod tests {
         let deposit = deposit(DepositState::Rejected);
         let without = included(None, 100, 2);
         assert!(matches!(
-            decide(&deposit, observed(100, &without), observed(100, &without), None),
+            decide(&deposit, observed(100, &without), observed(100, &without), false),
             Verdict::Reverse(evidence, None) if evidence["result"] == "transfer_absent_at_finality"
         ));
         // Not final yet: the transaction may still change.
@@ -1075,7 +1054,7 @@ mod tests {
                 &deposit,
                 observed(99, &without),
                 observed(100, &without),
-                None
+                false
             ),
             Verdict::Wait
         );
@@ -1085,7 +1064,7 @@ mod tests {
                 &deposit,
                 observed(100, &with),
                 observed(100, &without),
-                None
+                false
             ),
             Verdict::Wait
         );
@@ -1095,7 +1074,7 @@ mod tests {
                 &deposit,
                 observed(100, &with),
                 observed(100, &missing),
-                None
+                false
             ),
             Verdict::Wait
         );
@@ -1115,7 +1094,7 @@ mod tests {
                 &deposit,
                 observed(100, &primary),
                 observed(100, &secondary),
-                None
+                false
             ),
             Verdict::Wait
         );
@@ -1126,7 +1105,7 @@ mod tests {
                 &deposit,
                 observed(100, &primary),
                 observed(100, &recorded),
-                None
+                false
             ),
             Verdict::Wait
         );
@@ -1137,7 +1116,7 @@ mod tests {
                 &deposit,
                 observed(100, &primary),
                 observed(100, &elsewhere),
-                None
+                false
             ),
             Verdict::Wait
         );
@@ -1154,7 +1133,7 @@ mod tests {
                 &deposit,
                 observed(100, &receipt),
                 observed(100, &receipt),
-                None
+                false
             ),
             Verdict::Wait
         );
@@ -1169,7 +1148,7 @@ mod tests {
                 &credited,
                 observed(100, &receipt),
                 observed(100, &receipt),
-                None
+                false
             ),
             Verdict::Reverse(evidence, Some(successor))
                 if evidence["result"] == "transfer_changed_at_finality" && *successor == corrected

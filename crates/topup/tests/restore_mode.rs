@@ -32,7 +32,7 @@ use topup::deposit_addresses::REISSUE_VERSIONS_AHEAD;
 use topup::finality::FinalityWatch;
 use topup::pump::{Pump, PumpConfig, RunOnceResult, StepSet};
 use topup::restore_mode;
-use topup::scanner::{chain_routes, scan_once};
+use topup::scanner::{chain_routes, coverage_once};
 use topup::steps::confirm::ConfirmStep;
 use topup_adapters::attestation::AttestedWebhookKey;
 use topup_adapters::chain::evm::{
@@ -370,6 +370,7 @@ impl topup_adapters::risk::oracle::SanctionsSource for ClearSanctions {
         block_number: u64,
     ) -> topup_core::screening::SanctionsResult {
         topup_core::screening::SanctionsResult {
+            block_hash: None,
             provider_a: topup_core::screening::SanctionsAnswer::Clear,
             provider_b: topup_core::screening::SanctionsAnswer::Clear,
             block_number,
@@ -698,6 +699,10 @@ impl ChainReader for FinalChain {
         Ok(ReceiptLookup::Included {
             block_number: self.0.block_number,
             block_hash: self.0.block_hash,
+            block_time: self.0.block_time,
+            status: true,
+            tx_from: self.0.tx_from,
+            tx_nonce: self.0.tx_nonce,
             transfer: Some(Box::new(self.0.clone())),
         })
     }
@@ -2641,6 +2646,10 @@ impl ChainReader for ScriptedChain {
             Some(log) if log.tx_hash == tx_hash => ReceiptLookup::Included {
                 block_number: log.block_number,
                 block_hash: log.block_hash,
+                block_time: log.block_time,
+                status: true,
+                tx_from: log.tx_from,
+                tx_nonce: log.tx_nonce,
                 transfer: (log.receipt_log_index == receipt_log_index)
                     .then(|| Box::new(log.clone())),
             },
@@ -2788,9 +2797,11 @@ impl Pipeline {
             .into_iter()
             .next()
             .context("the chain's routes")?;
-        Ok(scan_once(&harness.pool, &self.chain, &routes)
-            .await?
-            .inserted)
+        Ok(
+            coverage_once(&harness.pool, &self.chain, &self.chain, &routes, 1)
+                .await?
+                .inserted,
+        )
     }
 
     /// Runs the pump until nothing is due.
@@ -4678,6 +4689,7 @@ impl topup_adapters::risk::oracle::SanctionsSource for NamesSender {
             topup_core::screening::SanctionsAnswer::Clear
         };
         topup_core::screening::SanctionsResult {
+            block_hash: None,
             provider_a: answer,
             provider_b: answer,
             block_number,

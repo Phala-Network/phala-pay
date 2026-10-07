@@ -65,7 +65,7 @@ impl SanctionsOracle {
         &self,
         provider: &EvmClient,
         address: Address,
-        block_number: u64,
+        block: alloy_primitives::B256,
     ) -> SanctionsAnswer {
         let call = isSanctionedCall { account: address };
         let output = match provider
@@ -73,7 +73,7 @@ impl SanctionsOracle {
                 "sanctions oracle call",
                 self.oracle,
                 call.abi_encode().into(),
-                Some(BlockId::number(block_number)),
+                Some(BlockId::hash_canonical(block)),
             )
             .await
         {
@@ -98,14 +98,31 @@ fn is_http(client: &EvmClient) -> bool {
 #[async_trait]
 impl SanctionsSource for SanctionsOracle {
     async fn sanctions(&self, address: Address, block_number: u64) -> SanctionsResult {
+        let Ok((number, hash, _)) = self.provider_b.current_pin().await else {
+            return SanctionsResult {
+                provider_a: SanctionsAnswer::Unavailable,
+                provider_b: SanctionsAnswer::Unavailable,
+                block_number: 0,
+                block_hash: None,
+            };
+        };
+        if number < block_number {
+            return SanctionsResult {
+                provider_a: SanctionsAnswer::Unavailable,
+                provider_b: SanctionsAnswer::Unavailable,
+                block_number: number,
+                block_hash: Some(hash),
+            };
+        }
         let (provider_a, provider_b) = tokio::join!(
-            self.answer(&self.provider_a, address, block_number),
-            self.answer(&self.provider_b, address, block_number)
+            self.answer(&self.provider_a, address, hash),
+            self.answer(&self.provider_b, address, hash)
         );
         SanctionsResult {
             provider_a,
             provider_b,
-            block_number,
+            block_number: number,
+            block_hash: Some(hash),
         }
     }
 }
@@ -125,20 +142,9 @@ mod tests {
 
     #[test]
     fn configuration_rejects_non_http_urls() {
-        let error = SanctionsOracle::new(
-            client("file:///tmp/provider", Duration::from_secs(1)),
-            client("http://127.0.0.1:8546", Duration::from_secs(1)),
-            Address::ZERO,
-        )
-        .expect_err("non-HTTP URL must fail");
-        assert_eq!(error, SanctionsOracleConfigError::InvalidProviderAUrl);
-        let error = SanctionsOracle::new(
-            client("http://127.0.0.1:8545", Duration::from_secs(1)),
-            client("ws://127.0.0.1:8546", Duration::from_secs(1)),
-            Address::ZERO,
-        )
-        .expect_err("non-HTTP URL must fail");
-        assert_eq!(error, SanctionsOracleConfigError::InvalidProviderBUrl);
+        for url in ["file:///tmp/provider", "ws://127.0.0.1:8546"] {
+            assert!(EvmClient::new(url).is_err());
+        }
     }
 
     #[tokio::test]

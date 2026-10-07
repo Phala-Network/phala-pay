@@ -42,7 +42,7 @@ macro_rules! select_lock {
            quote.amount_atomic::text AS amount_atomic,
            quote.price_scaled::text AS price_scaled,
            quote.credit_minor::text AS credit_minor,
-           quote.expires_at, quote.status, quote.created_at, quote.consumed_by, quote.metadata,
+           quote.expires_at, quote.cancel_requested_at, quote.status, quote.created_at, quote.consumed_by, quote.metadata,
            quote.route_version, quote.terms
     FROM quotes AS quote
     JOIN addresses AS address ON address.quote_id = quote.id
@@ -115,6 +115,8 @@ pub struct RateLock {
     pub credit_minor: MinorAmount,
     /// Payment deadline.
     pub expires_at: DateTime<Utc>,
+    /// Deferred cancellation request; the payment window ends at this instant.
+    pub cancel_requested_at: Option<DateTime<Utc>>,
     /// Persisted lifecycle status.
     pub status: RateLockStatus,
     /// Creation time.
@@ -163,9 +165,11 @@ impl ConfiguredQuoteProvider {
         routes: &crate::routes::RouteSet,
         cancellation: tokio_util::sync::CancellationToken,
     ) {
-        let mut tick = tokio::time::interval(Duration::from_secs(
-            topup_adapters::pricing::uniswap_v2::SAMPLE_INTERVAL_S,
-        ));
+        let mut tick = tokio::time::interval(Duration::from_secs(if routes.staging() {
+            topup_adapters::pricing::uniswap_v2::SAMPLE_INTERVAL_S
+        } else {
+            60
+        }));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
@@ -246,6 +250,9 @@ pub enum RateLockError {
     /// Current validated pricing is unavailable.
     #[error("validated pricing is unavailable")]
     PricingUnavailable,
+    /// The chain is not initialized or its pilot address capacity is exhausted.
+    #[error("chain cannot issue an address yet")]
+    ChainUnavailable,
     /// The account has no treasury on the route's chain.
     #[error("no treasury is set on the chain")]
     TreasuryNotSet,
@@ -535,6 +542,9 @@ pub async fn create_in(
     .bind(Json(terms))
     .execute(&mut **transaction)
     .await?;
+    if !crate::db::chain_reads::admit_address(transaction, route.chain.chain_id).await? {
+        return Err(RateLockError::ChainUnavailable);
+    }
     // A freshly derived single-use address cannot hold earlier payments, so the scanner only
     // needs to cover it from the chain's committed cursor instead of backfilling from genesis.
     sqlx::query(
@@ -544,7 +554,7 @@ pub async fn create_in(
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8,
-            COALESCE((SELECT scanned_block FROM cursors WHERE chain_id = $4), 0)
+            (SELECT through_block FROM chain_coverage WHERE chain_id = $4)
         )
         "#,
     )
@@ -571,6 +581,7 @@ pub async fn create_in(
         price: locked_price,
         credit_minor,
         expires_at,
+        cancel_requested_at: None,
         status: RateLockStatus::Open,
         created_at: now,
         consumed_by: None,
@@ -796,7 +807,7 @@ pub async fn reissue(
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8,
-            LEAST(COALESCE((SELECT scanned_block FROM cursors WHERE chain_id = $4), 0),
+            LEAST((SELECT through_block FROM chain_coverage WHERE chain_id = $4),
                   $9::bigint)
         )
         "#,
@@ -970,7 +981,7 @@ pub async fn cancel<'c>(
 
 async fn cancel_in(
     transaction: &mut Transaction<'_, Postgres>,
-    routes: &RouteSet,
+    _routes: &RouteSet,
     scope: Scope,
     actor: &Actor,
     id: Uuid,
@@ -978,7 +989,7 @@ async fn cancel_in(
     let row = get_in(transaction, scope, id)
         .await?
         .ok_or(RateLockError::NotFound)?;
-    if row.status == RateLockStatus::Cancelled {
+    if row.status == RateLockStatus::Cancelled || row.cancel_requested_at.is_some() {
         return Ok(row);
     }
     if row.status != RateLockStatus::Open {
@@ -1008,7 +1019,7 @@ async fn cancel_in(
     sqlx::query(
         r#"
         UPDATE quotes
-        SET status = 'cancelled', exposure_reserved = false, closed_at = now()
+        SET cancel_requested_at = now(), expires_at = now()
         WHERE id = $1 AND status = 'open' AND consumed_by IS NULL
         "#,
     )
@@ -1026,17 +1037,9 @@ async fn cancel_in(
         },
     )
     .await?;
-    let event = crate::db::NewOutboxEvent::new(
-        "quote.canceled",
-        scope,
-        crate::db::EventObject::Quote(row.id),
-        actor,
-    );
-    crate::db::enqueue_in(transaction, routes, &event, None).await?;
-    Ok(RateLock {
-        status: RateLockStatus::Cancelled,
-        ..row
-    })
+    get_in(transaction, scope, id)
+        .await?
+        .ok_or(RateLockError::NotFound)
 }
 
 /// Atomically consumes an open lock, releasing its exposure reservation.
@@ -1092,13 +1095,15 @@ pub async fn expire_once(pool: &PgPool, routes: &RouteSet) -> Result<u64, RateLo
     let mut transaction = pool.begin().await?;
     let rows = sqlx::query_as::<_, ExpiringRow>(
         r#"
-        SELECT quote.id, quote.account_id, quote.livemode
+        SELECT quote.id, quote.account_id, quote.livemode, quote.cancel_requested_at IS NOT NULL AS cancelled
         FROM quotes AS quote
         JOIN addresses AS address ON address.quote_id = quote.id
-        JOIN cursors AS cursor ON cursor.chain_id = address.chain_id
+        JOIN chain_coverage AS coverage ON coverage.chain_id = address.chain_id
         WHERE quote.status = 'open'
           AND quote.consumed_by IS NULL
-          AND quote.expires_at < cursor.scanned_block_time
+          AND address.dual_covered_through = coverage.through_block
+          AND quote.expires_at < coverage.through_time
+          AND NOT EXISTS (SELECT 1 FROM reconciliation_blocks WHERE scope='chain' AND chain_id=address.chain_id)
           AND NOT EXISTS (
               SELECT 1
               FROM deposits AS deposit
@@ -1107,7 +1112,7 @@ pub async fn expire_once(pool: &PgPool, routes: &RouteSet) -> Result<u64, RateLo
                 AND deposit.block_time <= quote.expires_at
           )
         ORDER BY quote.expires_at, quote.id
-        FOR UPDATE OF quote SKIP LOCKED
+        FOR UPDATE OF quote, address SKIP LOCKED
         LIMIT $1
         "#,
     )
@@ -1123,7 +1128,7 @@ pub async fn expire_once(pool: &PgPool, routes: &RouteSet) -> Result<u64, RateLo
     let updated = sqlx::query(
         r#"
         UPDATE quotes
-        SET status = 'expired', exposure_reserved = false, closed_at = now()
+        SET status = CASE WHEN cancel_requested_at IS NULL THEN 'expired' ELSE 'cancelled' END, exposure_reserved = false, closed_at = now()
         WHERE id = ANY($1) AND status = 'open' AND consumed_by IS NULL
         "#,
     )
@@ -1136,8 +1141,19 @@ pub async fn expire_once(pool: &PgPool, routes: &RouteSet) -> Result<u64, RateLo
 
     for row in &rows {
         let event = crate::db::NewOutboxEvent::system(
-            topup_core::identity::event_id("quote.expired", row.id),
-            "quote.expired",
+            topup_core::identity::event_id(
+                if row.cancelled {
+                    "quote.canceled"
+                } else {
+                    "quote.expired"
+                },
+                row.id,
+            ),
+            if row.cancelled {
+                "quote.canceled"
+            } else {
+                "quote.expired"
+            },
             Scope::new(row.account_id, row.livemode),
             crate::db::EventObject::Quote(row.id),
         );
@@ -1401,6 +1417,7 @@ struct RateLockRow {
     price_scaled: String,
     credit_minor: String,
     expires_at: DateTime<Utc>,
+    cancel_requested_at: Option<DateTime<Utc>>,
     status: String,
     created_at: DateTime<Utc>,
     consumed_by: Option<Uuid>,
@@ -1436,6 +1453,7 @@ impl TryFrom<RateLockRow> for RateLock {
             .map_err(|_| RateLockError::DatabaseInvariant)?,
             credit_minor: parse_minor(&row.credit_minor)?,
             expires_at: row.expires_at,
+            cancel_requested_at: row.cancel_requested_at,
             status: RateLockStatus::parse(&row.status)?,
             created_at: row.created_at,
             consumed_by: row.consumed_by,
@@ -1467,6 +1485,7 @@ async fn get_in(
 
 #[derive(FromRow)]
 struct ExpiringRow {
+    cancelled: bool,
     id: Uuid,
     account_id: Uuid,
     livemode: bool,

@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use topup_adapters::chain::evm::{
-    ChainError, ChainReader, FinalizedReader, KnownTransfer, ReceiptLookup, TransferLog,
+    ChainError, ChainReader, FinalizedReader, ReceiptLookup, TransferLog,
 };
 use topup_adapters::pricing::PriceSource;
 use topup_core::deposit::{RejectReason, RetryError, StepOutcome, WaitReason};
@@ -46,8 +46,6 @@ trait ConfirmationReader: Send + Sync {
         &self,
         tx: B256,
         position: u64,
-        known: KnownTransfer,
-        needed: u64,
         confirmations: Confirmations,
     ) -> Result<(ChainHeads, ReceiptLookup), ChainError>;
 }
@@ -61,11 +59,9 @@ where
         &self,
         tx: B256,
         position: u64,
-        known: KnownTransfer,
-        needed: u64,
         confirmations: Confirmations,
     ) -> Result<(ChainHeads, ReceiptLookup), ChainError> {
-        ChainReader::confirmation_evidence(self, tx, position, known, needed, confirmations).await
+        ChainReader::confirmation_evidence(self, tx, position, confirmations).await
     }
 }
 
@@ -306,6 +302,7 @@ impl ConfirmStep {
         let mut effects = TransitionEffects {
             canonical_evidence: canonical_effect,
             mark_final: is_final,
+            dual_verified: true,
             ..TransitionEffects::default()
         };
         // After a restore, the credit the merchant was told for this deposit stands: a settled
@@ -822,34 +819,13 @@ async fn confirmed_evidence(
     deposit: &Deposit,
     address: Address,
 ) -> FinalityResult {
-    // Every deposit the scanner records has its transaction's nonce; only a reversed deposit
-    // restored from a delivered event lacks it, and it is never confirmed.
-    let Some(tx_nonce) = deposit.tx_nonce else {
-        return FinalityResult::Retry(
-            RetryError::InvariantViolation,
-            json!({"stage": "finality", "error": "tx_nonce_missing"}),
-        );
-    };
-    let known = KnownTransfer {
-        block_hash: deposit.block_hash,
-        block_time: deposit.block_time,
-        tx_nonce,
-    };
     let (primary, secondary) = tokio::join!(
-        chains.primary.evidence(
-            deposit.tx_hash,
-            deposit.receipt_log_index,
-            known,
-            deposit.block_number,
-            confirmations
-        ),
-        chains.secondary.evidence(
-            deposit.tx_hash,
-            deposit.receipt_log_index,
-            known,
-            deposit.block_number,
-            confirmations
-        ),
+        chains
+            .primary
+            .evidence(deposit.tx_hash, deposit.receipt_log_index, confirmations),
+        chains
+            .secondary
+            .evidence(deposit.tx_hash, deposit.receipt_log_index, confirmations),
     );
     let (primary_heads, primary_receipt) = match primary {
         Ok((h, r)) => (Ok(h), Ok(r)),
@@ -904,7 +880,9 @@ async fn confirmed_evidence(
     let is_final =
         required_block <= primary_heads.finalized && required_block <= secondary_heads.finalized;
     match (primary_receipt.transfer(), secondary_receipt.transfer()) {
-        (Some(primary), Some(secondary)) if primary == secondary => {
+        (Some(primary), Some(secondary))
+            if primary == secondary && primary_receipt == secondary_receipt =>
+        {
             if primary.to != address {
                 return FinalityResult::Retry(
                     RetryError::RpcDisagreement,
@@ -973,6 +951,8 @@ fn canonical_effect(
         || deposit.block_time != canonical.block_time
         || deposit.asset_contract != canonical.token
         || deposit.from_address != canonical.from
+        || deposit.tx_from != Some(canonical.tx_from)
+        || deposit.tx_nonce != Some(canonical.tx_nonce)
         || deposit.amount_atomic != canonical.amount
         || deposit.route.as_deref() != selected_name
         || deposit.route_version != selected_version;
@@ -984,6 +964,8 @@ fn canonical_effect(
         asset_contract: canonical.token,
         from_address: canonical.from,
         amount_atomic: canonical.amount,
+        tx_from: canonical.tx_from,
+        tx_nonce: canonical.tx_nonce,
         route: selected_name.map(str::to_owned),
         route_version: selected_version,
     })
@@ -1171,6 +1153,10 @@ mod tests {
                     .map_or(ReceiptLookup::Missing, |log| ReceiptLookup::Included {
                         block_number: log.block_number,
                         block_hash: log.block_hash,
+                        block_time: log.block_time,
+                        status: true,
+                        tx_from: log.tx_from,
+                        tx_nonce: log.tx_nonce,
                         transfer: Some(Box::new(log)),
                     })
             }))
@@ -1338,6 +1324,74 @@ mod tests {
         );
         assert_eq!(result.evidence["quote"]["observations"], *observations);
     }
+    #[tokio::test]
+    async fn each_decision_field_on_either_endpoint_must_agree_before_advancing() {
+        for side in [0, 1] {
+            for field in [
+                "tx",
+                "position",
+                "log_index",
+                "block",
+                "hash",
+                "time",
+                "sender",
+                "nonce",
+                "token",
+                "from",
+                "to",
+                "amount",
+            ] {
+                let deposit = deposit(1_000);
+                let agreed = transfer(&deposit);
+                let mut forged = agreed.clone();
+                match field {
+                    "tx" => forged.tx_hash = B256::repeat_byte(9),
+                    "position" => forged.receipt_log_index += 1,
+                    "log_index" => forged.log_index += 1,
+                    "block" => forged.block_number += 1,
+                    "hash" => forged.block_hash = B256::repeat_byte(9),
+                    "time" => forged.block_time += chrono::TimeDelta::seconds(1),
+                    "sender" => forged.tx_from = Address::repeat_byte(9),
+                    "nonce" => forged.tx_nonce += 1,
+                    "token" => forged.token = Address::repeat_byte(9),
+                    "from" => forged.from = Address::repeat_byte(9),
+                    "to" => forged.to = Address::repeat_byte(9),
+                    "amount" => forged.amount = AtomicAmount::new(U256::from(999)),
+                    _ => unreachable!(),
+                }
+                let (a, b) = if side == 0 {
+                    (forged, agreed)
+                } else {
+                    (agreed, forged)
+                };
+                let result = step(
+                    route(PricingMode::Spot),
+                    chain(100, vec![a]),
+                    chain(100, vec![b]),
+                    prices(now_seconds()),
+                    context(None),
+                )
+                .run(&deposit)
+                .await;
+                assert_ne!(result.outcome, StepOutcome::Advance, "{side} {field}");
+                assert!(!result.effects.dual_verified, "{side} {field}");
+            }
+        }
+        let deposit = deposit(1_000);
+        let agreed = transfer(&deposit);
+        let result = step(
+            route(PricingMode::Spot),
+            chain(100, vec![agreed.clone()]),
+            chain(100, vec![agreed]),
+            prices(now_seconds()),
+            context(None),
+        )
+        .run(&deposit)
+        .await;
+        assert_eq!(result.outcome, StepOutcome::Advance);
+        assert!(result.effects.dual_verified);
+    }
+
     #[tokio::test]
     async fn provider_disagreement_retries() {
         let deposit = deposit(1_000);

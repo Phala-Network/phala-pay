@@ -35,7 +35,7 @@ async fn postgres_window_survives_restart_and_refused_samples_are_not_inserted()
                         .ok_or_else(|| anyhow::anyhow!("fixture cumulative"))?,
                 })
             };
-            let store = TwapStore(database.app_pool.clone());
+            let store = TwapStore::new(database.app_pool.clone());
             for i in 0..=29 {
                 let s = sample(i)?;
                 let h = store.record(&s, &policy).await?;
@@ -48,7 +48,7 @@ async fn postgres_window_survives_restart_and_refused_samples_are_not_inserted()
                 ));
             }
             drop(store);
-            let restarted = TwapStore(database.app_pool.clone());
+            let restarted = TwapStore::new(database.app_pool.clone());
             let s = sample(30)?;
             let (a, b) = tokio::join!(restarted.record(&s, &policy), restarted.record(&s, &policy));
             let h = a?;

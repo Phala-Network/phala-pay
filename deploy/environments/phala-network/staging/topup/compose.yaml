@@ -1,6 +1,4 @@
-# Phala's staging instance: the environment's public settings that are third-party env interfaces
-# (WAL-G's backup location, dstack-ingress's domain). Its RPC providers are keyless, so it declares
-# no TOPUP_RPC_<ID>_KEY; a keyed provider adds its name here, to topup and restore-check.
+# Phala's staging public settings and complete Ankr/Infura sealed-key mappings.
 # topup's own settings are in topup.yaml.
 services:
   postgres:
@@ -14,3 +12,9 @@ services:
   dstack-ingress:
     environment:
       DOMAIN: pay-api-staging.phala.com
+  topup:
+    environment: &rpc-keys
+      TOPUP_RPC_ANKR_KEY: ${TOPUP_RPC_ANKR_KEY:-}
+      TOPUP_RPC_INFURA_KEY: ${TOPUP_RPC_INFURA_KEY:-}
+  restore-check:
+    environment: *rpc-keys

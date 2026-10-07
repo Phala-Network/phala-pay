@@ -41,6 +41,7 @@ impl SanctionsSource for MockSanctionsSource {
             SanctionsAnswer::Clear
         };
         SanctionsResult {
+            block_hash: None,
             provider_a: answer,
             provider_b: answer,
             block_number,

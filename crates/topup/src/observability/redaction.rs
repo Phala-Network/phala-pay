@@ -61,7 +61,7 @@ mod tests {
         );
 
         reconciler
-            .check(CheckName::MissingDeposit)
+            .check(CheckName::CustodyBalance)
             .await
             .expect_err("closed connections fail the finalized-head request");
         server.abort();
@@ -69,7 +69,7 @@ mod tests {
         logs_assert(|lines: &[&str]| {
             let line = lines
                 .iter()
-                .find(|line| line.contains("missing-deposit check failed for chain"))
+                .find(|line| line.contains("custody balance check failed for chain"))
                 .ok_or_else(|| "missing production reconciler error log".to_owned())?;
             if !line.contains("finalized head fetch failed for provider `provider-a` (transport)") {
                 return Err(format!("adapter error was not redacted: {line}"));

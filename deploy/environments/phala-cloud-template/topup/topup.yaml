@@ -7,116 +7,52 @@ environment: testnet
 admin_key:
   id: admin/v1
 # Two keyless providers per chain, as on Phala's staging (deploy/phala.md, "RPC providers").
-rpc_companies:
-  drpc:
-    domains: [drpc.org]
-  tenderly:
-    domains:
-    - tenderly.co
-  publicnode:
-    domains:
-    - publicnode.com
-rpc_budgets:
-  drpc-account:
-    requests_per_second: 5
-    burst: 5
-  tenderly-account:
-    requests_per_second: 10
-    burst: 10
-  provider-a-key:
-    requests_per_second: 10
-    burst: 5
-  publicnode-account:
-    requests_per_second: 10
-    burst: 10
-  provider-b-key:
-    requests_per_second: 10
-    burst: 5
-  base-sepolia-a-key:
-    requests_per_second: 10
-    burst: 5
-  base-sepolia-b-key:
-    requests_per_second: 10
-    burst: 5
-  price-mainnet-a-key:
-    requests_per_second: 5
-    burst: 2
-  price-mainnet-b-key:
-    requests_per_second: 5
-    burst: 2
-  price-base-mainnet-a-key:
-    requests_per_second: 5
-    burst: 2
-  price-base-mainnet-b-key:
-    requests_per_second: 5
-    burst: 2
-rpc_groups:
-  provider-a:
-    chain_id: 11155111
-    members:
-    - id: provider-a
-      company: tenderly
-      url: https://sepolia.gateway.tenderly.co
-      account_budget: tenderly-account
-      key_budget: provider-a-key
-  provider-b:
-    chain_id: 11155111
-    members:
-    - id: provider-b
-      company: publicnode
-      url: https://ethereum-sepolia-rpc.publicnode.com
-      account_budget: publicnode-account
-      key_budget: provider-b-key
-  base-sepolia-a:
-    chain_id: 84532
-    members:
-    - id: base-sepolia-a
-      company: tenderly
-      url: https://base-sepolia.gateway.tenderly.co
-      account_budget: tenderly-account
-      key_budget: base-sepolia-a-key
-  base-sepolia-b:
-    chain_id: 84532
-    members:
-    - id: base-sepolia-b
-      company: publicnode
-      url: https://base-sepolia-rpc.publicnode.com
-      account_budget: publicnode-account
-      key_budget: base-sepolia-b-key
-  # Observation-only groups: no scanning or deployed payment contracts on these mainnets.
-  mainnet-a:
-    chain_id: 1
-    members:
-    - id: price-mainnet-a
-      company: tenderly
-      url: https://mainnet.gateway.tenderly.co
-      account_budget: tenderly-account
-      key_budget: price-mainnet-a-key
-  mainnet-b:
-    chain_id: 1
-    members:
-    - id: price-mainnet-b
-      company: drpc
-      url: https://eth.drpc.org
-      account_budget: drpc-account
-      key_budget: price-mainnet-b-key
-  base-mainnet-a:
-    chain_id: 8453
-    members:
-    - id: price-base-mainnet-a
-      company: tenderly
-      url: https://base.gateway.tenderly.co
-      account_budget: tenderly-account
-      key_budget: price-base-mainnet-a-key
-  base-mainnet-b:
-    chain_id: 8453
-    members:
-    - id: price-base-mainnet-b
-      company: publicnode
-      url: https://base-rpc.publicnode.com
-      account_budget: publicnode-account
-      key_budget: price-base-mainnet-b-key
-# Phala's staging routes, unchanged: test mode (`livemode: false`) on Sepolia and Base Sepolia.
+rpc:
+  - chain_id: 11155111
+    read:
+      id: ankr-sepolia
+      url: "https://rpc.ankr.com/eth_sepolia/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-sepolia
+      url: "https://sepolia.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 84532
+    read:
+      id: ankr-base-sepolia
+      url: "https://rpc.ankr.com/base_sepolia/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-base-sepolia
+      url: "https://base-sepolia.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 1
+    read:
+      id: ankr-mainnet
+      url: "https://rpc.ankr.com/eth/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-mainnet
+      url: "https://mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 8453
+    read:
+      id: ankr-base-mainnet
+      url: "https://rpc.ankr.com/base/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-base-mainnet
+      url: "https://base-mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+
 routes:
   # Staging route on Base Sepolia, the PHA route of Sepolia on a second chain: a test-mode route
   # (`livemode: false`) any account can quote on and pay its own treasury through. Test PHA here is
@@ -135,7 +71,6 @@ routes:
       # finality like Sepolia's depth 2. `3` is the family default, written out here; an account
       # may require more, `safe`, or `finalized`, never less.
       confirmations: 3
-      rpc_groups: { a: base-sepolia-a, b: base-sepolia-b } # this chain's own (deploy/phala.md, "Staging routes")
       sanctions_oracle: "0x8A0C93d85a05aD30741C193068abF2e5E16e7b35" # no Chainalysis oracle on Base Sepolia
 
     asset:
@@ -144,16 +79,15 @@ routes:
       decimals: 18
       # No transfer since it was deployed (the last 100 000 blocks, Sep 2026): one token-wide log
       # request per range. The USDC route still puts the whole chain in address mode (architecture §8).
-      backstop: token
 
     price:
       mode: volatile
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a }
       allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }]
+      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, observation_chain_id: 84532 }]
       check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
       fx:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 84532 }
 
     merchant:
       min_amount: { default: 100 }
@@ -177,7 +111,6 @@ routes:
       # finality like Sepolia's depth 2. `3` is the family default, written out here; an account
       # may require more, `safe`, or `finalized`, never less.
       confirmations: 3
-      rpc_groups: { a: base-sepolia-a, b: base-sepolia-b } # this chain's own (deploy/phala.md, "Staging routes")
       sanctions_oracle: "0x8A0C93d85a05aD30741C193068abF2e5E16e7b35" # no Chainalysis oracle on Base Sepolia
 
     asset:
@@ -188,13 +121,12 @@ routes:
       # one, Sep 2026): a token-wide 2 000-block backstop window would be up to 1.9 MB and a third of
       # providers' 10 000-log response caps. Address mode puts the whole chain, PHA included, on
       # requests by recipient (architecture §8).
-      backstop: addresses
 
     price:
       mode: stablecoin
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a }
       sources:
-        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 84532 }
       peg_band_bps: 100
 
     merchant:
@@ -222,7 +154,6 @@ routes:
       # finality like Sepolia's depth 2. `3` is the family default, written out here; an account
       # may require more, `safe`, or `finalized`, never less.
       confirmations: 3
-      rpc_groups: { a: base-sepolia-a, b: base-sepolia-b } # this chain's own (deploy/phala.md, "Staging routes")
       sanctions_oracle: "0x8A0C93d85a05aD30741C193068abF2e5E16e7b35" # no Chainalysis oracle on Base Sepolia
 
     asset:
@@ -231,13 +162,12 @@ routes:
       decimals: 6
       # 2 transfers in 2 000 blocks (Oct 2026): one token-wide log request per range. The USDC route
       # still puts the whole chain in address mode (architecture §8).
-      backstop: token
 
     price:
       mode: stablecoin
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a, rpc_group_b: base-mainnet-b }
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600, rpc_group: base-mainnet-a }
       sources:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 84532 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 84532 }
       peg_band_bps: 100
 
     merchant:
@@ -256,7 +186,6 @@ routes:
 
     chain:
       chain_id: 11155111
-      rpc_groups: { a: provider-a, b: provider-b }
       forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
       confirmations: 2 # the floor and default (design D1); an account may require more, never less
       sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
@@ -265,15 +194,14 @@ routes:
       symbol: pha
       contract: "0x8F40e7E99678F44c88158f049E62817580ab113B"
       decimals: 18
-      backstop: token # few transfers per block: one token-wide log request per range (architecture §8)
 
     price:
       mode: volatile
       allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }]
+      primary: [{ source: uniswap_v2_twap, rpc_group: mainnet-a, observation_chain_id: 11155111 }]
       check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
       fx:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 11155111 }
 
     merchant:
       min_amount: { default: 100 }
@@ -291,7 +219,6 @@ routes:
 
     chain:
       chain_id: 11155111
-      rpc_groups: { a: provider-a, b: provider-b }
       forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
       confirmations: 2 # the floor and default (design D1); an account may require more, never less
       sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
@@ -304,12 +231,11 @@ routes:
       # a token-wide 2 000-block backstop window would be 2.7 MB and near providers' 10 000-log
       # response caps. Address mode puts the whole chain, PHA included, on requests by recipient
       # (architecture §8).
-      backstop: addresses
 
     price:
       mode: stablecoin
       sources:
-        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 11155111 }
       peg_band_bps: 100
 
     merchant:
@@ -330,7 +256,6 @@ routes:
 
     chain:
       chain_id: 11155111
-      rpc_groups: { a: provider-a, b: provider-b }
       forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
       confirmations: 2 # the floor and default (design D1); an account may require more, never less
       sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
@@ -341,12 +266,11 @@ routes:
       decimals: 6
       # 175 transfers in 2 000 blocks, up to 3 in one (Oct 2026): one token-wide log request per
       # range. The USDC route still puts the whole chain in address mode (architecture §8).
-      backstop: token
 
     price:
       mode: stablecoin
       sources:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, rpc_group_b: mainnet-b, observation_chain_id: 11155111 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, rpc_group: mainnet-a, observation_chain_id: 11155111 }
       peg_band_bps: 100
 
     merchant:
