@@ -81,6 +81,7 @@ from topup_client.api.deposit_addresses import (
     get_deposit_address,
     list_deposit_addresses,
     rotate_deposit_address,
+    submit_deposit_address_transaction,
     update_deposit_address,
 )
 from topup_client.api.deposits import get_deposit, list_deposits, update_deposit
@@ -92,6 +93,7 @@ from topup_client.api.quotes import (
     create_quote,
     get_quote,
     list_quotes,
+    submit_quote_transaction,
     update_quote,
 )
 from topup_client.api.refunds import (
@@ -156,8 +158,11 @@ from topup_client.models import (
     ResendEventRequest,
     RollApiKeyRequest,
     RollWebhookKeyRequest,
+    SubmitDepositAddressTransactionRequest,
+    SubmitQuoteTransactionRequest,
     Sweep,
     SweepList,
+    TransactionSubmission,
     Treasury,
     TreasuryChallenge,
     TreasuryList,
@@ -497,6 +502,25 @@ class TopupClient:
         )
         return self._checked(quote)
 
+    def submit_quote_transaction(
+        self,
+        quote_id: str,
+        transaction_hash: str,
+        *,
+        request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
+    ) -> TransactionSubmission:
+        """Forwards a detection hint; `received` never signals a payment result."""
+        body = SubmitQuoteTransactionRequest(transaction_hash=transaction_hash)
+        return self._call(
+            lambda: submit_quote_transaction.sync_detailed(
+                quote_id, client=self._client, body=body
+            ),
+            TransactionSubmission,
+            request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
+        )
+
     def list_quotes(
         self,
         *,
@@ -678,6 +702,28 @@ class TopupClient:
             upgrade_tolerance=upgrade_tolerance,
         )
         return self._checked_deposit_address(address)
+
+    def submit_deposit_address_transaction(
+        self,
+        deposit_address_id: str,
+        transaction_hash: str,
+        *,
+        chain_id: int,
+        request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
+    ) -> TransactionSubmission:
+        """Forwards a hint on one of the deposit address's issued networks."""
+        body = SubmitDepositAddressTransactionRequest(
+            transaction_hash=transaction_hash, chain_id=chain_id
+        )
+        return self._call(
+            lambda: submit_deposit_address_transaction.sync_detailed(
+                deposit_address_id, client=self._client, body=body
+            ),
+            TransactionSubmission,
+            request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
+        )
 
     def list_deposit_addresses(
         self,
@@ -1894,7 +1940,9 @@ class TopupClient:
                 # Raise outside the decoder exception context; it may contain a raw body.
             else:
                 parsed = response.parsed
-                if response.status_code == 200 and isinstance(parsed, expected):
+                if response.status_code == (
+                    202 if expected is TransactionSubmission else 200
+                ) and isinstance(parsed, expected):
                     try:
                         self._verify_identity(parsed)
                     except ResponseValidationError as validation:

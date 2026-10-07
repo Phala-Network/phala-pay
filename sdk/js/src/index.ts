@@ -48,3 +48,5 @@ export {
 } from "./wallet.js";
 export { networkIcon, assetIcon } from "./icons.js";
 export type { CheckoutParams } from "./shared/checkout-params.js";
+
+export { submitTransaction, type SubmitTransactionOptions } from "./transactions.js";

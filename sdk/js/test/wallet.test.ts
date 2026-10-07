@@ -1,14 +1,15 @@
 import { createWalletClient, custom, decodeFunctionData, encodeFunctionResult, erc20Abi } from "viem";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   INJECTED_WALLET_UUID,
   WalletError,
   payWithWallet,
+  retrieveQuote,
   watchWallets,
   type EthereumProvider,
   type Wallet,
 } from "../src/index.js";
-import { ADDRESS, TOKEN, quote } from "./fixtures.js";
+import { ADDRESS, TOKEN, quote, API_BASE, CLIENT_SECRET } from "./fixtures.js";
 
 const ACCOUNT = "0x3333333333333333333333333333333333333333";
 const HASH = `0x${"ab".repeat(32)}`;
@@ -233,5 +234,28 @@ describe("watchWallets", () => {
     const seen: Wallet[][] = [];
     watchWallets((wallets) => seen.push(wallets))();
     expect(seen.at(-1)?.map((w) => w.info.uuid)).toEqual([INJECTED_WALLET_UUID]);
+  });
+});
+
+
+describe("automatic transaction hints", () => {
+  it.each(["received", "network failure", "pending"])("returns the broadcast hash when hint submission is %s", async (result) => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(Response.json(quote()));
+    if (result === "received") fetch.mockResolvedValueOnce(new Response("{}", { status: 202 }));
+    else if (result === "network failure") fetch.mockRejectedValueOnce(new Error("offline"));
+    else fetch.mockImplementationOnce(() => new Promise<Response>(() => undefined));
+    const payable = await retrieveQuote({ apiBase: API_BASE, clientSecret: CLIENT_SECRET, expectedAddress: ADDRESS, fetch });
+    const wallet = mockProvider(11155111, [11155111]);
+    await expect(payWithWallet(wallet.provider, payable)).resolves.toBe(HASH);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ transaction_hash: HASH }));
+    expect(JSON.stringify(payable)).not.toContain(CLIENT_SECRET);
+  });
+  it("sends no hint if the wallet rejects the transfer", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(Response.json(quote()));
+    const payable = await retrieveQuote({ apiBase: API_BASE, clientSecret: CLIENT_SECRET, expectedAddress: ADDRESS, fetch });
+    const wallet = mockProvider(11155111, [11155111], { eth_sendTransaction: 4001 });
+    await expect(payWithWallet(wallet.provider, payable)).rejects.toBeInstanceOf(WalletError);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

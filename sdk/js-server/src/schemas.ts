@@ -2329,6 +2329,33 @@ export const schemas: Record<string, Schema> = {
     },
     "type": "object"
   },
+  "SubmitDepositAddressTransactionRequest": {
+    "properties": {
+      "chain_id": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "transaction_hash": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "transaction_hash",
+      "chain_id"
+    ],
+    "type": "object"
+  },
+  "SubmitQuoteTransactionRequest": {
+    "properties": {
+      "transaction_hash": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "transaction_hash"
+    ],
+    "type": "object"
+  },
   "Sweep": {
     "properties": {
       "address": {
@@ -2428,6 +2455,31 @@ export const schemas: Record<string, Schema> = {
       "data"
     ],
     "type": "object"
+  },
+  "TransactionSubmission": {
+    "properties": {
+      "object": {
+        "$ref": "#/components/schemas/TransactionSubmissionObject"
+      },
+      "status": {
+        "$ref": "#/components/schemas/TransactionSubmissionStatus"
+      },
+      "transaction_hash": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "object",
+      "transaction_hash",
+      "status"
+    ],
+    "type": "object"
+  },
+  "TransactionSubmissionObject": {
+    "type": "string"
+  },
+  "TransactionSubmissionStatus": {
+    "type": "string"
   },
   "Treasury": {
     "properties": {
@@ -2898,6 +2950,14 @@ export const contracts: Record<string, Contract> = {
       "$ref": "#/components/schemas/DepositAddress"
     }
   },
+  "submit_deposit_address_transaction": {
+    "response": {
+      "$ref": "#/components/schemas/TransactionSubmission"
+    },
+    "body": {
+      "$ref": "#/components/schemas/SubmitDepositAddressTransactionRequest"
+    }
+  },
   "list_deposits": {
     "response": {
       "$ref": "#/components/schemas/DepositList"
@@ -2981,6 +3041,14 @@ export const contracts: Record<string, Contract> = {
   "cancel_quote": {
     "response": {
       "$ref": "#/components/schemas/Quote"
+    }
+  },
+  "submit_quote_transaction": {
+    "response": {
+      "$ref": "#/components/schemas/TransactionSubmission"
+    },
+    "body": {
+      "$ref": "#/components/schemas/SubmitQuoteTransactionRequest"
     }
   },
   "list_refunds": {

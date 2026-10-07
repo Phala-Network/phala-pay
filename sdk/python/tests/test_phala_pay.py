@@ -467,3 +467,37 @@ def test_construct_event_rejects_invalid_tolerance(tolerance: float) -> None:
         Webhook.construct_event(
             body, headers, SERVICE_PUBLIC_KEY, ACCOUNT, expected_livemode=False, tolerance=tolerance
         )
+
+
+def test_transaction_hints_forward_hash_and_deposit_address_chain_without_payment_result() -> None:
+    requests: list[httpx.Request] = []
+    transaction_hash = "0x" + "ab" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            202,
+            json={
+                "object": "transaction_submission",
+                "transaction_hash": transaction_hash,
+                "status": "received",
+            },
+        )
+
+    with _client(httpx.MockTransport(handler)) as client:
+        quote_hint = client.quotes.submit_transaction(
+            QUOTE_ID, transaction_hash=transaction_hash, request_deadline=2
+        )
+        address_hint = client.deposit_addresses.submit_transaction(
+            DEPOSIT_ADDRESS_ID, transaction_hash=transaction_hash, chain_id=84532
+        )
+    assert quote_hint.transaction_hash == transaction_hash
+    assert address_hint.transaction_hash == transaction_hash
+    assert requests[0].url.path == f"/v1/quotes/{QUOTE_ID}/transactions"
+    assert requests[1].url.path == f"/v1/deposit_addresses/{DEPOSIT_ADDRESS_ID}/transactions"
+    assert json.loads(requests[0].content) == {"transaction_hash": transaction_hash}
+    assert json.loads(requests[1].content) == {
+        "transaction_hash": transaction_hash,
+        "chain_id": 84532,
+    }
+    assert all(request.headers["authorization"] == f"Bearer {KEY}" for request in requests)

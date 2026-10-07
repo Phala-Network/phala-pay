@@ -28,6 +28,7 @@ from topup_client.models import (
     Quote,
     Refund,
     Sweep,
+    TransactionSubmission,
     Treasury,
 )
 from topup_sdk import (
@@ -94,6 +95,7 @@ __all__ = [
     "ResponseValidationError",
     "SignatureVerificationError",
     "Sweep",
+    "TransactionSubmission",
     "TransportError",
     "Treasury",
     "TreasuryStatus",

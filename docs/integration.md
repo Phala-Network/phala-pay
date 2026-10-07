@@ -848,6 +848,61 @@ settings = pay.payment_settings.update(chains=[
   not offered or credited until you or the operator change it.
 - **After a service restore** your settings are `held` until you reconfirm them (§5.12).
 
+### Transaction-hash hints
+
+`@phala/pay` submits a hint automatically when `payWithWallet` returns the broadcast hash for
+a quote retrieved by its client. `<Checkout>` needs no integration change. The hint starts
+receipt polling immediately; manual transfers still use the normal scanner.
+
+For a custom wallet flow, submit the returned hash yourself:
+
+```ts
+await pay.submitTransaction(clientSecret, transactionHash);
+// For a deposit-address client secret, also select an issued network:
+await pay.submitTransaction(addressClientSecret, transactionHash, { chainId: 84532 });
+```
+
+Server forwarding uses the merchant key:
+
+```ts
+await pay.quotes.submitTransaction(quoteId, { transaction_hash: transactionHash });
+await pay.depositAddresses.submitTransaction(addressId, {
+  transaction_hash: transactionHash, chain_id: 84532,
+});
+```
+
+Python exposes the same operations:
+
+```python
+pay.quotes.submit_transaction(quote_id, transaction_hash=transaction_hash)
+pay.deposit_addresses.submit_transaction(
+    address_id, transaction_hash=transaction_hash, chain_id=84532
+)
+```
+
+Plain HTTP accepts `POST /v1/quotes/{id}/transactions` with `{"transaction_hash":"0x…"}` and
+`POST /v1/deposit_addresses/{id}/transactions` with
+`{"transaction_hash":"0x…","chain_id":84532}`. Browser calls authenticate with the object's
+`client_secret` query parameter; server calls require `quotes.write` or
+`deposit_addresses.write`. A quote uses its stored chain, a deposit address requires one of
+its issued networks, and the server derives the recipient. Extra body fields do not select an
+address or change payment terms.
+
+Every submission responds `202` with
+`{"object":"transaction_submission","transaction_hash":"0x…","status":"received"}`.
+This acknowledges receipt only. Unknown objects, invalid credentials, unrelated or unmined
+transactions, duplicates and exhausted limits give no payment signal. Continue polling the quote
+or deposit address and fulfill only from verified webhooks.
+
+Hints can record only a successful routed ERC-20 transfer agreed by both RPC endpoints at the
+route's confirmation. They do not advance coverage or cause expiry, cancellation, rejection or
+credit by themselves. Each task is limited to 12 read calls and 8 verify calls including retries
+and head polling, and 90 seconds on Ethereum chains or 30 seconds on Base chains. Limits are
+3/minute and 10/day per object, 20/minute per source IP, four active tasks and a hard 150 tasks
+per environment per UTC day. A not-ready endpoint parks hints in a bounded process-local queue
+for at most 15 minutes. Exhausted, dropped or interrupted hints leave detection to the scanner;
+wallet submission errors never change an already broadcast payment's result.
+
 ## 2. Webhooks and fulfillment
 
 ### 2.1 The event

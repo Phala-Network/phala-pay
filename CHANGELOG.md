@@ -43,6 +43,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `Retry-After: 1`; the request has not executed. Malformed or checksum-invalid keys still return
   `401` without taking a slot. Payer reads, health checks, and admin authentication use their
   existing admission paths.
+- Object-scoped transaction-hash hint endpoints for quotes and deposit addresses always
+  acknowledge with `202 received`, use client-secret or merchant write authentication, and only
+  record dual-verified successful routed transfers at confirmation. Hard call, time, concurrency
+  and UTC daily task limits fall back to scanning; hints never establish negative coverage.
+
 - Dual finalized coverage and per-address backfill markers, independently verified deposit evidence,
   and durable agreed checkpoints. Contract code mismatch freezes only its chain; audited lifts
   require a fresh passing dual-source check.
@@ -111,6 +116,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Added
 
+- Browser `submitTransaction` and automatic submission after `payWithWallet` broadcasts a retrieved
+  quote's payment. `<Checkout>` inherits it. Server resources expose `quotes.submitTransaction`
+  and `depositAddresses.submitTransaction`.
 - Generated server error-code types include `address_capacity_reached` and `chain_unavailable`;
   unknown future codes remain accepted.
 - Quote types expose `cancel_requested_at`, including the browser's parsed `ClientQuote`.
@@ -186,6 +194,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 #### Added
 
 - Quote objects expose `cancel_requested_at` for deferred cancellation requests.
+- `quotes.submit_transaction` and `deposit_addresses.submit_transaction`, with matching
+  lower-level forwarding and regenerated clients in lockstep with JavaScript.
 
 #### Removed
 

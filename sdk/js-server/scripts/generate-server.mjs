@@ -43,6 +43,7 @@ for (const [path, methods] of Object.entries(api.paths))
           : id || singleton
             ? "update"
             : "create";
+    if (action === "transactions") method = "submitTransaction";
     if (resource === "treasuries" && path.endsWith("/challenge")) method = "challenge";
     if (resource === "account" && action === "pause") method = "pauseQuotes";
     if (resource === "account" && action === "resume") method = "resumeQuotes";

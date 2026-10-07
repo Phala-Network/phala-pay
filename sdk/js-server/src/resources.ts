@@ -70,6 +70,9 @@ export class DepositAddressesResource {
   rotate(id: string, options?: RequestOptions): Promise<Types.DepositAddress> {
     return this.execute<Types.DepositAddress>("rotate_deposit_address", "POST", `/v1/deposit_addresses/${encodeId(id)}/rotate`, undefined, options);
   }
+  submitTransaction(id: string, params: Types.DepositAddressSubmitTransactionParams, options?: RequestOptions): Promise<Types.TransactionSubmission> {
+    return this.execute<Types.TransactionSubmission>("submit_deposit_address_transaction", "POST", `/v1/deposit_addresses/${encodeId(id)}/transactions`, params, options);
+  }
  }
 export class DepositsResource {
   constructor(private readonly execute: Execute) {}
@@ -138,6 +141,9 @@ export class QuotesResource {
   }
   cancel(id: string, options?: RequestOptions): Promise<Types.Quote> {
     return this.execute<Types.Quote>("cancel_quote", "POST", `/v1/quotes/${encodeId(id)}/cancel`, undefined, options);
+  }
+  submitTransaction(id: string, params: Types.QuoteSubmitTransactionParams, options?: RequestOptions): Promise<Types.TransactionSubmission> {
+    return this.execute<Types.TransactionSubmission>("submit_quote_transaction", "POST", `/v1/quotes/${encodeId(id)}/transactions`, params, options);
   }
  }
 export class RefundsResource {

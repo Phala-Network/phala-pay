@@ -89,10 +89,15 @@ from .refund_object import RefundObject
 from .resend_event_request import ResendEventRequest
 from .roll_api_key_request import RollApiKeyRequest
 from .roll_webhook_key_request import RollWebhookKeyRequest
+from .submit_deposit_address_transaction_request import SubmitDepositAddressTransactionRequest
+from .submit_quote_transaction_request import SubmitQuoteTransactionRequest
 from .sweep import Sweep
 from .sweep_list import SweepList
 from .sweep_list_object import SweepListObject
 from .sweep_object import SweepObject
+from .transaction_submission import TransactionSubmission
+from .transaction_submission_object import TransactionSubmissionObject
+from .transaction_submission_status import TransactionSubmissionStatus
 from .treasury import Treasury
 from .treasury_challenge import TreasuryChallenge
 from .treasury_challenge_object import TreasuryChallengeObject
@@ -200,10 +205,15 @@ __all__ = (
     "ResendEventRequest",
     "RollApiKeyRequest",
     "RollWebhookKeyRequest",
+    "SubmitDepositAddressTransactionRequest",
+    "SubmitQuoteTransactionRequest",
     "Sweep",
     "SweepList",
     "SweepListObject",
     "SweepObject",
+    "TransactionSubmission",
+    "TransactionSubmissionObject",
+    "TransactionSubmissionStatus",
     "Treasury",
     "TreasuryChallenge",
     "TreasuryChallengeObject",

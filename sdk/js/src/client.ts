@@ -1,3 +1,5 @@
+import type { Hash } from "viem";
+import { submitTransaction, type SubmitTransactionOptions } from "./transactions.js";
 import {
   createCheckout,
   retrieveQuote,
@@ -58,6 +60,15 @@ export class PhalaPay {
       ...options,
       ...this.#fetchOption(),
     });
+  }
+
+  /** Acknowledges a hint only; continue polling the object for payment status. */
+  submitTransaction(
+    clientSecret: string,
+    transactionHash: Hash,
+    options: Pick<SubmitTransactionOptions, "chainId" | "signal" | "requestTimeout"> = {},
+  ): Promise<void> {
+    return submitTransaction({ ...options, clientSecret, transactionHash, apiBase: this.apiBase, ...this.#fetchOption() });
   }
 
   #fetchOption(): { fetch?: typeof globalThis.fetch } {

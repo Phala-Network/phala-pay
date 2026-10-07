@@ -30,6 +30,8 @@ const cases: Case[] = [
     call: (pay) => pay.quotes.create(quote),
     body: quote,
   },
+  { name: "quotes.submitTransaction", operation: "submit_quote_transaction", call: (pay) => pay.quotes.submitTransaction(id, { transaction_hash: `0x${"ab".repeat(32)}` }), body: { transaction_hash: `0x${"ab".repeat(32)}` } },
+  { name: "depositAddresses.submitTransaction", operation: "submit_deposit_address_transaction", call: (pay) => pay.depositAddresses.submitTransaction(id, { transaction_hash: `0x${"ab".repeat(32)}`, chain_id: 84532 }), body: { transaction_hash: `0x${"ab".repeat(32)}`, chain_id: 84532 } },
   { name: "quotes.retrieve", operation: "get_quote", call: (pay) => pay.quotes.retrieve(id) },
   { name: "quotes.listPage", operation: "list_quotes", call: (pay) => pay.quotes.listPage(query) },
   {
