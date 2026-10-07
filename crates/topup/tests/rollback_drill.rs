@@ -299,23 +299,53 @@ async fn credited(database: &TestDatabase, tx: B256) -> Result<()> {
     wait_until("payment credited",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM deposits WHERE tx_hash=$1 AND state IN ('credited','swept'))").bind(format!("{tx:#x}")).fetch_one(&database.app_pool).await?)}).await
 }
 fn reconcile(
-    image: Option<&str>, config: &Path, database: &TestDatabase, tls: &support::tls::RpcTlsProxy,
+    image: Option<&str>,
+    config: &Path,
+    database: &TestDatabase,
+    tls: &support::tls::RpcTlsProxy,
 ) -> Result<()> {
     let mut command = if let Some(image) = image {
         let mut command = Command::new("docker");
-        command.args(["run", "--rm", "--network", "host", "--add-host", "read-drill.test:127.0.0.1",
-            "--add-host", "verify-drill.test:127.0.0.1", "-e", &format!("DATABASE_URL={}", database.app_url),
-            "-v", &format!("{}:/etc/drill.json:ro", config.display()), image, "topup"]);
+        command.args([
+            "run",
+            "--rm",
+            "--network",
+            "host",
+            "--add-host",
+            "read-drill.test:127.0.0.1",
+            "--add-host",
+            "verify-drill.test:127.0.0.1",
+            "-e",
+            &format!("DATABASE_URL={}", database.app_url),
+            "-v",
+            &format!("{}:/etc/drill.json:ro", config.display()),
+            image,
+            "topup",
+        ]);
         command
     } else {
         let mut command = Command::new(env!("CARGO_BIN_EXE_topup"));
-        command.env("DATABASE_URL", &database.app_url).env("SSL_CERT_FILE", &tls.certificate)
-            .env("TOPUP_RPC_ANKR_KEY", "local-drill-key").env("TOPUP_RPC_INFURA_KEY", "local-drill-key");
+        command
+            .env("DATABASE_URL", &database.app_url)
+            .env("SSL_CERT_FILE", &tls.certificate)
+            .env("TOPUP_RPC_ANKR_KEY", "local-drill-key")
+            .env("TOPUP_RPC_INFURA_KEY", "local-drill-key");
         command
     };
-    command.args(["reconcile", "--config"]).arg(if image.is_some() { Path::new("/etc/drill.json") } else { config });
+    command
+        .args(["reconcile", "--config"])
+        .arg(if image.is_some() {
+            Path::new("/etc/drill.json")
+        } else {
+            config
+        });
     let output = command.output()?;
-    ensure!(output.status.success(), "reconciliation failed: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    ensure!(
+        output.status.success(),
+        "reconciliation failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 /// PR 3 extends this fixture to write hint-recorded deposits and pending tasks before rollback.
