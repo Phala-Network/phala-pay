@@ -459,7 +459,17 @@ twap_policy=$(jq -c '[.routes[].price | (.primary // [])[] | select(.source == "
 twap_sql="$tmp/twap.sql"
 : >"$twap_sql"
 pair_timestamp_last=$((ANVIL_PRICE_PAIR_TIMESTAMP - 1800))
-window_start=$(($(date +%s) - 2100))
+# The first seeded block must follow Anvil's real head, even when setup is fast.
+seed_head_timestamp=$(cast block latest --field timestamp --rpc-url "$mainnet_price_rpc_url")
+window_start=$(python3 - "$seed_head_timestamp" <<'PY'
+import sys, time
+now = int(time.time())
+start = max(int(sys.argv[1], 0) + 1, now - 2100)
+if start + 1800 > now:
+    raise ValueError("price fixture must begin at least thirty minutes before the wall clock")
+print(start)
+PY
+)
 twap_spot=$(python3 - <<'PY'
 print((100 * 10**18 << 112) // (100_000 * 10**18))
 PY
@@ -505,7 +515,7 @@ cast rpc --rpc-url "$base_mainnet_price_rpc_url" evm_mine >/dev/null
 cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setIntervalMining 1 >/dev/null
 cast rpc --rpc-url "$base_mainnet_price_rpc_url" anvil_setIntervalMining 1 >/dev/null
 dc start topup >/dev/null
-echo "ok: persisted 31 local samples covering the minimum TWAP window"
+echo "ok: persisted seven 300-second samples covering the minimum TWAP window"
 
 http_status() {
     product_python -c 'import sys, httpx; print(httpx.get(sys.argv[1], timeout=5).status_code)' "$1"
