@@ -235,8 +235,3 @@ missed samples. The jump bound scales the existing 500 bps per minute by
 √(300/60) under the random-walk assumption, rounded to 1100 bps. Code defaults remain
 180 s and 500 bps; the configured age bound is validated up to 900 s and the jump bound
 up to 2000 bps.
-
-Staging PHA explicitly sets `max_sample_age_s: 900`: three 300-second intervals, tolerating two
-misses. Its `max_sample_jump_bps: 1100` scales 500 bps by sqrt(300/60) under the random-walk
-assumption, rounded. Defaults stay 180 seconds / 500 bps for 60-second sampling. A gap over the
-configured age or jump over the configured limit rejects the series.

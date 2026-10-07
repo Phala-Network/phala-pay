@@ -1600,7 +1600,11 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
                         if let topup_core::price::Source::UniswapV2Twap { twap, .. } = source {
                             println!(
                                 "    TWAP={twap:?}; sample_interval_s={}; ETH/USD={:?}",
-                                topup_adapters::pricing::uniswap_v2::SAMPLE_INTERVAL_S,
+                                if config.environment == "staging" {
+                                    topup_adapters::pricing::uniswap_v2::SAMPLE_INTERVAL_S
+                                } else {
+                                    60
+                                },
                                 topup_core::price::feed("ETH_USD", 1)
                             );
                         }

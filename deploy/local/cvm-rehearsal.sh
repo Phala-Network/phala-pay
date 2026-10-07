@@ -141,6 +141,16 @@ cleanup() {
     if [[ -n "${compose_file:-}" ]]; then
         dc down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1
     fi
+    # A malformed overlay can prevent Compose from parsing even for `down`. Labels still
+    # identify only this run's resources, including containers created before rendering.
+    for owned_project in "$project" "$product_project"; do
+        mapfile -t owned_containers < <(docker ps -aq --filter "label=com.docker.compose.project=$owned_project")
+        ((${#owned_containers[@]} == 0)) || docker rm -fv "${owned_containers[@]}" >/dev/null 2>&1
+        mapfile -t owned_volumes < <(docker volume ls -q --filter "label=com.docker.compose.project=$owned_project")
+        ((${#owned_volumes[@]} == 0)) || docker volume rm "${owned_volumes[@]}" >/dev/null 2>&1
+        mapfile -t owned_networks < <(docker network ls -q --filter "label=com.docker.compose.project=$owned_project")
+        ((${#owned_networks[@]} == 0)) || docker network rm "${owned_networks[@]}" >/dev/null 2>&1
+    done
     docker rm -f -v "$registry" >/dev/null 2>&1
     # Failures show up in leftovers() below.
     docker image rm "${local_images[@]}" "$TOPUP_LOCAL_DSTACK_IMAGE" >/dev/null 2>&1

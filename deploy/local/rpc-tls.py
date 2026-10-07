@@ -13,6 +13,7 @@ def main() -> None:
     parser.add_argument("--certificate", type=Path, required=True)
     parser.add_argument("--key", type=Path, required=True)
     parser.add_argument("--image", required=True)
+    parser.add_argument("--restore-check", action="store_true")
     parser.add_argument("--chain", action="append", required=True, help="chain_id=http://upstream:port")
     args = parser.parse_args()
     upstreams = dict(item.split("=", 1) for item in args.chain)
@@ -41,7 +42,7 @@ def main() -> None:
                 "restart": "no",
             }
             relays[name] = {"condition": "service_started"}
-    for service in ("topup", "restore-check"):
+    for service in ("topup", "restore-check") if args.restore_check else ("topup",):
         services[service] = {
             "environment": {
                 "SSL_CERT_FILE": "/etc/rpc-tls/cert.pem",

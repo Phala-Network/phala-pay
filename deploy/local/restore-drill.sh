@@ -1327,7 +1327,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=crit
     -addext 'subjectAltName=DNS:*.rpc.test' -keyout "$admin_dir/rpc-key.pem" \
     -out "$admin_dir/rpc-cert.pem" >/dev/null 2>&1
 cp "$admin_dir/config.json" "$admin_dir/topup.json"
-python3 "$root/deploy/local/rpc-tls.py" "$admin_dir/topup.json" "$admin_dir/rpc-tls.json" \
+python3 "$root/deploy/local/rpc-tls.py" "$admin_dir/topup.json" "$admin_dir/rpc-tls.json" --restore-check \
     --certificate "$admin_dir/rpc-cert.pem" --key "$admin_dir/rpc-key.pem" \
     --image python:3.14-slim-trixie@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2 \
     --chain 11155111=http://anvil:8545 --chain 84532=http://anvil-base:8545 \
