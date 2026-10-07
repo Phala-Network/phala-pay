@@ -7,11 +7,11 @@ Uniswap V2 TWAP is implemented with persisted service observations.
 
 ## Decision
 
-Remove Coin Metrics. Production stablecoin valuation reads Chainlink Data Feeds on the route's RPC
-groups. Public exchange adapters remain available for explicit noncommercial staging rehearsal,
+Remove Coin Metrics. Production stablecoin valuation reads Chainlink Data Feeds through the price
+chain's read and verify endpoints. Public exchange adapters remain available for explicit noncommercial staging rehearsal,
 not production defaults. Volatile prices require two fresh observations from independent
 companies to agree; an outage or disagreement
-pauses the affected quote/credit path. This is the price counterpart to [RPC failover](rpc-failover.md).
+pauses the affected quote/credit path. On-chain evidence follows [chain reads](chain-reads.md).
 
 Coin Metrics Community is unsuitable: its [package terms](https://docs.coinmetrics.io/packages/coin-metrics-community-data)
 say “**non-commercial use only**” and the [announcement](https://coinmetrics.io/?p=16175) says

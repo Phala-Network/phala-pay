@@ -369,9 +369,9 @@ async fn published_image_round_trip() -> Result<()> {
         let contracts=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../contracts");
         let code=run_checked("forge",&["inspect","test/mocks/PriceFixtures.sol:MockPriceAggregator","deployedBytecode"],Some(&contracts))?;
         let code=String::from_utf8(code.stdout)?;let feed=topup_core::price::feed("USDC_USD",1).unwrap().address;
-        cast(&anvil,&["rpc","anvil_setCode",&feed.to_owned(),code.trim()])?;
+        cast(&anvil,&["rpc","anvil_setCode",feed,code.trim()])?;
         for (slot,value) in [(0,8_u64),(1,100000000),(2,1),(3,u64::try_from(Utc::now().timestamp())?),(4,u64::try_from(Utc::now().timestamp())?),(5,1)] {
-            cast(&anvil,&["rpc","anvil_setStorageAt",&feed.to_owned(),&format!("0x{slot:064x}"),&format!("0x{value:064x}")])?;
+            cast(&anvil,&["rpc","anvil_setStorageAt",feed,&format!("0x{slot:064x}"),&format!("0x{value:064x}")])?;
         }
         anvil.mine(16)?;
         let gate=Arc::new(AtomicBool::new(false));let observed=Arc::new(AtomicBool::new(false));
@@ -379,7 +379,7 @@ async fn published_image_round_trip() -> Result<()> {
         let tls=support::tls::RpcTlsProxy::start(&proxy)?;
         let (kms,_kms_task)=serve(Router::new().route("/GetKey",post(||async {Json(json!({"key":"01".repeat(32),"signature_chain":[]}))}))).await?;
         let mut route:RouteFile=serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml"))?;
-        route.livemode=false;route.route="rollback-ethereum-usdc-usd".into();route.chain.contracts.forwarder_factory=factory;
+        route.livemode=true;route.route="rollback-ethereum-usdc-usd".into();route.chain.contracts.forwarder_factory=factory;
         route.chain.contracts.implementation=topup_core::route::factory_implementation(factory);
         route.screening.sanctions_oracle=oracle;route.chain.confirmations=Confirmations::Depth(2);route.asset.contract=token;route.asset.symbol="usdc".into();
         route.pricing.mode=topup_core::route::PricingMode::Stablecoin;route.pricing.primary.clear();route.pricing.check.clear();route.pricing.fx.clear();
@@ -391,30 +391,31 @@ async fn published_image_round_trip() -> Result<()> {
         std::fs::write(&current_path,current.to_string())?;std::fs::write(&old_path,old.to_string())?;
         let migration=Command::new("docker").args(["run","--rm","--network","host","-e",&format!("DATABASE_URL={}",database.owner_url),&image,"topup","migrate"]).output()?;
         ensure!(migration.status.success(),"published N-1 migrate: {}",String::from_utf8_lossy(&migration.stderr));
-        let account=seed::create_account(&database.app_pool,&NewAccount {livemode:false,..NewAccount::named("rollback merchant")}).await?;
-        let key=seed::create_api_key(&database.app_pool,account.id,false).await?;
+        let account=seed::create_account(&database.app_pool,&NewAccount {livemode:true,..NewAccount::named("rollback merchant")}).await?;
+        let key=seed::create_api_key(&database.app_pool,account.id,true).await?;
         let treasury:Address="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".parse()?;
-        seed::set_treasury(&database.app_pool,account.id,false,1,treasury).await?;seed::accept_routes(&database.app_pool,account.id,false,&[&route]).await?;
+        seed::set_treasury(&database.app_pool,account.id,true,1,treasury).await?;seed::accept_routes(&database.app_pool,account.id,true,&[&route]).await?;
         let socket=std::net::TcpListener::bind("127.0.0.1:0")?;let port=socket.local_addr()?.port();drop(socket);let origin=format!("http://127.0.0.1:{port}");
         let mut previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
         let address=merchant(&origin,&key,"/v1/deposit_addresses",json!({"client_reference_id":"round-trip"})).await?;
         let forwarder:Address=address["networks"][0]["address"].as_str().context("issued network")?.parse()?;
         let da_id=topup::ids::parse(topup::ids::DEPOSIT_ADDRESS,address["id"].as_str().unwrap()).unwrap();
-        let first=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(8)?;credited(&database,first).await?;
+        let first=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(16)?;credited(&database,first).await?;
         wait_until("N-1 finalized payment",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT final_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?)}).await?;
         previous.stop()?;
         reconcile(Some(&image),&old_path,&database,&tls)?;
-        // Restore fixture: this already-issued address paid below its restored creation boundary.
-        // N must leave it absent until the real reissue lowers that boundary.
-        let historical=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;
-        anvil.mine(8)?;
+        // Restore fixture: version 2 was previously issued but its DB row was lost.
+        // Its historical payment stays absent until real reissue restores the version and
+        // lowers the newly inserted created_block below the current coverage boundary.
+        let historical_salt=topup_core::address::deposit_address_salt(&account.public_id,true,"round-trip",2);
+        let historical_forwarder=topup_core::address::forwarder_address(factory,route.chain.contracts.implementation,treasury,historical_salt);
+        let historical=send(&anvil,token,"transfer(address,uint256)",&[&format!("{historical_forwarder:#x}"),"1000000000000000000"])?;
+        anvil.mine(16)?;
         let historical_receipt=cast(&anvil,&["receipt",&format!("{historical:#x}"),"--json"])?;
         let historical_block=u64::from_str_radix(historical_receipt["blockNumber"].as_str().context("historical block")?.trim_start_matches("0x"),16)?;
-        sqlx::query("UPDATE addresses SET created_block=$2 WHERE deposit_address_id=$1")
-            .bind(da_id).bind(i64::try_from(historical_block+1)?).execute(&database.owner_pool).await?;
         topup::db::migrate(&database.owner_pool).await?;
         let mut current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;
-        let second=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(8)?;
+        let second=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(16)?;
         // Restart at a scheduled-round boundary without changing production cadences.
         current_service.stop()?;current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;credited(&database,second).await?;
         let cancel=merchant(&origin,&key,"/v1/quotes",json!({"client_reference_id":"cancel","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"})).await?;
@@ -425,12 +426,15 @@ async fn published_image_round_trip() -> Result<()> {
         sqlx::query("UPDATE quotes SET expires_at=now()-interval '1 second' WHERE id=$1").bind(expiry_id).execute(&database.owner_pool).await?;
         ensure!(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM deposits WHERE tx_hash=$1)")
             .bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?,"restored history was recorded before reissue");
+        current_service.stop()?;
         let historic_block:i64=sqlx::query_scalar("SELECT block_number FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?;
-        topup::deposit_addresses::reissue(&database.app_pool,&account,false,"round-trip",&[ChainContracts::of(&route)],ReissueTarget {version:Some(1),address:Some(forwarder)},Some(da_id),None,Some(Utc::now()-chrono::TimeDelta::hours(1)),&std::collections::BTreeMap::from([(1,u64::try_from(historic_block.saturating_sub(16))?)]),&Actor::system("rollback-drill"),"historical payment reissue").await?;
-        ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_covered_through IS NULL FROM addresses WHERE deposit_address_id=$1").bind(da_id).fetch_one(&database.app_pool).await?);
-        let salt:String=sqlx::query_scalar("SELECT salt FROM addresses WHERE deposit_address_id=$1").bind(da_id).fetch_one(&database.app_pool).await?;
-        send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&format!("[{salt}]"),&format!("{token:#x}")])?;
-        anvil.mine(16)?;current_service.stop()?;
+        let (reissued,created)=topup::deposit_addresses::reissue(&database.app_pool,&account,true,"round-trip",&[ChainContracts::of(&route)],ReissueTarget {version:Some(2),address:Some(historical_forwarder)},None,None,Some(Utc::now()-chrono::TimeDelta::hours(1)),&std::collections::BTreeMap::from([(1,u64::try_from(historic_block.saturating_sub(16))?)]),&Actor::system("rollback-drill"),"historical payment reissue").await?;
+        ensure!(created && reissued.version==2);
+        ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_covered_through IS NULL AND created_block < $2 FROM addresses WHERE deposit_address_id=$1").bind(reissued.id).bind(i64::try_from(historical_block)?).fetch_one(&database.app_pool).await?);
+        let salts:Vec<String>=sqlx::query_scalar("SELECT salt FROM addresses WHERE deposit_address_id=ANY($1) ORDER BY deposit_address_id").bind(vec![da_id,reissued.id]).fetch_all(&database.app_pool).await?;
+        ensure!(salts.len()==2);let salts=format!("[{}]",salts.join(","));
+        send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&salts,&format!("{token:#x}")])?;
+        anvil.mine(16)?;
         let before:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;
         gate.store(true,Ordering::SeqCst);observed.store(false,Ordering::SeqCst);
         let mut interrupted=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;
@@ -457,9 +461,9 @@ async fn published_image_round_trip() -> Result<()> {
         use tower::ServiceExt;
         let lifted=app.oneshot(support::signed_request(axum::http::Method::POST,"/v1/admin/reconciliation_blocks/chain:1/lift",serde_json::to_vec(&json!({"reason":"fresh dual check then audited rollback lift"}))?,"drill/admin",&ed25519_dalek::SigningKey::from_bytes(&[41;32]),Utc::now().timestamp())).await?;
         ensure!(lifted.status().is_success(),"fresh checked audited lift failed");
-        let third=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(8)?;
+        let third=send(&anvil,token,"transfer(address,uint256)",&[&format!("{historical_forwarder:#x}"),"1000000000000000000"])?;anvil.mine(16)?;
         previous.stop()?;previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;credited(&database,third).await?;credited(&database,historical).await?;
-        send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&format!("[{salt}]"),&format!("{token:#x}")])?;
+        send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&salts,&format!("{token:#x}")])?;
         anvil.mine(16)?;
         previous.stop()?;previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
         wait_until("N-1 finality and sweep",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT count(*)=4 AND bool_and(final_at IS NOT NULL AND state='swept') FROM deposits").fetch_one(&database.app_pool).await?)}).await?;
@@ -476,9 +480,35 @@ async fn published_image_round_trip() -> Result<()> {
         ensure!(sqlx::query_scalar::<_,bool>("SELECT bool_and(final_at IS NOT NULL AND state='swept') FROM deposits").fetch_one(&database.app_pool).await?);
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM reconciliation_blocks").fetch_one(&database.app_pool).await?==0);
         final_current.stop()?;
+        // Anvil mines empty blocks for the shortened finality lag. Give the typed startup
+        // self-test a genuine transaction/receipt/log in the finalized block as a real
+        // active chain does. These zero transfers pay no issued address and change no balance.
+        for _ in 0..16 {
+            send(&anvil,token,"transfer(address,uint256)",&[&format!("{treasury:#x}"),"0"])?;
+        }
         reconcile(None,&current_path,&database,&tls)?;
         Ok(())
     }.await;
+    if let Err(error) = &result {
+        eprintln!("rollback drill failed: {error:#}");
+        for entry in std::fs::read_dir(directory.path())? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|extension| extension == "log") {
+                let log = std::fs::read_to_string(&path)?;
+                let lines: Vec<_> = log.lines().collect();
+                eprintln!(
+                    "--- {} ---\n{}",
+                    path.display(),
+                    lines[lines.len().saturating_sub(80)..].join("\n")
+                );
+            }
+        }
+        let deposits: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT tx_hash,state,reason FROM deposits ORDER BY created_at")
+                .fetch_all(&database.app_pool)
+                .await?;
+        eprintln!("deposit outcomes: {deposits:?}");
+    }
     let cleanup = database.cleanup().await;
     result.and(cleanup)
 }
