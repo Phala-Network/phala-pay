@@ -526,12 +526,8 @@ fn router_from_routes(
     merchant: OpenApiRouter<AppState>,
     admin: OpenApiRouter<AppState>,
 ) -> (Router, ApiDocs) {
-    let (merchant_router, merchant_doc) = merchant
-        .layer(middleware::from_fn(interactive_rpc))
-        .split_for_parts();
-    let (admin_router, admin_doc) = admin
-        .layer(middleware::from_fn(interactive_rpc))
-        .split_for_parts();
+    let (merchant_router, merchant_doc) = merchant.split_for_parts();
+    let (admin_router, admin_doc) = admin.split_for_parts();
     let docs = ApiDocs {
         merchant: openapi::merchant(&merchant_doc),
         admin: openapi::admin(&admin_doc),
@@ -559,10 +555,6 @@ fn router_from_routes(
         .with_state(state);
 
     (router, docs)
-}
-
-async fn interactive_rpc(request: Request, next: Next) -> Response {
-    next.run(request).await
 }
 
 async fn unrecognized_request() -> Response {
@@ -697,39 +689,6 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::{AppState, VerificationKey};
-
-    async fn assert_interactive_route(path: &str) {
-        async fn priority_handler() -> StatusCode {
-            StatusCode::NO_CONTENT
-        }
-        let merchant =
-            super::OpenApiRouter::new().route("/v1/account", super::get(priority_handler));
-        let admin =
-            super::OpenApiRouter::new().route("/v1/admin/accounts", super::get(priority_handler));
-        // Use production router assembly so both scopes pass through the real middleware.
-        let app = super::router_from_routes(
-            offline_state(),
-            Arc::new(crate::pause::InstancePause::default()),
-            merchant,
-            admin,
-        )
-        .0;
-        let response = app
-            .oneshot(Request::get(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn merchant_route_uses_interactive_rpc_priority() {
-        assert_interactive_route("/v1/account").await;
-    }
-
-    #[tokio::test]
-    async fn admin_route_uses_interactive_rpc_priority() {
-        assert_interactive_route("/v1/admin/accounts").await;
-    }
 
     /// Occupying every unauthenticated permit cannot shed health checks, and trickled bodies
     /// expire even though the sender never signals EOF.
