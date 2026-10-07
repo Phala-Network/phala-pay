@@ -964,7 +964,7 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
             self.dispatch(self.post)
 
         def do_OPTIONS(self) -> None:
-            self.send(HTTPStatus.ACCEPTED, {}, cors=True)
+            self.send(HTTPStatus.NO_CONTENT, {}, cors=True)
 
         def dispatch(self, route: Any) -> None:
             url = urlsplit(self.path)
@@ -1121,7 +1121,7 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
             self.send(status, {"error": error}, cors=True)
 
         def send(self, status: HTTPStatus, body: dict[str, Any], *, cors: bool = False) -> None:
-            payload = json.dumps(body).encode()
+            payload = b"" if status == HTTPStatus.NO_CONTENT else json.dumps(body).encode()
             self.send_response(status)
             self.send_header("content-type", "application/json")
             self.send_header("request-id", "req_" + uuid.uuid4().hex)
@@ -1129,6 +1129,7 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
                 self.send_header("access-control-allow-origin", "*")
                 self.send_header("access-control-allow-methods", "POST, OPTIONS")
                 self.send_header("access-control-allow-headers", "Content-Type")
+                self.send_header("access-control-max-age", "600")
             self.send_header("content-length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)

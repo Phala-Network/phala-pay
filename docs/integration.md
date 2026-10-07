@@ -895,11 +895,16 @@ transactions, duplicates and exhausted limits give no payment signal. Continue p
 or deposit address and fulfill only from verified webhooks.
 
 Hints can record only a successful routed ERC-20 transfer agreed by both RPC endpoints at the
-route's confirmation. They do not advance coverage or cause expiry, cancellation, rejection or
+route's confirmation. The worker first polls read for inclusion, waits for both endpoints' heads
+at confirmation depth, then fetches complete independent evidence on each endpoint. Lagging
+receipt visibility keeps polling within the task budget; only confirmed evidence disagreement
+raises an alert. They do not advance coverage or cause expiry, cancellation, rejection or
 credit by themselves. Each task is limited to 12 read calls and 8 verify calls including retries
 and head polling, and 90 seconds on Ethereum chains or 30 seconds on Base chains. Limits are
-3/minute and 10/day per object, 20/minute per source IP, four active tasks and a hard 150 tasks
-per environment per UTC day. A not-ready endpoint parks hints in a bounded process-local queue
+3/minute and 10/day per authenticated object, four active tasks and a hard 150 tasks
+per environment per UTC day. Hint endpoints do not use a peer-IP limit: dstack's HAProxy ingress
+forwards TCP without PROXY protocol, so the service sees the same ingress IP for every client.
+Browser preflight returns an empty `204` with `Access-Control-Max-Age: 600`. A not-ready endpoint parks hints in a bounded process-local queue
 for at most 15 minutes. Exhausted, dropped or interrupted hints leave detection to the scanner;
 wallet submission errors never change an already broadcast payment's result.
 

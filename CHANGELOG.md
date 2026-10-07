@@ -47,6 +47,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   acknowledge with `202 received`, use client-secret or merchant write authentication, and only
   record dual-verified successful routed transfers at confirmation. Hard call, time, concurrency
   and UTC daily task limits fall back to scanning; hints never establish negative coverage.
+  Complete evidence is fetched independently after both endpoints reach confirmation depth;
+  receipt lag and confirmation-time reorgs stay within the whole-task budget. Endpoint readiness
+  loss parks tasks, and cancellation or panic releases running tasks. Hint counters expose budget
+  claims, recorded deposits, exhaustion, deferral and parking. Object credentials gate rate limits;
+  hint endpoints omit peer-IP limits because TCP ingress shares one peer across all clients.
 
 - Dual finalized coverage and per-address backfill markers, independently verified deposit evidence,
   and durable agreed checkpoints. Contract code mismatch freezes only its chain; audited lifts

@@ -83,8 +83,13 @@ async function serveQuote(page: Page, quote: ClientQuote, secret: string) {
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "POST, OPTIONS",
       "access-control-allow-headers": "Content-Type",
+      "access-control-max-age": "600",
     };
     if (url.pathname === `/v1/quotes/${quote.id}/transactions`) {
+      if (request.method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: cors, body: "" });
+        return;
+      }
       const body: unknown = request.postDataJSON();
       const hash = typeof body === "object" && body !== null && "transaction_hash" in body ? body.transaction_hash : "";
       await route.fulfill({ status: 202, headers: cors, json: { object: "transaction_submission", transaction_hash: hash, status: "received" } });

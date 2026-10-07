@@ -92,7 +92,8 @@ pub(super) async fn received(mut request: Request, next: Next) -> Response {
         return next.run(request).await;
     }
     if request.method() == Method::OPTIONS {
-        let mut response = acknowledgement(String::new());
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        super::allow_cross_origin(&mut response);
         response.headers_mut().insert(
             "access-control-allow-methods",
             axum::http::HeaderValue::from_static("POST, OPTIONS"),
@@ -100,6 +101,10 @@ pub(super) async fn received(mut request: Request, next: Next) -> Response {
         response.headers_mut().insert(
             "access-control-allow-headers",
             axum::http::HeaderValue::from_static("Content-Type"),
+        );
+        response.headers_mut().insert(
+            "access-control-max-age",
+            axum::http::HeaderValue::from_static("600"),
         );
         return response;
     }
@@ -265,22 +270,4 @@ async fn submit(
         },
     });
     Ok(())
-}
-
-/// Charge the dedicated peer limit before authentication touches the database.
-pub(super) async fn ingress(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Response {
-    if request.method() != Method::POST {
-        return next.run(request).await;
-    }
-    if !state
-        .hint_limits
-        .allow_source(&super::auth::source_for_request(&request))
-    {
-        return StatusCode::ACCEPTED.into_response();
-    }
-    next.run(request).await
 }

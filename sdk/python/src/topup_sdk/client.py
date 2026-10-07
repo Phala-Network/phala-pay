@@ -517,6 +517,7 @@ class TopupClient:
                 quote_id, client=self._client, body=body
             ),
             TransactionSubmission,
+            expected_status=202,
             request_deadline=request_deadline,
             upgrade_tolerance=upgrade_tolerance,
         )
@@ -721,6 +722,7 @@ class TopupClient:
                 deposit_address_id, client=self._client, body=body
             ),
             TransactionSubmission,
+            expected_status=202,
             request_deadline=request_deadline,
             upgrade_tolerance=upgrade_tolerance,
         )
@@ -1877,6 +1879,7 @@ class TopupClient:
         expected: type[T],
         *,
         retryable: bool = True,
+        expected_status: int = 200,
         idempotency_key: str | None = None,
         request_deadline: float | None = None,
         upgrade_tolerance: bool | None = None,
@@ -1900,7 +1903,7 @@ class TopupClient:
         )
         token = REQUEST_STATE.set(state)
         try:
-            return self._perform(operation, expected, state, retryable)
+            return self._perform(operation, expected, state, retryable, expected_status)
         finally:
             REQUEST_STATE.reset(token)
 
@@ -1910,6 +1913,7 @@ class TopupClient:
         expected: type[T],
         state: RequestState,
         retryable: bool,
+        expected_status: int,
     ) -> T:
         attempt = 0
         failure: ApiError | TransportError | ResponseValidationError = TransportError("timeout")
@@ -1940,9 +1944,7 @@ class TopupClient:
                 # Raise outside the decoder exception context; it may contain a raw body.
             else:
                 parsed = response.parsed
-                if response.status_code == (
-                    202 if expected is TransactionSubmission else 200
-                ) and isinstance(parsed, expected):
+                if response.status_code == expected_status and isinstance(parsed, expected):
                     try:
                         self._verify_identity(parsed)
                     except ResponseValidationError as validation:

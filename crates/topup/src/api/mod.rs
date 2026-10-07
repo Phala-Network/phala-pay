@@ -419,8 +419,6 @@ fn client_secret_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(quotes::get_quote))
         .routes(routes!(deposit_addresses::get_deposit_address))
-        .routes(routes!(transactions::submit_quote_transaction))
-        .routes(routes!(transactions::submit_deposit_address_transaction))
 }
 
 /// The operator's routes, authenticated by RFC 9421 signatures.
@@ -524,12 +522,8 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
     let client_secret = client_secret_routes()
         .route_layer(middleware::from_fn(auth::authorize))
         .route_layer(middleware::from_fn_with_state(
-            merchant_auth,
+            merchant_auth.clone(),
             auth::authenticate_merchant_or_client_secret,
-        ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            transactions::ingress,
         ));
     let admin = admin_routes()
         .route_layer(middleware::from_fn(instance_pause::admit_request))
@@ -537,7 +531,20 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
             state.clone(),
             auth::authenticate_admin,
         ));
-    let merchant = merchant.merge(client_secret);
+    let hints = OpenApiRouter::new()
+        .routes(routes!(transactions::submit_quote_transaction))
+        .routes(routes!(transactions::submit_deposit_address_transaction))
+        .route_layer(middleware::from_fn(auth::authorize))
+        .route_layer(middleware::from_fn_with_state(
+            merchant_auth,
+            auth::authenticate_merchant_or_client_secret,
+        ));
+    // dstack-ingress uses HAProxy TCP forwarding without PROXY protocol: every client has
+    // the same transport peer. A pre-auth peer limit would disable hints for everyone. Only
+    // hints bypass it; authenticated object limits and bounded task budgets remain enforced.
+    let merchant = merchant
+        .merge(client_secret)
+        .merge(hints);
     router_from_routes(state, pause, merchant, admin)
 }
 
