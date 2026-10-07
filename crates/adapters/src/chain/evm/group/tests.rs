@@ -70,6 +70,26 @@ fn classification_precedence_and_every_error_class() {
         Some(Failure::Malformed)
     );
 }
+#[test]
+fn lagging_node_block_errors_are_stale() {
+    for message in [
+        "block 47445875 is beyond the latest block of this node",
+        "block 47445875 is beyond current head",
+    ] {
+        let error = classify("eth_call", &reply(200, -32000, message)).unwrap();
+        assert_eq!(error, Failure::Stale);
+        assert!(error.retryable());
+        assert_eq!(
+            classify("eth_call", &reply(200, -32001, message)),
+            Some(Failure::Unclassified)
+        );
+    }
+    assert_eq!(
+        classify("eth_call", &reply(200, -32000, "unknown block")),
+        Some(Failure::Unclassified)
+    );
+}
+
 async fn server(router: Router) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());

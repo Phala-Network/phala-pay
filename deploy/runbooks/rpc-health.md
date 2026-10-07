@@ -16,6 +16,7 @@ freeze requires audited recovery; an endpoint repair cannot unfreeze the chain.
    [runbook index](README.md#environment). There is no deployed Prometheus collector.
 2. Compare group eligibility, member quarantine, failure classes, budget wait, accepted heads,
    chain epoch and replay backlog. Do not infer zero usage from an absent or stale snapshot.
+   Recovery failures appear as "RPC member recovery probe failed" warn logs on the first and every tenth consecutive failure per member.
 3. For a fork freeze follow [Chain frozen](chain-frozen.md). For a stopped scanner follow
    [Scanner lag](scanner-lag.md); for divergent providers follow
    [Provider disagreement](provider-disagreement.md).
