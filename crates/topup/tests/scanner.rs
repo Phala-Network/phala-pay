@@ -4,12 +4,13 @@ mod support;
 use alloy_primitives::{Address, B256, U256};
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use support::{
     TestDatabase,
     seed::{self, NewAccount, NewAddress},
     with_database,
 };
+use tokio::sync::Notify;
 use topup::{db, routes::RouteSet, scanner};
 use topup_adapters::chain::evm::{
     ChainError, ChainReader, FactoryLog, FactoryReceipt, FinalizedHead, ReceiptLookup, TransferLog,
@@ -37,6 +38,8 @@ struct Reader {
     factory: Option<FactoryReceipt>,
     receipt_reads: Mutex<usize>,
     factory_reads: Mutex<usize>,
+    header_reads: Mutex<Vec<u64>>,
+    logs_gate: Option<(Arc<Notify>, Arc<Notify>)>,
 }
 impl Reader {
     fn new(head: u64) -> Self {
@@ -51,6 +54,8 @@ impl Reader {
             factory: None,
             receipt_reads: Mutex::new(0),
             factory_reads: Mutex::new(0),
+            header_reads: Mutex::new(Vec::new()),
+            logs_gate: None,
         }
     }
 }
@@ -68,6 +73,7 @@ impl ChainReader for Reader {
         self.finalized_head().await
     }
     async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        self.header_reads.lock().unwrap().push(number);
         Ok((
             if self.forged_header || self.forged_at == Some(number) {
                 B256::ZERO
@@ -90,6 +96,12 @@ impl ChainReader for Reader {
         from: u64,
         to: u64,
     ) -> Result<Vec<TransferLog>, ChainError> {
+        if !addresses.is_empty()
+            && let Some((started, resume)) = &self.logs_gate
+        {
+            started.notify_one();
+            resume.notified().await;
+        }
         self.requests
             .lock()
             .unwrap()
@@ -193,6 +205,29 @@ fn transfer(address: &db::Address, number: u64) -> TransferLog {
         amount: AtomicAmount::new(U256::from(1000)),
     }
 }
+fn provisional(log: TransferLog, address: &db::ScanAddress) -> db::NewDeposit {
+    db::NewDeposit {
+        chain_id: 1,
+        tx_hash: log.tx_hash,
+        receipt_log_index: log.receipt_log_index,
+        log_index: log.log_index,
+        block_number: log.block_number,
+        block_hash: log.block_hash,
+        block_time: log.block_time,
+        address_id: address.id,
+        route: Some(route().route),
+        route_version: Some(1),
+        asset_contract: log.token,
+        from_address: log.from,
+        amount_atomic: log.amount,
+        state: topup_core::deposit::DepositState::Detected,
+        reason: None,
+        next_attempt_at: Utc::now(),
+        tx_from: log.tx_from,
+        tx_nonce: log.tx_nonce,
+        is_final: false,
+    }
+}
 async fn marker(database: &TestDatabase, id: Uuid) -> Result<Option<i64>> {
     Ok(
         sqlx::query_scalar("SELECT dual_covered_through FROM addresses WHERE id=$1")
@@ -200,6 +235,309 @@ async fn marker(database: &TestDatabase, id: Uuid) -> Result<Option<i64>> {
             .fetch_one(&database.app_pool)
             .await?,
     )
+}
+
+async fn compat(database: &TestDatabase) -> Result<(i64, Option<DateTime<Utc>>)> {
+    Ok(
+        sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1")
+            .fetch_one(&database.app_pool)
+            .await?,
+    )
+}
+
+#[tokio::test]
+async fn forward_migration_repairs_existing_dual_cursors_and_n_minus_one_reissue() -> Result<()> {
+    let Some(d) = TestDatabase::create_with_migrations(false).await? else {
+        return Ok(());
+    };
+    let result=async {
+        let directory=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let mut previous=sqlx::migrate::Migrator::new(directory.as_path()).await?;
+        previous.migrations.to_mut().retain(|migration|migration.version<20261031000000);
+        previous.run(&d.owner_pool).await?;
+        let address=address(&d,100).await?;
+        let read=Reader::new(4000);
+        scanner::initialize_chain(&d.app_pool,1,&read,&read).await?;
+        sqlx::query("UPDATE chain_coverage SET through_block=4000 WHERE chain_id=1").execute(&d.app_pool).await?;
+        sqlx::query("UPDATE addresses SET dual_covered_through=3009 WHERE id=$1").bind(address.id).execute(&d.app_pool).await?;
+        sqlx::query("UPDATE cursors SET scanned_block=9999,scanned_block_time=to_timestamp(9999) WHERE chain_id=1").execute(&d.app_pool).await?;
+        sqlx::query("INSERT INTO chain_coverage(chain_id,through_block,through_hash,through_time) VALUES(2,222,$1,$2)").bind(format!("{:#x}",hash(222))).bind(time(222)).execute(&d.app_pool).await?;
+        db::initialize_cursor(&d.app_pool,2,777,time(777)).await?;
+        db::migrate(&d.owner_pool).await?;
+        ensure!(compat(&d).await?==(3009,None), "forward repair retained a cursor above dual evidence");
+        let empty:(i64,Option<DateTime<Utc>>)=sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=2").fetch_one(&d.app_pool).await?;
+        ensure!(empty==(222,None), "empty-chain cursor was not capped at its agreed boundary");
+        // Exactly the UPDATE issued by N-1; it does not know any dual column.
+        sqlx::query("UPDATE addresses SET created_block=10 WHERE id=$1").bind(address.id).execute(&d.app_pool).await?;
+        ensure!(compat(&d).await?==(9,None));
+        ensure!(marker(&d,address.id).await?.is_none());
+        Ok::<_,anyhow::Error>(())
+    }.await;
+    result.and(d.cleanup().await)
+}
+
+#[tokio::test]
+async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 100).await?;
+            db::initialize_cursor(&d.app_pool, 1, 10000, time(10000)).await?;
+            let read = Reader::new(4000);
+            let mut verify = Reader::new(4000);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            ensure!(
+                compat(d).await? == (99, Some(time(99))),
+                "old N-1 cursor was not rebased"
+            );
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+            ensure!(compat(d).await? == (4000, Some(time(4000))));
+            let mut reissue = d.app_pool.begin().await?;
+            sqlx::query("UPDATE addresses SET created_block=10 WHERE id=$1")
+                .bind(address.id)
+                .execute(&mut *reissue)
+                .await?;
+            let inside: (i64, Option<DateTime<Utc>>) = sqlx::query_as(
+                "SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1",
+            )
+            .fetch_one(&mut *reissue)
+            .await?;
+            ensure!(
+                inside == (9, None),
+                "reissue did not atomically clear negative evidence"
+            );
+            ensure!(
+                compat(d).await? == (4000, Some(time(4000))),
+                "uncommitted reissue leaked"
+            );
+            reissue.commit().await?;
+            ensure!(compat(d).await? == (9, None));
+            // The partial backfill's common header must agree before any markers commit.
+            verify.forged_at = Some(3009);
+            ensure!(
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 3)
+                    .await
+                    .is_err()
+            );
+            ensure!(marker(d, address.id).await?.is_none());
+            ensure!(compat(d).await? == (9, None));
+            verify.forged_at = None;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 3).await?;
+            ensure!(marker(d, address.id).await? == Some(3009));
+            ensure!(
+                db::chain_reads::coverage(&d.app_pool, 1)
+                    .await?
+                    .unwrap()
+                    .number
+                    == 4000
+            );
+            ensure!(
+                compat(d).await? == (3009, Some(time(3009))),
+                "partial history authorized the distant chain boundary"
+            );
+            // N-1 may move its cursor while N is rolled back; startup must repair it again.
+            sqlx::query(
+                "UPDATE cursors SET scanned_block=9999,scanned_block_time=to_timestamp(9999)",
+            )
+            .execute(&d.app_pool)
+            .await?;
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            ensure!(
+                compat(d).await? == (3009, None),
+                "existing coverage did not repair an N-1 cursor"
+            );
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 4).await?;
+            ensure!(compat(d).await? == (4000, Some(time(4000))));
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn first_round_caps_future_creation_at_the_agreed_checkpoint() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 10000).await?;
+            let mut read = Reader::new(100);
+            let mut verify = Reader::new(100);
+            let boundary = scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            ensure!(boundary.number == 100, "coverage started above finality");
+            for reader in [&read, &verify] {
+                ensure!(reader.header_reads.lock().unwrap().contains(&100));
+                ensure!(!reader.header_reads.lock().unwrap().contains(&9999));
+            }
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            ensure!(marker(d, address.id).await?.is_none());
+            read.head = 10100;
+            verify.head = 10100;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 6).await?;
+            ensure!(
+                marker(d, address.id).await? == Some(10100),
+                "future address coverage stalled"
+            );
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn canonical_records_beyond_the_round_are_deferred_then_updated() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 100).await?;
+            let mut read = Reader::new(10000);
+            let mut verify = Reader::new(10000);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let scan_address = db::list_scan_addresses(&d.app_pool, 1).await?.remove(0);
+            let old = transfer(&address, 100);
+            db::commit_confirmed_scan(&d.app_pool, 1, &[provisional(old, &scan_address)], 100)
+                .await?;
+            read.receipt = Some(transfer(&address, 4000));
+            verify.receipt = read.receipt.clone();
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            let row: (i64, bool) =
+                sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits")
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            ensure!(
+                row == (100, false),
+                "a future canonical receipt was not deferred"
+            );
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+            let row: (i64, bool) =
+                sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits")
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            ensure!(row == (4000, true), "existing identity kept stale evidence");
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn coverage_requeries_fast_inserts_after_taking_the_chain_lock() -> Result<()> {
+    with_database(|d| Box::pin(async move {
+        let address=address(d,100).await?;
+        let started=Arc::new(Notify::new()); let resume=Arc::new(Notify::new());
+        let mut read=Reader::new(200); let mut verify=Reader::new(200);
+        read.receipt=Some(transfer(&address,100)); verify.receipt=read.receipt.clone();
+        scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
+        read.logs_gate=Some((started.clone(),resume.clone()));
+        let scan_address=db::list_scan_addresses(&d.app_pool,1).await?.remove(0);
+        let stale=provisional(transfer(&address,5000),&scan_address);
+        let chain=chain();
+        let coverage=scanner::coverage_once(&d.app_pool,&read,&verify,&chain,1);
+        let fast=async {
+            started.notified().await;
+            let mut tx=d.app_pool.begin().await?;
+            // The same lock the fast scanner holds for its insertion commit.
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('chain:1',704202))").execute(&mut *tx).await?;
+            resume.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(10),async {
+                loop {
+                    let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))").fetch_one(&d.owner_pool).await?;
+                    if waiting {break Ok::<_,sqlx::Error>(());}
+                    tokio::task::yield_now().await;
+                }
+            }).await??;
+            db::insert_scanned_deposit_in(&mut tx,&stale,db::Evidence::Confirmed).await?;
+            tx.commit().await?;
+            Ok::<_,anyhow::Error>(())
+        };
+        tokio::try_join!(async {Ok::<_,anyhow::Error>(coverage.await?)},fast)?;
+        let row:(i64,bool)=sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits").fetch_one(&d.app_pool).await?;
+        ensure!(row==(100,true), "concurrent fast insertion escaped dual verification");
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn changed_provisional_recipient_reverses_before_successor_coverage() -> Result<()> {
+    for tracked in [true, false] {
+        with_database(|d| {
+            Box::pin(async move {
+                let original = address(d, 100).await?;
+                let other = address(d, 100).await?;
+                let mut read = Reader::new(200);
+                let mut verify = Reader::new(200);
+                scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+                let scan_address = db::list_scan_addresses(&d.app_pool, 1)
+                    .await?
+                    .into_iter()
+                    .find(|a| a.id == original.id)
+                    .unwrap();
+                let mut old = transfer(&original, 100);
+                old.tx_hash = original.salt;
+                db::commit_confirmed_scan(
+                    &d.app_pool,
+                    1,
+                    &[provisional(old.clone(), &scan_address)],
+                    100,
+                )
+                .await?;
+                let mut canonical = old.clone();
+                canonical.to = if tracked {
+                    other.address
+                } else {
+                    Address::repeat_byte(0x99)
+                };
+                canonical.block_number = 101;
+                canonical.block_hash = hash(101);
+                canonical.block_time = time(101);
+                read.logs.push(canonical.clone());
+                read.receipt = Some(canonical.clone());
+                verify.receipt = Some(canonical.clone());
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+                let id = topup_core::identity::deposit_id(1, old.tx_hash, 0);
+                let provisional = db::get_deposit(&d.app_pool, id).await?.unwrap();
+                ensure!(
+                    provisional.state == topup_core::deposit::DepositState::Detected
+                        && provisional.address_id == original.id
+                );
+                let watch = topup::finality::FinalityWatch::single(
+                    d.app_pool.clone(),
+                    Arc::new(routes()),
+                    1,
+                    read,
+                    verify,
+                );
+                let stats = watch.watch_once(1).await?;
+                ensure!(
+                    stats.reversed == 1,
+                    "provisional recipient was not handed to finality: {stats:?}; tracked={tracked}"
+                );
+                let mut read = Reader::new(201);
+                let mut verify = Reader::new(201);
+                read.receipt = Some(canonical.clone());
+                verify.receipt = Some(canonical);
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+                let marked: bool = sqlx::query_scalar(
+                    "SELECT dual_verified_at IS NOT NULL FROM deposits WHERE id=$1",
+                )
+                .bind(id)
+                .fetch_one(&d.app_pool)
+                .await?;
+                ensure!(marked, "dual reversal left an unverified old revision");
+                let count: i64 =
+                    sqlx::query_scalar("SELECT count(*) FROM deposits WHERE tx_hash=$1")
+                        .bind(format!("{:#x}", old.tx_hash))
+                        .fetch_one(&d.app_pool)
+                        .await?;
+                ensure!(count == if tracked { 2 } else { 1 });
+                let frozen: bool =
+                    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM reconciliation_blocks)")
+                        .fetch_one(&d.app_pool)
+                        .await?;
+                ensure!(!frozen, "successor falsely froze its reversed predecessor");
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -408,17 +746,17 @@ async fn fast_and_n_minus_one_rows_are_reverified_even_if_both_logs_omit_them() 
                     .await?;
             ensure!(!marked);
             // N-1 writes no new marker and may have provisional fields to correct.
-            sqlx::query("UPDATE deposits SET block_time=to_timestamp(101),tx_nonce=10")
+            sqlx::query("UPDATE deposits SET block_number=5000,block_time=to_timestamp(101),tx_nonce=10")
                 .execute(&d.owner_pool)
                 .await?;
             read.logs.clear();
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
-            let row: (DateTime<Utc>, String, bool) = sqlx::query_as(
-                "SELECT block_time,tx_nonce::text,dual_verified_at IS NOT NULL FROM deposits",
+            let row: (i64, DateTime<Utc>, String, bool) = sqlx::query_as(
+                "SELECT block_number,block_time,tx_nonce::text,dual_verified_at IS NOT NULL FROM deposits",
             )
             .fetch_one(&d.app_pool)
             .await?;
-            ensure!(row == (time(100), "9".into(), true));
+            ensure!(row == (100, time(100), "9".into(), true));
             Ok(())
         })
     })

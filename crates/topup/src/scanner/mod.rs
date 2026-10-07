@@ -161,7 +161,22 @@ pub async fn initialize_chain<R: ChainReader, V: ChainReader>(
     verify: &V,
 ) -> Result<Boundary, ScannerError> {
     let checkpoint = crate::checkpoint::advance(pool, chain, read, verify).await?;
-    if let Some(coverage) = chain_reads::coverage(pool, chain).await? {
+    let mut tx = pool.begin().await?;
+    db::rpc::guard_in(&mut tx, chain).await?;
+    let existing: Option<(i64, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT through_block,through_hash,through_time FROM chain_coverage WHERE chain_id=$1",
+    )
+    .bind(i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((number, hash, time)) = existing {
+        let coverage = Boundary {
+            number: u64::try_from(number).map_err(|_| ScannerError::SnapshotChanged)?,
+            hash: hash.parse().map_err(|_| ScannerError::SnapshotChanged)?,
+            time,
+        };
+        chain_reads::initialize_coverage_in(&mut tx, chain, coverage).await?;
+        tx.commit().await?;
         return Ok(coverage);
     }
     let first: Option<i64> =
@@ -170,13 +185,14 @@ pub async fn initialize_chain<R: ChainReader, V: ChainReader>(
                 i64::try_from(chain)
                     .map_err(|_| ScannerError::Configuration("chain overflow".into()))?,
             )
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await?;
     let start = first
         .map(|n| u64::try_from(n).map(|n| n.saturating_sub(1)))
         .transpose()
         .map_err(|_| ScannerError::Configuration("creation block overflow".into()))?
-        .unwrap_or(checkpoint.number);
+        .unwrap_or(checkpoint.number)
+        .min(checkpoint.number);
     let (a, b) = tokio::try_join!(read.header(start), verify.header(start))?;
     if a != b {
         return Err(ScannerError::Disagreement);
@@ -186,7 +202,8 @@ pub async fn initialize_chain<R: ChainReader, V: ChainReader>(
         hash: a.0,
         time: a.1,
     };
-    chain_reads::initialize_coverage(pool, chain, boundary).await?;
+    chain_reads::initialize_coverage_in(&mut tx, chain, boundary).await?;
+    tx.commit().await?;
     Ok(boundary)
 }
 /// Fast candidates remain provisional; PR 3 uses the same public insertion boundary and receipt key.
@@ -350,7 +367,11 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     let mut candidates = BTreeSet::new();
     let mut factory_candidates = BTreeSet::new();
     let mut unverified = BTreeMap::<_, Vec<db::Deposit>>::new();
-    let mut index = BTreeMap::new();
+    let mut index: BTreeMap<_, _> = db::list_scan_addresses(pool, chain)
+        .await?
+        .into_iter()
+        .map(|a| (a.address, a))
+        .collect();
     for range in &ranges {
         if range.from > range.end {
             continue;
@@ -373,16 +394,6 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         for address in &range.addresses {
             index.insert(address.address.address, address.address.clone());
             let start = range.start(address);
-            let ids: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM deposits WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4 AND dual_verified_at IS NULL")
-                .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(address.address.id).bind(i64::try_from(start).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(range.end).map_err(|_|ScannerError::SnapshotChanged)?).fetch_all(pool).await?;
-            for (_, deposit) in db::deposits_by_ids(pool, &ids).await? {
-                let deposit = deposit?;
-                candidates.insert((deposit.tx_hash, deposit.receipt_log_index));
-                unverified
-                    .entry((deposit.tx_hash, deposit.receipt_log_index))
-                    .or_default()
-                    .push(deposit);
-            }
             // Insert-only factory evidence is reverified even when both getLogs responses omit it.
             let hashes: Vec<String> = sqlx::query_scalar("SELECT tx_hash FROM flushed WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4 UNION SELECT tx_hash FROM flush_failures WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4")
                 .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(address.address.id).bind(i64::try_from(start).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(range.end).map_err(|_|ScannerError::SnapshotChanged)?).fetch_all(pool).await?;
@@ -412,11 +423,37 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             }
         }
     }
+    // getLogs runs without a database lock. Re-read all unverified identities only after
+    // taking the chain lock, so a fast scan that committed during those RPC calls is included.
+    let mut tx = pool.begin().await?;
+    db::rpc::guard_in(&mut tx, chain).await?;
+    let durable: i64 =
+        sqlx::query_scalar("SELECT through_block FROM chain_coverage WHERE chain_id=$1 FOR UPDATE")
+            .bind(i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?)
+            .fetch_one(&mut *tx)
+            .await?;
+    if u64::try_from(durable).ok() != Some(cursor.number) {
+        return Err(ScannerError::SnapshotChanged);
+    }
+    let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL FOR UPDATE",
+    )
+    .bind(i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?)
+    .fetch_all(&mut *tx)
+    .await?;
+    for (_, deposit) in db::deposits_by_ids(&mut *tx, &ids).await? {
+        let deposit = deposit?;
+        candidates.insert((deposit.tx_hash, deposit.receipt_log_index));
+        unverified
+            .entry((deposit.tx_hash, deposit.receipt_log_index))
+            .or_default()
+            .push(deposit);
+    }
     let mut deposits = Vec::new();
     let mut corrections = Vec::new();
     for (hash, position) in candidates {
-        let marker: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT dual_verified_at FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3 AND state <> 'reversed'")
-            .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{hash:#x}")).bind(i64::try_from(position).map_err(|_|ScannerError::SnapshotChanged)?).fetch_optional(pool).await?;
+        let marker: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT dual_verified_at FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3 AND state <> 'reversed' FOR UPDATE")
+            .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{hash:#x}")).bind(i64::try_from(position).map_err(|_|ScannerError::SnapshotChanged)?).fetch_optional(&mut *tx).await?;
         if marker.flatten().is_some() && !unverified.contains_key(&(hash, position)) {
             continue;
         }
@@ -431,11 +468,53 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             continue;
         }; // absence never releases a held quote
         if log.block_number > end {
-            return Err(ScannerError::Disagreement);
+            continue;
+        }
+        // A provisional identity keeps its original recipient until the dual finality
+        // reversal/successor transaction releases that receipt position.
+        if let Some(records) = unverified.get(&(hash, position)) {
+            let changed_recipient = records.iter().any(|existing| {
+                index
+                    .get(&log.to)
+                    .is_none_or(|address| existing.address_id != address.id)
+            });
+            if changed_recipient {
+                if records
+                    .iter()
+                    .any(|existing| existing.state != DepositState::Detected)
+                {
+                    tx.rollback().await?;
+                    chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
+                    return Err(ScannerError::Disagreement);
+                }
+                continue;
+            }
         }
         let address = index
             .get(&log.to)
             .ok_or(ScannerError::UnknownRecipient(log.to))?;
+        let covered_end = ranges
+            .iter()
+            .filter(|range| {
+                range
+                    .addresses
+                    .iter()
+                    .any(|a| a.address.id == address.id && range.start(a) <= range.end)
+            })
+            .map(|range| range.end)
+            .max();
+        let already_covered: Option<i64> =
+            sqlx::query_scalar("SELECT dual_covered_through FROM addresses WHERE id=$1")
+                .bind(address.id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let target = covered_end
+            .into_iter()
+            .chain(already_covered.and_then(|n| u64::try_from(n).ok()))
+            .max();
+        if target.is_none_or(|target| log.block_number > target) {
+            continue;
+        }
         let deposit = resolve_log(log.clone(), address, routes, Utc::now());
         if let Some(records) = unverified.get(&(hash, position)) {
             for existing in records {
@@ -450,16 +529,13 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                     && existing.tx_from == Some(deposit.tx_from)
                     && existing.tx_nonce == Some(deposit.tx_nonce);
                 if !equal && existing.state != DepositState::Detected {
+                    tx.rollback().await?;
                     chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
                     tracing::error!(
                         tags.alert = "TopupUnverifiedEvidenceMismatch",
                         chain_id = chain,
                         "agreed evidence contradicts a permanent record; chain frozen"
                     );
-                    return Err(ScannerError::Disagreement);
-                }
-                // Recipient changes retain the existing provisional rule: finality records successors.
-                if existing.address_id != address.id {
                     return Err(ScannerError::Disagreement);
                 }
                 corrections.push((existing.id, existing.state, deposit.clone()));
@@ -481,6 +557,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             return Err(ScannerError::Disagreement);
         };
         if !db::sweeps::stored_factory_evidence_matches(pool, chain, hash, &receipt.logs).await? {
+            tx.rollback().await?;
             chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
             tracing::error!(
                 tags.alert = "TopupUnverifiedEvidenceMismatch",
@@ -494,16 +571,6 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                 log.block_number <= end && index.contains_key(&log.event.forwarder())
             }),
         );
-    }
-    let mut tx = pool.begin().await?;
-    db::rpc::guard_in(&mut tx, chain).await?;
-    let durable: i64 =
-        sqlx::query_scalar("SELECT through_block FROM chain_coverage WHERE chain_id=$1 FOR UPDATE")
-            .bind(i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?)
-            .fetch_one(&mut *tx)
-            .await?;
-    if u64::try_from(durable).ok() != Some(cursor.number) {
-        return Err(ScannerError::SnapshotChanged);
     }
     let mut stats = ScanStats {
         cursor: end,
@@ -548,8 +615,18 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     }
     sqlx::query("UPDATE chain_coverage SET through_block=$2,through_hash=$3,through_time=$4,updated_at=now() WHERE chain_id=$1 AND through_block < $2")
         .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(end).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{:#x}",a.0)).bind(a.1).execute(&mut *tx).await?;
-    sqlx::query("UPDATE cursors SET scanned_block=$2,scanned_block_time=$3 WHERE chain_id=$1 AND scanned_block < $2")
-        .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(end).map_err(|_|ScannerError::SnapshotChanged)?).bind(a.1).execute(&mut *tx).await?;
+    let common = chain_reads::common_coverage_in(&mut tx, chain).await?;
+    let time = if common == end {
+        a.1
+    } else {
+        let (read_header, verify_header) =
+            tokio::try_join!(read.header(common), verify.header(common))?;
+        if read_header != verify_header {
+            return Err(ScannerError::Disagreement);
+        }
+        read_header.1
+    };
+    chain_reads::set_compat_cursor_in(&mut tx, chain, common, Some(time)).await?;
     db::pending::delete_finalized_in(
         &mut tx,
         i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?,

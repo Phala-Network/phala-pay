@@ -561,8 +561,8 @@ pub async fn get_deposit(pool: &PgPool, id: Uuid) -> Result<Option<Deposit>, sql
 
 /// Reads a bounded ID batch using the existing deposit decoder. Row decoding failures remain
 /// associated with their IDs so reconciliation can report one corrupt row and keep progressing.
-pub(crate) async fn deposits_by_ids(
-    pool: &PgPool,
+pub(crate) async fn deposits_by_ids<'e>(
+    executor: impl PgExecutor<'e>,
     ids: &[Uuid],
 ) -> Result<Vec<(Uuid, Result<Deposit, sqlx::Error>)>, sqlx::Error> {
     let records = sqlx::query_as::<_, DepositRecord>(
@@ -574,7 +574,7 @@ pub(crate) async fn deposits_by_ids(
          quote,created_at,updated_at FROM deposits WHERE id=ANY($1)",
     )
     .bind(ids)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     Ok(records
         .into_iter()

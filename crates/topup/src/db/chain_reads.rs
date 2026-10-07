@@ -64,17 +64,50 @@ pub async fn initialize_coverage(
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     super::rpc::guard_in(&mut tx, chain).await?;
+    initialize_coverage_in(&mut tx, chain, boundary).await?;
+    tx.commit().await
+}
+pub(crate) async fn initialize_coverage_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    chain: u64,
+    boundary: Boundary,
+) -> Result<(), sqlx::Error> {
     let inserted = sqlx::query("INSERT INTO chain_coverage(chain_id,through_block,through_hash,through_time) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING")
-        .bind(to_i64(chain,"chain id")?).bind(to_i64(boundary.number,"coverage")?).bind(b256_hex(boundary.hash)).bind(boundary.time).execute(&mut *tx).await?.rows_affected();
+        .bind(to_i64(chain,"chain id")?).bind(to_i64(boundary.number,"coverage")?).bind(b256_hex(boundary.hash)).bind(boundary.time).execute(&mut **tx).await?.rows_affected();
     if inserted == 1 {
         sqlx::query("UPDATE addresses SET dual_covered_through=NULL WHERE chain_id=$1")
             .bind(to_i64(chain, "chain id")?)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        sqlx::query("INSERT INTO cursors(chain_id,scanned_block,scanned_block_time) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
-            .bind(to_i64(chain,"chain id")?).bind(to_i64(boundary.number,"coverage")?).bind(boundary.time).execute(&mut *tx).await?;
     }
-    tx.commit().await
+    let number = common_coverage_in(tx, chain).await?;
+    set_compat_cursor_in(
+        tx,
+        chain,
+        number,
+        (number == boundary.number).then_some(boundary.time),
+    )
+    .await
+}
+/// The negative-evidence boundary shared by every address, capped by committed chain coverage.
+pub(crate) async fn common_coverage_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    chain: u64,
+) -> Result<u64, sqlx::Error> {
+    let number: i64 = sqlx::query_scalar("SELECT LEAST(c.through_block, COALESCE((SELECT min(GREATEST(COALESCE(a.dual_covered_through, GREATEST(a.created_block-1,0)),GREATEST(a.created_block-1,0))) FROM addresses a WHERE a.chain_id=c.chain_id),c.through_block)) FROM chain_coverage c WHERE c.chain_id=$1")
+        .bind(to_i64(chain,"chain id")?).fetch_one(&mut **tx).await?;
+    to_u64(number, "common coverage")
+}
+/// Rebase or advance the N-1 cursor in the same transaction as the coverage it describes.
+pub(crate) async fn set_compat_cursor_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    chain: u64,
+    number: u64,
+    time: Option<DateTime<Utc>>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO cursors(chain_id,scanned_block,scanned_block_time) VALUES($1,$2,$3) ON CONFLICT(chain_id) DO UPDATE SET scanned_block=$2,scanned_block_time=$3")
+        .bind(to_i64(chain,"chain id")?).bind(to_i64(number,"common coverage")?).bind(time).execute(&mut **tx).await?;
+    Ok(())
 }
 /// Record a chain-wide conflict using the existing audited freeze/lift gate.
 pub async fn freeze(pool: &PgPool, chain: u64, check: &str) -> Result<(), sqlx::Error> {

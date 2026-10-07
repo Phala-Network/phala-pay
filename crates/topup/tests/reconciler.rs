@@ -39,6 +39,7 @@ struct MockChain {
     derivation_delay: StdDuration,
     derivation_started: Notify,
     fail_derivation: AtomicBool,
+    fail_balances: AtomicBool,
     balances: Mutex<BTreeMap<Address, U256>>,
     balance_reads: Mutex<Vec<(u64, Vec<Address>)>>,
     derived: Mutex<BTreeMap<B256, Address>>,
@@ -79,6 +80,11 @@ impl ReconciliationChain for MockChain {
             .lock()
             .unwrap()
             .push((block, addresses.to_vec()));
+        if self.fail_balances.load(Ordering::SeqCst) {
+            return Err(ReconciliationError::Chain(
+                "balance endpoint unavailable".into(),
+            ));
+        }
         let balances = self.balances.lock().unwrap();
         Ok(addresses
             .iter()
@@ -383,7 +389,10 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
                 .await?
                 .is_empty()
         );
-        ensure!(chain.balance_reads.lock().unwrap().as_slice() == [(140, vec![swept.address])]);
+        ensure!(
+            chain.balance_reads.lock().unwrap().as_slice()
+                == [(140, vec![swept.address]), (140, vec![swept.address])]
+        );
         ensure!(
             frozen_chains(&pool, &*route_set(route.clone())?)
                 .await?
@@ -415,10 +424,101 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
     .await
 }
 
-/// Staging's provider A is Tenderly's public Sepolia gateway, and every task of the service starts
-/// at once on it, so the first round after a restart meets refusals (`429`, `-32005`) that later
-/// rounds do not. The round backs off within itself: it completes, still repairs and reports,
-/// and resumes from the cursors the rounds before the restart stored.
+#[tokio::test]
+async fn custody_requires_full_dual_balance_agreement_even_when_read_matches() -> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let first = seed_identity(&pool, &route, 81).await?;
+        let second = seed_identity(&pool, &route, 82).await?;
+        seed_deposit(
+            &pool,
+            &route,
+            &first,
+            DepositSeed::new(81, DepositState::Credited)
+                .block(100)
+                .amount(100),
+        )
+        .await?;
+        seed_deposit(
+            &pool,
+            &route,
+            &second,
+            DepositSeed::new(82, DepositState::Credited)
+                .block(100)
+                .amount(200),
+        )
+        .await?;
+        scanned_through(&pool, 140).await?;
+        let read = Arc::new(MockChain::at(150));
+        let verify = Arc::new(MockChain::at(150));
+        for reader in [&read, &verify] {
+            reader.balances.lock().unwrap().extend([
+                (first.address, U256::from(100)),
+                (second.address, U256::from(200)),
+            ]);
+        }
+        let check = reconciler(&pool, route.clone(), read.clone())?.with_verifiers(BTreeMap::from(
+            [(CHAIN_ID, verify.clone() as Arc<dyn ReconciliationChain>)],
+        ));
+        // The first entry agrees; the second does not. A matching read vector cannot clear it.
+        verify
+            .balances
+            .lock()
+            .unwrap()
+            .insert(second.address, U256::from(201));
+        ensure!(
+            check.check(CheckName::CustodyBalance).await.is_err(),
+            "read-only agreement reported clean custody"
+        );
+        ensure!(
+            frozen_chains(&pool, &*route_set(route.clone())?)
+                .await?
+                .is_empty()
+        );
+        verify.fail_balances.store(true, Ordering::SeqCst);
+        ensure!(
+            check.check(CheckName::CustodyBalance).await.is_err(),
+            "an unavailable verifier reported clean custody"
+        );
+        ensure!(
+            frozen_chains(&pool, &*route_set(route.clone())?)
+                .await?
+                .is_empty()
+        );
+        verify.fail_balances.store(false, Ordering::SeqCst);
+        verify
+            .balances
+            .lock()
+            .unwrap()
+            .insert(second.address, U256::from(200));
+        ensure!(check.check(CheckName::CustodyBalance).await?.is_empty());
+        ensure!(
+            verify.balance_reads.lock().unwrap().len() == 3,
+            "a clean ledger skipped independent balances"
+        );
+        read.balances
+            .lock()
+            .unwrap()
+            .insert(first.address, U256::from(101));
+        ensure!(check.check(CheckName::CustodyBalance).await.is_err());
+        ensure!(
+            frozen_chains(&pool, &*route_set(route.clone())?)
+                .await?
+                .is_empty()
+        );
+        verify
+            .balances
+            .lock()
+            .unwrap()
+            .insert(first.address, U256::from(101));
+        ensure!(check.check(CheckName::CustodyBalance).await?.len() == 1);
+        ensure!(frozen_chains(&pool, &*route_set(route)?).await? == BTreeSet::from([CHAIN_ID]));
+        Ok(())
+    })
+    .await
+}
+
+/// Derivation reads are cached only while the stored derivation inputs remain unchanged.
 #[tokio::test]
 async fn each_stored_derivation_is_read_once_until_its_row_changes() -> Result<()> {
     with_database(|pool| async move {

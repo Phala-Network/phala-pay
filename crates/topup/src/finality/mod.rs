@@ -767,11 +767,12 @@ async fn reverse_deposit(
     let from = db::state_code(transition.from);
     let to = db::state_code(transition.to);
     let mut transaction = pool.begin().await?;
+    db::rpc::guard_in(&mut transaction, chain_id).await?;
     let owner = sqlx::query_as::<_, (Uuid, bool)>(
         r#"
         UPDATE deposits
         SET state = $3, reason = NULL, lease_token = NULL, lease_until = NULL,
-            next_attempt_at = now(), updated_at = now()
+            next_attempt_at = now(), updated_at = now(), dual_verified_at = now()
         WHERE id = $1 AND state = $2 AND final_at IS NULL
         RETURNING account_id, livemode
         "#,

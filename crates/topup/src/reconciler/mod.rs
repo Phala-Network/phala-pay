@@ -143,7 +143,7 @@ pub struct Reconciler {
 }
 
 impl Reconciler {
-    /// Builds production reconciliation dependencies on each chain's provider A.
+    /// Builds production reconciliation dependencies on each chain's read and verify endpoints.
     pub fn from_routes(pool: PgPool, routes: Arc<RouteSet>) -> Result<Self, ReconciliationError> {
         let mut chains = BTreeMap::<u64, Arc<dyn ReconciliationChain>>::new();
         for chain_id in routes.chain_ids() {
@@ -373,7 +373,7 @@ impl Reconciler {
         Ok(false)
     }
 
-    /// Runs a round every `every` in which provider A's `finalized`, as `heads` publishes it,
+    /// Runs a round every `every` in which the agreed checkpoint, as `heads` publishes it,
     /// advanced on some chain since the last complete round, until cancellation. A round without
     /// an advance would read the same finalized state, so it is skipped and reported healthy.
     pub async fn run_loop(
@@ -819,40 +819,27 @@ impl Reconciler {
             .iter()
             .map(|ledger| ledger.address)
             .collect::<Vec<_>>();
-        let balances = chain.token_balances_pinned(token, &physical, hash).await?;
+        let verifier = self
+            .verifiers
+            .get(&chain_id)
+            .ok_or(ReconciliationError::Invariant("custody verifier missing"))?;
+        let (balances, verified) = tokio::try_join!(
+            chain.token_balances_pinned(token, &physical, hash),
+            verifier.token_balances_pinned(token, &physical, hash)
+        )?;
         if balances.len() != ledgers.len() {
             return Err(ReconciliationError::Invariant(
                 "balance response length did not match address count",
             ));
         }
-        let mismatched = ledgers.iter().zip(&balances).any(|(ledger, observed)| {
-            ledger.deposits.checked_sub(ledger.flushed) != Some(*observed)
-        });
-        let verified = if mismatched {
-            let verifier = self
-                .verifiers
-                .get(&chain_id)
-                .ok_or(ReconciliationError::Invariant("custody verifier missing"))?;
-            let verified = verifier
-                .token_balances_pinned(token, &physical, hash)
-                .await?;
-            if verified != balances {
-                return Err(ReconciliationError::Chain(
-                    "dual custody evidence disagreed".into(),
-                ));
-            }
-            Some(verified)
-        } else {
-            None
-        };
+        if verified != balances {
+            return Err(ReconciliationError::Chain(
+                "dual custody evidence disagreed".into(),
+            ));
+        }
         for (ledger, observed) in ledgers.iter().zip(balances) {
             if ledger.deposits.checked_sub(ledger.flushed) == Some(observed) {
                 continue;
-            }
-            if verified.is_none() {
-                return Err(ReconciliationError::Invariant(
-                    "custody mismatch unverified",
-                ));
             }
             store::block_chain(
                 &self.pool,
