@@ -595,7 +595,8 @@ fn restoring() -> Response {
 /// Builds the router of an instance restored from backup (`TOPUP_SERVICE_ENABLED=read-only`,
 /// `deploy/RESTORE.md`): every request other than `GET`, `HEAD`, and the operator's restore
 /// reconciliation (`/v1/admin/restore/…`) is refused with `503 service_restoring`, and so is every
-/// request with a merchant API key, frozen or not: `restore-check` records the freeze in parallel,
+/// request with a merchant API key, frozen or not. Transaction hints return quiet `202`s and
+/// enqueue nothing in this mode. `restore-check` records the freeze in parallel,
 /// and may fail before it does. `/healthz` reports the boot-time `restore-check` result read from
 /// `restore_report`.
 pub fn read_only_router(state: AppState, restore_report: Option<PathBuf>) -> Router {

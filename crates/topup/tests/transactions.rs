@@ -119,6 +119,7 @@ async fn node(state: Rpc, label: &str) -> Result<(Arc<EvmClient>, Task)> {
 }
 struct Harness {
     app: Router,
+    read_only_app: Router,
     queue: Arc<HintQueue>,
     routes: Arc<RouteSet>,
     read: Arc<EvmClient>,
@@ -220,7 +221,9 @@ async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<
         screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
     };
+    let read_only_app = topup::api::read_only_router(state.clone(), None);
     Ok(Harness {
+        read_only_app,
         app: topup::api::router(state).0,
         queue,
         routes,
@@ -750,6 +753,57 @@ async fn read_only_restricted_keys_and_other_accounts_cannot_submit_tasks() -> R
         h.submit(&path, Some(&h.key), json!({"transaction_hash":TX}))
             .await?;
         ensure!(h.queue.pending() == 1);
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn browser_preflight_and_read_only_requests_keep_quiet_acknowledgements() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        let path = format!(
+            "/v1/quotes/{}/transactions?client_secret={}",
+            h.quote_id, h.secret
+        );
+        let preflight = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri(&path)
+                    .header("origin", "https://merchant.example")
+                    .header("access-control-request-method", "POST")
+                    .header("access-control-request-headers", "content-type")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        ensure!(preflight.status() == StatusCode::ACCEPTED);
+        ensure!(preflight.headers()["access-control-allow-origin"] == "*");
+        ensure!(preflight.headers()["access-control-allow-methods"] == "POST, OPTIONS");
+        ensure!(preflight.headers()["access-control-allow-headers"] == "Content-Type");
+        let response = h
+            .read_only_app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(
+                        &json!({"transaction_hash":TX}),
+                    )?))?,
+            )
+            .await?;
+        ensure!(response.status() == StatusCode::ACCEPTED);
+        ensure!(h.queue.pending() == 0);
+        ensure!(deposits(&db.app_pool).await? == 0);
         Ok(())
     }
     .await;
