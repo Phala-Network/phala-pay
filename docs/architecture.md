@@ -538,6 +538,14 @@ Multicall3 code freezes the chain; disagreement or unavailable code evidence onl
 chunks of 1,000 issued addresses, with no contract filter, and inserts routed, confirmed
 candidates as `detected` with NULL `dual_verified_at`. It advances only `confirmed_block`.
 
+**Transaction-hash hints** can record positive transfers after both endpoints independently
+agree at the route's confirmation depth. They use the same receipt-position insertion identity
+and inclusive `block_number >= created_block` boundary as the scanners, without advancing
+coverage or making a negative decision. Read's head reaches depth before verify is polled.
+Root's admission decision is no per-IP limit on hints: controls are authenticated per-object
+limits of 3/minute and 10/day, a hard daily cap of 150 tasks per environment per UTC day, and
+at most four tasks in flight. See the operator [API admission limits](configuration.md#api-admission-limits).
+
 **Finalized dual coverage** runs every ten minutes, staggered by chain. The checkpoint advances
 only after both sources agree on the new finalized boundary and retain the previous checkpoint's
 hash. A conflict freezes the chain. Coverage ends at `e = min(checkpoint, cursor + L)`, with
