@@ -2948,7 +2948,7 @@ fn delivered_body(delivery: &Value) -> Result<Value> {
 }
 
 #[tokio::test]
-async fn a_restored_unverified_reversed_record_freezes_on_canonical_contradiction() -> Result<()> {
+async fn a_restored_unverified_reversed_record_preserves_its_canonical_successor() -> Result<()> {
     support::with_database(|database| {
         Box::pin(async move {
             let harness = Harness::new(database).await?;
@@ -3010,23 +3010,73 @@ async fn a_restored_unverified_reversed_record_freezes_on_canonical_contradictio
                 imported.body
             );
 
-            // A reconstructed permanent row has no dual marker. Canonical successor evidence
-            // contradicts that row, so F3 freezes rather than assuming the old fact was verified.
-            let before = db::chain_reads::coverage(&harness.pool, 1).await?;
-            ensure!(pipeline.finalized_scan(&harness).await.is_err());
-            ensure!(db::chain_reads::coverage(&harness.pool, 1).await? == before);
-            let check: String = sqlx::query_scalar(
-                "SELECT check_name FROM reconciliation_blocks WHERE scope='chain' AND chain_id=1",
+            // Historical reversed evidence reconstructed from delivered events has no dual
+            // marker. It must not be compared with the active canonical successor.
+            let historical: bool = sqlx::query_scalar(
+                "SELECT state='reversed' AND dual_verified_at IS NULL FROM deposits WHERE id=$1",
+            ).bind(old).fetch_one(&harness.pool).await?;
+            ensure!(historical);
+            ensure!(pipeline.finalized_scan(&harness).await? == 1);
+            ensure!(db::chain_reads::coverage(&harness.pool,1).await?.context("coverage")?.number == 20);
+            let frozen: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM reconciliation_blocks WHERE scope='chain' AND chain_id=1)",
+            ).fetch_one(&harness.pool).await?;
+            ensure!(!frozen, "historical restored reversal froze its canonical successor");
+            let recorded: Vec<(Uuid, String, i64, Option<Uuid>)> = sqlx::query_as(
+                "SELECT id, state, revision, replaces FROM deposits \
+                 WHERE chain_id = 1 AND tx_hash = $1 ORDER BY revision",
             )
-            .fetch_one(&harness.pool)
+            .bind(format!("{ROUTER_TX:#x}"))
+            .fetch_all(&harness.pool)
             .await?;
-            ensure!(check == "unverified_evidence_mismatch");
-            ensure!(valuation(&harness, old).await?.0 == "reversed");
             ensure!(
-                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM webhook_deliveries")
-                    .fetch_one(&harness.pool)
-                    .await?
-                    == 0
+                recorded
+                    == vec![
+                        (old, "reversed".to_owned(), 0, None),
+                        (new, "detected".to_owned(), 1, Some(old)),
+                    ],
+                "{recorded:?}"
+            );
+            // Each deposit renders as the merchant last received it.
+            for (id, status, amount, replaces, replaced_by) in [
+                (&old_id, "reversed", 2_500, Value::Null, json!(new_id)),
+                (&new_id, "pending", 0, json!(old_id), Value::Null),
+            ] {
+                let read = harness
+                    .admin(
+                        Method::GET,
+                        &format!("/v1/admin/deposits/{id}"),
+                        &Value::Null,
+                    )
+                    .await?;
+                ensure!(read.status == StatusCode::OK, "{}", read.body);
+                ensure!(read.body["status"] == status, "{}", read.body);
+                ensure!(read.body["replaces"] == replaces, "{}", read.body);
+                ensure!(read.body["replaced_by"] == replaced_by, "{}", read.body);
+                if status == "reversed" {
+                    ensure!(read.body["amount"] == amount, "{}", read.body);
+                    ensure!(read.body["amount_reversed"] == amount, "{}", read.body);
+                }
+            }
+            // The second deposit is valued at its delivered credit, not at today's spot; nothing
+            // is sent again.
+            confirm(&harness, new, forwarder, 20_000_000).await?;
+            let restored = valuation(&harness, new).await?;
+            ensure!(
+                (restored.2.as_str(), restored.3.as_str()) == ("25000000", "2250"),
+                "{restored:?}"
+            );
+            let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM webhook_deliveries")
+                .fetch_one(&harness.pool)
+                .await?;
+            ensure!(queued == 0, "{queued} deliveries queued");
+            let status = harness
+                .admin(Method::GET, "/v1/admin/restore", &Value::Null)
+                .await?;
+            ensure!(
+                status.body["delivered_events"]["findings"] == json!([]),
+                "{}",
+                status.body
             );
             Ok(())
         })
