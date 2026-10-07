@@ -1906,15 +1906,8 @@
         "description": "Stable error fields safe to expose to callers.",
         "properties": {
           "code": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/KnownErrorCode"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Stable machine-readable error code; clients accept future codes."
+            "description": "Stable machine-readable error code; clients accept future codes.",
+            "type": "string"
           },
           "doc_url": {
             "description": "The documentation of `code` in the API reference. Every error of this service carries it;\nit is optional in the schema, as in Stripe's, so a client never fails on an error without\nit.",

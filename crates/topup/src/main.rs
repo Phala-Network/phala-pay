@@ -117,6 +117,8 @@ enum SyntheticAlert {
     CertificateProbeFailed,
     #[value(name = "TopupBusinessProbeFailed")]
     BusinessProbeFailed,
+    #[value(name = "TopupAddressCapacity")]
+    AddressCapacity,
 }
 
 #[derive(Subcommand)]

@@ -2362,7 +2362,7 @@ export interface components {
         /** @description Stable error fields safe to expose to callers. */
         readonly ErrorDetail: {
             /** @description Stable machine-readable error code; clients accept future codes. */
-            readonly code: components["schemas"]["KnownErrorCode"] | string;
+            readonly code: string;
             /**
              * @description The documentation of `code` in the API reference. Every error of this service carries it;
              *     it is optional in the schema, as in Stripe's, so a client never fails on an error without

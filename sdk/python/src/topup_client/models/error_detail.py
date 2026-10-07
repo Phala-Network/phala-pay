@@ -10,8 +10,6 @@ from ..types import UNSET, Unset
 
 from ..models.error_type import check_error_type
 from ..models.error_type import ErrorType
-from ..models.known_error_code import check_known_error_code
-from ..models.known_error_code import KnownErrorCode
 from ..types import UNSET, Unset
 from typing import cast
 
@@ -24,7 +22,7 @@ class ErrorDetail:
     """Stable error fields safe to expose to callers.
 
     Attributes:
-        code (KnownErrorCode | str): Stable machine-readable error code; clients accept future codes.
+        code (str): Stable machine-readable error code; clients accept future codes.
         message (str): Human-readable summary without internal details; it may change.
         type_ (ErrorType): Error category of [`ErrorDetail`].
         doc_url (str | Unset): The documentation of `code` in the API reference. Every error of this service carries it;
@@ -33,7 +31,7 @@ class ErrorDetail:
         param (None | str | Unset): The request parameter the error is about, when there is one.
     """
 
-    code: KnownErrorCode | str
+    code: str
     message: str
     type_: ErrorType
     doc_url: str | Unset = UNSET
@@ -41,11 +39,7 @@ class ErrorDetail:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        code: str
-        if isinstance(self.code, str):
-            code = self.code
-        else:
-            code = self.code
+        code = self.code
 
         message = self.message
 
@@ -78,19 +72,7 @@ class ErrorDetail:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-
-        def _parse_code(data: object) -> KnownErrorCode | str:
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                code_type_0 = check_known_error_code(data)
-
-                return code_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
-                pass
-            return cast(KnownErrorCode | str, data)
-
-        code = _parse_code(d.pop("code"))
+        code = d.pop("code")
 
         message = d.pop("message")
 

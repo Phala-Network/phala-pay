@@ -1495,14 +1495,7 @@ export const schemas: Record<string, Schema> = {
   "ErrorDetail": {
     "properties": {
       "code": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/KnownErrorCode"
-          },
-          {
-            "type": "string"
-          }
-        ]
+        "type": "string"
       },
       "doc_url": {
         "type": "string"

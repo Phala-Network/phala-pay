@@ -440,6 +440,7 @@ mod tests {
             "TopupCertificateExpiry",
             "TopupCertificateProbeFailed",
             "TopupBusinessProbeFailed",
+            "TopupAddressCapacity",
         ];
         let events = with_captured_events_options(
             || {
@@ -457,6 +458,8 @@ mod tests {
             assert_eq!(event.fingerprint[0], "topup-alert");
             let expected = if alert.starts_with("TopupOutbox") {
                 "outbox-backlog.md"
+            } else if alert == "TopupAddressCapacity" {
+                "address-capacity.md"
             } else {
                 "business-health.md"
             };

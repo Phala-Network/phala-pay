@@ -379,11 +379,6 @@ mod tests {
                 .iter()
                 .all(|e| e.tags.get("alert").map(String::as_str) == Some("TopupAddressCapacity"))
         );
-        assert!(events.iter().all(|e| {
-            e.tags
-                .get("runbook")
-                .is_some_and(|r| r.ends_with("address-capacity.md"))
-        }));
         assert_eq!(
             events[0].tags.get("severity").map(String::as_str),
             Some("warning")

@@ -1,7 +1,5 @@
 import type { components } from "./generated/openapi.js";
 
-/** Known service codes, generated from the OpenAPI error taxonomy. */
-export type KnownErrorCode = components["schemas"]["KnownErrorCode"];
 /** Future service codes remain accepted. */
 export type ApiErrorCode = components["schemas"]["ErrorDetail"]["code"];
 

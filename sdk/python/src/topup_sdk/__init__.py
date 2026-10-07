@@ -4,6 +4,8 @@
 signing, inbound verification, deterministic address helpers, and an idempotent client.
 """
 
+from topup_client.models.known_error_code import KnownErrorCode
+
 from .addresses import (
     deposit_address,
     deposit_address_salt,
@@ -18,7 +20,6 @@ from .errors import (
     AddressMismatchError,
     ApiError,
     ApiErrorCode,
-    KnownErrorCode,
     AttestationError,
     SignatureError,
     TopupError,
@@ -54,10 +55,10 @@ __all__ = [
     "AddressMismatchError",
     "ApiError",
     "ApiErrorCode",
-    "KnownErrorCode",
     "AttestationError",
     "CreditedDeposit",
     "FulfillmentError",
+    "KnownErrorCode",
     "RequestSigner",
     "SignatureError",
     "SigningAuth",

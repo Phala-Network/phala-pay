@@ -187,7 +187,7 @@ fn finish(openapi: &OpenApi, title: &str, description: &str) -> Value {
     });
     document["components"]["schemas"]["ErrorDetail"]["properties"]["code"] = json!({
         "description": "Stable machine-readable error code; clients accept future codes.",
-        "anyOf": [{"$ref": "#/components/schemas/KnownErrorCode"}, {"type": "string"}]
+        "type": "string"
     });
 
     document

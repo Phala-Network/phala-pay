@@ -125,6 +125,7 @@ was performed by the implementation PR.
 | `TopupCertificateExpiry` warning | `topup alert-test --alert TopupCertificateExpiry` | parsed DER with a fake clock at 14 days; test `certificate_expiry_probe_emits_warning_and_critical_events` |
 | `TopupCertificateExpiry` critical | `topup alert-test --alert TopupCertificateExpiry --severity critical` | same probe test at three days; no event at 15 days |
 | `TopupCertificateProbeFailed` | `topup alert-test --alert TopupCertificateProbeFailed --severity critical` | invalid DER rejected; TLS/network failures raise this alert |
+| `TopupAddressCapacity` | `topup alert-test --alert TopupAddressCapacity` | `capacity_counts_all_history_and_alerts_at_seventy_and_ninety_percent`: historical count ≥700 warning, ≥900 critical; pre-upgrade refuses >1000 |
 | `TopupBusinessProbeFailed` | `topup alert-test --alert TopupBusinessProbeFailed --severity critical` | failed/timed-out database scan |
 
 The business monitor's state tests `hourly_reminders_recovery_and_reentry_use_the_supplied_clock`,

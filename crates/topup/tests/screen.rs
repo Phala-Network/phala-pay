@@ -650,6 +650,7 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
                 let id=insert_confirmed(pool,seed,number,Address::repeat_byte(number),123).await?;
                 let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route.clone(),Arc::new(Answers(a,b)))])?;
                 let pump=Pump::new(pool.clone(),Arc::default(),Arc::new(wait_steps().with_confirmed(Box::new(step))),PumpConfig::default())?;
+                let attempted_at=Utc::now();
                 ensure!(pump.run_once().await?==RunOnceResult::Applied {deposit_id:id});
                 let deposit=db::get_deposit(pool,id).await?.context("screened deposit")?;
                 let expected=match (a,b) {
@@ -663,7 +664,7 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
                 let evidence=transition_evidence(pool,id).await?;
                 ensure!(evidence["block_hash"]==format!("{:#x}",B256::repeat_byte(7)));
                 if expected==DepositState::Confirmed {
-                    ensure!(deposit.attempt>0 && deposit.next_attempt_at>Utc::now());
+                    ensure!(deposit.attempt>0 && deposit.next_attempt_at>=attempted_at);
                     ensure!(evidence["sanctions_hold"]==true);
                     ensure!(sqlx::query_scalar::<_,bool>("SELECT sanctions_hit_at IS NULL FROM deposits WHERE id=$1").bind(id).fetch_one(pool).await?);
                     held=Some(id);

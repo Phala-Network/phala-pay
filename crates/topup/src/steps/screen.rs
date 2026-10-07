@@ -78,6 +78,9 @@ impl ScreenRoute {
         };
         let oracle = self.route.screening.sanctions_oracle;
         let mut evidence = screening_evidence(oracle, sanctions, bounds, &pause_scopes);
+        if sanctions.block_number < deposit.block_number {
+            evidence["error"] = json!("sanctions_pin_before_payment");
+        }
         if outcome
             == (StepOutcome::Retry {
                 error: RetryError::SanctionsInconclusive,
@@ -645,9 +648,10 @@ mod tests {
         assert_eq!(
             result.outcome,
             StepOutcome::Retry {
-                error: RetryError::Transient,
+                error: RetryError::SanctionsInconclusive,
             }
         );
         assert_eq!(result.evidence["error"], "sanctions_pin_before_payment");
+        assert_eq!(result.evidence["sanctions_hold"], true);
     }
 }
