@@ -397,6 +397,7 @@ async fn hints_ignore_transfers_before_created_block_and_include_the_boundary() 
                     .trim_start_matches("0x"),
                 16,
             )?;
+            read.receipt_gate.store(true, Ordering::SeqCst);
             let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
             sqlx::query("UPDATE addresses SET created_block=$1")
                 .bind(i64::try_from(block + u64::from(before_creation))?)
@@ -414,18 +415,31 @@ async fn hints_ignore_transfers_before_created_block_and_include_the_boundary() 
             )
             .await?;
             let (cancel, mut worker) = h.worker(&db.app_pool);
+            wait_until(async || {
+                Ok(read.methods.lock().unwrap().iter().any(|method| {
+                    method == "eth_getTransactionReceipt"
+                }))
+            })
+            .await?;
+            // A queued duplicate disappears only when the running task finishes. This
+            // proves the excluded case completed, rather than merely checking before insert.
+            h.submit(
+                &format!("/v1/quotes/{}/transactions", h.quote_id),
+                Some(&h.key),
+                json!({"transaction_hash":TX}),
+            )
+            .await?;
+            ensure!(h.queue.pending() == 1);
+            read.receipt_gate.store(false, Ordering::SeqCst);
+            wait_until(async || Ok(h.queue.pending() == 0)).await?;
+            // Both sources finish decoding; the creation boundary alone excludes the log.
+            ensure!(verify.methods.lock().unwrap().iter().any(|method| {
+                method == "eth_getTransactionByHash"
+            }));
             if before_creation {
-                // Both sources finish decoding; the creation boundary alone excludes the log.
-                wait_until(async || {
-                    Ok(verify.methods.lock().unwrap().iter().any(|method| {
-                        method == "eth_getTransactionByHash"
-                    }))
-                })
-                .await?;
-                tokio::time::sleep(Duration::from_secs(1)).await;
                 ensure!(deposits(&db.app_pool).await? == 0);
             } else {
-                wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+                ensure!(deposits(&db.app_pool).await? == 1);
                 ensure!(sqlx::query_scalar::<_, bool>(
                     "SELECT block_number=$1 AND dual_verified_at=created_at FROM deposits",
                 )
