@@ -36,6 +36,153 @@ use support::{
 
 const ADMIN_KID: &str = "admin/v1";
 
+/// Saturated authentication slots refuse well-formed keys promptly, while malformed keys,
+/// payer reads, health checks, and admin requests keep their independent admission paths.
+#[tokio::test]
+async fn pre_auth_database_gate_bounds_bearer_work_and_preserves_other_requests() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let pool = &database.app_pool;
+            let admin = SigningKey::from_bytes(&[39; 32]);
+            let (account, key) = seed_product(pool, "pre-auth-gate").await?;
+            let customer = seed_customer(pool, account.id, "payer").await?;
+            let address = seed::insert_address(
+                pool,
+                &NewAddress {
+                    id: Uuid::new_v4(),
+                    customer_id: customer.id,
+                    chain_id: 1,
+                    route: "phala-cloud-ethereum-pha-usd".to_owned(),
+                    salt: B256::repeat_byte(0x71),
+                    address: Address::repeat_byte(0x72),
+                },
+            )
+            .await?;
+            let quote = address.quote_id.context("seeded quote")?;
+            let state = app_state(pool.clone(), &admin);
+            let secret = support::issue_client_secret(pool, &state.client_reads, quote).await?;
+            let quote_path = format!("/v1/quotes/{}", topup::locks::quote_id(quote));
+            let app = topup::api::router(state).0;
+            let unknown = topup::api_keys::generate(topup::api_keys::KeyKind::Secret, true)?;
+            ensure!(topup::api_keys::check_format(&unknown).is_some());
+
+            // Block the first authentication query without occupying the application's pool.
+            let mut lock = database.owner_pool.begin().await?;
+            sqlx::query("LOCK TABLE restores IN ACCESS EXCLUSIVE MODE")
+                .execute(&mut *lock)
+                .await?;
+            let slots = pool.options().get_max_connections() / 2;
+            let mut pending = tokio::task::JoinSet::new();
+            for index in 0..slots {
+                let request = merchant_request(
+                    Method::GET,
+                    if index % 2 == 0 {
+                        "/v1/account"
+                    } else {
+                        &quote_path
+                    },
+                    vec![],
+                    &unknown,
+                );
+                pending.spawn(app.clone().oneshot(request));
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let waiting: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() \
+                     AND wait_event_type = 'Lock' \
+                     AND query LIKE 'SELECT EXISTS (SELECT 1 FROM restores%'",
+                    )
+                    .fetch_one(&database.owner_pool)
+                    .await?;
+                    if waiting == i64::from(slots) {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .context("authentication queries did not occupy half the pool")??;
+
+            for path in ["/v1/account", quote_path.as_str()] {
+                let started = std::time::Instant::now();
+                let response = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    app.clone()
+                        .oneshot(merchant_request(Method::GET, path, vec![], &unknown)),
+                )
+                .await
+                .context("authentication slot wait exceeded its bound")??;
+                ensure!(started.elapsed() >= std::time::Duration::from_millis(250));
+                ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
+                ensure!(response.headers()["retry-after"] == "1");
+                ensure!(response_json(response).await?["error"]["code"] == "unavailable");
+
+                let mut bad_checksum = unknown.to_string();
+                let last = bad_checksum.pop().context("key checksum")?;
+                bad_checksum.push(if last == '0' { '1' } else { '0' });
+                for invalid in ["malformed", bad_checksum.as_str()] {
+                    ensure!(topup::api_keys::check_format(invalid).is_none());
+                    let response = tokio::time::timeout(
+                        std::time::Duration::from_millis(200),
+                        app.clone()
+                            .oneshot(merchant_request(Method::GET, path, vec![], invalid)),
+                    )
+                    .await
+                    .context("invalid key waited for a database slot")??;
+                    ensure!(response.status() == StatusCode::UNAUTHORIZED);
+                    ensure!(response.headers().contains_key("www-authenticate"));
+                    ensure!(response_json(response).await?["error"]["code"] == "api_key_invalid");
+                }
+            }
+            let view = support::client_quote(&app, &secret).await?;
+            ensure!(view["id"] == topup::locks::quote_id(quote));
+            ensure!(
+                app.clone()
+                    .oneshot(axum::http::Request::get("/healthz").body(Body::empty())?)
+                    .await?
+                    .status()
+                    == StatusCode::OK
+            );
+            ensure!(
+                app.clone()
+                    .oneshot(signed_request(
+                        Method::GET,
+                        "/v1/admin/instance/pause",
+                        vec![],
+                        ADMIN_KID,
+                        &admin,
+                        Utc::now().timestamp()
+                    ))
+                    .await?
+                    .status()
+                    == StatusCode::OK
+            );
+
+            lock.rollback().await?;
+            while let Some(response) = pending.join_next().await {
+                ensure!(response??.status() == StatusCode::UNAUTHORIZED);
+            }
+            // Every failed authentication releases its slot; genuine Bearer requests work again.
+            ensure!(
+                app.clone()
+                    .oneshot(merchant_request(Method::GET, "/v1/account", vec![], &key))
+                    .await?
+                    .status()
+                    == StatusCode::OK
+            );
+            ensure!(
+                app.oneshot(merchant_request(Method::GET, &quote_path, vec![], &key))
+                    .await?
+                    .status()
+                    == StatusCode::OK
+            );
+            Ok(())
+        })
+    })
+    .await
+}
+
 /// Exercise every documented admin route, including new ones, against the same narrow key.
 #[tokio::test]
 async fn maintenance_keys_are_scoped_audited_and_replay_protected() -> Result<()> {

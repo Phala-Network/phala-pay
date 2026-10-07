@@ -1047,7 +1047,12 @@ restricted key one it was granted (`api_keys.permissions`; a `write` includes it
 webhook endpoints or resends, webhook keys, or account settings (design, launch hardening). A live key of an account the operator has not
 enabled for live mode is `403 testmode_charges_only`. Requests are rate-limited per account and
 mode in the process, 100 per second live and 25 test, with a 500 per second test-mode ceiling
-across accounts (`429 rate_limit`, `Retry-After: 1`). Every response carries `Request-Id: req_…`,
+across accounts (`429 rate_limit`, `Retry-After: 1`). API-key authentication uses a bounded
+database slot gate; exhausted slots return `503 unavailable` with `Retry-After: 1`. See
+[API admission limits](configuration.md#api-admission-limits) for the authentication gate and
+protection model.
+
+Every response carries `Request-Id: req_…`,
 and an event a request causes records it with the request's `Idempotency-Key`. A request for
 another account's object, or for the same account's object in the other mode, answers `404` as for
 a missing one.
@@ -1326,7 +1331,7 @@ destination is `400 destination_sanctioned`. A reversed deposit is not refundabl
 | 401 | `invalid_request_error` | `signature_replayed` (admin: the signature was already used) |
 | 409 | `idempotency_error` | `idempotency_key_in_use` (a request with the key still runs; retry); the only `409` |
 | 429 | `invalid_request_error` | `rate_limit` (requests per account and mode; reads of a public view by `client_secret`), `customer_rate_limit` (quote creations per minute and deposit address rotations per hour of one customer); each with `Retry-After` |
-| 503 | `api_error` | `unavailable` (no fresh price, database unavailable), `service_maintenance` (planned upgrades pause new mutations; reads continue while the process is up; retry after `Retry-After` with the same `Idempotency-Key`, since the request has not executed), `service_restoring` (every merchant request with an API key, reads included, while the service is frozen after a restore, §14; with `Retry-After`) |
+| 503 | `api_error` | `unavailable` (no fresh price, database unavailable, including API-key authentication slots exhausted), `service_maintenance` (planned upgrades pause new mutations; reads continue while the process is up; retry after `Retry-After` with the same `Idempotency-Key`, since the request has not executed), `service_restoring` (every merchant request with an API key, reads included, while the service is frozen after a restore, §14; with `Retry-After`) |
 | 400 | `invalid_request_error` | admin only: `restore_not_frozen`, `restore_rescan_incomplete` (§14) |
 | 500 | `api_error` | `internal_error` |
 

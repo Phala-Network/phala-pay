@@ -7,6 +7,13 @@ a reference product whose API serves the live demo on Phala's website,
 Another operator needs none of it, and can run the reference product the same way for its own
 rehearsals. The generic procedures are in the [deployment reference](README.md).
 
+## API admission limits
+
+API-key authentication that cannot acquire a database slot within 250 ms returns
+`503 unavailable` with `Retry-After: 1`. See
+[Service configuration](../docs/configuration.md#api-admission-limits) for the authentication
+gate and protection model.
+
 ## Onboarding policy
 
 Phala's instance onboards only Phala's own accounts, as in
