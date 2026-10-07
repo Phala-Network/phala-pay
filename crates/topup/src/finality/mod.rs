@@ -1,33 +1,11 @@
-//! Finality watch (design D1, architecture §7): whenever provider A's `finalized` advances, and
-//! every minute besides, the deposits that are not final yet, whose recorded block is at or below
-//! it, and whose recheck time has come are re-read on both providers by their transaction's
-//! receipt: one receipt per provider and deposit, plus provider B's `finalized` once per pass that
-//! has such a deposit. Nothing is read while no deposit waits.
-//!
-//! A pass claims deposits in pages of [`WATCH_PAGE`], oldest block first, at most
-//! [`WATCH_PAGES_PER_PASS`] pages, and gives each claimed deposit its own recheck time
-//! ([`RECHECK_INTERVAL`] later) as it claims it. A deposit that becomes final or reversed leaves
-//! the watch; one it keeps waiting on (providers disagree, the transaction is pending again, a
-//! read failed) is read again only at its recheck time, so however many deposits are stuck at the
-//! head of the backlog, every later one is read within the same pass or the next. A backlog larger
-//! than one pass continues at once, without waiting for the next advance.
-//!
-//! - Receipt at or below `finalized` on both, with the same transfer at the deposit's receipt
-//!   position: the deposit is final (`final_at`), and its evidence follows the block it is in.
-//! - Receipt in a newer block that is not final: the transaction was re-included; its evidence is
-//!   followed and nothing is reversed.
-//! - Receipt at or below `finalized` without the transfer, or no receipt on both providers while
-//!   the sender's nonce at `finalized` is past the transaction's (another transaction consumed
-//!   it): the deposit is `reversed`, `deposit.reversed` is sent if the account was told of it,
-//!   a quote it consumed opens again (or expires), and its pending refunds without a transaction
-//!   are canceled. When the final receipt holds another transfer at the deposit's receipt
-//!   position (the re-included transaction ran against other state), that transfer is recorded
-//!   in the same transaction as a new deposit, as the scanner records one, if it pays an issued
-//!   address: the scanners that read it while the old deposit held the position recorded nothing.
-//! - No receipt and the nonce not consumed: the transaction is pending again; the watch waits and
-//!   alerts after an hour.
-//!
-//! Anything else (the providers disagree) waits for the next advance.
+//! Finality watch (architecture §7): independently re-read receipts at the agreed checkpoint.
+//! Each due deposit receives its own recheck time, and bounded oldest-first pages keep a stuck
+//! deposit from starving later ones. An unchanged transfer below the checkpoint becomes final;
+//! one re-included above it is followed. Reversal requires an agreed finalized receipt without
+//! its transfer or a service-known finalized replacement with the same sender and nonce.
+//! Missing receipts without that positive evidence wait and alert; no nonce search proves loss.
+//! Reversal always reopens a consumed quote and restores its reservation. Dual coverage later
+//! completes expiry or cancellation. A canonical successor is inserted atomically with reversal.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -179,7 +157,7 @@ impl FinalityWatch {
         }
     }
 
-    /// Reads provider A's `finalized` and re-reads every deposit of `chain_id` that is neither
+    /// Reads the agreed checkpoint and re-reads every deposit of `chain_id` that is neither
     /// final nor reversed and whose recorded block is at or below it.
     pub async fn watch_once(&self, chain_id: u64) -> Result<WatchStats, FinalityError> {
         let Some(checkpoint) = db::chain_reads::checkpoint(&self.pool, chain_id).await? else {
@@ -189,7 +167,7 @@ impl FinalityWatch {
         self.watch_at(chain_id, finalized).await
     }
 
-    /// [`Self::watch_once`] at provider A's `primary_finalized`, as the head loop published it.
+    /// [`Self::watch_once`] at the agreed checkpoint announced by coverage.
     async fn watch_at(
         &self,
         chain_id: u64,
@@ -331,16 +309,16 @@ impl FinalityWatch {
                 tx_nonce,
                 ..
             } = a.receipt
+                && block_number <= checkpoint
+                && (tx_from, tx_nonce) == deposit.origin
             {
-                if block_number <= checkpoint && (tx_from, tx_nonce) == deposit.origin {
-                    return Ok(true);
-                }
+                return Ok(true);
             }
         }
         Ok(false)
     }
 
-    /// Runs a pass per chain whenever `heads` publishes an advance of provider A's `finalized`,
+    /// Runs a pass per chain whenever `heads` publishes an agreed checkpoint advance,
     /// and every [`RETRY_INTERVAL`] besides for deposits whose recheck time came, until
     /// cancellation. A pass that leaves deposits due is followed by another at once.
     pub async fn run(&self, heads: FinalizedHeads, cancellation: CancellationToken) {
@@ -767,7 +745,7 @@ async fn record_evidence(
 
 /// Reverses a deposit that is still in the observed state and not final: the transition and, for
 /// a deposit the account was told of (`credited` or `rejected`), `deposit.reversed`; a quote it
-/// consumed opens again while its window lasts, or expires with `quote.expired`; its pending
+/// consumed always opens again with its reservation restored; coverage closes it later. Its pending
 /// refunds without a transaction are canceled (design D1), while one marked paid stays tracked
 /// until verification ends it. Refunds require a final deposit, so the cancel only keeps that
 /// rule whole should one ever be pending.

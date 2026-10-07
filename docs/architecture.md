@@ -721,7 +721,7 @@ provider A's latest block (a Safe's owners collect signatures, or approve on cha
 `finalized`). `POST /v1/treasuries {chain_id, message,
 signature}` requires the message exactly as issued and proves the address when the signature is an
 EOA's EIP-191 `personal_sign` signature recovering to it (checked with Alloy), or when a contract
-is deployed at it at the chain's `finalized` block and `isValidSignature(eip191_hash(message),
+is deployed at it at the agreed checkpoint hash and `isValidSignature(eip191_hash(message),
 signature)` returns `0x1626ba7e` there on both providers (EIP-1271). On a Safe the
 CompatibilityFallbackHandler wraps that hash in the EIP-712 `SafeMessage(bytes message)` of the
 Safe's domain and checks the owners' signatures of it, or a `SignMessageLib` approval with `0x`:
@@ -815,7 +815,8 @@ webhook-signature: v1a,<base64 ed25519 by settlement/{acct}/{mode}/v{n} over
   is `quote`, otherwise the spot credit at finality (§9). `quote` is the receiving address's
   quote, also when a late or wrong-amount payment was valued at spot.
 - A credited deposit that a reorganization proves replaced before finality (its transaction's
-  nonce spent by another, or another transfer at its position at finality; §7) is `reversed`, and
+  service-known same-sender/same-nonce replacement agreed finalized on both endpoints, or
+  another transfer at its position at finality; §7) is `reversed`, and
   `deposit.reversed` follows, with the same derived-id rule. This is Stripe's pattern for a
   payment that fails after success (an ACH failure after `succeeded` becomes a dispute): rare,
   signed, and handled by the merchant like a refund: the snapshot's `amount_reversed` takes the
@@ -1367,8 +1368,8 @@ from fetched state, never from webhook order.
 
 ## 13. Reconciliation
 
-The reconciler runs a round every 10 minutes (`--reconcile-interval-s`) in which provider A's
-`finalized` advanced on some chain since the last complete round, using the head the scanner
+The reconciler runs a round every 10 minutes (`--reconcile-interval-s`) in which the agreed checkpoint
+advanced on some chain since the last complete round, using the head the scanner
 published (a round with nothing newly final is skipped and checks in healthy), and stores each
 finding once; repairs are silent, every other finding raises `TopupReconciliationMismatch` (§16).
 Chain reads stay proportional to what changed: each stored `(address, salt, treasury)` is checked
@@ -1379,7 +1380,7 @@ of forwarders holding unswept funds by the ledger.
 |---|---|
 | `credit_minor` ≠ recomputation from stored inputs | alert |
 | Final `credited` deposit with a `flushed` row at a later log position | sweep it (replay of indexed events) |
-| Per forwarder whose ledger holds unswept funds (Σ deposits ≠ Σ flushed), at block `B` = min(`finalized`, scanner cursor): its token balance at `B` ≠ Σ deposits at or below `B` (not reversed) − Σ `flushed.amount_atomic` at or below `B` | freeze chain, alert |
+| Per forwarder whose ledger holds unswept funds (Σ deposits ≠ Σ flushed), at block `B` = min(checkpoint, dual coverage cursor), pinned to its canonical hash: its token balance at `B` ≠ Σ deposits at or below `B` (not reversed) − Σ `flushed.amount_atomic` at or below `B` | freeze chain, alert |
 | `addressOf(treasury, salt)` on chain ≠ stored address, with each address's own treasury | freeze chain, alert |
 | After a restore, in the read-only restore-check instance (§14) | the checks above, on the restored ledger alone: the service's record is authoritative for its credits, so the check asks the merchant nothing and does not depend on it being reachable; the merchant's records enter only through the operator's reconciliation (§14) |
 

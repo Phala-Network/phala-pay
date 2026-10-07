@@ -3013,7 +3013,7 @@ async fn a_restored_unverified_reversed_record_freezes_on_canonical_contradictio
             // A reconstructed permanent row has no dual marker. Canonical successor evidence
             // contradicts that row, so F3 freezes rather than assuming the old fact was verified.
             let before = db::chain_reads::coverage(&harness.pool, 1).await?;
-            ensure!(matches!(pipeline.finalized_scan(&harness).await, Err(_)));
+            ensure!(pipeline.finalized_scan(&harness).await.is_err());
             ensure!(db::chain_reads::coverage(&harness.pool, 1).await? == before);
             let check: String = sqlx::query_scalar(
                 "SELECT check_name FROM reconciliation_blocks WHERE scope='chain' AND chain_id=1",

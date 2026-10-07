@@ -437,6 +437,80 @@ async fn progressed_unverified_mismatch_freezes_and_prevents_coverage_advance() 
 }
 
 #[tokio::test]
+async fn marked_reversed_revision_cannot_hide_an_unverified_current_revision() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 100).await?;
+            let log = transfer(&address, 100);
+            let mut read = Reader::new(200);
+            let mut verify = Reader::new(200);
+            read.logs.push(log.clone());
+            read.receipt = Some(log.clone());
+            verify.receipt = Some(log.clone());
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let mut fast_chain = chain();
+            fast_chain.chain.confirmations = Confirmations::Depth(2);
+            scanner::fast_once(&d.app_pool, &read, &fast_chain).await?;
+            sqlx::query("UPDATE deposits SET state='reversed',reason=NULL,dual_verified_at=now()")
+                .execute(&d.owner_pool)
+                .await?;
+            let mut tx = d.app_pool.begin().await?;
+            let successor = db::insert_scanned_deposit_in(
+                &mut tx,
+                &db::NewDeposit {
+                    chain_id: 1,
+                    tx_hash: log.tx_hash,
+                    receipt_log_index: log.receipt_log_index,
+                    log_index: log.log_index,
+                    block_number: log.block_number,
+                    block_hash: log.block_hash,
+                    block_time: time(101),
+                    address_id: address.id,
+                    route: Some(route().route),
+                    route_version: Some(1),
+                    asset_contract: log.token,
+                    from_address: log.from,
+                    amount_atomic: log.amount,
+                    state: topup_core::deposit::DepositState::Detected,
+                    reason: None,
+                    next_attempt_at: Utc::now(),
+                    tx_from: log.tx_from,
+                    tx_nonce: log.tx_nonce,
+                    is_final: true,
+                },
+                db::Evidence::Finalized,
+            )
+            .await?;
+            ensure!(successor.is_some());
+            tx.commit().await?;
+            sqlx::query("UPDATE deposits SET state='rejected',reason='out_of_bounds' WHERE id=$1")
+                .bind(successor.unwrap())
+                .execute(&d.owner_pool)
+                .await?;
+            ensure!(
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1)
+                    .await
+                    .is_err()
+            );
+            let check: String =
+                sqlx::query_scalar("SELECT check_name FROM reconciliation_blocks WHERE chain_id=1")
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            ensure!(check == "unverified_evidence_mismatch");
+            ensure!(
+                db::chain_reads::coverage(&d.app_pool, 1)
+                    .await?
+                    .unwrap()
+                    .number
+                    == 99
+            );
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn lowered_creation_clears_marker_and_backfills_before_quote_expiry() -> Result<()> {
     with_database(|d|Box::pin(async move {
         let address=address(d,100).await?;let read=Reader::new(4000);let verify=Reader::new(4000);

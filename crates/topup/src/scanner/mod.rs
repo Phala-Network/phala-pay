@@ -349,7 +349,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     }
     let mut candidates = BTreeSet::new();
     let mut factory_candidates = BTreeSet::new();
-    let mut unverified = BTreeMap::new();
+    let mut unverified = BTreeMap::<_, Vec<db::Deposit>>::new();
     let mut index = BTreeMap::new();
     for range in &ranges {
         if range.from > range.end {
@@ -378,7 +378,10 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             for (_, deposit) in db::deposits_by_ids(pool, &ids).await? {
                 let deposit = deposit?;
                 candidates.insert((deposit.tx_hash, deposit.receipt_log_index));
-                unverified.insert((deposit.tx_hash, deposit.receipt_log_index), deposit);
+                unverified
+                    .entry((deposit.tx_hash, deposit.receipt_log_index))
+                    .or_default()
+                    .push(deposit);
             }
             // Insert-only factory evidence is reverified even when both getLogs responses omit it.
             let hashes: Vec<String> = sqlx::query_scalar("SELECT tx_hash FROM flushed WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4 UNION SELECT tx_hash FROM flush_failures WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4")
@@ -412,9 +415,9 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     let mut deposits = Vec::new();
     let mut corrections = Vec::new();
     for (hash, position) in candidates {
-        let marker: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT dual_verified_at FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3")
+        let marker: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT dual_verified_at FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3 AND state <> 'reversed'")
             .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{hash:#x}")).bind(i64::try_from(position).map_err(|_|ScannerError::SnapshotChanged)?).fetch_optional(pool).await?;
-        if marker.flatten().is_some() {
+        if marker.flatten().is_some() && !unverified.contains_key(&(hash, position)) {
             continue;
         }
         let (a, b) = tokio::try_join!(
@@ -434,31 +437,33 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             .get(&log.to)
             .ok_or(ScannerError::UnknownRecipient(log.to))?;
         let deposit = resolve_log(log.clone(), address, routes, Utc::now());
-        if let Some(existing) = unverified.get(&(hash, position)) {
-            let equal = existing.address_id == deposit.address_id
-                && existing.block_number == deposit.block_number
-                && existing.block_hash == deposit.block_hash
-                && existing.block_time == deposit.block_time
-                && existing.log_index == deposit.log_index
-                && existing.asset_contract == deposit.asset_contract
-                && existing.from_address == deposit.from_address
-                && existing.amount_atomic == deposit.amount_atomic
-                && existing.tx_from == Some(deposit.tx_from)
-                && existing.tx_nonce == Some(deposit.tx_nonce);
-            if !equal && existing.state != DepositState::Detected {
-                chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
-                tracing::error!(
-                    tags.alert = "TopupUnverifiedEvidenceMismatch",
-                    chain_id = chain,
-                    "agreed evidence contradicts a permanent record; chain frozen"
-                );
-                return Err(ScannerError::Disagreement);
+        if let Some(records) = unverified.get(&(hash, position)) {
+            for existing in records {
+                let equal = existing.address_id == deposit.address_id
+                    && existing.block_number == deposit.block_number
+                    && existing.block_hash == deposit.block_hash
+                    && existing.block_time == deposit.block_time
+                    && existing.log_index == deposit.log_index
+                    && existing.asset_contract == deposit.asset_contract
+                    && existing.from_address == deposit.from_address
+                    && existing.amount_atomic == deposit.amount_atomic
+                    && existing.tx_from == Some(deposit.tx_from)
+                    && existing.tx_nonce == Some(deposit.tx_nonce);
+                if !equal && existing.state != DepositState::Detected {
+                    chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
+                    tracing::error!(
+                        tags.alert = "TopupUnverifiedEvidenceMismatch",
+                        chain_id = chain,
+                        "agreed evidence contradicts a permanent record; chain frozen"
+                    );
+                    return Err(ScannerError::Disagreement);
+                }
+                // Recipient changes retain the existing provisional rule: finality records successors.
+                if existing.address_id != address.id {
+                    return Err(ScannerError::Disagreement);
+                }
+                corrections.push((existing.id, existing.state, deposit.clone()));
             }
-            // Recipient changes retain the existing provisional rule: finality records successors.
-            if existing.address_id != address.id {
-                return Err(ScannerError::Disagreement);
-            }
-            corrections.push((existing.id, existing.state, deposit));
         } else {
             deposits.push(deposit);
         }

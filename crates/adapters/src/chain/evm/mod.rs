@@ -1032,10 +1032,9 @@ struct ReceiptFacts {
 /// "Despite the lack of signature validation, we still increment the nonce of the from account",
 /// and the receipt's `depositNonce` is "the nonce value of the from sender as registered before
 /// the EVM processing", present on every deposit receipt since Canyon. So `(from, depositNonce)`
-/// is the nonce the deposit consumed, as for a signed transaction: once the transaction is out of
-/// the chain and `from`'s nonce is past it, it cannot return, since a deposit re-derived after an
-/// L1 reorganization has a new source hash, so a new transaction hash, and is scanned as a new
-/// transfer. A deposit receipt without `depositNonce` is refused rather than given a nonce.
+/// is the nonce the deposit consumed, as for a signed transaction. A deposit receipt without
+/// `depositNonce` is refused rather than given a nonce. Only an independently verified,
+/// service-known finalized replacement proves reversal; an account nonce change does not.
 fn deposit_origin(receipt: &AnyTransactionReceipt) -> Result<Option<(Address, u64)>, ChainError> {
     if receipt.inner.inner.r#type != DEPOSIT_TX_TYPE {
         return Ok(None);
@@ -1506,10 +1505,10 @@ impl ChainReader for FinalizedReader {
                     .topic2(chunk.iter().copied().fold(Topic::default(), Topic::extend));
                 for log in self.client.logs(&filter).await? {
                     if is_transfer(&log) {
-                        if let Some(decoded) = decode_transfer_log(&log)? {
-                            if chunk.contains(&decoded.to) {
-                                transfers.push(self.complete(decoded).await?);
-                            }
+                        if let Some(decoded) = decode_transfer_log(&log)?
+                            && chunk.contains(&decoded.to)
+                        {
+                            transfers.push(self.complete(decoded).await?);
                         }
                     } else if log.address() == factory {
                         let event = decode_factory_log(&log)?;

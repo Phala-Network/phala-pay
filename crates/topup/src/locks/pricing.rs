@@ -2293,6 +2293,46 @@ mod tests {
         }
     }
     #[tokio::test(start_paused = true)]
+    async fn service_sampler_uses_five_minutes_only_in_staging() {
+        for (environment, interval) in [("staging", 300), ("testnet", 60)] {
+            let inner = CountingSource::new(Duration::ZERO);
+            let mut runtime = runtime();
+            runtime.primary[0].source = Arc::new(shared(inner.clone()));
+            runtime.primary[0].company = "uniswap-v2-onchain";
+            let route = route();
+            let routes = RouteSet::new(vec![route.clone()])
+                .unwrap()
+                .with_environment(environment.into());
+            let provider = crate::locks::ConfiguredQuoteProvider::from_runtimes(Arc::new(
+                BTreeMap::from([((route.route, route.version), Arc::new(runtime))]),
+            ));
+            let cancellation = tokio_util::sync::CancellationToken::new();
+            let stop = cancellation.clone();
+            let task = tokio::spawn(async move { provider.sample_twaps(&routes, stop).await });
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(inner.calls(), 1);
+            tokio::time::advance(Duration::from_secs(interval - 1)).await;
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(
+                inner.calls(),
+                1,
+                "{environment} sampled before its interval"
+            );
+            tokio::time::advance(Duration::from_secs(1)).await;
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(inner.calls(), 2, "{environment} skipped the next sample");
+            cancellation.cancel();
+            task.await.unwrap();
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn sampler_does_not_reuse_a_quote_completed_before_the_tick() {
         struct SampledSource {
             last_recorded: tokio::sync::Mutex<tokio::time::Instant>,

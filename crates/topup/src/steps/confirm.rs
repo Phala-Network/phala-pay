@@ -1,9 +1,8 @@
 //! Detected-to-confirmed deposit step: both providers show the same log at the transfer's receipt
 //! position, in the same block, at the route's required confirmation; then the deposit is valued.
 //!
-//! One check reads, on each provider, the one head the confirmation needs and the transaction's
-//! receipt; the block time and the nonce come from the recorded deposit, which its block hash
-//! and transaction hash fix.
+//! Each endpoint independently reads its confirmation head, receipt, transaction and header.
+//! Every decision field agrees, including block time and sender nonce, before valuation.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;

@@ -116,10 +116,9 @@ impl Snapshots {
         }
         if purpose == SnapshotUse::Quote
             && let Some(budget) = &self.budget
+            && !budget.claim(self.chain_id).await?
         {
-            if !budget.claim(self.chain_id).await? {
-                return Err(PriceError::SnapshotBudgetExhausted);
-            }
+            return Err(PriceError::SnapshotBudgetExhausted);
         }
         // Verify supplies both head and header. Read's only request is the multicall.
         let (number, hash, timestamp) = self
