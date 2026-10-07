@@ -485,6 +485,11 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                 {
                     tx.rollback().await?;
                     chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
+                    tracing::error!(
+                        tags.alert = "TopupUnverifiedEvidenceMismatch",
+                        chain_id = chain,
+                        "agreed evidence contradicts a permanent record; chain frozen"
+                    );
                     return Err(ScannerError::Disagreement);
                 }
                 continue;

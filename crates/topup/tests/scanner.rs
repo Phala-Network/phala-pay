@@ -456,7 +456,7 @@ async fn coverage_requeries_fast_inserts_after_taking_the_chain_lock() -> Result
 
 #[tokio::test]
 async fn changed_provisional_recipient_reverses_before_successor_coverage() -> Result<()> {
-    for tracked in [true, false] {
+    for (tracked, permanent) in [(true, false), (false, false), (true, true), (false, true)] {
         with_database(|d| {
             Box::pin(async move {
                 let original = address(d, 100).await?;
@@ -490,6 +490,26 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
                 read.logs.push(canonical.clone());
                 read.receipt = Some(canonical.clone());
                 verify.receipt = Some(canonical.clone());
+                if permanent {
+                    sqlx::query("UPDATE deposits SET state='rejected',reason='out_of_bounds'")
+                        .execute(&d.app_pool)
+                        .await?;
+                    ensure!(
+                        scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1)
+                            .await
+                            .is_err()
+                    );
+                    let check: String = sqlx::query_scalar(
+                        "SELECT check_name FROM reconciliation_blocks WHERE chain_id=1",
+                    )
+                    .fetch_one(&d.app_pool)
+                    .await?;
+                    ensure!(
+                        check == "unverified_evidence_mismatch",
+                        "permanent recipient contradiction did not freeze"
+                    );
+                    return Ok(());
+                }
                 scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
                 let id = topup_core::identity::deposit_id(1, old.tx_hash, 0);
                 let provisional = db::get_deposit(&d.app_pool, id).await?.unwrap();
