@@ -397,6 +397,122 @@ async fn merchant_key_hints_share_the_pre_auth_database_gate() -> Result<()> {
 }
 
 #[tokio::test]
+async fn browser_hints_share_client_read_slots_and_touch_no_database_when_saturated() -> Result<()>
+{
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        let account: Uuid = sqlx::query_scalar("SELECT account_id FROM quotes LIMIT 1")
+            .fetch_one(&db.app_pool)
+            .await?;
+        seed::set_treasury(&db.app_pool, account, false, CHAIN, Address::repeat_byte(9)).await?;
+        let response = h
+            .app
+            .clone()
+            .oneshot(support::merchant_request(
+                axum::http::Method::POST,
+                "/v1/deposit_addresses",
+                serde_json::to_vec(&json!({"client_reference_id":"browser hint admission"}))?,
+                &h.key,
+            ))
+            .await?;
+        ensure!(response.status().is_success());
+        let address: Value = serde_json::from_slice(&to_bytes(response.into_body(), 65536).await?)?;
+        let address_id = address["id"].as_str().context("address id")?;
+        let address_secret = address["client_secret"]
+            .as_str()
+            .context("address secret")?;
+        let paths = [
+            format!(
+                "/v1/quotes/{}/transactions?client_secret={}",
+                h.quote_id, h.secret
+            ),
+            format!(
+                "/v1/deposit_addresses/{address_id}/transactions?client_secret={address_secret}"
+            ),
+        ];
+
+        // Real GETs hold the shared permits while blocked on their first database query.
+        // Blocking restores too makes any hint database work observable: bypassing
+        // admission would wait here instead of returning after the 250 ms slot bound.
+        let mut lock = db.owner_pool.begin().await?;
+        sqlx::query("LOCK TABLE quotes, restores IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *lock)
+            .await?;
+        let slots = db.app_pool.options().get_max_connections() / 2;
+        let mut pending = tokio::task::JoinSet::new();
+        for _ in 0..slots {
+            pending.spawn(
+                h.app.clone().oneshot(
+                    Request::get(format!(
+                        "/v1/quotes/{}?client_secret={}",
+                        h.quote_id, h.secret
+                    ))
+                    .body(Body::empty())?,
+                ),
+            );
+        }
+        wait_until(async || {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() \
+                 AND wait_event_type='Lock' AND query LIKE '%FROM quotes%'",
+            )
+            .fetch_one(&db.owner_pool)
+            .await?;
+            Ok(waiting == i64::from(slots))
+        })
+        .await?;
+        for path in &paths {
+            let started = std::time::Instant::now();
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                h.submit(path, None, json!({"transaction_hash":TX,"chain_id":CHAIN})),
+            )
+            .await
+            .context("browser hint touched the database with client-read slots saturated")??;
+            ensure!(started.elapsed() >= Duration::from_millis(250));
+            ensure!(h.queue.pending() == 0);
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() \
+                 AND wait_event_type='Lock'",
+            )
+            .fetch_one(&db.owner_pool)
+            .await?;
+            ensure!(
+                waiting == i64::from(slots),
+                "hint started a database query without a slot"
+            );
+        }
+        lock.rollback().await?;
+        while let Some(response) = pending.join_next().await {
+            ensure!(response??.status() == StatusCode::OK);
+        }
+        // Permits release after GETs, and the hint-specific 3/min cap still applies to
+        // browser credentials independently of the shared client-read admission.
+        for (index, path) in paths.iter().enumerate() {
+            for byte in 1..=4 {
+                h.submit(
+                    path,
+                    None,
+                    json!({
+                        "transaction_hash":format!("{:#x}", B256::repeat_byte(byte)),
+                        "chain_id":CHAIN,
+                    }),
+                )
+                .await?;
+                ensure!(h.queue.pending() == index * 3 + usize::from(byte.min(3)));
+            }
+        }
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
 async fn reversal_history_written_during_hint_rpc_never_reenters_as_fresh_evidence() -> Result<()> {
     for case in ["identical", "different", "older-matching"] {
         let Some(db) = TestDatabase::create().await? else {

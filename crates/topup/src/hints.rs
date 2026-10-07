@@ -379,6 +379,8 @@ async fn process(
             // Inspect the full position history after RPC and under the chain lock. Hints
             // have confirmation evidence only: identical reversed evidence is dropped,
             // and changed evidence waits for the scanner's finalized successor path.
+            // insert_scanned_deposit_in already refuses Confirmed inserts at positions
+            // with history; this explicit check keeps the reversal policy clear here.
             let reversed: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM deposits WHERE chain_id=$1 AND tx_hash=$2 \
                  AND receipt_log_index=$3 AND state='reversed')",

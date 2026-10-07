@@ -208,16 +208,15 @@ async fn submit(
     ) else {
         return Ok(());
     };
-    let scope = if let Some(merchant) = merchant {
-        merchant.scope
+    // Hold browser admission through all object and address queries, as client GETs do.
+    let (scope, _client_slot) = if let Some(merchant) = merchant {
+        (merchant.scope, None)
     } else {
         let pairs = query_pairs(query);
         let Some((_, secret)) = pairs.iter().find(|(name, _)| name == "client_secret") else {
             return Ok(());
         };
-        if !state.client_reads.key().verify(id, secret) {
-            return Ok(());
-        }
+        let slot = state.client_reads.admit(id, object, secret).await?;
         if crate::restore_mode::is_frozen(&state.pool).await? {
             return Ok(());
         }
@@ -237,7 +236,7 @@ async fn submit(
         let Some((account, livemode)) = owner else {
             return Ok(());
         };
-        Scope::new(account, livemode)
+        (Scope::new(account, livemode), Some(slot))
     };
     // Only issued, current physical networks of this object are eligible; never create addresses.
     let address: Option<(Uuid, i64, String, i64)> = sqlx::query_as(
