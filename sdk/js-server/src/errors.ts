@@ -1,3 +1,10 @@
+import type { components } from "./generated/openapi.js";
+
+/** Known service codes, generated from the OpenAPI error taxonomy. */
+export type KnownErrorCode = components["schemas"]["KnownErrorCode"];
+/** Future service codes remain accepted. */
+export type ApiErrorCode = components["schemas"]["ErrorDetail"]["code"];
+
 /** Errors contain no request bodies, credentials, or raw transport causes. */
 export class PhalaPayError extends Error {
   constructor(message: string) {
@@ -31,7 +38,7 @@ export class TransportError extends PhalaPayError {
 export class ApiError extends PhalaPayError {
   constructor(
     readonly statusCode: number,
-    readonly code: string,
+    readonly code: ApiErrorCode,
     message: string,
     readonly errorType: string | null,
     readonly param: string | null,

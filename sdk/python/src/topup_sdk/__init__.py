@@ -17,6 +17,8 @@ from .client import TopupClient
 from .errors import (
     AddressMismatchError,
     ApiError,
+    ApiErrorCode,
+    KnownErrorCode,
     AttestationError,
     SignatureError,
     TopupError,
@@ -51,6 +53,8 @@ __all__ = [
     "CREDITED_EVENT",
     "AddressMismatchError",
     "ApiError",
+    "ApiErrorCode",
+    "KnownErrorCode",
     "AttestationError",
     "CreditedDeposit",
     "FulfillmentError",

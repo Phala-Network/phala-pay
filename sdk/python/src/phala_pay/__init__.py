@@ -33,6 +33,8 @@ from topup_client.models import (
 from topup_sdk import (
     AddressMismatchError,
     ApiError,
+    ApiErrorCode,
+    KnownErrorCode,
     AttestationError,
     flush_transaction,
     flush_transactions,
@@ -59,6 +61,8 @@ from ._webhook import Event, EventData, EventRequest, SignatureVerificationError
 __all__ = [
     "AddressMismatchError",
     "ApiError",
+    "ApiErrorCode",
+    "KnownErrorCode",
     "ApiKeyStatus",
     "AttestationError",
     "Balance",

@@ -2361,8 +2361,8 @@ export interface components {
         };
         /** @description Stable error fields safe to expose to callers. */
         readonly ErrorDetail: {
-            /** @description Stable machine-readable code. */
-            readonly code: string;
+            /** @description Stable machine-readable error code; clients accept future codes. */
+            readonly code: components["schemas"]["KnownErrorCode"] | string;
             /**
              * @description The documentation of `code` in the API reference. Every error of this service carries it;
              *     it is optional in the schema, as in Stripe's, so a client never fails on an error without
@@ -2671,6 +2671,8 @@ export interface components {
             /** @description The list's path, `/v1/forwarders`. */
             readonly url: string;
         };
+        /** @enum {string} */
+        readonly KnownErrorCode: "address_capacity_reached" | "chain_unavailable" | "price_unavailable" | "parameter_invalid" | "parameter_missing" | "parameter_unknown" | "amount_too_small" | "amount_too_large" | "exposure_cap_exceeded" | "paused" | "chain_frozen" | "asset_not_accepted" | "payment_settings_unconfirmed" | "treasury_not_set" | "treasury_proof_invalid" | "treasury_challenge_expired" | "treasury_challenge_used" | "treasury_not_deployed" | "treasury_sanctioned" | "treasury_change_pending" | "treasury_unchanged" | "treasury_unexpected_state" | "quote_payment_received" | "quote_window_closed" | "quote_unexpected_state" | "deposit_unexpected_state" | "deposit_not_refundable" | "deposit_not_final" | "destination_sanctioned" | "transfer_already_used" | "refund_unexpected_state" | "api_key_inactive" | "last_api_key" | "deposit_address_cap_exceeded" | "deposit_address_retired" | "webhook_endpoint_cap_exceeded" | "webhook_endpoint_disabled" | "idempotency_key_reused" | "signature_invalid" | "signature_replayed" | "api_key_missing" | "api_key_invalid" | "api_key_expired" | "permission_denied" | "testmode_charges_only" | "resource_missing" | "idempotency_key_in_use" | "rate_limit" | "customer_rate_limit" | "internal_error" | "unavailable" | "service_maintenance" | "service_restoring" | "restore_not_frozen" | "restore_rescan_incomplete";
         /**
          * @description `POST /v1/refunds/{id}/mark_paid` body: the merchant's refund transaction.
          * @example {
@@ -5318,6 +5320,19 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Permanent chain `address_capacity_reached`; not retryable */
+            readonly 422: {
+                headers: {
+                    /** @description Tenant data and credentials must never be stored, including errors */
+                    readonly "Cache-Control": "no-store";
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description `rate_limit`: retry after `Retry-After` seconds */
             readonly 429: {
                 headers: {
@@ -5660,6 +5675,19 @@ export interface operations {
             };
             /** @description `idempotency_key_in_use`: a request with this `Idempotency-Key` is still running; retry with the same key */
             readonly 409: {
+                headers: {
+                    /** @description Tenant data and credentials must never be stored, including errors */
+                    readonly "Cache-Control": "no-store";
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permanent chain `address_capacity_reached`; not retryable */
+            readonly 422: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
                     readonly "Cache-Control": "no-store";
@@ -6876,6 +6904,19 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Permanent chain `address_capacity_reached`; not retryable */
+            readonly 422: {
+                headers: {
+                    /** @description Tenant data and credentials must never be stored, including errors */
+                    readonly "Cache-Control": "no-store";
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description `rate_limit`, or `customer_rate_limit`: the customer's quotes per minute; retry after `Retry-After` seconds */
             readonly 429: {
                 headers: {
@@ -6891,7 +6932,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Service Unavailable */
+            /** @description `chain_unavailable`, `price_unavailable` or Service Unavailable */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */

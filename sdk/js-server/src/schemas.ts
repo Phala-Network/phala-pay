@@ -1495,7 +1495,14 @@ export const schemas: Record<string, Schema> = {
   "ErrorDetail": {
     "properties": {
       "code": {
-        "type": "string"
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/KnownErrorCode"
+          },
+          {
+            "type": "string"
+          }
+        ]
       },
       "doc_url": {
         "type": "string"
@@ -1762,6 +1769,9 @@ export const schemas: Record<string, Schema> = {
       "data"
     ],
     "type": "object"
+  },
+  "KnownErrorCode": {
+    "type": "string"
   },
   "MarkRefundPaidRequest": {
     "additionalProperties": false,

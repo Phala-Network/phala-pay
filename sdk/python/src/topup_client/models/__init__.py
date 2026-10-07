@@ -66,6 +66,7 @@ from .forwarder import Forwarder
 from .forwarder_list import ForwarderList
 from .forwarder_list_object import ForwarderListObject
 from .forwarder_object import ForwarderObject
+from .known_error_code import KnownErrorCode
 from .mark_refund_paid_request import MarkRefundPaidRequest
 from .metadata_clear import MetadataClear
 from .metadata_param_type_0 import MetadataParamType0
@@ -176,6 +177,7 @@ __all__ = (
     "ForwarderList",
     "ForwarderListObject",
     "ForwarderObject",
+    "KnownErrorCode",
     "MarkRefundPaidRequest",
     "MetadataClear",
     "MetadataParamType0",

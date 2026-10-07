@@ -227,6 +227,20 @@ describe("merchant transport", () => {
       expect(fetch).toHaveBeenCalledTimes(1);
     },
   );
+  it.each(["/v1/quotes", "/v1/deposit_addresses"])(
+    "surfaces permanent address capacity without retrying %s",
+    async (path) => {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(
+        errorResponse(422, "address_capacity_reached"),
+      );
+      await expect(transport(fetch).request("POST", path, {})).rejects.toMatchObject({
+        statusCode: 422,
+        code: "address_capacity_reached",
+        retryAfter: null,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
   it("ends retries on replayed errors", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
