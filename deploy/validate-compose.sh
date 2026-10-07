@@ -44,9 +44,9 @@ render template "$root/deploy/environments/phala-cloud-template/topup" --templat
 
 # Staging's sealed names are the ones sealed in its CVM: a change needs a re-seal
 # (deploy/README.md, "Sealing the secrets") before the upgrade that makes it.
-[[ "$(sealed service)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ALCHEMY_KEY " ]] ||
+[[ "$(sealed service)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN " ]] ||
     fail "staging's sealed names changed: $(sealed service)"
-[[ "$(sealed restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ALCHEMY_KEY " ]] ||
+[[ "$(sealed restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN " ]] ||
     fail "staging's restore-check sealed names changed: $(sealed restore-check)"
 [[ "$(sealed product)" == "PRODUCT_API_KEY " ]] || fail "the product's sealed names changed"
 
