@@ -533,7 +533,6 @@ async fn recover_members_every(
                 for (index, member) in group.members.iter().enumerate() {
                     if group.probe_due(index) {
                         let result = probe(group, index, route_files).await;
-                        log_recovery_probe_result(group, &member.id, &result, &mut probe_failures);
                         let known = sqlx::query_scalar::<_, String>(
                             r#"
                             SELECT genesis_hash
@@ -558,10 +557,9 @@ async fn recover_members_every(
                                 continue;
                             }
                         };
-                        group.probe_result(
-                            index,
-                            result.is_ok_and(|hash| known.as_ref() == Some(&hash)),
-                        );
+                        let result = validate_recovery_genesis(result, known.as_deref());
+                        log_recovery_probe_result(group, &member.id, &result, &mut probe_failures);
+                        group.probe_result(index, result.is_ok());
                     }
                 }
             }
@@ -579,8 +577,21 @@ async fn recover_members_every(
     with_availability_monitor(&watched, &cancellation, recovery).await
 }
 
-// Warn on the first and every tenth consecutive failure per member; successful probes reset
-// the count so the next eligibility loss starts a new warning sequence. Other failures are debug.
+fn validate_recovery_genesis(
+    result: Result<String, String>,
+    known: Option<&str>,
+) -> Result<String, String> {
+    result.and_then(|hash| {
+        if known == Some(hash.as_str()) {
+            Ok(hash)
+        } else {
+            Err("persisted genesis anchor mismatch".into())
+        }
+    })
+}
+
+// Warn on the first and every tenth consecutive failure per member; only a probe matching the
+// persisted genesis resets the count. Other failures are debug.
 fn log_recovery_probe_result(
     group: &RpcGroup,
     member: &str,
@@ -1328,7 +1339,7 @@ mod probe_tests {
 
     #[tokio::test]
     #[tracing_test::traced_test]
-    async fn recovery_probe_failures_warn_on_first_and_tenth_and_reset_after_success() {
+    async fn recovery_failures_warn_on_first_and_tenth_and_reset_only_after_accepted_genesis() {
         let mock = Arc::new(MockProbe {
             price_only: true,
             price_call_failure: true,
@@ -1341,10 +1352,16 @@ mod probe_tests {
         let mut failures = BTreeMap::new();
         for attempt in 1..=11 {
             if attempt == 11 {
-                log_recovery_probe_result(&group, "one", &Ok("genesis".into()), &mut failures);
+                let accepted = validate_recovery_genesis(Ok("genesis".into()), Some("genesis"));
+                assert!(accepted.is_ok());
+                log_recovery_probe_result(&group, "one", &accepted, &mut failures);
             }
-            let result = probe(&group, 0, &[]).await;
-            assert!(result.is_err(), "mock probe unexpectedly succeeded");
+            let result = match attempt {
+                2 => validate_recovery_genesis(Ok("genesis".into()), None),
+                10 => validate_recovery_genesis(Ok("genesis".into()), Some("other genesis")),
+                _ => validate_recovery_genesis(probe(&group, 0, &[]).await, Some("genesis")),
+            };
+            assert!(result.is_err(), "rejected recovery probe was accepted");
             tracing::info_span!("recovery_probe", attempt).in_scope(|| {
                 log_recovery_probe_result(&group, "one", &result, &mut failures);
             });
@@ -1380,13 +1397,22 @@ mod probe_tests {
                 return Err("second recovery probe failure was not logged at debug".into());
             }
             if recovery.iter().any(|line| {
+                let expected_error = if line.contains("attempt=2}") || line.contains("attempt=10}")
+                {
+                    "error=persisted genesis anchor mismatch"
+                } else {
+                    "error=price decimals capability: RPC server failure"
+                };
                 !line.contains("group=recovery-log-test")
                     || !line.contains("member=one")
-                    || !line.contains("error=price decimals capability: RPC server failure")
+                    || !line.contains(expected_error)
             }) {
                 return Err(format!(
                     "missing sanitized recovery log fields: {recovery:?}"
                 ));
+            }
+            if recovery.iter().any(|line| line.contains(&url)) {
+                return Err("mock server URL leaked into a recovery log".into());
             }
             Ok(())
         });

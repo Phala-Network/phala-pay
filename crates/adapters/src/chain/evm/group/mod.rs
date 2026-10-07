@@ -253,12 +253,10 @@ pub fn classify(method: &str, reply: &transport::HttpReply) -> Option<Failure> {
     if status == 429 {
         return Some(Failure::Throttled);
     }
-    // Sentio: "block N is beyond the latest block of this node"; providers also report
-    // "beyond current head" when the requested block has not reached their backend yet.
-    if code == Some(-32000)
-        && (message.contains("beyond the latest block") || message.contains("beyond current head"))
-    {
-        return Some(Failure::Stale);
+    // Sentio: "block 11859810 is beyond the latest block of this node, retry later".
+    // A transient backend error must not remove the member from eligibility on its first failure.
+    if code == Some(-32000) && message.contains("is beyond the latest block of this node") {
+        return Some(Failure::Server);
     }
     if code == Some(-32005) {
         return Some(
