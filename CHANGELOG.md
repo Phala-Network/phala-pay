@@ -17,7 +17,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 ### Added
 
 - API-key authentication uses a database slot gate sized to half the pool (at least one slot).
-  A checksum-valid Bearer key waiting more than 250 ms returns `503 database_busy` with
+  A checksum-valid Bearer key waiting more than 250 ms returns `503 unavailable` with
   `Retry-After: 1`; the request has not executed. Malformed or checksum-invalid keys still return
   `401` without taking a slot. Payer reads, health checks, and admin authentication use their
   existing admission paths.
@@ -30,10 +30,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 ### Changed
 
 - Removed the per-source pre-authentication budget: Phala's TCP ingress exposes only the shared
-  gateway address, so one client could exhaust it and cause every merchant to receive `429`.
-  There is no per-client-IP limiting; authenticated scope and `client_secret` object limits,
-  the authentication database gate, global concurrency, and the gateway's per-app connection cap
-  protect the service.
+  gateway's WireGuard address, so one client could exhaust it and cause every merchant to receive
+  `429`. There is no per-client-IP limiting; see
+  [API admission limits](docs/configuration.md#api-admission-limits) for the protection model.
 - **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the
   restore report's `expected_heartbeat_at` JSON field is now `failure_at`. Both refer to the
   externally recorded failure instant.

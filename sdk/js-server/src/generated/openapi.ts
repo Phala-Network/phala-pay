@@ -2356,10 +2356,7 @@ export interface components {
         };
         /** @description Stable error fields safe to expose to callers. */
         readonly ErrorDetail: {
-            /**
-             * @description Stable machine-readable code, including `database_busy` when API-key authentication slots
-             *     are full.
-             */
+            /** @description Stable machine-readable code. */
             readonly code: string;
             /**
              * @description The documentation of `code` in the API reference. Every error of this service carries it;
@@ -3967,7 +3964,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4080,7 +4077,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4193,7 +4190,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4306,7 +4303,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4406,7 +4403,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4519,7 +4516,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4615,7 +4612,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4724,7 +4721,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4853,7 +4850,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -4949,7 +4946,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Service Unavailable; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description Service Unavailable */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5029,7 +5026,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5109,7 +5106,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5213,7 +5210,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5326,7 +5323,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5425,7 +5422,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5554,7 +5551,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5679,7 +5676,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5799,7 +5796,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -5898,7 +5895,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6027,7 +6024,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6141,7 +6138,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6237,7 +6234,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6366,7 +6363,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6474,7 +6471,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `sweepable`: treasury screening is unavailable; retry; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `sweepable`: treasury screening is unavailable; retry */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6554,7 +6551,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6667,7 +6664,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6771,7 +6768,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6884,7 +6881,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Service Unavailable; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description Service Unavailable */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -6985,7 +6982,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -7114,7 +7111,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -7239,7 +7236,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -7343,7 +7340,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -7456,7 +7453,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Destination screening is unavailable; retry; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description Destination screening is unavailable; retry */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -7555,7 +7552,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -7684,7 +7681,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -7809,7 +7806,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -7938,7 +7935,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8044,7 +8041,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8148,7 +8145,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8261,7 +8258,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description The chain or sanctions screening could not be read; retry; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description The chain or sanctions screening could not be read; retry */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8374,7 +8371,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8470,7 +8467,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8595,7 +8592,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8707,7 +8704,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8819,7 +8816,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -8919,7 +8916,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -9032,7 +9029,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -9128,7 +9125,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -9257,7 +9254,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -9353,7 +9350,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
@@ -9465,7 +9462,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds */
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */

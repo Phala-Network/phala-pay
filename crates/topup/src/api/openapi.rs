@@ -97,12 +97,6 @@ pub(super) fn merchant(openapi: &OpenApi) -> Value {
         if responses.get("429").is_none() {
             responses["429"] = error_response("`rate_limit`: retry after `Retry-After` seconds");
         }
-        let unavailable = responses["503"]["description"]
-            .as_str()
-            .unwrap_or("Service Unavailable");
-        responses["503"]["description"] = Value::String(format!(
-            "{unavailable}; `database_busy`: API-key authentication slots are full; retry after `Retry-After` seconds"
-        ));
     });
     document["tags"] = tags(MERCHANT_TAGS);
     document["components"]["securitySchemes"] = json!({

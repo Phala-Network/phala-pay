@@ -111,7 +111,7 @@ impl Merchant {
 /// merchant requests: it runs before authorization and the idempotency layer, so a refusal is
 /// neither replayed nor saved, and after the key's form and checksum are checked in memory, so a
 /// request without a well-formed key is refused without a database read. Database authentication
-/// holds at most half the pool's slots; waiting more than 250 ms is `503 database_busy` with
+/// holds at most half the pool's slots; waiting more than 250 ms is `503 unavailable` with
 /// `Retry-After: 1`. The slot is released before any handler runs.
 pub(super) async fn authenticate_merchant(
     State(auth): State<MerchantAuthState>,
@@ -129,7 +129,7 @@ pub(super) async fn authenticate_merchant(
     let authenticated = {
         let _slot = match tokio::time::timeout(SLOT_WAIT, auth.slots.acquire()).await {
             Ok(Ok(slot)) => slot,
-            Ok(Err(_)) | Err(_) => return ApiError::pre_auth_database_busy().into_response(),
+            Ok(Err(_)) | Err(_) => return ApiError::database_busy().into_response(),
         };
         match crate::restore_mode::is_frozen(&state.pool).await {
             Ok(false) => {}

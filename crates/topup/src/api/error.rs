@@ -258,11 +258,6 @@ pub const ERROR_CODES: &[(&str, u16, &str)] = &[
         "A dependency (pricing, sanctions screening, attestation) is temporarily unavailable. Retry with backoff; the same `Idempotency-Key` runs the request again.",
     ),
     (
-        "database_busy",
-        503,
-        "API-key authentication could not acquire a database slot within 250 ms. Retry after `Retry-After` seconds; the request has not executed.",
-    ),
-    (
         "service_maintenance",
         503,
         "A planned upgrade temporarily pauses new mutations. Reads continue while the process is up. Retry after Retry-After with the same Idempotency-Key; the request has not executed. The pause expires automatically if deployment fails.",
@@ -307,8 +302,7 @@ pub struct ErrorDetail {
     /// `api_error` for 5xx.
     #[serde(rename = "type")]
     pub error_type: ErrorType,
-    /// Stable machine-readable code, including `database_busy` when API-key authentication slots
-    /// are full.
+    /// Stable machine-readable code.
     pub code: &'static str,
     /// Human-readable summary without internal details; it may change.
     pub message: String,
@@ -865,17 +859,6 @@ impl ApiError {
         Self::service_unavailable("the database is busy; retry").with_retry_after(1)
     }
 
-    /// Authentication refused before any database work or handler execution.
-    #[must_use]
-    pub fn pre_auth_database_busy() -> Self {
-        Self::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "database_busy",
-            "the database is busy; retry",
-        )
-        .with_retry_after(1)
-    }
-
     /// A mutation refused before execution during a planned upgrade.
     #[must_use]
     pub fn service_maintenance() -> Self {
@@ -1102,7 +1085,6 @@ mod tests {
             ApiError::service_unavailable(""),
             ApiError::request_deadline_exceeded(),
             ApiError::service_restoring(300),
-            ApiError::pre_auth_database_busy(),
             ApiError::service_maintenance(),
             ApiError::restore_not_frozen(),
             ApiError::restore_rescan_incomplete(),

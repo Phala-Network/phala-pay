@@ -116,7 +116,7 @@ async fn pre_auth_database_gate_bounds_bearer_work_and_preserves_other_requests(
                 ensure!(started.elapsed() >= std::time::Duration::from_millis(250));
                 ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
                 ensure!(response.headers()["retry-after"] == "1");
-                ensure!(response_json(response).await?["error"]["code"] == "database_busy");
+                ensure!(response_json(response).await?["error"]["code"] == "unavailable");
 
                 let mut bad_checksum = unknown.to_string();
                 let last = bad_checksum.pop().context("key checksum")?;

@@ -1906,7 +1906,7 @@
         "description": "Stable error fields safe to expose to callers.",
         "properties": {
           "code": {
-            "description": "Stable machine-readable code, including `database_busy` when API-key authentication slots\nare full.",
+            "description": "Stable machine-readable code.",
             "type": "string"
           },
           "doc_url": {

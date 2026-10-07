@@ -14,19 +14,19 @@ is in [design/deploy-config.md](design/deploy-config.md).
 
 ## API admission limits
 
-The service sees only the Phala gateway's WireGuard address (`10.4.0.1`) through dstack-ingress,
+The service sees only the gateway's WireGuard address through dstack-ingress,
 which forwards TCP traffic. There is no per-client-IP limiting. Protection comes from the
 authenticated account-and-mode limits (100 requests/s live, 25 test, and 500 test requests/s
 across accounts), the `client_secret` object limits (120 reads/minute), the pre-authentication
 database gate, the global limit of 256 concurrent API requests, and the Phala gateway's per-app
-connection cap.
+connection cap (configured by Phala; value not confirmed).
 
 Well-formed, checksum-valid Bearer keys wait at most 250 ms for an authentication slot. Slots
 are half the database pool, with a minimum of one, and cover the restore freeze check and API-key
-lookup only. A full gate returns `503 database_busy` with `Retry-After: 1`; malformed or
+lookup only. A full gate returns `503 unavailable` with `Retry-After: 1`; malformed or
 checksum-invalid keys return `401` before taking a slot. Anonymous `client_secret` reads use
-their own slots; `/healthz` and admin authentication do not use this gate. These admission limits
-are built in, with no new configuration setting.
+their own slots; `/healthz` and admin authentication do not use this gate. The service admission
+limits are built in, with no new configuration setting.
 
 Carrying real client IPs via PROXY protocol is future work: it requires the dstack gateway's
 `port_policy` option `pp` and a corresponding ingress change.
