@@ -455,7 +455,7 @@ dc stop --timeout 10 topup >/dev/null
 # The staging sampler persists one sample per five minutes. Rehearsal time is compressed by mining
 # those timestamps on the local production-chain-id Anvil; every row still carries a real local
 # block hash, so the reader's restart/reorg checks remain exercised.
-twap_policy=$(jq -c '[.routes[].price.sources[] | select(.source == "uniswap_v2_twap") | .twap] | unique | if length == 1 then .[0] else error("inconsistent rehearsal TWAP policies") end' "$environment/topup.yaml")
+twap_policy=$(jq -c '[.routes[].price | (.primary // [])[] | select(.source == "uniswap_v2_twap") | .twap] | unique | if length == 1 then .[0] else error("inconsistent rehearsal TWAP policies") end' "$environment/topup.yaml")
 twap_sql="$tmp/twap.sql"
 : >"$twap_sql"
 pair_timestamp_last=$((ANVIL_PRICE_PAIR_TIMESTAMP - 1800))

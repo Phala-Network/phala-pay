@@ -40,7 +40,7 @@ pub fn provider(source: &str) -> Option<Provider> {
         "chainlink" => (
             "https://chain.link/terms",
             "Allowed basis: public on-chain feed data consumed through our own RPC, without an account or key. The Chainlink ToS page is client-rendered; full text could not be retrieved. This verdict covers public on-chain consumption only.",
-            "shared RPC account/key budgets",
+            "provider throughput limits",
             Verdict::Allowed,
         ),
         "kraken" => (
@@ -64,7 +64,7 @@ pub fn provider(source: &str) -> Option<Provider> {
         "uniswap_v2_twap" | "uniswap-v2-onchain" => (
             "https://etherscan.io/address/0x8867f20c1c63baccec7617626254a060eeb0e61e",
             "Allowed basis: public on-chain contract state consumed through our own RPC, without an API account or terms. PHA/WETH TWAP multiplied by public Chainlink ETH/USD state.",
-            "one sample/minute; shared RPC budgets",
+            "one sample per service interval; provider throughput limits",
             Verdict::Allowed,
         ),
         "coinmetrics" => (

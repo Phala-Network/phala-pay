@@ -17,7 +17,6 @@ groups:
           runbook: "deploy/runbooks/rpc-health.md"
       - alert: RpcCoverageLag
         expr: topup_coverage_lag_seconds > 2700
-        for: 10m
         labels: { severity: warning }
         annotations:
           summary: "Dual coverage is over 45 minutes behind on chain {{ $labels.chain_id }}"

@@ -239,7 +239,8 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
                     .fetch_one(&chain.pool)
                     .await?;
             ensure!(refund_status == "canceled");
-            // The quote's window is still open, so it opens again with its reservation.
+            // Even past wall-clock expiry, reversal restores open and the reservation;
+            // only complete dual coverage may close the quote afterward.
             ensure!(chain.quote_status().await? == ("open".to_owned(), None));
             let reserved:bool=sqlx::query_scalar("SELECT exposure_reserved FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(chain.address_id).fetch_one(&chain.pool).await?;
             ensure!(reserved);
