@@ -318,6 +318,20 @@ impl Range {
             .max(self.from)
     }
 }
+
+fn same_transfer_evidence(existing: &db::Deposit, deposit: &db::NewDeposit) -> bool {
+    existing.address_id == deposit.address_id
+        && existing.block_number == deposit.block_number
+        && existing.block_hash == deposit.block_hash
+        && existing.block_time == deposit.block_time
+        && existing.log_index == deposit.log_index
+        && existing.asset_contract == deposit.asset_contract
+        && existing.from_address == deposit.from_address
+        && existing.amount_atomic == deposit.amount_atomic
+        && existing.tx_from == Some(deposit.tx_from)
+        && existing.tx_nonce == Some(deposit.tx_nonce)
+}
+
 /// One bounded coverage round. Every sixth round uses the approved hourly catch-up bound.
 pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     pool: &PgPool,
@@ -623,16 +637,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         let deposit = resolve_log(log.clone(), address, routes, Utc::now());
         if let Some(records) = unverified.get(&(hash, position)) {
             for existing in records {
-                let equal = existing.address_id == deposit.address_id
-                    && existing.block_number == deposit.block_number
-                    && existing.block_hash == deposit.block_hash
-                    && existing.block_time == deposit.block_time
-                    && existing.log_index == deposit.log_index
-                    && existing.asset_contract == deposit.asset_contract
-                    && existing.from_address == deposit.from_address
-                    && existing.amount_atomic == deposit.amount_atomic
-                    && existing.tx_from == Some(deposit.tx_from)
-                    && existing.tx_nonce == Some(deposit.tx_nonce);
+                let equal = same_transfer_evidence(existing, &deposit);
                 if !equal && existing.state != DepositState::Detected {
                     tx.rollback().await?;
                     chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
@@ -678,13 +683,45 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         ..ScanStats::default()
     };
     for deposit in &deposits {
-        if let Some(id) =
-            db::insert_scanned_deposit_in(&mut tx, deposit, db::Evidence::Finalized).await?
+        // An insert followed by a reversal during RPC leaves the active-id snapshot
+        // unchanged. Inspect all position history under the lock before recording cached
+        // evidence, so a reversed payment can never re-enter as a fresh finalized revision.
+        let history_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT id FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3 ORDER BY revision DESC FOR UPDATE",
+        ).bind(chain_key).bind(format!("{:#x}", deposit.tx_hash))
+            .bind(i64::try_from(deposit.receipt_log_index).map_err(|_| ScannerError::SnapshotChanged)?)
+            .fetch_all(&mut *tx).await?;
+        let mut history = BTreeMap::new();
+        for (id, record) in db::deposits_by_ids(&mut *tx, &history_ids).await? {
+            history.insert(id, record?);
+        }
+        let reversed: Vec<_> = history_ids
+            .iter()
+            .filter_map(|id| history.get(id))
+            .filter(|record| record.state == DepositState::Reversed)
+            .collect();
+        if reversed
+            .iter()
+            .any(|record| same_transfer_evidence(record, deposit))
         {
-            sqlx::query("UPDATE deposits SET dual_verified_at=now() WHERE id=$1")
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            continue;
+        }
+        let inserted = match reversed.first() {
+            Some(record) => crate::finality::successor_in(&mut tx, record.id, deposit).await?,
+            None => {
+                let inserted =
+                    db::insert_scanned_deposit_in(&mut tx, deposit, db::Evidence::Finalized)
+                        .await?;
+                if let Some(id) = inserted {
+                    sqlx::query("UPDATE deposits SET dual_verified_at=now() WHERE id=$1")
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                inserted
+            }
+        };
+        if inserted.is_some() {
             stats.inserted = stats.inserted.saturating_add(1);
         }
     }

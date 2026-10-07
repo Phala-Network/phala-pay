@@ -586,6 +586,146 @@ async fn reversal_during_coverage_rpc_discards_the_snapshot_without_reinserting(
 }
 
 #[tokio::test]
+async fn fast_insert_then_reversal_during_rpc_cannot_resurrect_cached_payment() -> Result<()> {
+    coverage_with_transient_reversed_history(None).await
+}
+
+#[tokio::test]
+async fn fast_insert_then_reversal_during_rpc_links_changed_evidence_as_successor() -> Result<()> {
+    for field in [
+        "recipient",
+        "block_number",
+        "block_hash",
+        "block_time",
+        "log_index",
+        "token",
+        "from",
+        "amount",
+        "tx_from",
+        "tx_nonce",
+    ] {
+        coverage_with_transient_reversed_history(Some(field)).await?;
+    }
+    Ok(())
+}
+
+async fn coverage_with_transient_reversed_history(changed: Option<&'static str>) -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 100).await?;
+            let old = transfer(&address, 100);
+            let id = topup_core::identity::deposit_id(1, old.tx_hash, old.receipt_log_index);
+            let mut cached = old.clone();
+            let recipient = if changed == Some("recipient") {
+                let customer_id: Uuid = sqlx::query_scalar("SELECT customer_id FROM quotes WHERE id=$1")
+                    .bind(address.quote_id).fetch_one(&d.app_pool).await?;
+                let recipient = seed::insert_address(&d.app_pool, &NewAddress {
+                    id: Uuid::new_v4(), customer_id, chain_id: 1, route: route().route,
+                    salt: B256::repeat_byte(0x88), address: Address::repeat_byte(0x88),
+                }).await?;
+                sqlx::query("UPDATE addresses SET created_block=100 WHERE id=$1")
+                    .bind(recipient.id).execute(&d.app_pool).await?;
+                recipient
+            } else {
+                address.clone()
+            };
+            match changed {
+                Some("recipient") => cached.to = recipient.address,
+                Some("block_number") => {
+                    cached.block_number = 101;
+                    cached.block_hash = hash(101);
+                    cached.block_time = time(101);
+                }
+                Some("block_hash") => cached.block_hash = B256::repeat_byte(0xbb),
+                Some("block_time") => cached.block_time = time(101),
+                Some("log_index") => cached.log_index = 3,
+                Some("token") => cached.token = Address::repeat_byte(0x55),
+                Some("from") => cached.from = Address::repeat_byte(0x55),
+                Some("amount") => cached.amount = AtomicAmount::new(U256::from(1001)),
+                Some("tx_from") => cached.tx_from = Address::repeat_byte(0x55),
+                Some("tx_nonce") => cached.tx_nonce = 10,
+                None => {}
+                _ => unreachable!("unknown evidence fixture"),
+            }
+            let mut read = Reader::new(200);
+            let mut verify = Reader::new(200);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            // No row exists in the pre-RPC active-id snapshot.
+            read.logs.push(cached.clone());
+            read.receipt = Some(cached.clone());
+            verify.receipt = Some(cached.clone());
+            let started = Arc::new(Notify::new());
+            let resume = Arc::new(Notify::new());
+            read.receipt_gate = Some((started.clone(), resume.clone()));
+            let mut fast_read = Reader::new(200);
+            fast_read.logs.push(old.clone());
+            let mut fast_chain = chain();
+            fast_chain.chain.confirmations = Confirmations::Depth(2);
+            let mut removed = old;
+            removed.to = Address::repeat_byte(0x99);
+            let mut finality_read = Reader::new(200);
+            let mut finality_verify = Reader::new(200);
+            finality_read.receipt = Some(removed.clone());
+            finality_verify.receipt = Some(removed);
+            let watch = topup::finality::FinalityWatch::single(
+                d.app_pool.clone(), Arc::new(routes()), 1, finality_read, finality_verify,
+            );
+            let chain = chain();
+            let coverage = scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 1);
+            let concurrent = async {
+                started.notified().await;
+                let result = async {
+                    let fast = scanner::fast_once(&d.app_pool, &fast_read, &fast_chain).await?;
+                    ensure!(fast.inserted == 1, "fast scanner did not insert during RPC");
+                    ensure!(watch.watch_once(1).await?.reversed == 1,
+                        "finality did not reverse the transient fast insert");
+                    Ok::<_, anyhow::Error>(())
+                }.await;
+                resume.notify_one();
+                result
+            };
+            let (outcome, concurrent) = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                async { tokio::join!(coverage, concurrent) },
+            ).await.context("coverage/fast/finality concurrency timed out")?;
+            concurrent?;
+            let stats = outcome?;
+            ensure!(stats.cursor == 200 && marker(d, address.id).await? == Some(200));
+            let history: Vec<(Uuid, String, i64, Option<Uuid>, bool)> = sqlx::query_as(
+                "SELECT id,state,revision,replaces,dual_verified_at IS NOT NULL FROM deposits ORDER BY revision",
+            ).fetch_all(&d.app_pool).await?;
+            ensure!(history[0] == (id, "reversed".into(), 0, None, true));
+            if changed.is_none() {
+                ensure!(history.len() == 1 && stats.inserted == 0,
+                    "cached evidence resurrected the already reversed payment");
+                ensure!(db::claim_deposit(&d.app_pool, Uuid::new_v4()).await?.is_none(),
+                    "reversed evidence re-entered the credit flow");
+            } else {
+                ensure!(history.len() == 2 && stats.inserted == 1);
+                let successor = topup_core::identity::deposit_revision_id(1, cached.tx_hash, 0, 1);
+                ensure!(history[1].0 == successor && history[1].2 == 1
+                    && history[1].3 == Some(id) && history[1].4,
+                    "changed {changed:?} evidence was inserted without the reversal link");
+                let recorded = db::get_deposit(&d.app_pool, successor).await?.unwrap();
+                ensure!(recorded.address_id == recipient.id
+                    && recorded.block_number == cached.block_number
+                    && recorded.block_hash == cached.block_hash
+                    && recorded.block_time == cached.block_time
+                    && recorded.log_index == cached.log_index
+                    && recorded.asset_contract == cached.token
+                    && recorded.from_address == cached.from
+                    && recorded.amount_atomic == cached.amount
+                    && recorded.tx_from == Some(cached.tx_from)
+                    && recorded.tx_nonce == Some(cached.tx_nonce));
+            }
+            ensure!(db::chain_reads::coverage(&d.app_pool, 1).await?.unwrap().number == 200);
+            ensure!(compat(d).await? == (200, Some(time(200))));
+            Ok(())
+        })
+    }).await
+}
+
+#[tokio::test]
 async fn changed_address_snapshot_retries_once_immediately_with_fresh_logs() -> Result<()> {
     for changes in [1, 2] {
         with_database(|d| {

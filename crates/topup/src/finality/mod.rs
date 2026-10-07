@@ -856,29 +856,38 @@ pub(crate) async fn reverse_in(
         return Ok(None);
     };
     let successor = match next {
-        Some(deposit) => {
-            db::insert_scanned_deposit_in(
-                transaction,
-                deposit,
-                Evidence::Successor { replaces: id },
-            )
-            .await?
-        }
+        Some(deposit) => successor_in(transaction, id, deposit).await?,
         None => None,
     };
-    if let Some(next) = successor {
-        sqlx::query("UPDATE deposits SET dual_verified_at=now() WHERE id=$1")
-            .bind(next)
-            .execute(&mut **transaction)
-            .await?;
-        if let Some(object) = evidence.as_object_mut() {
-            object.insert("successor_deposit_id".into(), json!(next));
-        }
+    if let Some(next) = successor
+        && let Some(object) = evidence.as_object_mut()
+    {
+        object.insert("successor_deposit_id".into(), json!(next));
     }
     insert_transition(transaction, id, from, to, attempt, evidence).await?;
     sqlx::query("UPDATE quotes SET consumed_by=NULL,status='open',exposure_reserved=true,closed_at=NULL WHERE consumed_by=$1")
         .bind(id).execute(&mut **transaction).await?;
     Ok(Some((account, livemode, successor)))
+}
+
+/// Records dual-verified canonical evidence at a reversed receipt position. The caller
+/// holds the chain lock and has checked that `replaces` is reversed in this transaction.
+/// Coverage uses this same path when finality committed the reversal during its RPC phase.
+pub(crate) async fn successor_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    replaces: Uuid,
+    deposit: &db::NewDeposit,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let successor =
+        db::insert_scanned_deposit_in(transaction, deposit, Evidence::Successor { replaces })
+            .await?;
+    if let Some(id) = successor {
+        sqlx::query("UPDATE deposits SET dual_verified_at=now() WHERE id=$1")
+            .bind(id)
+            .execute(&mut **transaction)
+            .await?;
+    }
+    Ok(successor)
 }
 
 async fn insert_transition(
