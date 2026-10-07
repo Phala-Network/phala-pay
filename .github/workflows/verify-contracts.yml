@@ -57,13 +57,10 @@ jobs:
 
       - name: Verify the Safe and the factory deployment on both providers
         run: |
-          # The first keyless members of the configuration's Sepolia A/B groups.
+          # The providers of the configuration's Sepolia routes, in their order.
           IFS=$'\t' read -r RPC_A RPC_B < <(jq -r '
-            def first_keyless($id):
-              [.rpc_groups[$id].members[]? | select(.sealed_key == null) | .url][0]
-              // error("RPC group \($id) has no keyless member");
-            [.routes[] | select(.chain.chain_id == 11155111)][0].chain.rpc_groups as $groups
-            | [first_keyless($groups.a), first_keyless($groups.b)] | @tsv' \
+            [.routes[] | select(.chain.chain_id == 11155111)][0].chain.rpc_providers as $ids
+            | .rpc_providers as $urls | [$urls[$ids[0]], $urls[$ids[1]]] | @tsv' \
             reports/staging-config.json)
           [[ -n "$RPC_A" && -n "$RPC_B" && "$RPC_A$RPC_B" != *"{key}"* ]] ||
             { echo "::error::the staging configuration needs two keyless Sepolia providers"; exit 1; }

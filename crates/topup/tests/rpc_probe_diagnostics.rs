@@ -48,10 +48,6 @@ async fn rpc_check_reports_every_wrong_chain_member_without_retry_or_secrets() -
             group["members"] = json!([member]);
             group["members"][0]["company"] = json!(if a { "local-a" } else { "local-b" });
             group["members"][0]["url"] = json!(format!("http://{host}:{port}/secret-key"));
-            group["members"][0]
-                .as_object_mut()
-                .context("member")?
-                .remove("sealed_key");
         }
         let expected_member_ids = config["rpc_groups"]
             .as_object()
