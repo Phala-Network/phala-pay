@@ -382,6 +382,83 @@ async fn hints_record_only_dual_verified_confirmed_positive_facts_and_scanner_du
 }
 
 #[tokio::test]
+async fn hints_ignore_transfers_before_created_block_and_include_the_boundary() -> Result<()> {
+    for before_creation in [true, false] {
+        let Some(db) = TestDatabase::create().await? else {
+            return Ok(());
+        };
+        let result = async {
+            let read = Rpc::new();
+            let verify = Rpc::new();
+            let block = u64::from_str_radix(
+                read.receipt.lock().unwrap()["blockNumber"]
+                    .as_str()
+                    .context("fixture block number")?
+                    .trim_start_matches("0x"),
+                16,
+            )?;
+            let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
+            sqlx::query("UPDATE addresses SET created_block=$1")
+                .bind(i64::try_from(block + u64::from(before_creation))?)
+                .execute(&db.app_pool)
+                .await?;
+            let markers: (Option<i64>, Option<i64>, bool) = sqlx::query_as(
+                "SELECT dual_covered_through,backfilled_through,backfilled FROM addresses",
+            )
+            .fetch_one(&db.app_pool)
+            .await?;
+            h.submit(
+                &format!("/v1/quotes/{}/transactions", h.quote_id),
+                Some(&h.key),
+                json!({"transaction_hash":TX}),
+            )
+            .await?;
+            let (cancel, mut worker) = h.worker(&db.app_pool);
+            if before_creation {
+                // Both sources finish decoding; the creation boundary alone excludes the log.
+                wait_until(async || {
+                    Ok(verify.methods.lock().unwrap().iter().any(|method| {
+                        method == "eth_getTransactionByHash"
+                    }))
+                })
+                .await?;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                ensure!(deposits(&db.app_pool).await? == 0);
+            } else {
+                wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+                ensure!(sqlx::query_scalar::<_, bool>(
+                    "SELECT block_number=$1 AND dual_verified_at=created_at FROM deposits",
+                )
+                .bind(i64::try_from(block)?)
+                .fetch_one(&db.app_pool)
+                .await?);
+            }
+            cancel.cancel();
+            (&mut worker.0).await?;
+            ensure!(disagreements(&h) == 0);
+            ensure!(sqlx::query_scalar::<_, bool>("SELECT through_block=0 FROM chain_coverage")
+                .fetch_one(&db.app_pool)
+                .await?);
+            ensure!(markers == sqlx::query_as::<_, (Option<i64>, Option<i64>, bool)>(
+                "SELECT dual_covered_through,backfilled_through,backfilled FROM addresses",
+            )
+            .fetch_one(&db.app_pool)
+            .await?);
+            ensure!(sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM events WHERE type IN ('quote.canceled','quote.expired','deposit.rejected')",
+            )
+            .fetch_one(&db.app_pool)
+            .await? == 0);
+            Ok(())
+        }
+        .await;
+        db.cleanup().await?;
+        result?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn unrelated_reverted_unsupported_and_disagreed_receipts_never_record_or_change_coverage()
 -> Result<()> {
     for case in [
@@ -466,18 +543,21 @@ async fn not_ready_parks_without_spending_daily_budget_then_resumes() -> Result<
 
 #[tokio::test]
 async fn whole_task_caps_include_unmined_receipt_polls_and_confirmation_head_polls() -> Result<()> {
-    for unmined in [true, false] {
+    for case in ["unmined", "read-behind", "verify-behind"] {
         let Some(db) = TestDatabase::create().await? else {
             return Ok(());
         };
         let result = async {
             let read = Rpc::new();
             let verify = Rpc::new();
-            if unmined {
-                *read.receipt.lock().unwrap() = Value::Null;
-            } else {
-                *read.head.lock().unwrap() = json!("0x2d3f773");
-                *verify.head.lock().unwrap() = json!("0x2d3f773");
+            match case {
+                "unmined" => *read.receipt.lock().unwrap() = Value::Null,
+                "read-behind" => {
+                    *read.head.lock().unwrap() = json!("0x2d3f773");
+                    *verify.head.lock().unwrap() = json!("0x2d3f773");
+                }
+                "verify-behind" => *verify.head.lock().unwrap() = json!("0x2d3f773"),
+                _ => unreachable!(),
             }
             let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
             let read_start = read.calls.load(Ordering::SeqCst);
@@ -490,10 +570,10 @@ async fn whole_task_caps_include_unmined_receipt_polls_and_confirmation_head_pol
             .await?;
             let (cancel, _worker) = h.worker(&db.app_pool);
             let limit = tokio::time::Instant::now() + Duration::from_secs(20);
-            while if unmined {
-                read.calls.load(Ordering::SeqCst) < read_start + 12
-            } else {
+            while if case == "verify-behind" {
                 verify.calls.load(Ordering::SeqCst) < verify_start + 8
+            } else {
+                read.calls.load(Ordering::SeqCst) < read_start + 12
             } {
                 ensure!(
                     tokio::time::Instant::now() < limit,
@@ -504,6 +584,14 @@ async fn whole_task_caps_include_unmined_receipt_polls_and_confirmation_head_pol
             tokio::time::sleep(Duration::from_secs(2)).await;
             ensure!(read.calls.load(Ordering::SeqCst) <= read_start + 12);
             ensure!(verify.calls.load(Ordering::SeqCst) <= verify_start + 8);
+            if case == "verify-behind" {
+                ensure!(read.calls.load(Ordering::SeqCst) == read_start + 10);
+                ensure!(verify.calls.load(Ordering::SeqCst) == verify_start + 8);
+            } else {
+                ensure!(read.calls.load(Ordering::SeqCst) == read_start + 12);
+                ensure!(verify.calls.load(Ordering::SeqCst) == verify_start);
+            }
+            ensure!(disagreements(&h) == 0, "budget exhaustion must not alert");
             ensure!(
                 h.read.ready() && h.verify.ready(),
                 "task budget exhaustion changed endpoint health"
@@ -917,6 +1005,8 @@ async fn reorg_during_confirmation_wait_uses_fresh_independent_evidence() -> Res
             *rpc.head.lock().unwrap() = json!("0x2d3f773");
         }
         let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
+        let read_start = read.calls.load(Ordering::SeqCst);
+        let verify_start = verify.calls.load(Ordering::SeqCst);
         h.submit(
             &format!("/v1/quotes/{}/transactions", h.quote_id),
             Some(&h.key),
@@ -924,7 +1014,8 @@ async fn reorg_during_confirmation_wait_uses_fresh_independent_evidence() -> Res
         )
         .await?;
         let (cancel, _worker) = h.worker(&db.app_pool);
-        wait_until(async || Ok(verify.calls.load(Ordering::SeqCst) >= 2)).await?;
+        wait_until(async || Ok(read.calls.load(Ordering::SeqCst) >= read_start + 2)).await?;
+        ensure!(verify.calls.load(Ordering::SeqCst) == verify_start);
         ensure!(deposits(&db.app_pool).await? == 0);
         let new_hash = format!("0x{}", "88".repeat(32));
         for rpc in [&read, &verify] {

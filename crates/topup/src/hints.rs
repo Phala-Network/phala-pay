@@ -301,12 +301,14 @@ async fn process(
             let read_head = read_reader
                 .confirmation_heads(chain.chain.confirmations)
                 .await?;
+            // Spend verify calls only once read has reached the required depth.
+            if !chain.chain.confirmations.reached(target, read_head) {
+                continue;
+            }
             let verify_head = verify_reader
                 .confirmation_heads(chain.chain.confirmations)
                 .await?;
-            if !chain.chain.confirmations.reached(target, read_head)
-                || !chain.chain.confirmations.reached(target, verify_head)
-            {
+            if !chain.chain.confirmations.reached(target, verify_head) {
                 continue;
             }
             // Receipt visibility can lag the head. Poll cheaply until verify includes the tx
@@ -351,6 +353,11 @@ async fn process(
         db::rpc::guard_in(&mut tx, hint.chain).await?;
         let mut recorded = false;
         for log in evidence.transfers {
+            // Match coverage scanning's inclusive address creation boundary, using the
+            // freshly agreed inclusion rather than the initial discovery receipt.
+            if log.block_number < hint.address.created_block {
+                continue;
+            }
             let deposit = scanner::resolve_log(log, &hint.address, &chain, chrono::Utc::now());
             if let Some(id) =
                 db::insert_scanned_deposit_in(&mut tx, &deposit, db::Evidence::Confirmed).await?

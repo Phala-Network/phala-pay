@@ -88,7 +88,7 @@ pub struct AppState {
     pub client_reads: Arc<ClientReadLimiter>,
     /// Per-account and platform rate limits of authenticated merchant requests.
     pub rate_limits: Arc<ApiRateLimiter>,
-    /// Dedicated object and peer limits for transaction hints.
+    /// Dedicated authenticated object limits for transaction hints.
     pub hint_limits: Arc<HintRateLimiter>,
     /// Shared bounded process-local hint queue.
     pub transaction_hints: Arc<crate::hints::HintQueue>,
@@ -541,13 +541,13 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
         ));
     let hints = hint_routes()
         .route_layer(middleware::from_fn(auth::authorize))
+        // Keep merchant-key hints on the shared authentication and admission path.
         .route_layer(middleware::from_fn_with_state(
             merchant_auth,
             auth::authenticate_merchant_or_client_secret,
         ));
-    // dstack-ingress uses HAProxy TCP forwarding without PROXY protocol: every client has
-    // the same transport peer. A pre-auth peer limit would disable hints for everyone. Only
-    // hints bypass it; authenticated object limits and bounded task budgets remain enforced.
+    // No per-client IP is available behind the ingress, so hints have no per-IP limit.
+    // Authenticated object limits, the daily hard cap and the in-flight cap bound hint work.
     let merchant = merchant
         .merge(client_secret)
         .merge(hints);
