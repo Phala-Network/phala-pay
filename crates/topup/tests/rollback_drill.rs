@@ -459,6 +459,13 @@ async fn published_image_round_trip() -> Result<()> {
         let after_hint:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;
         ensure!(hint_boundary==after_hint,"scanner advanced during the hint-only phase");
 
+        // RPC no longer holds the chain lock, so the pump can claim the hint row even
+        // while scanning is blocked. Finish it before the deliberate restart; killing an
+        // in-flight step would leave its five-minute lease beyond this drill's wait bound.
+        credited(&database,second).await?;
+        let after_credit:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;
+        ensure!(hint_boundary==after_credit,"scanner advanced before hint payment processing finished");
+
         // Restart at a scheduled-round boundary without changing production cadences.
         current_service.stop()?;scanner_gate.store(false,Ordering::SeqCst);current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;credited(&database,second).await?;
         wait_until("N finalized second payment",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT final_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?)}).await?;
