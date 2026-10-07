@@ -1,11 +1,12 @@
 //! Periodic custody and credit reconciliation.
 //!
-//! Every §13 check runs on every round, independently of the others. Per-deposit failures are
+//! Regular ledger checks run each round; scheduled dual custody runs every sixth ten-minute
+//! tick, independently per chain and token route. Per-deposit failures are
 //! recorded as findings; a check that cannot complete is reported in
 //! [`ReconciliationReport::failed_checks`] and withholds the round heartbeat.
 //!
-//! Chain reads stay proportional to what changed: the service's rounds run only after provider
-//! A's `finalized` advanced, reuse the head the scanner published, verify each stored
+//! Chain reads stay proportional to what changed: the service's rounds run only after the
+//! agreed checkpoint advances, reuse the head the scanner published, verify each stored
 //! `(address, salt, treasury)` against the factory with a bounded LRU cache, and read balances only of
 //! forwarders that hold unswept funds by the ledger.
 
@@ -246,7 +247,8 @@ impl Reconciler {
     }
 
     async fn run_checks(&self, post_restore: bool) -> ReconciliationReport {
-        self.run_checks_at(post_restore, RoundHeads::new()).await
+        self.run_checks_at(post_restore, RoundHeads::new(), true)
+            .await
     }
 
     /// Runs a round with finalized heads already known for some chains; the others are read.
@@ -254,9 +256,13 @@ impl Reconciler {
         &self,
         post_restore: bool,
         mut heads: RoundHeads,
+        custody_due: bool,
     ) -> ReconciliationReport {
         let mut report = ReconciliationReport::default();
         for check in REGULAR_CHECKS {
+            if check == CheckName::CustodyBalance && !custody_due {
+                continue;
+            }
             let mut findings = Vec::new();
             let mut result = async {
                 if post_restore {
@@ -386,11 +392,14 @@ impl Reconciler {
         let mut ticks = interval(every);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut reconciled: Option<RoundHeads> = None;
+        let mut round = 0_u64;
         loop {
             tokio::select! {
                 () = cancellation.cancelled() => return,
                 _ = ticks.tick() => {}
             }
+            let custody_due = round.is_multiple_of(6);
+            round = round.wrapping_add(1);
             let published = self
                 .chains
                 .keys()
@@ -410,7 +419,7 @@ impl Reconciler {
             }
             tokio::select! {
                 () = cancellation.cancelled() => return,
-                report = self.run_checks_at(false, published.clone()) => {
+                report = self.run_checks_at(false, published.clone(), custody_due) => {
                     monitor.check_in(report.succeeded());
                     if report.succeeded() {
                         reconciled = Some(published);

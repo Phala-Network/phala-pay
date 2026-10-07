@@ -843,6 +843,75 @@ async fn loop_respects_cancellation() -> Result<()> {
 }
 
 #[tokio::test]
+async fn scheduled_custody_reads_both_sources_only_every_sixth_round() -> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let seed = seed_identity(&pool, &route, 85).await?;
+        seed_deposit(
+            &pool,
+            &route,
+            &seed,
+            DepositSeed::new(85, DepositState::Credited)
+                .block(100)
+                .amount(250),
+        )
+        .await?;
+        scanned_through(&pool, 140).await?;
+        let chain = Arc::new(MockChain::at(150));
+        chain.derive(&[&seed]);
+        chain
+            .balances
+            .lock()
+            .unwrap()
+            .insert(seed.address, U256::from(250));
+        // A due derivation reports each round; failed checks do not suspend custody's schedule.
+        chain.fail_derivation.store(true, Ordering::SeqCst);
+        let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?);
+        let cancellation = CancellationToken::new();
+        let task = tokio::spawn({
+            let reconciler = reconciler.clone();
+            let cancellation = cancellation.clone();
+            async move {
+                reconciler
+                    .run_loop(
+                        StdDuration::from_millis(50),
+                        topup::scanner::FinalizedHeads::default(),
+                        cancellation,
+                    )
+                    .await;
+            }
+        });
+        let result = async {
+            for tick in 1..=8 {
+                tokio::time::timeout(
+                    StdDuration::from_secs(10),
+                    chain.derivation_started.notified(),
+                )
+                .await?;
+                // Each notification begins a round, after the preceding one has completed.
+                if (2..=7).contains(&tick) {
+                    ensure!(
+                        chain.balance_reads.lock().unwrap().len() == 2,
+                        "custody ran more often than every sixth round at tick {tick}"
+                    );
+                } else if tick == 8 {
+                    ensure!(
+                        chain.balance_reads.lock().unwrap().len() == 4,
+                        "hourly dual custody did not resume"
+                    );
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        cancellation.cancel();
+        task.await?;
+        result
+    })
+    .await
+}
+
+#[tokio::test]
 async fn loop_publishes_failed_checks_for_the_daily_report() -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
