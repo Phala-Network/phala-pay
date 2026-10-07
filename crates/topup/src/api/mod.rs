@@ -421,6 +421,13 @@ fn client_secret_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(deposit_addresses::get_deposit_address))
 }
 
+/// Object-authenticated hint writes, mounted separately from the shared peer-IP limiter.
+fn hint_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(transactions::submit_quote_transaction))
+        .routes(routes!(transactions::submit_deposit_address_transaction))
+}
+
 /// The operator's routes, authenticated by RFC 9421 signatures.
 fn admin_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -463,6 +470,7 @@ fn admin_routes() -> OpenApiRouter<AppState> {
 fn documents() -> (utoipa::openapi::OpenApi, utoipa::openapi::OpenApi) {
     let (_, merchant) = merchant_routes()
         .merge(client_secret_routes())
+        .merge(hint_routes())
         .split_for_parts();
     let (_, admin) = admin_routes().split_for_parts();
     (merchant, admin)
@@ -531,9 +539,7 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
             state.clone(),
             auth::authenticate_admin,
         ));
-    let hints = OpenApiRouter::new()
-        .routes(routes!(transactions::submit_quote_transaction))
-        .routes(routes!(transactions::submit_deposit_address_transaction))
+    let hints = hint_routes()
         .route_layer(middleware::from_fn(auth::authorize))
         .route_layer(middleware::from_fn_with_state(
             merchant_auth,
