@@ -19,10 +19,10 @@ trap cleanup EXIT INT TERM
 docker image inspect "$previous" >/dev/null 2>&1 || timeout --kill-after=2 180 docker pull "$previous" >/dev/null
 docker run -d --name "$name" -p 127.0.0.1::5432 -e POSTGRES_PASSWORD=drill "$image" -c max_connections=100 >/dev/null
 for ((attempt=0; attempt<60; attempt++)); do
-    docker exec "$name" pg_isready -U postgres >/dev/null 2>&1 && break
+    docker exec "$name" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
     sleep 1
 done
-docker exec "$name" pg_isready -U postgres >/dev/null
+docker exec "$name" pg_isready -h 127.0.0.1 -U postgres >/dev/null
 port=$(docker port "$name" 5432/tcp | cut -d: -f2)
 cd "$root"
 export CI=true SQLX_OFFLINE=true TOPUP_ROLLBACK_IMAGE="$previous"
