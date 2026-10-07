@@ -80,21 +80,19 @@ local_images=()
 # The rehearsal's environment directory (deploy/render.sh ENV_DIR).
 environment="$tmp/environment"
 mkdir "$environment"
-{
-    sed -n '/^services:$/,$p' "$root/deploy/environments/phala-network/staging/topup/compose.yaml" |
-        sed -e 's|WALG_S3_PREFIX: .*|WALG_S3_PREFIX: s3://topup-backups/postgres|' \
-            -e 's|AWS_ENDPOINT: .*|AWS_ENDPOINT: http://s3:3900|' \
-            -e 's|AWS_REGION: .*|AWS_REGION: us-east-1|'
-    # Staging's providers are keyless; the rehearsal's provider B is keyed (below), so its
-    # environment declares that key's sealed name, as a keyed provider's environment does.
-    cat <<'OVERLAY'
-  topup:
-    environment: &rpc-keys
-      TOPUP_RPC_PROVIDER_B_KEY: ${TOPUP_RPC_PROVIDER_B_KEY:-}
-  restore-check:
-    environment: *rpc-keys
-OVERLAY
-} >"$environment/compose.yaml"
+sed -n '/^services:$/,$p' "$root/deploy/environments/phala-network/staging/topup/compose.yaml" |
+    sed -e 's|WALG_S3_PREFIX: .*|WALG_S3_PREFIX: s3://topup-backups/postgres|' \
+        -e 's|AWS_ENDPOINT: .*|AWS_ENDPOINT: http://s3:3900|' \
+        -e 's|AWS_REGION: .*|AWS_REGION: us-east-1|' >"$environment/compose.yaml"
+# The rehearsal's provider B is keyed (below), so add its sealed name to staging's existing
+# shared topup/restore-check environment mapping, as a keyed provider's environment does.
+anchor='      TOPUP_RPC_ALCHEMY_KEY: ${TOPUP_RPC_ALCHEMY_KEY:-}'
+grep -Fqx "$anchor" "$environment/compose.yaml" || {
+    echo "cvm-rehearsal: $environment/compose.yaml is missing the TOPUP_RPC_ALCHEMY_KEY anchor" >&2
+    exit 1
+}
+sed -i "/^      TOPUP_RPC_ALCHEMY_KEY: \${TOPUP_RPC_ALCHEMY_KEY:-}$/a\\      TOPUP_RPC_PROVIDER_B_KEY: \${TOPUP_RPC_PROVIDER_B_KEY:-}" \
+    "$environment/compose.yaml"
 cp "$root/deploy/environments/phala-network/staging/topup/topup.yaml" "$environment/topup.yaml"
 
 # Compose as the CVM runs it: the rendered file with its `.env`. The staging names are removed
@@ -398,6 +396,9 @@ declare -A values=(
     [AWS_SECRET_ACCESS_KEY]=topup-s3-secret-key
     # Empty: the rehearsal proves the service runs unchanged with Sentry reporting off.
     [SENTRY_DSN]=''
+    # The local RPC rewrite drops all committed sealed_key fields, so Alchemy's declared staging
+    # name is unused; it still gets a fake sealed value because the copied Compose declares it.
+    [TOPUP_RPC_ALCHEMY_KEY]=rehearsal-alchemy-key
     # Provider A's URL is keyless; topup reaches provider B only with its key in place of `{key}`.
     [TOPUP_RPC_PROVIDER_B_KEY]=rehearsal-rpc-key
 )
