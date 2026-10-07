@@ -211,6 +211,9 @@ pub enum ChainError {
         /// Lower finalized head returned by the provider.
         current: u64,
     },
+    /// A local hint task has spent its call budget; endpoint health is unchanged.
+    #[error("hint task RPC call limit exhausted")]
+    HintCallLimit,
     /// The finalized-head guard lock was poisoned.
     #[error("provider health state unavailable")]
     HealthStateUnavailable,
@@ -746,6 +749,9 @@ impl EvmClient {
                 self.state.succeeded();
                 Ok(value)
             }
+            Ok(Err(TransportError::Transport(
+                alloy::transports::TransportErrorKind::NonRetryable(error),
+            ))) if error.is::<metrics::HintCallLimit>() => Err(ChainError::HintCallLimit),
             Ok(Err(error)) => {
                 self.state.failed();
                 Err(self.transport(operation, &error))

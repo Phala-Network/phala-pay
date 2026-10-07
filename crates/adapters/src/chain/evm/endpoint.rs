@@ -137,6 +137,10 @@ mod tests {
                 assert!(read.latest_head().await.is_err());
                 assert!(verify.latest_head().await.is_err());
                 assert_eq!(count.load(Ordering::SeqCst), limit);
+                assert!(
+                    side.ready(),
+                    "task exhaustion must not change endpoint readiness"
+                );
             })
             .await;
             // Scope termination restores the other callers' normal transport behavior.

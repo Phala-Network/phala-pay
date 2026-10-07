@@ -738,6 +738,10 @@ async fn shared_error_and_cache_contracts_match_http_responses() -> Result<()> {
             for (_, path) in document["paths"].as_object().context("paths")? {
                 for (method, operation) in path.as_object().context("operations")? {
                     if !["get", "post", "delete", "patch", "put"].contains(&method.as_str()) { continue; }
+                    if matches!(operation["operationId"].as_str(), Some("submit_quote_transaction" | "submit_deposit_address_transaction")) {
+                        ensure!(operation["responses"].as_object().is_some_and(|responses| responses.len()==1 && responses.contains_key("202")));
+                        continue;
+                    }
                     let unavailable = &operation["responses"]["503"];
                     ensure!(unavailable["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ErrorResponse");
                     ensure!(unavailable["headers"]["Retry-After"]["required"] == false);

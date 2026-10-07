@@ -484,6 +484,10 @@ async fn whole_task_caps_include_unmined_receipt_polls_and_confirmation_head_pol
             tokio::time::sleep(Duration::from_secs(2)).await;
             ensure!(read.calls.load(Ordering::SeqCst) <= read_start + 12);
             ensure!(verify.calls.load(Ordering::SeqCst) <= verify_start + 8);
+            ensure!(
+                h.read.ready() && h.verify.ready(),
+                "task budget exhaustion changed endpoint health"
+            );
             ensure!(deposits(&db.app_pool).await? == 0);
             cancel.cancel();
             Ok(())

@@ -19,6 +19,11 @@ tokio::task_local! {
     static TASK_CALLS: TaskCalls;
 }
 
+/// A task-local refusal, distinct from endpoint transport or quota failures.
+#[derive(Debug, thiserror::Error)]
+#[error("hint task RPC call limit exhausted")]
+pub(super) struct HintCallLimit;
+
 /// Hard transport-level limits of one hint task, including retries and batch items.
 #[derive(Clone)]
 struct TaskCalls {
@@ -304,8 +309,8 @@ where
         let methods: Vec<_> = request.method_names().map(bounded_method).collect();
         if TASK_CALLS.try_with(|budget| budget.claim(&self.labels, methods.len())) == Ok(false) {
             return Box::pin(async {
-                Err(alloy::transports::TransportErrorKind::non_retryable_str(
-                    "hint task RPC call limit exhausted",
+                Err(alloy::transports::TransportErrorKind::non_retryable(
+                    HintCallLimit,
                 ))
             });
         }
