@@ -6,5 +6,7 @@ export function TopUp({ checkout, onPaid }: {
   checkout: CheckoutParams;
   onPaid: () => void;
 }) {
-  return <Checkout {...checkout} onSuccess={onPaid} />;
+  return (
+    <Checkout {...checkout} onSuccess={onPaid} />
+  );
 }

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 
 /**
  * A radio choice with a description, laid out as a card around its RadioGroupItem. Selection and

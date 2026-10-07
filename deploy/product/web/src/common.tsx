@@ -137,15 +137,16 @@ export function Disclosure({ summary, children }: { summary: ReactNode; children
 /**
  * A long list's most recent `limit` items, and a "Show all (N)" button that shows the rest in the
  * page's flow (the page grows; nothing scrolls inside). `newestFirst` lists keep their first items;
- * the others (logs, oldest first) their last.
+ * the others (logs, oldest first) their last. With a `limit` of 0 the list is a disclosure, the
+ * button named by `name`: "Show finalized sweeps (3)".
  */
-export function useShowAll<T>(items: T[], limit: number, newestFirst = true): { shown: T[]; toggle: ReactNode } {
+export function useShowAll<T>(items: T[], limit: number, newestFirst = true, name = "all"): { shown: T[]; toggle: ReactNode } {
   const [all, setAll] = useState(false);
   const hidden = items.length - limit;
   const shown = all || hidden <= 0 ? items : newestFirst ? items.slice(0, limit) : items.slice(-limit);
   const toggle = hidden <= 0 ? null : (
     <Button type="button" variant="ghost" size="sm" className={cn("self-start", TOUCH)} aria-expanded={all} onClick={() => setAll((open) => !open)}>
-      {all ? "Show fewer" : `Show all (${items.length})`}
+      {all ? (limit === 0 ? `Hide ${name}` : "Show fewer") : `Show ${name} (${items.length})`}
     </Button>
   );
   return { shown, toggle };

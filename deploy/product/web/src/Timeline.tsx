@@ -16,7 +16,7 @@ import type {
 } from "./api.js";
 import { DataItem, DataList, Empty, ExplorerLink, LearnMore, Subsection, TABLE, useShowAll } from "./common.js";
 import { assetOf, networkOf } from "./chains.js";
-import { approx, clock, dollars, duration, minusDollars, rate, signedDollars, time, tokens } from "./format.js";
+import { approx, clock, dollars, duration, rate, signedDollars, time, tokens } from "./format.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { useNetworks } from "./queries.js";
 
@@ -86,8 +86,8 @@ const STEP_COPY: Record<StepKey, { title: string; short: string; hint: string; f
 const PREVIEW: StepKey[] = ["quote_created", "sent", "received", "credited", "webhook_received", "final", "swept"];
 
 /**
- * The payment's steps as a stepper: a row of steps from lg (a column each: its dot, its name, its
- * time), a list on a phone. Each step opens to what it waits for and its data, shown under the row,
+ * The payment's steps as a stepper: a row of steps where its container is 32rem wide or more (a
+ * column each: its dot, its name, its time), else a list, so the names never crowd. Each step opens to what it waits for and its data, shown under the row,
  * so the row stays one line high and the backend's tabs keep their room. Times are real: the time
  * since sending for the steps after it, else the time it happened; for a step yet to happen, how
  * long it usually takes.
@@ -115,9 +115,9 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
     return (
       <ol className={STEPPER} aria-label={`Loading ${loading}`} aria-busy="true">
         {PREVIEW.map((key) => (
-          <li key={key} className="flex h-11 items-center gap-3 px-2 lg:h-auto lg:flex-col lg:gap-2 lg:py-2">
+          <li key={key} className="flex h-11 items-center gap-3 px-2 @lg:h-auto @lg:flex-col @lg:gap-2 @lg:py-2">
             <span className="size-3 rounded-full bg-muted motion-safe:animate-pulse" />
-            <span className="h-2.5 w-24 rounded-full bg-muted motion-safe:animate-pulse lg:w-12" />
+            <span className="h-2.5 w-24 rounded-full bg-muted motion-safe:animate-pulse @lg:w-12" />
           </li>
         ))}
       </ol>
@@ -156,8 +156,8 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
   );
 }
 
-/** The steps: a list on a phone, from lg a row of equal columns, however many steps there are. */
-const STEPPER = "flex flex-col lg:grid lg:auto-cols-fr lg:grid-flow-col";
+/** The steps: a list in a narrow container, from 32rem a row of equal columns, however many steps there are. */
+const STEPPER = "flex flex-col @lg:grid @lg:auto-cols-fr @lg:grid-flow-col";
 
 function StepDot({ state }: { state: Step["state"] }) {
   if (state === "current") {
@@ -225,7 +225,7 @@ function StreamStep({
   const elapsed = elapsedOf(step, sent);
   return (
     <li
-      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden lg:before:top-4 lg:before:right-[calc(-50%+0.75rem)] lg:before:bottom-auto lg:before:left-[calc(50%+0.75rem)] lg:before:h-px lg:before:w-auto lg:before:translate-x-0"
+      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden @lg:before:top-4 @lg:before:right-[calc(-50%+0.75rem)] @lg:before:bottom-auto @lg:before:left-[calc(50%+0.75rem)] @lg:before:h-px @lg:before:w-auto @lg:before:translate-x-0"
       data-step={step.key}
       data-state={step.state}
       aria-current={step.state === "current" ? "step" : undefined}
@@ -235,7 +235,7 @@ function StreamStep({
         aria-expanded={open}
         aria-controls={open ? details : undefined}
         onClick={onToggle}
-        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none lg:flex lg:flex-col lg:items-center lg:gap-1 lg:px-1 lg:py-2 lg:text-center"
+        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none @lg:flex @lg:flex-col @lg:items-center @lg:gap-1 @lg:px-1 @lg:py-2 @lg:text-center"
       >
         <StepDot state={step.state} />
         <span className="flex min-w-0 items-center gap-1.5">
@@ -247,24 +247,24 @@ function StreamStep({
               step.state === "failed" && "text-destructive",
             )}
           >
-            <span className="lg:hidden">{copy.title}</span>
-            <span className="hidden lg:inline">{copy.short}</span>
+            <span className="@lg:hidden">{copy.title}</span>
+            <span className="hidden @lg:inline">{copy.short}</span>
             <span className="sr-only">, {stateLabel(step.state)}</span>
           </span>
           <ChevronDown
-            className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded/trigger:rotate-180 motion-reduce:transition-none lg:hidden"
+            className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded/trigger:rotate-180 motion-reduce:transition-none @lg:hidden"
             aria-hidden="true"
           />
         </span>
-        <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums lg:text-center lg:text-xs">
+        <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums @lg:text-center @lg:text-xs">
           {elapsed !== null ? (
             `+${duration(elapsed)}`
           ) : step.at !== null ? (
             <time dateTime={new Date(step.at * 1000).toISOString()}>{clock(step.at)}</time>
           ) : (step.state === "upcoming" || step.state === "current") && usually !== undefined ? (
-            <><span className="lg:hidden">usually </span>{usually}</>
+            <><span className="@lg:hidden">usually </span>{usually}</>
           ) : since !== null ? (
-            <time dateTime={new Date(since * 1000).toISOString()}><span className="lg:hidden">since </span>{clock(since)}</time>
+            <time dateTime={new Date(since * 1000).toISOString()}><span className="@lg:hidden">since </span>{clock(since)}</time>
           ) : null}
         </span>
       </button>
@@ -335,28 +335,24 @@ function DetailValue({ detail, token }: { detail: StepDetail; token: StepToken }
   return <>{String(value)}</>;
 }
 
-/** The deposit's ledger: the service's amounts, what they net to, and what the product's server holds. */
+/**
+ * The deposit's ledger as one equation, as every `deposit.*` event's cumulative amounts give it,
+ * then, on a line of its own, what the product's server holds for it.
+ */
 export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
   const product = ledger.product;
   return (
     <Subsection title="Ledger" id="ledger-title">
-      <p className="text-sm text-pretty text-muted-foreground">
-        A deposit nets to its amount, less what was refunded and reversed.{" "}
+      <p data-testid="ledger" className="text-sm tabular-nums">
+        <span className="text-muted-foreground">{ledger.status}: </span>
+        {ledger.amount === null ? "—" : dollars(ledger.amount)}
+        <span className="text-muted-foreground"> − {dollars(ledger.amount_refunded)} refunded − {dollars(ledger.amount_reversed)} reversed = </span>
+        <span className="font-semibold" data-testid="nets-to">{dollars(ledger.nets_to)}</span>{" "}
         <LearnMore anchor="the-balance-rule-and-event-ordering" topic="the balance rule" />
       </p>
-      {/* One type for the ledger: amounts in the text face with tabular figures, the status as the
-          API names it, in mono. */}
-      <DataList data-testid="ledger" className="divide-y border-y tabular-nums">
-        <DataItem label="Status">
-          <code className="font-mono text-mono">{ledger.status}</code>
-        </DataItem>
-        <DataItem label="Amount">{ledger.amount === null ? "—" : dollars(ledger.amount)}</DataItem>
-        <DataItem label="Refunded">{minusDollars(ledger.amount_refunded)}</DataItem>
-        <DataItem label="Reversed">{minusDollars(ledger.amount_reversed)}</DataItem>
-        <DataItem label="Nets to" className="font-semibold" data-testid="nets-to">
-          {dollars(ledger.nets_to)}
-        </DataItem>
-        <DataItem label="Your server's ledger" data-testid="console-net">
+      <p className="text-sm text-muted-foreground tabular-nums">
+        Your server's ledger:{" "}
+        <span className="text-foreground" data-testid="console-net">
           {product === null || product.status === null
             ? "no order yet"
             : product.net === null
@@ -364,13 +360,13 @@ export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
               : `${dollars(product.net)} (credit ${dollars(product.credit ?? 0)}${product.adjustments
                   .map((adjustment) => `, ${signedDollars(adjustment.amount)} by ${adjustment.reason}`)
                   .join("")})`}
-        </DataItem>
+        </span>
         {product?.bonus != null && product.bonus !== 0 && (
-          <DataItem label="Bonus (this demo's)" data-testid="console-bonus">
-            {signedDollars(product.bonus)}, its promotion's share of what the credit nets to
-          </DataItem>
+          <>
+            ; this demo's bonus <span className="text-foreground" data-testid="console-bonus">{signedDollars(product.bonus)}</span>
+          </>
         )}
-      </DataList>
+      </p>
     </Subsection>
   );
 }
@@ -378,7 +374,7 @@ export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
 /** The webhook events the product's server received; their ids where there is room. */
 export function EventsLog({ events }: { events: WebhookEvent[] }) {
   // The latest events (the log runs oldest first); the rest on request.
-  const recent = useShowAll(events, 5, false);
+  const recent = useShowAll(events, 2, false);
   return (
     <Subsection title="Webhook events received" id="events-title">
       {events.length === 0 ? (
@@ -388,9 +384,6 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead scope="col">Type</TableHead>
-              <TableHead scope="col" className="hidden md:table-cell">
-                Event id
-              </TableHead>
               <TableHead scope="col">Received</TableHead>
               <TableHead scope="col">Signature</TableHead>
             </TableRow>
@@ -399,9 +392,6 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
             {recent.shown.map((event) => (
               <TableRow key={event.id} data-testid="webhook-event">
                 <TableCell className="font-mono text-mono">{event.type}</TableCell>
-                <TableCell className="hidden whitespace-normal md:table-cell">
-                  <Hash value={event.id} />
-                </TableCell>
                 <TableCell className="text-muted-foreground tabular-nums" title={time(event.received_at)}>
                   {clock(event.received_at)}
                 </TableCell>
@@ -418,8 +408,8 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
 
 /** The product's API requests: sent from its server with its restricted key, never the browser. */
 export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; title: string; id: string }) {
-  // The latest requests (oldest first); the rest on request.
-  const recent = useShowAll(exchanges, 4, false);
+  // The latest request (oldest first); the rest on request.
+  const recent = useShowAll(exchanges, 1, false);
   return (
     <Subsection title={`${title} (${exchanges.length})`} id={id}>
       <p className="text-sm text-pretty text-muted-foreground">
@@ -439,15 +429,17 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
                       className="size-4 shrink-0 text-muted-foreground transition-transform group-open/exchange:rotate-90 motion-reduce:transition-none"
                       aria-hidden="true"
                     />
+                    {/* The method and path; the query, with the request and response, once opened. */}
                     <code className="min-w-0 flex-1 font-mono text-mono wrap-anywhere">
                       <span className="text-muted-foreground">{exchange.method}</span> {url.pathname}
-                      {url.search}
+                      {url.search !== "" && <span className="text-muted-foreground"> ?…</span>}
                     </code>
                     <StatusBadge tone={exchange.status < 400 ? "success" : "danger"} className="tabular-nums">
                       {exchange.status}
                     </StatusBadge>
                   </summary>
-                  <div className="pb-3 pl-8">
+                  <div className="flex flex-col gap-2 pb-3 pl-8">
+                    <code className="font-mono text-mono wrap-anywhere">{exchange.method} {url.pathname}{url.search}</code>
                     <CodeBlock
                       value={JSON.stringify({ request: exchange.request, response: exchange.response }, null, 2)}
                       label="request and response"

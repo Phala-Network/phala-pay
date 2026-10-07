@@ -1,5 +1,5 @@
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 
 /**
  * A 40px text field. Its text is 16px on phones, where anything smaller makes iOS zoom in on focus,

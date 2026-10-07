@@ -102,7 +102,7 @@ export function Product({
     />
   );
   return (
-    <Card role="region" aria-labelledby="product-title" className="flex-1">
+    <Card role="region" aria-labelledby="product-title">
       {/* One row: whose page this is (with the testnet mark while the network is a testnet), and
           the balance the payment moves. */}
       <CardHeader className="items-center py-3 sm:py-3">
@@ -131,7 +131,7 @@ export function Product({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-4 py-4 lg:py-3">
+      <CardContent className="flex flex-col gap-4 py-4 lg:py-3">
         {accountView.data !== undefined && <QueryState view={accountView} />}
         {unavailable ? (
           <Alert variant="destructive">

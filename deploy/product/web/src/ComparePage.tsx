@@ -74,13 +74,11 @@ export function ComparePage() {
           <p className="text-sm font-medium text-muted-foreground">Compare</p>
           <h1 className="mt-3 text-display-sm font-semibold text-balance sm:text-display">How Phala Pay compares</h1>
         </div>
-        <div className="lg:col-span-5">
-          <p className={LEAD}>Custody, fees, chains, speed, and refunds across six ways to accept crypto, each as its vendor states it, with a source for every value.</p>
-          <p className="mt-3 text-sm text-muted-foreground">
-            Last checked {COMPARE_ACCESSED}. Competitor terms change; check their sites before deciding.
-          </p>
-        </div>
+        <p className={cn(LEAD, "lg:col-span-5")}>Custody, fees, chains, speed, and refunds across six ways to accept crypto, each as its vendor states it, with a source for every value.</p>
       </div>
+      <p className="mt-4 text-sm text-muted-foreground">
+        Last checked {COMPARE_ACCESSED}. Competitor terms change; check their sites before deciding.
+      </p>
       <nav aria-label="On this page" className="mt-10 border-y">
         <ul className="flex flex-wrap gap-x-8 text-sm">
           {CONTENTS.map(({ href, label }) => (

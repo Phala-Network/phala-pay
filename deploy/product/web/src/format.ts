@@ -11,11 +11,6 @@ export function presetDollars(cents: number): string {
   return cents % 100 === 0 ? usd.format(cents / 100).replace(/\.00$/, "") : dollars(cents);
 }
 
-/** An amount taken off: `−$5.00`, but `$0.00` when nothing was. */
-export function minusDollars(cents: number): string {
-  return cents === 0 ? dollars(0) : `−${dollars(cents)}`;
-}
-
 /** `+$20.00` or `−$2.50`. */
 export function signedDollars(cents: number): string {
   return `${cents < 0 ? "−" : "+"}${usd.format(Math.abs(cents) / 100)}`;

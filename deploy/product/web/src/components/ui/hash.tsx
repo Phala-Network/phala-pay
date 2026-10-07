@@ -1,6 +1,6 @@
 import * as React from "react"
 import { ArrowUpRight } from "lucide-react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 import { getAddress, isAddress } from "viem"
 
 import { CopyButton } from "@/components/ui/copy-button"
@@ -28,13 +28,17 @@ function groups(value: string): string[] | null {
   return result
 }
 
-function Grouped({ value }: { value: string }) {
+/** The value's groups; `suffix` (a link's arrow) is part of the last, so it never starts a line. */
+function Grouped({ value, suffix }: { value: string; suffix?: React.ReactNode }) {
   const parts = groups(value)
-  if (parts === null) return <span className="break-all">{value}</span>
+  if (parts === null) return <span className="break-all">{value}{suffix}</span>
   return parts.map((group, index) => (
     <React.Fragment key={index}>
       {index > 0 && <wbr />}
-      <span className="mr-[0.5ch] whitespace-nowrap last:mr-0">{group}</span>
+      <span className="mr-[0.5ch] whitespace-nowrap last:mr-0">
+        {group}
+        {index === parts.length - 1 && suffix}
+      </span>
     </React.Fragment>
   ))
 }
@@ -61,9 +65,13 @@ function Hash({
   className?: string | undefined
 }) {
   const shown = displayed(value)
+  const arrow = href === undefined ? undefined : (
+    <ArrowUpRight aria-hidden="true" className="ml-0.5 inline size-3.5 align-[-0.125em] text-muted-foreground" />
+  )
   const text = (
-    <span data-slot="hash-value" className="font-mono text-mono text-foreground">
-      <Grouped value={shown} />
+    // Its own box, its lines balanced: a wrapped value never leaves one group alone on a line.
+    <span data-slot="hash-value" className="inline-block max-w-full font-mono text-mono text-balance text-foreground">
+      <Grouped value={shown} suffix={arrow} />
     </span>
   )
   return (
@@ -84,7 +92,6 @@ function Hash({
           rel="noreferrer"
         >
           {text}
-          <ArrowUpRight aria-hidden="true" className="ml-0.5 inline size-3.5 align-[-0.125em] text-muted-foreground" />
           <span className="sr-only"> (opens the block explorer)</span>
         </a>
       )}

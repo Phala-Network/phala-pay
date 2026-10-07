@@ -83,9 +83,9 @@ function DemoContent({ theme }: { theme: Theme }) {
 
   return (
     <>
-      {/* Two sibling cards, each at its content's height: the customer's view, then (beside it from
-          lg, the grid row stretching both to the taller) what the backend sees. */}
-      <div className="grid gap-6 lg:grid-cols-12">
+      {/* Two sibling cards, each at its own content's height, top-aligned: the customer's view, then
+          (beside it from lg) what the backend sees. */}
+      <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
         <div className="flex min-w-0 flex-col lg:col-span-6">
           <Product
             account={views.account}

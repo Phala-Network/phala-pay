@@ -1,6 +1,6 @@
 import * as React from "react"
 import { Check, Copy, X } from "lucide-react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 
 /**
  * Copies `value`, confirming with a tick for a moment (announced too). 32px, with a 44px hit area

@@ -24,7 +24,6 @@ import {
   describe,
   errorMessage,
   statusTone,
-  useMediaQuery,
   useShowAll,
   wallet,
 } from "./common.js";
@@ -50,8 +49,7 @@ export function Refunds({ timeline, deposit }: { timeline: Timeline; deposit: De
   return (
     <Subsection title="Refunds" id="refunds-title">
       <p className="text-sm text-pretty text-muted-foreground">
-        Pay refunds from the treasury (here Phala's Safe: one from your wallet fails as{" "}
-        <code className="font-mono text-mono">sender_mismatch</code>).{" "}
+        Pay refunds from the treasury; Phala Pay verifies them once final.{" "}
         <LearnMore anchor="3-refunds" topic="refunds" />
       </p>
       {refundable ? (
@@ -92,8 +90,6 @@ function RefundForm({ deposit, token }: { deposit: Deposit; token: RefundToken }
   const create = useCreateRefund();
   const amountId = useId();
   const destinationId = useId();
-  // On a phone the address wraps over two lines, every character in view; from sm it fits one.
-  const wide = useMediaQuery("(min-width: 40rem)");
   const submit = (event: FormEvent) => {
     event.preventDefault();
     let atomic: bigint;
@@ -121,8 +117,9 @@ function RefundForm({ deposit, token }: { deposit: Deposit; token: RefundToken }
   const error = invalid ?? (create.error === null ? null : `Could not declare the refund: ${describe(create.error)}.`);
   return (
     <form className="flex flex-col gap-3" onSubmit={submit} aria-label="Declare a refund">
-      <div className="grid gap-3 sm:grid-cols-[7rem_minmax(0,1fr)_auto] sm:items-end">
-        <Field>
+      {/* Labels on one line, controls on the next: each field spans both rows of the form's grid. */}
+      <div className="grid gap-3 sm:grid-cols-[7rem_minmax(0,1fr)_auto] sm:grid-rows-[auto_auto] sm:gap-y-2">
+        <Field className="sm:row-span-2 sm:grid sm:grid-rows-subgrid">
           <FieldLabel htmlFor={amountId}>Amount ({symbol})</FieldLabel>
           <Input
             id={amountId}
@@ -133,28 +130,19 @@ function RefundForm({ deposit, token }: { deposit: Deposit; token: RefundToken }
             onChange={(event) => setAmount(event.target.value)}
           />
         </Field>
-        <Field>
+        <Field className="sm:row-span-2 sm:grid sm:grid-rows-subgrid">
           <FieldLabel htmlFor={destinationId}>Destination</FieldLabel>
-          {wide ? (
-            <Input
-              id={destinationId}
-              className="font-mono md:text-mono"
-              spellCheck={false}
-              value={destination}
-              onChange={(event) => setDestination(event.target.value)}
-            />
-          ) : (
-            <Textarea
-              id={destinationId}
-              rows={2}
-              className="resize-none font-mono break-all"
-              spellCheck={false}
-              value={destination}
-              onChange={(event) => setDestination(event.target.value)}
-            />
-          )}
+          {/* Two lines, so the whole address is in view at any width. */}
+          <Textarea
+            id={destinationId}
+            rows={2}
+            className="resize-none font-mono text-mono break-all"
+            spellCheck={false}
+            value={destination}
+            onChange={(event) => setDestination(event.target.value)}
+          />
         </Field>
-        <Button type="submit" variant="secondary" className={TOUCH} disabled={create.isPending}>
+        <Button type="submit" variant="secondary" className={cn(TOUCH, "sm:col-start-3 sm:row-start-2 sm:self-start")} disabled={create.isPending}>
           {create.isPending ? "Declaring…" : "Declare refund"}
         </Button>
       </div>
@@ -168,11 +156,13 @@ function RefundForm({ deposit, token }: { deposit: Deposit; token: RefundToken }
 
 /**
  * A refund: one line (its id, amount, and status) that opens to the transfer to pay, the form that
- * attaches it, and the outcome. Open from the start while it waits for a payment.
+ * attaches it, and the outcome, in the page's flow.
  */
 function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
   const { chainId, symbol, decimals } = token;
-  const [open, setOpen] = useState(refund.status === "pending");
+  // Closed until opened: a refund's row is one line, its transfer and forms in the page's flow below
+  // it once opened.
+  const [open, setOpen] = useState(false);
   const [hash, setHash] = useState("");
   const [logIndex, setLogIndex] = useState("");
   const [invalid, setInvalid] = useState<string | null>(null);
@@ -290,8 +280,8 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
               </form>
               <div className="flex flex-col items-start gap-1 border-t pt-4">
                 <p className="text-sm text-pretty text-muted-foreground">
-                  Not the treasury? Pay the same transfer from your own wallet and mark that transaction paid to see
-                  verification fail.
+                  Not the treasury (on this demo, Phala's Safe)? Pay the same transfer from your own wallet and mark it
+                  paid to see verification fail with <code className="font-mono text-mono">sender_mismatch</code>.
                 </p>
                 <Button type="button" variant="secondary" className={TOUCH} disabled={pending} onClick={() => pay.mutate(transfer)}>
                   {pay.isPending ? "Confirm in your wallet…" : "Pay it from my wallet instead"}

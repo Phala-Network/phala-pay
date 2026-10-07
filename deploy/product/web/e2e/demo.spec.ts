@@ -463,16 +463,19 @@ async function openTab(scenes: Locator, name: string): Promise<Locator> {
   return scenes.getByRole("tabpanel", { name: new RegExp(`^${name}`) });
 }
 
-/** Opens every "Show all (N)" list in `scope`. */
+/** Opens every "Show … (N)" list in `scope`: "Show all (5)", "Show finalized sweeps (2)". */
 async function showAll(scope: Locator): Promise<void> {
-  const buttons = scope.getByRole("button", { name: /^Show all \(\d+\)$/ });
+  const buttons = scope.getByRole("button", { name: /^Show [a-z ]+ \(\d+\)$/ });
   while ((await buttons.count()) > 0) {
     await buttons.first().click();
   }
 }
 
-/** Declares a refund of `amount` PHA of the selected deposit and returns its list item. */
-async function declareRefund(scenes: Locator, amount: string): Promise<Locator> {
+/**
+ * Declares a refund of `amount` PHA and returns its list item, opened to its transfer and forms
+ * unless `open` is false (a refund's row starts closed).
+ */
+async function declareRefund(scenes: Locator, amount: string, open = true): Promise<Locator> {
   await openTab(scenes, "Refunds");
   const refunds = scenes.getByTestId("refund");
   const before = await refunds.count();
@@ -484,6 +487,11 @@ async function declareRefund(scenes: Locator, amount: string): Promise<Locator> 
   const id = await refunds.first().getAttribute("data-refund");
   const refund = scenes.locator(`[data-refund="${id ?? ""}"]`);
   await expect(refund).toHaveAttribute("data-status", "pending");
+  if (open) {
+    const trigger = refund.getByRole("button", { name: /^Refund / });
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  }
   return refund;
 }
 
@@ -835,7 +843,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
 
   // The merchant sweeps: the SDK's flush, signed from a wallet (anyone may send it; the funds can
   // only reach the treasury), indexed by the service once final.
-  const sweeps = (await openTab(scenes, "Sweeps")).getByRole("region", { name: "PHA on Sepolia testnet" });
+  const sweepsPanel = await openTab(scenes, "Sweeps");
+  const sweeps = sweepsPanel.getByRole("region", { name: "PHA on Sepolia testnet" });
   await expect(sweeps.getByTestId("unswept")).toContainText("80 PHA in 1 forwarder", { timeout: 30_000 });
   await sweeps.getByRole("button", { name: "Sweep from wallet" }).click();
   await expect(sweeps.getByTestId("flush-status")).toContainText("Flush sent: 0x");
@@ -845,7 +854,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
     "href",
     /^https:\/\/sepolia\.etherscan\.io\/tx\/0x[0-9a-f]{64}$/,
   );
-  await expect(sweeps.getByTestId("sweep")).toContainText("80 PHA", { timeout: 30_000 });
+  await sweepsPanel.getByRole("button", { name: /^Show finalized sweeps/ }).click({ timeout: 30_000 });
+  await expect(sweepsPanel.getByTestId("sweep").first()).toContainText("80 PHA", { timeout: 30_000 });
 
   // A refund paid from the treasury succeeds: 20 of 80 PHA takes back a quarter of the credit.
   const paid = await declareRefund(scenes, "20");
@@ -1611,9 +1621,11 @@ test("every page fits every width in either theme, with no serious accessibility
  * Nothing in the demo is cut off sideways: no tab panel, and nothing that hides its overflow,
  * holds content wider than itself (scrolling regions, which show theirs, are exempt).
  */
+const DEMO_TABS = ["Credits", "Refunds", "Sweeps", "API", "Trust"];
+
 async function expectNothingClipped(page: Page, state: string): Promise<void> {
   const scenes = page.getByRole("complementary", { name: "Your backend" });
-  for (const tab of ["Credits", "Refunds", "Sweeps", "API", "Trust"]) {
+  for (const tab of DEMO_TABS) {
     await openTab(scenes, tab);
     const clipped = await page.locator("#demo-root").evaluate((root) => [...root.querySelectorAll<HTMLElement>("*")]
       .filter((element) => {
@@ -1640,58 +1652,98 @@ async function expectNothingClipped(page: Page, state: string): Promise<void> {
   await openTab(scenes, "Credits");
 }
 
-test("the demo fits one screen at 1440×900 and 1280×800, idle, paying, and credited, and clips nothing", async ({ page }) => {
-  test.setTimeout(240_000);
+test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each state, and clips nothing", async ({ page }) => {
+  test.setTimeout(420_000);
   await installWallet(page);
   const product = page.getByRole("region", { name: "Customer view" });
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
   // The section, scrolled to as the nav's Demo link lands, is no taller than the screen under the
-  // 64px header.
+  // 64px header, whichever tab is open, before anything in it is expanded.
   const fits = async (state: string) => {
     for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
       await page.setViewportSize({ width, height });
-      const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
-      expect(demo, `${state} at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
+      for (const tab of DEMO_TABS) {
+        await openTab(scenes, tab);
+        const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
+        expect(demo, `${state}, ${tab} tab, at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
+      }
       await expectNothingClipped(page, `${state} at ${width}×${height}`);
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await expectNothingClipped(page, `${state} at 390px`);
+    await page.setViewportSize({ width: 1440, height: 900 });
   };
   await page.goto(env("SITE_URL"));
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
   await fits("idle");
-  await page.setViewportSize({ width: 1440, height: 900 });
   const testTokens = page.getByRole("note", { name: "Test tokens" });
   await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
   await expect(testTokens).toContainText("Minted:");
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   await expect(product.locator(".pp-summary")).toContainText("80 PHA");
   await fits("paying");
-  await page.setViewportSize({ width: 1440, height: 900 });
   await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
   await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
   await fits("credited");
+  // After the merchant's actions: the payment swept, and a refund requested (its row closed).
+  const timeline = scenes.getByRole("list", { name: "Payment timeline" });
+  await expectComplete(timeline, ["final"]);
+  // The merchant is every visitor's, so other payments may wait here too.
+  const sweepsPanel = await openTab(scenes, "Sweeps");
+  const sweeps = sweepsPanel.getByRole("region", { name: "PHA on Sepolia testnet" });
+  // The flush takes only final balances: it is sent once this payment is final here too, when no
+  // part of the unswept balance is still waiting ("… sweepable of … unswept").
+  await expect(sweeps.getByTestId("unswept")).toContainText(/PHA in \d+ forwarders? sweepable$/, { timeout: 60_000 });
+  await sweeps.getByRole("button", { name: "Sweep from wallet" }).click();
+  await expectComplete(timeline, ["swept"]);
+  await expect(sweepsPanel.getByRole("button", { name: /^Show finalized sweeps/ })).toBeVisible({ timeout: 30_000 });
+  await declareRefund(scenes, "20", false);
+  // Measured once the request's own webhook has arrived, the API tab's tallest case.
+  await openTab(scenes, "API");
+  await expect(scenes.getByTestId("webhook-event").filter({ hasText: "refund.created" })).toBeVisible({ timeout: 30_000 });
+  await fits("after a sweep and a refund request");
 });
 
-test("the demo arrives without shifting what is in view", async ({ page }) => {
+test("the demo arrives without shifting what is in view, from the top and at /#demo", async ({ page }) => {
   // Cumulative layout shift, as the browser reports it, while the page loads and the demo renders:
-  // under 0.05 at a desktop and a phone ("good" is under 0.1).
+  // under 0.05 at a desktop and a phone ("good" is under 0.1), opened at the top and at the demo.
+  // The demo's code arrives a second late, as on a slow network, after the page has painted.
+  await page.route("**/assets/Demo-*.js", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await route.continue();
+  });
   for (const [width, height] of [[1440, 900], [390, 844]] as const) {
-    await page.setViewportSize({ width, height });
-    await page.addInitScript(() => {
-      window.layoutShifts = [];
-      new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if ("value" in entry && typeof entry.value === "number" && "hadRecentInput" in entry && entry.hadRecentInput === false) {
-            window.layoutShifts.push(entry.value);
+    for (const path of ["", "#demo"]) {
+      await page.setViewportSize({ width, height });
+      await page.addInitScript(() => {
+        window.layoutShifts = [];
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if ("value" in entry && typeof entry.value === "number" && "hadRecentInput" in entry && entry.hadRecentInput === false) {
+              window.layoutShifts.push(entry.value);
+            }
           }
-        }
-      }).observe({ type: "layout-shift", buffered: true });
-    });
-    await page.goto(env("SITE_URL"));
-    await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
-    await page.waitForTimeout(500);
-    const shift = await page.evaluate(() => window.layoutShifts.reduce((sum, value) => sum + value, 0));
-    expect(shift, `${width}px`).toBeLessThan(0.05);
+        }).observe({ type: "layout-shift", buffered: true });
+      });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+      await page.waitForTimeout(500);
+      const shift = await page.evaluate(() => window.layoutShifts.reduce((sum, value) => sum + value, 0));
+      expect(shift, `/${path} at ${width}px`).toBeLessThan(0.05);
+    }
   }
+});
+
+test("the hero's code fits its window at 1440 and 1024; on a phone it scrolls sideways inside it", async ({ page }) => {
+  await page.goto(env("SITE_URL"));
+  for (const width of [1440, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    // Both snippets, the shown and the other (laid out in the same cell).
+    const wide = await page.locator("#hero-code pre").evaluateAll((blocks) =>
+      blocks.filter((block) => block.scrollWidth > block.clientWidth).map((block) => block.getAttribute("aria-label")));
+    expect(wide, `${width}px`).toEqual([]);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 });

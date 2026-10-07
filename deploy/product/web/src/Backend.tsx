@@ -50,8 +50,7 @@ export function Backend({
   const deposit = timeline?.deposit ?? null;
   const status = selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done";
   return (
-    // At its own content's height; from lg the grid row makes the two cards equally tall.
-    <Card role="complementary" aria-label="Your backend" className="flex-1">
+    <Card role="complementary" aria-label="Your backend">
       <CardHeader className="items-center gap-y-1 py-3 sm:py-3">
         <div className="flex min-w-0 items-baseline gap-x-3">
           <CardTitle>Your backend</CardTitle>
@@ -78,7 +77,7 @@ export function Backend({
         </dl>
       </CardHeader>
       {/* The stepper, one row high; opened steps add their details under it. */}
-      <div className="px-4 py-2 sm:px-6" aria-live="off">
+      <div className="@container px-4 py-2 sm:px-6" aria-live="off">
         <EventStream timeline={timelineView} loading={selected?.id ?? null} />
         {timelineView.data !== undefined && <QueryState view={timelineView} />}
       </div>
@@ -114,7 +113,7 @@ export function Backend({
               A credited payment can be refunded from the treasury once final.
             </EmptyState>
           ) : (
-            <div className="flex flex-col gap-8">
+            <div className="flex flex-col gap-6">
               {timeline.ledger !== null && <LedgerPanel ledger={timeline.ledger} />}
               <Refunds timeline={timeline} deposit={deposit} />
             </div>
@@ -129,7 +128,7 @@ export function Backend({
               The signed webhooks and the API calls of a payment show here.
             </EmptyState>
           ) : (
-            <div className="flex flex-col gap-8">
+            <div className="flex flex-col gap-6">
               <EventsLog events={timeline.events} />
               <Requests exchanges={timeline.api} title="API requests" id="api-title" />
             </div>
@@ -516,7 +515,10 @@ function AddressView({
   );
 }
 
-/** Why the merchant can trust the service: its attestation, its application, and its custody. */
+/**
+ * Why the merchant can trust the service, a row each: its attestation, the application's identity
+ * (from the TLS certificate's evidence quote), and its custody; then where to verify it.
+ */
 function TrustDetails({ trust: trustView, networks: networksView }: {
   trust: QueryView<Trust>;
   networks: QueryView<Network[]>;
@@ -526,8 +528,7 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
   const attestation = trust?.attestation;
   const evidence = trust?.tls_evidence;
   return (
-    <div className="flex flex-col gap-4">
-      <h4 className="text-sm font-semibold">Why you can trust Phala Pay</h4>
+    <div className="flex flex-col gap-3">
       <DataList className="divide-y border-y">
         <TrustItem title="Attestation">
           {attestation === undefined ? (
@@ -539,55 +540,46 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
               </p>
             )
           ) : attestation.binding_verified ? (
-            <>
-              <StatusBadge tone="success">Attestation verified</StatusBadge>
-              <p className="text-pretty text-muted-foreground">
-                Verified for a fresh nonce; it binds the key that signs every webhook,{" "}
-                <Hash value={attestation.webhook_public_key ?? ""} className="text-foreground" />.{" "}
+            <div className="flex flex-col gap-1 text-pretty text-muted-foreground">
+              <p>
+                <StatusBadge tone="success" className="mr-2 align-middle">Attestation verified</StatusBadge>
+                Verified for a fresh nonce.{" "}
                 <LearnMore anchor="53-pin-your-accounts-webhook-keys" topic="pinning the webhook key" />
               </p>
-            </>
+              <p>
+                It binds the key that signs every webhook: <Hash value={attestation.webhook_public_key ?? ""} />
+              </p>
+            </div>
           ) : (
-            <>
-              <StatusBadge tone="danger">Not verified</StatusBadge>
-              <p className="text-muted-foreground">The attestation did not bind its keys.</p>
-            </>
+            <p className="text-muted-foreground">
+              <StatusBadge tone="danger" className="mr-2 align-middle">Not verified</StatusBadge>
+              The attestation did not bind its keys.
+            </p>
           )}
         </TrustItem>
-        <TrustItem title="Application">
-          {evidence == null ? (
+        {evidence == null ? (
+          <TrustItem title="Application">
             <p className="text-muted-foreground">TLS evidence unavailable.</p>
-          ) : (
-            <>
-              <dl className="flex flex-col gap-1">
-                <div>
-                  <dt className="text-muted-foreground">App id</dt>
-                  <dd>
-                    <Hash value={evidence.app_id} copyLabel="Copy app id" />
-                  </dd>
-                </div>
-                {evidence.compose_hash !== undefined && (
-                  <div>
-                    <dt className="text-muted-foreground">Compose hash</dt>
-                    <dd>
-                      <Hash value={evidence.compose_hash} copyLabel="Copy compose hash" />
-                    </dd>
-                  </div>
-                )}
-              </dl>
-              <p className="text-muted-foreground">From the TLS certificate's evidence quote.</p>
-            </>
-          )}
-        </TrustItem>
+          </TrustItem>
+        ) : (
+          <>
+            <TrustItem title="App id">
+              <Hash value={evidence.app_id} copyLabel="Copy app id" />
+            </TrustItem>
+            {evidence.compose_hash !== undefined && (
+              <TrustItem title="Compose hash">
+                <Hash value={evidence.compose_hash} copyLabel="Copy compose hash" />
+              </TrustItem>
+            )}
+          </>
+        )}
         <TrustItem title="Custody">
           <p className="text-pretty">
             Every address pays only the merchant's treasury; Phala Pay holds no funds.
+            {networksView.error === null && networks !== undefined && (
+              <span className="text-muted-foreground"> On {networks.map((each) => each.name).join(" and ")}.</span>
+            )}
           </p>
-          {networksView.error === null && (
-            <p className="text-muted-foreground">
-              {networks === undefined ? "Networks: loading…" : `Networks: ${networks.map((each) => each.name).join(", ")}`}
-            </p>
-          )}
           <QueryState view={networksView} />
         </TrustItem>
       </DataList>
@@ -602,11 +594,12 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
   );
 }
 
+/** A row: its name beside its value (above it on a phone). */
 function TrustItem({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="grid gap-x-4 gap-y-2 py-4 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)]">
+    <div className="grid gap-x-4 gap-y-1 py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
       <dt className="font-medium">{title}</dt>
-      <dd className="flex min-w-0 flex-col items-start gap-2">{children}</dd>
+      <dd className="flex min-w-0 flex-col items-start gap-1">{children}</dd>
     </div>
   );
 }

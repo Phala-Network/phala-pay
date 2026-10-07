@@ -1,5 +1,5 @@
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 
 /**
  * A surface on the page: a 1px border, no shadow. Inside it, parts are set apart by dividers,

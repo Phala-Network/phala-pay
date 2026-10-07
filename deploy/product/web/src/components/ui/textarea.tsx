@@ -1,5 +1,5 @@
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 
 /**
  * A multi-line text field, drawn as Input is: 16px text on phones, where anything smaller makes iOS

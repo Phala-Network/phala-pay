@@ -225,14 +225,18 @@ export function HeroCode() {
           </>
         }
       >
-        {HERO_CODE.map(({ id: key, file, lines }, index) => (
-          <div key={key} role="tabpanel" id={`${id}-panel-${key}`} aria-labelledby={`${id}-tab-${key}`} hidden={index !== shown}>
-            {/* Fourteen lines at most: every snippet fits without scrolling down. */}
-            <CodeBody label={file} className="min-h-[calc(14lh+2rem)]">
-              <HighlightedLines lines={lines} />
-            </CodeBody>
-          </div>
-        ))}
+        {/* The panels share one grid cell, so the window is as tall as the longer snippet whichever
+            is shown; the other is invisible (and so out of the accessibility tree too). */}
+        <div className="grid">
+          {HERO_CODE.map(({ id: key, file, lines }, index) => (
+            <div key={key} role="tabpanel" id={`${id}-panel-${key}`} aria-labelledby={`${id}-tab-${key}`}
+              className={cn("col-start-1 row-start-1 min-w-0", index !== shown && "invisible")}>
+              <CodeBody label={file}>
+                <HighlightedLines lines={lines} />
+              </CodeBody>
+            </div>
+          ))}
+        </div>
       </CodeWindow>
       <figcaption className="mt-4 text-sm text-muted-foreground">
         {HERO_CODE_NOTE.before}<code className="font-mono text-mono text-foreground">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}
@@ -341,7 +345,10 @@ export function WhereTheMoneyGoes() {
           <CustodyPath />
         </div>
         <div className="mt-14 grid gap-6 lg:grid-cols-12 lg:gap-10">
-          <p className="text-sm font-medium text-muted-foreground lg:col-span-4">{PROPERTIES_LEAD}</p>
+          <div className="lg:col-span-4">
+            <h3 className="text-heading font-semibold">For platforms that sell credits</h3>
+            <p className="mt-2 max-w-xs text-pretty text-body-foreground">{PROPERTIES_LEAD}</p>
+          </div>
           <dl className="border-t lg:col-span-8">
             {rest.map(({ title, text }) => (
               <div key={title} className="grid gap-1 border-b py-4 sm:grid-cols-[12rem_minmax(0,1fr)] sm:gap-6">
@@ -462,7 +469,7 @@ export function ClosingCta({ command }: { command: ReactNode }) {
           {command}
           <p className="mt-3 text-sm text-pretty text-muted-foreground">
             Deploys the latest release. To verify the release's provenance first, follow
-            the <a className={TEXT_LINK} href={LINKS.deploy}>high-assurance path</a>.
+            the <a className={cn(TEXT_LINK, "whitespace-nowrap")} href={LINKS.deploy}>high-assurance path</a>.
           </p>
         </div>
       </div>
