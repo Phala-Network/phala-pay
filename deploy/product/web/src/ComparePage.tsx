@@ -1,7 +1,8 @@
 import { cn } from "@/lib/utils";
 import { ComparisonCell } from "./ComparisonCell.js";
 import { COMPARE_ACCESSED, competitors, dimensions, phalaPay, sources } from "./content/compare.js";
-import { CONTAINER, H2, LEAD, LINKS, ProviderList, TEXT_LINK } from "./Site.js";
+import { CONTAINER, H2, LEAD, LINKS, PHALA_COLUMN, TEXT_LINK } from "./Site.js";
+import { Versus } from "./Versus.js";
 
 const vendors = [phalaPay, ...competitors];
 const SECTION = "scroll-mt-20 border-t pt-12 lg:pt-16";
@@ -21,12 +22,12 @@ function ComparisonTable() {
           <caption className="sr-only">Phala Pay and five crypto payment services, compared across ten dimensions.</caption>
           <thead>
             <tr>
-              <th scope="col" className="sticky left-0 z-10 w-40 bg-background pr-4 pb-4 align-bottom text-xs font-medium text-muted-foreground">
+              <th scope="col" className="sticky left-0 z-10 w-40 border-r bg-background pr-4 pb-4 align-bottom text-xs font-medium text-muted-foreground">
                 Dimension
               </th>
               {vendors.map(({ id, name }) => (
                 <th key={id} scope="col"
-                  className={cn("border-t-2 px-4 pt-4 pb-4 align-bottom text-[0.9375rem] font-semibold", id === phalaPay.id ? "border-foreground" : "border-transparent text-body-foreground")}>
+                  className={cn("border-t-2 px-4 pt-4 pb-4 align-bottom text-table font-semibold", id === phalaPay.id ? PHALA_COLUMN : "border-transparent text-body-foreground")}>
                   {name}
                 </th>
               ))}
@@ -35,11 +36,11 @@ function ComparisonTable() {
           <tbody>
             {dimensions.map(({ key, label }) => (
               <tr key={key}>
-                <th scope="row" className="sticky left-0 z-10 border-t bg-background py-4 pr-4 align-top font-medium">
+                <th scope="row" className="sticky left-0 z-10 border-t border-r bg-background py-4 pr-4 align-top font-medium">
                   {label}
                 </th>
                 {vendors.map((vendor) => (
-                  <td key={vendor.id} className={cn("border-t px-4 py-4 align-top leading-6 text-pretty", vendor.id === phalaPay.id ? "text-foreground" : "text-body-foreground")}>
+                  <td key={vendor.id} className={cn("border-t px-4 py-4 align-top leading-6 text-pretty", vendor.id === phalaPay.id ? "bg-muted/50 text-foreground" : "text-body-foreground")}>
                     <ComparisonCell cell={vendor[key]} linkSource />
                   </td>
                 ))}
@@ -67,7 +68,8 @@ const FIT = [
 export function ComparePage() {
   return (
     <main id="top" className={`${CONTAINER} flex-1 pt-14 pb-20 sm:pt-20 lg:pb-28`}>
-      <div className="grid gap-6 lg:grid-cols-12 lg:items-end lg:gap-10">
+      {/* The lead's last line sits on the title's baseline. */}
+      <div className="grid gap-6 lg:grid-cols-12 lg:items-baseline-last lg:gap-10">
         <div className="lg:col-span-7">
           <p className="text-sm font-medium text-muted-foreground">Compare</p>
           <h1 className="mt-3 text-display-sm font-semibold text-balance sm:text-display">How Phala Pay compares</h1>
@@ -94,16 +96,7 @@ export function ComparePage() {
       <section id="glance" aria-labelledby="glance-title" className="mt-12 scroll-mt-20 lg:mt-16">
         <h2 id="glance-title" className={H2}>At a glance</h2>
         <ComparisonTable />
-        <nav aria-label="Providers" className="mt-6 md:hidden">
-          <ul className="flex flex-wrap gap-2">
-            {vendors.map(({ id, name }) => (
-              <li key={id}>
-                <a href={`#provider-${id}`} className="inline-flex min-h-11 items-center rounded-md border px-3 text-sm font-medium">{name}</a>
-              </li>
-            ))}
-          </ul>
-        </nav>
-        <ProviderList vendors={vendors} dimensions={dimensions} linkSource className="mt-10 md:hidden" />
+        <Versus phala={phalaPay} others={competitors} dimensions={dimensions} linkSource name="compare-versus" className="mt-8 md:hidden" />
         <div className="mt-6 grid gap-1 text-sm text-muted-foreground">
           <p id="partial-note">(partial): Partially stated by the vendor; see source.</p>
           <p id="not-stated-note">—: Not stated publicly as of {COMPARE_ACCESSED}.</p>

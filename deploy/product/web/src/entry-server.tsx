@@ -6,7 +6,7 @@ import { renderHead } from "./Head.js";
 import { pageMetadata, structuredData, type Page } from "./content/head.js";
 import { ComparePage } from "./ComparePage.js";
 import { NotFoundPage } from "./NotFoundPage.js";
-import { ClosingCta, CompareTeaser, DemoSection, DeployCommand, Faq, Hero, HeroCode, HowItWorks, Properties, SiteFooter } from "./Site.js";
+import { ClosingCta, CompareTeaser, DemoSection, DeployCommand, Faq, Hero, HeroCode, SiteFooter, WhereTheMoneyGoes } from "./Site.js";
 
 /**
  * An island: rendered on its own, with the identifier prefix its client root hydrates with, so the
@@ -23,8 +23,7 @@ function Main({ page }: { page: Page }) {
         <main id="top" className="flex-1">
           <Hero code={<Island id="hero-code" prefix={ISLAND_PREFIXES.heroCode}><HeroCode /></Island>} />
           <DemoSection />
-          <HowItWorks />
-          <Properties />
+          <WhereTheMoneyGoes />
           <CompareTeaser />
           <Faq />
           <ClosingCta command={<Island id="deploy-command" prefix={ISLAND_PREFIXES.deployCommand}><DeployCommand /></Island>} />

@@ -131,7 +131,7 @@ export function Product({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-4 py-4 sm:py-4">
+      <CardContent className="flex flex-1 flex-col gap-4 py-4 lg:py-3">
         {accountView.data !== undefined && <QueryState view={accountView} />}
         {unavailable ? (
           <Alert variant="destructive">
@@ -320,7 +320,7 @@ function TokenOption({ id, asset, testnet }: { id: string; asset: Asset; testnet
         <span className="text-right tabular-nums" data-testid="token-price">
           {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
         </span>
-        <span className="truncate text-muted-foreground">
+        <span className="text-muted-foreground">
           {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
         </span>
         {asset.bonus_bps > 0 ? (
@@ -474,20 +474,23 @@ function QuoteCheckout({
   const symbol = session.asset.toUpperCase();
   return (
     <div className="flex flex-col gap-3">
-      {/* One row above the checkout: the demo merchant's bonus, while payable, and the way out. */}
-      <div className="flex items-center gap-3">
-        {PAYABLE.has(status) && bps > 0 && (
-          <p className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
-            <Info className="size-4 shrink-0" aria-hidden="true" />
-            <span>
-              <span className="text-success">+{percent(bps)} {symbol} bonus</span>, the demo merchant's promotion
-            </span>
-          </p>
-        )}
-        <Button type="button" variant="ghost" size="sm" className={cn("-mr-3 ml-auto shrink-0", TOUCH)} onClick={onNewTopUp}>
-          Start a new top-up
-        </Button>
-      </div>
+      {/* While the quote is payable: the demo merchant's bonus, and from lg the way out beside it
+          (on a phone the bonus has its line, and the way out is at the checkout's foot). */}
+      {PAYABLE.has(status) && (
+        <div className="flex items-center gap-3">
+          {bps > 0 && (
+            <p className="flex min-w-0 items-start gap-2 text-sm text-pretty text-muted-foreground">
+              <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span>
+                <span className="text-success">+{percent(bps)} {symbol} bonus</span>, the demo merchant's promotion
+              </span>
+            </p>
+          )}
+          <Button type="button" variant="ghost" size="sm" className="ml-auto hidden shrink-0 lg:inline-flex" onClick={onNewTopUp}>
+            Start a new top-up
+          </Button>
+        </div>
+      )}
       {status === "credited" ? (
         <Credited session={session} account={account} bps={bps} />
       ) : (
@@ -509,6 +512,19 @@ function QuoteCheckout({
       {short !== null && status === "waiting" && network !== undefined && token !== undefined && (
         <FundWallet network={network} token={token} needed={BigInt(session.amount_atomic)} wallet={short} />
       )}
+      {/* The next action: once credited, the card's own button; while paying, a quiet way out at
+          the checkout's foot. */}
+      {status === "credited" ? (
+        <Button type="button" variant="secondary" size="lg" className="w-full" onClick={onNewTopUp}>
+          Start a new top-up
+        </Button>
+      ) : (
+        <div className={cn("justify-end border-t pt-2", PAYABLE.has(status) ? "flex lg:hidden" : "flex")}>
+          <Button type="button" variant="ghost" size="sm" className={TOUCH} onClick={onNewTopUp}>
+            Start a new top-up
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -527,7 +543,8 @@ function Credited({ session, account, bps }: { session: CreatedQuote; account: A
       <CircleCheck aria-hidden="true" />
       <AlertTitle>Payment credited</AlertTitle>
       <AlertDescription>
-        <dl className="mt-2 grid grid-cols-3 gap-x-4 gap-y-1 tabular-nums">
+        {/* Labels on one row and values on the next, so the values stay level when a label wraps. */}
+        <dl className="mt-2 grid grid-flow-col grid-cols-3 grid-rows-[auto_auto] gap-x-4 gap-y-1 tabular-nums [&>div]:row-span-2 [&>div]:grid [&>div]:grid-rows-subgrid [&_dt]:self-end">
           <div>
             <dt className="text-muted-foreground">Credit</dt>
             <dd className="font-medium">{dollars(session.amount)}</dd>

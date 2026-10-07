@@ -1,68 +1,21 @@
 import * as React from "react"
-import { ArrowUpRight, Check, Copy, X } from "lucide-react"
+import { ArrowUpRight } from "lucide-react"
 import { cn } from "cn"
+import { getAddress, isAddress } from "viem"
+
+import { CopyButton } from "@/components/ui/copy-button"
 
 /**
- * Copies `value`, confirming with a tick for a moment (announced too). 32px, with a 44px hit area
- * around it.
+ * The page's one way to show an address, hash, or id: in full, in groups of four characters, as the
+ * SDK shows a payer's address (@phala/pay-react). A type prefix (`0x`, `dep_`, `order_`, `demo-`)
+ * stays with the first group. It wraps only between groups, and a group is never shorter than four
+ * characters (a remainder joins the last group), so no character is ever left alone on a line.
+ * Selecting or copying it gives the value without spaces. Only hex and ids are grouped: a key in
+ * base64 (a webhook key) is shown as it is, wrapping anywhere.
  */
-function CopyButton({
-  value,
-  label,
-  className,
-}: {
-  value: string
-  label: string
-  className?: string | undefined
-}) {
-  const [result, setResult] = React.useState<"copied" | "failed" | null>(null)
-  const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  React.useEffect(() => () => clearTimeout(timer.current), [])
-  const show = (outcome: "copied" | "failed") => {
-    setResult(outcome)
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => setResult(null), 1500)
-  }
-  return (
-    <>
-      <button
-        type="button"
-        data-slot="copy-button"
-        aria-label={label}
-        className={cn(
-          "relative inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors before:absolute before:-inset-1.5 hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&_svg]:size-4",
-          className
-        )}
-        onClick={() => {
-          navigator.clipboard.writeText(value).then(
-            () => show("copied"),
-            () => show("failed")
-          )
-        }}
-      >
-        {result === "copied" ? (
-          <Check aria-hidden="true" />
-        ) : result === "failed" ? (
-          <X aria-hidden="true" />
-        ) : (
-          <Copy aria-hidden="true" />
-        )}
-      </button>
-      <span className="sr-only" aria-live="polite">
-        {result === "copied" ? "Copied" : result === "failed" ? "Could not copy" : ""}
-      </span>
-    </>
-  )
-}
-
-/**
- * The page's one way to show an address, hash, id, or key: in full, in groups of four characters,
- * as the SDK shows a payer's address (@phala/pay-react). A type prefix (`0x`, `dep_`, `order_`,
- * `demo-`) stays with the first group. It wraps only between groups, and a group is never shorter
- * than four characters (a remainder joins the last group), so no character is ever left alone on a
- * line. Selecting or copying it gives the value without spaces.
- */
-function groups(value: string): string[] {
+function groups(value: string): string[] | null {
+  const id = /^(?:0x|[A-Za-z]+[_-])?[0-9A-Za-z]+$/.exec(value)
+  if (id === null || value.length < 12) return null
   const prefix = /^(?:0x|[A-Za-z]+[_-])/.exec(value)?.[0].length ?? 0
   const result = [value.slice(0, prefix + 4)]
   for (let start = prefix + 4; start < value.length; start += 4) {
@@ -76,12 +29,19 @@ function groups(value: string): string[] {
 }
 
 function Grouped({ value }: { value: string }) {
-  return groups(value).map((group, index) => (
+  const parts = groups(value)
+  if (parts === null) return <span className="break-all">{value}</span>
+  return parts.map((group, index) => (
     <React.Fragment key={index}>
       {index > 0 && <wbr />}
       <span className="mr-[0.5ch] whitespace-nowrap last:mr-0">{group}</span>
     </React.Fragment>
   ))
+}
+
+/** An EVM address in its EIP-55 checksum case, as wallets and explorers show it; anything else as it is. */
+function displayed(value: string): string {
+  return isAddress(value, { strict: false }) ? getAddress(value) : value
 }
 
 /**
@@ -100,16 +60,17 @@ function Hash({
   copyLabel?: string | undefined
   className?: string | undefined
 }) {
+  const shown = displayed(value)
   const text = (
-    <span data-slot="hash-value" className="font-mono text-[0.8125rem] text-foreground">
-      <Grouped value={value} />
+    <span data-slot="hash-value" className="font-mono text-mono text-foreground">
+      <Grouped value={shown} />
     </span>
   )
   return (
     // With a copy button: the value and the button in one row, the value wrapping beside it.
     <span
       data-slot="hash"
-      data-value={value}
+      data-value={shown}
       className={cn(copyLabel === undefined ? "inline" : "inline-flex max-w-full items-start gap-1 align-top", className)}
     >
       {href === undefined ? (
@@ -128,10 +89,10 @@ function Hash({
         </a>
       )}
       {copyLabel !== undefined && (
-        <CopyButton value={value} label={copyLabel} className="-my-1.5 shrink-0" />
+        <CopyButton value={shown} label={copyLabel} className="-my-1.5 shrink-0" />
       )}
     </span>
   )
 }
 
-export { CopyButton, Hash }
+export { Hash }

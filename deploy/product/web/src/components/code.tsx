@@ -28,7 +28,7 @@ export function CodeWindow({ header, children, className }: { header: ReactNode;
 export function CodeBody({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
     <pre tabIndex={0} role="region" aria-label={label}
-      className={cn("overflow-x-auto px-5 py-4 font-mono text-[13px]/[1.7] text-code-foreground", className)}>
+      className={cn("overflow-x-auto px-5 py-4 font-mono text-mono text-code-foreground", className)}>
       <code>{children}</code>
     </pre>
   );

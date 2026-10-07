@@ -1,11 +1,12 @@
 import * as React from "react"
 import { cn } from "cn"
 
-import { CopyButton } from "@/components/ui/hash"
+import { CopyButton } from "@/components/ui/copy-button"
 
 /**
- * Code or data (JSON, calldata) as written: monospaced, at most 240px tall and scrolling beyond
- * (focusable, so the keyboard scrolls it too), with a copy button that stays in its corner. A block in
+ * Code or data (JSON, calldata) as written: monospaced, at its full height, scrolling sideways
+ * only where a line is wider than the block (focusable, so the keyboard scrolls it too), with a copy
+ * button in its corner. A block in
  * static HTML passes `copyable={false}` until it hydrates, so it shows no button that cannot work.
  */
 function CodeBlock({
@@ -27,7 +28,7 @@ function CodeBlock({
         role="region"
         aria-label={label}
         className={cn(
-          "max-h-60 overflow-auto rounded-lg border bg-muted/50 py-3 pr-12 pl-3 font-mono text-xs leading-relaxed",
+          "overflow-x-auto rounded-lg border bg-muted/50 py-3 pr-12 pl-3 font-mono text-xs leading-relaxed",
           className
         )}
       >

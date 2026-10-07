@@ -19,11 +19,13 @@ import {
   DataList,
   ExplorerLink,
   Subsection,
+  LearnMore,
   TOUCH,
   describe,
   errorMessage,
   statusTone,
   useMediaQuery,
+  useShowAll,
   wallet,
 } from "./common.js";
 import { statusLabel, tokens } from "./format.js";
@@ -42,16 +44,15 @@ export function Refunds({ timeline, deposit }: { timeline: Timeline; deposit: De
     symbol: (deposit.asset ?? "token").toUpperCase(),
     decimals: assetOf(network, deposit.asset)?.decimals ?? 18,
   };
-  const treasury = network?.treasury ?? timeline.refunds[0]?.treasury ?? "";
+  // The most recent refunds (newest first); the rest on request.
+  const recent = useShowAll(timeline.refunds, 3);
   const refundable = deposit.final && (deposit.status === "credited" || deposit.status === "rejected");
   return (
     <Subsection title="Refunds" id="refunds-title">
       <p className="text-sm text-pretty text-muted-foreground">
-        The merchant refunds from its own treasury: declare the refund, pay it from the treasury this deposit's
-        address pays, then attach the transaction, which Phala Pay verifies once final. On this demo the treasury{" "}
-        <ExplorerLink chainId={token.chainId} kind="address" value={treasury} /> is Phala's finance Safe, which you
-        do not control: a refund you pay from your own wallet fails verification with{" "}
-        <code className="font-mono text-[13px]">sender_mismatch</code>, as it should.
+        Pay refunds from the treasury (here Phala's Safe: one from your wallet fails as{" "}
+        <code className="font-mono text-mono">sender_mismatch</code>).{" "}
+        <LearnMore anchor="3-refunds" topic="refunds" />
       </p>
       {refundable ? (
         <RefundForm deposit={deposit} token={token} />
@@ -64,11 +65,12 @@ export function Refunds({ timeline, deposit }: { timeline: Timeline; deposit: De
       )}
       {timeline.refunds.length > 0 && (
         <ul className="flex flex-col divide-y border-y" aria-label="Refunds of this deposit">
-          {timeline.refunds.map((refund) => (
+          {recent.shown.map((refund) => (
             <RefundItem key={refund.id} refund={refund} token={token} />
           ))}
         </ul>
       )}
+      {recent.toggle}
     </Subsection>
   );
 }
@@ -136,7 +138,7 @@ function RefundForm({ deposit, token }: { deposit: Deposit; token: RefundToken }
           {wide ? (
             <Input
               id={destinationId}
-              className="font-mono md:text-[13px]"
+              className="font-mono md:text-mono"
               spellCheck={false}
               value={destination}
               onChange={(event) => setDestination(event.target.value)}
@@ -245,7 +247,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
                   </DataItem>
                   <DataItem label="Amount" className="tabular-nums">
                     {tokens(transfer.amount_atomic, symbol, decimals)}{" "}
-                    <span className="font-mono text-[13px] text-muted-foreground">({transfer.amount_atomic})</span>
+                    <span className="font-mono text-mono text-muted-foreground">({transfer.amount_atomic})</span>
                   </DataItem>
                 </DataList>
                 <p className="text-sm text-muted-foreground">Calldata</p>
@@ -256,7 +258,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
                   <FieldLabel htmlFor={hashId}>Transaction hash of the payment</FieldLabel>
                   <Input
                     id={hashId}
-                    className={cn("font-mono md:text-[13px]", TOUCH)}
+                    className={cn("font-mono md:text-mono", TOUCH)}
                     spellCheck={false}
                     placeholder="0x…"
                     value={hash}
@@ -309,7 +311,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
               <AlertTitle>Refund verified</AlertTitle>
               <AlertDescription>
                 The service verified the treasury's transfer at finality and sent{" "}
-                <code className="font-mono text-[13px]">deposit.refunded</code>, which took the refunded share back
+                <code className="font-mono text-mono">deposit.refunded</code>, which took the refunded share back
                 from the balance.
               </AlertDescription>
             </Alert>
@@ -319,7 +321,7 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
               <CircleAlert aria-hidden="true" />
               <AlertTitle>Refund failed verification</AlertTitle>
               <AlertDescription>
-                <code className="font-mono text-[13px]">{refund.failure_reason}</code>: {refund.failure_explanation} Its
+                <code className="font-mono text-mono">{refund.failure_reason}</code>: {refund.failure_explanation} Its
                 reservation of the deposit is released; declare a new refund and pay it from the treasury.
               </AlertDescription>
             </Alert>

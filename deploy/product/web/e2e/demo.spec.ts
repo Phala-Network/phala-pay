@@ -22,6 +22,8 @@ import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_
 
 declare global {
   interface Window {
+    /** The page's layout shifts, collected by a test. */
+    layoutShifts: number[];
     anvilRequest(
       chainId: number,
       method: string,
@@ -434,15 +436,19 @@ function step(timeline: Locator, key: string): Locator {
   return timeline.locator(`[data-step="${key}"]`);
 }
 
-/** Opens a step's line to its hint, time, and data (closed lines render none). */
+/** An opened step's details: its hint, time, and data, shown under the stepper. */
+function stepDetails(timeline: Locator, key: string): Locator {
+  return timeline.page().locator(`[data-step-details="${key}"]`);
+}
+
+/** Opens a step to its hint, time, and data (closed steps render none), and returns them. */
 async function openStep(timeline: Locator, key: string): Promise<Locator> {
-  const line = step(timeline, key);
-  const trigger = line.getByRole("button").first();
+  const trigger = step(timeline, key).getByRole("button");
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
   }
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
-  return line;
+  return stepDetails(timeline, key);
 }
 
 async function expectComplete(timeline: Locator, keys: string[], timeout = 60_000) {
@@ -455,6 +461,14 @@ async function expectComplete(timeline: Locator, keys: string[], timeout = 60_00
 async function openTab(scenes: Locator, name: string): Promise<Locator> {
   await scenes.getByRole("tab", { name: new RegExp(`^${name}`) }).click();
   return scenes.getByRole("tabpanel", { name: new RegExp(`^${name}`) });
+}
+
+/** Opens every "Show all (N)" list in `scope`. */
+async function showAll(scope: Locator): Promise<void> {
+  const buttons = scope.getByRole("button", { name: /^Show all \(\d+\)$/ });
+  while ((await buttons.count()) > 0) {
+    await buttons.first().click();
+  }
 }
 
 /** Declares a refund of `amount` PHA of the selected deposit and returns its list item. */
@@ -806,11 +820,11 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(credited).toContainText("the quote's locked price");
   // Each step opens to its data. The order id arrives in the verified deposit.credited's
   // data.object.metadata.
-  await openStep(timeline, "webhook_received");
-  await expect(step(timeline, "webhook_received").getByText("data.object.metadata")).toBeVisible();
-  await expect(step(timeline, "webhook_received")).toContainText("verified");
-  await expect(step(timeline, "webhook_received")).toContainText(`"order_id": "${order ?? ""}"`);
-  await expect(step(timeline, "webhook_received")).toContainText("+$20.00");
+  const webhook = await openStep(timeline, "webhook_received");
+  await expect(webhook.getByText("data.object.metadata")).toBeVisible();
+  await expect(webhook).toContainText("verified");
+  await expect(webhook).toContainText(`"order_id": "${order ?? ""}"`);
+  await expect(webhook).toContainText("+$20.00");
   await openTab(scenes, "API");
   await expect(scenes.getByTestId("webhook-event").first()).toContainText("deposit.credited");
   // Refunds wait for finality.
@@ -835,7 +849,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
 
   // A refund paid from the treasury succeeds: 20 of 80 PHA takes back a quarter of the credit.
   const paid = await declareRefund(scenes, "20");
-  await expect(paid.getByTestId("refund-transfer")).toContainText(env("TREASURY").toLowerCase());
+  await expect(paid.getByTestId("refund-transfer")).toContainText(env("TREASURY"));
   const hash = await payFromTreasury(env("PAYER_ADDRESS"), parseEther("20"));
   await paid.getByLabel("Transaction hash of the payment").fill(hash);
   await paid.getByRole("button", { name: "Mark paid" }).click();
@@ -862,7 +876,9 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await canceled.getByRole("button", { name: "Cancel refund" }).click();
   await expect(canceled).toHaveAttribute("data-status", "canceled");
   await expectAccessible(page, "refunds that succeeded, failed, and were canceled");
-  await openTab(scenes, "API");
+  // The tab shows the latest events and requests; the rest open in the page.
+  const apiPanel = await openTab(scenes, "API");
+  await showAll(apiPanel);
   const events = scenes.getByTestId("webhook-event");
   for (const type of ["refund.created", "refund.updated", "refund.failed", "deposit.refunded"]) {
     await expect(events.filter({ hasText: type }).first()).toBeVisible();
@@ -876,8 +892,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(api).toContainText("Bearer ppay_rk_test_…");
   await expect(api).not.toContainText("AAAAAAAA");
 
-  // The history row and the ledger lines behind the balance.
-  await openTab(scenes, "Credits");
+  // The history row and the ledger lines behind the balance, all of them.
+  await showAll(await openTab(scenes, "Credits"));
   const row = scenes.getByTestId("payment").first();
   await expect(row).toContainText("Quote");
   await expect(row).toContainText("80 PHA");
@@ -997,12 +1013,13 @@ test("a deposit address: one verified address, any amount credited at spot, then
   }
 
   // 25 PHA at 0.25 USD, credited at spot; the address's metadata arrived with the deposit.
-  await openStep(timeline, "credited");
-  await openStep(timeline, "webhook_received");
-  await expect(step(timeline, "credited")).toContainText("spot");
-  await expect(step(timeline, "credited")).toContainText("$6.25");
-  await expect(step(timeline, "webhook_received")).toContainText('"workspace": "demo-');
-  await expect(step(timeline, "webhook_received")).toContainText("+$6.25");
+  // Two steps open at once, each with its own details.
+  const creditedDetails = await openStep(timeline, "credited");
+  const webhookDetails = await openStep(timeline, "webhook_received");
+  await expect(creditedDetails).toContainText("spot");
+  await expect(creditedDetails).toContainText("$6.25");
+  await expect(webhookDetails).toContainText('"workspace": "demo-');
+  await expect(webhookDetails).toContainText("+$6.25");
   await expect(step(timeline, "reversed")).toHaveAttribute("data-state", "failed", { timeout: 30_000 });
   await expect(product.getByTestId("balance")).toHaveText("$0.00", { timeout: 10_000 });
   await openTab(scenes, "Refunds");
@@ -1015,7 +1032,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   // The customer sees each payment at the rate it was credited at.
   await expect(product.getByTestId("credit").first()).toContainText("25 Test PHA");
   await expect(product.getByTestId("credit").first()).toContainText("Credited at $0.25 / PHA, then reversed");
-  await openTab(scenes, "Credits");
+  await showAll(await openTab(scenes, "Credits"));
   const lines = scenes.getByTestId("ledger-line");
   await expect(lines.filter({ hasText: "deposit.credited" })).toContainText("+$6.25");
   // A reversal takes the whole bonus back with the credit.
@@ -1356,7 +1373,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     const home = await staticPage.goto(env("SITE_URL"));
     expect(home?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("Crypto payments, without a custodian");
-    await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(6);
+    await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(5);
     // The answers fold natively, without script.
     const question = staticPage.locator("summary", { hasText: "Which chains and tokens are supported?" });
     const answer = staticPage.getByText("The live demo uses test tokens on Sepolia and Base Sepolia.", { exact: false });
@@ -1377,13 +1394,19 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
-    // A phone reads one provider at a time, each with its ten values; from md, the table, all six
-    // vendors at 1280px.
-    await expect(staticPage.getByRole("table")).toBeHidden();
-    await expect(staticPage.getByRole("heading", { level: 3, name: "BTCPay Server", exact: true })).toBeVisible();
-    await expect(staticPage.getByRole("region", { name: "BTCPay Server" }).getByRole("term")).toHaveCount(10);
+    // A phone reads Phala Pay beside one provider, chosen above the table (natively, without
+    // script): two columns, ten dimensions. From md, the full table, all six vendors at 1280px.
+    const full = staticPage.getByRole("table", { name: /five crypto payment services/ });
+    const versus = staticPage.getByRole("table", { name: /provider chosen above/ });
+    await expect(full).toBeHidden();
+    await expect(versus.getByRole("columnheader", { name: "Stripe stablecoin payments" })).toBeVisible();
+    await staticPage.getByRole("group", { name: "Compare Phala Pay with" }).getByText("BTCPay Server", { exact: true }).click();
+    await expect(versus.getByRole("columnheader", { name: "BTCPay Server" })).toBeVisible();
+    await expect(versus.getByRole("columnheader", { name: "Stripe stablecoin payments" })).toBeHidden();
+    await expect(versus.getByRole("rowgroup").filter({ has: staticPage.getByRole("cell") })).toHaveCount(10);
     await staticPage.setViewportSize({ width: 1280, height: 900 });
-    await expect(staticPage.getByRole("table")).toBeVisible();
+    await expect(full).toBeVisible();
+    await expect(versus).toBeHidden();
     const scroller = staticPage.getByRole("region", { name: "Comparison table" });
     expect(await scroller.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
     await staticPage.setViewportSize({ width: 390, height: 844 });
@@ -1581,5 +1604,94 @@ test("every page fits every width in either theme, with no serious accessibility
     } finally {
       await context.close();
     }
+  }
+});
+
+/**
+ * Nothing in the demo is cut off sideways: no tab panel, and nothing that hides its overflow,
+ * holds content wider than itself (scrolling regions, which show theirs, are exempt).
+ */
+async function expectNothingClipped(page: Page, state: string): Promise<void> {
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  for (const tab of ["Credits", "Refunds", "Sweeps", "API", "Trust"]) {
+    await openTab(scenes, tab);
+    const clipped = await page.locator("#demo-root").evaluate((root) => [...root.querySelectorAll<HTMLElement>("*")]
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        const hides = style.overflowX === "hidden" || style.overflowX === "clip" || element.getAttribute("role") === "tabpanel";
+        // Visually hidden text (a 1px box for screen readers) is clipped on purpose.
+        return hides && element.clientWidth > 1 && element.checkVisibility() && element.scrollWidth > element.clientWidth + 1;
+      })
+      .map((element) => `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")} (${element.scrollWidth} > ${element.clientWidth})`));
+    expect(clipped, `${state}, ${tab} tab`).toEqual([]);
+    // Nothing scrolls inside the demo: every element shows its overflow, but for code blocks, which
+    // may scroll sideways on a phone and never scroll down. Native controls, images, and visually
+    // hidden text keep their own.
+    const scrolling = await page.locator("#demo-root").evaluate((root) => [...root.querySelectorAll<HTMLElement>("*")]
+      .filter((element) => {
+        if (element.matches("input, textarea, select, img, svg, svg *") || element.clientWidth <= 1) return false;
+        const style = getComputedStyle(element);
+        if (element.tagName === "PRE") return element.scrollHeight > element.clientHeight + 1;
+        return style.overflowX !== "visible" || style.overflowY !== "visible";
+      })
+      .map((element) => `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")}`));
+    expect(scrolling, `${state}, ${tab} tab: inner scrolling`).toEqual([]);
+  }
+  await openTab(scenes, "Credits");
+}
+
+test("the demo fits one screen at 1440×900 and 1280×800, idle, paying, and credited, and clips nothing", async ({ page }) => {
+  test.setTimeout(240_000);
+  await installWallet(page);
+  const product = page.getByRole("region", { name: "Customer view" });
+  // The section, scrolled to as the nav's Demo link lands, is no taller than the screen under the
+  // 64px header.
+  const fits = async (state: string) => {
+    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+      await page.setViewportSize({ width, height });
+      const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
+      expect(demo, `${state} at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
+      await expectNothingClipped(page, `${state} at ${width}×${height}`);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectNothingClipped(page, `${state} at 390px`);
+  };
+  await page.goto(env("SITE_URL"));
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  await fits("idle");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const testTokens = page.getByRole("note", { name: "Test tokens" });
+  await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
+  await expect(testTokens).toContainText("Minted:");
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await expect(product.locator(".pp-summary")).toContainText("80 PHA");
+  await fits("paying");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+  await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
+  await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
+  await fits("credited");
+});
+
+test("the demo arrives without shifting what is in view", async ({ page }) => {
+  // Cumulative layout shift, as the browser reports it, while the page loads and the demo renders:
+  // under 0.05 at a desktop and a phone ("good" is under 0.1).
+  for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+    await page.setViewportSize({ width, height });
+    await page.addInitScript(() => {
+      window.layoutShifts = [];
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if ("value" in entry && typeof entry.value === "number" && "hadRecentInput" in entry && entry.hadRecentInput === false) {
+            window.layoutShifts.push(entry.value);
+          }
+        }
+      }).observe({ type: "layout-shift", buffered: true });
+    });
+    await page.goto(env("SITE_URL"));
+    await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+    await page.waitForTimeout(500);
+    const shift = await page.evaluate(() => window.layoutShifts.reduce((sum, value) => sum + value, 0));
+    expect(shift, `${width}px`).toBeLessThan(0.05);
   }
 });

@@ -83,10 +83,10 @@ function DemoContent({ theme }: { theme: Theme }) {
 
   return (
     <>
-      {/* Two sibling cards: the customer's view, then (beside it from lg, the two as tall as the
-          taller) what the backend sees. */}
+      {/* Two sibling cards, each at its content's height: the customer's view, then (beside it from
+          lg, the grid row stretching both to the taller) what the backend sees. */}
       <div className="grid gap-6 lg:grid-cols-12">
-        <div className="flex min-w-0 flex-col lg:col-span-5">
+        <div className="flex min-w-0 flex-col lg:col-span-6">
           <Product
             account={views.account}
             networks={views.networks}
@@ -104,8 +104,7 @@ function DemoContent({ theme }: { theme: Theme }) {
             appearance={appearance}
           />
         </div>
-        {/* From lg the customer's view sets the row's height; the backend fills it (Backend). */}
-        <div className="relative flex min-w-0 flex-col lg:col-span-7">
+        <div className="flex min-w-0 flex-col lg:col-span-6">
           <Backend
             account={views.account}
             selected={selected}

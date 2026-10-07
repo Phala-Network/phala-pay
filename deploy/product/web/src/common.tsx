@@ -1,5 +1,6 @@
 import { ChevronRight, type LucideIcon } from "lucide-react";
-import { useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import { Hash } from "@/components/ui/hash";
 import type { StatusTone } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
@@ -9,6 +10,9 @@ import { useNetworks } from "./queries.js";
 
 /** An inline text link, in the page's text colour. */
 export const LINK = "font-medium underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground";
+
+/** The integration guide, where each tab's one-line explanation is told in full. */
+export const INTEGRATION_GUIDE = "https://github.com/Phala-Network/phala-pay/blob/main/docs/integration.md";
 
 /** On a phone, a control is 44px tall: a touch target's size. */
 export const TOUCH = "max-sm:h-11";
@@ -127,6 +131,32 @@ export function Disclosure({ summary, children }: { summary: ReactNode; children
       </summary>
       <div className="mt-1 flex flex-col gap-2">{children}</div>
     </details>
+  );
+}
+
+/**
+ * A long list's most recent `limit` items, and a "Show all (N)" button that shows the rest in the
+ * page's flow (the page grows; nothing scrolls inside). `newestFirst` lists keep their first items;
+ * the others (logs, oldest first) their last.
+ */
+export function useShowAll<T>(items: T[], limit: number, newestFirst = true): { shown: T[]; toggle: ReactNode } {
+  const [all, setAll] = useState(false);
+  const hidden = items.length - limit;
+  const shown = all || hidden <= 0 ? items : newestFirst ? items.slice(0, limit) : items.slice(-limit);
+  const toggle = hidden <= 0 ? null : (
+    <Button type="button" variant="ghost" size="sm" className={cn("self-start", TOUCH)} aria-expanded={all} onClick={() => setAll((open) => !open)}>
+      {all ? "Show fewer" : `Show all (${items.length})`}
+    </Button>
+  );
+  return { shown, toggle };
+}
+
+/** A one-line explanation's link to the integration guide, which explains it in full. */
+export function LearnMore({ anchor, topic }: { anchor: string; topic: string }) {
+  return (
+    <a className={cn(LINK, "whitespace-nowrap")} href={`${INTEGRATION_GUIDE}#${anchor}`} target="_blank" rel="noreferrer">
+      Learn more<span className="sr-only"> about {topic}</span>
+    </a>
   );
 }
 

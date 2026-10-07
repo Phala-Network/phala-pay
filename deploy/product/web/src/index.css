@@ -28,6 +28,16 @@
     --text-heading--letter-spacing: -0.01em;
     --text-lead: 1.125rem;
     --text-lead--line-height: 1.65;
+    /* Code, hashes, and ids in Geist Mono, a step under the text they sit in. */
+    --text-mono: 0.8125rem;
+    --text-mono--line-height: 1.7;
+    /* A comparison table's cells: between the body and sm, for six columns of prose. */
+    --text-table: 0.9375rem;
+    --text-table--line-height: 1.6;
+    /* The name beside the mark. */
+    --text-wordmark: 1.0625rem;
+    --text-wordmark--line-height: 1.5;
+    --text-wordmark--letter-spacing: -0.02em;
 }
 
 @theme inline {

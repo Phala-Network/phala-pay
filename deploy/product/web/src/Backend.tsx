@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, DepositAddressResponse, Network, PaymentRow, Selection, Timeline, Trust } from "./api.js";
-import { DataItem, DataList, Empty, EmptyState, ExplorerLink, LINK, Subsection, TABLE, TOUCH, statusTone, useMediaQuery } from "./common.js";
+import { DataItem, DataList, Empty, EmptyState, ExplorerLink, LINK, LearnMore, Subsection, TABLE, TOUCH, statusTone, useMediaQuery, useShowAll } from "./common.js";
 import { Refunds } from "./Refunds.js";
 import { assetOf, networkOf } from "./chains.js";
 import { day, dollars, price, signedDollars, statusLabel, time, tokenName, tokens } from "./format.js";
@@ -50,9 +50,8 @@ export function Backend({
   const deposit = timeline?.deposit ?? null;
   const status = selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done";
   return (
-    // From lg, as tall as the customer's view beside it (the column's height), its body scrolling
-    // inside: long content (the ledger, refunds) never makes the demo taller.
-    <Card role="complementary" aria-label="Your backend" className="flex-1 lg:absolute lg:inset-0 lg:overflow-hidden">
+    // At its own content's height; from lg the grid row makes the two cards equally tall.
+    <Card role="complementary" aria-label="Your backend" className="flex-1">
       <CardHeader className="items-center gap-y-1 py-3 sm:py-3">
         <div className="flex min-w-0 items-baseline gap-x-3">
           <CardTitle>Your backend</CardTitle>
@@ -78,70 +77,68 @@ export function Backend({
           )}
         </dl>
       </CardHeader>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className="px-4 py-2 sm:px-6" aria-live="off">
-          <EventStream timeline={timelineView} loading={selected?.id ?? null} />
-          {timelineView.data !== undefined && <QueryState view={timelineView} />}
-        </div>
-        <Tabs defaultValue="credits" className="flex-1 gap-0 border-t">
-          <TabsList
-            variant="line"
-            aria-label="Backend"
-            // Should the tabs ever overflow, the row scrolls, each tab snapping to its start clear of the
-            // row's padding. It stays in view while the panel below it scrolls.
-            className="sticky top-0 z-10 h-auto w-full snap-x scroll-px-2 justify-start gap-2 overflow-x-auto overflow-y-hidden bg-card px-2 sm:scroll-px-4 sm:px-4"
-          >
-            <Tab value="credits" count={account?.payments.length}>
-              Credits
-            </Tab>
-            <Tab value="refunds" count={timeline?.refunds.length}>
-              Refunds
-            </Tab>
-            <Tab value="sweeps">Sweeps</Tab>
-            <Tab value="api" count={timeline === null ? undefined : timeline.api.length + timeline.events.length}>
-              API
-            </Tab>
-            <Tab value="trust">Trust</Tab>
-          </TabsList>
-          <TabsContent value="credits" className="flex flex-col gap-3 px-4 py-4 sm:px-6">
-            {addressView.data === undefined && <QueryState view={addressView} />}
-            {accountView.error === null && (
-              <CreditsTab account={account} selected={selected} address={addressView} networks={networks} onSelect={onSelect} />
-            )}
-            <QueryState view={accountView} />
-          </TabsContent>
-          <TabsContent value="refunds" className="flex flex-col px-4 py-4 sm:px-6">
-            {timeline === null || deposit === null || account === null ? (
-              <EmptyState icon={Undo2} title="No deposit to refund">
-                A credited payment can be refunded from the treasury once final.
-              </EmptyState>
-            ) : (
-              <div className="flex flex-col gap-8">
-                {timeline.ledger !== null && <LedgerPanel ledger={timeline.ledger} />}
-                <Refunds timeline={timeline} deposit={deposit} />
-              </div>
-            )}
-          </TabsContent>
-          <TabsContent value="sweeps" className="flex flex-col px-4 py-4 sm:px-6">
-            <Sweeps ready={account !== null} />
-          </TabsContent>
-          <TabsContent value="api" className="flex flex-col px-4 py-4 sm:px-6">
-            {timeline === null ? (
-              <EmptyState icon={Webhook} title="No requests yet">
-                The signed webhooks and the API calls of a payment show here.
-              </EmptyState>
-            ) : (
-              <div className="flex flex-col gap-8">
-                <EventsLog events={timeline.events} />
-                <Requests exchanges={timeline.api} title="API requests" id="api-title" />
-              </div>
-            )}
-          </TabsContent>
-          <TabsContent value="trust" className="px-4 py-4 sm:px-6">
-            <TrustDetails trust={trustView} networks={networksView} />
-          </TabsContent>
-        </Tabs>
+      {/* The stepper, one row high; opened steps add their details under it. */}
+      <div className="px-4 py-2 sm:px-6" aria-live="off">
+        <EventStream timeline={timelineView} loading={selected?.id ?? null} />
+        {timelineView.data !== undefined && <QueryState view={timelineView} />}
       </div>
+      <Tabs defaultValue="credits" className="flex-1 gap-0 border-t">
+        <TabsList
+          variant="line"
+          aria-label="Backend"
+          // Five short names that fit a phone's width; should they not, the row wraps.
+          className="h-auto w-full flex-wrap justify-start gap-x-2 px-2 sm:px-4"
+        >
+          <Tab value="credits" count={account?.payments.length}>
+            Credits
+          </Tab>
+          <Tab value="refunds" count={timeline?.refunds.length}>
+            Refunds
+          </Tab>
+          <Tab value="sweeps">Sweeps</Tab>
+          <Tab value="api" count={timeline === null ? undefined : timeline.api.length + timeline.events.length}>
+            API
+          </Tab>
+          <Tab value="trust">Trust</Tab>
+        </TabsList>
+        <TabsContent value="credits" className="flex flex-col gap-3 px-4 py-4 sm:px-6">
+          {addressView.data === undefined && <QueryState view={addressView} />}
+          {accountView.error === null && (
+            <CreditsTab account={account} selected={selected} address={addressView} networks={networks} onSelect={onSelect} />
+          )}
+          <QueryState view={accountView} />
+        </TabsContent>
+        <TabsContent value="refunds" className="flex flex-col px-4 py-4 sm:px-6">
+          {timeline === null || deposit === null || account === null ? (
+            <EmptyState icon={Undo2} title="No deposit to refund">
+              A credited payment can be refunded from the treasury once final.
+            </EmptyState>
+          ) : (
+            <div className="flex flex-col gap-8">
+              {timeline.ledger !== null && <LedgerPanel ledger={timeline.ledger} />}
+              <Refunds timeline={timeline} deposit={deposit} />
+            </div>
+          )}
+        </TabsContent>
+        <TabsContent value="sweeps" className="flex flex-col px-4 py-4 sm:px-6">
+          <Sweeps ready={account !== null} />
+        </TabsContent>
+        <TabsContent value="api" className="flex flex-col px-4 py-4 sm:px-6">
+          {timeline === null ? (
+            <EmptyState icon={Webhook} title="No requests yet">
+              The signed webhooks and the API calls of a payment show here.
+            </EmptyState>
+          ) : (
+            <div className="flex flex-col gap-8">
+              <EventsLog events={timeline.events} />
+              <Requests exchanges={timeline.api} title="API requests" id="api-title" />
+            </div>
+          )}
+        </TabsContent>
+        <TabsContent value="trust" className="px-4 py-4 sm:px-6">
+          <TrustDetails trust={trustView} networks={networksView} />
+        </TabsContent>
+      </Tabs>
     </Card>
   );
 }
@@ -164,7 +161,7 @@ function MetaItem({ label, value, testId }: { label: string; value: string; test
  */
 function Tab({ value, count, children }: { value: string; count?: number | undefined; children: string }) {
   return (
-    <TabsTrigger value={value} className="h-11 min-w-11 flex-none snap-start px-2 tabular-nums">
+    <TabsTrigger value={value} className="h-11 min-w-11 flex-none px-2 tabular-nums">
       {children}
       {count !== undefined && count > 0 && <span className="max-sm:hidden">({count})</span>}
     </TabsTrigger>
@@ -207,6 +204,9 @@ function CreditsTab({
   const address = addressView.data ?? null;
   // A table where there is room for its columns; on a phone each payment as a list item.
   const wide = useMediaQuery("(min-width: 48rem)");
+  // The most recent payments and balance lines (both newest first); the rest on request.
+  const recentPayments = useShowAll(account?.payments ?? [], 3);
+  const recentLines = useShowAll(account?.ledger ?? [], 2);
   if (account === null) {
     return <Empty>Loading…</Empty>;
   }
@@ -217,7 +217,7 @@ function CreditsTab({
       </EmptyState>
     );
   }
-  const payments = account.payments.map((row) => {
+  const payments = recentPayments.shown.map((row) => {
     const network = networkOf(networks, row.chain_id);
     const selection: Selection = row.id.startsWith("dep_") ? { kind: "deposit", id: row.id } : { kind: "quote", id: row.id };
     return {
@@ -231,7 +231,7 @@ function CreditsTab({
   return (
     <div className="flex flex-col gap-8">
       {payments.length > 0 && (
-        <section aria-label="Credits">
+        <section aria-label="Credits" className="flex flex-col gap-2">
           {wide ? (
             // The first column clears the shown row's indicator.
             <Table className={cn(TABLE, "[&_tr>*:first-child]:pl-3")}>
@@ -261,7 +261,7 @@ function CreditsTab({
                     aria-current={isSelected ? "true" : undefined}
                     className={SELECTED_ROW}
                   >
-                    <TableCell>
+                    <TableCell className="whitespace-normal">
                       <PaymentAmount row={row} symbol={symbol} decimals={decimals} />
                     </TableCell>
                     <TableCell>
@@ -320,18 +320,18 @@ function CreditsTab({
               ))}
             </ul>
           )}
+          {recentPayments.toggle}
         </section>
       )}
       {account.ledger.length > 0 && (
         <Subsection title="How this balance adds up" id="balance-lines-title">
           <p className="text-sm text-pretty text-muted-foreground">
-            A bonus is this demo merchant's own promotion, not a Phala Pay feature: its backend adds a line on{" "}
-            <code className="font-mono text-[13px]">deposit.credited</code> and takes the same share back when a
-            refund or reversal nets the credit down.
+            A bonus is this demo merchant's own promotion, not Phala Pay's.{" "}
+            <LearnMore anchor="promotions-are-your-own-logic" topic="promotions in your ledger" />
           </p>
           {/* Each line: what moved the balance and by how much; under it, when and for which deposit. */}
           <ul className="flex flex-col divide-y border-y text-sm" aria-label="Balance lines">
-            {account.ledger.map((line) => (
+            {recentLines.shown.map((line) => (
               <li key={`${line.deposit}-${line.kind}-${line.reason}-${line.at}`} data-testid="ledger-line" data-kind={line.kind}
                 className="flex flex-col gap-1 py-3">
                 <p className="flex items-baseline justify-between gap-4">
@@ -339,7 +339,7 @@ function CreditsTab({
                     <span className="font-medium">{line.kind === "bonus" ? "Bonus" : "Credit"}</span>
                     <span className="text-muted-foreground"> · </span>
                     {/* Event names in mono; a bonus grant's label is prose. */}
-                    <span className={cn(line.reason.startsWith("deposit.") && "font-mono text-[13px]")}>{line.reason}</span>
+                    <span className={cn(line.reason.startsWith("deposit.") && "font-mono text-mono")}>{line.reason}</span>
                   </span>
                   <span className="font-medium tabular-nums">{signedDollars(line.amount)}</span>
                 </p>
@@ -349,6 +349,7 @@ function CreditsTab({
               </li>
             ))}
           </ul>
+          {recentLines.toggle}
         </Subsection>
       )}
       {address !== null && (
@@ -426,6 +427,7 @@ function AddressView({
   const view = address.deposit_address;
   // Each of the address's networks as the product's selectors name it and its tokens.
   const named = (chainId: number) => networks?.find((each) => each.chain_id === chainId);
+  const recent = useShowAll(view.payments, 3);
   return (
     <Subsection
       title="Deposit address"
@@ -442,7 +444,7 @@ function AddressView({
     >
       <p className="text-sm text-pretty text-muted-foreground">
         {address.verified
-          ? `The product's SDK recomputed ${view.address === null ? "every network's address" : "this address"} from its pinned account, factory, implementation, and treasury before showing it.`
+          ? "The product's SDK recomputed it from its pins before showing it."
           : "The address does not match what the product's pins derive; it is not shown to the customer."}
       </p>
       <DataList className="divide-y border-y">
@@ -473,7 +475,7 @@ function AddressView({
         <Empty>No payments yet. Send any amount of a supported token to the address.</Empty>
       ) : (
         <ul className="flex flex-col divide-y border-y text-sm" aria-label="Payments the product sees" aria-live="polite">
-          {view.payments.map((payment) => {
+          {recent.shown.map((payment) => {
             // The deposit's valuation, once the service recorded it.
             const rate = account.payments.find((row) => row.id === payment.deposit)?.exchange_rate ?? null;
             const token = assetOf(named(payment.chain_id), payment.asset);
@@ -509,6 +511,7 @@ function AddressView({
           })}
         </ul>
       )}
+      {recent.toggle}
     </Subsection>
   );
 }
@@ -539,9 +542,9 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
             <>
               <StatusBadge tone="success">Attestation verified</StatusBadge>
               <p className="text-pretty text-muted-foreground">
-                Verified for a fresh nonce: the TDX quote's report data binds this account's webhook key{" "}
-                <Hash value={attestation.webhook_public_key ?? ""} className="text-foreground" />, which signs every
-                webhook ({attestation.quote_bytes ?? 0}-byte quote).
+                Verified for a fresh nonce; it binds the key that signs every webhook,{" "}
+                <Hash value={attestation.webhook_public_key ?? ""} className="text-foreground" />.{" "}
+                <LearnMore anchor="53-pin-your-accounts-webhook-keys" topic="pinning the webhook key" />
               </p>
             </>
           ) : (
@@ -572,14 +575,13 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
                   </div>
                 )}
               </dl>
-              <p className="text-muted-foreground">From the TLS certificate's evidence quote, at issuance.</p>
+              <p className="text-muted-foreground">From the TLS certificate's evidence quote.</p>
             </>
           )}
         </TrustItem>
         <TrustItem title="Custody">
           <p className="text-pretty">
-            Non-custodial: every address pays only the merchant's treasury, fixed in the address. Phala Pay holds no
-            funds and sends no transactions; the merchant sweeps and refunds itself.
+            Every address pays only the merchant's treasury; Phala Pay holds no funds.
           </p>
           {networksView.error === null && (
             <p className="text-muted-foreground">

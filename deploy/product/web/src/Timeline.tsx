@@ -1,8 +1,8 @@
 import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
+import { useId, useState } from "react";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Hash } from "@/components/ui/hash";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type {
@@ -14,7 +14,7 @@ import type {
   Timeline,
   WebhookEvent,
 } from "./api.js";
-import { DataItem, DataList, Empty, ExplorerLink, Subsection, TABLE } from "./common.js";
+import { DataItem, DataList, Empty, ExplorerLink, LearnMore, Subsection, TABLE, useShowAll } from "./common.js";
 import { assetOf, networkOf } from "./chains.js";
 import { approx, clock, dollars, duration, minusDollars, rate, signedDollars, time, tokens } from "./format.js";
 import { QueryState, type QueryView } from "./queryView.js";
@@ -25,23 +25,28 @@ import { useNetworks } from "./queries.js";
 // your server received a webhook).
 // A step that usually takes a known time says so on its line until it happens (`usually`); the
 // credit's comes from the chain's `typical_credit_seconds` (`GET /v1/config`).
-const STEP_COPY: Record<StepKey, { title: string; hint: string; failed?: string; usually?: string }> = {
+// `short` names a step in the stepper's narrow columns from lg.
+const STEP_COPY: Record<StepKey, { title: string; short: string; hint: string; failed?: string; usually?: string }> = {
   quote_created: {
+    short: "Quote",
     title: "Quote created",
     hint: "A locked price for an exact amount, for 15 minutes.",
   },
   sent: {
+    short: "Sent",
     title: "Sent on chain",
     hint: "Waiting for a transfer to the address.",
     failed: "The quote expired without a payment.",
   },
   received: {
+    short: "Received",
     title: "Received by Phala Pay",
     hint:
       "Usually within a block of sending, about 12 s on Sepolia and 2 s on Base Sepolia: the " +
       "service scans every new block for its addresses.",
   },
   credited: {
+    short: "Credited",
     title: "Credited",
     hint:
       "At the chain's confirmation: 2 blocks on Sepolia, about 30 s after sending, and 3 blocks on " +
@@ -50,10 +55,12 @@ const STEP_COPY: Record<StepKey, { title: string; hint: string; failed?: string;
     failed: "The deposit was rejected and will not be credited.",
   },
   webhook_received: {
+    short: "Webhook",
     title: "Webhook handled by your server",
     hint: "The signed deposit.credited moves the balance; its metadata arrives with it.",
   },
   final: {
+    short: "Final",
     usually: "~15 min",
     title: "Final",
     hint:
@@ -61,11 +68,13 @@ const STEP_COPY: Record<StepKey, { title: string; hint: string; failed?: string;
       "credit; only a final deposit can be refunded. The time shown is the deposit's final_at.",
   },
   reversed: {
+    short: "Reversed",
     title: "Reversed",
     hint: "The transaction left the chain before finality; deposit.reversed took the credit back.",
     failed: "The transaction left the chain before finality; deposit.reversed took the credit back.",
   },
   swept: {
+    short: "Swept",
     title: "Swept to the treasury",
     hint:
       "Phala Pay never sweeps: the merchant signs factory.flush from its own wallet or Safe (see " +
@@ -73,21 +82,21 @@ const STEP_COPY: Record<StepKey, { title: string; hint: string; failed?: string;
   },
 };
 
-// A step's line in columns: its dot, its title with the opener, and its time on the right: the
-// time since sending for the steps after it, else the time it happened; for a step yet to happen,
-// how long it usually takes. Each line is a 44px target on touch layouts, 32px from lg.
-const STEP_GRID = "grid grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3";
-
 // A quote's steps, shown before there is a payment to follow.
 const PREVIEW: StepKey[] = ["quote_created", "sent", "received", "credited", "webhook_received", "final", "swept"];
 
 /**
- * The payment's steps as a compact live log: one line per step, with its status and its real
- * time; each line opens to what it waits for and its data.
+ * The payment's steps as a stepper: a row of steps from lg (a column each: its dot, its name, its
+ * time), a list on a phone. Each step opens to what it waits for and its data, shown under the row,
+ * so the row stays one line high and the backend's tabs keep their room. Times are real: the time
+ * since sending for the steps after it, else the time it happened; for a step yet to happen, how
+ * long it usually takes.
  */
 export function EventStream({ timeline: timelineView, loading }: { timeline: QueryView<Timeline>; loading: string | null }) {
   const timeline = timelineView.data ?? null;
   const networks = useNetworks().data;
+  const id = useId();
+  const [open, setOpen] = useState<StepKey[]>([]);
   // The payment's own chain and token, for its amounts and links.
   const chainId = timeline?.deposit?.chain_id ?? timeline?.quote?.chain_id;
   const asset = timeline?.deposit?.asset ?? timeline?.quote?.asset ?? null;
@@ -99,54 +108,61 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
     // The confirmation is per chain, so before there is a token any of the chain's assets has it.
     creditSeconds: (assetOf(network, asset) ?? network?.assets[0])?.typical_credit_seconds ?? null,
   };
-  if (loading === null) {
-    return (
-      <ol className="flex flex-col" aria-label="The steps of a payment">
-        {PREVIEW.map((key) => (
-          <StreamStep key={key} step={{ key, state: "upcoming", at: null, details: [] }} sent={null} token={token} />
-        ))}
-      </ol>
-    );
-  }
-  if (timeline === null) {
+  if (loading !== null && timeline === null) {
     if (timelineView.error !== null) {
       return <QueryState view={timelineView} />;
     }
     return (
-      <ol className="flex flex-col" aria-label={`Loading ${loading}`} aria-busy="true">
+      <ol className={STEPPER} aria-label={`Loading ${loading}`} aria-busy="true">
         {PREVIEW.map((key) => (
-          <li key={key} className={cn(STEP_GRID, "h-11 px-2 lg:h-8")}>
-            <span className="size-2.5 justify-self-center rounded-full bg-muted motion-safe:animate-pulse" />
-            <span className="h-2.5 w-40 rounded-full bg-muted motion-safe:animate-pulse" />
+          <li key={key} className="flex h-11 items-center gap-3 px-2 lg:h-auto lg:flex-col lg:gap-2 lg:py-2">
+            <span className="size-3 rounded-full bg-muted motion-safe:animate-pulse" />
+            <span className="h-2.5 w-24 rounded-full bg-muted motion-safe:animate-pulse lg:w-12" />
           </li>
         ))}
       </ol>
     );
   }
+  const steps: Step[] = timeline?.steps ?? PREVIEW.map((key) => ({ key, state: "upcoming", at: null, details: [] }));
+  const sent = timeline?.sent?.at ?? null;
+  const toggle = (key: StepKey) => setOpen((keys) => (keys.includes(key) ? keys.filter((each) => each !== key) : [...keys, key]));
+  const failed = steps.find((step) => step.state === "failed" && STEP_COPY[step.key].failed !== undefined);
   return (
-    <ol className="flex flex-col" aria-label="Payment timeline">
-      {timeline.steps.map((step, index) => (
-        <StreamStep
-          key={step.key}
-          step={step}
-          sent={timeline.sent?.at ?? null}
-          // The current step shows when it started: when the step before it completed.
-          since={
-            step.state === "current" && step.at === null
-              ? Math.max(0, ...timeline.steps.slice(0, index).map((each) => each.at ?? 0)) || null
-              : null
-          }
-          token={token}
-        />
+    <div className="flex flex-col gap-2">
+      <ol className={STEPPER} aria-label={timeline === null ? "The steps of a payment" : "Payment timeline"}>
+        {steps.map((step, index) => (
+          <StreamStep
+            key={step.key}
+            step={step}
+            sent={sent}
+            // The current step shows when it started: when the step before it completed.
+            since={
+              step.state === "current" && step.at === null
+                ? Math.max(0, ...steps.slice(0, index).map((each) => each.at ?? 0)) || null
+                : null
+            }
+            token={token}
+            open={open.includes(step.key)}
+            details={`${id}-${step.key}`}
+            onToggle={() => toggle(step.key)}
+          />
+        ))}
+      </ol>
+      {failed !== undefined && <p className="text-sm text-pretty text-destructive">{STEP_COPY[failed.key].failed}</p>}
+      {steps.filter((step) => open.includes(step.key)).map((step) => (
+        <StepDetails key={step.key} id={`${id}-${step.key}`} step={step} sent={sent} token={token} />
       ))}
-    </ol>
+    </div>
   );
 }
+
+/** The steps: a list on a phone, from lg a row of equal columns, however many steps there are. */
+const STEPPER = "flex flex-col lg:grid lg:auto-cols-fr lg:grid-flow-col";
 
 function StepDot({ state }: { state: Step["state"] }) {
   if (state === "current") {
     return (
-      <span className="flex size-4 items-center justify-center" aria-hidden="true">
+      <span className="relative z-10 flex size-4 items-center justify-center" aria-hidden="true">
         <span className="size-2.5 rounded-full bg-brand ring-2 ring-foreground/20" />
       </span>
     );
@@ -154,7 +170,7 @@ function StepDot({ state }: { state: Step["state"] }) {
   return (
     <span
       className={cn(
-        "flex size-4 items-center justify-center rounded-full bg-card transition-colors motion-reduce:transition-none",
+        "relative z-10 flex size-4 items-center justify-center rounded-full bg-card transition-colors motion-reduce:transition-none",
         state === "complete" && "bg-foreground text-background",
         state === "failed" && "bg-destructive text-background",
         state === "upcoming" && "border border-dashed border-muted-foreground",
@@ -176,92 +192,111 @@ interface StepToken {
   creditSeconds: number | null;
 }
 
+/** Seconds since the payment was sent, for the steps after it. */
+function elapsedOf(step: Step, sent: number | null): number | null {
+  return step.at !== null && sent !== null && step.key !== "sent" && step.key !== "quote_created" ? step.at - sent : null;
+}
+
+/**
+ * A step's button. Its rail runs to the next step's dot through the dots' centres: down the list on
+ * a phone (from below this dot to above the next, each line 44px with its dot centred), across the
+ * row from lg (from half a dot and a gap past this column's centre to as far before the next's).
+ */
 function StreamStep({
   step,
   sent,
   since = null,
   token,
+  open,
+  details,
+  onToggle,
 }: {
   step: Step;
   sent: number | null;
   since?: number | null;
   token: StepToken;
+  open: boolean;
+  details: string;
+  onToggle: () => void;
 }) {
   const copy = STEP_COPY[step.key];
   const usually =
     step.key === "credited" ? (token.creditSeconds === null ? undefined : approx(token.creditSeconds)) : copy.usually;
-  // Seconds since the payment was sent, for the steps after it.
-  const elapsed =
-    step.at !== null && sent !== null && step.key !== "sent" && step.key !== "quote_created" ? step.at - sent : null;
-  const failed = step.state === "failed" && copy.failed !== undefined;
+  const elapsed = elapsedOf(step, sent);
   return (
-    // The rail from this step's dot to the next one's, through the dots' centres (8px of padding
-    // and half a dot in), past this step's opened details.
     <li
-      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden lg:before:top-6 lg:before:-bottom-2"
+      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden lg:before:top-4 lg:before:right-[calc(-50%+0.75rem)] lg:before:bottom-auto lg:before:left-[calc(50%+0.75rem)] lg:before:h-px lg:before:w-auto lg:before:translate-x-0"
       data-step={step.key}
       data-state={step.state}
       aria-current={step.state === "current" ? "step" : undefined}
     >
-      <Collapsible>
-        <CollapsibleTrigger
-          className={cn(
-            STEP_GRID,
-            "group/trigger min-h-11 w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 motion-reduce:transition-none lg:min-h-8 lg:py-1",
-          )}
-        >
-          <StepDot state={step.state} />
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span
-              className={cn(
-                "min-w-0 text-sm text-pretty",
-                step.state === "upcoming" && "text-muted-foreground",
-                step.state === "current" && "font-medium",
-                step.state === "failed" && "text-destructive",
-              )}
-            >
-              {copy.title}
-              <span className="sr-only">, {stateLabel(step.state)}</span>
-            </span>
-            <ChevronDown
-              className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/trigger:rotate-180 motion-reduce:transition-none"
-              aria-hidden="true"
-            />
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={open ? details : undefined}
+        onClick={onToggle}
+        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none lg:flex lg:flex-col lg:items-center lg:gap-1 lg:px-1 lg:py-2 lg:text-center"
+      >
+        <StepDot state={step.state} />
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn(
+              "min-w-0 text-sm text-pretty",
+              step.state === "upcoming" && "text-muted-foreground",
+              (step.state === "current" || open) && "font-medium",
+              step.state === "failed" && "text-destructive",
+            )}
+          >
+            <span className="lg:hidden">{copy.title}</span>
+            <span className="hidden lg:inline">{copy.short}</span>
+            <span className="sr-only">, {stateLabel(step.state)}</span>
           </span>
-          <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums">
-            {elapsed !== null ? (
-              `+${duration(elapsed)}`
-            ) : step.at !== null ? (
-              <time dateTime={new Date(step.at * 1000).toISOString()}>{clock(step.at)}</time>
-            ) : (step.state === "upcoming" || step.state === "current") && usually !== undefined ? (
-              `usually ${usually}`
-            ) : since !== null ? (
-              <time dateTime={new Date(since * 1000).toISOString()}>since {clock(since)}</time>
-            ) : null}
-          </span>
-        </CollapsibleTrigger>
-        {failed && <p className="pb-1 pl-9 text-sm text-pretty text-destructive">{copy.failed}</p>}
-        {/* Under the title: 8px of padding, the dot, and the gap. */}
-        <CollapsibleContent className="flex flex-col gap-2 pr-2 pb-3 pl-9 text-sm">
-          <p className="text-pretty text-muted-foreground">{copy.hint}</p>
-          {step.at !== null && (
-            <p className="tabular-nums" data-testid="step-time">
-              {time(step.at)}
-              {elapsed !== null && <span className="text-muted-foreground"> · {duration(elapsed)} after sending</span>}
-            </p>
-          )}
-          {step.details.length > 0 && (
-            <DataList className="border-l pl-3">
-              {step.details.map((detail) => (
-                <DataItem key={detail.label} label={detail.label}>
-                  <DetailValue detail={detail} token={token} />
-                </DataItem>
-              ))}
-            </DataList>
-          )}
-        </CollapsibleContent>
-      </Collapsible>
+          <ChevronDown
+            className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded/trigger:rotate-180 motion-reduce:transition-none lg:hidden"
+            aria-hidden="true"
+          />
+        </span>
+        <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums lg:text-center lg:text-xs">
+          {elapsed !== null ? (
+            `+${duration(elapsed)}`
+          ) : step.at !== null ? (
+            <time dateTime={new Date(step.at * 1000).toISOString()}>{clock(step.at)}</time>
+          ) : (step.state === "upcoming" || step.state === "current") && usually !== undefined ? (
+            <><span className="lg:hidden">usually </span>{usually}</>
+          ) : since !== null ? (
+            <time dateTime={new Date(since * 1000).toISOString()}><span className="lg:hidden">since </span>{clock(since)}</time>
+          ) : null}
+        </span>
+      </button>
     </li>
+  );
+}
+
+/** An opened step: what it waits for, when it happened, and its data. */
+function StepDetails({ id, step, sent, token }: { id: string; step: Step; sent: number | null; token: StepToken }) {
+  const copy = STEP_COPY[step.key];
+  const elapsed = elapsedOf(step, sent);
+  return (
+    <section id={id} aria-label={`${copy.title}: details`} data-step-details={step.key}
+      className="flex flex-col gap-2 border-l-2 py-1 pl-3 text-sm">
+      <h5 className="font-medium">{copy.title}</h5>
+      <p className="text-pretty text-muted-foreground">{copy.hint}</p>
+      {step.at !== null && (
+        <p className="tabular-nums" data-testid="step-time">
+          {time(step.at)}
+          {elapsed !== null && <span className="text-muted-foreground"> · {duration(elapsed)} after sending</span>}
+        </p>
+      )}
+      {step.details.length > 0 && (
+        <DataList className="border-l pl-3">
+          {step.details.map((detail) => (
+            <DataItem key={detail.label} label={detail.label}>
+              <DetailValue detail={detail} token={token} />
+            </DataItem>
+          ))}
+        </DataList>
+      )}
+    </section>
   );
 }
 
@@ -306,29 +341,22 @@ export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
   return (
     <Subsection title="Ledger" id="ledger-title">
       <p className="text-sm text-pretty text-muted-foreground">
-        While <code className="font-mono text-[13px]">credited</code> or{" "}
-        <code className="font-mono text-[13px]">reversed</code>, a deposit nets to{" "}
-        <code className="font-mono text-[13px]">amount − amount_refunded − amount_reversed</code>; otherwise to 0.
-        Every <code className="font-mono text-[13px]">deposit.*</code> event carries these cumulative amounts, so
-        the result does not depend on the order events arrive in.
+        A deposit nets to its amount, less what was refunded and reversed.{" "}
+        <LearnMore anchor="the-balance-rule-and-event-ordering" topic="the balance rule" />
       </p>
-      <DataList data-testid="ledger" className="divide-y border-y">
-        <DataItem label="Status" className="font-mono text-[13px]">
-          {ledger.status}
+      {/* One type for the ledger: amounts in the text face with tabular figures, the status as the
+          API names it, in mono. */}
+      <DataList data-testid="ledger" className="divide-y border-y tabular-nums">
+        <DataItem label="Status">
+          <code className="font-mono text-mono">{ledger.status}</code>
         </DataItem>
-        <DataItem label="Amount" className="font-mono text-[13px] tabular-nums">
-          {ledger.amount === null ? "—" : dollars(ledger.amount)}
-        </DataItem>
-        <DataItem label="Refunded" className="font-mono text-[13px] tabular-nums">
-          {minusDollars(ledger.amount_refunded)}
-        </DataItem>
-        <DataItem label="Reversed" className="font-mono text-[13px] tabular-nums">
-          {minusDollars(ledger.amount_reversed)}
-        </DataItem>
-        <DataItem label="Nets to" className="font-mono text-[13px] font-semibold tabular-nums" data-testid="nets-to">
+        <DataItem label="Amount">{ledger.amount === null ? "—" : dollars(ledger.amount)}</DataItem>
+        <DataItem label="Refunded">{minusDollars(ledger.amount_refunded)}</DataItem>
+        <DataItem label="Reversed">{minusDollars(ledger.amount_reversed)}</DataItem>
+        <DataItem label="Nets to" className="font-semibold" data-testid="nets-to">
           {dollars(ledger.nets_to)}
         </DataItem>
-        <DataItem label="Your server's ledger" className="tabular-nums" data-testid="console-net">
+        <DataItem label="Your server's ledger" data-testid="console-net">
           {product === null || product.status === null
             ? "no order yet"
             : product.net === null
@@ -338,7 +366,7 @@ export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
                   .join("")})`}
         </DataItem>
         {product?.bonus != null && product.bonus !== 0 && (
-          <DataItem label="Bonus (this demo's)" className="tabular-nums" data-testid="console-bonus">
+          <DataItem label="Bonus (this demo's)" data-testid="console-bonus">
             {signedDollars(product.bonus)}, its promotion's share of what the credit nets to
           </DataItem>
         )}
@@ -349,6 +377,8 @@ export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
 
 /** The webhook events the product's server received; their ids where there is room. */
 export function EventsLog({ events }: { events: WebhookEvent[] }) {
+  // The latest events (the log runs oldest first); the rest on request.
+  const recent = useShowAll(events, 5, false);
   return (
     <Subsection title="Webhook events received" id="events-title">
       {events.length === 0 ? (
@@ -366,10 +396,10 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {events.map((event) => (
+            {recent.shown.map((event) => (
               <TableRow key={event.id} data-testid="webhook-event">
-                <TableCell className="font-mono text-[13px]">{event.type}</TableCell>
-                <TableCell className="hidden md:table-cell">
+                <TableCell className="font-mono text-mono">{event.type}</TableCell>
+                <TableCell className="hidden whitespace-normal md:table-cell">
                   <Hash value={event.id} />
                 </TableCell>
                 <TableCell className="text-muted-foreground tabular-nums" title={time(event.received_at)}>
@@ -381,22 +411,25 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
           </TableBody>
         </Table>
       )}
+      {recent.toggle}
     </Subsection>
   );
 }
 
 /** The product's API requests: sent from its server with its restricted key, never the browser. */
 export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; title: string; id: string }) {
+  // The latest requests (oldest first); the rest on request.
+  const recent = useShowAll(exchanges, 4, false);
   return (
     <Subsection title={`${title} (${exchanges.length})`} id={id}>
       <p className="text-sm text-pretty text-muted-foreground">
-        Sent from the product's server with its restricted API key; the browser never holds it.
+        Sent by the product's server with its restricted key; the browser never holds it.
       </p>
       {exchanges.length === 0 ? (
         <Empty>None yet.</Empty>
       ) : (
         <ul className="flex flex-col divide-y border-y">
-          {exchanges.map((exchange, index) => {
+          {recent.shown.map((exchange, index) => {
             const url = new URL(exchange.url);
             return (
               <li key={`${exchange.method}-${exchange.url}-${index}`}>
@@ -406,7 +439,7 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
                       className="size-4 shrink-0 text-muted-foreground transition-transform group-open/exchange:rotate-90 motion-reduce:transition-none"
                       aria-hidden="true"
                     />
-                    <code className="min-w-0 flex-1 font-mono text-[13px] wrap-anywhere">
+                    <code className="min-w-0 flex-1 font-mono text-mono wrap-anywhere">
                       <span className="text-muted-foreground">{exchange.method}</span> {url.pathname}
                       {url.search}
                     </code>
@@ -426,6 +459,7 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
           })}
         </ul>
       )}
+      {recent.toggle}
     </Subsection>
   );
 }

@@ -4,7 +4,7 @@ import { useId, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { Asset, Network } from "./api.js";
-import { ChainIcon, TokenIcon } from "./chains.js";
+import { TokenIcon } from "./chains.js";
 import { ExplorerLink, TOUCH, errorMessage, wallet } from "./common.js";
 import { tokenName, tokens } from "./format.js";
 import type { PaidWith } from "./testTokens.js";
@@ -51,7 +51,7 @@ function useMint(network: Network, need: Need | null, using?: PaidWith) {
 }
 
 /** A faucet, off the page: its mark and name as a link, marked as leaving the page; 44px tall on a phone. */
-function FaucetLink({ href, icon, title, children }: { href: string; icon: ReactNode; title?: string; children: ReactNode }) {
+function FaucetLink({ href, icon, title, children }: { href: string; icon?: ReactNode; title?: string; children: ReactNode }) {
   return (
     <a href={href} target="_blank" rel="noreferrer" title={title}
       className="inline-flex min-h-11 items-center gap-2 text-sm font-medium sm:min-h-8 text-foreground underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground">
@@ -97,23 +97,20 @@ export function TestTokens({ network, need }: { network: Network; need: Need | n
   // gives (a test token, or gas).
   return (
     <div role="note" aria-labelledby={id} className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <h4 id={id} className="text-sm font-medium text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 lg:gap-x-3">
+        {/* From lg the row speaks for itself, and fits one line: its name is for screen readers. */}
+        <h4 id={id} className="text-sm font-medium text-muted-foreground lg:sr-only">
           Test tokens
         </h4>
         {mintable.map((each) => (
           <MintButton key={each.asset} token={each} mint={mint} label={label} />
         ))}
         {fromFaucet !== undefined && fromFaucet.faucet !== null && (
-          <FaucetLink href={fromFaucet.faucet} icon={<TokenIcon asset={fromFaucet.asset} className="size-4" />} title={`On the faucet, pick ${chain} as the network.`}>
+          <FaucetLink href={fromFaucet.faucet} title={`On the faucet, pick ${chain} as the network.`}>
             Circle {fromFaucet.symbol} faucet
           </FaucetLink>
         )}
-        {network.faucet !== null && (
-          <FaucetLink href={network.faucet} icon={<ChainIcon chainId={network.chain_id} className="size-4 rounded-full" />}>
-            {chain} ETH faucets
-          </FaucetLink>
-        )}
+        {network.faucet !== null && <FaucetLink href={network.faucet}>{chain} ETH faucets</FaucetLink>}
       </div>
       <p aria-live="polite" className="flex items-start gap-2 text-sm text-muted-foreground empty:hidden">
         {mint.isSuccess && (

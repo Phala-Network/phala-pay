@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
 import type { FlushCall, SweepGroup } from "./api.js";
 import { TokenIcon } from "./chains.js";
-import { Disclosure, Empty, ExplorerLink, TOUCH, downloadJson, errorMessage, wallet } from "./common.js";
+import { Disclosure, Empty, ExplorerLink, LearnMore, TOUCH, downloadJson, errorMessage, useShowAll, wallet } from "./common.js";
 import { day, duration, time, tokens } from "./format.js";
 import { useSweeps } from "./queries.js";
 
@@ -24,16 +24,14 @@ export function Sweeps({ ready }: { ready: boolean }) {
   const groups = view?.groups ?? [];
   const shared = new Set(groups.map((group) => group.treasury.toLowerCase())).size === 1 ? groups[0] : undefined;
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <p className="text-sm text-pretty text-muted-foreground">
-        Payments stay in their forwarder addresses until the merchant sweeps them with{" "}
-        <code className="font-mono text-[13px] text-foreground">factory.flush(treasury, salts, token)</code>, from its own
-        wallet or its Safe, and pays the gas; Phala Pay never sweeps. Each forwarder pays only the treasury fixed in its
-        address, so anyone may send it.
+        Payments wait in their forwarders until you sweep them, from your wallet or Safe.{" "}
+        <LearnMore anchor="17-balance-sweeps-and-the-forwarder-export" topic="sweeps" />
       </p>
       {shared !== undefined && (
-        <p className="text-sm" data-testid="treasury">
-          <span className="block text-muted-foreground">Treasury (Phala's staging Safe)</span>
+        <p className="flex flex-wrap items-center gap-x-2 text-sm" data-testid="treasury">
+          <span className="text-muted-foreground">Treasury, Phala's staging Safe</span>
           <ExplorerLink chainId={shared.chain_id} kind="address" value={shared.treasury} copy />
         </p>
       )}
@@ -104,6 +102,8 @@ function SweepRow({ group, showTreasury }: { group: SweepGroup; showTreasury: bo
   });
   const { symbol, decimals } = group;
   const flush = group.stale ? undefined : group.flush[0];
+  // The latest finalized sweep (newest first); the rest on request.
+  const recent = useShowAll(group.sweeps, 1);
   // Nothing was ever paid here: the row says only that.
   const empty = group.unswept_atomic === "0" && group.sweeps.length === 0;
   return (
@@ -111,10 +111,10 @@ function SweepRow({ group, showTreasury }: { group: SweepGroup; showTreasury: bo
       aria-label={`${symbol} on ${group.network}`}
       data-testid="sweep-group"
       data-stale={group.stale ? "true" : undefined}
-      className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 gap-y-3 py-5"
+      className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 py-3"
     >
       <TokenIcon asset={group.asset} className="mt-0.5 size-6" />
-      <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-w-0 flex-col gap-2">
         <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
           <div className="flex min-w-0 flex-col gap-1">
             <h4 className="text-sm font-semibold">
@@ -181,7 +181,7 @@ function SweepRow({ group, showTreasury }: { group: SweepGroup; showTreasury: bo
           <section aria-label={`Finalized sweeps of ${symbol} on ${group.network}`} className="flex flex-col gap-2">
             <h5 className="text-xs font-medium text-muted-foreground">Finalized sweeps</h5>
             <ul className="flex flex-col divide-y border-y text-sm">
-              {group.sweeps.map((sweep) => (
+              {recent.shown.map((sweep) => (
                 <li key={sweep.id} data-testid="sweep" className="flex flex-col gap-1 py-3">
                   <p className="flex flex-wrap justify-between gap-x-4 tabular-nums">
                     <span className="font-medium">{tokens(sweep.amount_atomic, symbol, decimals)}</span>
@@ -196,6 +196,7 @@ function SweepRow({ group, showTreasury }: { group: SweepGroup; showTreasury: bo
                 </li>
               ))}
             </ul>
+            {recent.toggle}
           </section>
         )}
       </div>
