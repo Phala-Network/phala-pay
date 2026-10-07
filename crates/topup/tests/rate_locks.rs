@@ -1418,6 +1418,8 @@ async fn caps_are_per_account_and_mode_and_expiry_releases_them() -> Result<()> 
             })
         ));
         cancel_lock(&database.app_pool, &first, customer_lock.id).await?;
+        finalize_chain_past_now(&database.app_pool).await?;
+        ensure!(locks::expire_once(&database.app_pool, &test_routes()).await? == 1);
 
         // The account's open credit is capped per mode, and a test quote never uses live
         // headroom: the test cap fills first, and the live cap then still admits its own.
@@ -1721,6 +1723,7 @@ async fn the_client_view_reports_the_credit_of_a_spot_valued_underpayment() -> R
         let (product, product_key) = seed_product(pool, "phala-cloud").await?;
         seed_account(pool, product.id, "underpaid").await?;
         const BASE: u64 = 8_453;
+        seed::initialize_dual_chain(pool, BASE).await?;
         seed::set_treasury(pool, product.id, true, BASE, seed::FIXTURE_TREASURY).await?;
         let mut route = test_route();
         route.chain.chain_id = BASE;
@@ -2177,6 +2180,10 @@ async fn exposure_is_exact_after_concurrent_create_consume_cancel_and_expire() -
         })
         .await
         .context("lifecycle operations never completed")??;
+
+        // Cancellation reserves exposure until the dual scan catches up after the request.
+        finalize_chain_past_now(&database.app_pool).await?;
+        ensure!(locks::expire_once(&database.app_pool, &test_routes()).await? == ACCOUNTS as u64);
 
         // Per account: "keep" plus three new locks remain reserved.
         let open = exposure(&database.app_pool, "global").await?;

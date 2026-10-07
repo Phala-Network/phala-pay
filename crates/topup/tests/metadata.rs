@@ -136,6 +136,7 @@ async fn metadata_is_set_merged_unset_and_copied_from_quote_to_deposit() -> Resu
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let account = seed::create_account(
             pool,
             &NewAccount {

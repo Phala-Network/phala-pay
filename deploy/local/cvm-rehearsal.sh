@@ -160,7 +160,7 @@ trap 'exit 143' TERM
 
 # Trust only this run's certificate; HTTPS checks stay enabled in the SDK and HTTPX.
 mkdir "$TOPUP_TEST_TLS_DIR"
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=topup-tls \
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=critical,CA:FALSE' -subj /CN=topup-tls \
     -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub,DNS:*.rpc.test \
     -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
     -out "$TOPUP_TEST_TLS_DIR/cert.pem" >/dev/null 2>&1

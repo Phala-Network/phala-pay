@@ -16,13 +16,13 @@ use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 use topup::api::{AppState, PublicOrigin, VerificationKey};
-use topup::db::NewPendingTransfer;
+use topup::db::{self, NewPendingTransfer};
 use topup::locks::QuoteProvider;
 use topup::locks::pricing::ValidatedQuote;
 use topup::routes::RouteSet;
 use topup::scanner::{chain_routes, coverage_once, fast_once};
 use topup_adapters::attestation::DstackAttestor;
-use topup_adapters::chain::evm::{EvmClient, FinalizedReader};
+use topup_adapters::chain::evm::{ChainReader, EvmClient, FinalizedReader};
 use topup_core::money::{AtomicAmount, PRICE_SCALE, ScaledPrice};
 use topup_core::route::RouteFile;
 use tower::ServiceExt;
@@ -126,7 +126,11 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     // Only non-zero transfers of the routed token are requested and stored.
     ensure!(
         pending_rows(pool).await? == 2,
-        "unexpected head scan {scan:?}"
+        "unexpected head scan {scan:?}, addresses={:?}, logs={:?}",
+        db::list_scan_addresses(pool, CHAIN_ID).await?,
+        reader
+            .transfer_logs_to(&[lock_address, other_quote], 1, 1000)
+            .await?
     );
     ensure!(
         outbox_rows(pool).await? == 0,

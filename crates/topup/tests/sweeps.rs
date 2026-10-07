@@ -368,7 +368,7 @@ async fn a_forwarder_mismatch_freezes_crediting_on_the_chain() -> Result<()> {
             let third = chain.seed_address(8).await?;
             chain.pay(third.forwarder)?;
             chain.finalize()?;
-            chain.scan().await?;
+            ensure!(chain.scan().await.is_err(), "frozen chain accepted a scan");
             ensure!(chain.count("SELECT count(*) FROM deposits").await? == 2);
             Ok(())
         })

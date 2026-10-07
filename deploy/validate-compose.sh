@@ -65,7 +65,7 @@ jq -e --slurpfile service "$tmp/service.json" '
 
 # The template is the service without dstack-ingress, topup published on 80, and the deploy form's
 # values at runtime: topup's origin and admin key from its environment, its own topup.yaml
-# (staging's routes and providers), the backup location, and no keyed provider.
+# (staging's routes and providers), the backup location, and the same sealed RPC keys.
 jq -e --slurpfile service "$tmp/service.json" '
     def normal: del(.services["dstack-ingress", "restore-check"], .services.topup.ports)
         | .services.topup.command |= .[0:6]
@@ -80,8 +80,8 @@ jq -e --slurpfile service "$tmp/service.json" '
     fail "the template variant differs from the service in more than its declared changes"
 jq -j '.configs | to_entries[] | select(.key | startswith("topup_")) | .value.content' \
     "$tmp/template.json" | sed -n '/^routes:$/,$p' |
-    cmp -s - <(sed -n '/^routes:$/,$p' "$staging/topup/topup.yaml") ||
-    fail "the template's routes must be staging's"
+    cmp -s - <(sed -n '/^routes:$/,$p' "$staging/topup/topup.yaml" | sed 's/, twap: { max_sample_age_s: 900, max_sample_jump_bps: 1100 }//') ||
+    fail "the template's routes must match staging except its PHA sampling limits"
 
 # The reference product calls staging's topup and pins its keys there; its demo API allows only
 # the website's origin. Its chains are Sepolia and Base Sepolia, each with a committed keyless https

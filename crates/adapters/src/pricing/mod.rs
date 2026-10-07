@@ -74,6 +74,10 @@ pub trait PriceSource: Send + Sync {
     async fn quote_since(&self, _arrived: tokio::time::Instant) -> Result<PriceQuote, PriceError> {
         self.quote_fresh().await
     }
+    /// Sample once for a shared scheduled tick, without consuming quote snapshot capacity.
+    async fn sample_since(&self, _arrived: tokio::time::Instant) -> Result<PriceQuote, PriceError> {
+        self.sample().await
+    }
     /// A scheduled sample is independent of quote capacity.
     async fn sample(&self) -> Result<PriceQuote, PriceError> {
         self.quote_fresh().await

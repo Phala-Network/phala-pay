@@ -620,13 +620,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_cannot_substitute_a_different_evidence_block() {
+    async fn source_cannot_pin_before_the_payment() {
         let mut route = route(SanctionsAnswer::Clear, SanctionsAnswer::Clear);
         route.sanctions = Arc::new(FixedSanctions(SanctionsResult {
             block_hash: None,
             provider_a: SanctionsAnswer::Clear,
             provider_b: SanctionsAnswer::Clear,
-            block_number: 124,
+            block_number: 122,
         }));
         let result = route
             .evaluate(&deposit(amount(15)), pauses(&[], &[], &[]), bounds())
@@ -637,6 +637,6 @@ mod tests {
                 error: RetryError::InvariantViolation,
             }
         );
-        assert_eq!(result.evidence["error"], "sanctions_block_mismatch");
+        assert_eq!(result.evidence["error"], "sanctions_pin_before_payment");
     }
 }

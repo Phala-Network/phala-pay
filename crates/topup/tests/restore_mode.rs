@@ -108,6 +108,7 @@ struct Answer {
 impl Harness {
     async fn new(database: &TestDatabase) -> Result<Self> {
         let pool = database.app_pool.clone();
+        seed::initialize_dual_chain(&pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[91; 32]);
         let client_reads = Arc::new(topup::api::ClientReadLimiter::new(
             topup::client_secret::ClientSecretKey::new(topup_core::SecretKey32::new(
@@ -241,6 +242,16 @@ impl Harness {
         .bind(block_time)
         .execute(&self.pool)
         .await?;
+        sqlx::query("UPDATE chain_coverage SET through_block=$1,through_time=$2,updated_at=now() WHERE chain_id=1").bind(block).bind(block_time).execute(&self.pool).await?;
+        sqlx::query("UPDATE chain_checkpoints SET block_number=$1,block_time=$2 WHERE chain_id=1")
+            .bind(block)
+            .bind(block_time)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("UPDATE addresses SET dual_covered_through=$1 WHERE chain_id=1")
+            .bind(block)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 

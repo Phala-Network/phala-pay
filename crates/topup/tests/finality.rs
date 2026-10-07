@@ -155,6 +155,16 @@ async fn deposits_the_watch_keeps_waiting_on_do_not_starve_later_ones() -> Resul
     with_database(|context| {
         Box::pin(async move {
             let pool = &context.app_pool;
+            db::chain_reads::advance_checkpoint(
+                pool,
+                CHAIN_ID,
+                db::chain_reads::Boundary {
+                    number: 100,
+                    hash: block_hash(100),
+                    time: BLOCK_TIME,
+                },
+            )
+            .await?;
             let (_, customer) = seed::create_account_and_customer(
                 pool,
                 &NewAccount::named("finality"),

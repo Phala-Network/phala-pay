@@ -72,6 +72,6 @@ route config PR and Deploy `upgrade`. See [provider disagreement](provider-disag
 
 ## Done when
 
-Fresh sources satisfy every role, both RPC groups agree, sequencer grace has expired, deposits
+Fresh sources satisfy every role, read and verify endpoints agree, sequencer grace has expired, deposits
 advance with audited valuation evidence, and quotes are resumed:
 `admin POST "/v1/admin/routes/$ROUTE/resume" '{"scopes":["quotes"]}'`.

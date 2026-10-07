@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # Shared with the preflight regression test. topup, ok, fail and redact are caller functions.
+compose_topup() {
+    local candidate=$1 rendered=$2 sealed=$3 name unset=()
+    shift 3
+    while IFS= read -r name; do
+        unset+=(-u "$name")
+    done <"$sealed"
+    env "${unset[@]}" docker compose --env-file "$candidate" -f "$rendered" \
+        run --rm --no-deps topup topup "$@" /etc/topup/topup.yaml
+}
+
 check_rpc_endpoints() {
     local probe_dir=$1 reason
     if topup rpc check --config >"$probe_dir/healthy.json" 2>"$probe_dir/probe.err"; then

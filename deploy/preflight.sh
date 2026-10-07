@@ -107,17 +107,15 @@ jq -j --arg target /etc/topup/topup.yaml \
     | $root.configs[$name].content' "$tmp/compose.json" | sed 's/[$][$]/$/g' >"$tmp/topup.yaml"
 # RPC checks always use the rendered compose and candidate env, exactly as the CVM does.
 topup() {
-    local name values=() unset=()
+    local name values=()
     for name in "${!env[@]}"; do
-        unset+=(-u "$name")
         [[ "$name" == SENTRY_DSN || "$name" == TOPUP_RPC_*_KEY ]] || continue
         values+=("$name=${env[$name]}")
     done
     if [[ -n "${TOPUP:-}" && "$1" != rpc ]]; then
         env -i PATH="$PATH" "${values[@]}" "$TOPUP" "$@" /dev/stdin <"$tmp/topup.yaml"
     else
-        env "${unset[@]}" docker compose --env-file "$env_file" -f "$compose" \
-            run --rm --no-deps topup topup "$@" /etc/topup/topup.yaml
+        compose_topup "$env_file" "$compose" "$tmp/sealed" "$@"
     fi
 }
 secrets=()

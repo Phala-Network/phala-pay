@@ -32,6 +32,8 @@ impl RpcTlsProxy {
                     "/CN=localhost",
                     "-addext",
                     "subjectAltName=DNS:localhost,IP:127.0.0.1",
+                    "-addext",
+                    "basicConstraints=critical,CA:FALSE",
                     "-keyout",
                 ])
                 .arg(&key)

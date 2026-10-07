@@ -1146,6 +1146,8 @@ impl FastChain {
     }
 
     async fn watch(&self) -> Result<topup::finality::WatchStats> {
+        let verify = FinalizedReader::new(Arc::new(EvmClient::new(&self.anvil.rpc_url)?));
+        topup::checkpoint::advance(&self.pool, self.chain_id, &self.reader, &verify).await?;
         Ok(self.watch.watch_once(self.chain_id).await?)
     }
 

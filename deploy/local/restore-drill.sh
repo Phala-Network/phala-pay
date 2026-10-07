@@ -1323,7 +1323,7 @@ for chain in sepolia base-sepolia; do
         [.asset.contract, .asset.symbol, .chain.sanctions_oracle] | @tsv' "$admin_dir/config.json")
 done
 # Real independent HTTPS names and verified certificates for both local sources.
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=rpc.test \
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=critical,CA:FALSE' -subj /CN=rpc.test \
     -addext 'subjectAltName=DNS:*.rpc.test' -keyout "$admin_dir/rpc-key.pem" \
     -out "$admin_dir/rpc-cert.pem" >/dev/null 2>&1
 cp "$admin_dir/config.json" "$admin_dir/topup.json"

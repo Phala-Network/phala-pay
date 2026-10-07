@@ -1,38 +1,7 @@
-# RPC queue query plans
+# Concurrent migration recovery
 
-Status: implemented in v0.8.0; query-plan and migration recovery evidence.
-
-The database/API audit uses PostgreSQL 18.6 and SQLx 0.9.0. The reproducible test is
-[`rpc_query_plans.rs`](../../crates/topup/tests/rpc_query_plans.rs). It creates an isolated migrated
-database, inserts 120,000 review windows and 120,000 reorg ranges across four chains and three
-epochs, and marks 90% complete. Half of the remaining observations have replay progress.
-`ANALYZE` collects statistics; the test keeps the planner's default settings. It rolls back each
-`EXPLAIN ANALYZE` update so the logical before/after data is identical.
-
-## Results
-
-The review query is `due_reviews` in `db/rpc.rs`: active epoch, unreviewed windows, ordered by
-`COALESCE(replayed_at, created_at), from_block, id`, limited to 16. The replay query is the exact
-`commit_head_window` update, with chain 1 and block range 1,000,000–3,000,000.
-
-| Query | Before | After |
-|---|---|---|
-| Review | Bitmap heap scan through `rpc_window_reviews_pending`; 6,000 candidates, 4,000 removed by epoch filter; top-N sort | `rpc_window_reviews_due_idx` index scan; chain and epoch index conditions; 16 rows, no sort |
-| Review execution / shared buffer hits | 6.510 ms / 1,962 | 0.125 ms / 20 |
-| Reorg | Sequential scan of 120,000 rows, 119,666 removed | Bitmap index/heap scan through `rpc_reorg_ranges_pending_idx`, 334 matching rows |
-| Reorg execution / scan buffer hits | 14.569 ms / 1,466 | 2.469 ms / 251 |
-
-These are local warm-cache measurements, not a production latency guarantee. Update totals also
-include writes and trigger/index maintenance. The regression test asserts index validity, the
-absence of the redundant old review index, the review's sort-free scan, and the reorg index path;
-it does not assert timings. The test prints full `EXPLAIN (ANALYZE, BUFFERS)` output.
-
-The review index begins with `(chain_id, epoch)` and includes its full ordering expression, so
-`LIMIT 16` stops the index walk early. Its `reviewed_at IS NULL` predicate excludes completed
-history and its leading keys also serve pending review counts. The reorg index begins with
-`(chain_id, epoch)` and its next-block expression, with the same incomplete-range predicate as
-replay and pending-range counts. No additional count or watermark index is added: these leading
-keys and the existing watermark primary key already cover them.
+The retained N-1 queue indexes remain part of the expand-only compatibility schema. Current
+chain reads use dual coverage; the former review and replay query paths are removed.
 
 ## Concurrent migration behavior
 
@@ -46,9 +15,7 @@ SQLx's official source at the commit published in the 0.9.0 crates verifies both
 Each up/down file begins with that directive and contains exactly one concurrent create or drop.
 PostgreSQL runs multiple commands sent in one simple-query message in an implicit transaction
 ([protocol documentation](https://www.postgresql.org/docs/18/protocol-flow.html#PROTOCOL-FLOW-MULTI-STATEMENT)),
-so putting two concurrent statements into one nontransactional SQLx file still fails. The test
-actually undoes the three migrations through SQLx to the pre-index version, captures the baseline,
-then reapplies them and verifies that both indexes are valid. Existing applied migrations are
+so putting two concurrent statements into one nontransactional SQLx file still fails. The migration tests exercise the retained compatibility migrations and their recovery. Existing applied migrations are
 unchanged. The replacement review index is created before the old one is dropped; undo restores
 the old index before removing the replacement.
 
@@ -97,13 +64,10 @@ reviewed correction to the unexpected schema, outside automatic queue-index reco
 
 ## Reproduce
 
-Use the repository's database test setup with an isolated PostgreSQL 18 instance, then run:
+Use the isolated PostgreSQL setup in [CONTRIBUTING.md](../../CONTRIBUTING.md#rust-service), then run:
 
 ```sh
-CARGO_BUILD_JOBS=2 SQLX_OFFLINE=true CI=true cargo test --locked -p topup \
-  --test rpc_query_plans -- --nocapture --test-threads=1
+CARGO_BUILD_JOBS=2 SQLX_OFFLINE=true CI=true cargo test --locked -p topup --test database
 ```
 
-Set `OWNER_DATABASE_URL` and `DATABASE_URL` as described in
-[CONTRIBUTING.md](../../CONTRIBUTING.md#rust-service). The harness removes its own database and
-login role on completion.
+The harness removes its own database and login role on completion.

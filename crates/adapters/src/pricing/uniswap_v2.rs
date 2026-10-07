@@ -456,6 +456,10 @@ impl PriceSource for UniswapV2 {
         self.fetch(super::snapshot::SnapshotUse::Confirm, arrived)
             .await
     }
+    async fn sample_since(&self, arrived: tokio::time::Instant) -> Result<PriceQuote, PriceError> {
+        self.fetch(super::snapshot::SnapshotUse::Sample, arrived)
+            .await
+    }
     async fn sample(&self) -> Result<PriceQuote, PriceError> {
         self.fetch(
             super::snapshot::SnapshotUse::Sample,

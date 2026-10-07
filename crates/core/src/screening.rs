@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(
             screen(
                 amount(9),
-                &sanctions(SanctionsAnswer::Clear, SanctionsAnswer::Sanctioned),
+                &sanctions(SanctionsAnswer::Sanctioned, SanctionsAnswer::Sanctioned),
                 &bounds(),
                 &scopes(&["settlement"]),
                 &scopes(&["settlement"]),

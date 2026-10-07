@@ -59,7 +59,7 @@ wallet or Safe. Phala Cloud is an ordinary account. A deposit is credited at
 the route's confirmation (two blocks on Ethereum, about 30 seconds after paying) and watched to
 finality; the rare deposit a reorganization proves replaced is reversed with a signed
 `deposit.reversed`, which the merchant handles like a refund (one whose transaction leaves the
-chain with its nonce unspent stays credited and not final, with an alert, §7). There are two ways to deposit. A
+chain without positively proven replacement stays credited and not final, with an alert, §7). There are two ways to deposit. A
 **quote** fixes a price: the user states a USD amount, receives a locked price, an exact token
 amount, a single-use address, and a countdown, then pays. This is the checkout model of Coinbase
 Commerce and BitPay. A payment that does not match its quote (late, wrong amount, second
@@ -94,8 +94,8 @@ and the goods it sells).
 2. **Fast credit, recoverable reversal.** A deposit is recorded once its block reaches the
    route's confirmation on provider A and credited once both providers show the same log there
    (§8). A watch re-reads every deposit by its receipt until it is final: a re-included
-   transaction is followed, and only a transaction proven dropped (its nonce consumed by another)
-   or a transfer missing at finality makes a deposit `reversed`. The display-only pending view shows
+   transaction is followed, and only a known same-sender, same-nonce replacement independently
+   agreed finalized by both endpoints, or a transfer missing at finality makes a deposit `reversed`. The display-only pending view shows
    a transfer as seen within seconds of its block; it never creates, rejects, values, or credits
    anything.
 3. **Custody location is a chain fact, not a state.** A flush, sent by anyone, moves an
@@ -283,7 +283,7 @@ customers     id, account_id, livemode, client_reference_id, paused_scopes text[
               -- created by the customer's first quote or deposit address
               -- (`settlement` stops crediting: deposits wait in `confirmed`)
 quotes        id (qt_ + hex), account_id, livemode, customer_id, route, route_version, amount_atomic,
-              price_scaled, credit_minor, expires_at, status, consumed_by (deposit_id) UNIQUE,
+              price_scaled, credit_minor, expires_at, cancel_requested_at, status, consumed_by (deposit_id) UNIQUE,
               client_secret_hash, metadata jsonb, restore_id, settings_revision_id, terms jsonb
               -- restore_id: re-issued after a restore, lock never applied; terms: the resolved
               -- terms the quote was issued with, kept for good (§9, Payment settings)
@@ -320,8 +320,8 @@ deposits      id, account_id, livemode, customer_id, chain_id, tx_hash, receipt_
               UNIQUE (chain_id, tx_hash, receipt_log_index) WHERE state <> 'reversed'
               -- revision: deposits recorded at the position before this one, each reversed (§7)
               -- account, mode, and customer are the address's; log_index and the block columns are
-              -- evidence that follows re-inclusion; tx_from and tx_nonce prove a dropped
-              -- transaction; swept requires final_at; metadata starts as the quote's or the
+              -- evidence that follows re-inclusion; tx_from and tx_nonce identify known replacement
+              -- candidates; dual_verified_at records complete independently agreed evidence; swept requires final_at; metadata starts as the quote's or the
               -- deposit address's; exactly one of settings_revision_id (a revision of its account
               -- and mode) and settings_hold_id (the restore that held them): its binding (§9)
 transitions   id, deposit_id, from_state, to_state, attempt, evidence jsonb, created_at
@@ -438,11 +438,11 @@ once final, whatever the cap, or once earlier credits become final. It is still 
 later; nothing is rejected. A merchant selling what it cannot take back requires `finalized`
 confirmations in its payment settings instead (§9), which credits nothing before finality.
 
-**Finality watch.** Whenever the head loop publishes an advance of provider A's `finalized` (§8),
+**Finality watch.** Whenever dual coverage publishes an agreed checkpoint (§8),
 and every minute besides, the deposits of the chain that are neither final nor reversed, whose
 recorded block is at or below it, and whose recheck time (`finality_check_at`) has come are
-re-read on both providers by their transaction's receipt, once per provider (the block time and
-nonce come from the deposit), plus provider B's `finalized` once per pass; nothing is read while
+re-read independently on both endpoints by receipt, transaction and block header, with the
+agreed checkpoint as the finality boundary; nothing is read while
 no deposit is due. A pass claims deposits in pages of 500, oldest block first, at most 10 pages,
 with `FOR UPDATE SKIP LOCKED`, and moves each claimed deposit's recheck time a minute ahead as it
 claims it: a deposit the watch keeps waiting on (the providers disagree, the transaction is
@@ -463,8 +463,9 @@ new block's:
 
 A reversal is one transaction: the `reversed` transition with its evidence; `deposit.reversed`
 (event id `uuid_v5(NS, "deposit.reversed:" + deposit UUID)`) when the merchant was told of the
-deposit (`credited` or `rejected`); and a quote the deposit consumed opens again while its window
-lasts, or expires with `quote.expired`; its pending refunds without a transaction are canceled,
+deposit (`credited` or `rejected`); and a quote the deposit consumed always opens again with
+its reservation restored and no quote event. Coverage later expires or cancels it. Its pending
+refunds without a transaction are canceled,
 though none can exist while refunds require a final deposit (§12). The watch raises `TopupDepositReversed`. A reversed deposit is never claimed again,
 never swept, and not counted in custody reconciliation (§13).
 
@@ -1624,7 +1625,7 @@ linked to its runbook: `TopupDepositStateAgeExceeded` (age in state past the rou
 `alerts.stuck_after_s`), `TopupReconciliationMismatch`, `TopupLockExposureNearCap`,
 `TopupLockExpiryFailing`, `TopupUnsupportedInflows`, `TopupDepositReversed` (a deposit's
 transaction left the chain before finality: a chain-health signal), `TopupDepositPendingAfterReorg`
-(a deposit's transaction has been out of every block for an hour with its nonce unused),
+(a deposit's transaction has been out of every block for an hour without positive replacement proof),
 `TopupTreasurySanctioned` (a current treasury is listed; §9), `TopupDeliveredCreditSanctioned` (a
 credit delivered before a restore whose sender is now listed: the credit stands and its forwarder
 is never offered for a sweep; §14). Alerts
@@ -1644,19 +1645,15 @@ read-only rejection, measuring time to response headers, including middleware an
 waits; response-body streaming time is excluded. Buckets are 5, 10, 25, 50, 100, 250, 500 ms and
 1, 2.5, 5, 10, 30 s, plus infinity. Counters reset with the process.
 
-RPC operational alerts use the same Sentry tracing integration, fingerprints, runbook links and
-ten-minute repeat suppression as other alerts. `TopupRpcGroupUnavailable` fires after one minute
-without a serving candidate; recovery clears that timer. An independent cancellation-aware
-five-second monitor observes availability even while recovery probes or database refreshes wait,
-so an uninterrupted outage is detected within 70 seconds (observation plus alert polling). `TopupRpcChainFrozen` fires after a
-durable fork freeze. Quarantine, cooldown, upstream quota pressure and unclassified upstream
-errors emit `TopupRpcMemberQuarantined`, `TopupRpcMemberCooldown`, `TopupRpcQuotaPressure` and
-`TopupRpcUnclassifiedError`. `TopupRpcAnchorUnavailable` reports a closed cursor safety gate;
-`TopupRpcRecoveryUnavailable` reports a failed durable identity read and leaves members unverified.
-`TopupRpcMetricsRefreshFailed` reports failed collection without stopping recovery or replacing
-last successful gauges with zeros. `topup_rpc_metrics_refreshed_at_seconds` distinguishes stale
-snapshots; before the first successful refresh durable gauges are absent. See
-[RPC health](../deploy/runbooks/rpc-health.md).
+RPC operational alerts use the same Sentry integration, fingerprints, runbook links and
+repeat suppression as other alerts. Endpoint failures make only their chain or price feature
+not-ready. `TopupRpcDisagreement` reports differing independent evidence;
+`TopupContractCodeMismatch` freezes an agreed incorrect deployment and
+`TopupContractCheckUnavailable` reports a pending check without freezing. Checkpoint and
+permanent evidence conflicts freeze through `reconciliation_blocks`. An audited chain lift
+requires a fresh passing dual-source contract check. Coverage lag, lagging addresses, daily
+price budgets and provider run-rates are defined in [RPC alerts](../deploy/rpc-alerts.yaml),
+with recovery steps in [RPC health](../deploy/runbooks/rpc-health.md).
 
 ### Service objectives and measurement
 
@@ -1699,10 +1696,9 @@ freeze, `503 service_restoring`, and each reconciliation action); fast credit wi
 nothing; a transaction re-included in a later block keeps its deposit id and is followed, not
 reversed, when its block-wide `log_index` changes; a transaction replaced with the same nonce is
 reversed with one `deposit.reversed` and its quote reopened; a lagging provider B delays the
-credit; inclusion to `deposit.credited` under 30 s on 12 s blocks with the head loop at its
-production cadence); RPC cost (an idle chain polls only `eth_blockNumber`, a new block costs one
-`eth_getLogs` whatever the address count, a window of the dual finalized coverage costs one token-wide
-request, an address issued mid-run is scanned from the next block without a gap); tenancy
+credit; independent receipt fields agree before credit; the 60-second discovery cadence and
+bounded dual coverage commit only scanned ranges, with errors aborting the range and address
+reissues catching up before negative decisions). Tenancy
 (`404` across accounts and modes), API keys, restricted key permissions, treasuries (EOA, Safe
 v1.4.1 messages and `SignMessageLib`), webhook endpoints and fair delivery, refunds, deposit
 addresses, metadata, and the exposure cap. The suite's shared route fixture credits at `finalized`, so it also checks

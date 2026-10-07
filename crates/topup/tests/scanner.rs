@@ -33,6 +33,9 @@ struct Reader {
     error: bool,
     forged_header: bool,
     requests: Mutex<Vec<(Vec<Address>, u64, u64)>>,
+    factory: Option<FactoryReceipt>,
+    receipt_reads: Mutex<usize>,
+    factory_reads: Mutex<usize>,
 }
 impl Reader {
     fn new(head: u64) -> Self {
@@ -43,6 +46,9 @@ impl Reader {
             error: false,
             forged_header: false,
             requests: Mutex::new(Vec::new()),
+            factory: None,
+            receipt_reads: Mutex::new(0),
+            factory_reads: Mutex::new(0),
         }
     }
 }
@@ -110,9 +116,11 @@ impl ChainReader for Reader {
         _: B256,
         _: Address,
     ) -> Result<Option<FactoryReceipt>, ChainError> {
-        Ok(None)
+        *self.factory_reads.lock().unwrap() += 1;
+        Ok(self.factory.clone())
     }
     async fn receipt_transfer(&self, tx: B256, position: u64) -> Result<ReceiptLookup, ChainError> {
+        *self.receipt_reads.lock().unwrap() += 1;
         Ok(match &self.receipt {
             Some(log) if log.tx_hash == tx && log.receipt_log_index == position => {
                 ReceiptLookup::Included {
@@ -220,7 +228,7 @@ async fn first_scan_includes_creation_and_all_boundaries_end_at_scanned_e() -> R
                     }
                 })
                 .collect();
-            db::pending::commit_head_scan(&d.app_pool, 1, 100, 10000, &pending).await?;
+            db::commit_head_scan(&d.app_pool, 1, 100, 10000, &pending).await?;
             let result = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
             ensure!(result.cursor == 3099 && result.finalized == 10000);
             let coverage = db::chain_reads::coverage(&d.app_pool, 1).await?.unwrap();
@@ -500,4 +508,90 @@ async fn lagging_chunk_is_bounded_and_never_bulk_marks_unscanned_addresses() -> 
         let mut tx=d.app_pool.begin().await?;ensure!(!db::chain_reads::admit_address(&mut tx,1).await?);tx.rollback().await?;
         Ok(())
     })).await
+}
+
+#[tokio::test]
+async fn marked_deposits_are_skipped_but_existing_factory_records_are_always_reverified()
+-> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 100).await?;
+            let log = transfer(&address, 100);
+            let mut read = Reader::new(200);
+            let mut verify = Reader::new(200);
+            read.logs.push(log.clone());
+            read.receipt = Some(log.clone());
+            verify.receipt = Some(log);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            let event = FactoryLog {
+                tx_hash: B256::repeat_byte(0xbb),
+                log_index: 3,
+                block_number: 100,
+                block_hash: hash(100),
+                event: topup_adapters::chain::flush::FactoryEvent::Flushed(
+                    topup_adapters::chain::flush::DecodedFlushed {
+                        salt: address.salt,
+                        forwarder: address.address,
+                        treasury: address.treasury,
+                        token: route().asset.contract,
+                        amount: U256::from(1000),
+                    },
+                ),
+            };
+            db::commit_factory_logs(&d.app_pool, 1, std::slice::from_ref(&event)).await?;
+            let receipt = FactoryReceipt {
+                status: true,
+                block_number: 100,
+                block_hash: hash(100),
+                block_time: time(100),
+                origin: (Address::repeat_byte(4), 9),
+                logs: vec![event],
+            };
+            read.factory = Some(receipt.clone());
+            verify.factory = Some(receipt);
+            // Reissue resets the per-address marker; a verified deposit still needs no receipt call.
+            sqlx::query("UPDATE addresses SET created_block=99 WHERE id=$1")
+                .bind(address.id)
+                .execute(&d.app_pool)
+                .await?;
+            read.receipt = None;
+            verify.receipt = None;
+            let before = *read.receipt_reads.lock().unwrap();
+            verify.factory.as_mut().unwrap().origin.1 += 1;
+            ensure!(
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2)
+                    .await
+                    .is_err()
+            );
+            ensure!(marker(d, address.id).await?.is_none());
+            ensure!(
+                *read.factory_reads.lock().unwrap() == 1
+                    && *verify.factory_reads.lock().unwrap() == 1
+            );
+            verify.factory = read.factory.clone();
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 3).await?;
+            ensure!(*read.receipt_reads.lock().unwrap() == before);
+            ensure!(
+                *read.factory_reads.lock().unwrap() == 2
+                    && *verify.factory_reads.lock().unwrap() == 2
+            );
+            ensure!(marker(d, address.id).await? == Some(200));
+            // Both endpoints agreeing on a contradiction of insert-only evidence freezes the chain.
+            sqlx::query("UPDATE addresses SET created_block=98 WHERE id=$1")
+                .bind(address.id)
+                .execute(&d.app_pool)
+                .await?;
+            read.factory.as_mut().unwrap().logs.clear();
+            verify.factory = read.factory.clone();
+            ensure!(
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 4)
+                    .await
+                    .is_err()
+            );
+            ensure!(topup::reconciler::chain_is_blocked(&d.app_pool, 1).await?);
+            Ok(())
+        })
+    })
+    .await
 }

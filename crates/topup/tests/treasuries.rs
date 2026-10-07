@@ -1250,6 +1250,7 @@ struct Fixture {
 
 impl Fixture {
     async fn new(pool: &sqlx::PgPool, contracts: Contracts) -> Result<Self> {
+        seed::initialize_dual_chain(pool, 1).await?;
         let account = seed::create_account(
             pool,
             &NewAccount {

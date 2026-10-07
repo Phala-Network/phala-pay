@@ -407,5 +407,15 @@ pub async fn initialize_dual_chain(pool: &PgPool, chain: u64) -> Result<(), sqlx
             time: chrono::DateTime::UNIX_EPOCH,
         },
     )
+    .await?;
+    topup::db::chain_reads::advance_checkpoint(
+        pool,
+        chain,
+        topup::db::chain_reads::Boundary {
+            number: 0,
+            hash: B256::ZERO,
+            time: chrono::DateTime::UNIX_EPOCH,
+        },
+    )
     .await
 }

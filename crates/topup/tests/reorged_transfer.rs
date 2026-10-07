@@ -568,6 +568,18 @@ impl Scenario {
     }
 
     async fn watch(&self) -> Result<WatchStats> {
+        let head = self.chain.finalized_head().await?;
+        let (hash, time) = self.chain.header(head.number).await?;
+        db::chain_reads::advance_checkpoint(
+            &self.pool,
+            CHAIN_ID,
+            db::chain_reads::Boundary {
+                number: head.number,
+                hash,
+                time,
+            },
+        )
+        .await?;
         Ok(self.watch.watch_once(CHAIN_ID).await?)
     }
 

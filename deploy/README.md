@@ -286,9 +286,9 @@ hash. The sealed names are:
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, the object store's token (declared in
   [compose.yaml](compose.yaml));
 - `SENTRY_DSN`, required for production; staging and templates may leave it empty to turn Sentry off;
-- a `TOPUP_RPC_<ID>_KEY` per keyed [RPC provider](#rpc-providers), declared in the environment's
-  `compose.yaml` overlay. It is the API key topup puts in place of `{key}` in the provider's
-  attested URL. Phala's staging has keyless providers and declares none.
+- `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`, declared in each environment's
+  `compose.yaml` overlay. Each replaces `{key}` in its endpoint's attested URL, including
+  staging's route and price chains.
 
 Each line is `NAME=VALUE`, the value as is. The Phala Cloud CLI reads the file as dotenv does, which
 would cut a value at `#` and strip quotes and surrounding whitespace, so preflight refuses a value
@@ -317,13 +317,15 @@ with the keys.
 
 The CVM restarts, `/healthz` answers, and backups have started once a WAL segment younger than two
 minutes is listed (`aws s3 ls "${WALG_S3_PREFIX%/}/wal_005/" --endpoint-url "$AWS_ENDPOINT" | tail -1`).
-Re-seal the same way whenever a secret changes; never change a setting with `envs update`.
+Re-seal the complete secret set the same way whenever a secret changes, including unchanged
+names. A partial update can unset another chain's credentials. Never change an attested setting
+with `envs update`.
 
 **A new sealed name** (a new keyed provider's `TOPUP_RPC_<ID>_KEY`) is not among the CVM's allowed
 names, which Deploy `upgrade` keeps, so after the upgrade it would be unset and topup would refuse
 to start (a `{key}` without a key). Once, before that upgrade, run only the `envs update` above with
 `.env.ENV` holding the new compose's sealed names: the running compose ignores the new name, and
-preflight against it would refuse it. A new keyless provider adds no name.
+preflight against it would refuse it. Every configured endpoint requires its explicitly declared sealed key.
 
 ### Attested settings
 
@@ -381,7 +383,7 @@ renders the same way from
 `render.sh --template` renders the Phala Cloud template, a one-click testnet quick start
 ([self-hosting, "The Phala Cloud template"](../docs/self-hosting.md#the-phala-cloud-template)),
 from [environments/phala-cloud-template](environments/phala-cloud-template/topup): Phala's staging
-routes and keyless providers. Each release publishes it as `phala-cloud-template.yml`, and
+routes and the same sealed Ankr and Infura endpoint keys. Each release publishes it as `phala-cloud-template.yml`, and
 Phala Cloud's template, once published, is that file byte for byte.
 [compose.template.yaml](compose.template.yaml) removes `dstack-ingress` and `restore-check`, and
 topup publishes `80:8080`, which the Phala Cloud gateway serves as

@@ -308,7 +308,7 @@ the token's price risk from the payment until you sell it.
   exactly `amount`; `exchange_rate` is the locked price in USD per token with 8 decimal places;
   times are Unix seconds.
 - `status` is `open`, `complete` (a matching payment consumed it), `expired`, or `canceled`. A
-  quote stays `open` past `expires_at` until the finalized chain passes it, so a payment mined in
+  quote stays `open` past `expires_at` until both endpoints cover its address beyond that time, so a payment mined in
   time is never reported as expired: hide the address once `expires_at` has passed and offer a
   new quote.
 - `payment` is what the waiting screen shows once a transfer is seen on chain, display only:
@@ -321,7 +321,9 @@ the token's price risk from the payment until you sell it.
 - `metadata` holds your own key/value pairs, such as your order id; the deposit that pays the
   quote starts with a copy (§1.4).
 - `GET /v1/quotes/{id}` resumes a checkout; `POST /v1/quotes/{id}/cancel` cancels an unpaid
-  quote, after which any payment to its address is credited at spot.
+  quote by setting `cancel_requested_at` and ending its payment window. The response stays
+  `open`; coverage later completes cancellation with `quote.canceled`. An in-window payment
+  discovered afterwards consumes the quote normally. Hide the payment address after requesting cancellation.
 - A quote above the remaining open exposure fails with `400 exposure_cap_exceeded`; its message
   states what is left.
 
@@ -335,9 +337,14 @@ verbatim:
 | `amount_too_large` (400) | The amount is above the maximum for one payment; split it. |
 | `exposure_cap_exceeded` (400) | Too many unpaid quotes are open; pay or wait for one to expire, or enter a smaller amount. |
 | `paused`, `chain_frozen` (400) | Crypto top-ups are temporarily unavailable. |
-| `unavailable`, `service_restoring` (503), `rate_limit`, `customer_rate_limit` (429) | Try again in a minute (`Retry-After` says how long). |
+| `price_unavailable`, `unavailable`, `service_restoring` (503), `rate_limit`, `customer_rate_limit` (429) | Try again in a minute (`Retry-After` says how long). |
 
-Semantics (spread, tolerance, expiry by finalized chain time, exposure caps) are
+Fresh quote snapshots have a hard daily cap of 100 per price chain and environment. Exhaustion
+returns retryable `503 price_unavailable`; the service never substitutes a stale price. Manual
+transfers are discovered every 60 seconds; dual coverage catches omissions and completes quote
+expiry or cancellation within finality plus up to 10 minutes.
+
+Semantics (spread, tolerance, expiry by dual coverage time, exposure caps) are
 [architecture §9](architecture.md#9-quotes).
 
 **Recompute every address before you show it.** A quote's address salt is
@@ -465,7 +472,7 @@ locally ([deploy/sandbox/README.md](../deploy/sandbox/README.md#scenarios)).
 | Below your `min_amount` | `rejected(below_minimum)`. |
 | Outside your `min_deposit_atomic`..`max_deposit_atomic`, or credit overflow | `rejected(out_of_bounds)` or `rejected(out_of_range)`. |
 | Sanctioned sender | `rejected(sanctioned)`; not refundable. |
-| Transaction dropped before finality (another transaction took its nonce), or its transfer is gone at finality | Deposit `reversed`; `deposit.reversed` if you were told of it (credited or rejected): its `amount_reversed` takes the whole credit back (§2.3). A quote it completed opens again while its window lasts, otherwise expires. A transaction re-included in another block keeps its deposit id and is not reversed. |
+| Known same-sender, same-nonce replacement agreed finalized by both endpoints, or its transfer is gone at finality | Deposit `reversed`; `deposit.reversed` if you were told of it (credited or rejected): its `amount_reversed` takes the whole credit back (§2.3). A quote it completed always reopens with its reservation; coverage later expires or cancels it. A transaction re-included in another block keeps its deposit id and is not reversed. |
 | A payment made through a contract (a router, a swap output) whose transaction is re-included before finality against other state, so that it pays you another amount, or another of your addresses | The first deposit is `reversed` as above, and the transfer now in the final chain is a **new deposit with a new id**, credited (or rejected) through the usual events, already final. The new deposit's `replaces` names the reversed one, and the reversed one's `replaced_by` names it (both `null` when the other deposit is in another account or mode). If it pays the same quote, it completes that quote in the first deposit's place, with no `quote.expired` in between. The events of the two deposits can arrive in any order (a new deposit's `deposit.rejected` can even come before the old one's `deposit.reversed`): apply each through the balance rule (§2.3), which nets the customer to what the final chain paid whatever the order. A plain transfer of a routed token cannot change this way: routes never take fee-on-transfer or rebasing tokens. |
 | You refuse the credit (for example a closed customer) | Deposit `credited`; you hold it and refund it (§2.4). |
 
@@ -1086,7 +1093,7 @@ Standard Webhooks, not `Stripe-Signature`, because you hold only the service's p
 | `refund.created` | A refund was requested (`POST /v1/refunds`, §3). | The refund, `status: "pending"` |
 | `refund.updated` | A refund changed: marked paid, canceled (by you before `mark_paid`), succeeded or failed, or its `metadata`; `data.previous_attributes` names what changed. | The refund |
 | `refund.failed` | The transaction attached with `mark_paid` does not pay the refund: final without paying it, dropped, or never seen (§3); one event per refund, beside its `refund.updated`. Create a new refund to try again. | The refund, `status: "failed"` with its `failure_reason` |
-| `quote.canceled` | A quote was canceled (`POST /v1/quotes/{id}/cancel`); later payments to its address are credited at spot. | The quote, `status: "canceled"` |
+| `quote.canceled` | Dual coverage completed a requested cancellation; payments outside its shortened window are credited at spot. | The quote, `status: "canceled"` |
 | `quote.expired` | The finalized chain passed `expires_at` with the quote unpaid. | The quote |
 | `treasury.created` | A treasury was proven (§1.6): `active` at once for a chain's first one and in test mode, else `pending` until `effective_at`. Cancel a change you did not request. | The treasury |
 | `treasury.updated` | A pending treasury took effect (`status: "active"`), a newer one replaced it (`status: "replaced"`), or crediting of it was paused or resumed (`crediting_paused`, `crediting_paused_by`); `data.previous_attributes` has the former values. | The treasury |
@@ -1212,14 +1219,10 @@ POST /v1/refunds/re_…/mark_paid
 - **Once marked paid, a refund cannot be canceled** (`400 refund_unexpected_state`): the attached
   transaction may still be mined, and a second refund would pay the customer twice. It stays
   `pending`, holding its reservation, until it `succeeded`, or `failed` because the transaction is
-  proven not to pay it: final without the transfer (above); `transaction_dropped`, when neither
-  provider has it in a block and, at `finalized` on both, its sender's nonce was used by another
-  transaction (you replaced or canceled it in your wallet), so it can never be mined; or
-  `transaction_not_found`, when neither provider has ever returned the transaction within 24 hours
-  of `mark_paid` (a mistyped hash, or one never broadcast; do not broadcast it afterwards). Then
-  request a new refund. To replace a stuck refund transaction, send the replacement with the same
-  nonce: once the replacement is final, the original is `transaction_dropped`, and a replacement
-  that pays the refund can be attached to the new refund.
+  proven not to pay it: final without the transfer (above); or `transaction_not_found`, when
+  neither provider has ever returned the transaction within 24 hours of `mark_paid` (a mistyped
+  hash, or one never broadcast; do not broadcast it afterwards). An observed transaction that
+  disappears stays pending with its reservation. Sender nonce changes cannot prove it dropped.
 - `POST /v1/refunds/{id}/cancel` cancels a pending refund that has no transaction attached and
   releases its reservation. `GET /v1/refunds/{id}` reads a refund.
 - When `deposit.refunded` arrives, apply its snapshot by the balance rule (§2.3): its

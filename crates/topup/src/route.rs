@@ -126,7 +126,7 @@ mod tests {
             format!("{:#x}", route.chain.contracts.implementation),
             "0x49f2f1f1a25269ea0c6ff2ab1c7b09dcbe9c5ba9"
         );
-        assert_eq!(route.chain.rpc_providers, ["provider-a", "provider-b"]);
+        assert_eq!(route.chain.rpc_providers, ["read", "verify"]);
         assert_eq!(route.pricing.primary[0].company(), "uniswap-v2-onchain");
         assert!(matches!(
             route.pricing.primary[0],
@@ -239,7 +239,7 @@ mod tests {
             pha.chain.confirmations,
             topup_core::route::ChainFamily::OpStack.default_confirmations()
         );
-        assert_eq!(pha.chain.rpc_providers, ["provider-a", "provider-b"]);
+        assert_eq!(pha.chain.rpc_providers, ["read", "verify"]);
         let sepolia = staging(DEPLOY_ROUTE).expect("staging route must pass");
         assert_eq!(pha.chain.contracts, sepolia.chain.contracts);
         assert_eq!(

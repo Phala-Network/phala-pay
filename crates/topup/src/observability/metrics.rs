@@ -249,6 +249,7 @@ pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> 
     let mut families = lag.collect();
     families.extend(addresses.collect());
     families.extend(used.collect());
+    families.retain(|family| !family.get_metric().is_empty());
     Ok(TextEncoder::new().encode_to_string(&families)?)
 }
 

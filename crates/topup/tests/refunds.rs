@@ -21,7 +21,7 @@ use sqlx::Connection as _;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use topup::api::{AppState, ClientReadLimiter, PublicOrigin, VerificationKey};
-use topup::db::{Account, NewDeposit};
+use topup::db::{self, Account, NewDeposit};
 use topup::deposit_addresses::{self, ChainContracts};
 use topup::outbox::{DeliveryConfig, DeliveryWorker};
 use topup::refunds::{
@@ -108,6 +108,7 @@ async fn a_pending_refund_cannot_be_marked_paid_after_a_sanctions_hit() -> Resul
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
             let (merchant, deposit, id, refund) = pending_credited_refund(pool).await?;
             let mut hit = database.owner_pool.begin().await?;
             sqlx::query("UPDATE deposits SET sanctions_hit_at = now() WHERE id = $1")
@@ -153,6 +154,7 @@ async fn a_paid_pending_refund_is_not_claimed_after_a_sanctions_hit() -> Result<
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
             let (merchant, deposit, id, refund) = pending_credited_refund(pool).await?;
             merchant.mark_paid(&id, REFUND_TX).await?;
             let paying = finalized(vec![transfer(
@@ -218,6 +220,7 @@ async fn a_sanctions_hit_during_verification_keeps_the_refund_pending() -> Resul
         support::with_database(|database| {
             Box::pin(async move {
                 let pool = &database.app_pool;
+                seed::initialize_dual_chain(pool, 1).await?;
                 let (merchant, deposit, id, refund) = pending_credited_refund(pool).await?;
                 merchant.mark_paid(&id, REFUND_TX).await?;
                 let paying = finalized(vec![transfer(
@@ -282,6 +285,7 @@ async fn a_missing_bound_route_version_never_uses_the_current_refund_floor() -> 
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
             let app = test_router(pool, &SigningKey::from_bytes(&[43; 32]));
             let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
             let deposit = seed_deposit(
@@ -345,6 +349,7 @@ async fn a_refund_paid_from_the_address_treasury_succeeds_at_finality() -> Resul
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[43; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -540,6 +545,7 @@ async fn a_refused_or_repeated_refund_call_holds_no_lock_once_it_answers() -> Re
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[49; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -627,6 +633,7 @@ async fn transfers_that_do_not_pay_the_refund_fail_it_and_release_the_reservatio
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[44; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -769,6 +776,7 @@ async fn a_deposit_address_refund_is_paid_from_that_networks_own_treasury() -> R
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[49; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -883,6 +891,7 @@ async fn a_transfer_log_pays_only_one_refund() -> Result<()> {
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[46; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -968,6 +977,7 @@ async fn only_an_unpaid_refund_is_canceled_and_missing_receipts_keep_the_reserva
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[48; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -1132,6 +1142,7 @@ async fn a_refund_transaction_no_provider_ever_returned_fails_after_a_day() -> R
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[49; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -1175,6 +1186,7 @@ async fn refunds_take_back_the_credit_pro_rata_in_each_deposit_snapshot() -> Res
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[51; 32]);
         let client_reads = Arc::new(ClientReadLimiter::default());
         let app = test_router_with(
@@ -1292,6 +1304,7 @@ async fn only_a_refundable_deposit_to_a_screened_destination_is_refunded() -> Re
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[61; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -1389,6 +1402,7 @@ async fn a_raised_refund_floor_does_not_strand_a_deposit_recorded_before() -> Re
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[62; 32]);
         // The account accepts nothing: the deposit is `asset_not_accepted` on version 1, whose
         // floor of 20 its 100 clears.
@@ -1531,6 +1545,7 @@ async fn refund_lists_page_with_stripe_cursors_and_match_individual_reads() -> R
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
             let admin_key = SigningKey::from_bytes(&[49; 32]);
             let app = test_router(pool, &admin_key);
             let merchant = Merchant::seed(pool, &app, "refund-pages").await?;
@@ -1732,6 +1747,16 @@ async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Res
     let Some(database) = TestDatabase::create().await? else {
         return Ok(());
     };
+    db::chain_reads::advance_checkpoint(
+        &database.app_pool,
+        1,
+        db::chain_reads::Boundary {
+            number: 100,
+            hash: B256::from(U256::from(100_u64)),
+            time: Utc::now(),
+        },
+    )
+    .await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(async move {
@@ -1800,6 +1825,7 @@ async fn worker_shutdown_cancels_a_hung_read() -> Result<()> {
     };
     let result = async {
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let admin_key = SigningKey::from_bytes(&[50; 32]);
         let app = test_router(pool, &admin_key);
         let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
@@ -1849,6 +1875,7 @@ async fn admin_nudge_reschedules_only_a_deposit_the_pump_claims() -> Result<()> 
         let admin_key = SigningKey::from_bytes(&[53; 32]);
         let (product, _) = seed_product(&database.app_pool, "phala-cloud").await?;
         let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
         let seed = |customer: &'static str, state| {
             seed_deposit(pool, product.id, customer, 100, state, None)
         };

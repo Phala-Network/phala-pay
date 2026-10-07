@@ -496,6 +496,9 @@ jobs:
       - name: Create and recreate rendered compose config consumers with Docker
         timeout-minutes: 5
         run: deploy/tests/compose-startup.sh
+      - name: Exercise RPC preflight through the real candidate Compose environment
+        timeout-minutes: 5
+        run: deploy/tests/preflight-compose.sh
       # Every tracked file with a shell shebang, with .shellcheckrc, but Phala Cloud's pre-launch
       # script, kept byte for byte as attested; streamed into the container, since the runner's
       # Docker daemon cannot bind-mount the workspace.
