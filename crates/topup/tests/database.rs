@@ -19,7 +19,6 @@ use topup::db::{
 };
 use topup::reconciler::{CheckName, Reconciler, ReconciliationChain, ReconciliationError};
 use topup::{heartbeat, restore};
-use topup_adapters::chain::evm::TransferLog;
 use topup_core::deposit::{DepositState, StepOutcome, WaitReason, next};
 use topup_core::identity::deposit_id;
 use topup_core::money::AtomicAmount;
@@ -449,28 +448,6 @@ impl UnavailableChain {
 
 #[async_trait]
 impl ReconciliationChain for UnavailableChain {
-    async fn finalized_head(&self) -> Result<u64, ReconciliationError> {
-        Self::error()
-    }
-
-    async fn transfer_logs_to(
-        &self,
-        _addresses: &[Address],
-        _from_block: u64,
-        _to_block: u64,
-    ) -> Result<Vec<TransferLog>, ReconciliationError> {
-        Self::error()
-    }
-
-    async fn token_balances(
-        &self,
-        _token: Address,
-        _addresses: &[Address],
-        _block: u64,
-    ) -> Result<Vec<U256>, ReconciliationError> {
-        Self::error()
-    }
-
     async fn factory_addresses(
         &self,
         _factory: Address,
@@ -1593,12 +1570,6 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
     with_legacy_database(|context| {
         Box::pin(async move {
             let pool = &context.owner_pool;
-            let ledger: Vec<(i64, Vec<u8>, i64)> = sqlx::query_as(
-                "SELECT version, checksum, compatibility_floor FROM topup_migration_compatibility \
-                 WHERE version <= 20261029030005 ORDER BY version",
-            )
-            .fetch_all(pool)
-            .await?;
             undo_legacy_indexes(pool, 20261029030005).await?;
             for sql in [
                 include_str!("../migrations/20261029040000_quote_list.up.sql"),
@@ -1626,6 +1597,12 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
             let before = objects().await?;
             ensure!(before.len() == 4 && before.iter().all(|(_, _, valid)| *valid));
             db::migrate(pool).await?;
+            let ledger: Vec<(i64, Vec<u8>, i64)> = sqlx::query_as(
+                "SELECT version, checksum, compatibility_floor FROM topup_migration_compatibility \
+                 WHERE version <= 20261029030005 ORDER BY version",
+            )
+            .fetch_all(pool)
+            .await?;
             ensure!(objects().await? == before, "completed index was rebuilt");
             let compatible: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM _sqlx_migrations m \

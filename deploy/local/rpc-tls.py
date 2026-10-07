@@ -25,11 +25,11 @@ def main() -> None:
         for role in ("read", "verify"):
             name = f"rpc-{chain_id}-{role}"
             host = f"{name}.rpc.test"
-            chain[role]["url"] = f"https://{host}:8443/{{key}}"
+            chain[role]["url"] = f"https://{host}:8443/?key={{key}}"
             services[name] = {
                 "image": args.image,
                 "entrypoint": ["python3", "/etc/rpc-tls/proxy.py"],
-                "command": ["--certificate", "/etc/rpc-tls/cert.pem", "--key", "/etc/rpc-tls/key.pem", "--upstream", upstream],
+                "command": ["--certificate", "/etc/rpc-tls/cert.pem", "--key", "/etc/rpc-tls/key.pem", "--upstream", upstream, "--bind", "0.0.0.0"],
                 "configs": [
                     {"source": "rpc_tls_proxy", "target": "/etc/rpc-tls/proxy.py"},
                     {"source": "rpc_tls_certificate", "target": "/etc/rpc-tls/cert.pem"},

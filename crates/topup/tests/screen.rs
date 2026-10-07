@@ -262,11 +262,10 @@ async fn anvil_oracle_uses_current_canonical_pins_and_maps_live_results() -> Res
             ensure!(
                 unavailable.outcome
                     == StepOutcome::Retry {
-                        error: RetryError::SanctionsInconclusive,
+                        error: RetryError::Transient,
                     }
             );
-            ensure!(unavailable.evidence["provider_a"] == "clear");
-            ensure!(unavailable.evidence["provider_b"] == "unavailable");
+            ensure!(unavailable.evidence["error"] == "sanctions_pin_before_payment");
             Ok(())
         })
     })

@@ -2584,6 +2584,8 @@ struct ScriptedState {
     head: u64,
     finalized: u64,
     transfer: Option<TransferLog>,
+    receipt: Option<TransferLog>,
+    time: DateTime<Utc>,
 }
 
 impl ScriptedChain {
@@ -2591,7 +2593,9 @@ impl ScriptedChain {
         *self.0.lock().expect("chain state") = ScriptedState {
             head,
             finalized,
+            receipt: transfer.clone(),
             transfer,
+            time: Utc::now(),
         };
     }
 
@@ -2604,7 +2608,7 @@ impl ChainReader for ScriptedChain {
     async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
         Ok(self.state(|state| match &state.transfer {
             Some(log) if log.block_number == number => (log.block_hash, log.block_time),
-            _ => (B256::ZERO, DateTime::UNIX_EPOCH),
+            _ => (B256::ZERO, state.time),
         }))
     }
 
@@ -2621,7 +2625,7 @@ impl ChainReader for ScriptedChain {
     async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
         Ok(FinalizedHead {
             number: self.state(|state| state.finalized),
-            time: Utc::now(),
+            time: self.state(|state| state.time),
         })
     }
 
@@ -2660,7 +2664,7 @@ impl ChainReader for ScriptedChain {
         tx_hash: B256,
         receipt_log_index: u64,
     ) -> Result<ReceiptLookup, ChainError> {
-        Ok(self.state(|state| match &state.transfer {
+        Ok(self.state(|state| match &state.receipt {
             Some(log) if log.tx_hash == tx_hash => ReceiptLookup::Included {
                 block_number: log.block_number,
                 block_hash: log.block_hash,
@@ -2668,16 +2672,18 @@ impl ChainReader for ScriptedChain {
                 status: true,
                 tx_from: log.tx_from,
                 tx_nonce: log.tx_nonce,
-                transfer: (log.receipt_log_index == receipt_log_index)
-                    .then(|| Box::new(log.clone())),
+                transfer: state
+                    .transfer
+                    .as_ref()
+                    .filter(|transfer| transfer.receipt_log_index == receipt_log_index)
+                    .map(|transfer| Box::new(transfer.clone())),
             },
             _ => ReceiptLookup::Missing,
         }))
     }
 
-    // Past the router transaction's nonce: a transaction no longer on chain was replaced.
     async fn nonce_at(&self, _account: Address, _block: u64) -> Result<u64, ChainError> {
-        Ok(8)
+        panic!("finality never searches sender nonces")
     }
 }
 
@@ -2942,8 +2948,7 @@ fn delivered_body(delivery: &Value) -> Result<Value> {
 }
 
 #[tokio::test]
-async fn a_reversed_deposit_and_its_successor_keep_their_identities_through_a_restore() -> Result<()>
-{
+async fn a_restored_unverified_reversed_record_freezes_on_canonical_contradiction() -> Result<()> {
     support::with_database(|database| {
         Box::pin(async move {
             let harness = Harness::new(database).await?;
@@ -3005,64 +3010,23 @@ async fn a_reversed_deposit_and_its_successor_keep_their_identities_through_a_re
                 imported.body
             );
 
-            // The rescan reads only the final transfer at the position: it is the second deposit
-            // again, with its id and link, and the first is the reversed deposit it replaced.
-            ensure!(pipeline.finalized_scan(&harness).await? == 1);
-            let recorded: Vec<(Uuid, String, i64, Option<Uuid>)> = sqlx::query_as(
-                "SELECT id, state, revision, replaces FROM deposits \
-                 WHERE chain_id = 1 AND tx_hash = $1 ORDER BY revision",
+            // A reconstructed permanent row has no dual marker. Canonical successor evidence
+            // contradicts that row, so F3 freezes rather than assuming the old fact was verified.
+            let before = db::chain_reads::coverage(&harness.pool, 1).await?;
+            ensure!(matches!(pipeline.finalized_scan(&harness).await, Err(_)));
+            ensure!(db::chain_reads::coverage(&harness.pool, 1).await? == before);
+            let check: String = sqlx::query_scalar(
+                "SELECT check_name FROM reconciliation_blocks WHERE scope='chain' AND chain_id=1",
             )
-            .bind(format!("{ROUTER_TX:#x}"))
-            .fetch_all(&harness.pool)
+            .fetch_one(&harness.pool)
             .await?;
+            ensure!(check == "unverified_evidence_mismatch");
+            ensure!(valuation(&harness, old).await?.0 == "reversed");
             ensure!(
-                recorded
-                    == vec![
-                        (old, "reversed".to_owned(), 0, None),
-                        (new, "detected".to_owned(), 1, Some(old)),
-                    ],
-                "{recorded:?}"
-            );
-            // Each deposit renders as the merchant last received it.
-            for (id, status, amount, replaces, replaced_by) in [
-                (&old_id, "reversed", 2_500, Value::Null, json!(new_id)),
-                (&new_id, "pending", 0, json!(old_id), Value::Null),
-            ] {
-                let read = harness
-                    .admin(
-                        Method::GET,
-                        &format!("/v1/admin/deposits/{id}"),
-                        &Value::Null,
-                    )
-                    .await?;
-                ensure!(read.status == StatusCode::OK, "{}", read.body);
-                ensure!(read.body["status"] == status, "{}", read.body);
-                ensure!(read.body["replaces"] == replaces, "{}", read.body);
-                ensure!(read.body["replaced_by"] == replaced_by, "{}", read.body);
-                if status == "reversed" {
-                    ensure!(read.body["amount"] == amount, "{}", read.body);
-                    ensure!(read.body["amount_reversed"] == amount, "{}", read.body);
-                }
-            }
-            // The second deposit is valued at its delivered credit, not at today's spot; nothing
-            // is sent again.
-            confirm(&harness, new, forwarder, 20_000_000).await?;
-            let restored = valuation(&harness, new).await?;
-            ensure!(
-                (restored.2.as_str(), restored.3.as_str()) == ("25000000", "2250"),
-                "{restored:?}"
-            );
-            let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM webhook_deliveries")
-                .fetch_one(&harness.pool)
-                .await?;
-            ensure!(queued == 0, "{queued} deliveries queued");
-            let status = harness
-                .admin(Method::GET, "/v1/admin/restore", &Value::Null)
-                .await?;
-            ensure!(
-                status.body["delivered_events"]["findings"] == json!([]),
-                "{}",
-                status.body
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM webhook_deliveries")
+                    .fetch_one(&harness.pool)
+                    .await?
+                    == 0
             );
             Ok(())
         })
@@ -3080,12 +3044,13 @@ async fn a_rejected_deposit_reversed_before_finality_round_trips_through_a_resto
             harness.scan_to(5, Utc::now()).await?;
             let pipeline = Pipeline::new(&harness)?;
 
-            // A token without a route is rejected unvalued; its transaction leaves the chain
-            // before finality, so the rejected deposit is reversed, still unvalued.
+            // A token without a route is rejected unvalued; its final receipt no longer has
+            // that transfer, so the rejected deposit is reversed, still unvalued.
             let transfer = router_transfer(UNROUTED_TOKEN, forwarder, 10, 0xaa, 100);
             pipeline.chain.set(12, 5, Some(transfer.clone()));
             pipeline.fast_scan(&harness, &transfer, address_id).await?;
-            pipeline.chain.set(30, 20, None);
+            pipeline.chain.set(30, 20, Some(transfer));
+            pipeline.chain.0.lock().expect("chain state").transfer = None;
             ensure!(pipeline.watch_once(&harness).await?.reversed == 1);
             harness.deliver().await?;
             let deposit = deposit_id(1, ROUTER_TX, 0);

@@ -1,12 +1,12 @@
 # The Phala Cloud template's topup configuration (docs/configuration.md): the six test routes and
-# the keyless providers of Phala's staging instance. It leaves out the public origin (the app's
+# the read/verify endpoints of Phala's staging instance. It leaves out the public origin (the app's
 # gateway domain) and the admin public key, known only at deploy time: `topup run` reads them from
 # DSTACK_APP_DOMAIN and TOPUP_ADMIN_PUBLIC_KEY (deploy/compose.template.yaml), parses them strictly
 # at startup, and they are not attested. A production instance attests them (docs/self-hosting.md).
 environment: testnet
 admin_key:
   id: admin/v1
-# Two keyless providers per chain, as on Phala's staging (deploy/phala.md, "RPC providers").
+# Independent Ankr read and Infura verify endpoints, with both sealed keys.
 rpc:
   - chain_id: 11155111
     read:

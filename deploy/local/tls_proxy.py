@@ -56,7 +56,7 @@ async def main() -> None:
     parser.add_argument("--certificate", type=Path, default=Path("/etc/test-tls/cert.pem"))
     parser.add_argument("--key", type=Path, default=Path("/etc/test-tls/key.pem"))
     parser.add_argument("--upstream", default="http://topup:8080")
-    parser.add_argument("--bind", default="0.0.0.0")
+    parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8443)
     args = parser.parse_args()
     upstream = urlsplit(args.upstream)

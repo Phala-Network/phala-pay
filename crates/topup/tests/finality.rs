@@ -92,13 +92,16 @@ impl ChainReader for ScriptedChain {
             return Ok(ReceiptLookup::Missing);
         }
         let block_number = 20;
+        let nonce: u64 = U256::from_be_bytes(tx_hash.0)
+            .try_into()
+            .expect("fixture nonce");
         Ok(ReceiptLookup::Included {
             block_number,
             block_hash: block_hash(block_number),
             status: true,
             block_time: BLOCK_TIME,
             tx_from: SENDER,
-            tx_nonce: 0,
+            tx_nonce: nonce,
             transfer: Some(Box::new(TransferLog {
                 tx_hash,
                 receipt_log_index,
@@ -107,7 +110,7 @@ impl ChainReader for ScriptedChain {
                 block_hash: block_hash(block_number),
                 block_time: BLOCK_TIME,
                 tx_from: SENDER,
-                tx_nonce: 0,
+                tx_nonce: nonce,
                 token: TOKEN,
                 from: SENDER,
                 to: RECIPIENT,
@@ -132,7 +135,7 @@ async fn insert(pool: &sqlx::PgPool, address_id: Uuid, index: u64, block: u64) -
                 log_index: 0,
                 receipt_log_index: 0,
                 tx_from: SENDER,
-                tx_nonce: 0,
+                tx_nonce: index,
                 is_final: false,
                 block_number: block,
                 block_hash: block_hash(block),

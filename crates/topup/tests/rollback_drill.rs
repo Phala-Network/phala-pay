@@ -298,10 +298,30 @@ async fn ready(service: &mut Service, origin: &str) -> Result<()> {
 async fn credited(database: &TestDatabase, tx: B256) -> Result<()> {
     wait_until("payment credited",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM deposits WHERE tx_hash=$1 AND state IN ('credited','swept'))").bind(format!("{tx:#x}")).fetch_one(&database.app_pool).await?)}).await
 }
+fn reconcile(
+    image: Option<&str>, config: &Path, database: &TestDatabase, tls: &support::tls::RpcTlsProxy,
+) -> Result<()> {
+    let mut command = if let Some(image) = image {
+        let mut command = Command::new("docker");
+        command.args(["run", "--rm", "--network", "host", "--add-host", "read-drill.test:127.0.0.1",
+            "--add-host", "verify-drill.test:127.0.0.1", "-e", &format!("DATABASE_URL={}", database.app_url),
+            "-v", &format!("{}:/etc/drill.json:ro", config.display()), image, "topup"]);
+        command
+    } else {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_topup"));
+        command.env("DATABASE_URL", &database.app_url).env("SSL_CERT_FILE", &tls.certificate)
+            .env("TOPUP_RPC_ANKR_KEY", "local-drill-key").env("TOPUP_RPC_INFURA_KEY", "local-drill-key");
+        command
+    };
+    command.args(["reconcile", "--config"]).arg(if image.is_some() { Path::new("/etc/drill.json") } else { config });
+    let output = command.output()?;
+    ensure!(output.status.success(), "reconciliation failed: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    Ok(())
+}
 /// PR 3 extends this fixture to write hint-recorded deposits and pending tasks before rollback.
 fn pr3_hint_extension_point() {}
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires verified published N-1 image; mandatory deploy rollback CI gate"]
 async fn published_image_round_trip() -> Result<()> {
     let image = std::env::var("TOPUP_ROLLBACK_IMAGE").context("published N-1 image required")?;
@@ -353,6 +373,15 @@ async fn published_image_round_trip() -> Result<()> {
         let first=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(8)?;credited(&database,first).await?;
         wait_until("N-1 finalized payment",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT final_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?)}).await?;
         previous.stop()?;
+        reconcile(Some(&image),&old_path,&database,&tls)?;
+        // Restore fixture: this already-issued address paid below its restored creation boundary.
+        // N must leave it absent until the real reissue lowers that boundary.
+        let historical=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;
+        anvil.mine(8)?;
+        let historical_receipt=cast(&anvil,&["receipt",&format!("{historical:#x}"),"--json"])?;
+        let historical_block=u64::from_str_radix(historical_receipt["blockNumber"].as_str().context("historical block")?.trim_start_matches("0x"),16)?;
+        sqlx::query("UPDATE addresses SET created_block=$2 WHERE deposit_address_id=$1")
+            .bind(da_id).bind(i64::try_from(historical_block+1)?).execute(&database.owner_pool).await?;
         topup::db::migrate(&database.owner_pool).await?;
         let mut current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;
         let second=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(8)?;
@@ -364,6 +393,8 @@ async fn published_image_round_trip() -> Result<()> {
         let expiry=merchant(&origin,&key,"/v1/quotes",json!({"client_reference_id":"expiry","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"})).await?;
         let expiry_id=topup::ids::parse(topup::ids::QUOTE,expiry["id"].as_str().unwrap()).unwrap();
         sqlx::query("UPDATE quotes SET expires_at=now()-interval '1 second' WHERE id=$1").bind(expiry_id).execute(&database.owner_pool).await?;
+        ensure!(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM deposits WHERE tx_hash=$1)")
+            .bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?,"restored history was recorded before reissue");
         let historic_block:i64=sqlx::query_scalar("SELECT block_number FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?;
         topup::deposit_addresses::reissue(&database.app_pool,&account,false,"round-trip",&[ChainContracts::of(&route)],ReissueTarget {version:Some(1),address:Some(forwarder)},Some(da_id),None,Some(Utc::now()-chrono::TimeDelta::hours(1)),&std::collections::BTreeMap::from([(1,u64::try_from(historic_block.saturating_sub(16))?)]),&Actor::system("rollback-drill"),"historical payment reissue").await?;
         ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_covered_through IS NULL FROM addresses WHERE deposit_address_id=$1").bind(da_id).fetch_one(&database.app_pool).await?);
@@ -397,17 +428,25 @@ async fn published_image_round_trip() -> Result<()> {
         let lifted=app.oneshot(support::signed_request(axum::http::Method::POST,"/v1/admin/reconciliation_blocks/chain:1/lift",serde_json::to_vec(&json!({"reason":"fresh dual check then audited rollback lift"}))?,"drill/admin",&ed25519_dalek::SigningKey::from_bytes(&[41;32]),Utc::now().timestamp())).await?;
         ensure!(lifted.status().is_success(),"fresh checked audited lift failed");
         let third=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(8)?;
-        previous.stop()?;previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;credited(&database,third).await?;
+        previous.stop()?;previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;credited(&database,third).await?;credited(&database,historical).await?;
+        send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&format!("[{salt}]"),&format!("{token:#x}")])?;
+        anvil.mine(16)?;
+        previous.stop()?;previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
+        wait_until("N-1 finality and sweep",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT count(*)=4 AND bool_and(final_at IS NOT NULL AND state='swept') FROM deposits").fetch_one(&database.app_pool).await?)}).await?;
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?==1);
         wait_until("N-1 indexed flush",||async {Ok(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM flushed").fetch_one(&database.app_pool).await?>0)}).await?;
         previous.stop()?;
+        reconcile(Some(&image),&old_path,&database,&tls)?;
         let unverified:bool=sqlx::query_scalar("SELECT dual_verified_at IS NULL FROM deposits WHERE tx_hash=$1").bind(format!("{third:#x}")).fetch_one(&database.app_pool).await?;ensure!(unverified);
         let mut final_current=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut final_current,&origin).await?;
         wait_until("N reverified N-1 deposits and address backfill",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT NOT EXISTS(SELECT 1 FROM deposits WHERE dual_verified_at IS NULL) AND NOT EXISTS(SELECT 1 FROM addresses a JOIN chain_coverage c USING(chain_id) WHERE a.dual_covered_through IS DISTINCT FROM c.through_block)").fetch_one(&database.app_pool).await?)}).await?;
         wait_until("coverage cancellation and expiry",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT bool_and(status IN ('expired','cancelled')) FROM quotes WHERE id=ANY($1)").bind(vec![expiry_id,topup::ids::parse(topup::ids::QUOTE,cancel["id"].as_str().unwrap()).unwrap()]).fetch_one(&database.app_pool).await?)}).await?;
-        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits").fetch_one(&database.app_pool).await?==3);
-        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM events WHERE type='deposit.credited'").fetch_one(&database.app_pool).await?==3);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits").fetch_one(&database.app_pool).await?==4);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM events WHERE type='deposit.credited'").fetch_one(&database.app_pool).await?==4);
+        ensure!(sqlx::query_scalar::<_,bool>("SELECT bool_and(final_at IS NOT NULL AND state='swept') FROM deposits").fetch_one(&database.app_pool).await?);
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM reconciliation_blocks").fetch_one(&database.app_pool).await?==0);
         final_current.stop()?;
+        reconcile(None,&current_path,&database,&tls)?;
         Ok(())
     }.await;
     let cleanup = database.cleanup().await;

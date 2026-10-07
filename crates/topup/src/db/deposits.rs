@@ -399,7 +399,7 @@ pub enum Evidence {
     /// Read at the route's confirmation, before finality (the per-block scan): only a position
     /// that never had a deposit. Such a read may be of a log a reorganization has since removed.
     Confirmed,
-    /// Read at or below `finalized` (the finalized backstop, the reconciler, restore rescans).
+    /// Read at or below `finalized` (dual coverage, finality successor evidence, restore rescans).
     Finalized,
     /// The transfer the finality watch found final at the position of `replaces`, which it
     /// reversed in the same transaction.

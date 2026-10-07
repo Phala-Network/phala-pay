@@ -2166,9 +2166,14 @@ async fn exposure_is_exact_after_concurrent_create_consume_cancel_and_expire() -
         {
             let pool = database.app_pool.clone();
             tasks.spawn(async move {
-                let mut expired = 0;
-                while expired < ACCOUNTS as u64 {
-                    expired += locks::expire_once(&pool, &test_routes()).await?;
+                while sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM quotes WHERE status='expired'",
+                )
+                .fetch_one(&pool)
+                .await?
+                    < ACCOUNTS as i64
+                {
+                    locks::expire_once(&pool, &test_routes()).await?;
                 }
                 anyhow::Ok(())
             });
@@ -2184,7 +2189,13 @@ async fn exposure_is_exact_after_concurrent_create_consume_cancel_and_expire() -
 
         // Cancellation reserves exposure until the dual scan catches up after the request.
         finalize_chain_past_now(&database.app_pool).await?;
-        ensure!(locks::expire_once(&database.app_pool, &test_routes()).await? == ACCOUNTS as u64);
+        locks::expire_once(&database.app_pool, &test_routes()).await?;
+        ensure!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM quotes WHERE status='cancelled'")
+                .fetch_one(&database.app_pool)
+                .await?
+                == ACCOUNTS as i64
+        );
 
         // Per account: "keep" plus three new locks remain reserved.
         let open = exposure(&database.app_pool, "global").await?;

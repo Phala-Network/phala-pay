@@ -322,9 +322,7 @@ install_anvil_price_fixtures "$mainnet_price_rpc_url" "$base_mainnet_price_rpc_u
 echo "== writing the configuration and rendering the staging compose"
 # Phala's staging configuration with this network's addresses: on each chain the test token stands
 # in for PHA, the reference product's asset, a six-decimal mock token for USDC, and a USDT-like one
-# for USDT. Provider A is keyless, as staging's; provider B is attested with a `{key}`, as a paid
-# provider is, and Anvil ignores the query that carries the key. Base Sepolia's two providers are
-# keyless, at two URLs of its Anvil.
+# for USDT. Each role has its own certificate-verified relay and sealed fixture key.
 second_token=$(rehearsal_token UsdcLikeToken "$rpc_url")
 third_token=$(rehearsal_token UsdtLikeToken "$rpc_url")
 # The owner's admin key, in the PEM form deploy/runbooks/sign-admin-request.sh signs with.
@@ -386,7 +384,7 @@ declare -A values=(
     [AWS_SECRET_ACCESS_KEY]=topup-s3-secret-key
     # Empty: the rehearsal proves the service runs unchanged with Sentry reporting off.
     [SENTRY_DSN]=''
-    # Provider A's URL is keyless; topup reaches provider B only with its key in place of `{key}`.
+    # Both endpoint roles receive their sealed fixture keys through the rendered Compose path.
     [TOPUP_RPC_ANKR_KEY]=rehearsal-rpc-key
     [TOPUP_RPC_INFURA_KEY]=rehearsal-rpc-key
 )
@@ -444,20 +442,20 @@ echo "ok: migrate exited 0"
 echo "== seeding the hermetic thirty-minute TWAP window"
 # Keep the sampler out of the compressed history; resume it against the completed window.
 dc stop --timeout 10 topup >/dev/null
-# The production sampler persists one sample per minute. Rehearsal time is compressed by mining
+# The staging sampler persists one sample per five minutes. Rehearsal time is compressed by mining
 # those timestamps on the local production-chain-id Anvil; every row still carries a real local
 # block hash, so the reader's restart/reorg checks remain exercised.
-twap_policy='{"window_s":1800,"max_sample_age_s":180,"min_weth_reserve_usd":100000,"max_spot_deviation_bps":300,"max_sample_jump_bps":500}'
+twap_policy=$(jq -c '[.routes[].price.sources[] | select(.source == "uniswap_v2_twap") | .twap] | unique | if length == 1 then .[0] else error("inconsistent rehearsal TWAP policies") end' "$environment/topup.yaml")
 twap_sql="$tmp/twap.sql"
 : >"$twap_sql"
 pair_timestamp_last=$((ANVIL_PRICE_PAIR_TIMESTAMP - 1800))
-window_start=$(($(date +%s) - 1860))
+window_start=$(($(date +%s) - 2100))
 twap_spot=$(python3 - <<'PY'
 print((100 * 10**18 << 112) // (100_000 * 10**18))
 PY
 )
-for i in $(seq 1 31); do
-    sample_timestamp=$((window_start + (i - 1) * 60))
+for i in $(seq 1 7); do
+    sample_timestamp=$((window_start + (i - 1) * 300))
     cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setNextBlockTimestamp "$sample_timestamp" >/dev/null
     cast rpc --rpc-url "$mainnet_price_rpc_url" evm_mine >/dev/null
     # Capture number/hash/timestamp together, from the block actually mined.

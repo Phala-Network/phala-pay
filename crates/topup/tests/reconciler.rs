@@ -39,9 +39,6 @@ struct MockChain {
     derivation_delay: StdDuration,
     derivation_started: Notify,
     fail_derivation: AtomicBool,
-    fail_logs_from: Mutex<Option<u64>>,
-    logs: Mutex<Vec<TransferLog>>,
-    log_requests: Mutex<Vec<(u64, u64)>>,
     balances: Mutex<BTreeMap<Address, U256>>,
     balance_reads: Mutex<Vec<(u64, Vec<Address>)>>,
     derived: Mutex<BTreeMap<B256, Address>>,
@@ -66,47 +63,9 @@ impl MockChain {
 
 #[async_trait]
 impl ReconciliationChain for MockChain {
-    async fn finalized_head(&self) -> Result<u64, ReconciliationError> {
-        Ok(self.finalized.load(Ordering::SeqCst))
-    }
-
-    async fn transfer_logs_to(
-        &self,
-        addresses: &[Address],
-        from_block: u64,
-        to_block: u64,
-    ) -> Result<Vec<TransferLog>, ReconciliationError> {
-        self.log_requests
-            .lock()
-            .unwrap()
-            .push((from_block, to_block));
-        if self
-            .fail_logs_from
-            .lock()
-            .unwrap()
-            .is_some_and(|block| from_block >= block)
-        {
-            return Err(ReconciliationError::Chain(
-                "transfer logs unavailable".to_owned(),
-            ));
-        }
-        Ok(self
-            .logs
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|log| {
-                addresses.contains(&log.to)
-                    && log.block_number >= from_block
-                    && log.block_number <= to_block
-            })
-            .cloned()
-            .collect())
-    }
-
     async fn token_balances_pinned(
         &self,
-        token: Address,
+        _token: Address,
         addresses: &[Address],
         hash: B256,
     ) -> Result<Vec<U256>, ReconciliationError> {
@@ -115,19 +74,7 @@ impl ReconciliationChain for MockChain {
                 "fixture custody pin changed",
             ));
         }
-        self.token_balances(
-            token,
-            addresses,
-            self.finalized.load(Ordering::SeqCst).min(140),
-        )
-        .await
-    }
-    async fn token_balances(
-        &self,
-        _token: Address,
-        addresses: &[Address],
-        block: u64,
-    ) -> Result<Vec<U256>, ReconciliationError> {
+        let block = self.finalized.load(Ordering::SeqCst).min(140);
         self.balance_reads
             .lock()
             .unwrap()

@@ -386,7 +386,7 @@ main() {
         if ((!existing)); then
             mkdir -p "$env_dir"
             {
-                echo "# Written by deploy.sh $release: the kit's phala-cloud-template routes and keyless"
+                echo "# Written by deploy.sh $release: the kit's phala-cloud-template routes and sealed RPC"
                 echo "# providers (Phala's staging), served at this domain (docs/configuration.md)."
                 echo "environment: testnet"
                 echo "public_origin: https://$DOMAIN"
@@ -437,7 +437,7 @@ YAML
             DSTACK_APP_DOMAIN) continue ;;
             TOPUP_ADMIN_PUBLIC_KEY | WALG_S3_PREFIX | AWS_ENDPOINT | AWS_REGION) ;;
             SENTRY_DSN) ask_secret "$name" "Sentry DSN (optional)" "" ;;
-            TOPUP_RPC_*_KEY) ask_secret "$name" "$name, its provider's API key (empty for a keyless URL)" "" ;;
+            TOPUP_RPC_*_KEY) ask_secret "$name" "$name, its provider's required API key" "" ;;
             *) ask_secret "$name" "$name" ;;
         esac
         [[ -z "${!name}" ]] || printf '%s=%s\n' "$name" "${!name}" >>"$env_file"

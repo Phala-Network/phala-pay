@@ -122,20 +122,9 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     transfer(&anvil.rpc_url, token, other_quote, 7)?;
     transfer(&anvil.rpc_url, token, other_quote, 0)?;
 
-    let scan = fast_once(pool, &reader, &chain_routes).await?;
+    fast_once(pool, &reader, &chain_routes).await?;
     // Only non-zero transfers of the routed token are requested and stored.
-    ensure!(
-        pending_rows(pool).await? == 2,
-        "unexpected head scan {scan:?}, addresses={:?}, logs={:?}",
-        db::list_scan_addresses(pool, CHAIN_ID).await?,
-        reader
-            .transfer_logs_to(
-                &[lock_address, other_quote],
-                1,
-                reader.latest_header().await?.number
-            )
-            .await?
-    );
+    ensure!(pending_rows(pool).await? == 2);
     ensure!(
         outbox_rows(pool).await? == 0,
         "the head scan wrote an event"
@@ -312,6 +301,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         Value::Null,
     )
     .await?;
+    rpc(anvil, "evm_increaseTime", &["2"])?;
     transfer(&anvil.rpc_url, token, cancelled, 100)?;
     anvil.mine(FINALITY_LAG)?;
     coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;

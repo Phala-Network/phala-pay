@@ -273,14 +273,19 @@ impl FinalityWatch {
                 secondary_finalized
             ),
         )?;
-        let replacement = self
-            .known_replacement(
+        let replacement = if matches!(primary_evidence.receipt, ReceiptLookup::Missing)
+            && matches!(secondary_evidence.receipt, ReceiptLookup::Missing)
+        {
+            self.known_replacement(
                 chain,
                 chain_id,
                 deposit,
                 primary_finalized.min(secondary_finalized),
             )
-            .await?;
+            .await?
+        } else {
+            false
+        };
         let primary_finalized = primary_evidence.finalized;
         let secondary_finalized = secondary_evidence.finalized;
         let primary = primary_evidence.receipt;

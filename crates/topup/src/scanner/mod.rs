@@ -219,6 +219,13 @@ pub async fn fast_once<R: ChainReader>(
     let from = cursor.saturating_add(1);
     let addresses = db::list_scan_addresses(pool, chain).await?;
     let index: BTreeMap<_, _> = addresses.into_iter().map(|a| (a.address, a)).collect();
+    tracing::debug!(
+        chain_id = chain,
+        from,
+        latest,
+        addresses = index.len(),
+        "fast discovery range"
+    );
     let mut deposits = Vec::new();
     let mut pending = Vec::new();
     if from <= latest {
@@ -227,7 +234,10 @@ pub async fn fast_once<R: ChainReader>(
             let Some(address) = index.get(&log.to) else {
                 return Err(ScannerError::UnknownRecipient(log.to));
             };
-            if !routes.routes.contains_key(&log.token) || log.block_number < address.created_block {
+            if !routes.routes.contains_key(&log.token)
+                || log.block_number < address.created_block
+                || log.amount.value().is_zero()
+            {
                 continue;
             }
             if routes.chain.confirmations.reached(log.block_number, heads) {
@@ -250,6 +260,12 @@ pub async fn fast_once<R: ChainReader>(
         }
     }
     let mut tx = pool.begin().await?;
+    tracing::debug!(
+        chain_id = chain,
+        deposits = deposits.len(),
+        pending = pending.len(),
+        "fast discovery candidates"
+    );
     db::rpc::guard_in(&mut tx, chain).await?;
     let commit = db::scanner::commit_confirmed_scan_in(
         &mut tx,

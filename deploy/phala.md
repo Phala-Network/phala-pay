@@ -133,8 +133,8 @@ use `0x936c…4504` on Base Sepolia: a copy exists there whose owner key is dest
 4. **Reseal the service's secrets** with the commands the summary prints
    ([Sealing the secrets](README.md#sealing-the-secrets)): `.env.staging` (mode 0600) holds exactly
    the rendered compose's sealed names, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
-   `SENTRY_DSN`. Staging's providers are keyless, so it seals no `TOPUP_RPC_<ID>_KEY`, and the old
-   CVM's two empty provider names are not sealed again.
+   `SENTRY_DSN`, `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Submit the complete secret set
+   together; the Compose preflight verifies both RPC keys reach the service.
 5. **Switch DNS** for `pay-api-staging.phala.com` to the records the summary lists: the CNAME to
    the new node's gateway and the `_dstack-app-address` TXT to the new instance, DNS only
    ([Custom domain](README.md#custom-domain)).

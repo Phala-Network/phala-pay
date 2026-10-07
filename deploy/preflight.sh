@@ -83,7 +83,7 @@ while IFS= read -r name; do
     if [[ "$value" == *replace-me* ]]; then
         fail "$name still contains replace-me"
     elif [[ -z "$value" ]] && ((unsealed == 0)) && [[ "$name" != SENTRY_DSN && "$name" != TOPUP_RPC_*_KEY ]]; then
-        # An empty or unset DSN turns Sentry off; no key means a keyless URL (config check --secrets).
+        # An empty or unset DSN turns Sentry off; configured RPC sealed keys are required.
         fail "$name is empty or not set"
     fi
 done <"$tmp/sealed"

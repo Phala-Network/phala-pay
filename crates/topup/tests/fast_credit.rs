@@ -254,7 +254,8 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
 
             // Terminal: later passes and pumps leave it alone, and the event stays single.
             let again = chain.watch().await?;
-            ensure!(again.watched == 0, "{again:?}");
+            ensure!(again.finalized == 1 && again.reversed == 0, "{again:?}");
+            ensure!(chain.watch().await?.watched == 0);
             chain.settle().await?;
             ensure!(chain.pump.run_once().await? == RunOnceResult::Idle);
             ensure!(chain.events("deposit.reversed").await?.len() == 1);
@@ -610,9 +611,9 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
                 chain.events("deposit.credited").await?.len() == 2
                     && chain.events("deposit.reversed").await?.len() == 1
             );
-            // Its block is already final: the next watch pass marks it so, and nothing else moves.
+            // Coverage already recorded finalized evidence for the successor.
             let stats = chain.watch().await?;
-            ensure!(stats.finalized == 1 && stats.reversed == 0, "{stats:?}");
+            ensure!(stats.watched == 0 && stats.reversed == 0, "{stats:?}");
             ensure!(chain.deposit(successor).await?.final_at.is_some());
             ensure!(chain.events("deposit.reversed").await?.len() == 1);
             Ok(())

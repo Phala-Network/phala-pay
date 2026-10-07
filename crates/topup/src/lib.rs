@@ -15,7 +15,6 @@
 pub mod api;
 pub mod api_keys;
 pub mod audit;
-mod chain_retry;
 pub mod chain_rpc;
 pub mod checkpoint;
 pub mod client_secret;

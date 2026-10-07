@@ -362,11 +362,11 @@ fn config_yaml(
         rpc = rpc
             .replace(
                 "https://rpc.ankr.com/eth/{key}",
-                &format!("{}/{{key}}", tls.read_url),
+                &format!("{}/?key={{key}}", tls.read_url),
             )
             .replace(
                 "https://mainnet.infura.io/v3/{key}",
-                &format!("{}/{{key}}", tls.verify_url),
+                &format!("{}/?key={{key}}", tls.verify_url),
             );
     }
     format!(

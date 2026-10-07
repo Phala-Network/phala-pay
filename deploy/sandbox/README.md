@@ -128,7 +128,7 @@ sandbox-only contracts (a mintable test token, a second token for `unsupported_a
    [deploy/environments/example/topup](../environments/example/topup) with the sandbox's values.
    Its `topup.yaml` holds its own `public_origin` (the sandbox's custom domain, for example
    `https://sandbox.topup.example`, with the DNS records of
-   [Custom domain](../README.md#custom-domain)), its admin key, its keyless Sepolia providers as
+   [Custom domain](../README.md#custom-domain)), its admin key, its sealed read/verify Sepolia endpoints as
    `provider-a` and `provider-b`, and the rendered route as its only `routes` item. Its
    `compose.yaml` holds its own backup prefix, and the domain as dstack-ingress's `DOMAIN`. Then
    render it as Deploy renders an Environment, with a release's `images.json` and the sandbox
