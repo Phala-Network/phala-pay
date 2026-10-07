@@ -28,7 +28,7 @@ cd "$root"
 export CI=true SQLX_OFFLINE=true TOPUP_ROLLBACK_IMAGE="$previous"
 export OWNER_DATABASE_URL="postgres://postgres:drill@127.0.0.1:$port/postgres"
 export DATABASE_URL="postgres://topup_ci:topup_ci@127.0.0.1:$port/postgres"
-# PR 3 extension point: published_image_round_trip::pr3_hint_extension_point records
-# hint deposits and pending tasks before the second N-1 phase. PR 2 contains no hints.
+# The round trip submits a real hint-recorded deposit and interrupts an unmined in-memory task.
+# N-1 preserves the positive deposit and verification marker without touching the hint budget.
 timeout --kill-after=10 1800 cargo test --locked -p topup --test rollback_drill \
     published_image_round_trip -- --ignored --exact --nocapture

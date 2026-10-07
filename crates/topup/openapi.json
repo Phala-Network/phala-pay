@@ -3820,6 +3820,48 @@
         },
         "type": "object"
       },
+      "SubmitDepositAddressTransactionRequest": {
+        "description": "The deposit address must already have a network for this chain.",
+        "example": {
+          "chain_id": 84532,
+          "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+        },
+        "properties": {
+          "chain_id": {
+            "description": "One of this object's issued network identifiers.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transaction_hash": {
+            "description": "Transaction hash, exactly 32 hexadecimal bytes prefixed by `0x`.",
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_hash",
+          "chain_id"
+        ],
+        "type": "object"
+      },
+      "SubmitQuoteTransactionRequest": {
+        "description": "A quote's chain is derived from its stored terms.",
+        "example": {
+          "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+        },
+        "properties": {
+          "transaction_hash": {
+            "description": "Transaction hash, exactly 32 hexadecimal bytes prefixed by `0x`.",
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_hash"
+        ],
+        "type": "object"
+      },
       "Sweep": {
         "description": "A sweep: one finalized `Flushed` event of the factory, which moved a forwarder's whole balance\nof a token to its treasury (Stripe's Payout). Anyone can send the `flush`; the merchant usually\ndoes, with the SDK's `flush_transaction` or `safe_batch`.",
         "properties": {
@@ -3966,6 +4008,48 @@
           "data"
         ],
         "type": "object"
+      },
+      "TransactionSubmission": {
+        "description": "A quiet acknowledgement, including for ignored hints.",
+        "example": {
+          "object": "transaction_submission",
+          "status": "received",
+          "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+        },
+        "properties": {
+          "object": {
+            "$ref": "#/components/schemas/TransactionSubmissionObject",
+            "description": "Object discriminator."
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionSubmissionStatus",
+            "description": "Acknowledgement only; poll the original object for payment status."
+          },
+          "transaction_hash": {
+            "description": "Hash echoed from the submission.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "transaction_hash",
+          "status"
+        ],
+        "type": "object"
+      },
+      "TransactionSubmissionObject": {
+        "description": "Constant submission object discriminator.",
+        "enum": [
+          "transaction_submission"
+        ],
+        "type": "string"
+      },
+      "TransactionSubmissionStatus": {
+        "description": "Received acknowledges submission only, never detection or verification.",
+        "enum": [
+          "received"
+        ],
+        "type": "string"
       },
       "Treasury": {
         "description": "An account's treasury of one chain and mode (design D10): the only address the forwarders\nissued over it can pay.",
@@ -8610,6 +8694,81 @@
         ]
       }
     },
+    "/v1/deposit_addresses/{id}/transactions": {
+      "post": {
+        "operationId": "submit_deposit_address_transaction",
+        "parameters": [
+          {
+            "description": "Deposit-address identifier",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Object's browser client secret; omit with a merchant key",
+            "in": "query",
+            "name": "client_secret",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitDepositAddressTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionSubmission"
+                }
+              }
+            },
+            "description": "Received, including ignored hints. No payment result is disclosed.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {}
+        ],
+        "summary": "Submit a deposit-address transaction hint on one of its issued networks.",
+        "tags": [
+          "deposit_addresses"
+        ]
+      }
+    },
     "/v1/deposits": {
       "get": {
         "operationId": "list_deposits",
@@ -12257,6 +12416,81 @@
           }
         ],
         "summary": "Cancels an open, unpaid quote; a canceled quote is returned unchanged. Later payments to its\naddress are credited at spot.",
+        "tags": [
+          "quotes"
+        ]
+      }
+    },
+    "/v1/quotes/{id}/transactions": {
+      "post": {
+        "operationId": "submit_quote_transaction",
+        "parameters": [
+          {
+            "description": "Quote identifier",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Object's browser client secret; omit with a merchant key",
+            "in": "query",
+            "name": "client_secret",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitQuoteTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionSubmission"
+                }
+              }
+            },
+            "description": "Received, including ignored hints. No payment result is disclosed.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {}
+        ],
+        "summary": "Submit a quote transaction hint. The stored quote selects the chain and recipient.",
         "tags": [
           "quotes"
         ]

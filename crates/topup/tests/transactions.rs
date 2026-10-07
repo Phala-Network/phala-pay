@@ -17,7 +17,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -43,6 +43,7 @@ struct Rpc {
     block: Arc<Mutex<Value>>,
     head: Arc<Mutex<Value>>,
     calls: Arc<AtomicUsize>,
+    receipt_gate: Arc<AtomicBool>,
 }
 impl Rpc {
     fn new() -> Self {
@@ -67,11 +68,17 @@ impl Rpc {
             )),
             head: Arc::new(Mutex::new(json!("0x2d3f77a"))),
             calls: Arc::default(),
+            receipt_gate: Arc::default(),
         }
     }
 }
 async fn rpc(State(state): State<Rpc>, Json(request): Json<Value>) -> Json<Value> {
     state.calls.fetch_add(1, Ordering::SeqCst);
+    if request["method"] == "eth_getTransactionReceipt" {
+        while state.receipt_gate.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
     let result = match request["method"].as_str().unwrap() {
         "eth_getTransactionReceipt" => {
             if request["params"][0] == TX {
@@ -117,7 +124,6 @@ struct Harness {
     read: Arc<EvmClient>,
     verify: Arc<EvmClient>,
     key: String,
-    object: Uuid,
     quote_id: String,
     secret: String,
     _nodes: Vec<Task>,
@@ -128,7 +134,11 @@ async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<
     let mut route: RouteFile =
         serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml"))?;
     route.chain.chain_id = CHAIN;
-    route.chain.name = "base-sepolia".into();
+    route.livemode = false;
+    route.pricing.sequencer_uptime = Some(topup_core::price::Sequencer {
+        feed: "BASE_SEQUENCER_UPTIME".into(),
+        grace_s: 3600,
+    });
     route.chain.confirmations = Confirmations::Depth(2);
     route.asset.contract = TOKEN.parse()?;
     let routes = Arc::new(
@@ -144,20 +154,28 @@ async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<
         )
         .map_err(anyhow::Error::msg)?,
     );
-    let account = seed::create_account(pool, &NewAccount::named("hint merchant")).await?;
+    let account = seed::create_account(
+        pool,
+        &NewAccount {
+            livemode: false,
+            ..NewAccount::named("hint merchant")
+        },
+    )
+    .await?;
     let customer = seed::create_customer(
         pool,
         &NewCustomer {
             id: Uuid::new_v4(),
             account_id: account.id,
-            livemode: true,
+            livemode: false,
             client_reference_id: "hint customer".into(),
+            paused_scopes: Vec::new(),
         },
     )
     .await?;
-    seed::accept_routes(pool, account.id, true, &[&route]).await?;
+    seed::accept_routes(pool, account.id, false, &[&route]).await?;
     seed::initialize_dual_chain(pool, CHAIN).await?;
-    let key = seed::create_api_key(pool, account.id, true).await?;
+    let key = seed::create_api_key(pool, account.id, false).await?;
     let address = seed::insert_address(
         pool,
         &NewAddress {
@@ -209,7 +227,6 @@ async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<
         read,
         verify,
         key,
-        object,
         quote_id,
         secret,
         _nodes: vec![read_task, verify_task],
@@ -324,7 +341,7 @@ async fn hints_record_only_dual_verified_confirmed_positive_facts_and_scanner_du
         wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
         cancel.cancel();
         ensure!(sqlx::query_scalar::<_, bool>("SELECT state='detected' AND final_at IS NULL AND dual_verified_at IS NOT NULL AND receipt_log_index=0 AND log_index=35 FROM deposits").fetch_one(&db.app_pool).await?);
-        ensure!(sqlx::query_scalar::<_, i64>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&db.app_pool).await? == 1);
+        ensure!(sqlx::query_scalar::<_, i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&db.app_pool).await? == 1);
         let deposit: topup::db::Deposit = topup::db::get_deposit(&db.app_pool, sqlx::query_scalar("SELECT id FROM deposits").fetch_one(&db.app_pool).await?).await?.context("hint deposit")?;
         // Normal scanner insertion at the same receipt position cannot create a second deposit.
         let mut tx = db.app_pool.begin().await?;
@@ -396,6 +413,7 @@ async fn not_ready_parks_without_spending_daily_budget_then_resumes() -> Result<
     };
     let result = async {
         let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        ensure!(h.read.ready());
         h.verify.mark_not_ready();
         h.submit(
             &format!("/v1/quotes/{}/transactions", h.quote_id),
@@ -526,6 +544,212 @@ async fn daily_budget_is_atomic_hard_counter_and_151st_task_per_utc_day_is_ignor
                 == 150
         );
         cancel.cancel();
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn deposit_address_requires_an_issued_chain_and_its_secret_or_write_permission() -> Result<()>
+{
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        let account: Uuid = sqlx::query_scalar("SELECT account_id FROM quotes LIMIT 1")
+            .fetch_one(&db.app_pool)
+            .await?;
+        seed::set_treasury(&db.app_pool, account, false, CHAIN, Address::repeat_byte(9)).await?;
+        let response = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/deposit_addresses")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", h.key))
+                    .body(Body::from(r#"{"client_reference_id":"persistent hint"}"#))?,
+            )
+            .await?;
+        ensure!(
+            response.status().is_success(),
+            "deposit address creation failed"
+        );
+        let address: Value = serde_json::from_slice(&to_bytes(response.into_body(), 65536).await?)?;
+        let id = address["id"].as_str().context("address id")?;
+        let secret = address["client_secret"]
+            .as_str()
+            .context("address secret")?;
+        let path = format!("/v1/deposit_addresses/{id}/transactions");
+        for body in [
+            json!({"transaction_hash":TX}),
+            json!({"transaction_hash":TX,"chain_id":1}),
+            json!({"transaction_hash":TX,"chain_id":0}),
+            json!({"transaction_hash":TX,"chain_id":u64::MAX}),
+        ] {
+            h.submit(&path, Some(&h.key), body).await?;
+            ensure!(h.queue.pending() == 0);
+        }
+        h.submit(
+            &format!("{path}?client_secret={}", h.secret),
+            None,
+            json!({"transaction_hash":TX,"chain_id":CHAIN}),
+        )
+        .await?;
+        ensure!(
+            h.queue.pending() == 0,
+            "quote secret authenticated another object"
+        );
+        h.submit(
+            &format!("{path}?client_secret={secret}"),
+            None,
+            json!({"transaction_hash":TX,"chain_id":CHAIN,"recipient":RECIPIENT}),
+        )
+        .await?;
+        ensure!(h.queue.pending() == 1);
+        let (cancel, _worker) = h.worker(&db.app_pool);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        cancel.cancel();
+        ensure!(
+            deposits(&db.app_pool).await? == 0,
+            "caller recipient redirected the hint"
+        );
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn one_transaction_can_pay_two_objects_and_each_task_gets_its_own_dedup_key() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let read = Rpc::new(); let verify = Rpc::new();
+        let recipient = Address::repeat_byte(8);
+        for state in [&read, &verify] {
+            let mut receipt = state.receipt.lock().unwrap();
+            let mut second = receipt["logs"][0].clone();
+            second["topics"][2] = json!(format!("0x{:064x}", recipient.into_word()));
+            second["logIndex"] = json!("0x24");
+            receipt["logs"].as_array_mut().unwrap().push(second);
+        }
+        let h = harness(&db.app_pool, read, verify).await?;
+        let customer_id: Uuid = sqlx::query_scalar("SELECT customer_id FROM quotes LIMIT 1").fetch_one(&db.app_pool).await?;
+        let route: String = sqlx::query_scalar("SELECT route FROM quotes LIMIT 1").fetch_one(&db.app_pool).await?;
+        let address = seed::insert_address(&db.app_pool, &NewAddress { id:Uuid::new_v4(), customer_id, chain_id:CHAIN, route, salt:B256::repeat_byte(8), address:recipient }).await?;
+        let other = topup::ids::format(topup::ids::QUOTE, address.quote_id.unwrap());
+        h.submit(&format!("/v1/quotes/{}/transactions", h.quote_id), Some(&h.key), json!({"transaction_hash":TX})).await?;
+        let (cancel, _worker) = h.worker(&db.app_pool);
+        wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+        // The first object's already recorded transfer must not deduplicate the second object.
+        h.submit(&format!("/v1/quotes/{other}/transactions"), Some(&h.key), json!({"transaction_hash":TX})).await?;
+        wait_until(async || Ok(deposits(&db.app_pool).await? == 2)).await?;
+        cancel.cancel();
+        ensure!(sqlx::query_scalar::<_, i64>("SELECT count(DISTINCT receipt_log_index) FROM deposits WHERE dual_verified_at IS NOT NULL").fetch_one(&db.app_pool).await? == 2);
+        Ok(())
+    }.await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn only_four_hint_tasks_can_be_in_flight_even_with_more_ready_objects() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let read = Rpc::new();
+        let verify = Rpc::new();
+        read.receipt_gate.store(true, Ordering::SeqCst);
+        let h = harness(&db.app_pool, read.clone(), verify).await?;
+        let (customer_id, route): (Uuid, String) =
+            sqlx::query_as("SELECT customer_id,route FROM quotes LIMIT 1")
+                .fetch_one(&db.app_pool)
+                .await?;
+        for index in 1_u8..=6 {
+            let address = seed::insert_address(
+                &db.app_pool,
+                &NewAddress {
+                    id: Uuid::new_v4(),
+                    customer_id,
+                    chain_id: CHAIN,
+                    route: route.clone(),
+                    salt: B256::repeat_byte(index),
+                    address: Address::repeat_byte(index),
+                },
+            )
+            .await?;
+            let id = topup::ids::format(topup::ids::QUOTE, address.quote_id.unwrap());
+            h.submit(
+                &format!("/v1/quotes/{id}/transactions"),
+                Some(&h.key),
+                json!({"transaction_hash":TX}),
+            )
+            .await?;
+        }
+        let start = read.calls.load(Ordering::SeqCst);
+        let (cancel, _worker) = h.worker(&db.app_pool);
+        wait_until(async || Ok(read.calls.load(Ordering::SeqCst) == start + 4)).await?;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        ensure!(read.calls.load(Ordering::SeqCst) == start + 4);
+        ensure!(h.queue.pending() == 2);
+        cancel.cancel();
+        read.receipt_gate.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn read_only_restricted_keys_and_other_accounts_cannot_submit_tasks() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        let response = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/api_keys")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", h.key))
+                    .body(Body::from(
+                        r#"{"type":"restricted","permissions":["quotes.read"]}"#,
+                    ))?,
+            )
+            .await?;
+        ensure!(response.status().is_success());
+        let key: Value = serde_json::from_slice(&to_bytes(response.into_body(), 65536).await?)?;
+        let other_account = seed::create_account(
+            &db.app_pool,
+            &NewAccount {
+                livemode: false,
+                ..NewAccount::named("another merchant")
+            },
+        )
+        .await?;
+        let other_key = seed::create_api_key(&db.app_pool, other_account.id, false).await?;
+        let path = format!("/v1/quotes/{}/transactions", h.quote_id);
+        for key in [key["secret"].as_str().unwrap(), &other_key] {
+            h.submit(&path, Some(key), json!({"transaction_hash":TX}))
+                .await?;
+            ensure!(h.queue.pending() == 0);
+        }
+        h.submit(&path, Some(&h.key), json!({"transaction_hash":TX}))
+            .await?;
+        ensure!(h.queue.pending() == 1);
         Ok(())
     }
     .await;

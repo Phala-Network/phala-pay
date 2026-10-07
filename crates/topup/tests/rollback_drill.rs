@@ -348,8 +348,23 @@ fn reconcile(
     );
     Ok(())
 }
-/// PR 3 extends this fixture to write hint-recorded deposits and pending tasks before rollback.
-fn pr3_hint_extension_point() {}
+/// A real N API submission. Rollback must preserve positive rows and abandon pending memory tasks.
+async fn submit_hint(origin: &str, key: &str, address: &str, hash: B256) -> Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{origin}/v1/deposit_addresses/{address}/transactions"
+        ))
+        .bearer_auth(key)
+        .json(&json!({"transaction_hash":format!("{hash:#x}"),"chain_id":1}))
+        .send()
+        .await?;
+    ensure!(response.status().as_u16() == 202);
+    ensure!(
+        response.json::<Value>().await?
+            == json!({"object":"transaction_submission","transaction_hash":format!("{hash:#x}"),"status":"received"})
+    );
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires verified published N-1 image; mandatory deploy rollback CI gate"]
@@ -416,6 +431,10 @@ async fn published_image_round_trip() -> Result<()> {
         topup::db::migrate(&database.owner_pool).await?;
         let mut current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;
         let second=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(16)?;
+        submit_hint(&origin,&key,address["id"].as_str().unwrap(),second).await?;
+        wait_until("hint recorded dual-verified positive deposit",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT dual_verified_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_optional(&database.app_pool).await?==Some(true))}).await?;
+        ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&database.app_pool).await?==1);
+
         // Restart at a scheduled-round boundary without changing production cadences.
         current_service.stop()?;current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;credited(&database,second).await?;
         wait_until("N finalized second payment",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT final_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?)}).await?;
@@ -439,7 +458,12 @@ async fn published_image_round_trip() -> Result<()> {
         sqlx::query("UPDATE quotes SET expires_at=now()-interval '1 second' WHERE id=$1").bind(expiry_id).execute(&database.owner_pool).await?;
         ensure!(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM deposits WHERE tx_hash=$1)")
             .bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?,"restored history was recorded before reissue");
+        let pending_hint=B256::repeat_byte(0x79);
+        // Use a deposit-address object, whose endpoint requires the explicit network.
+        submit_hint(&origin,&key,address["id"].as_str().unwrap(),pending_hint).await?;
+        wait_until("N pending hint task started",||async {Ok(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&database.app_pool).await?==2)}).await?;
         current_service.stop()?;
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{pending_hint:#x}")).fetch_one(&database.app_pool).await?==0);
         let historic_block:i64=sqlx::query_scalar("SELECT block_number FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?;
         let (reissued,created)=topup::deposit_addresses::reissue(&database.app_pool,&account,true,"round-trip",&[ChainContracts::of(&route)],ReissueTarget {version:Some(2),address:Some(historical_forwarder)},None,None,Some(Utc::now()-chrono::TimeDelta::hours(1)),&std::collections::BTreeMap::from([(1,u64::try_from(historic_block.saturating_sub(16))?)]),&Actor::system("rollback-drill"),"historical payment reissue").await?;
         ensure!(created && reissued.version==2);
@@ -455,7 +479,6 @@ async fn published_image_round_trip() -> Result<()> {
         wait_until("coverage request interrupted",||async {Ok(observed.load(Ordering::SeqCst))}).await?;
         interrupted.stop()?;gate.store(false,Ordering::SeqCst);
         let after:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;ensure!(before==after,"interrupted coverage advanced");
-        pr3_hint_extension_point();
         topup::db::chain_reads::freeze(&database.app_pool,1,"contract_code_mismatch").await?;
         let mut previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
         let frozen=reqwest::Client::new().post(format!("{origin}/v1/quotes")).bearer_auth(&key).header("Idempotency-Key",Uuid::new_v4().to_string()).json(&json!({"client_reference_id":"frozen","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"})).send().await?;
@@ -483,6 +506,9 @@ async fn published_image_round_trip() -> Result<()> {
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?==1);
         wait_until("N-1 indexed flush",||async {Ok(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM flushed").fetch_one(&database.app_pool).await?>0)}).await?;
         previous.stop()?;
+        ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&database.app_pool).await?==2,"N-1 touched pending hint state");
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{pending_hint:#x}")).fetch_one(&database.app_pool).await?==0,"N-1 materialized an unmined hint");
+        ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_verified_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?,"N-1 discarded N's hint verification marker");
         reconcile(Some(&image),&old_path,&database,&tls)?;
         let unverified:bool=sqlx::query_scalar("SELECT dual_verified_at IS NULL FROM deposits WHERE tx_hash=$1").bind(format!("{third:#x}")).fetch_one(&database.app_pool).await?;ensure!(unverified);
         let mut final_current=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut final_current,&origin).await?;

@@ -602,6 +602,7 @@ pub fn read_only_router(state: AppState, restore_report: Option<PathBuf>) -> Rou
     let (router, _) = router_inner(state, Arc::new(crate::pause::InstancePause::default()));
     router
         .layer(middleware::from_fn(reject_writes))
+        .layer(middleware::from_fn(transactions::received))
         .layer(middleware::from_fn(cache::no_store))
         .layer(Extension(ReadOnly {
             restore_report: restore_report.map(Arc::from),

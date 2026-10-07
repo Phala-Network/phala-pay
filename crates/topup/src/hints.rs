@@ -167,7 +167,6 @@ async fn process(
         return Ok(());
     };
     let base = matches!(hint.chain, 8453 | 84532);
-    let deadline = Duration::from_secs(if base { 30 } else { 90 });
     let work = async {
         if !db::daily_budgets::claim(pool, "hints", HINTS_PER_DAY).await? {
             return Ok(());
@@ -236,18 +235,44 @@ async fn process(
         tx.commit().await?;
         Ok::<_, scanner::ScannerError>(())
     };
-    read.hint_call_limits(verify, async {
-        match tokio::time::timeout(deadline, work).await {
-            Ok(result) => result,
-            Err(_) => Ok(()),
-        }
-    })
-    .await
+    read.hint_call_limits(verify, bounded_task(hint.chain, work))
+        .await
+}
+
+async fn bounded_task(
+    chain: u64,
+    work: impl Future<Output = Result<(), scanner::ScannerError>>,
+) -> Result<(), scanner::ScannerError> {
+    let deadline = Duration::from_secs(if matches!(chain, 8453 | 84532) {
+        30
+    } else {
+        90
+    });
+    match tokio::time::timeout(deadline, work).await {
+        Ok(result) => result,
+        Err(_) => Ok(()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test(start_paused = true)]
+    async fn whole_task_deadlines_cancel_work_without_a_result_signal() {
+        for (chain, seconds) in [(1, 90), (11155111, 90), (8453, 30), (84532, 30)] {
+            let start = Instant::now();
+            let wrote = std::sync::atomic::AtomicBool::new(false);
+            bounded_task(chain, async {
+                tokio::time::sleep(Duration::from_secs(120)).await;
+                wrote.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+            assert_eq!(start.elapsed(), Duration::from_secs(seconds));
+            assert!(!wrote.load(std::sync::atomic::Ordering::SeqCst));
+        }
+    }
     fn hint(object: Uuid, chain: u64) -> Hint {
         Hint {
             chain,

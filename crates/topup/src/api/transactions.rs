@@ -42,12 +42,14 @@ pub struct SubmitDepositAddressTransactionRequest {
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionSubmissionObject {
+    /// Transaction-submission acknowledgement.
     TransactionSubmission,
 }
 /// Received acknowledges submission only, never detection or verification.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionSubmissionStatus {
+    /// Received without a processing result.
     Received,
 }
 /// A quiet acknowledgement, including for ignored hints.
@@ -232,9 +234,6 @@ async fn submit(
         };
         Scope::new(account, livemode)
     };
-    if !state.hint_limits.allow_object(object) {
-        return Ok(());
-    }
     // Only issued, current physical networks of this object are eligible; never create addresses.
     let address: Option<(Uuid, i64, String, i64)> = sqlx::query_as(
         "SELECT id,chain_id,address,created_block FROM addresses WHERE account_id=$1 AND livemode=$2 \
@@ -245,6 +244,9 @@ async fn submit(
     let Some((id, chain, recipient, created)) = address else {
         return Ok(());
     };
+    if !state.hint_limits.allow_object(object) {
+        return Ok(());
+    }
     let chain = u64::try_from(chain).map_err(|_| ApiError::internal())?;
     let recipient = recipient
         .parse::<Address>()

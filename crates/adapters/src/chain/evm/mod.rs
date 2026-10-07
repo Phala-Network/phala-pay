@@ -1796,7 +1796,7 @@ impl FinalizedReader {
             return Err(ChainError::Reorganized("receipt block header"));
         }
         let block_time = utc_timestamp(block.header.inner.timestamp)?;
-        let origin = match deposit_origin(&receipt)? {
+        let origin = match deposit_origin(receipt)? {
             Some(origin) => origin,
             None => {
                 use alloy::consensus::Transaction as _;
