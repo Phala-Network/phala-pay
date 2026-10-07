@@ -542,6 +542,9 @@ candidates as `detected` with NULL `dual_verified_at`. It advances only `confirm
 agree at the route's confirmation depth. They use the same receipt-position insertion identity
 and inclusive `block_number >= created_block` boundary as the scanners, without advancing
 coverage or making a negative decision. Read's head reaches depth before verify is polled.
+RPC runs outside the chain lock; insertion strictly rechecks the address snapshot and inspects
+all receipt-position history under that lock. Any reversed history defers the hint to scanning:
+identical evidence cannot re-enter, and differing evidence needs the finalized successor path.
 Root's admission decision is no per-IP limit on hints: controls are authenticated per-object
 limits of 3/minute and 10/day, a hard daily cap of 150 tasks per environment per UTC day, and
 at most four tasks in flight. See the operator [API admission limits](configuration.md#api-admission-limits).

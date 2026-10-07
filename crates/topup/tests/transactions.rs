@@ -27,7 +27,10 @@ use support::{
 };
 use tokio_util::sync::CancellationToken;
 use topup::{api::AppState, chain_rpc::ChainRpc, hints::HintQueue, routes::RouteSet};
-use topup_adapters::{attestation::DstackAttestor, chain::evm::EvmClient};
+use topup_adapters::{
+    attestation::DstackAttestor,
+    chain::evm::{ChainReader, EvmClient, FinalizedReader},
+};
 use topup_core::route::{Confirmations, RouteFile};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -303,6 +306,218 @@ async fn deposits(pool: &sqlx::PgPool) -> Result<i64> {
     Ok(sqlx::query_scalar("SELECT count(*) FROM deposits")
         .fetch_one(pool)
         .await?)
+}
+
+#[tokio::test]
+async fn merchant_key_hints_share_the_pre_auth_database_gate() -> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        let path = format!("/v1/quotes/{}/transactions", h.quote_id);
+        let unknown = topup::api_keys::generate(topup::api_keys::KeyKind::Secret, false)?;
+        let mut lock = db.owner_pool.begin().await?;
+        sqlx::query("LOCK TABLE restores IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *lock)
+            .await?;
+        let slots = db.app_pool.options().get_max_connections() / 2;
+        let mut pending = tokio::task::JoinSet::new();
+        for index in 0..slots {
+            let request = if index % 2 == 0 {
+                support::merchant_request(axum::http::Method::GET, "/v1/account", vec![], &unknown)
+            } else {
+                support::merchant_request(
+                    axum::http::Method::POST,
+                    &path,
+                    serde_json::to_vec(&json!({"transaction_hash":TX}))?,
+                    &unknown,
+                )
+            };
+            pending.spawn(h.app.clone().oneshot(request));
+        }
+        wait_until(async || {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() \
+                 AND wait_event_type='Lock' AND query LIKE 'SELECT EXISTS (SELECT 1 FROM restores%'",
+            )
+            .fetch_one(&db.owner_pool)
+            .await?;
+            Ok(waiting == i64::from(slots))
+        })
+        .await?;
+        // Saturating a mix of ordinary and hint authentication consumes the same slots.
+        for path in [
+            path.as_str(),
+            "/v1/deposit_addresses/daddr_00000000000000000000000000000001/transactions",
+        ] {
+            let started = std::time::Instant::now();
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                h.submit(path, Some(&h.key), json!({"transaction_hash":TX,"chain_id":CHAIN})),
+            )
+            .await
+            .context("hint bypassed the shared authentication slot bound")??;
+            ensure!(started.elapsed() >= Duration::from_millis(250));
+            ensure!(h.queue.pending() == 0);
+            // Invalid keys still return quiet acknowledgements without waiting for a slot.
+            tokio::time::timeout(
+                Duration::from_millis(200),
+                h.submit(path, Some("malformed"), json!({"transaction_hash":TX})),
+            )
+            .await??;
+        }
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            h.app.clone().oneshot(support::merchant_request(
+                axum::http::Method::GET, "/v1/account", vec![], &h.key,
+            )),
+        )
+        .await??;
+        ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
+        ensure!(response.headers()["retry-after"] == "1");
+        lock.rollback().await?;
+        while let Some(response) = pending.join_next().await {
+            ensure!(matches!(response??.status(), StatusCode::UNAUTHORIZED | StatusCode::ACCEPTED));
+        }
+        h.submit(&path, Some(&h.key), json!({"transaction_hash":TX})).await?;
+        ensure!(h.queue.pending() == 1, "gate did not release authentication slots");
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn reversal_history_written_during_hint_rpc_never_reenters_as_fresh_evidence() -> Result<()> {
+    for case in ["identical", "different", "older-matching"] {
+        let Some(db) = TestDatabase::create().await? else {
+            return Ok(());
+        };
+        let result = async {
+            let read = Rpc::new();
+            let verify = Rpc::new();
+            let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
+            let evidence = FinalizedReader::new(h.read.clone()).receipt_transfer(TX.parse()?, 0).await?;
+            let log = evidence.transfer().context("fixture transfer")?;
+            let (address_id, route, version): (Uuid, String, i64) = sqlx::query_as(
+                "SELECT a.id,q.route,q.route_version FROM addresses a JOIN quotes q ON q.id=a.quote_id",
+            ).fetch_one(&db.app_pool).await?;
+            let mut old = topup::db::NewDeposit {
+                chain_id: CHAIN, tx_hash: log.tx_hash, receipt_log_index: log.receipt_log_index,
+                log_index: log.log_index, block_number: log.block_number, block_hash: log.block_hash,
+                block_time: log.block_time, address_id, route: Some(route),
+                route_version: Some(u64::try_from(version)?), asset_contract: log.token,
+                from_address: log.from, amount_atomic: log.amount,
+                state: topup_core::deposit::DepositState::Detected, reason: None,
+                next_attempt_at: chrono::Utc::now(), tx_from: log.tx_from,
+                tx_nonce: log.tx_nonce, is_final: false,
+            };
+            if case == "different" {
+                old.tx_nonce += 1;
+            }
+            read.receipt_gate.store(true, Ordering::SeqCst);
+            let start = read.calls.load(Ordering::SeqCst);
+            let path = format!("/v1/quotes/{}/transactions", h.quote_id);
+            h.submit(&path, Some(&h.key), json!({"transaction_hash":TX})).await?;
+            let (cancel, mut worker) = h.worker(&db.app_pool);
+            wait_until(async || Ok(read.calls.load(Ordering::SeqCst) > start)).await?;
+            // These writes must acquire the chain lock while hint RPC is still blocked.
+            tokio::time::timeout(Duration::from_secs(1), async {
+                let mut tx = db.owner_pool.begin().await?;
+                topup::db::rpc::guard_in(&mut tx, CHAIN).await?;
+                let id = topup::db::insert_scanned_deposit_in(&mut tx, &old, topup::db::Evidence::Confirmed)
+                    .await?.context("transient scanner deposit")?;
+                sqlx::query("UPDATE deposits SET state='reversed',dual_verified_at=now() WHERE id=$1")
+                    .bind(id).execute(&mut *tx).await?;
+                if case == "older-matching" {
+                    old.tx_nonce += 1;
+                    let successor = topup::db::insert_scanned_deposit_in(
+                        &mut tx, &old, topup::db::Evidence::Successor { replaces: id },
+                    ).await?.context("history successor")?;
+                    sqlx::query("UPDATE deposits SET state='reversed' WHERE id=$1")
+                        .bind(successor).execute(&mut *tx).await?;
+                }
+                tx.commit().await?;
+                Ok::<_, anyhow::Error>(())
+            }).await.context("hint held the chain lock during RPC")??;
+            let history: Vec<(Uuid, String, i64, Option<Uuid>, Option<chrono::DateTime<chrono::Utc>>)> =
+                sqlx::query_as("SELECT id,state,revision,replaces,dual_verified_at FROM deposits ORDER BY revision")
+                    .fetch_all(&db.app_pool).await?;
+            h.submit(&path, Some(&h.key), json!({"transaction_hash":TX})).await?;
+            ensure!(h.queue.pending() == 1);
+            read.receipt_gate.store(false, Ordering::SeqCst);
+            wait_until(async || Ok(h.queue.pending() == 0)).await?;
+            cancel.cancel();
+            (&mut worker.0).await?;
+            let after = sqlx::query_as("SELECT id,state,revision,replaces,dual_verified_at FROM deposits ORDER BY revision")
+                .fetch_all(&db.app_pool).await?;
+            ensure!(history == after, "hint rewrote reversal history in {case}");
+            ensure!(topup::db::claim_deposit(&db.app_pool, Uuid::new_v4()).await?.is_none());
+            ensure!(disagreements(&h) == 0);
+            ensure!(sqlx::query_scalar::<_, bool>("SELECT through_block=0 FROM chain_coverage")
+                .fetch_one(&db.app_pool).await?);
+            Ok(())
+        }.await;
+        db.cleanup().await?;
+        result?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_address_snapshot_during_hint_rpc_defers_even_when_transfer_remains_eligible()
+-> Result<()> {
+    let Some(db) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let read = Rpc::new();
+        read.receipt_gate.store(true, Ordering::SeqCst);
+        let h = harness(&db.app_pool, read.clone(), Rpc::new()).await?;
+        let start = read.calls.load(Ordering::SeqCst);
+        let path = format!("/v1/quotes/{}/transactions", h.quote_id);
+        h.submit(&path, Some(&h.key), json!({"transaction_hash":TX}))
+            .await?;
+        let (cancel, mut worker) = h.worker(&db.app_pool);
+        wait_until(async || Ok(read.calls.load(Ordering::SeqCst) > start)).await?;
+        let block = u64::from_str_radix(
+            read.receipt.lock().unwrap()["blockNumber"]
+                .as_str()
+                .context("fixture block")?
+                .trim_start_matches("0x"),
+            16,
+        )?;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            let mut tx = db.app_pool.begin().await?;
+            topup::db::rpc::guard_in(&mut tx, CHAIN).await?;
+            sqlx::query("UPDATE addresses SET created_block=$1")
+                .bind(i64::try_from(block)?)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("hint held the chain lock during RPC")??;
+        h.submit(&path, Some(&h.key), json!({"transaction_hash":TX}))
+            .await?;
+        ensure!(h.queue.pending() == 1);
+        read.receipt_gate.store(false, Ordering::SeqCst);
+        wait_until(async || Ok(h.queue.pending() == 0)).await?;
+        cancel.cancel();
+        (&mut worker.0).await?;
+        ensure!(
+            deposits(&db.app_pool).await? == 0,
+            "changed snapshot admitted cached hint evidence"
+        );
+        ensure!(disagreements(&h) == 0);
+        Ok(())
+    }
+    .await;
+    db.cleanup().await?;
+    result
 }
 
 #[tokio::test]

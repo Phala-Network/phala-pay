@@ -351,6 +351,23 @@ async fn process(
         };
         let mut tx = pool.begin().await?;
         db::rpc::guard_in(&mut tx, hint.chain).await?;
+        // RPC runs outside the chain lock. A changed address snapshot must be retried
+        // by scanning, even if its new creation boundary would still admit this transfer.
+        let current: Option<(String, i64)> = sqlx::query_as(
+            "SELECT address,created_block FROM addresses WHERE id=$1 AND chain_id=$2",
+        )
+        .bind(hint.address.id)
+        .bind(i64::try_from(hint.chain).map_err(|_| scanner::ScannerError::SnapshotChanged)?)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let expected = (
+            format!("{:#x}", hint.address.address),
+            i64::try_from(hint.address.created_block)
+                .map_err(|_| scanner::ScannerError::SnapshotChanged)?,
+        );
+        if current.as_ref() != Some(&expected) {
+            return Ok(Outcome::Deferred);
+        }
         let mut recorded = false;
         for log in evidence.transfers {
             // Match coverage scanning's inclusive address creation boundary, using the
@@ -359,6 +376,24 @@ async fn process(
                 continue;
             }
             let deposit = scanner::resolve_log(log, &hint.address, &chain, chrono::Utc::now());
+            // Inspect the full position history after RPC and under the chain lock. Hints
+            // have confirmation evidence only: identical reversed evidence is dropped,
+            // and changed evidence waits for the scanner's finalized successor path.
+            let reversed: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM deposits WHERE chain_id=$1 AND tx_hash=$2 \
+                 AND receipt_log_index=$3 AND state='reversed')",
+            )
+            .bind(i64::try_from(hint.chain).map_err(|_| scanner::ScannerError::SnapshotChanged)?)
+            .bind(format!("{:#x}", deposit.tx_hash))
+            .bind(
+                i64::try_from(deposit.receipt_log_index)
+                    .map_err(|_| scanner::ScannerError::SnapshotChanged)?,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            if reversed {
+                continue;
+            }
             if let Some(id) =
                 db::insert_scanned_deposit_in(&mut tx, &deposit, db::Evidence::Confirmed).await?
             {

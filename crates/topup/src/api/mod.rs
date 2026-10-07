@@ -548,9 +548,7 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
         ));
     // No per-client IP is available behind the ingress, so hints have no per-IP limit.
     // Authenticated object limits, the daily hard cap and the in-flight cap bound hint work.
-    let merchant = merchant
-        .merge(client_secret)
-        .merge(hints);
+    let merchant = merchant.merge(client_secret).merge(hints);
     router_from_routes(state, pause, merchant, admin)
 }
 
