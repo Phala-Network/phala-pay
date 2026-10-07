@@ -36,6 +36,9 @@ rpc_companies:
     # Sentio's public testnet RPCs; reviewed against sentio.xyz and its official docs.
     domains:
     - sentio.xyz
+  alchemy:
+    domains:
+    - alchemy.com
 # Interactive reserves keep tokens available for API requests (quotes, screening), so background scanning cannot starve them; values are per budget burst.
 rpc_budgets:
   drpc-account:
@@ -65,6 +68,13 @@ rpc_budgets:
   sentio-account:
     requests_per_second: 5
     burst: 5
+  alchemy-account:
+    requests_per_second: 10
+    burst: 10
+    interactive_reserve: 2
+  alchemy-key:
+    requests_per_second: 10
+    burst: 10
   sentio-sepolia-key:
     requests_per_second: 5
     burst: 2
@@ -120,6 +130,12 @@ rpc_groups:
     policy:
       probe: { attempts: 3, deadline: 30000 }
     members:
+    - id: alchemy-sepolia-a
+      company: alchemy
+      url: https://eth-sepolia.g.alchemy.com/v2/{key}
+      sealed_key: TOPUP_RPC_ALCHEMY_KEY
+      account_budget: alchemy-account
+      key_budget: alchemy-key
     - id: provider-a
       company: tenderly
       url: https://sepolia.gateway.tenderly.co
@@ -152,6 +168,12 @@ rpc_groups:
     policy:
       probe: { attempts: 3, deadline: 30000 }
     members:
+    - id: alchemy-base-sepolia-a
+      company: alchemy
+      url: https://base-sepolia.g.alchemy.com/v2/{key}
+      sealed_key: TOPUP_RPC_ALCHEMY_KEY
+      account_budget: alchemy-account
+      key_budget: alchemy-key
     - id: base-sepolia-a
       company: tenderly
       url: https://base-sepolia.gateway.tenderly.co
@@ -180,6 +202,12 @@ rpc_groups:
     chain_id: 1
     policy: { head_regression_tolerance: 2 }
     members:
+    - id: alchemy-mainnet-a
+      company: alchemy
+      url: https://eth-mainnet.g.alchemy.com/v2/{key}
+      sealed_key: TOPUP_RPC_ALCHEMY_KEY
+      account_budget: alchemy-account
+      key_budget: alchemy-key
     - id: price-mainnet-a
       company: tenderly
       url: https://mainnet.gateway.tenderly.co
