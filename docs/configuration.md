@@ -245,3 +245,22 @@ not the defaults. Both modes reject `window_s + max_sample_age_s > 2880 s`: the 
 observation chain is Ethereum (12 s blocks), and Multicall3's `BLOCKHASH` can reach only 256
 blocks. The limit leaves a 16-block margin (240 × 12 s) for the oldest sample. A longer window
 cannot be verified by that contract and is refused at config validation.
+
+## Sanctions lists
+
+The service accepts `sanctions.max_staleness`, a positive integer followed by `s`, `m`, `h`,
+or `d`, default `24h`. The refresh interval is fixed at one hour and the stale alert at six hours.
+The first refresh runs immediately; before a verified snapshot exists, negative decisions hold.
+A hit in the active snapshot or an active manual entry rejects even if stale. Clear requires a
+fresh snapshot and successful reads of both lists. EVM addresses match across chains and the
+screening time is the decision time, using the newest verified snapshot. The SDN download and
+publication-hash endpoints are fixed; source changes require a release. `chain.sanctions_oracle`
+is deprecated and parsed for N-1 rollback only; it is removed in N+1.
+
+```yaml
+sanctions:
+  max_staleness: 24h
+```
+
+See the [sanctions runbook](../deploy/runbooks/sanctions-list.md) for verification failures,
+manual entries and rollback precautions.

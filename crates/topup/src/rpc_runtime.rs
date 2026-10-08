@@ -152,24 +152,6 @@ async fn check_endpoint(
             {
                 return Err(format!("chain {chain}: token decimals mismatch"));
             }
-            let mut oracle = alloy_primitives::keccak256("isSanctioned(address)")
-                .as_slice()
-                .get(..4)
-                .ok_or("oracle selector missing")?
-                .to_vec();
-            oracle.extend_from_slice(&[0; 32]);
-            let result = client
-                .call(
-                    "self-test sanctions",
-                    route.screening.sanctions_oracle,
-                    oracle.into(),
-                    pin,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-            if result.len() != 32 || U256::from_be_slice(&result) > U256::from(1) {
-                return Err(format!("chain {chain}: sanctions response malformed"));
-            }
             if client
                 .code_at_id(
                     route.chain.contracts.forwarder_factory,

@@ -873,6 +873,50 @@ pub async fn rescreen_due(
     Ok(outcome)
 }
 
+/// Re-screens pending changes immediately when a new verified publication activates.
+/// Positive hits cancel through the same audited path as a hit at time-lock expiry.
+pub async fn rescreen_pending(
+    pool: &PgPool,
+    routes: &RouteSet,
+    screening: &dyn DestinationScreener,
+) -> Result<(), TreasuryError> {
+    let pending: Vec<(Uuid, Uuid, bool, i64, String)> = sqlx::query_as(
+        "SELECT id,account_id,livemode,chain_id,address FROM treasuries WHERE applied_at IS NULL AND canceled_at IS NULL ORDER BY id")
+        .fetch_all(pool).await?;
+    let actor = Actor::system("sanctions_refresh");
+    for (id, account_id, livemode, chain, address) in pending {
+        let (chain, address) = parse_chain_address(chain, &address)?;
+        let Some(route) = chain_route(routes, livemode, chain) else {
+            continue;
+        };
+        if screening.screen(route, address).await != DestinationScreening::Sanctioned {
+            continue;
+        }
+        let scope = Scope::new(account_id, livemode);
+        let mut tx = pool.begin().await?;
+        lock(&mut tx, scope, true).await?;
+        let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM treasuries WHERE id=$1 AND applied_at IS NULL AND canceled_at IS NULL)")
+            .bind(id).fetch_one(&mut *tx).await?;
+        if pending {
+            mark_canceled(
+                &mut tx,
+                scope,
+                id,
+                CancellationReason::Sanctioned,
+                &actor,
+                "active sanctions snapshot names pending treasury",
+            )
+            .await?;
+            tracing::error!(
+                tags.alert = "TopupTreasurySanctioned",
+                "active sanctions snapshot canceled pending treasury"
+            );
+        }
+        tx.commit().await?;
+    }
+    Ok(())
+}
+
 /// A current route of the mode on `chain_id`, whose sanctions oracle screens its treasuries.
 fn chain_route(routes: &RouteSet, livemode: bool, chain_id: u64) -> Option<&RouteFile> {
     routes

@@ -8,29 +8,53 @@ use serde::{Deserialize, Serialize};
 use crate::deposit::{RejectReason, RetryError, StepOutcome, WaitReason};
 use crate::money::AtomicAmount;
 
-/// One provider's direct sanctions-list answer.
+/// Decision-time sanctions verdict from verified lists.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SanctionsAnswer {
-    /// The source address appears on the sanctions list.
+pub enum SanctionsVerdict {
+    /// An active snapshot or manual entry names the address, even if stale.
     Sanctioned,
-    /// The source address does not appear on the sanctions list.
+    /// No hit, a fresh active snapshot, and a successful manual-list read.
     Clear,
-    /// The provider could not return a usable answer.
-    Unavailable,
+    /// No usable fresh snapshot or a failed list read; hold and retry.
+    Uncertain,
 }
 
-/// Sanctions answers from both providers at the same recorded block.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Evidence of the verified snapshot used at decision time.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SanctionsProvenance {
+    /// Active snapshot identifier, absent before initial verification.
+    pub snapshot_id: Option<uuid::Uuid>,
+    /// SHA-256 of the exact publication bytes.
+    pub sha256: Option<alloy_primitives::B256>,
+    /// OFAC publication date in ISO format.
+    pub publish_date: Option<String>,
+    /// Last successful verification, Unix seconds.
+    pub verified_at: Option<i64>,
+    /// Whether an active operator entry matched.
+    pub manual_hit: bool,
+    /// Decision time, Unix seconds.
+    pub screened_at: i64,
+}
+
+/// A single verdict with optional provenance (test and deprecated oracle sources omit it).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SanctionsResult {
-    /// The answer returned by provider A.
-    pub provider_a: SanctionsAnswer,
-    /// The answer returned by provider B.
-    pub provider_b: SanctionsAnswer,
-    /// Canonical EIP-1898 pin; test sources may omit the hash.
-    pub block_hash: Option<alloy_primitives::B256>,
-    /// The block number at which both providers performed the check.
-    pub block_number: u64,
+    /// The list verdict.
+    pub verdict: SanctionsVerdict,
+    /// Verified-list provenance.
+    pub provenance: Option<SanctionsProvenance>,
+}
+
+impl SanctionsResult {
+    /// Creates a verdict without snapshot evidence, for injectable sources.
+    #[must_use]
+    pub const fn new(verdict: SanctionsVerdict) -> Self {
+        Self {
+            verdict,
+            provenance: None,
+        }
+    }
 }
 
 /// Inclusive per-deposit amount bounds, from the terms that govern the deposit.
@@ -130,19 +154,7 @@ impl ParsePauseScopeError {
 /// step because it holds a deposit before crediting; the other scopes govern their own
 /// operations.
 ///
-/// The sanctions truth table is:
-///
-/// | Provider A | Provider B | Decision |
-/// | --- | --- | --- |
-/// | `Sanctioned` | `Sanctioned` | reject |
-/// | `Sanctioned` | `Clear` | retry |
-/// | `Sanctioned` | `Unavailable` | retry |
-/// | `Clear` | `Sanctioned` | retry |
-/// | `Clear` | `Clear` | continue |
-/// | `Clear` | `Unavailable` | retry |
-/// | `Unavailable` | `Sanctioned` | retry |
-/// | `Unavailable` | `Clear` | retry |
-/// | `Unavailable` | `Unavailable` | retry |
+/// A positive hit rejects; an uncertain answer retries; only clear proceeds.
 #[must_use]
 pub fn screen(
     amount: AtomicAmount,
@@ -151,15 +163,14 @@ pub fn screen(
     customer_scopes: &PauseScopes,
     account_scopes: &PauseScopes,
 ) -> StepOutcome {
-    if sanctions.provider_a != sanctions.provider_b
-        || sanctions.provider_a == SanctionsAnswer::Unavailable
-    {
-        return StepOutcome::Retry {
-            error: RetryError::SanctionsInconclusive,
-        };
-    }
-    if sanctions.provider_a == SanctionsAnswer::Sanctioned {
-        return StepOutcome::Reject(RejectReason::Sanctioned);
+    match sanctions.verdict {
+        SanctionsVerdict::Sanctioned => return StepOutcome::Reject(RejectReason::Sanctioned),
+        SanctionsVerdict::Uncertain => {
+            return StepOutcome::Retry {
+                error: RetryError::SanctionsInconclusive,
+            };
+        }
+        SanctionsVerdict::Clear => {}
     }
 
     if amount < bounds.min_atomic || amount > bounds.max_atomic {
@@ -187,13 +198,8 @@ mod tests {
         AtomicAmount::new(U256::from(value))
     }
 
-    fn sanctions(provider_a: SanctionsAnswer, provider_b: SanctionsAnswer) -> SanctionsResult {
-        SanctionsResult {
-            provider_a,
-            provider_b,
-            block_number: 21_000_000,
-            block_hash: None,
-        }
+    fn sanctions(verdict: SanctionsVerdict) -> SanctionsResult {
+        SanctionsResult::new(verdict)
     }
 
     fn bounds() -> Bounds {
@@ -252,43 +258,36 @@ mod tests {
     }
 
     #[test]
-    fn sanctions_pair_truth_table_is_complete() {
-        use SanctionsAnswer::{Clear, Sanctioned, Unavailable};
-
-        let reject = StepOutcome::Reject(RejectReason::Sanctioned);
-        let retry = StepOutcome::Retry {
-            error: RetryError::SanctionsInconclusive,
-        };
-        let cases = [
-            (Sanctioned, Sanctioned, reject),
-            (Sanctioned, Clear, retry),
-            (Sanctioned, Unavailable, retry),
-            (Clear, Sanctioned, retry),
-            (Clear, Clear, StepOutcome::Advance),
-            (Clear, Unavailable, retry),
-            (Unavailable, Sanctioned, retry),
-            (Unavailable, Clear, retry),
-            (Unavailable, Unavailable, retry),
-        ];
-
-        for (provider_a, provider_b, expected) in cases {
+    fn sanctions_verdict_truth_table() {
+        for (verdict, expected) in [
+            (
+                SanctionsVerdict::Sanctioned,
+                StepOutcome::Reject(RejectReason::Sanctioned),
+            ),
+            (
+                SanctionsVerdict::Uncertain,
+                StepOutcome::Retry {
+                    error: RetryError::SanctionsInconclusive,
+                },
+            ),
+            (SanctionsVerdict::Clear, StepOutcome::Advance),
+        ] {
             assert_eq!(
                 screen(
                     amount(15),
-                    &sanctions(provider_a, provider_b),
+                    &sanctions(verdict),
                     &bounds(),
                     &PauseScopes::default(),
-                    &PauseScopes::default(),
+                    &PauseScopes::default()
                 ),
-                expected,
-                "unexpected decision for {provider_a:?}/{provider_b:?}"
+                expected
             );
         }
     }
 
     #[test]
     fn deposit_bounds_are_inclusive() {
-        let sanctions = sanctions(SanctionsAnswer::Clear, SanctionsAnswer::Clear);
+        let sanctions = sanctions(SanctionsVerdict::Clear);
         let bounds = bounds();
         let no_pauses = PauseScopes::default();
         let cases = [
@@ -308,7 +307,7 @@ mod tests {
 
     #[test]
     fn settlement_pause_on_customer_or_account_waits() {
-        let sanctions = sanctions(SanctionsAnswer::Clear, SanctionsAnswer::Clear);
+        let sanctions = sanctions(SanctionsVerdict::Clear);
         let bounds = bounds();
         let active = PauseScopes::default();
         let paused = scopes(&["settlement"]);
@@ -343,7 +342,7 @@ mod tests {
         assert_eq!(
             screen(
                 amount(15),
-                &sanctions(SanctionsAnswer::Clear, SanctionsAnswer::Clear),
+                &sanctions(SanctionsVerdict::Clear),
                 &bounds(),
                 &non_settlement,
                 &non_settlement,
@@ -357,7 +356,7 @@ mod tests {
         assert_eq!(
             screen(
                 amount(9),
-                &sanctions(SanctionsAnswer::Sanctioned, SanctionsAnswer::Sanctioned),
+                &sanctions(SanctionsVerdict::Sanctioned),
                 &bounds(),
                 &scopes(&["settlement"]),
                 &scopes(&["settlement"]),
@@ -371,7 +370,7 @@ mod tests {
         assert_eq!(
             screen(
                 amount(9),
-                &sanctions(SanctionsAnswer::Unavailable, SanctionsAnswer::Clear),
+                &sanctions(SanctionsVerdict::Uncertain),
                 &bounds(),
                 &scopes(&["settlement"]),
                 &scopes(&["settlement"]),
@@ -387,7 +386,7 @@ mod tests {
         assert_eq!(
             screen(
                 amount(21),
-                &sanctions(SanctionsAnswer::Clear, SanctionsAnswer::Clear),
+                &sanctions(SanctionsVerdict::Clear),
                 &bounds(),
                 &scopes(&["settlement"]),
                 &scopes(&["settlement"]),

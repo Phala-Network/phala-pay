@@ -1,4 +1,4 @@
-//! Confirmed-to-credited screening step.
+//! Confirmed-to-credited decision-time verified-list screening step.
 //!
 //! A deposit that passes screening is credited: its USD value is final and owed to the account,
 //! which learns it from the `deposit.credited` webhook written in the same transaction. A deposit
@@ -8,12 +8,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[cfg(test)]
 use alloy_primitives::Address;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
-use topup_adapters::risk::oracle::{SanctionsOracle, SanctionsOracleConfigError, SanctionsSource};
+use topup_adapters::risk::oracle::SanctionsSource;
 use topup_core::deposit::{DepositState, RejectReason, RetryError, StepOutcome};
 use topup_core::identity::{credited_event_id, event_id};
 use topup_core::money::AtomicAmount;
@@ -23,7 +24,7 @@ use topup_core::screening::{Bounds, PauseScopes, SanctionsResult, screen};
 use crate::db::{Deposit, EventObject, OutboxEvent};
 use crate::pause::{self, PauseScopeSources};
 use crate::pump::{Step, StepResult};
-use crate::routes::{ProviderError, RouteSet};
+use crate::routes::RouteSet;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct RouteKey {
@@ -63,24 +64,14 @@ impl ScreenRoute {
             .sanctions
             .sanctions(deposit.from_address, deposit.block_number)
             .await;
-        let outcome = if sanctions.block_number < deposit.block_number {
-            StepOutcome::Retry {
-                error: RetryError::SanctionsInconclusive,
-            }
-        } else {
-            screen(
-                deposit.amount_atomic,
-                &sanctions,
-                &bounds,
-                &pause_scopes.effective,
-                &PauseScopes::default(),
-            )
-        };
-        let oracle = self.route.screening.sanctions_oracle;
-        let mut evidence = screening_evidence(oracle, sanctions, bounds, &pause_scopes);
-        if sanctions.block_number < deposit.block_number {
-            evidence["error"] = json!("sanctions_pin_before_payment");
-        }
+        let outcome = screen(
+            deposit.amount_atomic,
+            &sanctions,
+            &bounds,
+            &pause_scopes.effective,
+            &PauseScopes::default(),
+        );
+        let mut evidence = screening_evidence(&sanctions, bounds, &pause_scopes);
         if outcome
             == (StepOutcome::Retry {
                 error: RetryError::SanctionsInconclusive,
@@ -99,26 +90,6 @@ impl ScreenRoute {
 /// Failure while constructing the route-to-screening registry.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ScreenStepConfigError {
-    /// One of the route's first two RPC providers is unusable.
-    #[error("route `{route}` version {version}: {source}")]
-    Provider {
-        /// Stable route name.
-        route: String,
-        /// Immutable route version.
-        version: u64,
-        /// Non-secret provider failure.
-        source: ProviderError,
-    },
-    /// A route's sanctions-oracle client could not be configured.
-    #[error("route `{route}` version {version} has invalid sanctions configuration: {source}")]
-    InvalidOracle {
-        /// Stable route name.
-        route: String,
-        /// Immutable route version.
-        version: u64,
-        /// Non-secret configuration failure.
-        source: SanctionsOracleConfigError,
-    },
     /// Two supplied route files used the same name and version.
     #[error("duplicate route `{route}` version {version}")]
     DuplicateRoute {
@@ -129,7 +100,7 @@ pub enum ScreenStepConfigError {
     },
 }
 
-/// Real screening step backed by PostgreSQL pause scopes and route-specific oracle clients.
+/// Real screening step backed by PostgreSQL pause scopes and local verified-list sources.
 pub struct ScreenStep {
     pool: PgPool,
     routes: BTreeMap<RouteKey, ScreenRoute>,
@@ -157,30 +128,31 @@ impl ScreenStep {
         })
     }
 
-    /// Creates route-specific sanctions checks on each route chain's first two providers.
+    /// Uses the newest verified local list for every route, with the default freshness limit.
     pub fn from_routes(pool: PgPool, routes: &RouteSet) -> Result<Self, ScreenStepConfigError> {
-        let mut screening_routes = Vec::with_capacity(routes.routes().len());
-        for route in routes.routes() {
-            let provider = |index| {
-                routes
-                    .provider(route.chain.chain_id, index)
-                    .map(Arc::clone)
-                    .map_err(|source| ScreenStepConfigError::Provider {
-                        route: route.route.clone(),
-                        version: route.version,
-                        source,
-                    })
-            };
-            let oracle =
-                SanctionsOracle::new(provider(0)?, provider(1)?, route.screening.sanctions_oracle)
-                    .map_err(|source| ScreenStepConfigError::InvalidOracle {
-                        route: route.route.clone(),
-                        version: route.version,
-                        source,
-                    })?;
-            screening_routes.push(ScreenRoute::new(route.clone(), Arc::new(oracle)));
-        }
-        Self::new(pool, screening_routes)
+        Self::from_source(
+            pool.clone(),
+            routes,
+            Arc::new(crate::sanctions::ListScreener::new(
+                pool,
+                std::time::Duration::from_secs(24 * 3600),
+            )),
+        )
+    }
+
+    /// Composes the shared configured local source; it never calls the deprecated oracle.
+    pub fn from_source(
+        pool: PgPool,
+        routes: &RouteSet,
+        source: Arc<dyn SanctionsSource>,
+    ) -> Result<Self, ScreenStepConfigError> {
+        Self::new(
+            pool,
+            routes
+                .routes()
+                .iter()
+                .map(|route| ScreenRoute::new(route.clone(), Arc::clone(&source))),
+        )
     }
 
     /// The amount bounds of the terms that govern `deposit` on `route`; none bound a credit the
@@ -331,17 +303,13 @@ fn credited_event(deposit: &Deposit) -> Result<OutboxEvent, &'static str> {
 }
 
 fn screening_evidence(
-    oracle: Address,
-    sanctions: SanctionsResult,
+    sanctions: &SanctionsResult,
     bounds: Bounds,
     pause_scopes: &PauseScopeSources,
 ) -> serde_json::Value {
     json!({
-        "oracle": format!("{oracle:#x}"),
-        "block_number": sanctions.block_number,
-        "block_hash": sanctions.block_hash,
-        "provider_a": sanctions.provider_a,
-        "provider_b": sanctions.provider_b,
+        "sanctions": sanctions.verdict,
+        "provenance": sanctions.provenance,
         "bounds": {
             "min_atomic": bounds.min_atomic,
             "max_atomic": bounds.max_atomic,
@@ -399,7 +367,7 @@ mod tests {
     use chrono::Utc;
     use topup_core::deposit::{RejectReason, StepOutcome, WaitReason};
     use topup_core::money::AtomicAmount;
-    use topup_core::screening::SanctionsAnswer;
+    use topup_core::screening::SanctionsVerdict;
     use uuid::Uuid;
 
     use super::*;
@@ -409,7 +377,7 @@ mod tests {
     #[async_trait]
     impl SanctionsSource for FixedSanctions {
         async fn sanctions(&self, _address: Address, _block_number: u64) -> SanctionsResult {
-            self.0
+            self.0.clone()
         }
     }
 
@@ -456,7 +424,7 @@ mod tests {
         }
     }
 
-    fn route(provider_a: SanctionsAnswer, provider_b: SanctionsAnswer) -> ScreenRoute {
+    fn route(verdict: SanctionsVerdict) -> ScreenRoute {
         let mut route: topup_core::route::RouteFile =
             serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml"))
                 .expect("route fixture");
@@ -465,12 +433,9 @@ mod tests {
         route.screening.sanctions_oracle = Address::repeat_byte(9);
         ScreenRoute::new(
             route,
-            Arc::new(FixedSanctions(SanctionsResult {
-                block_hash: None,
-                provider_a,
-                provider_b,
-                block_number: 123,
-            })),
+            Arc::new(FixedSanctions(topup_core::screening::SanctionsResult::new(
+                verdict,
+            ))),
         )
     }
 
@@ -490,73 +455,25 @@ mod tests {
 
     #[tokio::test]
     async fn sanctions_truth_table_maps_to_step_results() {
-        use SanctionsAnswer::{Clear, Sanctioned, Unavailable};
-
         let cases = [
             (
-                Sanctioned,
-                Sanctioned,
+                SanctionsVerdict::Sanctioned,
                 StepOutcome::Reject(RejectReason::Sanctioned),
             ),
-            (Clear, Clear, StepOutcome::Advance),
+            (SanctionsVerdict::Clear, StepOutcome::Advance),
             (
-                Sanctioned,
-                Clear,
-                StepOutcome::Retry {
-                    error: RetryError::SanctionsInconclusive,
-                },
-            ),
-            (
-                Clear,
-                Sanctioned,
-                StepOutcome::Retry {
-                    error: RetryError::SanctionsInconclusive,
-                },
-            ),
-            (
-                Sanctioned,
-                Unavailable,
-                StepOutcome::Retry {
-                    error: RetryError::SanctionsInconclusive,
-                },
-            ),
-            (
-                Unavailable,
-                Sanctioned,
-                StepOutcome::Retry {
-                    error: RetryError::SanctionsInconclusive,
-                },
-            ),
-            (
-                Clear,
-                Unavailable,
-                StepOutcome::Retry {
-                    error: RetryError::SanctionsInconclusive,
-                },
-            ),
-            (
-                Unavailable,
-                Clear,
-                StepOutcome::Retry {
-                    error: RetryError::SanctionsInconclusive,
-                },
-            ),
-            (
-                Unavailable,
-                Unavailable,
+                SanctionsVerdict::Uncertain,
                 StepOutcome::Retry {
                     error: RetryError::SanctionsInconclusive,
                 },
             ),
         ];
-
-        for (provider_a, provider_b, expected) in cases {
+        for (verdict, expected) in cases {
             let deposit = deposit(amount(15));
-            let result = route(provider_a, provider_b)
+            let result = route(verdict)
                 .evaluate(&deposit, pauses(&[], &[], &[]), bounds())
                 .await;
             assert_eq!(result.outcome, expected);
-            assert_eq!(result.evidence["block_number"], 123);
             if matches!(expected, StepOutcome::Reject(_)) {
                 assert_eq!(result.events.len(), 1);
                 assert_eq!(result.events[0].event_type, "deposit.rejected");
@@ -575,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn bounds_and_pause_outcomes_preserve_evidence_and_event_rules() {
-        let out_of_bounds = route(SanctionsAnswer::Clear, SanctionsAnswer::Clear)
+        let out_of_bounds = route(SanctionsVerdict::Clear)
             .evaluate(&deposit(amount(21)), pauses(&[], &[], &[]), bounds())
             .await;
         assert_eq!(
@@ -586,7 +503,7 @@ mod tests {
         assert_eq!(out_of_bounds.evidence["bounds"]["min_atomic"], "10");
         assert_eq!(out_of_bounds.evidence["bounds"]["max_atomic"], "20");
 
-        let waiting = route(SanctionsAnswer::Clear, SanctionsAnswer::Clear)
+        let waiting = route(SanctionsVerdict::Clear)
             .evaluate(
                 &deposit(amount(15)),
                 pauses(&["settlement"], &[], &[]),
@@ -605,7 +522,7 @@ mod tests {
             "settlement"
         );
 
-        let route_paused = route(SanctionsAnswer::Clear, SanctionsAnswer::Clear)
+        let route_paused = route(SanctionsVerdict::Clear)
             .evaluate(
                 &deposit(amount(15)),
                 pauses(&[], &[], &["settlement"]),
@@ -623,7 +540,7 @@ mod tests {
             "settlement"
         );
 
-        let non_settlement_route_pause = route(SanctionsAnswer::Clear, SanctionsAnswer::Clear)
+        let non_settlement_route_pause = route(SanctionsVerdict::Clear)
             .evaluate(
                 &deposit(amount(15)),
                 pauses(&[], &[], &["refunds"]),
@@ -634,24 +551,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_cannot_pin_before_the_payment() {
-        let mut route = route(SanctionsAnswer::Clear, SanctionsAnswer::Clear);
-        route.sanctions = Arc::new(FixedSanctions(SanctionsResult {
-            block_hash: None,
-            provider_a: SanctionsAnswer::Clear,
-            provider_b: SanctionsAnswer::Clear,
-            block_number: 122,
-        }));
-        let result = route
+    async fn decision_time_screening_does_not_require_a_block_pin() {
+        let result = route(SanctionsVerdict::Clear)
             .evaluate(&deposit(amount(15)), pauses(&[], &[], &[]), bounds())
             .await;
-        assert_eq!(
-            result.outcome,
-            StepOutcome::Retry {
-                error: RetryError::SanctionsInconclusive,
-            }
-        );
-        assert_eq!(result.evidence["error"], "sanctions_pin_before_payment");
-        assert_eq!(result.evidence["sanctions_hold"], true);
+        assert_eq!(result.outcome, StepOutcome::Advance);
+        assert!(result.evidence.get("block_number").is_none());
     }
 }

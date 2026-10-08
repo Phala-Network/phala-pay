@@ -1385,6 +1385,7 @@ pub async fn daily_report(
         failing_webhook_endpoints(pool, generated_at, failing_for_hours).await?;
 
     Ok(DailyReportResponse {
+        sanctions_snapshot: crate::sanctions::active(pool).await?,
         generated_at,
         exposure_minor,
         routes: reports.into_values().collect(),

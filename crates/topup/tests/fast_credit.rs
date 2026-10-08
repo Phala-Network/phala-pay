@@ -35,7 +35,7 @@ use topup_core::deposit::DepositState;
 use topup_core::identity::{credited_event_id, deposit_id, reversed_event_id};
 use topup_core::money::{AtomicAmount, PRICE_SCALE, ScaledPrice};
 use topup_core::route::{ChainFamily, ChainHeads, Confirmations, RouteFile};
-use topup_core::screening::{SanctionsAnswer, SanctionsResult};
+use topup_core::screening::{SanctionsResult, SanctionsVerdict};
 use topup_core::valuation::{SourceId, UnixSeconds};
 use tracing_test::traced_test;
 use uuid::Uuid;
@@ -1367,12 +1367,7 @@ struct ClearSanctions;
 
 #[async_trait]
 impl SanctionsSource for ClearSanctions {
-    async fn sanctions(&self, _address: Address, block_number: u64) -> SanctionsResult {
-        SanctionsResult {
-            block_hash: None,
-            provider_a: SanctionsAnswer::Clear,
-            provider_b: SanctionsAnswer::Clear,
-            block_number,
-        }
+    async fn sanctions(&self, _address: Address, _block_number: u64) -> SanctionsResult {
+        topup_core::screening::SanctionsResult::new(SanctionsVerdict::Clear)
     }
 }

@@ -566,7 +566,7 @@ pub struct ChainSpec {
     /// Forwarder implementation; default the factory's first `CREATE` ([`factory_implementation`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub implementation: Option<Address>,
-    /// Sanctions oracle; default [`default_sanctions_oracle`] for the chain.
+    /// Deprecated in N: parsed for N-1 rollback only; unused for screening. Default [`default_sanctions_oracle`] for the chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sanctions_oracle: Option<Address>,
 }

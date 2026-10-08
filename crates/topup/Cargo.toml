@@ -11,6 +11,8 @@ name = "topup"
 path = "src/main.rs"
 
 [features]
+# Loopback-only fixtures for the real-worker rollback drill; never ship this feature.
+test-support = []
 dev-signer = ["topup-adapters/dev-signer"]
 
 [dependencies]
@@ -57,6 +59,7 @@ url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 x509-parser = "=0.18.1"
+quick-xml = { version = "=0.38.4", features = ["serialize"] }
 
 [dev-dependencies]
 topup-adapters = { path = "../adapters", features = ["test-support"] }

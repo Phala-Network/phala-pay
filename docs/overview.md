@@ -109,3 +109,7 @@ and never credited.
 | Service | Addresses, chain evidence, finality, screening, pricing, deposit state, credits and their webhooks, the swept status it reads from the chain, and reconciliation. |
 | Operator | Creating accounts, deciding live access, issuing first and recovery keys, handling incidents, and its own compliance. |
 | Merchant | Its keys, treasuries, webhook endpoints, sweeps, and refunds (and their gas), and its customers' identity (KYC), balances, entitlements, and billing policy. |
+
+Payers, treasuries and refund destinations are screened against verified OFAC SDN snapshots
+and audited operator supplements. A stale or unavailable negative answer holds the decision;
+positive hits still deny. This is direct address-list screening; operators own broader compliance.

@@ -3,9 +3,14 @@ mod support;
 
 use alloy_primitives::{Address, B256};
 use anyhow::{Context, Result, ensure};
-use axum::{Json, Router, extract::State, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    routing::{get, post},
+};
 use chrono::Utc;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -257,11 +262,15 @@ fn start_service(
         c
     } else {
         let mut c = Command::new(env!("CARGO_BIN_EXE_topup"));
-        c.env("DATABASE_URL", &database.app_url)
-            .env("DSTACK_SIMULATOR_ENDPOINT", kms)
-            .env("SSL_CERT_FILE", &tls.certificate)
-            .env("TOPUP_RPC_ANKR_KEY", "local-drill-key")
-            .env("TOPUP_RPC_INFURA_KEY", "local-drill-key");
+        c.env(
+            "TOPUP_TEST_SLS_ORIGIN",
+            std::fs::read_to_string(directory.join("sls-origin"))?,
+        )
+        .env("DATABASE_URL", &database.app_url)
+        .env("DSTACK_SIMULATOR_ENDPOINT", kms)
+        .env("SSL_CERT_FILE", &tls.certificate)
+        .env("TOPUP_RPC_ANKR_KEY", "local-drill-key")
+        .env("TOPUP_RPC_INFURA_KEY", "local-drill-key");
         c
     };
     command.args([
@@ -386,6 +395,10 @@ async fn submit_hint(origin: &str, key: &str, address: &str, hash: B256) -> Resu
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires verified published N-1 image; mandatory deploy rollback CI gate"]
 async fn published_image_round_trip() -> Result<()> {
+    ensure!(
+        cfg!(feature = "test-support"),
+        "rollback worker drill requires test-support; official OFAC fetch is forbidden"
+    );
     let image = std::env::var("TOPUP_ROLLBACK_IMAGE").context("published N-1 image required")?;
     ensure!(image.contains("@sha256:"));
     let database = TestDatabase::create_with_migrations(false)
@@ -393,6 +406,12 @@ async fn published_image_round_trip() -> Result<()> {
         .context("local Postgres required")?;
     let directory = FixtureDirectory::new()?;
     let result=async {
+        let xml=include_str!("fixtures/sdn.xml").to_owned();
+        let hash=hex::encode(Sha256::digest(xml.as_bytes()));
+        let (sls,_sls_task)=serve(Router::new()
+            .route("/api/PublicationPreview/SdnList",post(move || {let hash=hash.clone(); async move { Json(json!([{"fileName":"SDN.XML","hashCodes":{"SHA-256":hash},"lastUpdated":"2026-10-05T00:00:00Z"}])) }}))
+            .route("/api/download/SDN.XML",get(move || {let xml=xml.clone(); async move {xml}}))).await?;
+        std::fs::write(directory.path().join("sls-origin"),sls)?;
         let anvil=Anvil::start(1,&["--slots-in-an-epoch","4"]).await?;
         let factory=forge_create(&anvil.rpc_url,"src/ForwarderFactory.sol:ForwarderFactory",&[])?;
         let oracle=forge_create(&anvil.rpc_url,"test/mocks/MockSanctionsOracle.sol:MockSanctionsOracle",&[])?;

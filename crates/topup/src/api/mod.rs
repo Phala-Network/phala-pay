@@ -27,6 +27,7 @@ mod quotes;
 mod rate_limit;
 mod repository;
 mod restore;
+mod sanctions;
 mod sweeps;
 mod transactions;
 mod treasuries;
@@ -451,6 +452,8 @@ fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::nudge_deposit))
         .routes(routes!(handlers::lift_reconciliation_block))
         .routes(routes!(handlers::daily_report))
+        .routes(routes!(sanctions::add))
+        .routes(routes!(sanctions::remove))
         .routes(routes!(handlers::metrics))
         .routes(routes!(account::admin_get_attestation))
         .routes(routes!(restore::get_restore))

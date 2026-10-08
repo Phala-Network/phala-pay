@@ -770,8 +770,17 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let confirm_step =
         ConfirmStep::from_routes(pool.clone(), &routes, Arc::clone(&pricing_runtimes))
             .context("invalid confirm-step configuration")?;
-    let screen_step = ScreenStep::from_routes(pool.clone(), &routes)
-        .context("failed to configure screening step")?;
+    let screening = Arc::new(topup::sanctions::ListScreener::new(
+        pool.clone(),
+        config.sanctions.duration().map_err(anyhow::Error::msg)?,
+    ));
+    let sanctions_refresh = topup::sanctions::Refresher::new(pool.clone())?;
+    let screen_step = ScreenStep::from_source(
+        pool.clone(),
+        &routes,
+        Arc::clone(&screening) as Arc<dyn topup_adapters::risk::oracle::SanctionsSource>,
+    )
+    .context("failed to configure screening step")?;
     let steps = Arc::new(StepSet::new(Box::new(confirm_step), Box::new(screen_step)));
     let pump = Pump::new(
         pool.clone(),
@@ -796,9 +805,6 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             .map_err(anyhow::Error::msg)
             .context("failed to configure the finality watch")?;
     let mut tasks = ServiceTasks::new();
-    let screening = Arc::new(topup::refunds::CachedDestinationScreener::new(Arc::new(
-        topup::refunds::OracleDestinationScreener::new(Arc::clone(&routes)),
-    )));
     let state = topup::api::AppState {
         pool: pool.clone(),
         routes: Arc::clone(&routes),
@@ -840,6 +846,13 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     tracing::info!(bind = %args.bind, "API listening");
 
     let price_routes = Arc::clone(&routes);
+    let sanctions_routes = Arc::clone(&routes);
+    let sanctions_screening = Arc::clone(&screening);
+    tasks.spawn("sanctions list refresh", |cancellation| async move {
+        sanctions_refresh
+            .run(sanctions_routes, sanctions_screening, cancellation)
+            .await;
+    });
     tasks.spawn("TWAP price sampler", |cancellation| async move {
         price_provider
             .sample_twaps(&price_routes, cancellation)

@@ -7,9 +7,16 @@ use alloy::primitives::Address;
 use alloy::sol;
 use alloy::sol_types::SolCall;
 use async_trait::async_trait;
-use topup_core::screening::{SanctionsAnswer, SanctionsResult};
+use topup_core::screening::{SanctionsResult, SanctionsVerdict};
 
 use crate::chain::evm::EvmClient;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LegacyAnswer {
+    Sanctioned,
+    Clear,
+    Unavailable,
+}
 
 sol! {
     function isSanctioned(address account) external view returns (bool sanctioned);
@@ -66,7 +73,7 @@ impl SanctionsOracle {
         provider: &EvmClient,
         address: Address,
         block: alloy_primitives::B256,
-    ) -> SanctionsAnswer {
+    ) -> LegacyAnswer {
         let call = isSanctionedCall { account: address };
         let output = match provider
             .call(
@@ -80,13 +87,13 @@ impl SanctionsOracle {
             Ok(output) => output,
             Err(error) => {
                 tracing::warn!(%error, "sanctions provider request failed");
-                return SanctionsAnswer::Unavailable;
+                return LegacyAnswer::Unavailable;
             }
         };
         match isSanctionedCall::abi_decode_returns_validate(&output) {
-            Ok(true) => SanctionsAnswer::Sanctioned,
-            Ok(_) => SanctionsAnswer::Clear,
-            Err(_) => SanctionsAnswer::Unavailable,
+            Ok(true) => LegacyAnswer::Sanctioned,
+            Ok(_) => LegacyAnswer::Clear,
+            Err(_) => LegacyAnswer::Unavailable,
         }
     }
 }
@@ -99,20 +106,10 @@ fn is_http(client: &EvmClient) -> bool {
 impl SanctionsSource for SanctionsOracle {
     async fn sanctions(&self, address: Address, block_number: u64) -> SanctionsResult {
         let Ok((number, hash, _)) = self.provider_b.current_pin().await else {
-            return SanctionsResult {
-                provider_a: SanctionsAnswer::Unavailable,
-                provider_b: SanctionsAnswer::Unavailable,
-                block_number: 0,
-                block_hash: None,
-            };
+            return SanctionsResult::new(SanctionsVerdict::Uncertain);
         };
         if number < block_number {
-            return SanctionsResult {
-                provider_a: SanctionsAnswer::Unavailable,
-                provider_b: SanctionsAnswer::Unavailable,
-                block_number: number,
-                block_hash: Some(hash),
-            };
+            return SanctionsResult::new(SanctionsVerdict::Uncertain);
         }
         let (provider_a, provider_b) = tokio::join!(
             self.answer(&self.provider_a, address, hash),
@@ -122,12 +119,11 @@ impl SanctionsSource for SanctionsOracle {
             self.provider_a.disagreement("eth_call");
             self.provider_b.disagreement("eth_call");
         }
-        SanctionsResult {
-            provider_a,
-            provider_b,
-            block_number: number,
-            block_hash: Some(hash),
-        }
+        SanctionsResult::new(match (provider_a, provider_b) {
+            (LegacyAnswer::Sanctioned, LegacyAnswer::Sanctioned) => SanctionsVerdict::Sanctioned,
+            (LegacyAnswer::Clear, LegacyAnswer::Clear) => SanctionsVerdict::Clear,
+            _ => SanctionsVerdict::Uncertain,
+        })
     }
 }
 
@@ -175,8 +171,7 @@ mod tests {
         let result = oracle.sanctions(Address::repeat_byte(1), 1).await;
         let elapsed = started.elapsed();
 
-        assert_eq!(result.provider_a, SanctionsAnswer::Unavailable);
-        assert_eq!(result.provider_b, SanctionsAnswer::Unavailable);
+        assert_eq!(result.verdict, SanctionsVerdict::Uncertain);
         assert!(elapsed >= timeout);
         assert!(elapsed < Duration::from_secs(1));
         server.abort();

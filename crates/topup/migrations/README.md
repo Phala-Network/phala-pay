@@ -335,3 +335,10 @@ that lowers `created_block` can expose unscanned history, so the compatibility c
 rebase to the boundary reached by every address and clear `scanned_block_time`. N-1 pauses
 expiry while that time is NULL and rescans from the lowered cursor. N publishes an agreed
 time only in the transaction that commits the corresponding dual address markers and coverage.
+
+`20261101000000_sanctions_lists` adds only verified OFAC snapshots, their digital-currency
+identifiers, and audited manual sanctions entries. The newest activation is active, and all
+snapshot evidence is retained. The down migration is a no-op; the compatibility floor and
+persisted `sanctioned` / `sanctions_inconclusive` values stay unchanged. N-1 ignores the tables
+and resumes the deprecated oracle, with its known stale-list defect. Pause settlement for routes
+affected by active manual entries before rollback; see the sanctions runbook.

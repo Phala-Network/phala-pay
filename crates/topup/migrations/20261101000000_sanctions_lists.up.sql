@@ -11,9 +11,9 @@ CREATE TABLE IF NOT EXISTS sanctions_list_snapshots (
     verified_at timestamptz NOT NULL,
     UNIQUE (source, sha256)
 );
--- Only the active snapshot has activated_at set; fetched_at preserves historical ordering.
-CREATE UNIQUE INDEX IF NOT EXISTS sanctions_list_one_active
-    ON sanctions_list_snapshots (source) WHERE activated_at IS NOT NULL;
+-- The latest activation is active; preserve historical activation evidence.
+CREATE INDEX IF NOT EXISTS sanctions_list_latest
+    ON sanctions_list_snapshots (source, activated_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS sanctions_list_addresses (
     snapshot_id uuid NOT NULL REFERENCES sanctions_list_snapshots(id),
     sdn_uid bigint NOT NULL,

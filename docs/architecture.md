@@ -29,7 +29,7 @@ Every mechanism follows a named practice. Where this design adapts a practice, t
 | Rate-locked deposits | Invoice model (BTCPay Server, Coinbase Commerce): unique address, fixed amount, expiry | Exception rules (§9) are this service's policy profile, not a processor standard |
 | Chain reads | JSON-RPC `latest`, `safe`, and `finalized` tags, `eth_getLogs`, receipts, two independent providers | Credit at a confirmation depth like exchanges and BTCPay's confirmation setting; watch to finality |
 | Price | Chainlink and independent public exchange observations | — |
-| Sanctions | Chainalysis sanctions oracle `isSanctioned(address)` | Direct list screening only; not KYT |
+| Sanctions | Verified OFAC SDN snapshots + audited operator supplements | Direct list screening only; not KYT |
 | Deposit identity | UUIDv5 (RFC 9562) over `chain_id:lowercase_tx_hash:decimal_receipt_log_index`; reorg handling as in chain indexers: the orphaned record is rolled back and the canonical log indexed as a new record | The log's position in its transaction's receipt, which survives re-inclusion. The position does not fix the content: when another transfer is final at a reversed deposit's position, it is a new deposit with the next revision, `…:decimal_revision`, that `replaces` it (§7) |
 | Reversal | Etherscan "Dropped & Replaced", ethers `TRANSACTION_REPLACED`; Stripe's dispute after a failed ACH payment | A proven-dropped deposit becomes `reversed` and `deposit.reversed` |
 | Job queue | PostgreSQL `SELECT … FOR UPDATE SKIP LOCKED` | — |
@@ -235,7 +235,7 @@ flowchart TB
         kms["dstack KMS<br/>derived keys"]
         rpc["RPC providers<br/>A and B"]
         prices["Price sources"]
-        oracle["Sanctions oracle"]
+        oracle["OFAC SDN + publication hash"]
         sentry["Sentry"]
         r2[("R2<br/>encrypted backups")]
     end
@@ -248,7 +248,7 @@ flowchart TB
 
 ```text
 crates/core       pure, no I/O: money, route schema, CREATE2 math, state machine, valuation, screening
-crates/adapters   chain::evm, signer::dstack, pricing::{chainlink,binance,kraken,uniswap_v2}, risk::oracle
+crates/adapters   chain::evm, signer::dstack, pricing::{chainlink,binance,kraken,uniswap_v2}, risk::oracle (deprecated); topup::sanctions
 crates/topup      binary: db, pump, scanner, finality, outbox, reconciler, api, cli
 contracts/        Forwarder.sol, ForwarderFactory.sol, deploy scripts, Foundry tests
 deploy/           compose, deployment scripts, runbooks; deploy/environments: each deployment's attested settings and routes
@@ -423,7 +423,7 @@ once. A step panic aborts the process; the lease expires and another pump re-cla
 | Step | Does |
 |---|---|
 | `detected → confirmed` | From both providers, by the transaction's receipt: the log at the deposit's receipt position, in the same block (same hash), and that block has reached the route's confirmation on each (§8, §14). Each check reads, per provider, the one head the confirmation needs and the transaction's receipt; the block time and sender nonce are independently read on each endpoint. A lagging provider is waited for every 2 s, 12 s for `finalized`. While `detected`, evidence is provisional: if both providers agree on different canonical evidence for the same identity, the row is corrected. If both are final past the row and neither has the log, the step retries with `log_absent_at_finality` until the finality watch decides; before finality it waits. For a `finalized` route, whose check reads `finalized`, the deposit is marked final (`final_at`) in the same transaction; otherwise the finality watch marks it. The confirmation waited for is the stricter of the chain's current floor, the deposit's bound requirement, and, for a payment of a quote's asset to its address, the quote's (§9). A deposit bound while its account's settings were held waits, unless its outcome was delivered before a restore (§14). Then the terms: those of the address's quote for a valid payment of it, otherwise those its binding resolves on its route; a binding that does not accept the asset → `rejected(asset_not_accepted)`, before any price is fetched. In the same step, fetch the quote (§8) and store `valuation_at`, `price_scaled`, `credit_minor`, `quote`. Below the terms' `min_amount` → `rejected(below_minimum)`. |
-| `confirmed → credited` | `isSanctioned(from)` on both providers at a recorded block; the governing terms' `min_deposit_atomic ≤ amount ≤ max_deposit_atomic` (none for a credit delivered before a restore, §14); account, customer, and route not paused for `settlement`, and crediting of the treasury the deposit's forwarder pays not paused by the merchant or the operator (paused → `Wait`, never a rejection); a deposit not final yet only while its credit keeps the account's unfinalized credit within `accounts.max_unfinalized_credit` (below; past it → `Wait` until final). On a pass, the same transaction writes the `deposit.credited` outbox row (§11): the credit is owed to the merchant, whatever the merchant answers, unless the deposit is reversed before finality. |
+| `confirmed → credited` | decision-time local screening of `from` against the newest verified snapshot and active manual entries; the governing terms' `min_deposit_atomic ≤ amount ≤ max_deposit_atomic` (none for a credit delivered before a restore, §14); account, customer, and route not paused for `settlement`, and crediting of the treasury the deposit's forwarder pays not paused by the merchant or the operator (paused → `Wait`, never a rejection); a deposit not final yet only while its credit keeps the account's unfinalized credit within `accounts.max_unfinalized_credit` (below; past it → `Wait` until final). On a pass, the same transaction writes the `deposit.credited` outbox row (§11): the credit is owed to the merchant, whatever the merchant answers, unless the deposit is reversed before finality. |
 | `credited → swept` | The deposit is final and a `flushed` row (a finalized `Flushed` event for its address, token, and treasury, whoever sent it) exists at a log position `(block_number, log_index)` greater than the deposit's. Applied in SQL, with the finalized `Flushed` event as evidence, when the scanner indexes the event, when the deposit is credited or becomes final, and by the reconciler's repair pass; the pump's credited step only waits. |
 
 **Unfinalized credit cap.** Crediting before finality is the service's exposure to a
@@ -621,11 +621,24 @@ See [price failover](design/price-failover.md) and [configuration](configuration
 
 **Screening** is direct sanctions-list screening plus per-deposit bounds. KYC, KYT, and the Travel
 Rule are not part of the software: they are the operator's and the merchant's responsibility (§15).
-New credit requires both endpoints to answer clear at the verified screening block. Both
-sanctioned answers reject. Disagreement or unavailability holds and retries, alerting after the
-confirmation window. For credit delivered before restore, agreed sanctioned answers record a
-hit and block sweep while preserving the credit; inconclusive replay records no hit and leaves
-that credit unchanged.
+New credit requires no hit, an active verified OFAC SDN snapshot no older than
+`sanctions.max_staleness` (default 24h), and a successful manual-list read. A hit in either
+active source rejects even if the snapshot is stale. Missing snapshots, stale negative answers,
+or database failures hold with `sanctions_inconclusive` and retry using the newest snapshot.
+Provenance records snapshot id, SHA-256, publication date, verification time, manual hit and
+screening time. No historical block pin or clear-verdict cache applies to sanctions.
+For credit delivered before restore, a hit records a compliance restriction and blocks sweep
+while preserving credit; an uncertain replay records no hit and leaves that credit unchanged.
+
+The service checks SLS hourly, immediately at startup. It obtains SDN.XML bytes and the SLS
+PublicationPreview SHA-256 through separate paths, then verifies the exact hash, complete XML,
+`Record_Count`, and nondecreasing `Publish_Date` before atomic activation. An unchanged official
+hash advances only `verified_at`; failures retain all previous evidence. Both paths belong to
+OFAC, the authoritative publisher; this is integrity verification, not independent publishers.
+All digital-currency identifiers are retained, while valid 20-byte EVM addresses match across
+all EVM chains without EIP-55 validation. Malformed `0x` values are counted without repair.
+Snapshots are retained by default. Operator supplements use the signed admin API and audit log;
+see the [sanctions runbook](../deploy/runbooks/sanctions-list.md).
 
 ## 9. Quotes
 
@@ -762,7 +775,7 @@ the integration tests check against Safe v1.4.1 built from its tagged source (in
 §1.6). An ERC-6492 wrapper (magic suffix
 `0x6492…6492`) and a contract not deployed at `finalized` are refused (`treasury_proof_invalid`,
 `treasury_not_deployed`); the providers disagreeing is `503`. The address is screened with the
-route's sanctions oracle (`400 treasury_sanctioned`), again by the time-lock worker when a pending
+newest verified sanctions lists (`400 treasury_sanctioned`), again by the time-lock worker when a pending
 change is due (a listed one is canceled, `cancellation_reason: sanctioned`, instead of applied),
 and daily while current: a listed current treasury pauses the account's `quotes` and `settlement`
 (audited, `account.updated`, alert `TopupTreasurySanctioned`) until the operator resumes them with
@@ -1232,9 +1245,8 @@ forwarders hold (deposits not reversed minus finalized `flushed` amounts) and it
 `GET /v1/sweeps` lists `flushed` rows as `sw_…` objects (the id is a UUID of the event's identity).
 `GET /v1/forwarders` exports every address row with its `(factory, salt, treasury)`; with
 `sweepable=<token>` only rows with a final unswept balance of it, none holding a `sanctioned`
-deposit, and none paying a treasury the route's oracle names at request time; sweepable listing
-reuses a clear verdict for up to 10 minutes (refund destinations and treasury changes are screened
-fresh; `503` if screening cannot answer), so an SDK-built `flush` never sweeps a sanctioned deposit
+deposit, and none paying a treasury the active lists name at request time; sweepable listing
+queries the local lists at decision time (`503` if screening cannot answer), so an SDK-built `flush` never sweeps a sanctioned deposit
 or pays a sanctioned treasury.
 
 **Refund.** `{id, object: "refund", deposit, amount_atomic, destination_address, treasury, status,
@@ -1466,7 +1478,8 @@ defaulted addresses from it. The defaults and why:
 |---|---|
 | `chain.confirmations` | per chain family (§8): 2 on Ethereum L1, 3 on OP-stack, `finalized` elsewhere; a route may require more (for example `finalized`), and a family accepts only its values |
 | `chain.implementation` | the factory's first `CREATE` (nonce 1), which its constructor deploys; startup verifies `implementation()` on chain (§4) |
-| `chain.sanctions_oracle` | the Chainalysis oracle published for the chain (Ethereum and most EVM chains `0x40C5…aC8fb`, Base `0x3A91…D739B`); required on any other chain, such as Sepolia |
+| `chain.sanctions_oracle` | Deprecated: parsed for N-1 rollback, unused by N; removed in N+1. |
+| `sanctions.max_staleness` | Service configuration, default `24h`; maximum successful verification age for a clear verdict. |
 | `rpc` | required read/verify endpoint pair for each route and price chain, with independent hosts and explicit sealed keys ([RPC configuration](configuration.md#the-configuration-file), [runbook](../deploy/RPC.md)) |
 | `price.mode`, role lists | explicit `volatile` or `stablecoin`; no implicit providers |
 | `price.max_age_s`, `peg_band_bps`, `max_deviation_bps`, `max_fx_deviation_bps` | 90, 100, 100, 100; Chainlink uses its pinned heartbeat + 600 s |
@@ -1659,6 +1672,9 @@ linked to its runbook: `TopupDepositStateAgeExceeded` (age in state past the rou
 `TopupLockExpiryFailing`, `TopupUnsupportedInflows`, `TopupDepositReversed` (a deposit's
 transaction left the chain before finality: a chain-health signal), `TopupDepositPendingAfterReorg`
 (a deposit's transaction has been out of every block for an hour without positive replacement proof),
+`TopupSanctionsListStale` (no snapshot or verification older than 6h),
+`TopupSanctionsListVerifyFailed` (hash, XML, count or date validation failure),
+`TopupRefundDestinationSanctioned` (pending refund destination hit),
 `TopupTreasurySanctioned` (a current treasury is listed; §9), `TopupDeliveredCreditSanctioned` (a
 credit delivered before a restore whose sender is now listed: the credit stands and its forwarder
 is never offered for a sweep; §14). Alerts
@@ -1785,3 +1801,7 @@ Ownership: **S** service, **M** merchant (its UI, billing, and support), **O** o
 | Account closure (design PR 13) | S+O | | ✓ |
 | Base mainnet routes (test routes on Base Sepolia run on staging) | S | | ✓ |
 | Merchant dashboard, users, logins, self-serve onboarding, fees, custody | — | | never (design, owner ruling of 2026-09-28) |
+
+New snapshot activation also re-screens current treasuries, pending treasury changes and pending
+refund destinations. The signed admin metrics and daily report expose the active publication,
+hash and verification time; the hourly loop sends Sentry Crons check-ins.
