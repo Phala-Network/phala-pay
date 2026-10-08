@@ -11,6 +11,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use topup_adapters::risk::oracle::SanctionsSource;
 use topup_core::screening::{SanctionsProvenance, SanctionsResult, SanctionsVerdict};
@@ -29,6 +30,7 @@ const HOSTS: [&str; 2] = [
 /// Refresh immediately at startup, then hourly.
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(3600);
 const STALE_ALERT_SECONDS: i64 = 6 * 3600;
+const USER_AGENT: &str = concat!("phala-pay/", env!("CARGO_PKG_VERSION"));
 const MAX_XML_BYTES: usize = 64 * 1024 * 1024;
 
 /// Only sanctions configuration knob. Example: `max_staleness: 24h`.
@@ -85,6 +87,27 @@ pub struct Snapshot {
 pub async fn active(pool: &PgPool) -> Result<Option<Snapshot>, sqlx::Error> {
     sqlx::query_as("SELECT id,publish_date,encode(sha256,'hex') AS sha256,record_count,address_count,verified_at FROM sanctions_list_snapshots WHERE source='ofac_sdn' AND activated_at IS NOT NULL ORDER BY activated_at DESC,id DESC LIMIT 1")
         .fetch_optional(pool).await
+}
+
+/// Active operator supplement with its designation and creation evidence.
+#[derive(Clone, Debug, FromRow, Serialize, utoipa::ToSchema)]
+pub struct ManualEntry {
+    /// Normalized full EVM address.
+    pub address: String,
+    /// Audited operator reason.
+    pub reason: String,
+    /// Official source document or entity reference.
+    pub source_ref: String,
+    /// Signing administrator identity.
+    pub created_by: String,
+    /// Last addition or reactivation time.
+    pub created_at: DateTime<Utc>,
+}
+
+/// Active entries in deterministic address order; removals remain in the audit log.
+pub async fn manual_entries(pool: &PgPool) -> Result<Vec<ManualEntry>, sqlx::Error> {
+    sqlx::query_as("SELECT '0x' || encode(evm_address,'hex') AS address,reason,source_ref,created_by,created_at FROM sanctions_manual_entries WHERE removed_at IS NULL ORDER BY evm_address")
+        .fetch_all(pool).await
 }
 
 /// Pure deny-first rules. Failed reads cannot turn a positive hit into a clear answer.
@@ -201,6 +224,52 @@ impl DestinationScreener for ListScreener {
     }
 }
 
+pub(crate) fn evm_address(value: &str) -> Option<Address> {
+    let value = value.trim();
+    value
+        .starts_with("0x")
+        .then(|| value.parse().ok())
+        .flatten()
+}
+
+/// Read-only summary for offline publication verification with the production parser.
+#[derive(Debug, Serialize)]
+pub struct PublicationSummary {
+    /// OFAC publication date.
+    pub publish_date: NaiveDate,
+    /// Validated count of SDN entries.
+    pub record_count: i64,
+    /// All currency labels retained for evidence.
+    pub currency_identifiers: usize,
+    /// Unique normalized EVM addresses across all labels.
+    pub unique_evm_addresses: usize,
+    /// Malformed prefixed EVM values.
+    pub parse_errors: u64,
+    /// SHA-256 of the exact input bytes.
+    pub sha256: String,
+}
+
+/// Fully validates local bytes without network requests or database mutations.
+pub fn inspect_publication(bytes: &[u8]) -> Result<PublicationSummary, RefreshError> {
+    if bytes.len() > MAX_XML_BYTES {
+        return Err(RefreshError::Parse);
+    }
+    let parsed = parse(bytes)?;
+    Ok(PublicationSummary {
+        publish_date: parsed.date,
+        record_count: parsed.count,
+        currency_identifiers: parsed.addresses.len(),
+        unique_evm_addresses: parsed
+            .addresses
+            .iter()
+            .filter_map(|a| a.evm)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        parse_errors: parsed.parse_errors,
+        sha256: hex::encode(Sha256::digest(bytes)),
+    })
+}
+
 #[derive(Deserialize)]
 struct SdnList {
     #[serde(rename = "publshInformation")]
@@ -259,7 +328,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed, RefreshError> {
             Event::Start(e) => {
                 if depth == 0 {
                     roots = roots.saturating_add(1);
-                    if e.local_name().as_ref() != b"sdnList" {
+                    if e.local_name().as_ref() != "sdnList" {
                         return Err(RefreshError::Parse);
                     }
                 }
@@ -270,7 +339,9 @@ fn parse(bytes: &[u8]) -> Result<Parsed, RefreshError> {
             }
             Event::Empty(_) if depth == 0 => return Err(RefreshError::Parse),
             Event::DocType(_) => return Err(RefreshError::Parse),
-            Event::Text(e) if depth == 0 && !e.as_ref().iter().all(u8::is_ascii_whitespace) => {
+            Event::Text(e)
+                if depth == 0 && !e.as_ref().bytes().all(|b| b.is_ascii_whitespace()) =>
+            {
                 return Err(RefreshError::Parse);
             }
             Event::Eof => break,
@@ -299,12 +370,12 @@ fn parse(bytes: &[u8]) -> Result<Parsed, RefreshError> {
             if !id.kind.starts_with("Digital Currency Address - ") {
                 continue;
             }
-            let evm = id.value.trim().parse::<Address>().ok();
+            let evm = evm_address(&id.value);
             if id.value.trim().starts_with("0x") && evm.is_none() {
                 parse_errors = parse_errors.saturating_add(1);
             }
             addresses
-                .entry((entry.uid, id.value.clone()))
+                .entry((entry.uid, id.kind.clone(), id.value.clone()))
                 .or_insert(CurrencyAddress {
                     uid: entry.uid,
                     kind: id.kind,
@@ -325,7 +396,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed, RefreshError> {
 #[serde(rename_all = "camelCase")]
 struct PreviewFile {
     file_name: String,
-    hash_codes: BTreeMap<String, String>,
+    hash_codes: Option<String>,
     last_updated: String,
 }
 
@@ -348,7 +419,8 @@ pub enum RefreshError {
 impl RefreshError {
     fn code(&self) -> &'static str {
         match self {
-            Self::Fetch | Self::Database(_) => "fetch_error",
+            Self::Fetch => "fetch_error",
+            Self::Database(_) => "database_error",
             Self::Hash => "hash_mismatch",
             Self::Parse => "parse_error",
         }
@@ -378,6 +450,7 @@ impl Refresher {
             return Self::fixture(pool, &origin);
         }
         let client = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(60))
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 let url = attempt.url();
@@ -414,8 +487,32 @@ impl Refresher {
             return Err(RefreshError::Fetch);
         }
         let client = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
+            .resolve(
+                HOSTS[1],
+                std::net::SocketAddr::new(
+                    std::net::Ipv4Addr::LOCALHOST.into(),
+                    url.port_or_known_default().ok_or(RefreshError::Fetch)?,
+                ),
+            )
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                let target = attempt.url();
+                if attempt.previous().len() >= 5
+                    || target.scheme() != "http"
+                    || target.port_or_known_default() != url.port_or_known_default()
+                    || !matches!(
+                        target.host_str(),
+                        Some("127.0.0.1")
+                            | Some("wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com")
+                    )
+                {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            }))
             .build()
             .map_err(|_| RefreshError::Fetch)?;
         let origin = origin.trim_end_matches('/');
@@ -470,7 +567,10 @@ impl Refresher {
     }
     async fn refresh_inner(&self) -> Result<Refresh, RefreshError> {
         let preview = self
-            .bytes(self.client.post(&self.preview), 1024 * 1024)
+            .bytes(
+                self.client.post(&self.preview).body(Vec::new()),
+                1024 * 1024,
+            )
             .await?;
         let files: Vec<PreviewFile> =
             serde_json::from_slice(&preview).map_err(|_| RefreshError::Fetch)?;
@@ -479,8 +579,10 @@ impl Refresher {
         if matching.next().is_some() || file.last_updated.trim().is_empty() {
             return Err(RefreshError::Fetch);
         }
-        let sha = file
-            .hash_codes
+        let hashes: BTreeMap<String, String> =
+            serde_json::from_str(file.hash_codes.as_deref().ok_or(RefreshError::Fetch)?)
+                .map_err(|_| RefreshError::Fetch)?;
+        let sha = hashes
             .get("SHA-256")
             .and_then(|value| hex::decode(value).ok())
             .filter(|v| v.len() == 32)
@@ -566,6 +668,7 @@ impl Refresher {
         self,
         routes: Arc<RouteSet>,
         screening: Arc<ListScreener>,
+        notify: Arc<Notify>,
         cancellation: CancellationToken,
     ) {
         let cron = crate::observability::CronMonitor::sanctions();
@@ -573,23 +676,35 @@ impl Refresher {
         let mut interval = tokio::time::interval(REFRESH_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            tokio::select! { biased; _ = cancellation.cancelled() => break, _ = interval.tick() => {} }
-            let outcome = tokio::select! { biased; _ = cancellation.cancelled() => break, result = self.refresh() => result };
-            cron.check_in(outcome.is_ok());
-            if let Err(error) = &outcome {
-                tracing::warn!(
-                    result = error.code(),
-                    "sanctions refresh failed; retaining previous verification time"
-                );
-            }
-            if matches!(outcome, Ok(Refresh::Activated)) {
-                pending_rescreen = true;
+            let refresh_due = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => break,
+                _ = notify.notified() => { pending_rescreen = true; false },
+                _ = interval.tick() => true,
+            };
+            if refresh_due {
+                let outcome = tokio::select! { biased; _ = cancellation.cancelled() => break, result = self.refresh() => result };
+                cron.check_in(outcome.is_ok());
+                if let Err(error) = &outcome {
+                    tracing::warn!(
+                        result = error.code(),
+                        "sanctions refresh failed; retaining previous verification time"
+                    );
+                }
+                if matches!(outcome, Ok(Refresh::Activated)) {
+                    pending_rescreen = true;
+                }
             }
             if pending_rescreen {
-                match rescreen(&self.pool, &routes, &*screening).await {
-                    Ok(()) => pending_rescreen = false,
+                match tokio::select! { biased; _ = cancellation.cancelled() => break, result = rescreen(&self.pool, &routes, &*screening) => result }
+                {
+                    Ok(()) => {
+                        pending_rescreen = false;
+                        tracing::info!("sanctions destination re-screen completed");
+                    }
                     Err(_) => tracing::error!(
-                        "sanctions activation re-screen failed; retry on next refresh"
+                        tags.alert = "TopupSanctionsRescreenFailed",
+                        "sanctions destination re-screen failed; retry on next refresh"
                     ),
                 }
             }
@@ -662,29 +777,47 @@ pub async fn rescreen(
         }) else {
             continue;
         };
-        if screening.screen(route, address).await == DestinationScreening::Sanctioned {
-            // The service does not move refunds. Mark the hit for the operator and retain reservation;
-            // finality verification remains the existing ledger path.
-            audit::insert(
-                pool,
-                &Entry {
-                    account_id: None,
-                    actor: &Actor::system("sanctions_refresh"),
-                    action: "sanctions.refund_destination_hit",
-                    subject: &id.to_string(),
-                    reason: "active sanctions list names a pending refund destination",
-                },
-            )
-            .await?;
-            tracing::error!(
-                tags.alert = "TopupRefundDestinationSanctioned",
-                "active sanctions list names a pending refund destination; operator review required"
-            );
+        match screening.screen(route, address).await {
+            DestinationScreening::Sanctioned => {
+                // Serialize with refund updates and retain audit evidence across worker restarts.
+                let mut tx = pool.begin().await?;
+                let pending: Option<bool> = sqlx::query_scalar(
+                    "SELECT status='pending' FROM refunds WHERE id=$1 FOR UPDATE",
+                )
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let subject = id.to_string();
+                let recorded: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM audit WHERE action='sanctions.refund_destination_hit' AND subject=$1)")
+                    .bind(&subject).fetch_one(&mut *tx).await?;
+                if pending == Some(true) && !recorded {
+                    audit::insert(
+                        &mut *tx,
+                        &Entry {
+                            account_id: None,
+                            actor: &Actor::system("sanctions_refresh"),
+                            action: "sanctions.refund_destination_hit",
+                            subject: &subject,
+                            reason: "active sanctions list names a pending refund destination",
+                        },
+                    )
+                    .await?;
+                    tx.commit().await?;
+                    tracing::error!(
+                        tags.alert = "TopupRefundDestinationSanctioned",
+                        "active sanctions list names a pending refund destination; operator review required"
+                    );
+                } else {
+                    tx.commit().await?;
+                }
+            }
+            DestinationScreening::Unavailable => incomplete = true,
+            DestinationScreening::Clear => {}
         }
     }
     if incomplete {
         Err(sqlx::Error::Protocol(
-            "treasury rescreen unavailable".into(),
+            "destination rescreen unavailable".into(),
         ))
     } else {
         Ok(())
@@ -694,13 +827,8 @@ pub async fn rescreen(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::sanctions::Fixture;
     use crate::test_support::with_database;
-    use axum::{
-        Json, Router,
-        extract::State,
-        routing::{get, post},
-    };
-    use std::sync::Mutex;
     const XML: &str = include_str!("../tests/fixtures/sdn.xml");
     #[test]
     fn xml_retains_all_currencies_and_normalizes_across_tags() {
@@ -728,6 +856,98 @@ mod tests {
         assert!(parse(format!("{XML}<sdnList/>").as_bytes()).is_err());
         assert!(parse(XML.replace("<uid>200", "<uid>100").as_bytes()).is_err());
     }
+    #[test]
+    fn realistic_twenty_thousand_entry_publication_parses_completely() {
+        let mut xml = String::from(
+            "<sdnList xmlns=\"http://tempuri.org/sdnList.xsd\"><publshInformation><Publish_Date>10/05/2026</Publish_Date><Record_Count>20000</Record_Count></publshInformation>",
+        );
+        for uid in 1..=20_000 {
+            xml.push_str(&format!(r#"<sdnEntry><uid>{uid}</uid><firstName>Fixture</firstName><lastName>Entity</lastName><sdnType>Individual</sdnType><programList><program>CYBER2</program></programList><akaList><aka><uid>{uid}</uid><type>a.k.a.</type><category>strong</category><lastName>Alias</lastName></aka></akaList><addressList><address><uid>{uid}</uid><address1>Fixture street</address1><city>Fixture city</city><country>Fixture country</country></address></addressList><nationalityList><nationality><uid>{uid}</uid><country>Fixture country</country><mainEntry>true</mainEntry></nationality></nationalityList><dateOfBirthList><dateOfBirthItem><uid>{uid}</uid><dateOfBirth>01 Jan 1970</dateOfBirth><mainEntry>true</mainEntry></dateOfBirthItem></dateOfBirthList><idList><id><uid>{uid}</uid><idType>Digital Currency Address - ETH</idType><idNumber>0x{uid:040x}</idNumber></id><id><uid>{uid}</uid><idType>Digital Currency Address - BSC</idType><idNumber>0x{uid:040x}</idNumber></id><id><uid>{uid}</uid><idType>Passport</idType><idNumber>fixture</idNumber><idCountry>Fixture country</idCountry></id></idList><remarks>Fixture designation; realistic unknown children exercise namespace scope.</remarks></sdnEntry>"#));
+        }
+        xml.push_str("</sdnList>");
+        let summary = inspect_publication(xml.as_bytes()).unwrap();
+        assert_eq!(summary.record_count, 20_000);
+        assert_eq!(summary.currency_identifiers, 40_000);
+        assert_eq!(summary.unique_evm_addresses, 20_000);
+        assert_eq!(summary.parse_errors, 0);
+    }
+
+    #[test]
+    fn prefixed_addresses_only_and_all_labels_retained() {
+        assert!(evm_address("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());
+        let xml = XML.replace("</idList></sdnEntry>", "<id><idType>Digital Currency Address - USDC</idType><idNumber>0xdddddddddddddddddddddddddddddddddddddddd</idNumber></id><id><idType>Digital Currency Address - ETH</idType><idNumber>eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee</idNumber></id></idList></sdnEntry>");
+        let parsed = parse(xml.as_bytes()).unwrap();
+        assert_eq!(
+            parsed
+                .addresses
+                .iter()
+                .filter(|a| a.evm == Some(Address::repeat_byte(0xdd)))
+                .count(),
+            2
+        );
+        assert!(
+            parsed
+                .addresses
+                .iter()
+                .any(|a| a.raw == "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" && a.evm.is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn fixture_enforces_real_sls_http_contract() -> anyhow::Result<()> {
+        let fixture = Fixture::new(XML).await?;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        let preview = format!("{}/api/PublicationPreview/SdnList", fixture.origin);
+        assert_eq!(
+            client
+                .post(&preview)
+                .body(Vec::new())
+                .send()
+                .await?
+                .status(),
+            403
+        );
+        assert_eq!(
+            client
+                .post(&preview)
+                .header("user-agent", USER_AGENT)
+                .send()
+                .await?
+                .status(),
+            411
+        );
+        let files: Vec<PreviewFile> = client
+            .post(preview)
+            .header("user-agent", USER_AGENT)
+            .body(Vec::new())
+            .send()
+            .await?
+            .json()
+            .await?;
+        assert!(files.iter().any(|f| f.hash_codes.is_none()));
+        let sdn = files
+            .into_iter()
+            .find(|f| f.file_name == "SDN.XML")
+            .unwrap();
+        let hashes: BTreeMap<String, String> =
+            serde_json::from_str(sdn.hash_codes.as_deref().unwrap())?;
+        assert_eq!(
+            hashes.get("SHA-256"),
+            Some(&hex::encode(Sha256::digest(XML.as_bytes())))
+        );
+        let response = client
+            .get(format!("{}/api/download/SDN.XML", fixture.origin))
+            .header("user-agent", USER_AGENT)
+            .send()
+            .await?;
+        assert_eq!(response.status(), 302);
+        let redirect = url::Url::parse(response.headers().get("location").unwrap().to_str()?)?;
+        assert_eq!(redirect.host_str(), Some(HOSTS[1]));
+        Ok(())
+    }
+
     #[test]
     fn deny_first_verdict_truth_table() {
         for snapshot_hit in [false, true] {
@@ -781,67 +1001,64 @@ mod tests {
             limit
         ));
     }
-    #[derive(Clone)]
-    struct PublicationState {
-        xml: String,
-        sha: String,
-        malformed: bool,
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn manual_notification_wakes_worker_and_failed_rescreen_retries() -> anyhow::Result<()> {
+        use crate::test_support::seed::{self, NewAccount};
+        use tracing::Instrument;
+        with_database(|db| Box::pin(async move {
+            let route: topup_core::route::RouteFile = serde_saphyr::from_str(include_str!("../tests/fixtures/phala-cloud-pha.yaml"))?;
+            let account = seed::create_account(&db.app_pool, &NewAccount::named("notification fixture")).await?;
+            let address = Address::repeat_byte(0x11);
+            seed::set_treasury(&db.app_pool, account.id, route.livemode, route.chain.chain_id, address).await?;
+            let routes = Arc::new(RouteSet::new(vec![route]).map_err(anyhow::Error::msg)?);
+            let fixture = Fixture::new(XML).await?;
+            let refresh = Refresher::fixture(db.app_pool.clone(), &fixture.origin)?;
+            let source = Arc::new(ListScreener::new(db.app_pool.clone(), Duration::from_secs(86400)));
+            let notify = Arc::new(Notify::new());
+            let cancellation = CancellationToken::new();
+            let task = tokio::spawn(refresh.run(routes, source, notify.clone(), cancellation.clone()).in_current_span());
+            let result = async {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while !logs_contain("sanctions destination re-screen completed") {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await?;
+                // A committed manual addition must be processed before the next hourly fetch.
+                sqlx::query("INSERT INTO sanctions_manual_entries(evm_address,reason,source_ref,created_by) VALUES($1,'fixture','EU:fixture','fixture')")
+                    .bind(address.as_slice()).execute(&db.app_pool).await?;
+                sqlx::query("REVOKE SELECT ON sanctions_manual_entries FROM topup_app").execute(&db.owner_pool).await?;
+                notify.notify_one();
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while !logs_contain("sanctions destination re-screen failed") {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await?;
+                sqlx::query("GRANT SELECT ON sanctions_manual_entries TO topup_app").execute(&db.owner_pool).await?;
+                // No further notification: retained retry state must survive an unchanged refresh.
+                tokio::time::pause();
+                tokio::time::advance(REFRESH_INTERVAL).await;
+                tokio::time::resume();
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        let paused: Vec<String> = sqlx::query_scalar("SELECT paused_scopes FROM accounts WHERE id=$1")
+                            .bind(account.id).fetch_one(&db.app_pool).await?;
+                        if paused.iter().any(|scope| scope == "settlement") { return anyhow::Ok(()); }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await??;
+                Ok::<(), anyhow::Error>(())
+            }.await;
+            cancellation.cancel();
+            tokio::time::timeout(Duration::from_secs(5), task).await??;
+            result
+        })).await
     }
-    async fn preview(State(state): State<Arc<Mutex<PublicationState>>>) -> Json<serde_json::Value> {
-        let state = state.lock().unwrap();
-        if state.malformed {
-            return Json(serde_json::json!({"changed_contract":true}));
-        }
-        Json(
-            serde_json::json!([{"fileName":"SDN.XML","hashCodes":{"SHA-256":state.sha},"lastUpdated":"2026-10-05T00:00:00Z"}]),
-        )
-    }
-    async fn download(State(state): State<Arc<Mutex<PublicationState>>>) -> String {
-        state.lock().unwrap().xml.clone()
-    }
-    struct Fixture {
-        state: Arc<Mutex<PublicationState>>,
-        origin: String,
-        task: tokio::task::JoinHandle<()>,
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            self.task.abort();
-        }
-    }
-    impl Fixture {
-        async fn new() -> Self {
-            let state = Arc::new(Mutex::new(PublicationState {
-                xml: XML.into(),
-                sha: hex::encode(Sha256::digest(XML.as_bytes())),
-                malformed: false,
-            }));
-            let app = Router::new()
-                .route("/api/PublicationPreview/SdnList", post(preview))
-                .route("/api/download/SDN.XML", get(download))
-                .with_state(state.clone());
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let origin = format!("http://{}", listener.local_addr().unwrap());
-            let task = tokio::spawn(async move {
-                axum::serve(listener, app).await.unwrap();
-            });
-            Self {
-                state,
-                origin,
-                task,
-            }
-        }
-        fn publish(&self, xml: String) {
-            let mut state = self.state.lock().unwrap();
-            state.sha = hex::encode(Sha256::digest(xml.as_bytes()));
-            state.xml = xml;
-            state.malformed = false;
-        }
-    }
+
     #[tokio::test]
     async fn fixture_refresh_is_atomic_and_failure_preserves_verification() -> anyhow::Result<()> {
         with_database(|db|Box::pin(async move {
-            let fixture=Fixture::new().await;
+            let fixture=Fixture::new(XML).await?;
             let refresh=Refresher::fixture(db.app_pool.clone(),&fixture.origin)?;
             let source=ListScreener::new(db.app_pool.clone(),Duration::from_secs(86400));
             assert_eq!(source.check(Address::repeat_byte(0x11),"deposit").await.verdict,SanctionsVerdict::Uncertain);
@@ -887,6 +1104,12 @@ mod tests {
             sqlx::query("UPDATE sanctions_list_snapshots SET activated_at=NULL").execute(&db.owner_pool).await?;
             assert_eq!(source.check(Address::repeat_byte(0x11),"destination").await.verdict,SanctionsVerdict::Sanctioned);
             assert_eq!(source.check(Address::repeat_byte(0x22),"destination").await.verdict,SanctionsVerdict::Uncertain);
+            // Corrupt provenance cannot clear, while a known address still denies.
+            sqlx::query("ALTER TABLE sanctions_list_snapshots DROP CONSTRAINT sanctions_list_snapshots_sha256_check").execute(&db.owner_pool).await?;
+            sqlx::query("UPDATE sanctions_list_snapshots SET sha256=$1,activated_at=now(),verified_at=now() WHERE id=$2").bind(vec![1_u8]).bind(first.id).execute(&db.owner_pool).await?;
+            assert_eq!(source.check(Address::repeat_byte(0x22),"deposit").await.verdict,SanctionsVerdict::Uncertain);
+            assert_eq!(source.check(Address::repeat_byte(0xaa),"deposit").await.verdict,SanctionsVerdict::Sanctioned);
+            sqlx::query("UPDATE sanctions_list_snapshots SET sha256=$1 WHERE id=$2").bind(hex::decode(&first.sha256)?).bind(first.id).execute(&db.owner_pool).await?;
             // Fault injection: a failed manual-list read holds a fresh negative answer.
             sqlx::query("UPDATE sanctions_list_snapshots SET activated_at=now(),verified_at=now() WHERE id=$1").bind(first.id).execute(&db.owner_pool).await?;
             sqlx::query("REVOKE SELECT ON sanctions_manual_entries FROM topup_app").execute(&db.owner_pool).await?;

@@ -119,6 +119,8 @@ jobs:
         run: cargo sqlx prepare --workspace --check -- --all-targets --all-features
       - name: Test the workspace on Anvil and PostgreSQL
         run: cargo test --workspace --locked --all-features -- --nocapture
+      - name: Prove sanctions verdict and action rules
+        run: python3 scripts/tests/sanctions-mutations.py
 
   sdk:
     runs-on: ubuntu-latest

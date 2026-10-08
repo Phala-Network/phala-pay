@@ -171,7 +171,7 @@ trap 'exit 143' TERM
 # Trust only this run's certificate; HTTPS checks stay enabled in the SDK and HTTPX.
 mkdir "$TOPUP_TEST_TLS_DIR"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=critical,CA:FALSE' -subj /CN=topup-tls \
-    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub,DNS:*.rpc.test,DNS:sanctionslistservice.ofac.treas.gov \
+    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub,DNS:*.rpc.test,DNS:sanctionslistservice.ofac.treas.gov,DNS:wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com \
     -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
     -out "$TOPUP_TEST_TLS_DIR/cert.pem" >/dev/null 2>&1
 python3 - "$TOPUP_TEST_TLS_DIR/cert.pem" "$TOPUP_TEST_TLS_DIR/ca.pem" <<'PYTHON'

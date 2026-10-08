@@ -138,6 +138,7 @@ impl Harness {
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::clone(&screening) as Arc<dyn topup::refunds::DestinationScreener>,
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         };
         let account = seed::create_account(

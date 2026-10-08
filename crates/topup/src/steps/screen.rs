@@ -128,18 +128,6 @@ impl ScreenStep {
         })
     }
 
-    /// Uses the newest verified local list for every route, with the default freshness limit.
-    pub fn from_routes(pool: PgPool, routes: &RouteSet) -> Result<Self, ScreenStepConfigError> {
-        Self::from_source(
-            pool.clone(),
-            routes,
-            Arc::new(crate::sanctions::ListScreener::new(
-                pool,
-                std::time::Duration::from_secs(24 * 3600),
-            )),
-        )
-    }
-
     /// Composes the shared configured local source; it never calls the deprecated oracle.
     pub fn from_source(
         pool: PgPool,

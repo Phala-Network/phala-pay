@@ -1170,6 +1170,7 @@ fn app(pool: &sqlx::PgPool, routes: Vec<RouteFile>) -> Result<Router> {
         hint_limits: Arc::default(),
         transaction_hints: Arc::default(),
         screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+        sanctions_rescreen: Arc::default(),
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
     })
     .0)

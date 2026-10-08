@@ -166,32 +166,11 @@ async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
                     &format!("{oracle:#x}"),
                 );
             // The guest-agent stub uses the same documented /GetKey contract as dstack_domains.
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-            let endpoint = format!("http://{}", listener.local_addr()?);
-            let xml = include_str!("fixtures/sdn.xml");
-            let sha = <sha2::Sha256 as sha2::Digest>::digest(xml.as_bytes());
-            let preview = serde_json::json!([{
-                "fileName": "SDN.XML",
-                "hashCodes": {"SHA-256": hex::encode(sha)},
-                "lastUpdated": "2026-10-05T00:00:00Z"
-            }]);
-            let guest = axum::Router::new().route(
-                "/GetKey",
-                axum::routing::post(|| async {
-                    axum::Json(
-                        serde_json::json!({"key": hex::encode([1; 32]), "signature_chain": []}),
-                    )
-                }),
-            )
-            .route(
-                "/api/PublicationPreview/SdnList",
-                axum::routing::post(move || async move { axum::Json(preview) }),
-            )
-            .route(
-                "/api/download/SDN.XML",
-                axum::routing::get(|| async { include_str!("fixtures/sdn.xml") }),
-            );
-            let guest_task = tokio::spawn(async move { axum::serve(listener, guest).await });
+            let fixture = support::sanctions::Fixture::with_routes(include_str!("fixtures/sdn.xml"),
+                axum::Router::new().route("/GetKey", axum::routing::post(|| async {
+                    axum::Json(serde_json::json!({"key": hex::encode([1;32]), "signature_chain": []}))
+                }))).await?;
+            let endpoint = fixture.origin.clone();
             let result = async {
                 let mut service = StartupService::start(
                     &config,
@@ -227,8 +206,7 @@ async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
                 Ok(())
             }
             .await;
-            guest_task.abort();
-            let _ = guest_task.await;
+            drop(fixture);
             result
         })
     })

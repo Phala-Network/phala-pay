@@ -3,14 +3,9 @@ mod support;
 
 use alloy_primitives::{Address, B256};
 use anyhow::{Context, Result, ensure};
-use axum::{
-    Json, Router,
-    extract::State,
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::State, routing::post};
 use chrono::Utc;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -408,12 +403,8 @@ async fn published_image_round_trip() -> Result<()> {
         .context("local Postgres required")?;
     let directory = FixtureDirectory::new()?;
     let result=async {
-        let xml=include_str!("fixtures/sdn.xml").to_owned();
-        let hash=hex::encode(Sha256::digest(xml.as_bytes()));
-        let (sls,_sls_task)=serve(Router::new()
-            .route("/api/PublicationPreview/SdnList",post(move || {let hash=hash.clone(); async move { Json(json!([{"fileName":"SDN.XML","hashCodes":{"SHA-256":hash},"lastUpdated":"2026-10-05T00:00:00Z"}])) }}))
-            .route("/api/download/SDN.XML",get(move || {let xml=xml.clone(); async move {xml}}))).await?;
-        std::fs::write(directory.path().join("sls-origin"),sls)?;
+        let sls = support::sanctions::Fixture::new(include_str!("fixtures/sdn.xml")).await?;
+        std::fs::write(directory.path().join("sls-origin"), &sls.origin)?;
         let anvil=Anvil::start(1,&["--slots-in-an-epoch","4"]).await?;
         let factory=forge_create(&anvil.rpc_url,"src/ForwarderFactory.sol:ForwarderFactory",&[])?;
         let oracle=forge_create(&anvil.rpc_url,"test/mocks/MockSanctionsOracle.sol:MockSanctionsOracle",&[])?;
@@ -544,6 +535,7 @@ async fn published_image_round_trip() -> Result<()> {
             maintenance_keys:Vec::new(),public_origin:topup::api::PublicOrigin::parse(support::TEST_ORIGIN).unwrap(),
             attestor:Arc::new(topup_adapters::attestation::DstackAttestor::new()),
             rate_lock_quotes:Arc::new(topup::locks::UnavailableQuoteProvider),client_reads:Arc::default(),rate_limits:Arc::default(), hint_limits: Arc::default(), transaction_hints: Arc::default(),
+            sanctions_rescreen: Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         });
         use tower::ServiceExt;

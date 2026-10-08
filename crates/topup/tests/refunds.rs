@@ -2507,6 +2507,7 @@ fn test_router_on(
         hint_limits: Arc::default(),
         transaction_hints: Arc::default(),
         screening,
+        sanctions_rescreen: Arc::default(),
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
     };
     topup::api::router(state).0
@@ -2880,6 +2881,10 @@ async fn list_activation_rescreens_pending_refund_and_stale_hit_still_denies() -
         topup::sanctions::rescreen(&db.app_pool,&routes,&source).await?;
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit WHERE action='sanctions.refund_destination_hit' AND subject=$1").bind(refund.to_string()).fetch_one(&db.app_pool).await?==1);
         ensure!(logs_contain("pending refund destination"));
+        // A restarted worker uses a new source, but must retain the durable hit evidence.
+        let restarted = topup::sanctions::ListScreener::new(db.app_pool.clone(),StdDuration::from_secs(86400));
+        topup::sanctions::rescreen(&db.app_pool,&routes,&restarted).await?;
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit WHERE action='sanctions.refund_destination_hit' AND subject=$1").bind(refund.to_string()).fetch_one(&db.app_pool).await?==1);
         sqlx::query("UPDATE sanctions_list_snapshots SET verified_at=now()-interval '25 hours'").execute(&db.app_pool).await?;
         ensure!(source.screen(&route,address).await==DestinationScreening::Sanctioned);
         Ok(())

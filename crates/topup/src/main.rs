@@ -681,6 +681,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         };
         return serve_read_only(args.bind, state, args.restore_report.clone()).await;
@@ -774,6 +775,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         pool.clone(),
         config.sanctions.duration().map_err(anyhow::Error::msg)?,
     ));
+    let sanctions_rescreen = Arc::new(tokio::sync::Notify::new());
     let sanctions_refresh = topup::sanctions::Refresher::new(pool.clone())?;
     let screen_step = ScreenStep::from_source(
         pool.clone(),
@@ -821,6 +823,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         hint_limits: Arc::default(),
         transaction_hints: Arc::default(),
         screening: Arc::clone(&screening) as Arc<dyn topup::refunds::DestinationScreener>,
+        sanctions_rescreen: sanctions_rescreen.clone(),
         contract_signatures: Arc::new(
             topup::treasuries::EvmContractSignatures::from_routes(pool.clone(), &routes)
                 .map_err(anyhow::Error::msg)
@@ -850,7 +853,12 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let sanctions_screening = Arc::clone(&screening);
     tasks.spawn("sanctions list refresh", |cancellation| async move {
         sanctions_refresh
-            .run(sanctions_routes, sanctions_screening, cancellation)
+            .run(
+                sanctions_routes,
+                sanctions_screening,
+                sanctions_rescreen,
+                cancellation,
+            )
             .await;
     });
     tasks.spawn("TWAP price sampler", |cancellation| async move {

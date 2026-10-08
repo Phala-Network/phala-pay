@@ -1550,6 +1550,7 @@ fn app(
         hint_limits: Arc::default(),
         transaction_hints: Arc::default(),
         screening,
+        sanctions_rescreen: Arc::default(),
         contract_signatures,
     })
     .0)

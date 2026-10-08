@@ -176,6 +176,7 @@ async fn a_failure_before_the_response_is_saved_creates_no_quote_and_is_replayed
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
         .0;
@@ -280,6 +281,7 @@ impl SlowQuote {
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
         .0;
@@ -612,6 +614,7 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
         .0;
@@ -1116,6 +1119,7 @@ async fn client_secret_reads_are_limited_per_object_and_forgeries_cost_nothing()
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
         .0;
@@ -1297,6 +1301,7 @@ async fn quoted_amount_rounds_up_to_the_routes_amount_decimals() -> Result<()> {
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
         .0;
@@ -1764,6 +1769,7 @@ async fn the_client_view_reports_the_credit_of_a_spot_valued_underpayment() -> R
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
         .0;
@@ -2686,6 +2692,7 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
             public_origin: PublicOrigin::parse(TEST_ORIGIN)?, attestor: Arc::new(DstackAttestor::new()),
             rate_lock_quotes: quotes, client_reads: Arc::default(), rate_limits: Arc::default(), hint_limits: Arc::default(), transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;
         let get = |path: String| {
@@ -2773,6 +2780,7 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
                 attestor:Arc::new(DstackAttestor::new()), rate_lock_quotes:Arc::new(locks::ConfiguredQuoteProvider::from_runtimes(runtimes)),
                 client_reads:Arc::default(),rate_limits:Arc::default(), hint_limits: Arc::default(), transaction_hints: Arc::default(),
                 screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
                 contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
             }).0;
             let response = app.oneshot(merchant_request_with_key(Method::POST,"/v1/quotes",serde_json::to_vec(&json!({
@@ -2810,6 +2818,7 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
             rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
             hint_limits:Arc::default(),transaction_hints:Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;
         for (path,body) in [("/v1/quotes",json!({"client_reference_id":"capacity-quote","amount":100,"currency":"usd","chain_id":1,"asset":"pha"})),
@@ -2847,6 +2856,7 @@ async fn routed_chain_not_ready_returns_chain_unavailable_for_both_issuance_path
             rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
             hint_limits:Arc::default(),transaction_hints:Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;
         for (path,body) in [("/v1/quotes",json!({"client_reference_id":"unready-quote","amount":100,"currency":"usd","chain_id":1,"asset":"pha"})),

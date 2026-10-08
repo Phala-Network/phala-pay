@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS sanctions_list_addresses (
     id_type text NOT NULL,
     raw_value text NOT NULL,
     evm_address bytea CHECK (octet_length(evm_address) = 20),
-    PRIMARY KEY (snapshot_id, sdn_uid, raw_value)
+    PRIMARY KEY (snapshot_id, sdn_uid, id_type, raw_value)
 );
 CREATE INDEX IF NOT EXISTS sanctions_list_evm_address
     ON sanctions_list_addresses (evm_address, snapshot_id);

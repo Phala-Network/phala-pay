@@ -110,7 +110,7 @@ services:
     command: [python, /etc/sanctions-stub/server.py, "443", /etc/sanctions-stub/sdn.xml, /etc/test-tls/cert.pem, /etc/test-tls/key.pem]
     networks:
       default:
-        aliases: [sanctionslistservice.ofac.treas.gov]
+        aliases: [sanctionslistservice.ofac.treas.gov, wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com]
     configs:
       - source: sanctions_stub_server
         target: /etc/sanctions-stub/server.py

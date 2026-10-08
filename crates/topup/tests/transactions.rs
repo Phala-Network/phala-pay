@@ -246,6 +246,7 @@ async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<
         hint_limits: Arc::default(),
         transaction_hints: queue.clone(),
         screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+        sanctions_rescreen: Arc::default(),
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
     };
     let read_only_app = topup::api::read_only_router(state.clone(), None);

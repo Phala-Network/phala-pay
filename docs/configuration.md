@@ -257,10 +257,8 @@ screening time is the decision time, using the newest verified snapshot. The SDN
 publication-hash endpoints are fixed; source changes require a release. `chain.sanctions_oracle`
 is deprecated and parsed for N-1 rollback only; it is removed in N+1.
 
-```yaml
-sanctions:
-  max_staleness: 24h
-```
+Omit the `sanctions` section to use the default. N-1's strict configuration schema cannot
+parse this section; retain the previous configuration for rollback.
 
 See the [sanctions runbook](../deploy/runbooks/sanctions-list.md) for verification failures,
 manual entries and rollback precautions.

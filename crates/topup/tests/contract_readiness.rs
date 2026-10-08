@@ -209,6 +209,7 @@ async fn audited_lift_refuses_before_a_passing_fresh_dual_check() -> Result<()> 
                 hint_limits: Arc::default(),
                 transaction_hints: Arc::default(),
                 screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
+                sanctions_rescreen: Arc::default(),
                 contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
             });
             let path = "/v1/admin/reconciliation_blocks/chain:1/lift";

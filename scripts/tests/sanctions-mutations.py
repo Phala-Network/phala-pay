@@ -16,6 +16,9 @@ mutations = [
     ("no active snapshot holds", "_ => (false, false),", "_ => (false, true),"),
     ("verification age cannot exceed configured staleness", "age <= limit", "age >= chrono::Duration::zero()"),
     ("freshness boundary is inclusive", "age <= limit", "age < limit"),
+    ("future verification timestamps hold", "age >= chrono::Duration::zero()", "true"),
+    ("invalid snapshot hash cannot clear", "evidence.sha256.is_some() && fresh_at", "fresh_at"),
+    ("a failed manual list read cannot clear", "snapshot.is_ok() && manual.is_ok()", "snapshot.is_ok()"),
     ("snapshot hit must deny even stale or failed reads", "snapshot_hit || manual_hit", "manual_hit"),
     ("manual hit must deny even with no snapshot", "snapshot_hit || manual_hit", "snapshot_hit"),
     ("clear needs a fresh active snapshot", "snapshot_fresh && reads_ok", "reads_ok"),
@@ -57,7 +60,7 @@ try:
     # Limit the retry mutation to the production function, leaving expected outcomes unchanged.
     boundary = core_original.index("#[cfg(test)]")
     production, tests = core_original[:boundary], core_original[boundary:]
-    for index, (name, before, after) in enumerate(core_mutants, start=10):
+    for index, (name, before, after) in enumerate(core_mutants, start=len(mutations) + 1):
         if production.count(before) != 1:
             raise SystemExit(f"core mutation anchor not unique: {name}")
         core.write_text(production.replace(before, after) + tests)
@@ -69,4 +72,4 @@ try:
         core.write_text(core_original)
 finally:
     core.write_text(core_original)
-print("PASS all 11 verdict/action mutants killed; original sources restored", flush=True)
+print("PASS all 14 verdict/action mutants killed; original sources restored", flush=True)

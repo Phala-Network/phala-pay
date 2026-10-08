@@ -889,8 +889,10 @@ pub async fn rescreen_pending(
         let Some(route) = chain_route(routes, livemode, chain) else {
             continue;
         };
-        if screening.screen(route, address).await != DestinationScreening::Sanctioned {
-            continue;
+        match screening.screen(route, address).await {
+            DestinationScreening::Clear => continue,
+            DestinationScreening::Unavailable => return Err(TreasuryError::Unavailable),
+            DestinationScreening::Sanctioned => {}
         }
         let scope = Scope::new(account_id, livemode);
         let mut tx = pool.begin().await?;
@@ -917,7 +919,7 @@ pub async fn rescreen_pending(
     Ok(())
 }
 
-/// A current route of the mode on `chain_id`, whose sanctions oracle screens its treasuries.
+/// A current route of the mode on `chain_id` used to screen its treasuries.
 fn chain_route(routes: &RouteSet, livemode: bool, chain_id: u64) -> Option<&RouteFile> {
     routes
         .current_in(livemode)

@@ -70,7 +70,7 @@ staging instance ([staging reference product](deploy/phala.md#staging-reference-
   wallet or Safe; the service verifies refunds at finality.
 - **Stripe-style API**: test and live modes, secret and restricted keys, idempotency keys, events,
   cursor pagination, and Stripe's error object.
-- **Screening and pricing**: direct sanctions screening with the Chainalysis oracle, and Coin
+- **Screening and pricing**: sanctions screening against verified OFAC SDN snapshots and audited operator supplements, and Coin
   Metrics reference-rate prices with a deviation check.
 - **Operable in a CVM**: reproducible images, an attested compose, encrypted WAL-G backups,
   restore mode, Sentry alerts linked to [runbooks](deploy/runbooks/README.md).

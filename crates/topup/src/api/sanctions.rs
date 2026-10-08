@@ -6,7 +6,6 @@ use super::{
     extract::ApiJson,
 };
 use crate::audit::{self, Entry};
-use alloy_primitives::Address;
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -14,7 +13,7 @@ use utoipa::ToSchema;
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ManualEntryRequest {
-    /// EVM address, normalized to 20 bytes without EIP-55 validation.
+    /// EVM address with 0x prefix, normalized to 20 bytes without EIP-55 validation.
     address: String,
     /// Operator's audited reason, 1-1000 bytes.
     reason: String,
@@ -37,7 +36,7 @@ pub(crate) async fn add(
     change(state, actor, request, true).await
 }
 #[utoipa::path(post, path="/v1/admin/sanctions/manual/remove", tag="admin", request_body=ManualEntryRequest,
- responses((status=200,description="Manual sanctions entry removed",body=ManualEntryResponse),(status=400,description="Invalid input",body=ErrorResponse)), security(("http_message_signature"=[])))]
+ responses((status=200,description="Manual sanctions entry removed",body=ManualEntryResponse),(status=404,description="No active entry",body=ErrorResponse),(status=400,description="Invalid input",body=ErrorResponse)), security(("http_message_signature"=[])))]
 pub(crate) async fn remove(
     State(state): State<AppState>,
     AdminActor(actor): AdminActor,
@@ -51,11 +50,9 @@ async fn change(
     request: ManualEntryRequest,
     add: bool,
 ) -> Result<Json<ManualEntryResponse>, ApiError> {
-    let address: Address = request
-        .address
-        .trim()
-        .parse()
-        .map_err(|_| ApiError::bad_request("invalid EVM address").with_param("address"))?;
+    let address = crate::sanctions::evm_address(&request.address).ok_or_else(|| {
+        ApiError::bad_request("invalid EVM address; 0x prefix required").with_param("address")
+    })?;
     for (name, value) in [
         ("reason", &request.reason),
         ("source_ref", &request.source_ref),
@@ -71,8 +68,11 @@ async fn change(
         sqlx::query("INSERT INTO sanctions_manual_entries(evm_address,reason,source_ref,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(evm_address) DO UPDATE SET reason=$2,source_ref=$3,created_by=$4,created_at=clock_timestamp(),removed_by=NULL,removed_at=NULL")
             .bind(address.as_slice()).bind(&request.reason).bind(&request.source_ref).bind(actor.to_string()).execute(&mut *tx).await?;
     } else {
-        sqlx::query("UPDATE sanctions_manual_entries SET removed_by=$2,removed_at=clock_timestamp() WHERE evm_address=$1 AND removed_at IS NULL")
+        let removed = sqlx::query("UPDATE sanctions_manual_entries SET removed_by=$2,removed_at=clock_timestamp() WHERE evm_address=$1 AND removed_at IS NULL")
             .bind(address.as_slice()).bind(actor.to_string()).execute(&mut *tx).await?;
+        if removed.rows_affected() == 0 {
+            return Err(ApiError::not_found());
+        }
     }
     let subject = format!("sanctions:{address:#x}");
     let reason =
@@ -93,19 +93,19 @@ async fn change(
     )
     .await?;
     tx.commit().await?;
-    // Known hits are effective on the next decision; proactively revisit destination policies.
-    if add
-        && crate::sanctions::rescreen(&state.pool, &state.routes, &*state.screening)
-            .await
-            .is_err()
-    {
-        tracing::error!(
-            tags.alert = "TopupSanctionsListVerifyFailed",
-            "manual entry committed; destination rescreen will retry in refresh worker"
-        );
-    }
+    // Notify retains a permit if the worker is busy; failures retry on the hourly tick.
+    state.sanctions_rescreen.notify_one();
     Ok(Json(ManualEntryResponse {
         address: format!("{address:#x}"),
         active: add,
     }))
+}
+
+#[utoipa::path(get, path="/v1/admin/sanctions/manual", tag="admin",
+ responses((status=200,description="Active manual sanctions entries",body=Vec<crate::sanctions::ManualEntry>)), security(("http_message_signature"=[])))]
+pub(crate) async fn list(
+    State(state): State<AppState>,
+    AdminActor(_actor): AdminActor,
+) -> Result<Json<Vec<crate::sanctions::ManualEntry>>, ApiError> {
+    Ok(Json(crate::sanctions::manual_entries(&state.pool).await?))
 }
