@@ -1842,7 +1842,9 @@ async fn manual_sanctions_require_admin_signature_and_are_audited_atomically() -
         let unauthorized=app.clone().oneshot(axum::http::Request::post(path).header("content-type","application/json").body(axum::body::Body::from(body.clone()))?).await?;
         ensure!(unauthorized.status()==StatusCode::UNAUTHORIZED);
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM sanctions_manual_entries").fetch_one(&db.app_pool).await?==0);
-        for (path,active) in [(path,true),("/v1/admin/sanctions/manual/remove",false),(path,true)] {
+        for (path,active,reason) in [(path,true,"initial designation"),("/v1/admin/sanctions/manual/remove",false,"designation withdrawn"),(path,true,"designation reinstated")] {
+            // Distinct audited actions need distinct signatures; an exact replay is refused.
+            let body=serde_json::to_vec(&json!({"address":format!("{address:#x}"),"reason":reason,"source_ref":"UK:test"}))?;
             let response=app.clone().oneshot(signed_request(Method::POST,path,body.clone(),ADMIN_KID,&key,Utc::now().timestamp())).await?;
             ensure!(response.status()==StatusCode::OK);
             let entry_active:bool=sqlx::query_scalar("SELECT removed_at IS NULL FROM sanctions_manual_entries WHERE evm_address=$1").bind(address.as_slice()).fetch_one(&db.app_pool).await?;

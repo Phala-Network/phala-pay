@@ -73,6 +73,8 @@ Keep the previous configuration with the parsed `chain.sanctions_oracle`; N+1 re
 
 Run the disposable local [rollback drill](../local/rollback-drill.sh) with the verified published
 N-1 image digest. The N worker uses a loopback-only SLS fixture in the test-support build; the
-production build has fixed official endpoints. CI and the drill never fetch real OFAC data.
+production build has fixed official endpoints. The CVM rehearsal resolves those URLs to a local
+TLS fixture using only its disposable Compose network and certificate. CI and the drill never
+fetch real OFAC data.
 Staging's later live smoke check must verify a snapshot and a known SDN hit, then clean up its
 artifacts; this implementation does not deploy or perform that check.

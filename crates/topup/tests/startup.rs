@@ -132,6 +132,8 @@ async fn run_refuses_an_incomplete_payment_settings_cutover() -> Result<()> {
 }
 
 /// A migrated database starts the pumps and advances its scanner without an operator action.
+/// The full service needs the loopback-only SLS fixture (CI tests all features).
+#[cfg(feature = "test-support")]
 #[tokio::test]
 async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
     support::with_database(|database| {
@@ -166,6 +168,13 @@ async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
             // The guest-agent stub uses the same documented /GetKey contract as dstack_domains.
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
             let endpoint = format!("http://{}", listener.local_addr()?);
+            let xml = include_str!("fixtures/sdn.xml");
+            let sha = <sha2::Sha256 as sha2::Digest>::digest(xml.as_bytes());
+            let preview = serde_json::json!([{
+                "fileName": "SDN.XML",
+                "hashCodes": {"SHA-256": hex::encode(sha)},
+                "lastUpdated": "2026-10-05T00:00:00Z"
+            }]);
             let guest = axum::Router::new().route(
                 "/GetKey",
                 axum::routing::post(|| async {
@@ -173,6 +182,14 @@ async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
                         serde_json::json!({"key": hex::encode([1; 32]), "signature_chain": []}),
                     )
                 }),
+            )
+            .route(
+                "/api/PublicationPreview/SdnList",
+                axum::routing::post(move || async move { axum::Json(preview) }),
+            )
+            .route(
+                "/api/download/SDN.XML",
+                axum::routing::get(|| async { include_str!("fixtures/sdn.xml") }),
             );
             let guest_task = tokio::spawn(async move { axum::serve(listener, guest).await });
             let result = async {
@@ -257,6 +274,8 @@ impl StartupService {
             }
             if let Some(endpoint) = endpoint {
                 command.env("DSTACK_SIMULATOR_ENDPOINT", endpoint);
+                #[cfg(feature = "test-support")]
+                command.env("TOPUP_TEST_SLS_ORIGIN", endpoint);
             }
             if let Some(key) = rpc_key {
                 command

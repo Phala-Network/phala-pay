@@ -171,7 +171,7 @@ trap 'exit 143' TERM
 # Trust only this run's certificate; HTTPS checks stay enabled in the SDK and HTTPX.
 mkdir "$TOPUP_TEST_TLS_DIR"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=critical,CA:FALSE' -subj /CN=topup-tls \
-    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub,DNS:*.rpc.test \
+    -addext subjectAltName=DNS:topup-tls,DNS:api.kraken.com,DNS:data-api.binance.vision,DNS:price-stub,DNS:*.rpc.test,DNS:sanctionslistservice.ofac.treas.gov \
     -keyout "$TOPUP_TEST_TLS_DIR/key.pem" \
     -out "$TOPUP_TEST_TLS_DIR/cert.pem" >/dev/null 2>&1
 python3 - "$TOPUP_TEST_TLS_DIR/cert.pem" "$TOPUP_TEST_TLS_DIR/ca.pem" <<'PYTHON'
@@ -182,10 +182,13 @@ Path(sys.argv[2]).write_text(roots + Path(sys.argv[1]).read_text())
 PYTHON
 export TOPUP_TEST_TLS_PROXY TOPUP_TEST_TLS_CERTIFICATE TOPUP_TEST_TLS_KEY
 export TOPUP_PRICE_STUB_SERVER
+export TOPUP_SANCTIONS_STUB_SERVER TOPUP_SANCTIONS_STUB_XML
 TOPUP_TEST_TLS_PROXY="$(<"$root/deploy/local/tls_proxy.py")"
 TOPUP_TEST_TLS_CERTIFICATE="$(<"$TOPUP_TEST_TLS_DIR/cert.pem")"
 TOPUP_TEST_TLS_KEY="$(<"$TOPUP_TEST_TLS_DIR/key.pem")"
 TOPUP_PRICE_STUB_SERVER="$(<"$root/deploy/local/price_stub.py")"
+TOPUP_SANCTIONS_STUB_SERVER="$(<"$root/deploy/local/sanctions_stub.py")"
+TOPUP_SANCTIONS_STUB_XML="$(<"$root/crates/topup/tests/fixtures/sdn.xml")"
 
 wait_for() {
     local description=$1 attempts=$2
@@ -524,6 +527,12 @@ healthy() {
     [[ "$(http_status http://topup:8080/healthz)" == 200 ]]
 }
 wait_for "GET /healthz" 90 healthy
+sanctions_verified() {
+    [[ "$(dc exec -T postgres psql -U postgres -d topup -XAtq -c \
+        "SELECT EXISTS(SELECT 1 FROM sanctions_list_snapshots WHERE source='ofac_sdn' AND activated_at IS NOT NULL AND verified_at > now()-interval '5 minutes')")" == t ]]
+}
+wait_for "verified local SLS snapshot" 30 sanctions_verified
+echo "ok: verified sanctions snapshot came from the disposable SLS fixture"
 tls_healthy() {
     product_python -c 'import ssl, httpx; print(httpx.get("https://topup-tls:8443/healthz", verify=ssl.create_default_context(cafile="/opt/test-ca.pem"), timeout=5).status_code)' |
         grep -qx 200

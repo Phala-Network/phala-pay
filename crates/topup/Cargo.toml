@@ -11,7 +11,7 @@ name = "topup"
 path = "src/main.rs"
 
 [features]
-# Loopback-only fixtures for the real-worker rollback drill; never ship this feature.
+# Loopback-only fixtures for full-service tests and the rollback drill; never ship this feature.
 test-support = []
 dev-signer = ["topup-adapters/dev-signer"]
 

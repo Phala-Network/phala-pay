@@ -114,9 +114,14 @@ jq -e '[.services[].volumes[]? | select(.type == "bind")] == []' "$tmp/drill.jso
     fail "the restore-drill stack bind-mounts a host path; CI's Docker daemon cannot see it"
 jq -e '[.services[].ports[]?] == []' "$tmp/drill.json" >/dev/null ||
     fail "the restore-drill stack must not publish host ports"
-TOPUP_LOCAL_DSTACK_IMAGE=validate "$compose" -p validate-rehearsal \
+TOPUP_LOCAL_DSTACK_IMAGE=validate TOPUP_TEST_TLS_IMAGE=validate \
+    TOPUP_TEST_TLS_PROXY=validate TOPUP_TEST_TLS_CERTIFICATE=validate TOPUP_TEST_TLS_KEY=validate \
+    TOPUP_SANCTIONS_STUB_SERVER="$(<"$root/deploy/local/sanctions_stub.py")" \
+    TOPUP_SANCTIONS_STUB_XML="$(<"$root/crates/topup/tests/fixtures/sdn.xml")" \
+    "$compose" -p validate-rehearsal \
     --project-directory "$root/deploy/local" -f "$tmp/service.yml" \
-    -f "$root/deploy/local/cvm-rehearsal.compose.yml" config --format json >"$tmp/rehearsal.json"
+    -f "$root/deploy/local/cvm-rehearsal.compose.yml" \
+    -f "$root/deploy/local/test-tls.compose.yml" config --format json >"$tmp/rehearsal.json"
 # Compare both through the runtime loader: it normalizes memory units and omits false defaults.
 "$compose" -f "$tmp/service.yml" config --format json >"$tmp/service-runtime.json"
 jq -e --slurpfile service "$tmp/service-runtime.json" '
