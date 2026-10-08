@@ -92,7 +92,7 @@ function rehypeCodeBlocks(file: string) {
         element("span", {}, [text(lang === "" ? "text" : lang)]),
         element("button", { type: "button", className: ["code-block-copy"], dataCopy: "", ariaLive: "polite", hidden: true }, [text("Copy")]),
       ]);
-      parent.children.splice(index, 1, element("div", { className: ["code-block"], dataLanguage: lang }, [header, pre]));
+      parent.children.splice(index, 1, element("div", { className: ["code-block"], dataLanguage: lang === "" ? "text" : lang }, [header, pre]));
     }
   };
 }

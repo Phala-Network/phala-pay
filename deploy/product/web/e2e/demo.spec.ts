@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { expect, test as base, type Locator, type Page } from "@playwright/test";
 import {
   createPublicClient,
@@ -1958,6 +1958,87 @@ async function expectOnlyNavScrolls(page: Page, label: string): Promise<void> {
   expect(scrollers, `${label}: elements that scroll inside the page`).toEqual([]);
 }
 
+/**
+ * A diagram's drawing at its natural size (1:1, as the docs' column shows it on a desktop): what
+ * overlaps or overflows. No two labels overlap; no sequence number's disc (the marker at its
+ * message's start) touches a label; every note, actor, and node contains its text.
+ */
+async function diagramProblems(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const svg = document.querySelector("svg");
+    if (svg === null) return ["no svg"];
+    svg.style.maxWidth = "none";
+    svg.setAttribute("width", String(svg.viewBox.baseVal.width));
+    svg.setAttribute("height", String(svg.viewBox.baseVal.height));
+    const box = (element: Element) => element.getBoundingClientRect();
+    const meet = (a: { left: number; right: number; top: number; bottom: number }, b: DOMRect) =>
+      a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+    const outside = (inner: DOMRect, outer: DOMRect) =>
+      inner.left < outer.left - 0.5 || inner.right > outer.right + 0.5 || inner.top < outer.top - 0.5 || inner.bottom > outer.bottom + 0.5;
+    const label = (element: SVGElement) => `"${element.textContent.trim().slice(0, 32)}"`;
+    const texts = [...svg.querySelectorAll("text")].filter((text) => text.textContent.trim() !== "" && box(text).width > 0);
+    const problems: string[] = [];
+    texts.forEach((a, index) => {
+      for (const b of texts.slice(index + 1)) {
+        if (!a.contains(b) && !b.contains(a) && meet(box(a), box(b))) problems.push(`${label(a)} overlaps ${label(b)}`);
+      }
+    });
+    const ctm = svg.getScreenCTM();
+    for (const line of svg.querySelectorAll('line[marker-start*="sequencenumber"]')) {
+      const id = /#([^)]+)\)/.exec(line.getAttribute("marker-start") ?? "")?.[1] ?? "";
+      const radius = Number(document.getElementById(id)?.querySelector("circle")?.getAttribute("r") ?? 0) *
+        (parseFloat(getComputedStyle(line).strokeWidth) || 1) * (ctm === null ? 1 : ctm.a);
+      const centre = new DOMPoint(Number(line.getAttribute("x1")), Number(line.getAttribute("y1"))).matrixTransform(ctm === null ? undefined : ctm);
+      const disc = { left: centre.x - radius, right: centre.x + radius, top: centre.y - radius, bottom: centre.y + radius };
+      for (const text of texts) {
+        if (!text.classList.contains("sequenceNumber") && meet(disc, box(text))) problems.push(`a number's marker touches ${label(text)}`);
+      }
+    }
+    for (const shape of svg.querySelectorAll("rect.note, rect.actor")) {
+      for (const text of shape.parentElement?.querySelectorAll("text") ?? []) {
+        if (box(text).width > 0 && outside(box(text), box(shape))) problems.push(`${label(text)} overflows its ${shape.getAttribute("class") ?? "box"}`);
+      }
+    }
+    for (const node of svg.querySelectorAll("g.node")) {
+      const shape = node.querySelector("rect, path, polygon, circle, ellipse");
+      const text = node.querySelector<SVGElement>(".label, text");
+      if (shape !== null && text !== null && outside(box(text), box(shape))) problems.push(`${label(text)} overflows its node`);
+    }
+    return problems;
+  });
+}
+
+test("the docs' diagrams are legible: at least 12px text on a desktop, nothing overlapping", async ({ page }) => {
+  const names = readdirSync(new URL("../public/diagrams/", import.meta.url)).filter((name) => name.endsWith(".svg"));
+  expect(names.length).toBeGreaterThan(0);
+  for (const name of names) {
+    // The served SVG, drawn as an <img> draws it: on a document of its own, without the page's
+    // CSP (which, opened directly, refuses the SVG's own <style>; an image is not subject to it).
+    const served = await page.request.get(new URL(`diagrams/${name}`, env("SITE_URL")).href);
+    expect(served.status(), name).toBe(200);
+    const body = await served.body();
+    await page.route("https://diagram.test/*", (route) => route.fulfill({ body, contentType: "image/svg+xml" }));
+    await page.goto(`https://diagram.test/${name}`);
+    await page.unroute("https://diagram.test/*");
+    await page.evaluate(() => document.fonts.ready);
+    expect(await diagramProblems(page), name).toEqual([]);
+  }
+  // Drawn with 14px text, a diagram shown at its column's width keeps at least 12px of it.
+  for (const path of ["docs/overview", "docs/integration"]) {
+    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      const image = page.locator(".docs-prose figure.diagram img:visible");
+      await image.scrollIntoViewIfNeeded();
+      const [shown, natural] = await image.evaluate(async (element: HTMLImageElement) => {
+        await element.decode();
+        return [element.getBoundingClientRect().width, element.naturalWidth];
+      });
+      expect((shown / natural) * 14, `${path} at ${width}px: the diagram's text size`).toBeGreaterThanOrEqual(12);
+    }
+  }
+});
+
 test("the docs and the API reference are rendered from the repository, linked within the site, and work without script", async ({ browser, page }) => {
   const problems = await watchConsole(page);
   // Every doc, prerendered from its markdown: its own title and canonical URL, in the sitemap.
@@ -2009,7 +2090,7 @@ test("the docs and the API reference are rendered from the repository, linked wi
   const diagram = page.locator(".docs-prose figure.diagram img:visible");
   await expect(diagram).toHaveCount(1);
   await expect(diagram).toHaveAttribute("src", /^\/diagrams\/docs-overview-1-(light|dark)\.svg$/);
-  await expect(diagram).toHaveAttribute("alt", /^Flowchart\. .*Payer to CREATE2 forwarders/);
+  await expect(diagram).toHaveAttribute("alt", /^Flowchart\. .*Payer to Deposit address: pays/);
   expect(await diagram.evaluate((image: HTMLImageElement) => image.decode().then(() => image.naturalWidth))).toBeGreaterThan(0);
   await expect(page.locator(".docs-prose figure.diagram figcaption a:visible")).toHaveText("Open the diagram full size");
   // The header marks the part of the site a page is in.

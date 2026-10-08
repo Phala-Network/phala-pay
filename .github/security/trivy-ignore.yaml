@@ -9,7 +9,7 @@
     {
       "id": "CVE-2026-103923",
       "purls": ["pkg:npm/katex@0.16.47"],
-      "statement": "dev-only: katex is pulled in by mermaid through @mermaid-js/mermaid-cli, used only by `npm run diagrams` (deploy/product/web/scripts/diagrams.sh), which renders the repository's own docs' diagrams offline (no network, in Playwright's image) to committed SVGs; katex renders only math in diagram labels, which the docs' diagrams have none of, and nothing of it is in the site's build output. No fixed version reachable: mermaid 12.1.0 requires katex ^0.16.47 and the fix is 0.18.2; remove when mermaid allows katex >=0.18.2. deploy/product/web/pnpm-lock.yaml is the only lockfile that resolves katex.",
+      "statement": "dev-only: katex is pulled in by mermaid through @mermaid-js/mermaid-cli, used only by `npm run diagrams` (deploy/product/web/scripts/diagrams.sh), which renders the repository's own docs' diagrams offline (no network, in Playwright's image) to committed SVGs; katex renders only math in diagram labels, which the docs' diagrams have none of, and nothing of it is in the site's build output. No fixed version reachable: mermaid 12.1.0 requires katex ^0.16.47 and the fix is 0.18.2; remove when mermaid allows katex >=0.18.2. deploy/product/web/pnpm-lock.yaml is the only lockfile that resolves katex. Tracked in https://github.com/Phala-Network/phala-pay/issues/430.",
       "expired_at": "2026-11-07T00:00:00Z"
     }
   ]

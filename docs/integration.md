@@ -225,34 +225,34 @@ choose, from your own wallet or Safe (§1.7).
 sequenceDiagram
     autonumber
     actor Payer
-    participant UI as Your web app (Checkout)
-    participant BE as Your backend
+    participant UI as Web app
+    participant BE as Backend
     participant PP as Phala Pay
     participant ETH as Ethereum
     Payer->>UI: top up $25
     UI->>BE: create top-up
-    BE->>PP: POST /v1/quotes (Bearer key, Idempotency-Key)
-    PP-->>BE: quote with client_secret
+    BE->>PP: POST /v1/quotes
+    PP-->>BE: the quote
     BE-->>UI: client_secret
-    UI->>PP: GET /v1/quotes/{id}?client_secret=… (polls)
-    Payer->>ETH: transfer the exact amount (wallet, QR, or manual)
-    PP-->>UI: payment seen within seconds, then confirming
-    Note over PP,ETH: two blocks, both RPC providers agree (about 30 s after paying)
-    PP->>BE: webhook deposit.credited (signed, retried until 2xx)
-    BE->>BE: verify, apply the deposit snapshot (balance rule)
+    UI->>PP: poll the quote (client_secret)
+    Payer->>ETH: pay the exact amount
+    PP-->>UI: payment seen, confirming
+    Note over PP,ETH: after the required confirmations, both RPC providers agree
+    PP->>BE: deposit.credited
+    Note right of BE: verify the signature, apply the deposit snapshot
     BE-->>PP: 2xx
     PP-->>UI: credited
-    Note over PP,ETH: watched until final, about 15 minutes
-    opt Transaction dropped before finality (rare)
-        PP->>BE: webhook deposit.reversed: the snapshot nets the deposit to zero
+    Note over PP,ETH: watched until final
+    opt Dropped before finality (rare)
+        PP->>BE: deposit.reversed
     end
-    BE->>ETH: sweep: factory flush to your treasury (your wallet or Safe, pays gas)
-    PP-->>PP: finalized Flushed event marks the deposit swept
-    opt Refund (your staff, from your internal admin)
-        BE->>PP: POST /v1/refunds {deposit, destination_address}
-        BE->>ETH: transfer from the refund's treasury (your wallet or Safe)
-        BE->>PP: POST /v1/refunds/{id}/mark_paid {transaction_hash}
-        PP->>BE: webhook deposit.refunded, once the transfer is final
+    BE->>ETH: flush to your treasury
+    Note right of PP: a finalized Flushed event marks the deposit swept
+    opt Refund (your staff)
+        BE->>PP: POST /v1/refunds
+        BE->>ETH: pay it from your treasury
+        BE->>PP: mark_paid
+        PP->>BE: deposit.refunded
     end
 ```
 

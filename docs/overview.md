@@ -53,28 +53,28 @@ no second Allowed independent price source ([price sources](configuration.md#pri
 ## Architecture at a glance
 
 ```mermaid
-flowchart LR
+flowchart TB
     payer(["Payer"])
     subgraph merchant["Merchant (e.g. Phala Cloud)"]
-        ui["Web app<br/>&lt;Checkout&gt; from @phala/pay-react"]
-        backend["Backend<br/>phala-pay SDK, pinned addresses"]
-        wallet["Merchant wallet or Safe"]
+        ui["Web app<br/>(Checkout)"]
+        backend["Backend<br/>(phala-pay SDK)"]
+        wallet["Wallet or Safe"]
     end
-    subgraph cvm["Phala Pay (dstack CVM, attested)"]
-        api["HTTP API<br/>/v1/quotes, deposit_addresses, deposits, refunds"]
-        worker["Scanner, pump, finality watch,<br/>outbox, reconciler"]
+    subgraph cvm["Phala Pay (attested CVM)"]
+        api["HTTP API"]
+        worker["Chain reads,<br/>webhook outbox"]
     end
     subgraph chain["EVM chain"]
-        fwd["CREATE2 forwarders<br/>(clone arg: treasury)"]
+        fwd["Deposit address<br/>(CREATE2 forwarder)"]
         treasury[("Merchant treasury")]
     end
-    payer -->|"wallet, QR, or manual transfer"| fwd
+    payer -->|"pays"| fwd
     ui -->|"client_secret: status"| api
     ui <--> backend
-    backend -->|"Bearer API key: quotes, refunds, keys, treasuries"| api
-    worker -->|"deposit.credited, signed with the account's key"| backend
-    worker -->|"reads logs (2 RPC providers)"| fwd
-    wallet -->|"factory flush, pays gas (anyone may flush)"| fwd
+    backend -->|"API key"| api
+    worker -->|"signed webhooks"| backend
+    worker -->|"reads, 2 RPC providers"| fwd
+    wallet -->|"flush, pays gas"| fwd
     fwd -->|"can only pay"| treasury
 ```
 

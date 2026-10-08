@@ -21,6 +21,8 @@ const PALETTE: Record<Theme, Palette> = {
   dark: { node: "#232323", border: "#3d3d3d", text: "#f2f2f2", line: "#a3a3a3", group: "#1c1c1c", groupBorder: "#2f2f2f", note: "#2a2a2a", ground: "#141414" },
 };
 
+const FONT = '"Geist Variable", sans-serif';
+
 function config(theme: Theme, seed: string) {
   const colour = PALETTE[theme];
   return {
@@ -30,9 +32,19 @@ function config(theme: Theme, seed: string) {
     // Some shapes' outlines are drawn by rough.js, which is otherwise seeded at random.
     handDrawnSeed: 1,
     htmlLabels: false,
-    flowchart: { htmlLabels: false, curve: "basis" as const },
+    // Mermaid copies this over each diagram's own text sizes: the size it measures and draws.
+    fontSize: 14,
+    // Sized for the docs' prose column (768px) at 14px text: a flowchart top to bottom, a sequence
+    // with compact lifelines whose messages wrap.
+    flowchart: { htmlLabels: false, curve: "basis" as const, diagramPadding: 8, nodeSpacing: 32, rankSpacing: 48, wrappingWidth: 160 },
+    sequence: {
+      wrap: true, width: 96, actorMargin: 64, diagramMarginX: 8, diagramMarginY: 8, boxMargin: 14, noteMargin: 8,
+      messageMargin: 40, actorFontFamily: FONT, messageFontFamily: FONT, noteFontFamily: FONT,
+    },
     themeVariables: {
-      fontFamily: "Geist Variable, sans-serif",
+      // The family the SVG embeds (@fontsource-variable/geist): mermaid-cli loads it before
+      // Mermaid measures any text, so what is measured is what is drawn.
+      fontFamily: FONT,
       fontSize: "14px",
       background: "transparent",
       primaryColor: colour.node,
