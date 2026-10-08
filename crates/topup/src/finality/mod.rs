@@ -36,8 +36,6 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(60);
 pub const WATCH_PAGE: i64 = 500;
 /// Pages one pass reads at most; the next pass continues at once.
 pub const WATCH_PAGES_PER_PASS: usize = 10;
-/// A claimed deposit that is still neither final nor reversed is read again after this long.
-pub const RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 /// A transaction that left the chain without a replacement is alerted on after this long.
 const PENDING_AFTER_REORG_ALERT: TimeDelta = TimeDelta::hours(1);
 
@@ -160,11 +158,20 @@ impl FinalityWatch {
     /// Reads the agreed checkpoint and re-reads every deposit of `chain_id` that is neither
     /// final nor reversed and whose recorded block is at or below it.
     pub async fn watch_once(&self, chain_id: u64) -> Result<WatchStats, FinalityError> {
+        self.watch_once_at(chain_id, Utc::now()).await
+    }
+
+    /// Runs one pass with a supplied scheduling clock, without changing the evidence rules.
+    pub async fn watch_once_at(
+        &self,
+        chain_id: u64,
+        now: DateTime<Utc>,
+    ) -> Result<WatchStats, FinalityError> {
         let Some(checkpoint) = db::chain_reads::checkpoint(&self.pool, chain_id).await? else {
             return Ok(WatchStats::default());
         };
         let finalized = checkpoint.number;
-        self.watch_at(chain_id, finalized).await
+        self.watch_at(chain_id, finalized, now).await
     }
 
     /// [`Self::watch_once`] at the agreed checkpoint announced by coverage.
@@ -172,6 +179,7 @@ impl FinalityWatch {
         &self,
         chain_id: u64,
         primary_finalized: u64,
+        now: DateTime<Utc>,
     ) -> Result<WatchStats, FinalityError> {
         let chain = self
             .chains
@@ -186,7 +194,8 @@ impl FinalityWatch {
             return Ok(stats);
         }
         for _ in 0..WATCH_PAGES_PER_PASS {
-            let deposits = claim_unfinal_deposits(&self.pool, chain_id, primary_finalized).await?;
+            let deposits =
+                claim_unfinal_deposits(&self.pool, chain_id, primary_finalized, now).await?;
             let Some(last) = deposits.len().checked_sub(1) else {
                 return Ok(stats);
             };
@@ -290,8 +299,18 @@ impl FinalityWatch {
         deposit: &WatchedDeposit,
         checkpoint: u64,
     ) -> Result<bool, FinalityError> {
-        let hashes: Vec<String> = sqlx::query_scalar("SELECT DISTINCT tx_hash FROM deposits WHERE chain_id=$1 AND tx_from=$2 AND tx_nonce=$3::text::numeric AND tx_hash != $4")
+        let hashes: Vec<String> = sqlx::query_scalar("SELECT DISTINCT tx_hash FROM deposits WHERE chain_id=$1 AND tx_from=$2 AND tx_nonce=$3::text::numeric AND tx_hash != $4 LIMIT 2")
             .bind(i64::try_from(chain_id).map_err(|_|sqlx::Error::Protocol("chain overflow".into()))?).bind(format!("{:#x}",deposit.origin.0)).bind(deposit.origin.1.to_string()).bind(format!("{:#x}",deposit.tx_hash)).fetch_all(&self.pool).await?;
+        if hashes.len() > 1 {
+            crate::observability::metrics::replacement_ambiguous(chain_id);
+            tracing::error!(
+                tags.alert = "TopupDepositReplacementAmbiguous",
+                tags.chain_id = chain_id,
+                deposit_id = %crate::ids::format(crate::ids::DEPOSIT, deposit.id),
+                "multiple service-known replacement candidates; reversal is not proven"
+            );
+            return Ok(false);
+        }
         for hash in hashes {
             let hash = hash
                 .parse()
@@ -337,7 +356,7 @@ impl FinalityWatch {
                 };
                 let result = tokio::select! {
                     () = cancellation.cancelled() => return,
-                    result = self.watch_at(chain_id, finalized) => result,
+                    result = self.watch_at(chain_id, finalized, Utc::now()) => result,
                 };
                 match result {
                     Ok(stats) => {
@@ -615,15 +634,15 @@ fn decide(
 
 /// Claims the next page of deposits of `chain_id` that are neither final nor reversed, recorded
 /// at or below `finalized`, and due: never read, or past their recheck time. Claiming moves each
-/// one's recheck time [`RECHECK_INTERVAL`] ahead, so a deposit that is still waiting afterwards
-/// does not come back until then, and concurrent watchers skip each other's pages. Oldest block
-/// first.
+/// one's recheck time ahead by 60s for its first ten minutes, 600s until six hours, then 3600s.
+/// The first due claim persists the age anchor, independent of block time, retries or restarts.
+/// Concurrent watchers skip each other's pages. Oldest block first.
 async fn claim_unfinal_deposits(
     pool: &PgPool,
     chain_id: u64,
     finalized: u64,
+    now: DateTime<Utc>,
 ) -> Result<Vec<WatchedDeposit>, FinalityError> {
-    let recheck_seconds = f64::from(u32::try_from(RECHECK_INTERVAL.as_secs()).unwrap_or(u32::MAX));
     let rows = sqlx::query(
         r#"
         WITH due AS (
@@ -631,13 +650,18 @@ async fn claim_unfinal_deposits(
             FROM deposits
             WHERE chain_id = $1 AND final_at IS NULL AND state <> 'reversed'
               AND block_number <= $3
-              AND (finality_check_at IS NULL OR finality_check_at <= now())
+              AND (finality_check_at IS NULL OR finality_check_at <= $4)
             ORDER BY block_number, id
             LIMIT $2
             FOR UPDATE SKIP LOCKED
         )
         UPDATE deposits AS deposit
-        SET finality_check_at = now() + make_interval(secs => $4)
+        SET finality_due_at = COALESCE(deposit.finality_due_at, $4),
+            finality_check_at = $4 + make_interval(secs => CASE
+                WHEN $4 < COALESCE(deposit.finality_due_at, $4) + interval '10 minutes' THEN 60
+                WHEN $4 < COALESCE(deposit.finality_due_at, $4) + interval '6 hours' THEN 600
+                ELSE 3600
+            END)
         FROM due, addresses AS address
         WHERE deposit.id = due.id AND address.id = deposit.address_id
         RETURNING deposit.id, deposit.state, deposit.attempt, deposit.tx_hash,
@@ -651,7 +675,7 @@ async fn claim_unfinal_deposits(
     .bind(to_i64(chain_id)?)
     .bind(WATCH_PAGE)
     .bind(to_i64(finalized)?)
-    .bind(recheck_seconds)
+    .bind(now)
     .fetch_all(pool)
     .await?;
     let mut deposits = rows

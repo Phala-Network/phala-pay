@@ -120,6 +120,34 @@ pub(crate) fn pool_acquire_timed_out() {
     }
 }
 
+static REPLACEMENT_AMBIGUOUS: OnceLock<Result<IntCounterVec, prometheus::Error>> = OnceLock::new();
+fn replacement_ambiguities() -> Result<&'static IntCounterVec, prometheus::Error> {
+    REPLACEMENT_AMBIGUOUS
+        .get_or_init(|| {
+            IntCounterVec::new(
+                Opts::new(
+                    "topup_finality_replacement_ambiguous_total",
+                    "Finality checks with multiple service-known replacement candidates.",
+                ),
+                &["chain_id"],
+            )
+        })
+        .as_ref()
+        .map_err(|_| prometheus::Error::Msg("finality metrics unavailable".into()))
+}
+
+/// Records fail-closed replacement ambiguity with only a bounded chain label.
+pub(crate) fn replacement_ambiguous(chain_id: u64) {
+    let chain = chain_id.to_string();
+    match replacement_ambiguities() {
+        Ok(counter) => counter.with_label_values(&[&chain]).inc(),
+        Err(_) => tracing::error!("finality metrics initialization failed"),
+    }
+    sentry::metrics::counter("topup_finality_replacement_ambiguous_total", 1)
+        .attribute("chain_id", chain)
+        .capture();
+}
+
 /// Renders counters, histograms and current pool gauges without database or network I/O.
 pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     let http = http().map_err(|_| prometheus::Error::Msg("HTTP metrics unavailable".into()))?;
@@ -204,6 +232,7 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     families.extend(super::capacity::collect()?);
     families.extend(super::price_metrics::collect()?);
     families.extend(super::sanctions_metrics::collect()?);
+    families.extend(replacement_ambiguities()?.collect());
     families.extend(http.requests.collect());
     families.extend(http.latency.collect());
     families.extend(http.deadlines.collect());
@@ -225,10 +254,11 @@ pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> 
             .max(0);
         super::sanctions_metrics::snapshot(&snapshot, age, pool).await;
     }
-    let (coverage,budgets,issued)=tokio::try_join!(
+    let (coverage,budgets,issued,stuck)=tokio::try_join!(
         sqlx::query_as::<_,(i64,i64,i64)>("SELECT c.chain_id,GREATEST(0,extract(epoch FROM now()-c.through_time)::bigint),(SELECT count(*) FROM addresses a WHERE a.chain_id=c.chain_id AND (a.dual_covered_through IS NULL OR a.dual_covered_through < c.through_block)) FROM chain_coverage c").fetch_all(pool),
         sqlx::query_as::<_,(String,i32)>("SELECT name,used FROM daily_budgets WHERE day=(now() AT TIME ZONE 'UTC')::date").fetch_all(pool),
-        sqlx::query_as::<_,(i64,i64)>("SELECT chain_id,count(*) FROM addresses GROUP BY chain_id UNION ALL SELECT chain_id,0 FROM chain_coverage c WHERE NOT EXISTS(SELECT 1 FROM addresses a WHERE a.chain_id=c.chain_id)").fetch_all(pool)
+        sqlx::query_as::<_,(i64,i64)>("SELECT chain_id,count(*) FROM addresses GROUP BY chain_id UNION ALL SELECT chain_id,0 FROM chain_coverage c WHERE NOT EXISTS(SELECT 1 FROM addresses a WHERE a.chain_id=c.chain_id)").fetch_all(pool),
+        sqlx::query_as::<_,(i64,i64)>("SELECT chain_id,count(*) FILTER (WHERE final_at IS NULL AND state <> 'reversed' AND finality_due_at + interval '1 hour' < now()) FROM deposits GROUP BY chain_id UNION ALL SELECT chain_id,0 FROM chain_checkpoints c WHERE NOT EXISTS(SELECT 1 FROM deposits d WHERE d.chain_id=c.chain_id)").fetch_all(pool)
     )?;
     let lag = IntGaugeVec::new(
         Opts::new(
@@ -280,7 +310,20 @@ pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> 
             .with_label_values(&[&chain])
             .set(crate::db::chain_reads::ISSUED_ADDRESS_CAP);
     }
+    let stuck_gauge = IntGaugeVec::new(
+        Opts::new(
+            "topup_finality_stuck_deposits",
+            "Deposits unresolved more than one hour after first due for finality.",
+        ),
+        &["chain_id"],
+    )?;
+    for (chain, count) in stuck {
+        stuck_gauge
+            .with_label_values(&[&chain.to_string()])
+            .set(count);
+    }
     let mut families = lag.collect();
+    families.extend(stuck_gauge.collect());
     families.extend(issued_gauge.collect());
     families.extend(cap_gauge.collect());
     families.extend(addresses.collect());

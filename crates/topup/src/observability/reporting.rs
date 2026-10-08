@@ -211,7 +211,9 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         | "TopupSanctionsRescreenFailed"
         | "TopupRefundDestinationSanctioned" => "sanctions-list.md",
         "TopupTreasurySanctioned" => "treasury-change.md#sanctioned-treasury",
-        "TopupDepositReversed" | "TopupDepositPendingAfterReorg" => "deposit-reversed.md",
+        "TopupDepositReversed"
+        | "TopupDepositPendingAfterReorg"
+        | "TopupDepositReplacementAmbiguous" => "deposit-reversed.md",
         _ => "README.md#alert-and-symptom-index",
     }
 }
