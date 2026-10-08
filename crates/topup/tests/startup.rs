@@ -327,6 +327,7 @@ fn route_yaml(anvil: &Anvil, factory: Address, treasury: &str) -> String {
 }
 
 /// The service configuration of `route_yaml`, its two providers configured by id.
+#[cfg(feature = "test-support")]
 fn config_yaml(
     factory: Address,
     treasury: &str,

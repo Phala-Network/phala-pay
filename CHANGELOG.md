@@ -16,6 +16,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Breaking (operators)
 
+- Replace the deprecated Chainalysis oracle with verified OFAC SDN snapshots and audited manual
+  supplements. Allow outbound HTTPS to the SLS and its published S3 host. The service verifies
+  the publication hourly; without a fresh snapshot, negative answers hold (default limit 24h).
+  `chain.sanctions_oracle` remains parsed for N-1 rollback and is removed in N+1. Pause settlement
+  for routes affected by active manual entries before rolling back to N-1, which cannot read them.
 - The pilot permanently caps issued addresses at 1,000 per chain, counting all historical
   addresses. Quotes and deposit addresses return non-retryable `422 address_capacity_reached`
   at the cap. Operators must run the pre-upgrade count check; alerts warn at 70% and 90%.
@@ -38,6 +43,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Added
 
+- Admin-signed manual sanctions add/remove endpoints with transactional audit, snapshot
+  provenance in screening evidence and daily reports, and sanctions refresh/freshness metrics,
+  alerts and an operator runbook. Activating a snapshot re-screens current and pending treasuries
+  and pending refund destinations across all EVM chains.
 - API-key authentication uses a database slot gate sized to half the pool (at least one slot).
   A checksum-valid Bearer key waiting more than 250 ms returns `503 unavailable` with
   `Retry-After: 1`; the request has not executed. Malformed or checksum-invalid keys still return
@@ -65,13 +74,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   [API admission limits](docs/configuration.md#api-admission-limits) for the protection model.
 - Quote pricing failures now return retryable `503 price_unavailable` instead of `unavailable`.
   Routed chains that are not ready return `503 chain_unavailable`.
-- **Compliance-relevant behaviour change:** A deposit is credited ONLY when both endpoints answer
-  "clear" at the verified screening block. If both answer "sanctioned", it is rejected, exactly
-  as before. If the endpoints disagree, or one is unavailable, the deposit is HELD. It is retried,
-  never credited, and an alert fires when the hold persists past the deposit's confirmation window.
-  For a credit already delivered to the merchant before a restore, keep the credit: both endpoints
-  must agree "sanctioned" before a hit is recorded and its sweep is blocked. Disagreement or
-  unavailability holds and alerts without recording a hit or changing the delivered credit.
+- **Compliance-relevant behaviour change:** Screening uses the latest verified local snapshot at
+  decision time. A hit in the active OFAC snapshot or manual list rejects even when stale or the
+  other list read fails. A negative answer clears only with a fresh snapshot and successful list
+  reads; otherwise `sanctions_inconclusive` holds and retries. For credit delivered before a
+  restore, a hit preserves the credit and blocks its sweep; an uncertain answer holds without
+  changing delivered value.
 
 - **Breaking:** `topup restore-check --expected-heartbeat-at` is now `--failure-at`, and the
   restore report's `expected_heartbeat_at` JSON field is now `failure_at`. Both refer to the
@@ -96,9 +104,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Kraken pricing uses order-book mid instead of a potentially stale last trade, retaining bid,
   ask and last in audit evidence. Checks with spreads above `max_deviation_bps` are unavailable
   (`wide_spread`), allowing failover without recording price disagreement.
-- `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries, concurrently,
-  and reuses a clear sanctions verdict for 10 minutes; under RPC rate budgets it took several
-  seconds per chain and could time out.
+- `GET /v1/forwarders?sweepable=` screens only the requested chain's treasuries concurrently with
+  local list reads. The clear-verdict cache is removed, so snapshot and manual-list changes are
+  visible on every decision.
 - List endpoints for quotes, refunds, and forwarders use account-scoped indexes, and refunds load
   in one query; they scanned whole tables as history grew. Heartbeat reads use a timestamp index
   while preserving timestamp ordering.
