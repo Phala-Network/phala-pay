@@ -3,6 +3,7 @@
 mod accounts;
 mod addresses;
 pub mod chain_reads;
+pub mod confirmation;
 pub mod daily_budgets;
 mod deposits;
 pub(crate) mod migrations;

@@ -700,6 +700,11 @@ async fn reversal_during_coverage_rpc_discards_the_snapshot_without_reinserting(
                 100,
             )
             .await?;
+            // The unresolved confirmation is owned by the watcher while coverage is in flight.
+            sqlx::query("UPDATE deposits SET first_unresolved_at=now() WHERE id=$1")
+                .bind(id)
+                .execute(&d.app_pool)
+                .await?;
             let before = db::chain_reads::coverage(&d.app_pool, 1).await?;
             let compat_before: (i64, Option<DateTime<Utc>>) = sqlx::query_as(
                 "SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1",
@@ -883,6 +888,9 @@ async fn coverage_with_transient_reversed_history(changed: Option<&'static str>)
                 let result = async {
                     let fast = scanner::fast_once(&d.app_pool, &fast_read, &fast_chain).await?;
                     ensure!(fast.inserted == 1, "fast scanner did not insert during RPC");
+                    // A confirmation anomaly makes this transient detected row watcher-owned S.
+                    sqlx::query("UPDATE deposits SET first_unresolved_at=now() WHERE id=$1")
+                        .bind(id).execute(&d.app_pool).await?;
                     ensure!(watch.watch_once(1).await?.reversed == 1,
                         "finality did not reverse the transient fast insert");
                     Ok::<_, anyhow::Error>(())

@@ -344,3 +344,11 @@ snapshot evidence is retained. The down migration is a no-op; the compatibility 
 persisted `sanctioned` / `sanctions_inconclusive` values stay unchanged. N-1 ignores the tables
 and resumes the deprecated oracle, with its known stale-list defect. Pause settlement for routes
 affected by active manual entries before rollback; see the sanctions runbook.
+
+`20261103000000_confirmation_bounds` adds default-zero normal head/receipt counters and nullable,
+immutable confirmation deadlines and slow-lane entry history. The shared read claim reserves
+counters, due time and the existing five-minute lease before RPC; normal/L and unresolved S never
+restart a budget. Complete terminal evidence in transition records can be reused for valuation.
+Additive SQL functions share watcher eligibility and terminal-proof lookup with the pump and DB
+metrics, including detected S rows with an older final marker. Its down migration keeps all
+history and money state. N-1 can read/write the expanded schema but uses its old RPC allocation.

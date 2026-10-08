@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use topup_adapters::chain::evm::{
-    ChainError, ChainReader, FinalizedReader, ReceiptLookup, TransferLog,
+    ChainError, ChainReader, FinalizedHead, FinalizedReader, ReceiptLookup, TransferLog,
 };
 use topup_adapters::pricing::PriceSource;
 use topup_core::deposit::{RejectReason, RetryError, StepOutcome, WaitReason};
@@ -41,12 +41,11 @@ use crate::routes::RouteSet;
 
 #[async_trait]
 trait ConfirmationReader: Send + Sync {
-    async fn evidence(
+    async fn probe(
         &self,
-        tx: B256,
-        position: u64,
         confirmations: Confirmations,
-    ) -> Result<(ChainHeads, ReceiptLookup), ChainError>;
+    ) -> Result<(FinalizedHead, B256), ChainError>;
+    async fn receipt(&self, tx: B256, position: u64) -> Result<ReceiptLookup, ChainError>;
 }
 
 #[async_trait]
@@ -54,14 +53,28 @@ impl<R> ConfirmationReader for R
 where
     R: ChainReader + Send + Sync,
 {
-    async fn evidence(
+    async fn probe(
         &self,
-        tx: B256,
-        position: u64,
         confirmations: Confirmations,
-    ) -> Result<(ChainHeads, ReceiptLookup), ChainError> {
-        ChainReader::confirmation_evidence(self, tx, position, confirmations).await
+    ) -> Result<(FinalizedHead, B256), ChainError> {
+        ChainReader::confirmation_probe(self, confirmations).await
     }
+    async fn receipt(&self, tx: B256, position: u64) -> Result<ReceiptLookup, ChainError> {
+        ChainReader::receipt_transfer(self, tx, position).await
+    }
+}
+
+/// Complete independent confirmation evidence persisted with the transition that uses it.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ConfirmationEvidence {
+    /// The actual confirmation strategy used for these heads.
+    pub policy: Confirmations,
+    /// Whether fresh dual receipt evidence is at or below both finalized horizons.
+    pub terminal: bool,
+    /// Independently observed heads, one per endpoint.
+    pub heads: [ChainHeads; 2],
+    /// Complete independently decoded receipts, including status, origin and transfer.
+    pub receipts: [ReceiptLookup; 2],
 }
 
 struct ChainPair {
@@ -196,6 +209,195 @@ impl ConfirmStep {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn bounded_evidence(
+        &self,
+        chains: &ChainPair,
+        policy: Confirmations,
+        deposit: &Deposit,
+        address: Address,
+        clock: Option<DateTime<Utc>>,
+        supplied: Option<ConfirmationEvidence>,
+    ) -> FinalityResult {
+        let supplied = match supplied {
+            Some(evidence) => Some(evidence),
+            None => match self.context_lookup.terminal_evidence(deposit.id).await {
+                Ok(evidence) => evidence,
+                Err(_) => {
+                    return FinalityResult::Retry(
+                        RetryError::Transient,
+                        json!({"stage":"finality","error":"cached_evidence_invalid"}),
+                    );
+                }
+            },
+        };
+        if let Some(evidence) = supplied {
+            return confirmed_evidence_from(
+                Ok((evidence.heads[0], evidence.receipts[0].clone())),
+                Ok((evidence.heads[1], evidence.receipts[1].clone())),
+                policy,
+                deposit,
+                address,
+            );
+        }
+        let unresolved = |error: &str| {
+            FinalityResult::Unresolved(
+                StepOutcome::Retry {
+                    error: RetryError::RpcDisagreement,
+                },
+                json!({"stage":"finality","error":error}),
+            )
+        };
+        let claim = match self
+            .context_lookup
+            .claim_probe(deposit, policy, clock.unwrap_or_else(Utc::now))
+            .await
+        {
+            Ok(Some(claim)) if claim.probe => claim,
+            Ok(_) => return FinalityResult::Wait(json!({"stage":"finality","result":"not_due"})),
+            Err(_) => {
+                return FinalityResult::Retry(
+                    RetryError::Transient,
+                    json!({"stage":"finality","error":"read_claim_failed"}),
+                );
+            }
+        };
+        let (a, b) = tokio::join!(chains.primary.probe(policy), chains.secondary.probe(policy));
+        let ((a, ah), (b, bh)) = match (a, b) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => return unresolved("rpc_failure"),
+        };
+        match self
+            .context_lookup
+            .check_boundary(deposit.chain_id, [(a.number, ah), (b.number, bh)])
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return unresolved("finalized_checkpoint_conflict"),
+            Err(_) => return unresolved("checkpoint_lookup_failed"),
+        }
+        let heads = |head: FinalizedHead| match policy {
+            Confirmations::Depth(_) => ChainHeads {
+                latest: Some(head.number),
+                ..ChainHeads::default()
+            },
+            Confirmations::Safe => ChainHeads {
+                safe: Some(head.number),
+                ..ChainHeads::default()
+            },
+            Confirmations::Finalized => ChainHeads {
+                finalized: head.number,
+                ..ChainHeads::default()
+            },
+        };
+        let (ha, hb) = (heads(a), heads(b));
+        let ready =
+            policy.reached(deposit.block_number, ha) && policy.reached(deposit.block_number, hb);
+        let now = clock.unwrap_or_else(Utc::now);
+        let anchor = match policy {
+            Confirmations::Depth(depth) => {
+                let Some(required) = deposit
+                    .block_number
+                    .checked_add(depth)
+                    .and_then(|b| b.checked_sub(1))
+                else {
+                    return unresolved("invalid_depth_height");
+                };
+                let seconds = topup_core::route::ChainFamily::of(deposit.chain_id)
+                    .map_or(12, |family| family.block_seconds());
+                let estimate = |head: FinalizedHead| -> Option<DateTime<Utc>> {
+                    if head.number >= required {
+                        return Some(now);
+                    }
+                    let delay = required.checked_sub(head.number)?.checked_mul(seconds)?;
+                    head.time.checked_add_signed(chrono::Duration::try_seconds(
+                        i64::try_from(delay).ok()?,
+                    )?)
+                };
+                let (Some(ea), Some(eb)) = (estimate(a), estimate(b)) else {
+                    return unresolved("invalid_depth_time");
+                };
+                now.max(ea.min(eb))
+            }
+            _ => now,
+        };
+        match self
+            .context_lookup
+            .finish_probe(deposit, claim, policy, anchor, ready, now)
+            .await
+        {
+            Ok(true) => {}
+            _ => {
+                return FinalityResult::Retry(
+                    RetryError::Transient,
+                    json!({"stage":"finality","error":"stale_probe"}),
+                );
+            }
+        }
+        if !ready {
+            return FinalityResult::Wait(
+                json!({"stage":"finality","result":"not_confirmed","confirmations":policy.policy_value(),"provider_a_horizon":policy.horizon(ha),"provider_b_horizon":policy.horizon(hb)}),
+            );
+        }
+        match self.context_lookup.reserve_receipt(deposit, claim).await {
+            Ok(true) => {}
+            _ => return unresolved("receipt_quota_unavailable"),
+        }
+        let (ra, rb) = tokio::join!(
+            chains
+                .primary
+                .receipt(deposit.tx_hash, deposit.receipt_log_index),
+            chains
+                .secondary
+                .receipt(deposit.tx_hash, deposit.receipt_log_index)
+        );
+        let read_evidence = match (&ra, &rb) {
+            (Ok(a), Ok(b)) => match serde_json::to_value(ConfirmationEvidence {
+                policy,
+                terminal: false,
+                heads: [ha, hb],
+                receipts: [a.clone(), b.clone()],
+            }) {
+                Ok(evidence) => Some(evidence),
+                Err(error) => {
+                    tracing::error!(%error,"confirmation read evidence serialization failed");
+                    return unresolved("evidence_serialization_failed");
+                }
+            },
+            _ => None,
+        };
+        let result = confirmed_evidence_from(
+            ra.map(|r| (ha, r)),
+            rb.map(|r| (hb, r)),
+            policy,
+            deposit,
+            address,
+        );
+        let mut result = match result {
+            FinalityResult::Ready { ref log, .. }
+                if log.block_number != deposit.block_number
+                    || log.block_time != deposit.block_time
+                    || log.block_hash != deposit.block_hash
+                    || log.log_index != deposit.log_index
+                    || log.token != deposit.asset_contract
+                    || log.from != deposit.from_address
+                    || log.amount != deposit.amount_atomic
+                    || deposit.tx_from.is_some_and(|from| from != log.tx_from)
+                    || deposit.tx_nonce.is_some_and(|nonce| nonce != log.tx_nonce) =>
+            {
+                unresolved("confirmation_evidence_changed")
+            }
+            FinalityResult::Wait(_) => unresolved("receipt_not_confirmed"),
+            FinalityResult::Retry(_, _) => unresolved("rpc_disagreement"),
+            other => other,
+        };
+        if let FinalityResult::Unresolved(_, evidence) = &mut result {
+            evidence["confirmation_read"] =
+                read_evidence.unwrap_or_else(|| json!({"error":"incomplete_rpc_evidence"}));
+        }
+        result
+    }
+
     /// The route of the transfer the providers agree on: the deposit's own for its recorded
     /// token, otherwise the current route of the canonical token, if any.
     fn selected_route<'s>(
@@ -213,6 +415,16 @@ impl ConfirmStep {
     }
 
     async fn execute(&self, deposit: &Deposit, deadline: tokio::time::Instant) -> StepResult {
+        self.execute_with_clock(deposit, deadline, None, None).await
+    }
+
+    async fn execute_with_clock(
+        &self,
+        deposit: &Deposit,
+        deadline: tokio::time::Instant,
+        clock: Option<DateTime<Utc>>,
+        supplied: Option<ConfirmationEvidence>,
+    ) -> StepResult {
         let context = match self
             .context_lookup
             .load(deposit.address_id, deposit.id)
@@ -268,50 +480,64 @@ impl ConfirmStep {
                     .chain(quoted),
             )
         };
-        let mut confirmations = required(deposit.route.as_deref());
-        let (mut canonical, mut is_final) =
-            match confirmed_evidence(chains, confirmations, deposit, context.address).await {
-                FinalityResult::Ready { log, is_final } => (log, is_final),
-                FinalityResult::Unresolved(outcome, evidence) => {
-                    let mut result = StepResult::new(outcome, evidence);
-                    result.effects.first_unresolved = true;
-                    return result;
-                }
-                FinalityResult::Wait(evidence) => {
-                    return confirmation_wait(confirmations, evidence);
-                }
-                FinalityResult::Retry(error, evidence) => {
-                    return retry(error, evidence, TransitionEffects::default());
-                }
-            };
-        let mut selected_route = self.selected_route(deposit, &canonical);
+        let confirmations = required(deposit.route.as_deref());
+        let (canonical, is_final, complete_evidence) = match self
+            .bounded_evidence(
+                chains,
+                confirmations,
+                deposit,
+                context.address,
+                clock,
+                supplied.clone(),
+            )
+            .await
+        {
+            FinalityResult::Ready {
+                log,
+                is_final,
+                evidence,
+            } => (*log, is_final, *evidence),
+            FinalityResult::Unresolved(outcome, evidence) => {
+                let mut result = StepResult::new(outcome, evidence);
+                result.effects.first_unresolved = true;
+                return result;
+            }
+            FinalityResult::Wait(evidence) => {
+                return confirmation_wait(confirmations, evidence);
+            }
+            FinalityResult::Retry(error, evidence) => {
+                return retry(error, evidence, TransitionEffects::default());
+            }
+        };
+        let selected_route = self.selected_route(deposit, &canonical);
         // The receipt corrected the token: the requirement is that of the corrected facts, so a
         // payment now of the quote's asset is held to the quote's stricter confirmation.
         let corrected = required(selected_route.map(|(name, _)| name.as_str()));
-        if corrected.stricter(confirmations) != confirmations {
-            confirmations = corrected;
-            (canonical, is_final) =
-                match confirmed_evidence(chains, confirmations, deposit, context.address).await {
-                    FinalityResult::Ready { log, is_final } => (log, is_final),
-                    FinalityResult::Unresolved(outcome, evidence) => {
-                        let mut result = StepResult::new(outcome, evidence);
-                        result.effects.first_unresolved = true;
-                        return result;
-                    }
-                    FinalityResult::Wait(evidence) => {
-                        return confirmation_wait(confirmations, evidence);
-                    }
-                    FinalityResult::Retry(error, evidence) => {
-                        return retry(error, evidence, TransitionEffects::default());
-                    }
-                };
-            selected_route = self.selected_route(deposit, &canonical);
+        if corrected.stricter(confirmations) != confirmations && !is_final {
+            let mut result = retry(
+                RetryError::RpcDisagreement,
+                json!({"stage":"finality","error":"corrected_confirmation_requirement"}),
+                TransitionEffects::default(),
+            );
+            result.effects.first_unresolved = true;
+            return result;
         }
         let canonical_effect = canonical_effect(deposit, &canonical, selected_route);
         let mut effects = TransitionEffects {
             canonical_evidence: canonical_effect,
             mark_final: is_final,
             dual_verified: true,
+            confirmation_evidence: match serde_json::to_value(complete_evidence) {
+                Ok(evidence) => Some(evidence),
+                Err(error) => {
+                    tracing::error!(%error, "confirmation evidence serialization failed");
+                    return retry(
+                        RetryError::InvariantViolation,
+                        json!({"error":"evidence_serialization_failed"}),
+                        TransitionEffects::default(),
+                    );
+                }
+            },
             ..TransitionEffects::default()
         };
         // After a restore, the credit the merchant was told for this deposit stands: a settled
@@ -604,6 +830,25 @@ impl Step for ConfirmStep {
         )
         .await
     }
+    async fn run_with_clock(
+        &self,
+        deposit: &Deposit,
+        deadline: tokio::time::Instant,
+        clock: Option<DateTime<Utc>>,
+    ) -> StepResult {
+        self.execute_with_clock(deposit, deadline, clock, None)
+            .await
+    }
+    async fn run_with_final_evidence(
+        &self,
+        deposit: &Deposit,
+        evidence: ConfirmationEvidence,
+        deadline: tokio::time::Instant,
+        now: DateTime<Utc>,
+    ) -> StepResult {
+        self.execute_with_clock(deposit, deadline, Some(now), Some(evidence))
+            .await
+    }
     async fn run_with_deadline(
         &self,
         deposit: &Deposit,
@@ -648,6 +893,39 @@ struct StoredLock {
 
 #[async_trait]
 trait ContextLookup: Send + Sync {
+    async fn terminal_evidence(
+        &self,
+        _id: Uuid,
+    ) -> Result<Option<ConfirmationEvidence>, sqlx::Error> {
+        Ok(None)
+    }
+    async fn check_boundary(
+        &self,
+        _chain: u64,
+        _heads: [(u64, B256); 2],
+    ) -> Result<bool, sqlx::Error> {
+        Ok(true)
+    }
+    async fn claim_probe(
+        &self,
+        deposit: &Deposit,
+        policy: Confirmations,
+        now: DateTime<Utc>,
+    ) -> Result<Option<crate::db::confirmation::ReadClaim>, sqlx::Error>;
+    async fn reserve_receipt(
+        &self,
+        deposit: &Deposit,
+        claim: crate::db::confirmation::ReadClaim,
+    ) -> Result<bool, sqlx::Error>;
+    async fn finish_probe(
+        &self,
+        deposit: &Deposit,
+        claim: crate::db::confirmation::ReadClaim,
+        policy: Confirmations,
+        anchor: DateTime<Utc>,
+        ready: bool,
+        now: DateTime<Utc>,
+    ) -> Result<bool, sqlx::Error>;
     async fn load(
         &self,
         address_id: Uuid,
@@ -659,6 +937,92 @@ struct PostgresContextLookup(PgPool);
 
 #[async_trait]
 impl ContextLookup for PostgresContextLookup {
+    async fn terminal_evidence(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<ConfirmationEvidence>, sqlx::Error> {
+        let evidence: Option<Value> =
+            sqlx::query_scalar("SELECT confirmation_terminal_evidence($1)")
+                .bind(id)
+                .fetch_one(&self.0)
+                .await?;
+        evidence
+            .map(|value| {
+                serde_json::from_value(value).map_err(|error| sqlx::Error::Decode(error.into()))
+            })
+            .transpose()
+    }
+    async fn check_boundary(
+        &self,
+        chain: u64,
+        heads: [(u64, B256); 2],
+    ) -> Result<bool, sqlx::Error> {
+        let (checkpoint, coverage) = tokio::try_join!(
+            crate::db::chain_reads::checkpoint(&self.0, chain),
+            crate::db::chain_reads::coverage(&self.0, chain)
+        )?;
+        for boundary in checkpoint.into_iter().chain(coverage) {
+            if heads
+                .iter()
+                .any(|(number, hash)| *number == boundary.number && *hash != boundary.hash)
+            {
+                crate::db::chain_reads::freeze(&self.0, chain, "finalized_checkpoint_conflict")
+                    .await?;
+                tracing::error!(
+                    tags.alert = "TopupFinalizedCheckpointConflict",
+                    chain_id = chain,
+                    "stored confirmation boundary hash changed; chain frozen"
+                );
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    async fn claim_probe(
+        &self,
+        deposit: &Deposit,
+        policy: Confirmations,
+        now: DateTime<Utc>,
+    ) -> Result<Option<crate::db::confirmation::ReadClaim>, sqlx::Error> {
+        let token = deposit.lease_token.ok_or_else(|| {
+            sqlx::Error::Protocol("confirmation requires a processing lease".into())
+        })?;
+        crate::db::confirmation::claim_read(
+            &self.0,
+            deposit.id,
+            token,
+            crate::db::confirmation::Reader::Confirm(policy),
+            now,
+        )
+        .await
+    }
+    async fn reserve_receipt(
+        &self,
+        deposit: &Deposit,
+        claim: crate::db::confirmation::ReadClaim,
+    ) -> Result<bool, sqlx::Error> {
+        let token = deposit.lease_token.ok_or_else(|| {
+            sqlx::Error::Protocol("confirmation requires a processing lease".into())
+        })?;
+        crate::db::confirmation::reserve_receipt(&self.0, deposit.id, token, claim.version).await
+    }
+    async fn finish_probe(
+        &self,
+        deposit: &Deposit,
+        claim: crate::db::confirmation::ReadClaim,
+        policy: Confirmations,
+        anchor: DateTime<Utc>,
+        ready: bool,
+        now: DateTime<Utc>,
+    ) -> Result<bool, sqlx::Error> {
+        let token = deposit.lease_token.ok_or_else(|| {
+            sqlx::Error::Protocol("confirmation requires a processing lease".into())
+        })?;
+        crate::db::confirmation::finish_probe(
+            &self.0, deposit.id, token, claim, policy, anchor, ready, now,
+        )
+        .await
+    }
     async fn load(
         &self,
         address_id: Uuid,
@@ -807,7 +1171,11 @@ fn confirmation_wait(confirmations: Confirmations, evidence: Value) -> StepResul
 }
 
 enum FinalityResult {
-    Ready { log: TransferLog, is_final: bool },
+    Ready {
+        log: Box<TransferLog>,
+        is_final: bool,
+        evidence: Box<ConfirmationEvidence>,
+    },
     Wait(Value),
     Retry(RetryError, Value),
     Unresolved(StepOutcome, Value),
@@ -823,20 +1191,13 @@ fn receipt_block(lookup: &ReceiptLookup) -> Option<u64> {
 /// Reads the transfer at the deposit's receipt position on both providers and returns it once
 /// both show the same log in the same block and the block has reached the route's confirmation
 /// on both. The block is final too when both providers' `finalized` covers it.
-async fn confirmed_evidence(
-    chains: &ChainPair,
+fn confirmed_evidence_from(
+    primary: Result<(ChainHeads, ReceiptLookup), ChainError>,
+    secondary: Result<(ChainHeads, ReceiptLookup), ChainError>,
     confirmations: Confirmations,
     deposit: &Deposit,
     address: Address,
 ) -> FinalityResult {
-    let (primary, secondary) = tokio::join!(
-        chains
-            .primary
-            .evidence(deposit.tx_hash, deposit.receipt_log_index, confirmations),
-        chains
-            .secondary
-            .evidence(deposit.tx_hash, deposit.receipt_log_index, confirmations),
-    );
     let (primary_heads, primary_receipt) = match primary {
         Ok((h, r)) => (Ok(h), Ok(r)),
         Err(e) => (Err(e.clone()), Err(e)),
@@ -914,13 +1275,19 @@ async fn confirmed_evidence(
                 );
             }
             FinalityResult::Ready {
-                log: primary.clone(),
+                log: Box::new(primary.clone()),
                 is_final,
+                evidence: Box::new(ConfirmationEvidence {
+                    policy: confirmations,
+                    terminal: is_final,
+                    heads: [primary_heads, secondary_heads],
+                    receipts: [primary_receipt.clone(), secondary_receipt.clone()],
+                }),
             }
         }
         // Past finality on both providers, a missing transfer is a finality or provider fault
         // until the finality watch proves the transaction dropped and reverses the deposit.
-        (None, None) if is_final => FinalityResult::Unresolved(
+        (None, None) if is_final || deposit.final_at.is_some() => FinalityResult::Unresolved(
             StepOutcome::Retry {
                 error: RetryError::InvariantViolation,
             },
@@ -1134,6 +1501,24 @@ mod tests {
             }))
         }
 
+        async fn confirmation_probe(
+            &self,
+            policy: Confirmations,
+        ) -> Result<(FinalizedHead, B256), ChainError> {
+            let heads = self.confirmation_heads(policy).await?;
+            let number = if policy.needs_latest() {
+                heads.latest.unwrap_or(heads.finalized)
+            } else {
+                heads.finalized
+            };
+            Ok((
+                FinalizedHead {
+                    number,
+                    time: DateTime::UNIX_EPOCH,
+                },
+                B256::ZERO,
+            ))
+        }
         fn confirmation_heads(
             &self,
             confirmations: Confirmations,
@@ -1223,6 +1608,38 @@ mod tests {
 
     #[async_trait]
     impl ContextLookup for MockContext {
+        async fn claim_probe(
+            &self,
+            deposit: &Deposit,
+            _policy: Confirmations,
+            _now: DateTime<Utc>,
+        ) -> Result<Option<crate::db::confirmation::ReadClaim>, sqlx::Error> {
+            Ok(Some(crate::db::confirmation::ReadClaim {
+                version: deposit.updated_at,
+                head_checks: 1,
+                deadline: None,
+                first_slow_at: None,
+                probe: true,
+            }))
+        }
+        async fn reserve_receipt(
+            &self,
+            _deposit: &Deposit,
+            _claim: crate::db::confirmation::ReadClaim,
+        ) -> Result<bool, sqlx::Error> {
+            Ok(true)
+        }
+        async fn finish_probe(
+            &self,
+            _deposit: &Deposit,
+            _claim: crate::db::confirmation::ReadClaim,
+            _policy: Confirmations,
+            _anchor: DateTime<Utc>,
+            _ready: bool,
+            _now: DateTime<Utc>,
+        ) -> Result<bool, sqlx::Error> {
+            Ok(true)
+        }
         async fn load(
             &self,
             _address_id: Uuid,
@@ -1633,7 +2050,7 @@ mod tests {
         let deposit = deposit(1_000);
         let log = transfer(&deposit);
         let result = step(
-            depth_route(),
+            route(PricingMode::Spot),
             chain_at(10, 12, vec![log.clone()]),
             chain_at(10, 12, vec![log]),
             prices(now_seconds()),
@@ -1643,6 +2060,27 @@ mod tests {
         .await;
         assert_eq!(result.outcome, StepOutcome::Advance);
         assert!(result.effects.mark_final);
+    }
+
+    fn terminal(log: &TransferLog) -> ConfirmationEvidence {
+        let receipt = ReceiptLookup::Included {
+            block_number: log.block_number,
+            block_hash: log.block_hash,
+            block_time: log.block_time,
+            status: true,
+            tx_from: log.tx_from,
+            tx_nonce: log.tx_nonce,
+            transfer: Some(Box::new(log.clone())),
+        };
+        ConfirmationEvidence {
+            policy: Confirmations::Finalized,
+            terminal: true,
+            heads: [ChainHeads {
+                finalized: u64::MAX,
+                ..Default::default()
+            }; 2],
+            receipts: [receipt.clone(), receipt],
+        }
     }
 
     #[tokio::test]
@@ -1658,7 +2096,12 @@ mod tests {
             prices(now_seconds()),
             context(None),
         )
-        .run(&deposit)
+        .run_with_final_evidence(
+            &deposit,
+            terminal(&canonical),
+            tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT,
+            Utc::now(),
+        )
         .await;
         assert_eq!(result.outcome, StepOutcome::Advance);
         let correction = result.effects.canonical_evidence.expect("correction");
@@ -1681,7 +2124,12 @@ mod tests {
             prices(now_seconds()),
             context(None),
         )
-        .run(&deposit)
+        .run_with_final_evidence(
+            &deposit,
+            terminal(&canonical),
+            tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT,
+            Utc::now(),
+        )
         .await;
         assert_eq!(result.outcome, StepOutcome::Advance);
         assert_eq!(
@@ -1735,11 +2183,18 @@ mod tests {
                 ChainPair {
                     confirmations: Confirmations::Finalized,
                     primary: Arc::new(chain(100, vec![canonical.clone()])),
-                    secondary: Arc::new(chain(100, vec![canonical])),
+                    secondary: Arc::new(chain(100, vec![canonical.clone()])),
                 },
             )]),
         };
-        let result = step.run(&deposit).await;
+        let result = step
+            .run_with_final_evidence(
+                &deposit,
+                terminal(&canonical),
+                tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT,
+                Utc::now(),
+            )
+            .await;
         assert_eq!(result.outcome, StepOutcome::Advance);
         let correction = result.effects.canonical_evidence.expect("token correction");
         assert_eq!(correction.route.as_deref(), Some("canonical-token-route"));
@@ -1803,11 +2258,12 @@ mod tests {
         let result = step.run(&deposit).await;
         assert_eq!(
             result.outcome,
-            StepOutcome::Wait {
-                reason: WaitReason::Confirmations
+            StepOutcome::Retry {
+                error: RetryError::RpcDisagreement
             }
         );
         assert!(result.effects.valuation.is_none());
+        assert!(result.effects.first_unresolved);
     }
 
     #[tokio::test]
@@ -1819,11 +2275,16 @@ mod tests {
         let result = step(
             route(PricingMode::Spot),
             chain(100, vec![canonical.clone()]),
-            chain(100, vec![canonical]),
+            chain(100, vec![canonical.clone()]),
             prices(now_seconds()),
             context,
         )
-        .run(&deposit)
+        .run_with_final_evidence(
+            &deposit,
+            terminal(&canonical),
+            tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT,
+            Utc::now(),
+        )
         .await;
         assert_eq!(
             result.outcome,
@@ -2213,7 +2674,12 @@ mod tests {
                 prices(now_seconds()),
                 restored,
             )
-            .run(&deposit)
+            .run_with_final_evidence(
+                &deposit,
+                terminal(&canonical),
+                tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT,
+                Utc::now(),
+            )
             .await;
             assert_eq!(
                 result.outcome,

@@ -341,8 +341,16 @@ verbatim:
 
 Fresh quote snapshots have a hard daily cap of 100 per price chain and environment. Exhaustion
 returns retryable `503 price_unavailable`; the service never substitutes a stale price. Manual
-transfers are discovered every 60 seconds; dual coverage catches omissions and completes quote
+transfers are discovered every five minutes; hourly dual coverage catches omissions and completes quote
 expiry or cancellation within finality plus up to 10 minutes.
+
+Confirmation first probes only the required heads. Healthy Depth confirmation normally finishes
+about four seconds after the estimated depth, plus processing; temporary provider lag can wait
+up to the current normal interval (64 seconds at the end of the window). If only height remains
+insufficient after that window, a slow lane checks every minute for ten minutes, every ten minutes
+until six hours, then hourly. Recovery can take that interval plus processing; confirmation resumes
+as soon as both providers qualify, without waiting for the published checkpoint. Existing typical
+credit times describe healthy hinted payments and are not guarantees during provider lag.
 
 Semantics (spread, tolerance, expiry by dual coverage time, exposure caps) are
 [architecture §9](architecture.md#9-quotes).

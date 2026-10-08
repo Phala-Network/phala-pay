@@ -415,18 +415,25 @@ impl<'writer> MakeWriter<'writer> for LogBuffer {
 }
 
 async fn replacement_case(pool: &sqlx::PgPool, candidates: u64) -> Result<()> {
-    replacement_case_with_state(pool, candidates, DepositState::Rejected).await
+    replacement_case_with_state(pool, candidates, DepositState::Rejected, false).await
 }
 
 async fn replacement_case_with_state(
     pool: &sqlx::PgPool,
     candidates: u64,
     state: DepositState,
+    old_final: bool,
 ) -> Result<()> {
     let address = setup(pool).await?;
     let original = insert(pool, address, 1, 10).await?;
     if state == DepositState::Detected {
         sqlx::query("UPDATE deposits SET state='detected',reason=NULL,first_unresolved_at=now() WHERE id=$1").bind(original).execute(pool).await?;
+        if old_final {
+            sqlx::query("UPDATE deposits SET final_at=now() WHERE id=$1")
+                .bind(original)
+                .execute(pool)
+                .await?;
+        }
         ensure!(
             db::claim_deposit(pool, Uuid::new_v4()).await?.is_none(),
             "pump must leave unresolved due finality to the watcher"
@@ -514,12 +521,16 @@ async fn replacement_case_with_state(
 
 #[tokio::test]
 async fn unresolved_detected_deposit_reverses_only_on_watcher_replacement_proof() -> Result<()> {
-    with_database(|context| {
-        Box::pin(async move {
-            replacement_case_with_state(&context.app_pool, 1, DepositState::Detected).await
+    for old_final in [false, true] {
+        with_database(|context| {
+            Box::pin(async move {
+                replacement_case_with_state(&context.app_pool, 1, DepositState::Detected, old_final)
+                    .await
+            })
         })
-    })
-    .await
+        .await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -721,4 +732,33 @@ async fn resolved_unresolved_entries_remain_in_the_rolling_window_until_twenty_f
         })
     })
     .await
+}
+
+#[tokio::test]
+async fn old_final_detected_absence_keeps_s_until_fresh_terminal_proof() -> Result<()> {
+    with_database(|context|Box::pin(async move {
+        let p=&context.app_pool;let address=setup(p).await?;let id=insert(p,address,1,20).await?;
+        let now=DateTime::from_timestamp(2_000_000_000,0).context("clock")?;
+        sqlx::query("UPDATE deposits SET state='detected',reason=NULL,final_at=$2,first_unresolved_at=$2,next_attempt_at=$2,finality_check_at=$2 WHERE id=$1").bind(id).bind(now).execute(p).await?;
+        let chain=scripted(BTreeSet::new());
+        let watch=FinalityWatch::single(p.clone(),Arc::default(),CHAIN_ID,chain.clone(),chain.clone());
+        let buffer=LogBuffer::default();
+        let stats=watch.watch_once_at(CHAIN_ID,now).with_subscriber(topup::observability::log_subscriber(buffer.clone())).await?;
+        ensure!(stats.watched==1 && stats.finalized==0 && stats.reversed==0,"old final marker bypassed fresh proof");
+        ensure!(db::claim_deposit_at(p,Uuid::new_v4(),now+TimeDelta::minutes(10)).await?.is_none(),"pump stole S");
+        ensure!(unresolved_counts(p,now).await?==(1,1),"old final S not counted");
+        let logs=String::from_utf8(buffer.0.lock().expect("logs").clone())?;
+        ensure!(logs.contains("log_absent_at_finality"));
+        ensure!(watch.watch_once_at(CHAIN_ID,now).await?.watched==0);
+        ensure!(chain.reads.lock().expect("reads").len()==2);
+        let included=scripted(BTreeSet::from([hash_for_index(1)]));
+        let watch=FinalityWatch::single(p.clone(),Arc::default(),CHAIN_ID,included.clone(),included.clone());
+        let stats=watch.watch_once_at(CHAIN_ID,now+TimeDelta::seconds(60)).await?;
+        ensure!(stats.finalized==1 && included.reads.lock().expect("reads").len()==2);
+        ensure!(unresolved_counts(p,now+TimeDelta::seconds(60)).await?==(0,1));
+        ensure!(first_unresolved(p,id).await?==Some(now));Ok(())
+    })).await
+}
+fn hash_for_index(n: u64) -> B256 {
+    B256::from(U256::from(n))
 }

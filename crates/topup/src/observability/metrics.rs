@@ -269,11 +269,12 @@ async fn render_chain_reads_with_clock(
             .max(0);
         super::sanctions_metrics::snapshot(&snapshot, age, pool).await;
     }
-    let (coverage,budgets,issued,unresolved)=tokio::try_join!(
+    let (coverage,budgets,issued,unresolved,slow)=tokio::try_join!(
         sqlx::query_as::<_,(i64,i64,i64)>("SELECT c.chain_id,GREATEST(0,extract(epoch FROM now()-c.through_time)::bigint),(SELECT count(*) FROM addresses a WHERE a.chain_id=c.chain_id AND (a.dual_covered_through IS NULL OR a.dual_covered_through < c.through_block)) FROM chain_coverage c").fetch_all(pool),
         sqlx::query_as::<_,(String,i32)>("SELECT name,used FROM daily_budgets WHERE day=(now() AT TIME ZONE 'UTC')::date").fetch_all(pool),
         sqlx::query_as::<_,(i64,i64)>("SELECT chain_id,count(*) FROM addresses GROUP BY chain_id UNION ALL SELECT chain_id,0 FROM chain_coverage c WHERE NOT EXISTS(SELECT 1 FROM addresses a WHERE a.chain_id=c.chain_id)").fetch_all(pool),
-        sqlx::query_as::<_,(i64,i64,i64)>("SELECT chain_id,count(*) FILTER (WHERE first_unresolved_at IS NOT NULL AND final_at IS NULL AND state <> 'reversed'),count(*) FILTER (WHERE first_unresolved_at > COALESCE($1::timestamptz, now()) - interval '24 hours') FROM deposits GROUP BY chain_id UNION ALL SELECT chain_id,0,0 FROM chain_checkpoints c WHERE NOT EXISTS(SELECT 1 FROM deposits d WHERE d.chain_id=c.chain_id)").bind(now).fetch_all(pool)
+        sqlx::query_as::<_,(i64,i64,i64)>("SELECT chain_id,count(*) FILTER (WHERE first_unresolved_at IS NOT NULL AND deposit_finality_pending(deposits)),count(*) FILTER (WHERE first_unresolved_at > COALESCE($1::timestamptz, now()) - interval '24 hours') FROM deposits GROUP BY chain_id UNION ALL SELECT chain_id,0,0 FROM chain_checkpoints c WHERE NOT EXISTS(SELECT 1 FROM deposits d WHERE d.chain_id=c.chain_id)").bind(now).fetch_all(pool),
+        sqlx::query_as::<_,(i64,i64,i64)>("SELECT chain_id,count(*) FILTER (WHERE first_slow_at IS NOT NULL AND first_unresolved_at IS NULL AND state='detected' AND confirm_receipt_checks=0),count(*) FILTER (WHERE first_slow_at > COALESCE($1::timestamptz,now()) - interval '24 hours') FROM deposits GROUP BY chain_id UNION ALL SELECT chain_id,0,0 FROM chain_checkpoints c WHERE NOT EXISTS(SELECT 1 FROM deposits d WHERE d.chain_id=c.chain_id)").bind(now).fetch_all(pool)
     )?;
     let lag = IntGaugeVec::new(
         Opts::new(
@@ -344,7 +345,28 @@ async fn render_chain_reads_with_clock(
         unresolved_gauge.with_label_values(&[&chain]).set(stock);
         entries_gauge.with_label_values(&[&chain]).set(entries);
     }
+    let slow_gauge = IntGaugeVec::new(
+        Opts::new(
+            "topup_confirmation_slow",
+            "Deposits waiting only for confirmation height after the normal window.",
+        ),
+        &["chain_id"],
+    )?;
+    let slow_entries = IntGaugeVec::new(
+        Opts::new(
+            "topup_confirmation_slow_entries_24h",
+            "Deposits first entering the slow lane in the last 24 hours, including resolved entries.",
+        ),
+        &["chain_id"],
+    )?;
+    for (chain, stock, entries) in slow {
+        let chain = chain.to_string();
+        slow_gauge.with_label_values(&[&chain]).set(stock);
+        slow_entries.with_label_values(&[&chain]).set(entries);
+    }
     let mut families = lag.collect();
+    families.extend(slow_gauge.collect());
+    families.extend(slow_entries.collect());
     families.extend(unresolved_gauge.collect());
     families.extend(entries_gauge.collect());
     families.extend(issued_gauge.collect());

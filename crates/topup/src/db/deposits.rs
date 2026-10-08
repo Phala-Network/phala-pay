@@ -218,6 +218,8 @@ pub struct TransitionEffects {
     pub sanctions_hit: bool,
     /// The confirm check agreed the transfer is absent; set its durable entry once.
     pub first_unresolved: bool,
+    /// Complete dual-source confirmation evidence, retained for terminal valuation retries.
+    pub confirmation_evidence: Option<Value>,
 }
 
 /// Timeline and side effects written by one transition application.
@@ -611,12 +613,11 @@ pub async fn claim_deposit_at(
             WHERE state IN ('detected', 'confirmed')
               AND next_attempt_at <= $2
               AND (lease_until IS NULL OR lease_until <= $2)
-              AND NOT (state = 'detected' AND final_at IS NULL
-                  AND first_unresolved_at IS NOT NULL
-                  AND (finality_due_at IS NULL OR finality_check_at IS NOT NULL)
-                  AND EXISTS (SELECT 1 FROM chain_checkpoints AS checkpoint
-                      WHERE checkpoint.chain_id = deposits.chain_id
-                        AND checkpoint.block_number >= deposits.block_number))
+              AND (state = 'confirmed' OR
+                  (state = 'detected' AND
+                    (confirmation_terminal_evidence(id) IS NOT NULL OR
+                     (first_unresolved_at IS NULL AND confirm_receipt_checks=0
+                      AND (finality_check_at IS NULL OR finality_check_at <= $2)))))
             ORDER BY next_attempt_at, created_at, id
             FOR UPDATE SKIP LOCKED
             LIMIT 1
@@ -724,6 +725,12 @@ pub async fn apply_transition(
         return Ok(ApplyTransitionResult::Stale);
     }
 
+    // Head-only waits retain the due time already reserved by the shared read claim.
+    if expected_state == DepositState::Detected && update.transition.to == expected_state {
+        sqlx::query("UPDATE deposits SET next_attempt_at=GREATEST(next_attempt_at,finality_check_at) WHERE id=$1 AND confirmation_terminal_evidence(id) IS NULL")
+            .bind(deposit_id).execute(&mut **transaction).await?;
+    }
+
     if writes.effects.first_unresolved {
         sqlx::query(
             "UPDATE deposits SET first_unresolved_at=COALESCE(first_unresolved_at,$2), \
@@ -808,6 +815,15 @@ pub async fn apply_transition(
         .await?;
     }
 
+    if expected_state == DepositState::Detected
+        && update.transition.to == expected_state
+        && writes.effects.confirmation_evidence.is_some()
+        && !writes.effects.mark_final
+    {
+        sqlx::query("UPDATE deposits SET first_unresolved_at=COALESCE(first_unresolved_at,$2), finality_check_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2), next_attempt_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2) WHERE id=$1")
+            .bind(deposit_id).bind(writes.checked_at).execute(&mut **transaction).await?;
+    }
+
     if writes.effects.mark_final {
         sqlx::query(
             "UPDATE deposits SET final_at = now(), updated_at = now() \
@@ -847,6 +863,15 @@ pub async fn apply_transition(
         return Ok(ApplyTransitionResult::UnfinalizedCreditCapped(capped));
     }
 
+    let mut evidence = writes.evidence.clone();
+    if let Some(confirmation) = &writes.effects.confirmation_evidence {
+        if !evidence.is_object() {
+            evidence = serde_json::json!({"step":evidence});
+        }
+        if let Some(object) = evidence.as_object_mut() {
+            object.insert("chain_confirmation".into(), confirmation.clone());
+        }
+    }
     sqlx::query!(
         r#"
         INSERT INTO transitions (id, deposit_id, from_state, to_state, attempt, evidence)
@@ -857,7 +882,7 @@ pub async fn apply_transition(
         expected,
         target,
         update.attempt,
-        writes.evidence
+        &evidence
     )
     .execute(&mut **transaction)
     .await?;

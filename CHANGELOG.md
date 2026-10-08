@@ -14,6 +14,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed (operators)
+
+- Confirmation uses bounded head-only probes: Depth six probes at the fixed estimated-depth
+  anchor plus 4/12/28/60/124 seconds, Safe three and Finalized seven at 384-second intervals.
+  Height-only exhaustion enters slow lane L and rechecks after 60 seconds, ten minutes, then
+  hourly; it confirms when both heads qualify without waiting for checkpoint. DB gauges alert
+  on ten-minute L occupancy and current/rolling-entry totals above one per environment.
+  Missing/conflicting evidence stays in S under one shared atomic read lease and backoff;
+  terminal evidence flows directly to valuation and is reused for price retries. Expand-only
+  counters/history survive rollback, but N-1 keeps its old RPC allocation. Production's operational
+  deposit allocation is 46/day (staging 20) to retain 10.04% shared Infura budget headroom.
+
 ### Breaking (operators)
 
 - Replace the deprecated Chainalysis oracle with verified OFAC SDN snapshots and audited manual
@@ -35,7 +47,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Fresh quote price snapshots are capped at 60 per price chain/environment/UTC day. Exhaustion
   returns retryable `503 price_unavailable`; the twelve-second reuse limit is unchanged.
   Production and staging share provider free quotas: their operational deposit allocations are
-  60/day and 20/day respectively. Keep hourly dual custody on every routed chain/token pair;
+  46/day and 20/day respectively. Keep hourly dual custody on every routed chain/token pair;
   the required positive `max_attached_pending_refunds` deployment setting enforces production's
   limit of two attached-pending refunds and staging's limit of one per environment.
 - Remove RPC recovery/resume commands, member pools, review sweeps, single-source backstops and

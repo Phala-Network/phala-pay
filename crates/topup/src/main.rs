@@ -785,13 +785,15 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     )
     .context("failed to configure screening step")?;
     let steps = Arc::new(StepSet::new(Box::new(confirm_step), Box::new(screen_step)));
-    let pump = Pump::new(
-        pool.clone(),
-        Arc::clone(&routes),
-        Arc::<StepSet>::clone(&steps),
-        pump_config,
-    )
-    .context("invalid pump configuration")?;
+    let pump = Arc::new(
+        Pump::new(
+            pool.clone(),
+            Arc::clone(&routes),
+            Arc::<StepSet>::clone(&steps),
+            pump_config,
+        )
+        .context("invalid pump configuration")?,
+    );
     let refund_reader = |index| {
         topup::refunds::EvmRefundChainReader::from_routes(pool.clone(), &routes, index)
             .context("failed to configure refund verification chain reader")
@@ -806,7 +808,8 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let finality_watch =
         topup::finality::FinalityWatch::from_routes(pool.clone(), Arc::clone(&routes))
             .map_err(anyhow::Error::msg)
-            .context("failed to configure the finality watch")?;
+            .context("failed to configure the finality watch")?
+            .with_pump(Arc::clone(&pump));
     let mut tasks = ServiceTasks::new();
     let state = topup::api::AppState {
         pool: pool.clone(),

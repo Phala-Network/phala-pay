@@ -51,6 +51,9 @@ pub enum FinalityError {
     /// The chain has no configured providers.
     #[error("chain {0} is not configured")]
     UnknownChain(u64),
+    /// Shared confirmation or valuation could not be persisted.
+    #[error("{0}")]
+    Confirm(#[from] crate::pump::PumpError),
 }
 
 #[async_trait]
@@ -102,6 +105,7 @@ pub struct FinalityWatch {
     pool: PgPool,
     routes: Arc<RouteSet>,
     chains: BTreeMap<u64, WatchChain>,
+    pump: Option<Arc<crate::pump::Pump>>,
 }
 
 impl FinalityWatch {
@@ -127,6 +131,7 @@ impl FinalityWatch {
             pool,
             routes,
             chains,
+            pump: None,
         })
     }
 
@@ -145,6 +150,7 @@ impl FinalityWatch {
         Self {
             pool,
             routes,
+            pump: None,
             chains: BTreeMap::from([(
                 chain_id,
                 WatchChain {
@@ -153,6 +159,13 @@ impl FinalityWatch {
                 },
             )]),
         }
+    }
+
+    /// Uses the shared confirmation and valuation handler under the existing watch lease.
+    #[must_use]
+    pub fn with_pump(mut self, pump: Arc<crate::pump::Pump>) -> Self {
+        self.pump = Some(pump);
+        self
     }
 
     /// Reads the agreed checkpoint and re-reads every deposit of `chain_id` that is neither
@@ -167,10 +180,9 @@ impl FinalityWatch {
         chain_id: u64,
         now: DateTime<Utc>,
     ) -> Result<WatchStats, FinalityError> {
-        let Some(checkpoint) = db::chain_reads::checkpoint(&self.pool, chain_id).await? else {
-            return Ok(WatchStats::default());
-        };
-        let finalized = checkpoint.number;
+        let finalized = db::chain_reads::checkpoint(&self.pool, chain_id)
+            .await?
+            .map_or(0, |checkpoint| checkpoint.number);
         self.watch_at(chain_id, finalized, now).await
     }
 
@@ -186,10 +198,9 @@ impl FinalityWatch {
             .get(&chain_id)
             .ok_or(FinalityError::UnknownChain(chain_id))?;
         let mut stats = WatchStats::default();
-        let Some(checkpoint) = db::chain_reads::checkpoint(&self.pool, chain_id).await? else {
-            return Ok(stats);
-        };
-        let primary_finalized = primary_finalized.min(checkpoint.number);
+        let checkpoint = db::chain_reads::checkpoint(&self.pool, chain_id).await?;
+        let primary_finalized =
+            primary_finalized.min(checkpoint.map_or(0, |checkpoint| checkpoint.number));
         if crate::reconciler::chain_is_blocked(&self.pool, chain_id).await? {
             return Ok(stats);
         }
@@ -218,13 +229,16 @@ impl FinalityWatch {
                     // A concurrent finalization/reversal must not create an unresolved entry.
                     sqlx::query(
                         "UPDATE deposits SET first_unresolved_at=$2 WHERE id=$1 \
-                         AND first_unresolved_at IS NULL AND final_at IS NULL AND state <> 'reversed'",
+                         AND first_unresolved_at IS NULL AND lease_token=$3 AND updated_at=$4 AND deposit_finality_pending(deposits)",
                     )
                     .bind(deposit.id)
                     .bind(now)
+                    .bind(deposit.token)
+                    .bind(deposit.version)
                     .execute(&self.pool)
                     .await?;
                 }
+                db::confirmation::release_read(&self.pool, deposit.id, deposit.token).await?;
                 match watched {
                     Ok(Applied::Final) => stats.finalized = stats.finalized.saturating_add(1),
                     Ok(Applied::Followed) => stats.followed = stats.followed.saturating_add(1),
@@ -303,30 +317,55 @@ impl FinalityWatch {
             },
             replacement,
         );
-        let resume_confirm = deposit.state == DepositState::Detected
-            && primary == secondary
-            && primary
-                .transfer()
-                .is_some_and(|transfer| transfer.to == deposit.address);
-        let applied = self.apply(deposit, verdict, chain_id).await?;
-        if resume_confirm && matches!(applied, Applied::Nothing | Applied::Followed) {
-            // Provisional corrections and re-inclusion still belong to confirm. A null watcher
-            // schedule after a due check hands positive evidence back to the normal pump;
-            // another agreed absence reinstates the shared schedule. Never clear entry history.
-            sqlx::query(
-                "UPDATE deposits SET finality_check_at=NULL, \
-                 first_unresolved_at=COALESCE(first_unresolved_at,$2), next_attempt_at=$3 \
-                 WHERE id=$1 AND state='detected' AND final_at IS NULL",
-            )
-            .bind(deposit.id)
-            .bind(now)
-            .bind(
-                now + chrono::Duration::from_std(crate::pump::CONFIRMATION_WAIT_INTERVAL)
-                    .expect("fixed confirmation interval fits chrono"),
-            )
-            .execute(&self.pool)
-            .await?;
+        let terminal_transfer = primary == secondary
+            && primary.transfer().is_some_and(|transfer| {
+                transfer.to == deposit.address
+                    && transfer.block_number <= primary_finalized.min(secondary_finalized)
+            });
+        let evidence = crate::steps::confirm::ConfirmationEvidence {
+            policy: topup_core::route::Confirmations::Finalized,
+            terminal: primary == secondary
+                && primary.transfer().is_some_and(|log| {
+                    log.block_number <= primary_finalized.min(secondary_finalized)
+                }),
+            heads: [
+                topup_core::route::ChainHeads {
+                    finalized: primary_finalized,
+                    ..Default::default()
+                },
+                topup_core::route::ChainHeads {
+                    finalized: secondary_finalized,
+                    ..Default::default()
+                },
+            ],
+            receipts: [primary.clone(), secondary.clone()],
+        };
+        if deposit.state == DepositState::Detected && terminal_transfer {
+            if let Some(pump) = &self.pump {
+                let current = db::get_deposit(&self.pool, deposit.id)
+                    .await?
+                    .ok_or(sqlx::Error::RowNotFound)?;
+                if current.lease_token != Some(deposit.token)
+                    || current.updated_at != deposit.version
+                {
+                    return Ok(Applied::Nothing);
+                }
+                pump.confirm_final_evidence(&current, evidence, now).await?;
+            } else {
+                // Test-only watches without a pump still persist the full terminal proof.
+                let block = BlockEvidence::from(primary.transfer().expect("terminal transfer"));
+                if !record_evidence(&self.pool, deposit, &block, true, Some(&evidence)).await? {
+                    return Ok(Applied::Nothing);
+                }
+            }
+            return Ok(Applied::Final);
         }
+        if primary.transfer().is_none() && secondary.transfer().is_none() && deposit.old_final {
+            tracing::error!(tags.alert="TopupLogAbsentAtFinality",tags.chain_id=chain_id,deposit_id=%crate::ids::format(crate::ids::DEPOSIT,deposit.id),"log_absent_at_finality; fresh terminal proof is required");
+        }
+        let applied = self
+            .apply(deposit, verdict, chain_id, &evidence, now)
+            .await?;
         Ok(applied)
     }
 
@@ -444,6 +483,8 @@ impl FinalityWatch {
         deposit: &WatchedDeposit,
         verdict: Verdict,
         chain_id: u64,
+        complete: &crate::steps::confirm::ConfirmationEvidence,
+        now: DateTime<Utc>,
     ) -> Result<Applied, FinalityError> {
         match verdict {
             Verdict::Wait => Ok(Applied::Nothing),
@@ -462,7 +503,8 @@ impl FinalityWatch {
                 Ok(Applied::Nothing)
             }
             Verdict::Follow(block) => {
-                let applied = record_evidence(&self.pool, deposit, &block, false).await?;
+                let applied =
+                    record_evidence(&self.pool, deposit, &block, false, Some(complete)).await?;
                 Ok(if applied {
                     Applied::Followed
                 } else {
@@ -470,7 +512,8 @@ impl FinalityWatch {
                 })
             }
             Verdict::Final(block) => {
-                let applied = record_evidence(&self.pool, deposit, &block, true).await?;
+                let applied =
+                    record_evidence(&self.pool, deposit, &block, true, Some(complete)).await?;
                 Ok(if applied {
                     Applied::Final
                 } else {
@@ -485,10 +528,23 @@ impl FinalityWatch {
                     deposit,
                     evidence,
                     successor.as_deref(),
+                    complete,
+                    now,
                 )
                 .await?;
                 match reversed {
                     Some(Reversed { successor }) => {
+                        if let (Some(id), Some(pump)) = (successor, &self.pump) {
+                            let current = db::get_deposit(&self.pool, id)
+                                .await?
+                                .ok_or(sqlx::Error::RowNotFound)?;
+                            if current.state == DepositState::Detected {
+                                pump.confirm_final_evidence(&current, complete.clone(), now)
+                                    .await?;
+                            }
+                        } else if let Some(id) = successor {
+                            db::confirmation::release_read(&self.pool, id, deposit.token).await?;
+                        }
                         tracing::warn!(
                             tags.alert = "TopupDepositReversed",
                             tags.chain_id = chain_id,
@@ -539,6 +595,10 @@ struct WatchedDeposit {
     amount_atomic: AtomicAmount,
     /// The transaction's sender and nonce.
     origin: (Address, u64),
+    chain_id: u64,
+    token: Uuid,
+    version: DateTime<Utc>,
+    old_final: bool,
 }
 
 impl WatchedDeposit {
@@ -633,7 +693,14 @@ fn decide(
                     if deposit.state == DepositState::Detected
                         && transfer.to == deposit.address =>
                 {
-                    Verdict::Wait
+                    if transfer.block_number != deposit.block_number
+                        || transfer.block_hash != deposit.block_hash
+                        || transfer.log_index != deposit.log_index
+                    {
+                        Verdict::Follow(BlockEvidence::from(transfer))
+                    } else {
+                        Verdict::Wait
+                    }
                 }
                 _ if is_final => Verdict::Reverse(
                     json!({
@@ -670,57 +737,41 @@ fn decide(
     }
 }
 
-/// Claims the next page of deposits of `chain_id` that are neither final nor reversed, recorded
-/// at or below `finalized`, and due: never read, or past their recheck time. Claiming moves each
-/// one's recheck time ahead by 60s for its first ten minutes, 600s until six hours, then 3600s.
-/// Once present, the first unresolved entry is the shared age anchor. The first due claim
-/// otherwise establishes it independently of block time, retries and restarts. Active pump
-/// leases are excluded; a positive detected receipt can hand the next check back to confirm.
-/// Concurrent watchers skip each other's pages. Oldest block first.
+/// Selects an oldest-first page of watcher-owned due deposits. Each row then goes through
+/// the same atomic lease/due claim as normal/L probes. S stays eligible above checkpoint
+/// and with an old final marker; finalized rows outside S remain excluded.
 async fn claim_unfinal_deposits(
     pool: &PgPool,
     chain_id: u64,
     finalized: u64,
     now: DateTime<Utc>,
 ) -> Result<Vec<WatchedDeposit>, FinalityError> {
-    let rows = sqlx::query(
-        r#"
-        WITH due AS (
-            SELECT id
-            FROM deposits
-            WHERE chain_id = $1 AND final_at IS NULL AND state <> 'reversed'
-              AND block_number <= $3
-              AND (state <> 'detected' OR lease_until IS NULL OR lease_until <= $4)
-              AND (state <> 'detected' OR finality_due_at IS NULL OR finality_check_at IS NOT NULL)
-              AND (finality_check_at IS NULL OR finality_check_at <= $4)
-            ORDER BY block_number, id
-            LIMIT $2
-            FOR UPDATE SKIP LOCKED
-        )
-        UPDATE deposits AS deposit
-        SET finality_due_at = COALESCE(deposit.finality_due_at, $4),
-            finality_check_at = finality_next_check_at(
-                COALESCE(deposit.first_unresolved_at, deposit.finality_due_at, $4), $4),
-            next_attempt_at = CASE WHEN deposit.state = 'detected' THEN
-                GREATEST(deposit.next_attempt_at, finality_next_check_at(
-                    COALESCE(deposit.first_unresolved_at, deposit.finality_due_at, $4), $4))
-                ELSE deposit.next_attempt_at END
-        FROM due, addresses AS address
-        WHERE deposit.id = due.id AND address.id = deposit.address_id
-        RETURNING deposit.id, deposit.state, deposit.attempt, deposit.tx_hash,
-                  deposit.receipt_log_index, deposit.log_index, deposit.block_number,
-                  deposit.block_hash, deposit.block_time, address.address,
-                  deposit.asset_contract, deposit.from_address,
-                  deposit.amount_atomic::text AS amount_atomic,
-                  deposit.tx_from, deposit.tx_nonce::text AS tx_nonce
-        "#,
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM deposits WHERE chain_id=$1 AND deposit_finality_pending(deposits) \
+         AND (first_unresolved_at IS NOT NULL OR block_number <= $2) \
+         AND (lease_until IS NULL OR lease_until <= $3) \
+         AND (finality_check_at IS NULL OR finality_check_at <= $3) \
+         ORDER BY block_number,id LIMIT $4",
     )
     .bind(to_i64(chain_id)?)
-    .bind(WATCH_PAGE)
     .bind(to_i64(finalized)?)
     .bind(now)
+    .bind(WATCH_PAGE)
     .fetch_all(pool)
     .await?;
+    let mut rows = Vec::new();
+    for id in ids {
+        let token = Uuid::new_v4();
+        if db::confirmation::claim_read(pool, id, token, db::confirmation::Reader::Watcher, now)
+            .await?
+            .is_none()
+        {
+            continue;
+        }
+        let row = sqlx::query("SELECT deposit.id,deposit.state,deposit.attempt,deposit.tx_hash,deposit.receipt_log_index,deposit.log_index,deposit.block_number,deposit.block_hash,deposit.block_time,address.address,deposit.asset_contract,deposit.from_address,deposit.amount_atomic::text AS amount_atomic,deposit.tx_from,deposit.tx_nonce::text AS tx_nonce,deposit.lease_token,deposit.updated_at,deposit.final_at IS NOT NULL AS old_final FROM deposits deposit JOIN addresses address ON address.id=deposit.address_id WHERE deposit.id=$1 AND deposit.lease_token=$2")
+            .bind(id).bind(token).fetch_one(pool).await?;
+        rows.push(row);
+    }
     let mut deposits = rows
         .into_iter()
         .map(|row| {
@@ -730,6 +781,10 @@ async fn claim_unfinal_deposits(
             );
             Ok(WatchedDeposit {
                 id: row.try_get("id")?,
+                chain_id,
+                token: row.try_get("lease_token")?,
+                version: row.try_get("updated_at")?,
+                old_final: row.try_get("old_final")?,
                 state: db::parse_state(&row.try_get::<String, _>("state")?)?,
                 attempt: row.try_get("attempt")?,
                 tx_hash: parse(&row.try_get::<String, _>("tx_hash")?)?,
@@ -762,17 +817,20 @@ async fn record_evidence(
     deposit: &WatchedDeposit,
     block: &BlockEvidence,
     is_final: bool,
+    confirmation: Option<&crate::steps::confirm::ConfirmationEvidence>,
 ) -> Result<bool, FinalityError> {
     let mut transaction = pool.begin().await?;
+    db::rpc::guard_in(&mut transaction, deposit.chain_id).await?;
     let updated = sqlx::query(
         r#"
         UPDATE deposits
         SET log_index = $2, block_number = $3, block_hash = $4, block_time = $5,
             final_at = CASE WHEN $6 THEN now() END,
+            first_unresolved_at=CASE WHEN NOT $6 THEN COALESCE(first_unresolved_at,finality_due_at) ELSE first_unresolved_at END,
             next_attempt_at = CASE WHEN $6 AND state = 'detected' THEN now()
                 ELSE next_attempt_at END,
             updated_at = now()
-        WHERE id = $1 AND final_at IS NULL AND state <> 'reversed'
+        WHERE id = $1 AND lease_token=$7 AND updated_at=$8 AND state <> 'reversed'
         RETURNING state
         "#,
     )
@@ -782,6 +840,8 @@ async fn record_evidence(
     .bind(format!("{:#x}", block.block_hash))
     .bind(block.block_time)
     .bind(is_final)
+    .bind(deposit.token)
+    .bind(deposit.version)
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(row) = updated else {
@@ -796,6 +856,7 @@ async fn record_evidence(
         &state,
         deposit.attempt,
         &json!({
+            "chain_confirmation": confirmation,
             "stage": "finality",
             "result": if is_final { "final" } else { "followed" },
             "moved": moved,
@@ -822,6 +883,7 @@ async fn record_evidence(
 /// `successor`, the final transfer now at the deposit's receipt position, is recorded as a new
 /// deposit in the same transaction ([`reverse_in`]). Returns `None` when nothing was
 /// reversed.
+#[allow(clippy::too_many_arguments)]
 async fn reverse_deposit(
     pool: &PgPool,
     routes: &RouteSet,
@@ -829,6 +891,8 @@ async fn reverse_deposit(
     deposit: &WatchedDeposit,
     mut evidence: Value,
     successor: Option<&TransferLog>,
+    complete: &crate::steps::confirm::ConfirmationEvidence,
+    now: DateTime<Utc>,
 ) -> Result<Option<Reversed>, FinalityError> {
     let chain = chain_routes(routes)
         .into_iter()
@@ -836,6 +900,20 @@ async fn reverse_deposit(
         .ok_or(FinalityError::UnknownChain(chain_id))?;
     let mut transaction = pool.begin().await?;
     db::rpc::guard_in(&mut transaction, chain_id).await?;
+    let current: Option<Uuid> = sqlx::query_scalar("SELECT id FROM deposits WHERE id=$1 AND lease_token=$2 AND updated_at=$3 AND state=$4 FOR UPDATE")
+        .bind(deposit.id).bind(deposit.token).bind(deposit.version).bind(db::state_code(deposit.state)).fetch_optional(&mut *transaction).await?;
+    if current.is_none() {
+        return Ok(None);
+    }
+    // Only this fresh, dual-source positive reversal verdict may override an old final marker.
+    if deposit.old_final && deposit.state == DepositState::Detected {
+        sqlx::query(
+            "UPDATE deposits SET final_at=NULL WHERE id=$1 AND first_unresolved_at IS NOT NULL",
+        )
+        .bind(deposit.id)
+        .execute(&mut *transaction)
+        .await?;
+    }
     let next = match successor {
         Some(transfer) => {
             match db::find_scan_address(&mut *transaction, chain_id, transfer.to).await? {
@@ -859,6 +937,21 @@ async fn reverse_deposit(
     else {
         return Ok(None);
     };
+    if let Some(id) = successor {
+        // The already-read terminal receipt belongs to this canonical successor too. Reserve
+        // its existing lease and receipt quota inside the atomic reversal transaction.
+        sqlx::query("UPDATE deposits SET lease_token=$2,lease_until=$3+interval '5 minutes',confirm_receipt_checks=GREATEST(confirm_receipt_checks,1),final_at=$3 WHERE id=$1 AND state='detected'")
+            .bind(id).bind(deposit.token).bind(now).execute(&mut *transaction).await?;
+        insert_transition(
+            &mut transaction,
+            id,
+            "detected",
+            "detected",
+            0,
+            &json!({"stage":"finality","result":"successor_final","chain_confirmation":complete}),
+        )
+        .await?;
+    }
     let scope = Scope::new(account_id, livemode);
     let pending_refunds: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM refunds WHERE deposit_id = $1 AND status = 'pending' AND tx_hash IS NULL \
@@ -1011,6 +1104,10 @@ mod tests {
 
     fn deposit(state: DepositState) -> WatchedDeposit {
         WatchedDeposit {
+            chain_id: 1,
+            token: Uuid::nil(),
+            version: Utc::now(),
+            old_final: false,
             id: Uuid::nil(),
             state,
             attempt: 0,

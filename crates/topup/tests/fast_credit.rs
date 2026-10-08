@@ -256,7 +256,8 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
 
             // Terminal: later passes and pumps leave it alone, and the event stays single.
             let again = chain.watch().await?;
-            ensure!(again.finalized == 1 && again.reversed == 0, "{again:?}");
+            // The service-known candidate is still normal pump work, not unresolved stock.
+            ensure!(again.watched == 0 && again.reversed == 0, "{again:?}");
             ensure!(chain.watch().await?.watched == 0);
             chain.settle().await?;
             ensure!(chain.pump.run_once().await? == RunOnceResult::Idle);
@@ -326,7 +327,7 @@ async fn the_payers_view_credits_the_shown_payment_and_drops_a_reversed_one() ->
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
             chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
-            ensure!(stats.reversed == 1 && stats.finalized == 2, "{stats:?}");
+            ensure!(stats.reversed == 1 && stats.finalized == 1, "{stats:?}");
             ensure!(chain.deposit(first).await?.state == DepositState::Reversed);
             ensure!(chain.deposit(second).await?.state == DepositState::Credited);
             let view = chain.client_quote().await?;
@@ -533,15 +534,15 @@ async fn a_lagging_provider_b_delays_the_credit_until_it_reaches_the_depth() -> 
                 .fetch_one(&chain.pool)
                 .await?;
                 ensure!(evidence["result"] == "not_confirmed", "{evidence}");
-                // Retried within a few seconds, not a full wait interval.
-                let delay = waiting.next_attempt_at - Utc::now();
-                ensure!(delay <= chrono::Duration::seconds(3), "{delay}");
+                // The fixed first position follows the estimated depth anchor by four seconds.
+                let deadline: chrono::DateTime<Utc> =
+                    sqlx::query_scalar("SELECT confirm_deadline_at FROM deposits WHERE id=$1")
+                        .bind(id)
+                        .fetch_one(&chain.pool)
+                        .await?;
+                ensure!(waiting.next_attempt_at == deadline - chrono::Duration::seconds(120));
 
                 lag.store(0, Ordering::SeqCst);
-                sqlx::query("UPDATE deposits SET next_attempt_at = now() WHERE id = $1")
-                    .bind(id)
-                    .execute(&chain.pool)
-                    .await?;
                 chain.settle().await?;
                 ensure!(chain.deposit(tx).await?.state == DepositState::Credited);
                 Ok(())
@@ -615,9 +616,11 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
                 chain.events("deposit.credited").await?.len() == 2
                     && chain.events("deposit.reversed").await?.len() == 1
             );
-            // Coverage already recorded finalized evidence for the successor.
+            // Normal Depth confirmation consumes its own receipt evidence; the watcher then
+            // verifies terminal evidence once, at the reserved due time.
             let stats = chain.watch().await?;
-            ensure!(stats.watched == 0 && stats.reversed == 0, "{stats:?}");
+            ensure!(stats.finalized == 1 && stats.reversed == 0, "{stats:?}");
+            ensure!(chain.watch().await?.watched == 0);
             ensure!(chain.deposit(successor).await?.final_at.is_some());
             ensure!(chain.events("deposit.reversed").await?.len() == 1);
             Ok(())
@@ -886,7 +889,8 @@ impl FastChain {
             chain_id,
             reader(&anvil.rpc_url)?,
             secondary(&anvil.rpc_url)?,
-        );
+        )
+        .with_pump(Arc::new(pump.clone()));
         let client_reads = Arc::new(ClientReadLimiter::default());
         let api = topup::api::router(AppState {
             pool: pool.clone(),
@@ -1096,7 +1100,12 @@ impl FastChain {
     /// Runs the pump until nothing is due.
     async fn settle(&self) -> Result<()> {
         for _ in 0..10 {
-            if self.pump.run_once().await? == RunOnceResult::Idle {
+            let clock: chrono::DateTime<Utc> = sqlx::query_scalar(
+                "SELECT GREATEST(now(),COALESCE(max(next_attempt_at),now())) FROM deposits",
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            if self.pump.run_once_at(clock).await? == RunOnceResult::Idle {
                 return Ok(());
             }
         }
@@ -1164,7 +1173,13 @@ impl FastChain {
     async fn watch(&self) -> Result<topup::finality::WatchStats> {
         let verify = FinalizedReader::new(Arc::new(EvmClient::new(&self.anvil.rpc_url)?));
         topup::checkpoint::advance(&self.pool, self.chain_id, &self.reader, &verify).await?;
-        Ok(self.watch.watch_once(self.chain_id).await?)
+        let clock: chrono::DateTime<Utc> = sqlx::query_scalar(
+            "SELECT GREATEST(now(),COALESCE(max(finality_check_at),now())) \
+             FROM deposits WHERE deposit_finality_pending(deposits)",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(self.watch.watch_once_at(self.chain_id, clock).await?)
     }
 
     async fn deposit(&self, tx: B256) -> Result<db::Deposit> {
@@ -1332,6 +1347,17 @@ impl ChainReader for LaggingReader {
             latest: heads.latest.map(|latest| latest.saturating_sub(lag)),
             ..heads
         })
+    }
+
+    async fn confirmation_probe(
+        &self,
+        confirmations: Confirmations,
+    ) -> Result<(FinalizedHead, B256), ChainError> {
+        let (mut head, hash) = self.inner.confirmation_probe(confirmations).await?;
+        if confirmations.needs_latest() {
+            head.number = head.number.saturating_sub(self.lag.load(Ordering::SeqCst));
+        }
+        Ok((head, hash))
     }
 
     async fn transfer_logs_to(

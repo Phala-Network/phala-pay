@@ -17,7 +17,10 @@ finality = root / "crates/topup/src/finality/mod.rs"
 schedule = root / "crates/topup/migrations/20261102000000_finality_due.up.sql"
 deposits = root / "crates/topup/src/db/deposits.rs"
 scanner = root / "crates/topup/src/scanner/mod.rs"
-originals = {path: path.read_text() for path in [refunds, api, repository, finality, schedule, deposits, scanner]}
+confirmation = root / "crates/topup/src/db/confirmation.rs"
+bounds = root / "crates/topup/migrations/20261103000000_confirmation_bounds.up.sql"
+confirm_step = root / "crates/topup/src/steps/confirm.rs"
+originals = {path: path.read_text() for path in [refunds, api, repository, finality, schedule, deposits, scanner, confirmation, bounds, confirm_step]}
 cases = [
     (schedule, "finality ten-minute boundary", "WHEN checked_at < COALESCE(anchor, checked_at) + interval '10 minutes' THEN 60", "WHEN checked_at <= COALESCE(anchor, checked_at) + interval '10 minutes' THEN 60",
      ["--test", "finality", "unresolved_finality_cadence_keeps_first_due_time_and_exact_boundaries"]),
@@ -47,17 +50,17 @@ cases = [
      ["--test", "refunds", "refund_attachment_pending_cap_keeps_existing_checks_and_reservations"]),
     (schedule, "shared finality hourly backoff", "ELSE 3600", "ELSE 600",
      ["--test", "pump", "absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours"]),
-    (deposits, "confirm must use shared backoff", "next_attempt_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2)", "next_attempt_at=$2 + interval '2 seconds'",
+    (deposits, "confirm must use shared backoff", '             finality_check_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2) \\\n', "             finality_check_at=$2 + interval '2 seconds' \\\n",
      ["--test", "pump", "absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours"]),
     (deposits, "confirm unresolved persistence", "if writes.effects.first_unresolved {", "if false {",
      ["--test", "pump", "absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours"]),
-    (deposits, "confirm once-only unresolved entry", "first_unresolved_at=COALESCE(first_unresolved_at,$2)", "first_unresolved_at=$2",
+    (finality, "watcher once-only unresolved entry", "AND first_unresolved_at IS NULL AND lease_token=$3", "AND lease_token=$3",
      ["--test", "pump", "absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours"]),
-    (finality, "watcher excludes active confirm lease", "AND (state <> 'detected' OR lease_until IS NULL OR lease_until <= $4)", "",
-     ["--test", "pump", "absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours"]),
-    (deposits, "watcher owns due unresolved confirm", "AND NOT (state = 'detected' AND final_at IS NULL", "AND NOT (false AND state = 'detected' AND final_at IS NULL",
+    (confirmation, "shared reader excludes active lease", "AND (lease_until IS NULL OR lease_until <= $3 OR lease_token=$2)", "AND true",
+     ["--test", "confirmation_bounds", "missed_positions_restart_crash_and_stale_claims_never_reset_budgets"]),
+    (deposits, "watcher owns due unresolved confirm", "first_unresolved_at IS NULL AND confirm_receipt_checks=0", "true",
      ["--test", "finality", "unresolved_detected_deposit_reverses_only_on_watcher_replacement_proof"]),
-    (finality, "confirm positive evidence handoff", "if resume_confirm && matches!(applied, Applied::Nothing | Applied::Followed) {", "if false && matches!(applied, Applied::Nothing | Applied::Followed) {",
+    (finality, "confirm positive evidence handoff", "if deposit.state == DepositState::Detected && terminal_transfer {", "if false && terminal_transfer {",
      ["--test", "pump", "positive_reincluded_provisional_transfer_returns_to_confirm_without_extra_watcher_reads"]),
     (scanner, "coverage persisted checkpoint conflict", "end == checkpoint.number && (a.0 != checkpoint.hash || b.0 != checkpoint.hash)", "false",
      ["--test", "scanner", "dual_agreed_coverage_boundary_conflict_freezes_before_any_publication"]),
@@ -69,6 +72,30 @@ cases = [
      ["--test", "scanner", "single_endpoint_coverage_boundary_conflict_freezes_before_disagreement"]),
     (scanner, "coverage verify endpoint checkpoint conflict", "a.0 != checkpoint.hash || b.0 != checkpoint.hash", "a.0 != checkpoint.hash",
      ["--test", "scanner", "single_endpoint_coverage_boundary_conflict_freezes_before_disagreement"]),
+]
+cases += [
+    (confirmation, "Depth six probes and fixed last position", "[0, 4, 12, 28, 60, 124]", "[0, 4, 12, 28, 60, 123]",
+     ["--test", "confirmation_bounds", "normal_modes_and_slow_lane_have_hard_method_bounds"]),
+    (confirmation, "Safe fixed cadence", "vec![0, 384, 768]", "vec![0, 60, 120]",
+     ["--test", "confirmation_bounds", "normal_modes_and_slow_lane_have_hard_method_bounds"]),
+    (confirmation, "Finalized seven probes", "(0..7).map", "(0..8).map",
+     ["--test", "confirmation_bounds", "normal_modes_and_slow_lane_have_hard_method_bounds"]),
+    (confirmation, "normal deadline immutable", "confirm_deadline_at=COALESCE(confirm_deadline_at,$4)", "confirm_deadline_at=$4 + interval '1 second'",
+     ["--test", "confirmation_bounds", "missed_positions_restart_crash_and_stale_claims_never_reset_budgets"]),
+    (confirmation, "receipt quota once only", "AND confirm_receipt_checks=0", "AND confirm_receipt_checks<=1",
+     ["--test", "confirmation_bounds", "missed_positions_restart_crash_and_stale_claims_never_reset_budgets"]),
+    (confirmation, "read result version CAS", "AND updated_at=$3 AND state='detected' \\\n         AND confirm_receipt_checks=0", "AND state='detected' \\\n         AND confirm_receipt_checks=0",
+     ["--test", "confirmation_bounds", "missed_positions_restart_crash_and_stale_claims_never_reset_budgets"]),
+    (confirm_step, "Depth anchor uses earlier endpoint", "now.max(ea.min(eb))", "now.max(ea.max(eb))",
+     ["--test", "confirmation_bounds", "normal_modes_and_slow_lane_have_hard_method_bounds"]),
+    (confirm_step, "changed receipt enters S", "unresolved(\"confirmation_evidence_changed\")", "result",
+     ["--test", "confirmation_bounds", "receipt_anomalies_and_price_failure_keep_watcher_ownership_and_one_quota"]),
+    (bounds, "old final S watcher eligibility", "(deposit.state = 'detected'", "(deposit.state = 'detected' AND deposit.final_at IS NULL",
+     ["--test", "finality", "old_final_detected_absence_keeps_s_until_fresh_terminal_proof"]),
+    (bounds, "nonterminal proof cannot be cached", "AND evidence -> 'chain_confirmation' -> 'terminal' = 'true'::jsonb", "AND true",
+     ["--test", "confirmation_bounds", "receipt_anomalies_and_price_failure_keep_watcher_ownership_and_one_quota"]),
+    (finality, "successor inherits consumed receipt quota", "confirm_receipt_checks=GREATEST(confirm_receipt_checks,1)", "confirm_receipt_checks=confirm_receipt_checks",
+     ["--test", "confirmation_bounds", "nonterminal_price_failure_then_reorg_reverses_with_atomic_successor"]),
 ]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--case", action="append", choices=[case[1] for case in cases], help="Run a named proof; repeat to select several")
@@ -108,7 +135,7 @@ for path, name, before, after, args in cases:
         path.write_text(mutated)
         # SQL claim mutations are checked against the prepared disposable schema. This does not
         # rewrite committed metadata; mutated migrations run only in each test's fresh database.
-        environment = {**os.environ, "SQLX_OFFLINE": "false"} if path == deposits else None
+        environment = {**os.environ, "SQLX_OFFLINE": "false", "DATABASE_URL": os.environ["OWNER_DATABASE_URL"]} if path == deposits else None
         result = subprocess.run(command, cwd=root, capture_output=True, timeout=600, env=environment)
         output = result.stdout.decode() + result.stderr.decode()
         if result.returncode == 0 or "test result: FAILED" not in output:

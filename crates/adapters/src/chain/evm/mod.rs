@@ -56,7 +56,7 @@ pub const EIP1271_MAGIC_VALUE: [u8; 4] = [0x16, 0x26, 0xba, 0x7e];
 ///
 /// Its identity is `(tx_hash, receipt_log_index)`, which survives the transaction's re-inclusion in
 /// another block; the block fields and the block-wide `log_index` are evidence that may change.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TransferLog {
     /// Transaction hash containing the event.
     pub tx_hash: B256,
@@ -85,7 +85,7 @@ pub struct TransferLog {
 }
 
 /// A transaction's receipt as one provider reports it, with the transfer at one receipt position.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ReceiptLookup {
     /// The provider has no receipt: the transaction is not in its canonical chain.
     Missing,
@@ -293,6 +293,25 @@ pub trait ChainReader: Send + Sync {
         &self,
         confirmations: Confirmations,
     ) -> impl Future<Output = Result<ChainHeads, ChainError>> + Send;
+
+    /// Returns the required tagged head and timestamp without reading a receipt. Production
+    /// readers use exactly one eth_getBlockByNumber call, including the header hash.
+    fn confirmation_probe(
+        &self,
+        confirmations: Confirmations,
+    ) -> impl Future<Output = Result<(FinalizedHead, B256), ChainError>> + Send {
+        async move {
+            let heads = self.confirmation_heads(confirmations).await?;
+            let number = match confirmations {
+                Confirmations::Depth(_) => heads.latest,
+                Confirmations::Safe => heads.safe,
+                Confirmations::Finalized => Some(heads.finalized),
+            }
+            .ok_or(ChainError::MissingField("confirmation head"))?;
+            let (hash, time) = self.header(number).await?;
+            Ok((FinalizedHead { number, time }, hash))
+        }
+    }
 
     /// Returns the factory's `ForwarderCreated`, `Flushed`, and `FlushFailed` events about any
     /// supplied forwarder in the inclusive block range. Anyone can call the factory, so the caller
@@ -1643,6 +1662,28 @@ impl ChainReader for FinalizedReader {
                 time,
             },
             block.header.hash,
+        ))
+    }
+
+    async fn confirmation_probe(
+        &self,
+        confirmations: Confirmations,
+    ) -> Result<(FinalizedHead, B256), ChainError> {
+        if confirmations == Confirmations::Finalized {
+            return self.finalized_header().await;
+        }
+        let tag = if confirmations.needs_safe() {
+            BlockNumberOrTag::Safe
+        } else {
+            BlockNumberOrTag::Latest
+        };
+        let (number, hash, timestamp) = self.client.price_block(tag).await?;
+        Ok((
+            FinalizedHead {
+                number,
+                time: utc_timestamp(timestamp)?,
+            },
+            hash,
         ))
     }
 

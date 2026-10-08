@@ -100,7 +100,7 @@ async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -
             }
             let due = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
             let rpc = AbsentRpc::default();
-            if watcher_due_at_first { rpc.head.store(500, Ordering::SeqCst); }
+            rpc.head.store(500, Ordering::SeqCst);
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
             let address = listener.local_addr()?;
             let cancellation = CancellationToken::new();
@@ -120,7 +120,7 @@ async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -
                 let pump = test_pump(pool, static_steps(StepOutcome::Wait { reason: WaitReason::Paused }).with_detected(Box::new(confirm)), PumpConfig::default(), 0)?;
                 let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader(0)?, reader(1)?);
                 if watcher_due_at_first {
-                    db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:b256(50), time:due }).await?;
+                    db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:B256::from(U256::from(500)), time:due }).await?;
                 }
                 // A pump's active lease excludes the watcher even before the first absence is persisted.
                 let first_pump = pump.clone();
@@ -133,14 +133,10 @@ async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -
                 ensure!(during.watched == 0, "watcher read during the pump lease");
                 ensure!(first_outcome == RunOnceResult::Applied { deposit_id:id });
                 let timeline: serde_json::Value = sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1").bind(id).fetch_one(pool).await?;
-                if watcher_due_at_first {
-                    ensure!(timeline["error"] == "log_absent_at_finality", "finality evidence lost: {timeline}");
-                } else {
-                    ensure!(timeline["result"] == "not_confirmed", "pre-confirmation evidence lost: {timeline}");
-                }
+                ensure!(timeline["error"] == "log_absent_at_finality", "finality evidence lost: {timeline}");
                 let gauges = topup::observability::metrics::render_chain_reads_at(pool, due).await?;
                 for name in ["topup_finality_unresolved", "topup_finality_unresolved_entries_24h"] {
-                    let count = if name == "topup_finality_unresolved" && previously_final { 0 } else { 1 };
+                    let count = 1;
                     ensure!(gauges.lines().any(|line| line == format!("{name}{{chain_id=\"1\"}} {count}")), "confirm absence missing from {name}");
                 }
                 let mut elapsed = 60;
@@ -148,7 +144,7 @@ async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -
                     for probe in [elapsed - 1, elapsed, elapsed + 1] {
                         if probe == 600 && !watcher_due_at_first {
                             rpc.head.store(500, Ordering::SeqCst);
-                            db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:b256(50), time:due }).await?;
+                            db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:B256::from(U256::from(500)), time:due }).await?;
                         }
                         let now = due + Duration::seconds(probe);
                         let before = rpc.receipts.each_ref().map(|count| count.load(Ordering::SeqCst));
@@ -162,7 +158,7 @@ async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -
                         ensure!(entry == due, "entry timestamp overwritten");
                         if probe == elapsed {
                             let interval = if elapsed < 600 { 60 } else if elapsed < 21_600 { 600 } else { 3600 };
-                            ensure!(next_confirm == now + Duration::seconds(interval) && next_watch == next_confirm, "schedules differ at {elapsed}");
+                            ensure!(next_confirm == now + Duration::seconds(interval) && next_watch == next_confirm, "schedules differ at {elapsed}: confirm={next_confirm}, watch={next_watch}, now={now}");
                         }
                     }
                     elapsed += if elapsed < 600 { 60 } else if elapsed < 21_600 { 600 } else { 3600 };
@@ -198,16 +194,16 @@ async fn positive_reincluded_provisional_transfer_returns_to_confirm_without_ext
         let mut corrected = transfer_log(&deposit, evm_address(32));
         corrected.amount = AtomicAmount::new(U256::from(2000));
         let reader = ConfirmChain { logs:Arc::new(vec![corrected.clone()]), barrier:None };
-        let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader.clone(), reader);
         let pump = test_pump(pool, confirm_steps(pool, vec![corrected], None), PumpConfig::default(), 0)?;
+        let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader.clone(), reader).with_pump(Arc::new(pump.clone()));
         ensure!(pump.run_once_at(now).await? == RunOnceResult::Idle);
         ensure!(watch.watch_once_at(1, now).await?.watched == 1);
         ensure!(watch.watch_once_at(1, now).await?.watched == 0, "positive handoff cannot restart the watcher at the same due time");
-        ensure!(pump.run_once_at(now).await? == RunOnceResult::Idle, "handoff must use a distinct next due time");
+        ensure!(db::get_deposit(pool,id).await?.context("confirmed")?.state == DepositState::Confirmed,"watcher did not confirm within its claim");
         let (entry, scheduled): (DateTime<Utc>,Option<DateTime<Utc>>) = sqlx::query_as("SELECT first_unresolved_at,finality_check_at FROM deposits WHERE id=$1").bind(id).fetch_one(pool).await?;
-        ensure!(entry == now - Duration::hours(7) && scheduled.is_none());
+        ensure!(entry == now - Duration::hours(7) && scheduled == Some(now+Duration::hours(1)));
         ensure!(watch.watch_once_at(1, now + Duration::seconds(2)).await?.watched == 0);
-        ensure!(pump.run_once_at(now + Duration::seconds(2)).await? == RunOnceResult::Applied { deposit_id:id });
+
         let stored = db::get_deposit(pool, id).await?.context("confirmed")?;
         ensure!(stored.state == DepositState::Confirmed && stored.amount_atomic == AtomicAmount::new(U256::from(2000)) && stored.final_at.is_some());
         Ok(())
@@ -223,16 +219,16 @@ async fn watcher_resolution_wakes_confirm_immediately_without_clearing_entry_his
             let seed = seed_account(pool, 31).await?;
             let id = insert_deposit(pool, seed, 31).await?;
             let now = DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).context("PostgreSQL precision clock")?;
-            sqlx::query("UPDATE deposits SET final_at=NULL,first_unresolved_at=CASE WHEN $2 THEN $3 - interval '7 hours' END,next_attempt_at=$3 + interval '1 hour' WHERE id=$1")
+            sqlx::query("UPDATE deposits SET final_at=NULL,first_unresolved_at=CASE WHEN $2 THEN $3 - interval '7 hours' END,next_attempt_at=$3 WHERE id=$1")
                 .bind(id).bind(was_unresolved).bind(now).execute(pool).await?;
             db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:b256(50), time:now }).await?;
             let deposit = db::get_deposit(pool, id).await?.context("deposit")?;
             let logs = vec![transfer_log(&deposit, evm_address(31))];
             let reader = ConfirmChain { logs:Arc::new(logs.clone()), barrier:None };
-            let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader.clone(), reader);
-            ensure!(watch.watch_once_at(1, now).await?.finalized == 1);
             let pump = test_pump(pool, confirm_steps(pool, logs, None), PumpConfig::default(), 0)?;
-            ensure!(pump.run_once_at(now + Duration::seconds(1)).await? == RunOnceResult::Applied { deposit_id:id }, "normal finalization acquired a backoff delay");
+            let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader.clone(), reader).with_pump(Arc::new(pump.clone()));
+            ensure!(watch.watch_once_at(1,now).await?.finalized == u64::from(was_unresolved));
+            if !was_unresolved {ensure!(pump.run_once_at(now).await? == RunOnceResult::Applied {deposit_id:id},"normal confirmation delayed");}
             let stored = db::get_deposit(pool, id).await?.context("confirmed")?;
             ensure!(stored.state == DepositState::Confirmed && stored.final_at.is_some());
             let entry: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1").bind(id).fetch_one(pool).await?;
@@ -385,6 +381,7 @@ async fn step_evidence_and_events_commit_with_the_transition() -> Result<()> {
                 effects: TransitionEffects {
                     mark_final: false,
                     first_unresolved: false,
+                    confirmation_evidence: None,
                     dual_verified: false,
                     sanctions_hit: false,
                     canonical_evidence: None,
@@ -1055,6 +1052,10 @@ struct ConfirmChain {
 }
 
 impl ChainReader for ConfirmChain {
+    async fn header(&self, _number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        Ok((B256::ZERO, DateTime::UNIX_EPOCH))
+    }
+
     async fn factory_logs(
         &self,
         _factory: Address,

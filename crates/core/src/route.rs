@@ -169,7 +169,7 @@ pub enum Confirmations {
 
 /// A provider's heads read for one confirmation check. `latest` and `safe` are read only when the
 /// confirmation needs them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainHeads {
     /// The `latest` block number, when read.
     pub latest: Option<u64>,

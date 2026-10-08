@@ -31,6 +31,15 @@ use topup_core::{
 };
 use uuid::Uuid;
 
+type ConfirmationHistory = (
+    Uuid,
+    i32,
+    i32,
+    Option<chrono::DateTime<Utc>>,
+    Option<chrono::DateTime<Utc>>,
+    Option<chrono::DateTime<Utc>>,
+);
+
 struct FixtureDirectory(PathBuf);
 impl FixtureDirectory {
     fn new() -> Result<Self> {
@@ -527,6 +536,9 @@ async fn published_image_round_trip() -> Result<()> {
         interrupted.stop()?;gate.store(false,Ordering::SeqCst);
         let after:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;ensure!(before==after,"interrupted coverage advanced");
         topup::db::chain_reads::freeze(&database.app_pool,1,"contract_code_mismatch").await?;
+        // Immutable confirmation history and funds state must survive the real old binary.
+        sqlx::query("UPDATE deposits SET first_slow_at=now()-interval '2 days',first_unresolved_at=now()-interval '2 days' WHERE tx_hash=$1").bind(format!("{second:#x}")).execute(&database.app_pool).await?;
+        let quota_before:Vec<ConfirmationHistory>=sqlx::query_as("SELECT id,confirm_head_checks,confirm_receipt_checks,confirm_deadline_at,first_slow_at,first_unresolved_at FROM deposits ORDER BY id").fetch_all(&database.app_pool).await?;
         let mut previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
         let frozen=reqwest::Client::new().post(format!("{origin}/v1/quotes")).bearer_auth(&key).header("Idempotency-Key",Uuid::new_v4().to_string()).json(&json!({"client_reference_id":"frozen","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"})).send().await?;
         ensure!(frozen.status().as_u16()==400 && frozen.json::<Value>().await?["error"]["code"]=="chain_frozen","N-1 ignored an unknown chain-scope freeze");
@@ -560,6 +572,8 @@ async fn published_image_round_trip() -> Result<()> {
         ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_verified_at=created_at FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?,"N-1 discarded N's hint verification marker");
         reconcile(Some(&image),&old_path,&database,&tls)?;
         let unverified:bool=sqlx::query_scalar("SELECT dual_verified_at IS NULL FROM deposits WHERE tx_hash=$1").bind(format!("{third:#x}")).fetch_one(&database.app_pool).await?;ensure!(unverified);
+        let quota_after:Vec<ConfirmationHistory>=sqlx::query_as("SELECT id,confirm_head_checks,confirm_receipt_checks,confirm_deadline_at,first_slow_at,first_unresolved_at FROM deposits WHERE id=ANY($1) ORDER BY id").bind(quota_before.iter().map(|row|row.0).collect::<Vec<_>>()).fetch_all(&database.app_pool).await?;
+        ensure!(quota_after==quota_before,"N-1 reset confirmation quota or history");
         let mut final_current=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut final_current,&origin).await?;
         wait_until("N reverified N-1 deposits and address backfill",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT NOT EXISTS(SELECT 1 FROM deposits WHERE dual_verified_at IS NULL) AND NOT EXISTS(SELECT 1 FROM addresses a JOIN chain_coverage c USING(chain_id) WHERE a.dual_covered_through IS DISTINCT FROM c.through_block)").fetch_one(&database.app_pool).await?)}).await?;
         wait_until("coverage cancellation and expiry",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT bool_and(status IN ('expired','cancelled')) FROM quotes WHERE id=ANY($1)").bind(vec![expiry_id,topup::ids::parse(topup::ids::QUOTE,cancel["id"].as_str().unwrap()).unwrap()]).fetch_one(&database.app_pool).await?)}).await?;

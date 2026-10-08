@@ -211,7 +211,7 @@ async fn a_successor_that_still_pays_the_quote_takes_it_over() -> Result<()> {
             });
             ensure!(chain.watch().await?.reversed == 1);
             let successor = chain.successor(chain.recipient_id, 100).await?;
-            ensure!(chain.quote_consumed_by().await? == ("open".to_owned(), None));
+            ensure!(chain.quote_consumed_by().await? == ("consumed".to_owned(), Some(successor)));
             chain.settle().await?;
 
             chain
@@ -472,7 +472,8 @@ impl Scenario {
             CHAIN_ID,
             chain.clone(),
             chain.clone(),
-        );
+        )
+        .with_pump(Arc::new(pump.clone()));
         Ok(Self {
             pool,
             chain,
@@ -581,13 +582,21 @@ impl Scenario {
             },
         )
         .await?;
-        Ok(self.watch.watch_once(CHAIN_ID).await?)
+        let clock: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT GREATEST(now(),COALESCE(max(finality_check_at),now())) FROM deposits WHERE deposit_finality_pending(deposits)",
+        ).fetch_one(&self.pool).await?;
+        Ok(self.watch.watch_once_at(CHAIN_ID, clock).await?)
     }
 
     /// Runs the pump until nothing is due.
     async fn settle(&self) -> Result<()> {
         for _ in 0..10 {
-            if self.pump.run_once().await? == RunOnceResult::Idle {
+            let clock: DateTime<Utc> = sqlx::query_scalar(
+                "SELECT GREATEST(now(),COALESCE(max(next_attempt_at),now())) FROM deposits",
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            if self.pump.run_once_at(clock).await? == RunOnceResult::Idle {
                 return Ok(());
             }
         }
@@ -600,7 +609,7 @@ impl Scenario {
         let id = deposit_revision_id(CHAIN_ID, TX, 0, 1);
         ensure!(id != deposit_id(CHAIN_ID, TX, 0));
         let deposit = self.deposit(id).await?;
-        ensure!(deposit.state == DepositState::Detected);
+        ensure!(deposit.state == DepositState::Confirmed);
         ensure!(deposit.address_id == address_id);
         ensure!(deposit.amount_atomic == AtomicAmount::new(U256::from(amount)));
         ensure!(deposit.block_number == 11 && deposit.receipt_log_index == 0);
