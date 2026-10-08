@@ -63,7 +63,7 @@ contract ForwarderHandler is Test {
         token.setBlacklisted(forwarder, !token.blacklisted(forwarder));
     }
 
-    /// Flushes a subset of salts chosen by `mask` for a treasury argument that may be any address.
+    /// Flushes a subset of salts chosen by `mask` for any non-zero treasury argument.
     function flush(
         address caller,
         uint256 treasurySeed,
@@ -74,7 +74,7 @@ contract ForwarderHandler is Test {
         // A forwarder address has no key: as a caller, the fuzzer would give it an account nonce
         // no real chain can, and CREATE2 refuses an address with a nonce.
         if (treasuryOf[caller] != address(0)) caller = address(0xCA11E2);
-        address treasury = anyTreasury && treasurySeed != 0
+        address treasury = anyTreasury && address(uint160(treasurySeed)) != address(0)
             ? address(uint160(treasurySeed))
             : treasuries[treasurySeed % TREASURY_COUNT];
         bytes32[] memory batch = new bytes32[](SALT_COUNT);
@@ -119,6 +119,13 @@ contract ForwarderInvariantTest is StdInvariant, Test {
         for (uint256 i; i < handler.forwarderCount(); ++i) {
             excludeSender(handler.forwarders(i));
         }
+    }
+
+    function test_FlushWithNonZeroTreasurySeedThatTruncatesToZero() public {
+        // Replay the shrunk CI sequence: a non-zero seed can still truncate to the zero address.
+        uint256 treasurySeed = 0xd7bb818300000000000000000000000000000000000000000000000000000000;
+        vm.prank(0x8BC840e877f6A1Ae3B4dC657e32956A375DA0d13);
+        handler.flush(address(0x0400), treasurySeed, 669, false, true);
     }
 
     /// Every unit funded into a treasury's forwarders is either still in them or at that
