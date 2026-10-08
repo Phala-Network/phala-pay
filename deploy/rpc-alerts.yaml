@@ -29,7 +29,7 @@ groups:
           summary: "Address history still needs dual backfill on chain {{ $labels.chain_id }}"
           runbook: "deploy/runbooks/rpc-health.md"
       - alert: RpcPriceSnapshotBudgetExhausted
-        expr: topup_daily_budget_used{name=~"price:.*"} >= 100
+        expr: topup_daily_budget_used{name=~"price:.*"} >= 60
         labels: { severity: warning }
         annotations:
           summary: "Fresh quote snapshot budget exhausted until UTC midnight"

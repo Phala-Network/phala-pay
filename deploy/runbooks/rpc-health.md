@@ -16,6 +16,10 @@ fixed cadences and shared quotas.
 4. HTTP 402 waits until UTC midnight. Do not create extra free accounts, switch endpoints or
    enlarge budgets. Fresh quote snapshots also have a hard 60/day/price-chain cap; exhaustion
    returns retryable `price_unavailable`, and the UTC day resets that budget.
+   `RpcPriceSnapshotBudgetExhausted` fires at `topup_daily_budget_used{name=~"price:.*"} >= 60`,
+   including exactly the hard cap. This repository has no Prometheus rule-test harness; when
+   importing the rules, verify with the operator's rule evaluator that a sample of 59 does not
+   fire and a sample of 60 does.
 5. On disagreement, preserve decoded evidence and wait. Never pick one source or manually
    advance coverage. A checkpoint conflict or progressed evidence mismatch uses the existing
    [chain freeze gate](chain-frozen.md) and audited lift.
