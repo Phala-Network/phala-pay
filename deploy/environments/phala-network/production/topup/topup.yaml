@@ -40,6 +40,8 @@ rpc:
       max_log_blocks: 3000
 
 routes:
+  # The merchant amount defaults below are copied from the reviewed templates and remain
+  # illustrative until Finance signs off the production pilot amounts and max_unfinalized_credit.
   # Ethereum mainnet USDC. The route uses Circle's canonical 6-decimal token and Chainlink's
   # same-chain USDC/USD feed; every route value is live because this is a production environment.
   - route: phala-cloud-ethereum-usdc-usd
@@ -121,38 +123,6 @@ routes:
       sources:
         - { source: chainlink, feed: USDC_USD, chain_id: 8453 }
         - { source: chainlink, feed: USDC_USD, chain_id: 1, observation_chain_id: 8453 }
-      peg_band_bps: 100
-
-    merchant:
-      min_amount: { default: 100 }
-      max_deposit_atomic: { default: "10000000000" }
-      min_refund_atomic: { default: "1000000" }
-      quote_spread_bps: { default: 0 }
-
-  # Base mainnet USDT is the canonical bridged Tether token and has a reviewed Chainlink USDT/USD
-  # feed on Base (docs/design/price-feed-registry.json). Issuer controls are covered by the USDT
-  # runbook linked above.
-  - route: phala-cloud-base-usdt-usd
-    version: 1
-    livemode: true
-
-    chain:
-      chain_id: 8453
-      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
-      confirmations: 3
-      sanctions_oracle: "0x3A91A31cB3dC49b4db9Ce721F50a9D076c8D739B"
-
-    asset:
-      symbol: usdt
-      contract: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2"
-      decimals: 6
-
-    price:
-      mode: stablecoin
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
-      sources:
-        - { source: chainlink, feed: USDT_USD, chain_id: 8453 }
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 8453 }
       peg_band_bps: 100
 
     merchant:
