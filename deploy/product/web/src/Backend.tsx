@@ -50,7 +50,7 @@ export function Backend({
   const deposit = timeline?.deposit ?? null;
   const status = selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done";
   return (
-    <Card role="complementary" aria-label="Your backend" className="flex-1">
+    <Card role="complementary" aria-label="Your backend">
       <CardHeader className="items-center gap-y-1 py-3 sm:py-3">
         <div className="flex min-w-0 items-baseline gap-x-3">
           <CardTitle>Your backend</CardTitle>

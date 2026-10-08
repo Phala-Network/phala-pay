@@ -88,9 +88,9 @@ function DemoContent({ theme }: { theme: Theme }) {
   return (
     <>
       {/* Two sibling cards on the page's grid, the customer's view and (beside it from lg) what the
-          backend sees, each as tall as the row: the grid's own stretch, no height set. */}
-      <div className={cn(GRID, "gap-y-6")}>
-        <div className={cn(LEFT, "flex flex-col")}>
+          backend sees, each at its own content's height, top-aligned. */}
+      <div className={cn(GRID, "gap-y-6 lg:items-start")}>
+        <div data-column="left" className={cn(LEFT, "flex flex-col")}>
           <Product
             account={views.account}
             networks={views.networks}

@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowRight, Menu, Plus, X } from "lucide-react";
+import { Menu, MoveDown, MoveRight, Plus, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -152,7 +152,8 @@ export function Lockup({ className }: { className?: string }) {
         />
         <rect x="10" y="10" width="12" height="12" rx="3" className="fill-brand" />
       </svg>
-      <span className="text-wordmark font-semibold text-foreground">Phala Pay</span>
+      {/* The lockup's baseline is the name's (where a row aligns it on baselines, as the footer's). */}
+      <span className="self-baseline text-wordmark font-semibold text-foreground">Phala Pay</span>
     </span>
   );
 }
@@ -163,8 +164,8 @@ export function Hero({ code }: { code: ReactNode }) {
   return (
     // The two columns centred on each other: the pitch, and the code window with its caption inside.
     <section aria-labelledby="hero-title" className="border-b">
-      <div className={cn(CONTAINER, GRID, "gap-y-12 pt-14 pb-16 sm:pt-20 lg:items-center lg:py-20")}>
-        <div className={LEFT}>
+      <div data-align="center" className={cn(CONTAINER, GRID, "gap-y-12 pt-14 pb-16 sm:pt-20 lg:items-center lg:py-20")}>
+        <div data-column="left" className={LEFT}>
           <h1 id="hero-title" className="max-w-xl text-display-sm font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display">
             {TAGLINE}
           </h1>
@@ -257,7 +258,7 @@ export function HeroCode() {
 function SectionHeader({ id, title, aside, lead }: { id: string; title: string; aside?: ReactNode; lead?: ReactNode }) {
   return (
     <div className={cn(GRID, "gap-y-3 lg:items-baseline")}>
-      <div className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-1")}>
+      <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-1")}>
         <h2 id={id} className={H2}>{title}</h2>
         {aside}
       </div>
@@ -309,24 +310,21 @@ export function DemoLoading() {
 }
 
 /**
- * The path a payment takes, drawn as the page's one diagram: three stations in a row (a column on a
- * phone), each joined to the next by an arrow that carries its label, with room around it. The
- * last station, the merchant's own, is set apart.
+ * The path a payment takes, drawn as the page's one diagram: three stations in a row from xl (a
+ * column below it, where a row would wrap the stations' names), each joined to the next by an
+ * arrow under its label, with room around it. The last station, the merchant's own, is set apart.
  */
 function CustodyPath() {
   return (
     <figure>
-      <ol className="flex flex-col gap-2 lg:flex-row lg:items-stretch">
+      <ol className="flex flex-col gap-2 xl:flex-row xl:items-stretch">
         {CUSTODY_PATH.map(({ role, name, detail }, index) => (
           <li key={name} className="contents">
             {index > 0 && (
-              <span className="flex items-center gap-2 py-1 pl-6 text-sm text-muted-foreground lg:w-36 lg:shrink-0 lg:flex-col lg:justify-center lg:gap-1.5 lg:px-4 lg:py-0">
-                <ArrowDown {...ICON} className="size-4 lg:hidden" />
+              <span className="flex items-center gap-2 py-1 pl-6 text-sm text-muted-foreground xl:w-36 xl:shrink-0 xl:flex-col xl:justify-center xl:gap-1 xl:px-4 xl:py-0">
+                <MoveDown {...ICON} className="size-5 xl:hidden" />
                 <span>{CUSTODY_LINKS[index - 1]}</span>
-                <span aria-hidden="true" className="hidden w-full items-center text-muted-foreground lg:flex">
-                  <span className="h-px flex-1 bg-current" />
-                  <ArrowRight {...ICON} className="-ml-1.5 size-4" />
-                </span>
+                <MoveRight {...ICON} className="hidden size-6 xl:block" />
               </span>
             )}
             <div className={cn("flex-1 rounded-lg border bg-card p-6", index === CUSTODY_PATH.length - 1 && "border-foreground")}>
@@ -355,14 +353,15 @@ export function WhereTheMoneyGoes() {
         <div className="mt-10 lg:mt-12">
           <CustodyPath />
         </div>
-        <div className={cn(GRID, "mt-16 gap-y-6")}>
-          <div className={LEFT}>
+        {/* The heading's first line on the list's first term's baseline, as every header's is. */}
+        <div className={cn(GRID, "mt-16 gap-y-6 lg:items-baseline")}>
+          <div data-column="left" className={LEFT}>
             <h3 className="text-heading font-semibold">For platforms that sell credits</h3>
             <p className="mt-2 max-w-sm text-pretty text-body-foreground">{PROPERTIES_LEAD}</p>
           </div>
           <dl data-column="right" className={cn(RIGHT, "border-t")}>
             {rest.map(({ title, text }) => (
-              <div key={title} className="grid gap-1.5 border-b py-5 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-6">
+              <div key={title} className="grid gap-1.5 border-b py-5 xl:grid-cols-[10rem_minmax(0,1fr)] xl:gap-6">
                 <dt className="font-semibold">{title}</dt>
                 <dd className="leading-7 text-pretty text-body-foreground">{unbroken(text)}</dd>
               </div>
@@ -391,7 +390,7 @@ export function CompareTeaser() {
           title="How Phala Pay compares"
           lead={<>Beside {list.format(others.map(({ name }) => name))}, as each states it. The full comparison adds {list.format(TEASER_OTHERS)}, with a source for every value.</>}
         />
-        <div className="mt-10 hidden md:block">
+        <div className="mt-10 hidden lg:block">
           {/* Four equal columns, on the grid's quarters: the dimension, then each provider. */}
           <table className="w-full table-fixed border-collapse text-left">
             <caption className="sr-only">{list.format(TEASER.vendors.map(({ name }) => name))} on {TEASER.dimensions.length} dimensions.</caption>
@@ -432,9 +431,9 @@ export function CompareTeaser() {
           </table>
         </div>
         {phala !== undefined && (
-          <Versus phala={phala} others={others} dimensions={TEASER.dimensions} linkSource={false} name="teaser-versus" className="mt-8 md:hidden" />
+          <Versus phala={phala} others={others} dimensions={TEASER.dimensions} linkSource={false} name="teaser-versus" className="mt-8 lg:hidden" />
         )}
-        <a href="/compare" className={cn(TEXT_LINK, "mt-6 inline-flex min-h-11 items-center text-sm md:hidden")}>
+        <a href="/compare" className={cn(TEXT_LINK, "mt-6 inline-flex min-h-11 items-center text-sm lg:hidden")}>
           See the full comparison
         </a>
       </div>
@@ -454,24 +453,25 @@ export const PHALA_CELL = "bg-foreground/3 text-foreground";
 export function Faq() {
   return (
     <section aria-labelledby="faq-title" className={cn(SECTION, "border-t")}>
-      <div className={cn(CONTAINER, GRID, "gap-y-10")}>
-        <div className={LEFT}>
-          <h2 id="faq-title" className={H2}>Frequently asked questions</h2>
-          <p className="mt-4 max-w-sm text-pretty text-body-foreground">
-            Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask
-            on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.
-          </p>
-        </div>
-        <div data-column="right" className={cn(RIGHT, "border-t")}>
-          {FAQ.map(({ question, answer }) => (
-            <details key={question} className="group border-b">
-              <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-4 text-base font-medium sm:text-lg [&::-webkit-details-marker]:hidden">
-                {question}
-                <Plus {...ICON} className="size-5 shrink-0 text-muted-foreground group-open:rotate-45 motion-safe:transition-transform" />
-              </summary>
-              <p className="pr-10 pb-6 leading-7 text-pretty text-body-foreground">{unbroken(answer)}</p>
-            </details>
-          ))}
+      {/* The section's header, as every section's; the questions under its introduction. */}
+      <div className={CONTAINER}>
+        <SectionHeader
+          id="faq-title"
+          title="Frequently asked questions"
+          lead={<>Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.</>}
+        />
+        <div className={cn(GRID, "mt-8")}>
+          <div data-column="right" className={cn(RIGHT, "border-t")}>
+            {FAQ.map(({ question, answer }) => (
+              <details key={question} className="group border-b">
+                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-4 text-base font-medium sm:text-lg [&::-webkit-details-marker]:hidden">
+                  {question}
+                  <Plus {...ICON} className="size-5 shrink-0 text-muted-foreground group-open:rotate-45 motion-safe:transition-transform" />
+                </summary>
+                <p className="pr-10 pb-6 leading-7 text-pretty text-body-foreground">{unbroken(answer)}</p>
+              </details>
+            ))}
+          </div>
         </div>
       </div>
     </section>
@@ -485,8 +485,8 @@ export function Faq() {
 export function ClosingCta({ command }: { command: ReactNode }) {
   return (
     <section aria-labelledby="closing-title" className="border-t bg-surface py-16 lg:py-20">
-      <div className={cn(CONTAINER, GRID, "gap-y-10 lg:items-center")}>
-        <div className={LEFT}>
+      <div data-align="center" className={cn(CONTAINER, GRID, "gap-y-10 lg:items-center")}>
+        <div data-column="left" className={LEFT}>
           <h2 id="closing-title" className={H2}>{CLOSING_TITLE}</h2>
           <p className={cn(LEAD, "mt-4 max-w-md")}>{CLOSING_LEAD}</p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -565,8 +565,8 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
 export function SiteFooter() {
   return (
     <footer className="border-t">
-      <div className={cn(CONTAINER, GRID, "gap-y-12 pt-14 pb-10 text-sm lg:pt-16")}>
-        <div className={LEFT}>
+      <div className={cn(CONTAINER, GRID, "gap-y-12 pt-14 pb-10 text-sm lg:items-baseline lg:pt-16")}>
+        <div data-column="left" className={LEFT}>
           <Lockup />
           <p className="mt-4 max-w-xs text-pretty text-muted-foreground">{TAGLINE}. Open source, self-hosted, on Ethereum and Base.</p>
         </div>
