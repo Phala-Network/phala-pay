@@ -310,8 +310,12 @@ Normal, L and S share the persisted chain-read due time and atomic lease claim. 
 probe/evidence allowance and advance due time before RPC; failed or crashed reads do not refund
 it. RPC runs outside the transaction and chain lock; evidence commits check the lease token
 and record version. One logical reader owns each due time. Restarts, missed ticks, pump/watcher
-handoffs and price retries never reopen the normal window or evidence allowance. Reuse persisted finalized
-evidence for valuation; non-final evidence retains watcher eligibility for finality verification.
+handoffs and price retries never reopen the normal window or evidence allowance. Persisted finalized
+evidence may serve valuation/price retries only for deposits that have not entered S. Once a
+deposit enters S, use only fresh watcher evidence created after `first_unresolved_at`. The
+transfer identity (`to`, `token`, `from`, `amount`, `tx_from`, `tx_nonce`) must match the deposit;
+otherwise follow the S or reversal path. Non-final evidence retains watcher eligibility for
+finality verification.
 N-1 data compatibility preserves history but does not make its binary obey these new budgets.
 
 ### Monitoring and stop actions

@@ -210,7 +210,10 @@ lease token and record version. Failure/crash does not refund counts;
 restarts, handoffs and price retries cannot reset them. S follows re-inclusion until finality
 without handing back to a fresh normal window. Finalized watcher evidence goes to common
 confirmation/valuation in the same claim without a second receipt read. Persisted final evidence
-can serve price retries; non-final evidence retains watcher eligibility and cannot prove credit
+can serve price retries only for deposits that have not entered S. Once a deposit enters S,
+use only fresh watcher evidence created after `first_unresolved_at`. The transfer identity
+(`to`, `token`, `from`, `amount`, `tx_from`, `tx_nonce`) must match the deposit; otherwise follow
+the S or reversal path. Non-final evidence retains watcher eligibility and cannot prove credit
 forever. N-1 migrations preserve fields/history, but its binary needs its own operating budget.
 Normal probe slots use `confirm_head_checks` (default 0), the single complete read uses
 `confirm_receipt_checks` (default 0), and the fixed window uses nullable `confirm_deadline_at`;

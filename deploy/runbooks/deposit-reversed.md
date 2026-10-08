@@ -119,8 +119,11 @@ Counts and the next due are consumed before RPC; failure/crash does not return t
 one logical reader owns a due time. Missed slots are skipped. Restarts, handoffs and valuation
 retries cannot reopen windows or evidence allowances. S follows re-inclusion until finality
 and passes usable final evidence to confirmation/valuation in the same claim, without a second
-receipt read. Persisted final evidence can serve price retries; non-final evidence retains
-watcher eligibility. Never clear due fields or infer proof from `dual_verified_at` alone.
+receipt read. Persisted final evidence can serve price retries only for deposits that have not
+entered S. Once a deposit enters S, use only fresh watcher evidence created after
+`first_unresolved_at`. The transfer identity (`to`, `token`, `from`, `amount`, `tx_from`,
+`tx_nonce`) must match the deposit; otherwise follow the S or reversal path. Non-final evidence
+retains watcher eligibility. Never clear due fields or infer proof from `dual_verified_at` alone.
 
 L budgets `2×(62 + 24) = 172` head methods per endpoint across both environments daily:
 172 Ankr calls / 13,760 Infura credits before retries. The complete read is already in D's
