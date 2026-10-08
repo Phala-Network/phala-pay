@@ -22,7 +22,8 @@ confirmation = root / "crates/topup/src/db/confirmation.rs"
 bounds = root / "crates/topup/migrations/20261103000000_confirmation_bounds.up.sql"
 confirm_step = root / "crates/topup/src/steps/confirm.rs"
 metrics = root / "crates/topup/src/observability/metrics.rs"
-originals = {path: path.read_text() for path in [refunds, api, repository, finality, schedule, deposits, scanner, checkpoint, confirmation, bounds, confirm_step, metrics]}
+pump = root / "crates/topup/src/pump/mod.rs"
+originals = {path: path.read_text() for path in [refunds, api, repository, finality, schedule, deposits, scanner, checkpoint, confirmation, bounds, confirm_step, metrics, pump]}
 cases = [
     (schedule, "finality ten-minute boundary", "WHEN checked_at < COALESCE(anchor, checked_at) + interval '10 minutes' THEN 60", "WHEN checked_at <= COALESCE(anchor, checked_at) + interval '10 minutes' THEN 60",
      ["--test", "finality", "unresolved_finality_cadence_keeps_first_due_time_and_exact_boundaries"]),
@@ -152,6 +153,20 @@ cases += [
      ["--test", "confirmation_bounds", "watcher_does_not_report_final_when_handoff_does_not_persist_terminal_evidence"]),
     (finality, "watcher propagates stale handoff", "if !matches!(outcome, crate::pump::RunOnceResult::Applied { .. }) {", "if false {",
      ["--test", "confirmation_bounds", "watcher_propagates_stale_handoff_even_when_another_writer_saved_a_proof"]),
+]
+cases += [
+    (pump, "failed watcher handoff enters S within CAS", "if watcher_handoff {", "if false {",
+     ["--test", "confirmation_bounds", "watcher_does_not_report_final_when_handoff_does_not_persist_terminal_evidence"]),
+    (confirmation, "failed watcher handoff keeps first S entry", "UPDATE deposits SET first_unresolved_at=COALESCE(first_unresolved_at,$2), ", "UPDATE deposits SET first_unresolved_at=$2, ",
+     ["--test", "confirmation_bounds", "watcher_does_not_report_final_when_handoff_does_not_persist_terminal_evidence"]),
+    (confirmation, "failed watcher handoff schedules shared due", "finality_check_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2)", "finality_check_at=$2 + interval '2 seconds'",
+     ["--test", "confirmation_bounds", "watcher_does_not_report_final_when_handoff_does_not_persist_terminal_evidence"]),
+]
+cases += [
+    (pump, "stale watcher handoff requires row version CAS", "AND updated_at=$3 AND state=$4 FOR UPDATE", "AND ($3::timestamptz IS NOT NULL) AND state=$4 FOR UPDATE",
+     ["--test", "confirmation_bounds", "stale_watcher_handoff_does_not_change_newer_version_without_a_terminal_proof"]),
+    (finality, "stale watcher handoff does not clear newer lease", "if !matches!(&watched, Ok(Applied::HandedOff)) {", "if true {",
+     ["--test", "confirmation_bounds", "stale_watcher_handoff_does_not_change_newer_version_without_a_terminal_proof"]),
 ]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--case", action="append", choices=[case[1] for case in cases], help="Run a named proof; repeat to select several")

@@ -24,6 +24,28 @@ pub(crate) async fn link_terminal_evidence(
     Ok(())
 }
 
+/// Completes an admitted watcher handoff inside its row-version CAS transaction. A business
+/// retry without a reusable terminal proof enters S and keeps its once-only entry timestamp.
+/// Call only after the transition and terminal-proof effects have been applied successfully.
+pub(crate) async fn schedule_unresolved_handoff(
+    transaction: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE deposits SET first_unresolved_at=COALESCE(first_unresolved_at,$2), \
+         finality_check_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2), \
+         next_attempt_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2) \
+         WHERE id=$1 AND deposit_finality_pending(deposits) \
+         AND confirmation_terminal_evidence(id) IS NULL",
+    )
+    .bind(id)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 /// Fixed normal Depth wake-up offsets after the estimated depth anchor.
 pub const DEPTH_OFFSETS: [i64; 6] = [0, 4, 12, 28, 60, 124];
 

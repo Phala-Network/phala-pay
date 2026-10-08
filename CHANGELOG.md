@@ -163,7 +163,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Freeze persisted boundary conflicts from either successful RPC endpoint even when its peer
   errors. Preserve terminal proofs and final markers across held-settings waits, so subsequent
   business retries reuse the same evidence without chain reads; watcher completion reflects
-  the actual handoff persistence result.
+  the actual handoff persistence result. Handoffs without a reusable terminal proof enter S
+  and persist its backoff atomically with the version-checked transition.
 
 - Reference-product sweep groups retain their last successful balances and sweep history for up to
   ten minutes when a refresh fails, while disabling stale signable calls.

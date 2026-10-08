@@ -224,7 +224,10 @@ impl FinalityWatch {
                         now,
                     )
                     .await;
-                if !matches!(&watched, Ok(Applied::Final | Applied::Reversed)) {
+                if !matches!(
+                    &watched,
+                    Ok(Applied::Final | Applied::Reversed | Applied::HandedOff)
+                ) {
                     // Rechecks and later resolution retain the original entry timestamp.
                     // A concurrent finalization/reversal must not create an unresolved entry.
                     sqlx::query(
@@ -238,12 +241,14 @@ impl FinalityWatch {
                     .execute(&self.pool)
                     .await?;
                 }
-                db::confirmation::release_read(&self.pool, deposit.id, deposit.token).await?;
+                if !matches!(&watched, Ok(Applied::HandedOff)) {
+                    db::confirmation::release_read(&self.pool, deposit.id, deposit.token).await?;
+                }
                 match watched {
                     Ok(Applied::Final) => stats.finalized = stats.finalized.saturating_add(1),
                     Ok(Applied::Followed) => stats.followed = stats.followed.saturating_add(1),
                     Ok(Applied::Reversed) => stats.reversed = stats.reversed.saturating_add(1),
-                    Ok(Applied::Nothing) => {}
+                    Ok(Applied::Nothing | Applied::HandedOff) => {}
                     // One deposit's failed read holds back no other: it is read again at its
                     // recheck time.
                     Err(FinalityError::Chain(error)) => {
@@ -348,11 +353,11 @@ impl FinalityWatch {
                 if current.lease_token != Some(deposit.token)
                     || current.updated_at != deposit.version
                 {
-                    return Ok(Applied::Nothing);
+                    return Ok(Applied::HandedOff);
                 }
                 let outcome = pump.confirm_final_evidence(&current, evidence, now).await?;
                 if !matches!(outcome, crate::pump::RunOnceResult::Applied { .. }) {
-                    return Ok(Applied::Nothing);
+                    return Ok(Applied::HandedOff);
                 }
                 let persisted: bool =
                     sqlx::query_scalar("SELECT confirmation_terminal_evidence($1) IS NOT NULL")
@@ -360,7 +365,7 @@ impl FinalityWatch {
                         .fetch_one(&self.pool)
                         .await?;
                 if !persisted {
-                    return Ok(Applied::Nothing);
+                    return Ok(Applied::HandedOff);
                 }
             } else {
                 // Test-only watches without a pump still persist the full terminal proof.
@@ -571,6 +576,8 @@ impl FinalityWatch {
 }
 
 enum Applied {
+    // The pump completed (or lost) its CAS; it owns S persistence before lease release.
+    HandedOff,
     Final,
     Followed,
     Reversed,

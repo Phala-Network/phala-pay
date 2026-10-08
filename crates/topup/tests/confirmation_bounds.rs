@@ -1114,7 +1114,7 @@ async fn watcher_does_not_report_final_when_handoff_does_not_persist_terminal_ev
             )
             .await?;
             // A handler that returns a retry without evidence models a context-load failure.
-            run_fixture_with_step(p, &f, Some(Box::new(Paused)), async |_, watch, r, _| {
+            run_fixture_with_step(p, &f, Some(Box::new(Paused)), async |pump, watch, r, _| {
                 let result = watch.watch_once_at(1, f.due).await?;
                 ensure!(result.watched == 1 && result.finalized == 0);
                 let proof: Option<Value> =
@@ -1124,6 +1124,58 @@ async fn watcher_does_not_report_final_when_handoff_does_not_persist_terminal_ev
                         .await?;
                 ensure!(proof.is_none());
                 ensure!(counts(&r) == [3, 3]);
+                let entry: Option<DateTime<Utc>> =
+                    sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1")
+                        .bind(f.id)
+                        .fetch_one(p)
+                        .await?;
+                ensure!(
+                    entry == Some(f.due),
+                    "failed handoff did not enter S atomically"
+                );
+                let gauges = topup::observability::metrics::render_chain_reads_at(p, f.due).await?;
+                ensure!(gauges.contains("topup_finality_unresolved{chain_id=\"1\"} 1"));
+                ensure!(gauges.contains("topup_finality_unresolved_entries_24h{chain_id=\"1\"} 1"));
+                let next = f.due + Duration::seconds(60);
+                ensure!(due(p, f.id).await? == next && pump_due(p, f.id).await? == next);
+                for elapsed in [0, 1, 30, 59] {
+                    let now = f.due + Duration::seconds(elapsed);
+                    set_clock(&r, now);
+                    ensure!(watch.watch_once_at(1, now).await?.watched == 0);
+                    ensure!(pump.run_once_at(now).await? == topup::pump::RunOnceResult::Idle);
+                    ensure!(
+                        counts(&r) == [3, 3],
+                        "failed handoff re-read within backoff"
+                    );
+                }
+                set_clock(&r, next);
+                ensure!(watch.watch_once_at(1, next).await?.watched == 1);
+                ensure!(counts(&r) == [6, 6]);
+                let repeated: Option<DateTime<Utc>> =
+                    sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1")
+                        .bind(f.id)
+                        .fetch_one(p)
+                        .await?;
+                ensure!(repeated == entry, "handoff recheck overwrote S history");
+                ensure!(due(p, f.id).await? == next + Duration::seconds(60));
+                // The failed handoff follows the same ten-minute phase boundary as all S.
+                let later = f.due + Duration::minutes(10);
+                set_clock(&r, later);
+                ensure!(watch.watch_once_at(1, later).await?.watched == 1);
+                ensure!(due(p, f.id).await? == later + Duration::minutes(10));
+                ensure!(pump_due(p, f.id).await? == later + Duration::minutes(10));
+                let before = counts(&r);
+                for elapsed in [1, 60, 599] {
+                    let now = later + Duration::seconds(elapsed);
+                    set_clock(&r, now);
+                    ensure!(watch.watch_once_at(1, now).await?.watched == 0);
+                    ensure!(pump.run_once_at(now).await? == topup::pump::RunOnceResult::Idle);
+                    ensure!(
+                        counts(&r) == before,
+                        "failed handoff bypassed ten-minute backoff"
+                    );
+                }
+
                 Ok(())
             })
             .await
@@ -1144,15 +1196,15 @@ impl Step for ConcurrentTerminalWriter {
         deposit: &db::Deposit,
         evidence: topup::steps::confirm::ConfirmationEvidence,
         _: tokio::time::Instant,
-        _: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> StepResult {
         let proof = Uuid::new_v4();
         let mut tx = self.0.begin().await.expect("competing transaction");
         sqlx::query("INSERT INTO transitions(id,deposit_id,from_state,to_state,attempt,evidence) VALUES($1,$2,'detected','detected',0,$3)")
             .bind(proof).bind(deposit.id).bind(json!({"confirmation_proof_version":1,"chain_confirmation":evidence}))
             .execute(&mut *tx).await.expect("competing proof");
-        sqlx::query("UPDATE deposits SET final_at=now(),confirmation_terminal_transition_id=$2,updated_at=now()+interval '1 second',lease_token=NULL,lease_until=NULL WHERE id=$1")
-            .bind(deposit.id).bind(proof).execute(&mut *tx).await.expect("competing final marker");
+        sqlx::query("UPDATE deposits SET final_at=now(),confirmation_terminal_transition_id=$2,updated_at=now()+interval '1 second',lease_token=NULL,lease_until=NULL,next_attempt_at=$3,finality_check_at=$3 WHERE id=$1")
+            .bind(deposit.id).bind(proof).bind(now + Duration::days(1)).execute(&mut *tx).await.expect("competing final marker");
         tx.commit().await.expect("competing commit");
         Paused.run(deposit).await
     }
@@ -1190,6 +1242,114 @@ async fn watcher_propagates_stale_handoff_even_when_another_writer_saved_a_proof
                         "stale handoff reported Final"
                     );
                     ensure!(terminal_reference(p, f.id).await?.0 != Uuid::nil());
+                    let entry: Option<DateTime<Utc>> =
+                        sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1")
+                            .bind(f.id)
+                            .fetch_one(p)
+                            .await?;
+                    ensure!(entry.is_none(), "stale handoff changed newer S history");
+                    ensure!(
+                        due(p, f.id).await? == f.due + Duration::days(1),
+                        "stale handoff rescheduled newer version"
+                    );
+                    ensure!(
+                        db::get_deposit(p, f.id)
+                            .await?
+                            .context("newer deposit")?
+                            .next_attempt_at
+                            == f.due + Duration::days(1)
+                    );
+
+                    ensure!(counts(&r) == [3, 3]);
+                    Ok(())
+                },
+            )
+            .await
+        })
+    })
+    .await
+}
+
+// A failed handoff that races only a row-version change must not write S or clear
+// the retained token of that newer version. No terminal proof exempts it from S.
+struct ConcurrentVersionWriter(PgPool);
+#[async_trait]
+impl Step for ConcurrentVersionWriter {
+    async fn run(&self, deposit: &db::Deposit) -> StepResult {
+        Paused.run(deposit).await
+    }
+    async fn run_with_final_evidence(
+        &self,
+        deposit: &db::Deposit,
+        _: topup::steps::confirm::ConfirmationEvidence,
+        _: tokio::time::Instant,
+        now: DateTime<Utc>,
+    ) -> StepResult {
+        sqlx::query(
+            "UPDATE deposits SET updated_at=$2,next_attempt_at=$3,finality_check_at=$3 WHERE id=$1",
+        )
+        .bind(deposit.id)
+        .bind(deposit.updated_at + Duration::seconds(1))
+        .bind(now + Duration::days(1))
+        .execute(&self.0)
+        .await
+        .expect("newer record version");
+        Paused.run(deposit).await
+    }
+}
+
+#[tokio::test]
+async fn stale_watcher_handoff_does_not_change_newer_version_without_a_terminal_proof() -> Result<()>
+{
+    with_database(|ctx| {
+        Box::pin(async move {
+            let p = &ctx.app_pool;
+            let f = fixture(p, Confirmations::Finalized, 1).await?;
+            sqlx::query("UPDATE deposits SET final_at=$2 WHERE id=$1")
+                .bind(f.id)
+                .bind(f.due)
+                .execute(p)
+                .await?;
+            let version = db::get_deposit(p, f.id)
+                .await?
+                .context("original")?
+                .updated_at;
+            db::chain_reads::advance_checkpoint(
+                p,
+                1,
+                db::chain_reads::Boundary {
+                    number: 200,
+                    hash: hash(200),
+                    time: f.due,
+                },
+            )
+            .await?;
+            run_fixture_with_step(
+                p,
+                &f,
+                Some(Box::new(ConcurrentVersionWriter(p.clone()))),
+                async |_, watch, r, _| {
+                    let result = watch.watch_once_at(1, f.due).await?;
+                    ensure!(result.watched == 1 && result.finalized == 0);
+                    let newer = db::get_deposit(p, f.id).await?.context("newer")?;
+                    let entry: Option<DateTime<Utc>> =
+                        sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1")
+                            .bind(f.id)
+                            .fetch_one(p)
+                            .await?;
+                    ensure!(entry.is_none(), "stale handoff wrote S on newer version");
+                    ensure!(
+                        newer.updated_at == version + Duration::seconds(1),
+                        "stale handoff changed newer version"
+                    );
+                    ensure!(
+                        newer.lease_token.is_some(),
+                        "stale watcher cleared newer version's lease"
+                    );
+                    ensure!(
+                        newer.next_attempt_at == f.due + Duration::days(1)
+                            && due(p, f.id).await? == newer.next_attempt_at
+                    );
                     ensure!(counts(&r) == [3, 3]);
                     Ok(())
                 },

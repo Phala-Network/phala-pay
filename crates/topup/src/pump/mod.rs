@@ -365,6 +365,7 @@ impl Pump {
                     lease_token,
                     result,
                     clock.unwrap_or_else(Utc::now),
+                    false,
                 )
                 .await?
             {
@@ -406,7 +407,7 @@ impl Pump {
                 json!({"error":"step_timeout"}),
             ),
         };
-        match self.persist(deposit, token, result, now).await? {
+        match self.persist(deposit, token, result, now, true).await? {
             Persisted::Done(result) => Ok(result),
             Persisted::Capped(_) => Err(PumpError::MissingStep(deposit.state)),
         }
@@ -419,6 +420,7 @@ impl Pump {
         lease_token: Uuid,
         result: StepResult,
         now: DateTime<Utc>,
+        watcher_handoff: bool,
     ) -> Result<Persisted, PumpError> {
         let deposit_id = deposit.id;
         let result = match next(deposit.state, &result.outcome) {
@@ -502,6 +504,14 @@ impl Pump {
 
         match applied {
             ApplyTransitionResult::Applied => {
+                if watcher_handoff {
+                    db::confirmation::schedule_unresolved_handoff(
+                        &mut transaction,
+                        deposit.id,
+                        now,
+                    )
+                    .await?;
+                }
                 transaction.commit().await?;
                 tracing::info!(
                     deposit_id = %crate::ids::format(crate::ids::DEPOSIT, deposit.id),
