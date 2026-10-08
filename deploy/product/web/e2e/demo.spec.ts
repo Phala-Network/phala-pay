@@ -1999,6 +1999,21 @@ async function diagramProblems(page: Page): Promise<string[]> {
         if (box(text).width > 0 && outside(box(text), box(shape))) problems.push(`${label(text)} overflows its ${shape.getAttribute("class") ?? "box"}`);
       }
     }
+    // No edge crosses a subgraph's title: points every 2px along each edge, against each title.
+    for (const title of svg.querySelectorAll<SVGGraphicsElement>("g.cluster-label")) {
+      const area = box(title);
+      if (area.width === 0) continue;
+      for (const edge of svg.querySelectorAll<SVGPathElement>("path.flowchart-link")) {
+        const matrix = edge.getScreenCTM();
+        for (let at = 0; at <= edge.getTotalLength(); at += 2) {
+          const point = edge.getPointAtLength(at).matrixTransform(matrix ?? undefined);
+          if (point.x > area.left && point.x < area.right && point.y > area.top && point.y < area.bottom) {
+            problems.push(`an edge crosses the title ${label(title)}`);
+            break;
+          }
+        }
+      }
+    }
     for (const node of svg.querySelectorAll("g.node")) {
       const shape = node.querySelector("rect, path, polygon, circle, ellipse");
       const text = node.querySelector<SVGElement>(".label, text");

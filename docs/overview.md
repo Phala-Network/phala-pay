@@ -60,14 +60,12 @@ flowchart TB
         backend["Backend<br/>(phala-pay SDK)"]
         wallet["Wallet or Safe"]
     end
-    subgraph cvm["Phala Pay (attested CVM)"]
+    subgraph cvm["Phala Pay (attested)"]
         api["HTTP API"]
         worker["Chain reads,<br/>webhook outbox"]
     end
-    subgraph chain["EVM chain"]
-        fwd["Deposit address<br/>(CREATE2 forwarder)"]
-        treasury[("Merchant treasury")]
-    end
+    fwd["Deposit address<br/>(on-chain forwarder)"]
+    treasury[("Merchant treasury<br/>(on chain)")]
     payer -->|"pays"| fwd
     ui -->|"client_secret: status"| api
     ui <--> backend
@@ -80,26 +78,25 @@ flowchart TB
 
 ## Payment lifecycle
 
-```text
-merchant backend creates a quote (or the customer's deposit address) with its API key
-  → service locks the price and computes a CREATE2 forwarder address over the merchant's treasury
-  → the merchant recomputes the address from its own pins before showing it
-  → a checkout transaction hint starts immediate verification; unhinted transfers are discovered
-    by the fixed five-minute read scan
-  → recorded once its block reaches the confirmation (2 blocks on Ethereum, about 30 s after
-    paying; 3 blocks on an OP-stack chain such as Base, about 7 s; or the account's stricter
-    policy)
-  → both RPC providers independently agree on receipt, transaction, header and transfer fields;
-    the quote is taken at that instant
-  → sanctions screening and per-deposit bounds
-  → credited: a signed deposit.credited webhook, retried until the merchant fulfills it once
-  → independent dual checkpoints every ten minutes watch finality; a payment a reorg proves
-    replaced becomes deposit.reversed; one gone
-    with its nonce unspent stays credited, not final, within the cap, and alerts the operator
-  → the merchant (or anyone) flushes forwarders to its treasury; the service marks deposits swept
-    from the finalized Flushed events
-  → hourly dual log coverage and custody reconciliation per forwarder
-```
+1. The merchant backend creates a quote (or the customer's deposit address) with its API key.
+2. The service locks the price and computes a CREATE2 forwarder address over the merchant's
+   treasury.
+3. The merchant recomputes the address from its own pins before showing it.
+4. A checkout transaction hint starts immediate verification; unhinted transfers are discovered
+   by the fixed five-minute read scan.
+5. It is recorded once its block reaches the confirmation (2 blocks on Ethereum, about 30 s after
+   paying; 3 blocks on an OP-stack chain such as Base, about 7 s; or the account's stricter
+   policy).
+6. Both RPC providers independently agree on receipt, transaction, header and transfer fields;
+   the quote is taken at that instant.
+7. Sanctions screening and per-deposit bounds.
+8. Credited: a signed `deposit.credited` webhook, retried until the merchant fulfills it once.
+9. Independent dual checkpoints every ten minutes watch finality: a payment a reorg proves
+   replaced becomes `deposit.reversed`; one gone with its nonce unspent stays credited, not
+   final, within the cap, and alerts the operator.
+10. The merchant (or anyone) flushes forwarders to its treasury; the service marks deposits swept
+    from the finalized `Flushed` events.
+11. Hourly dual log coverage and custody reconciliation per forwarder.
 
 No payment needs an operator step, and there is no failure state: anything that cannot complete
 retries with backoff and raises an alert on age. Deterministic denials are recorded with evidence
