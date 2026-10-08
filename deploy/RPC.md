@@ -226,19 +226,21 @@ the operator reconciles the evidence.
 Monitor stock from the first due finality check that leaves a deposit unresolved. Sum all
 payment chains per environment, independently of the one-hour age alert. #425 exposes
 `topup_finality_unresolved` (gauge, per chain) and
-`topup_finality_unresolved_entries_total` (counter of new entries, per chain). Configure three
-separate alerts:
+`topup_finality_unresolved_entries_24h` (DB-derived gauge, per chain). The latter counts
+deposits whose persisted `first_unresolved_at` is within the last 24 hours, including resolved
+ones. Configure three separate alerts:
 
 | Alert | Condition within one environment |
 |---|---|
 | Current unresolved stock | `sum(topup_finality_unresolved) > 1` |
-| New unresolved entries in rolling 24 h | `sum(increase(topup_finality_unresolved_entries_total[24h])) > 1` |
+| New unresolved entries in rolling 24 h | `sum(topup_finality_unresolved_entries_24h) > 1` |
 | Unresolved age | Existing one-hour `TopupDepositPendingAfterReorg` alert |
 
 Evaluate the stock and entry expressions separately for each environment, summing across its
 chains. When a Prometheus receives both environments, restrict the selectors using the
-deployment's scrape labels before summing. Resolved entries remain in the rolling-24-hour
-counter increase; rechecks do not count as new entries.
+deployment's scrape labels before summing. Use the DB-derived gauge directly for the exact
+rolling count. Resolved deposits remain counted until their `first_unresolved_at` leaves the
+24-hour window; rechecks do not count as new entries.
 
 **Above either S=1 current stock or one new entry in rolling 24 h, pause new quotes on all
 routes of the affected chain and escalate.** Do not wait for the one-hour age alert. Multiple

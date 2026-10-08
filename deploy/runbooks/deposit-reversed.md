@@ -106,12 +106,14 @@ costs at most four methods per endpoint: `max(3, 1 + 3×K) = 4` at K=1. See the
 [complete stock/turnover arithmetic](../RPC.md#worst-case-pilot-budget).
 
 Use `topup_finality_unresolved` (per-chain gauge) for current stock and
-`topup_finality_unresolved_entries_total` (per-chain counter) for new entries. Evaluate the
-alerts separately for each environment and sum across its chains:
+`topup_finality_unresolved_entries_24h` (per-chain DB-derived gauge) for new entries. The latter
+counts deposits whose persisted `first_unresolved_at` is within the last 24 hours, including
+resolved ones. Evaluate the alerts separately for each environment and sum across its chains:
 
 - Current stock: `sum(topup_finality_unresolved) > 1`.
-- New entries: `sum(increase(topup_finality_unresolved_entries_total[24h])) > 1`; resolution
-  does not remove entries from the rolling count, and rechecks do not add entries.
+- New entries: `sum(topup_finality_unresolved_entries_24h) > 1`; use this exact DB count
+  directly. Resolution does not remove deposits from the rolling count; they leave when their
+  `first_unresolved_at` falls outside the last 24 hours. Rechecks do not add entries.
 - Age: retain the separate one-hour `TopupDepositPendingAfterReorg` alert.
 
 Restrict selectors to one environment using deployment scrape labels when both environments

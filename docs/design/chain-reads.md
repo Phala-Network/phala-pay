@@ -407,14 +407,16 @@ budgets; metrics `topup_rpc_errors_total{provider,chain_id,method,class}`,
 `topup_rpc_endpoint_ready`, `topup_coverage_lag_seconds{chain_id}` (now − `through_time`),
 `topup_addresses_lagging{chain_id}`, `topup_hint_total{result}`, `topup_daily_budget_used{name}`,
 `topup_finality_unresolved{chain_id}` (current-stock gauge),
-`topup_finality_unresolved_entries_total{chain_id}` (new-entry counter).
+`topup_finality_unresolved_entries_24h{chain_id}` (DB-derived rolling-entry gauge: deposits
+whose persisted `first_unresolved_at` is within the last 24 hours, including resolved ones).
 Alerts: endpoint not ready 5 min, any disagreement, coverage lag > 2 h, reversal unproven,
 quota run-rate (recording rules over `topup_rpc_calls_total` × provider cost tables, both
 environments summed). Finality alerts separately sum each environment's chains: current stock
-above one, `sum(increase(topup_finality_unresolved_entries_total[24h])) > 1` new entries, and
+above one, `sum(topup_finality_unresolved_entries_24h) > 1` new entries, and
 the existing one-hour age alert. Current stock uses `sum(topup_finality_unresolved) > 1`.
 Scope selectors to one environment using scrape labels; either stock or rolling-entry alert
-requires the quote-pause stop action (§5.2).
+requires the quote-pause stop action (§5.2). Use the rolling-entry gauge directly for the exact
+DB count; rechecks do not add entries, and resolution does not remove deposits from the window.
 
 Docs: architecture §0, §2 rule 7, §7, §8, §9 (cancel, snapshot cap), §13;
 `docs/configuration.md`; `docs/integration.md` (hints, cancel, latency); `deploy/RPC.md`;
