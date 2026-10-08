@@ -9,7 +9,7 @@ export const HOME_DESCRIPTION = "Open-source payments API for ERC-20 tokens on E
 
 export const DEMO_TITLE = "Try it on testnet";
 export const DEMO_STATUS = "Live on Sepolia and Base Sepolia";
-export const DEMO_LEAD = "Top up a sample product with test tokens and watch its backend follow the payment.";
+export const DEMO_LEAD = "Pay with test tokens and watch the backend follow the payment.";
 
 export const PROPERTIES_LEAD = "Top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute.";
 // Where a payment goes, as docs/overview.md and docs/integration.md §1.6 describe it: the headline

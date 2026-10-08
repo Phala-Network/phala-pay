@@ -93,20 +93,22 @@ export function TestTokens({ network, need }: { network: Network; need: Need | n
   const { mint, label } = useMint(network, need);
   const chain = chainName(network);
   const id = useId();
-  // One row: the mints from the wallet, then the faucets off the page; the links name what each
-  // gives (a test token, or gas).
+  // Two groups on one row, spaced apart: the mints from the wallet, then the faucets off the page
+  // (the links name what each gives, a test token or gas); where the row is narrow, the faucets
+  // wrap onto a line of their own.
   return (
-    <div role="note" aria-labelledby={id} className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 lg:gap-x-3">
-        {/* From lg the row speaks for itself, and fits one line: its name is for screen readers. */}
-        <h4 id={id} className="text-sm font-medium text-muted-foreground lg:sr-only">
-          Test tokens
-        </h4>
-        {mintable.map((each) => (
-          <MintButton key={each.asset} token={each} mint={mint} label={label} />
-        ))}
-        {/* The faucets wrap together, onto a line of their own where the row is narrow. */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 lg:gap-x-3">
+    <div role="note" aria-labelledby={id} className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* From lg the row speaks for itself: its name is for screen readers. */}
+          <h4 id={id} className="mr-2 text-sm font-medium text-muted-foreground lg:sr-only">
+            Test tokens
+          </h4>
+          {mintable.map((each) => (
+            <MintButton key={each.asset} token={each} mint={mint} label={label} />
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           {fromFaucet !== undefined && fromFaucet.faucet !== null && (
             <FaucetLink href={fromFaucet.faucet} title={`On the faucet, pick ${chain} as the network.`}>
               Circle {fromFaucet.symbol} faucet

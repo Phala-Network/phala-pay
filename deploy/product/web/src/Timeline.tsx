@@ -255,7 +255,7 @@ function StreamStep({
             aria-hidden="true"
           />
         </span>
-        <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums @lg:text-center @lg:text-xs">
+        <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums @lg:text-center @lg:text-sm/4">
           {elapsed !== null ? (
             `+${duration(elapsed)}`
           ) : step.at !== null ? (

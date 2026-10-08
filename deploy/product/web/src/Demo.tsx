@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import type { CreatedQuote, DepositAddressResponse, Selection } from "./api.js";
 import { Backend } from "./Backend.js";
 import { queryView } from "./queryView.js";
+import { GRID, LEFT, RIGHT } from "./layout.js";
+import { cn } from "@/lib/utils";
 import { Product, type Method } from "./Product.js";
 import { queryClient, keys, useAccount, useDepositAddress, useNetworks, useTimeline, useTrust } from "./queries.js";
 import type { Theme } from "./theme.js";
@@ -85,10 +87,10 @@ function DemoContent({ theme }: { theme: Theme }) {
 
   return (
     <>
-      {/* Two sibling cards, each at its own content's height, top-aligned: the customer's view, then
-          (beside it from lg) what the backend sees. */}
-      <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
-        <div className="flex min-w-0 flex-col lg:col-span-6">
+      {/* Two sibling cards on the page's grid, the customer's view and (beside it from lg) what the
+          backend sees, each as tall as the row: the grid's own stretch, no height set. */}
+      <div className={cn(GRID, "gap-y-6")}>
+        <div className={cn(LEFT, "flex flex-col")}>
           <Product
             account={views.account}
             networks={views.networks}
@@ -106,7 +108,7 @@ function DemoContent({ theme }: { theme: Theme }) {
             appearance={appearance}
           />
         </div>
-        <div className="flex min-w-0 flex-col lg:col-span-6">
+        <div data-column="right" className={cn(RIGHT, "flex flex-col")}>
           <Backend
             account={views.account}
             selected={selected}

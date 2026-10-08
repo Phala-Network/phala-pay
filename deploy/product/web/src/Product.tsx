@@ -26,11 +26,8 @@ import { FundWallet, TestTokens, type Need } from "./Funding.js";
 import { keys, useCreateQuote } from "./queries.js";
 import type { PaidWith } from "./testTokens.js";
 
-/**
- * The payment form's fields: from sm, each label beside its control, as a settings form sets them,
- * so the form takes a row per field; on a phone, the label above.
- */
-const ROW = "sm:grid sm:grid-cols-[4.5rem_minmax(0,1fr)] sm:items-center sm:gap-x-3";
+// The payment form's fields put each label above its control, so every control in the card (the
+// method tabs, the amounts, the network, the tokens, the pay button) starts on one left edge.
 
 const Checkout = lazy(() => loadSdk().then((sdk) => ({ default: sdk.Checkout })));
 
@@ -102,7 +99,7 @@ export function Product({
     />
   );
   return (
-    <Card role="region" aria-labelledby="product-title">
+    <Card role="region" aria-labelledby="product-title" className="flex-1">
       {/* One row: whose page this is (with the testnet mark while the network is a testnet), and
           the balance the payment moves. */}
       <CardHeader className="items-center py-3 sm:py-3">
@@ -118,7 +115,7 @@ export function Product({
           <CardDescription className="mt-0.5">Acme Cloud · Billing</CardDescription>
         </div>
         <div className="text-right">
-          <p id="balance-title" className="text-xs text-muted-foreground">
+          <p id="balance-title" className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
             Balance
           </p>
           <div
@@ -249,7 +246,7 @@ function PaymentOptions({
   }
   return (
     <>
-      <Field className={ROW}>
+      <Field>
         <FieldLabel htmlFor={`${id}-network`}>Network</FieldLabel>
         {network === undefined ? (
           <Skeleton className="h-11 sm:h-10" />
@@ -276,7 +273,7 @@ function PaymentOptions({
           </div>
         )}
       </Field>
-      <Field className={cn(ROW, "sm:items-start [&>[data-slot=field-label]]:sm:mt-4")}>
+      <Field>
         <FieldLabel id={`${id}-token`} asChild>
           <span>Token</span>
         </FieldLabel>
@@ -385,7 +382,7 @@ function AmountPicker({
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-3">
-      <Field className={ROW}>
+      <Field>
         <FieldLabel id={`${id}-amount-label`} asChild>
           <span>Amount</span>
         </FieldLabel>
@@ -403,7 +400,7 @@ function AmountPicker({
         </SegmentedControl>
       </Field>
       {preset === "custom" && (
-        <Field className={ROW}>
+        <Field>
           <FieldLabel htmlFor={`${id}-amount`}>
             Custom<span className="sr-only"> amount (USD)</span>
           </FieldLabel>

@@ -28,7 +28,7 @@ function CodeBlock({
         role="region"
         aria-label={label}
         className={cn(
-          "overflow-x-auto rounded-lg border bg-muted/50 py-3 pr-12 pl-3 font-mono text-xs leading-relaxed",
+          "overflow-x-auto rounded-lg border bg-muted/50 py-3 pr-12 pl-3 font-mono text-mono",
           className
         )}
       >

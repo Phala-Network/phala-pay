@@ -13,13 +13,17 @@ export function HighlightedLines({ lines }: { lines: Token[][] }): ReactNode {
 
 /**
  * The page's code window: one dark surface in either theme, a header row (what it shows, a file name,
- * actions), and code that scrolls inside the window, never past the page's edge.
+ * actions), code that scrolls inside the window, never past the page's edge, and a footer, when
+ * there is one, for the line that goes with the code: part of the window, not floating under it.
  */
-export function CodeWindow({ header, children, className }: { header: ReactNode; children: ReactNode; className?: string }) {
+export function CodeWindow({ header, footer, children, className }: { header: ReactNode; footer?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <div className={cn("dark overflow-hidden rounded-xl border border-code-border bg-code text-code-foreground shadow-[0_1px_2px_rgb(0_0_0/0.06),0_12px_32px_-12px_rgb(0_0_0/0.25)]", className)}>
       <div className="flex h-12 items-center gap-3 border-b border-code-border pr-2 pl-4">{header}</div>
       {children}
+      {footer !== undefined && (
+        <div className="border-t border-code-border px-4 py-3 text-sm text-pretty text-code-muted sm:px-5">{footer}</div>
+      )}
     </div>
   );
 }

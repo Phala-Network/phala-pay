@@ -1642,6 +1642,8 @@ test("sweeps from the last good data show their balances and age, without sweep 
 });
 
 test("every page fits every width in either theme, with no serious accessibility violation", async ({ browser }) => {
+  // 24 axe scans (three pages, four widths, two themes): a few seconds each on a loaded machine.
+  test.setTimeout(300_000);
   for (const colorScheme of ["light", "dark"] as const) {
     const context = await browser.newContext({ colorScheme });
     try {
@@ -1796,15 +1798,61 @@ test("the demo arrives without shifting what is in view, from the top and at /#d
   }
 });
 
-test("the hero's code fits its window at 1440 and 1024; on a phone it scrolls sideways inside it", async ({ page }) => {
+test("the hero's code fits its window at every width, a phone's too: no line is cut", async ({ page }) => {
   await page.goto(env("SITE_URL"));
-  for (const width of [1440, 1024]) {
+  for (const width of [1440, 1280, 1024, 768, 390]) {
     await page.setViewportSize({ width, height: 900 });
     // Both snippets, the shown and the other (laid out in the same cell).
     const wide = await page.locator("#hero-code pre").evaluateAll((blocks) =>
       blocks.filter((block) => block.scrollWidth > block.clientWidth).map((block) => block.getAttribute("aria-label")));
     expect(wide, `${width}px`).toEqual([]);
   }
-  await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+});
+
+test("one layout grid: every two-column section's right column starts on one line", async ({ page }) => {
+  // Every right column (src/layout.ts marks each). On the home page: the hero's code, each
+  // section's introduction, the demo's backend card, the spec list, the FAQ, the closing command,
+  // and the footer's links; on /compare, its introduction, its sources, and the footer's links.
+  for (const [path, least] of [["", 9], ["compare", 3]] as const) {
+    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+      const columns = await page.locator('[data-column="right"]').evaluateAll((elements) => elements.map((element) => ({
+        where: element.closest("[aria-labelledby]")?.getAttribute("aria-labelledby") ?? element.closest("footer, aside, section, main")?.tagName.toLowerCase() ?? "?",
+        x: element.getBoundingClientRect().left,
+      })));
+      expect(columns.length, `/${path} at ${width}px: right columns`).toBeGreaterThanOrEqual(least);
+      const line = columns[0]?.x ?? 0;
+      const off = columns.filter(({ x }) => Math.abs(x - line) > 1).map(({ where, x }) => `${where} at ${x.toFixed(1)} (not ${line.toFixed(1)})`);
+      expect(off, `/${path} at ${width}px`).toEqual([]);
+    }
+  }
+});
+
+test("body text is at least 14px; only uppercase, tracked labels are smaller", async ({ page }) => {
+  for (const path of ["", "compare"]) {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+      const small = await page.evaluate(() => {
+        const found: string[] = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+          const text = node.textContent?.trim() ?? "";
+          const element = node.parentElement;
+          // Code and ids (monospace), footnote markers, and text not shown are not body text.
+          if (text === "" || element === null || element.closest("pre, code, sup, .sr-only") !== null || !element.checkVisibility()) continue;
+          const style = getComputedStyle(element);
+          if (style.fontFamily.includes("Mono")) continue;
+          const label = style.textTransform === "uppercase" && style.letterSpacing !== "normal";
+          if (parseFloat(style.fontSize) < 14 && !label) found.push(`${element.tagName.toLowerCase()} "${text.slice(0, 40)}" ${style.fontSize}`);
+        }
+        return found;
+      });
+      expect(small, `/${path} at ${width}px`).toEqual([]);
+    }
+  }
 });

@@ -1,7 +1,8 @@
 import { cn } from "@/lib/utils";
 import { ComparisonCell } from "./ComparisonCell.js";
 import { COMPARE_ACCESSED, competitors, dimensions, phalaPay, sources } from "./content/compare.js";
-import { CONTAINER, H2, LEAD, LINKS, PHALA_COLUMN, TEXT_LINK } from "./Site.js";
+import { GRID, LEFT, RIGHT } from "./layout.js";
+import { CONTAINER, H2, LEAD, LINKS, PHALA_CELL, PHALA_COLUMN, TEXT_LINK } from "./Site.js";
 import { Versus } from "./Versus.js";
 
 const vendors = [phalaPay, ...competitors];
@@ -17,7 +18,7 @@ function ComparisonTable() {
       <caption className="sr-only">Phala Pay and five crypto payment services, compared across ten dimensions.</caption>
       <thead>
         <tr>
-          <th scope="col" className="w-32 pr-3 pb-4 align-bottom text-xs font-medium text-muted-foreground xl:w-40 xl:pr-4">
+          <th scope="col" className="w-32 pr-3 pb-4 align-bottom text-xs font-medium tracking-wider text-muted-foreground uppercase xl:w-40 xl:pr-4">
             Dimension
           </th>
           {vendors.map(({ id, name }) => (
@@ -35,7 +36,7 @@ function ComparisonTable() {
               {label}
             </th>
             {vendors.map((vendor) => (
-              <td key={vendor.id} className={cn("px-3 py-4 align-top leading-6 text-pretty wrap-break-word xl:px-4", vendor.id === phalaPay.id ? "bg-muted/50 text-foreground" : "text-body-foreground")}>
+              <td key={vendor.id} className={cn("px-3 py-4 align-top leading-6 text-pretty wrap-break-word xl:px-4", vendor.id === phalaPay.id ? PHALA_CELL : "text-body-foreground")}>
                 <ComparisonCell cell={vendor[key]} linkSource />
               </td>
             ))}
@@ -61,13 +62,12 @@ const FIT = [
 export function ComparePage() {
   return (
     <main id="top" className={`${CONTAINER} flex-1 pt-14 pb-20 sm:pt-20 lg:pb-28`}>
-      {/* The lead's last line sits on the title's baseline. */}
-      <div className="grid gap-6 lg:grid-cols-12 lg:items-baseline-last lg:gap-10">
-        <div className="lg:col-span-7">
-          <p className="text-sm font-medium text-muted-foreground">Compare</p>
-          <h1 className="mt-3 text-display-sm font-semibold text-balance sm:text-display">How Phala Pay compares</h1>
-        </div>
-        <p className={cn(LEAD, "lg:col-span-5")}>Custody, fees, chains, speed, and refunds across six ways to accept crypto, each as its vendor states it, with a source for every value.</p>
+      <p className="text-sm font-medium text-muted-foreground">Compare</p>
+      {/* The site's one header pattern (src/Site.tsx): the title in the left half, the
+          introduction in the right, their first lines on one baseline. */}
+      <div className={cn(GRID, "mt-3 gap-y-4 lg:items-baseline")}>
+        <h1 className={cn(H2, LEFT)}>How Phala Pay compares</h1>
+        <p data-column="right" className={cn(LEAD, RIGHT)}>Custody, fees, chains, speed, and refunds across six ways to accept crypto, each as its vendor states it, with a source for every value.</p>
       </div>
       <p className="mt-4 text-sm text-muted-foreground">
         Last checked {COMPARE_ACCESSED}. Competitor terms change; check their sites before deciding.
@@ -96,9 +96,10 @@ export function ComparePage() {
 
       <section id="fit" aria-labelledby="fit-title" className={cn(SECTION, "mt-16 lg:mt-24")}>
         <h2 id="fit-title" className={H2}>Where each fits</h2>
-        <div className="mt-10 grid gap-10 lg:grid-cols-3 lg:gap-10">
+        {/* Three columns of the page's grid, four of its twelve each. */}
+        <div className={cn(GRID, "mt-10 gap-y-10")}>
           {FIT.map(({ title, text }, index) => (
-            <div key={title} className={cn("border-t-2 pt-5", index === FIT.length - 1 ? "border-foreground" : "border-border")}>
+            <div key={title} className={cn("border-t-2 pt-5 lg:col-span-4", index === FIT.length - 1 ? "border-foreground" : "border-border")}>
               <h3 className="text-heading font-semibold">{title}</h3>
               <p className="mt-2 text-pretty text-body-foreground">{text}</p>
               {index === FIT.length - 1 && (
@@ -110,12 +111,12 @@ export function ComparePage() {
       </section>
 
       <section id="sources" aria-labelledby="sources-title" className={cn(SECTION, "mt-16 lg:mt-24")}>
-        <div className="grid gap-6 lg:grid-cols-12 lg:gap-10">
-          <div className="lg:col-span-4">
+        <div className={cn(GRID, "gap-y-6")}>
+          <div className={LEFT}>
             <h2 id="sources-title" className={H2}>Sources</h2>
             <p className="mt-3 text-sm text-muted-foreground">All accessed {COMPARE_ACCESSED}.</p>
           </div>
-          <ol className="list-decimal gap-10 pl-6 text-sm/6 marker:text-muted-foreground marker:tabular-nums md:columns-2 lg:col-span-8">
+          <ol data-column="right" className={cn(RIGHT, "list-decimal gap-8 pl-6 text-sm/6 marker:text-muted-foreground marker:tabular-nums md:columns-2")}>
             {sources.map(({ url, title, host, archived }, index) => (
               <li key={url} id={`source-${index + 1}`} className="mb-3 scroll-mt-20 break-inside-avoid pl-1">
                 <a href={url} className={TEXT_LINK}>{title}</a>
