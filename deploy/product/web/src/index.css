@@ -244,14 +244,14 @@
   /* A code block (scripts/markdown.ts): a dark frame with its language and copy button above. */
   .docs-prose :where(.code-block) { @apply my-6 overflow-hidden rounded-lg border border-code-border bg-code; }
   .docs-prose :where(.code-block-header) { @apply flex h-9 items-center justify-between border-b border-code-border pr-1.5 pl-4 font-mono text-xs text-code-muted; }
-  .docs-prose :where(.code-block-copy) { @apply inline-flex h-7 items-center rounded-md px-2 font-sans text-xs font-medium text-code-muted transition-colors hover:bg-white/10 hover:text-code-foreground; }
+  .docs-prose :where(.code-block-copy) { @apply inline-flex h-7 items-center rounded-md px-2 font-sans text-sm font-medium text-code-muted transition-colors hover:bg-white/10 hover:text-code-foreground; }
   .docs-prose :where(.code-block pre) { @apply m-0 overflow-x-auto px-4 py-3.5 font-mono text-mono text-code-foreground; }
   .docs-prose :where(.code-block-note) { @apply m-0 border-t border-code-border px-4 py-2.5 text-sm text-code-muted; }
   .docs-prose :where(.code-block-note a) { @apply text-code-foreground; }
   .docs-prose :where(pre .line) { @apply block min-h-[1lh]; }
   /* Tables take the column's width and wrap their cells; only code blocks scroll sideways. */
   .docs-prose :where(table) { @apply w-full text-sm; }
-  .docs-prose :where(th) { @apply border-b px-3 py-2 text-left align-bottom text-xs font-medium text-muted-foreground first:pl-0; }
+  .docs-prose :where(th) { @apply border-b px-3 py-2 text-left align-bottom text-xs font-medium tracking-wider text-muted-foreground uppercase first:pl-0; }
   .docs-prose :where(td) { @apply border-b px-3 py-2.5 align-top first:pl-0; }
   /* In a table, code wraps only where its identifiers divide (<wbr>, scripts/markdown.ts). */
   .docs-prose :where(td code, th code) { overflow-wrap: normal; }
@@ -263,7 +263,7 @@
     .docs-prose :where(thead) { @apply sr-only; }
     .docs-prose :where(tr) { @apply border-b py-2; }
     .docs-prose :where(td) { @apply border-0 px-0 py-1; }
-    .docs-prose :where(td[data-label])::before { @apply block text-xs font-medium text-muted-foreground; content: attr(data-label); }
+    .docs-prose :where(td[data-label])::before { @apply block text-xs font-medium tracking-wider text-muted-foreground uppercase; content: attr(data-label); }
   }
   .docs-prose :where(.heading-anchor) { @apply ml-2 text-muted-foreground no-underline opacity-0 transition-opacity; }
   .docs-prose :where(h2, h3, h4):hover .heading-anchor { @apply opacity-100; }

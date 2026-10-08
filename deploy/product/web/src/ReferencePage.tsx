@@ -2,8 +2,14 @@ import type { ReactNode } from "react";
 import type { Field, OperationModel, ReferenceModel, TypeNode } from "../scripts/reference.ts";
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
-import { CONTAINER } from "./Site.js";
-import { DocsMobileNav, PROSE } from "./DocsPage.js";
+import { DocsMobileNav, LABEL, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEBAR_LAYOUT } from "./DocsPage.js";
+
+/**
+ * An operation's or an object's two parts, on the page's grid: the page's nine columns again
+ * (same gutter, so the same lines), the fields in five, the example in four, their first lines
+ * on one baseline; stacked below xl.
+ */
+const PART = "grid gap-y-8 xl:grid-cols-9 xl:items-baseline xl:gap-x-8";
 
 /** A method as a small mono label, its colour from the method's family (read or write). */
 function Method({ method }: { method: string }) {
@@ -56,13 +62,13 @@ function Fields({ fields, nested = false }: { fields: Field[]; nested?: boolean 
           <dt className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <code className="font-mono text-mono font-semibold text-foreground">{field.name}</code>
             <span className="font-mono text-xs text-muted-foreground"><TypeLabel type={field.type} /></span>
-            {field.required && <span className="text-xs font-medium text-foreground">required</span>}
+            {field.required && <span className="text-xs font-medium tracking-wider text-foreground uppercase">required</span>}
           </dt>
           <dd>
             {field.html !== "" && <div className={cn(PROSE, "mt-1 text-sm")} dangerouslySetInnerHTML={{ __html: field.html }} />}
             {field.fields.length > 0 && (
               <details className="group mt-2">
-                <summary className="inline-flex min-h-8 cursor-pointer items-center rounded-md border px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+                <summary className="inline-flex min-h-8 cursor-pointer items-center rounded-md border px-2.5 text-sm font-medium text-muted-foreground hover:text-foreground">
                   {field.fields.length} child field{field.fields.length === 1 ? "" : "s"}
                 </summary>
                 <Fields fields={field.fields} nested />
@@ -89,8 +95,8 @@ function OperationSection({ operation }: { operation: OperationModel }) {
   const success = operation.responses.find(({ status }) => status.startsWith("2"));
   return (
     <section id={operation.anchor} aria-labelledby={`${operation.anchor}-title`} className="scroll-mt-20 border-t py-12">
-      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] xl:gap-12">
-        <div className="min-w-0">
+      <div data-layout="operation" className={PART}>
+        <div data-column="left" className="min-w-0 xl:col-span-5">
           <h3 id={`${operation.anchor}-title`} className="text-heading font-semibold">{operation.summary}</h3>
           <p className="mt-2 flex flex-wrap items-center gap-2 font-mono text-mono">
             <Method method={operation.method} />
@@ -129,7 +135,7 @@ function OperationSection({ operation }: { operation: OperationModel }) {
         {/* The request; the response is the object it returns, whose example is under Objects (once
             for every operation that returns it). In the page's flow: only the navigation scrolls on
             its own. */}
-        <div className="flex min-w-0 flex-col gap-3">
+        <div data-column="right" className="flex min-w-0 flex-col gap-3 xl:col-span-4">
           <Example title="Request" label={`${operation.summary}: request`} lines={operation.request} />
           {success?.type !== undefined && (
             <p className="text-sm text-muted-foreground">
@@ -146,7 +152,7 @@ function OperationSection({ operation }: { operation: OperationModel }) {
 function ReferenceNav({ model }: { model: ReferenceModel }) {
   return (
     <nav aria-label="API reference" className="text-sm">
-      <p className="px-2 pb-2 text-xs font-medium text-muted-foreground">Introduction</p>
+      <p className={cn(LABEL, "px-2 pb-1.5")}>Introduction</p>
       <ul>
         {model.intro.map(({ id, title }) => (
           <li key={id}><a href={`#${id}`} className="flex min-h-8 items-center rounded-md px-2 text-body-foreground hover:bg-muted hover:text-foreground">{title}</a></li>
@@ -154,7 +160,7 @@ function ReferenceNav({ model }: { model: ReferenceModel }) {
       </ul>
       {model.tags.map(({ name, title, anchor, operations }) => (
         <div key={name} className="mt-5">
-          <a href={`#${anchor}`} className="block px-2 pb-1 text-xs font-medium text-muted-foreground hover:text-foreground">{title}</a>
+          <a href={`#${anchor}`} className={cn(LABEL, "block px-2 pb-1 hover:text-foreground")}>{title}</a>
           <ul>
             {operations.map((operation) => (
               <li key={operation.id}>
@@ -167,23 +173,23 @@ function ReferenceNav({ model }: { model: ReferenceModel }) {
           </ul>
         </div>
       ))}
-      <a href="#objects" className="mt-5 block px-2 text-xs font-medium text-muted-foreground hover:text-foreground">Objects</a>
+      <a href="#objects" className={cn(LABEL, "mt-5 block px-2 hover:text-foreground")}>Objects</a>
     </nav>
   );
 }
 
 export function ReferencePage({ model }: { model: ReferenceModel }) {
   return (
-    <div className={`${CONTAINER} flex-1 lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-10`}>
+    <div data-layout="sidebar" className={SIDEBAR_LAYOUT}>
       {/* The one part of the site that scrolls on its own: the reference's navigation. */}
-      <aside className="hidden lg:block">
-        <div className="sticky top-16 max-h-[calc(100svh-4rem)] overflow-y-auto py-10 pr-2">
+      <aside data-column="left" className={NAV_COLUMN}>
+        <div className={NAV_SCROLL}>
           <ReferenceNav model={model} />
         </div>
       </aside>
-      <main id="top" className="min-w-0 pt-10 pb-24">
+      <main id="top" data-column="right" className={PAGE_COLUMN}>
         <DocsMobileNav label="API reference menu"><ReferenceNav model={model} /></DocsMobileNav>
-        <p className="text-sm font-medium text-muted-foreground">API reference · v{model.version}</p>
+        <p className={LABEL}>API reference · v{model.version}</p>
         <h1 className="mt-2 text-title-sm font-semibold sm:text-title">{model.title}</h1>
         <div className={cn(PROSE, "mt-4 max-w-3xl")} dangerouslySetInnerHTML={{ __html: model.lead }} />
         <dl className="mt-6 grid gap-2 text-sm sm:grid-cols-2">
@@ -213,13 +219,13 @@ export function ReferencePage({ model }: { model: ReferenceModel }) {
           <h2 id="objects-title" className="text-title-sm font-semibold">Objects</h2>
           {model.schemas.map(({ name, anchor, html, fields, example }) => (
             <section key={name} id={anchor} aria-labelledby={`${anchor}-title`} className="scroll-mt-20 border-t py-10">
-              <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] xl:gap-12">
-                <div className="min-w-0">
+              <div data-layout="operation" className={PART}>
+                <div data-column={example === undefined ? undefined : "left"} className="min-w-0 xl:col-span-5">
                   <h3 id={`${anchor}-title`} className="font-mono text-base font-semibold"><SchemaName name={name} /></h3>
                   {html !== "" && <div className={cn(PROSE, "mt-2")} dangerouslySetInnerHTML={{ __html: html }} />}
                   {fields.length > 0 && <div className="mt-4"><Fields fields={fields} /></div>}
                 </div>
-                {example !== undefined && <div className="min-w-0"><Example title="Example" label={`${name} example`} lines={example} /></div>}
+                {example !== undefined && <div data-column="right" className="min-w-0 xl:col-span-4"><Example title="Example" label={`${name} example`} lines={example} /></div>}
               </div>
             </section>
           ))}

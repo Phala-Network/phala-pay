@@ -1651,7 +1651,7 @@ test("every page fits every width in either theme, with no serious accessibility
   // long docs, and the desktop for the API reference, whose markup is the same at every width (axe
   // takes most of a minute over its 15,000 elements).
   test.setTimeout(600_000);
-  const all = [1440, 1024, 768, 390];
+  const all = [1440, 1280, 1024, 768, 390];
   const pages: [string, number[]][] = [
     ["", all], ["compare", all], ["no-such-page/deeper", all], ["docs", all], ["docs/sdk/react", all],
     ["docs/integration", [1440, 390]], ["reference", [1440]],
@@ -1853,9 +1853,11 @@ async function columnLayout(page: Page) {
       const left = [...(grid?.children ?? [])].find((child) => child.getAttribute("data-column") === "left");
       const name = right.closest("[aria-labelledby]")?.getAttribute("aria-labelledby") ?? right.closest("footer, main")?.tagName.toLowerCase() ?? "?";
       const centred = grid?.getAttribute("data-align") === "center";
+      const layout = grid?.getAttribute("data-layout") ?? "split";
       const middle = (element: Element) => { const box = element.getBoundingClientRect(); return box.top + box.height / 2; };
       return {
         name,
+        layout,
         x: right.getBoundingClientRect().left,
         how: centred ? "middles" : "baselines",
         left: left === undefined ? null : centred ? middle(left) : baseline(left),
@@ -1867,24 +1869,36 @@ async function columnLayout(page: Page) {
 
 test("one layout grid: every right column starts on one line, and each part's columns line up", async ({ page }) => {
   // On the home page: the hero, each section's header, the demo's cards, the spec list, the FAQ,
-  // the close, and the footer; on /compare, its header, its sources, and the footer.
-  for (const [path, least] of [["", 9], ["compare", 3]] as const) {
-    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+  // the close, and the footer; on /compare, its header, its sources, and the footer; on the docs
+  // and the reference, the navigation beside the page, each operation's and object's fields beside
+  // their example, and the footer. Within a page, every right column of one layout (the 6/6 split,
+  // the docs' sidebar layout, the reference's parts) starts on one line; the sidebar layout's page
+  // starts on one line across the docs and the reference.
+  const pages = [["", 9], ["compare", 3], ["docs", 2], ["docs/integration", 2], ["docs/configuration", 2], ["docs/sdk/react", 2], ["reference", 40]] as const;
+  for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+    const sidebar = new Set<number>();
+    for (const [path, least] of pages) {
       await page.setViewportSize({ width, height });
       await page.goto(new URL(path, env("SITE_URL")).href);
       if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
       const parts = await columnLayout(page);
       const where = `/${path} at ${width}px`;
       expect(parts.length, `${where}: two-column parts`).toBeGreaterThanOrEqual(least);
-      const line = parts[0]?.x ?? 0;
-      expect(parts.filter(({ x }) => Math.abs(x - line) > 1).map(({ name, x }) => `${name} starts at ${x.toFixed(1)}, not ${line.toFixed(1)}`), where).toEqual([]);
+      for (const layout of new Set(parts.map((part) => part.layout))) {
+        const group = parts.filter((part) => part.layout === layout);
+        const line = group[0]?.x ?? 0;
+        expect(group.filter(({ x }) => Math.abs(x - line) > 1).map(({ name, x }) => `${name} starts at ${x.toFixed(1)}, not ${line.toFixed(1)}`), `${where}, ${layout}`).toEqual([]);
+        if (layout === "sidebar") sidebar.add(Math.round(line));
+      }
       // A right column with no left one beside it (the FAQ's questions, under its header) is
       // measured by its left edge only.
       expect(parts.filter(({ left, right }) => left !== null && (right === null || Math.abs(left - right) > 1))
         .map(({ name, how, left, right }) => `${name}: ${how} at ${left?.toFixed(1) ?? "none"} and ${right?.toFixed(1) ?? "none"}`), where).toEqual([]);
     }
+    expect([...sidebar], `the docs' and the reference's page column at ${width}px`).toHaveLength(1);
   }
 });
+
 
 /**
  * The text in `scope` smaller than 14px, save what may be: code and ids (monospace), footnote
@@ -1908,7 +1922,8 @@ async function smallText(page: Page, scope = "body"): Promise<string[]> {
 }
 
 test("body text is at least 14px; only uppercase, tracked labels are smaller", async ({ page }) => {
-  for (const path of ["", "compare"]) {
+  test.setTimeout(240_000);
+  for (const path of ["", "compare", "docs", "docs/integration", "docs/configuration", "docs/sdk/react", "reference"]) {
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(new URL(path, env("SITE_URL")).href);

@@ -3,7 +3,21 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { DOC_SECTIONS, DOCS, docPath, type DocEntry } from "./content/docs.js";
 import type { RenderedDoc, TocEntry } from "../scripts/markdown.ts";
+import { GRID } from "./layout.js";
 import { CONTAINER, REPO } from "./Site.js";
+
+/**
+ * The docs' and the reference's layout, on the page's grid (src/layout.ts): the navigation in
+ * columns 1–3, the one part of the site that may stick and scroll on its own; the page in
+ * columns 4–12, its text at a reading measure. Both start their first line on one baseline: the
+ * navigation's first label and the page's kicker share a style (LABEL).
+ */
+export const SIDEBAR_LAYOUT = cn(CONTAINER, GRID, "flex-1");
+export const NAV_COLUMN = "hidden lg:col-span-3 lg:block";
+export const NAV_SCROLL = "sticky top-16 max-h-[calc(100svh-4rem)] overflow-y-auto py-10 pr-2";
+export const PAGE_COLUMN = "min-w-0 pt-10 pb-24 lg:col-span-9 lg:col-start-4";
+/** A small label: uppercase and tracked, the one kind of text under 14px. */
+export const LABEL = "text-xs font-medium tracking-wider text-muted-foreground uppercase";
 
 /**
  * Rendered markdown, in the site's type: the `docs-prose` rules in src/index.css set its headings,
@@ -23,7 +37,7 @@ function DocsNav({ current, toc = [] }: { current: string | null; toc?: TocEntry
     <nav aria-label="Documentation" className="text-sm">
       {DOC_SECTIONS.map(({ title, pages }) => (
         <div key={title} className="mb-6 last:mb-0">
-          <p className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">{title}</p>
+          <p className={cn(LABEL, "px-2 pb-1.5")}>{title}</p>
           <ul>
             {pages.map(({ slug, label }) => (
               <li key={slug}>
@@ -78,7 +92,7 @@ function Neighbour({ entry, direction }: { entry: DocEntry | undefined; directio
   return (
     <a href={docPath(entry.slug)} rel={direction === "previous" ? "prev" : "next"}
       className={cn("group flex flex-col gap-1 rounded-lg border px-4 py-3 transition-colors hover:border-border-strong hover:bg-muted/50", direction === "next" && "items-end text-right")}>
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className={cn(LABEL, "flex items-center gap-1.5")}>
         {direction === "previous" && <ArrowLeft aria-hidden="true" className="size-3.5" />}
         {direction === "previous" ? "Previous" : "Next"}
         {direction === "next" && <ArrowRight aria-hidden="true" className="size-3.5" />}
@@ -92,17 +106,17 @@ export function DocsPage({ doc }: { doc: DocContent }) {
   const index = DOCS.findIndex(({ slug }) => slug === doc.slug);
   const section = DOC_SECTIONS.find(({ pages }) => pages.some(({ slug }) => slug === doc.slug));
   return (
-    <div className={`${CONTAINER} flex-1 lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-10 xl:gap-16`}>
+    <div data-layout="sidebar" className={SIDEBAR_LAYOUT}>
       {/* The one part of the site that scrolls on its own: the docs' navigation, beside the page. */}
-      <aside className="hidden lg:block">
-        <div className="sticky top-16 max-h-[calc(100svh-4rem)] overflow-y-auto py-10 pr-2">
+      <aside data-column="left" className={NAV_COLUMN}>
+        <div className={NAV_SCROLL}>
           <DocsNav current={doc.slug} toc={doc.toc} />
         </div>
       </aside>
-      <main id="top" className="min-w-0 pt-10 pb-24">
+      <main id="top" data-column="right" className={PAGE_COLUMN}>
         <DocsMobileNav label="Documentation menu"><DocsNav current={doc.slug} toc={doc.toc} /></DocsMobileNav>
-        <article className="mx-auto max-w-3xl">
-          {section !== undefined && <p className="text-sm font-medium text-muted-foreground">{section.title}</p>}
+        <article className="max-w-3xl">
+          {section !== undefined && <p className={LABEL}>{section.title}</p>}
           <h1 className="mt-2 text-title-sm font-semibold text-balance sm:text-title">{doc.title}</h1>
           <div className={cn(PROSE, "mt-8")} dangerouslySetInnerHTML={{ __html: doc.html }} />
           <footer className="mt-16 border-t pt-8">
