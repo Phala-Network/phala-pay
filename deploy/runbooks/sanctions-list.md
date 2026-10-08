@@ -70,6 +70,8 @@ oracle. A successful rollback drill proves binary/schema compatibility, not curr
 coverage. **If active manual entries exist, pause settlement for affected routes before rollback**:
 N-1 cannot see them. Retain the pause until N is restored and verified screening is healthy.
 Keep the previous configuration with the parsed `chain.sanctions_oracle`; N+1 removes it.
+N-1's strict configuration schema cannot parse the new top-level `sanctions` section, so use the
+retained previous configuration when rolling back.
 
 Run the disposable local [rollback drill](../local/rollback-drill.sh) with the verified published
 N-1 image digest. The N worker uses a loopback-only SLS fixture in the test-support build; the

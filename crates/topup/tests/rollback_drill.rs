@@ -216,6 +216,8 @@ fn new_config(route: &RouteFile, tls: &support::tls::RpcTlsProxy) -> Result<Valu
 fn previous_config(mut config: Value, anvil: &Anvil) -> Value {
     let port = anvil.rpc_url.rsplit(':').next().unwrap();
     config.as_object_mut().unwrap().remove("rpc");
+    // N-1 keeps its own strict configuration schema and deprecated oracle settings.
+    config.as_object_mut().unwrap().remove("sanctions");
     config["rpc_companies"] =
         json!({"read":{"domains":["read-drill.test"]},"verify":{"domains":["verify-drill.test"]}});
     config["rpc_budgets"] = json!({"read-account":{"requests_per_second":100,"burst":100},"read-key":{"requests_per_second":100,"burst":100},"verify-account":{"requests_per_second":100,"burst":100},"verify-key":{"requests_per_second":100,"burst":100}});
