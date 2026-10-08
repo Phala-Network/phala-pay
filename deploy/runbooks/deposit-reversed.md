@@ -97,15 +97,26 @@ the first ten minutes, every ten minutes until six hours, then hourly. The first
 `TopupDepositPendingAfterReorg` alert remains, including while a replacement anomaly waits
 for operator resolution.
 
-Monitor S=1 unresolved deposit per environment across all its payment chains, two combined.
-Also allow at most one new stuck deposit per environment in each 24-hour budget window;
-resolving a deposit does not reset the arrival tally. Each day's budget includes first-day cost
-for one arrival plus later-day cost for one carried deposit in each environment. A recheck
+Count a deposit in S as soon as its first due finality check leaves it unresolved, not after
+one hour. Monitor S=1 as the sum across all payment chains per environment, two combined.
+Also allow at most one new unresolved entry per environment in any rolling 24 hours; resolved
+entries still count in that window. Each day's budget includes first-day cost for one arrival
+plus later-day cost for one carried deposit in each environment. A recheck
 costs at most four methods per endpoint: `max(3, 1 + 3×K) = 4` at K=1. See the
 [complete stock/turnover arithmetic](../RPC.md#worst-case-pilot-budget).
 
-Above S, or above the daily arrival allowance, pause new quotes on all routes of the affected
-chain and escalate:
+Use `topup_finality_unresolved` (per-chain gauge) for current stock and
+`topup_finality_unresolved_entries_total` (per-chain counter) for new entries. Evaluate the
+alerts separately for each environment and sum across its chains:
+
+- Current stock: `sum(topup_finality_unresolved) > 1`.
+- New entries: `sum(increase(topup_finality_unresolved_entries_total[24h])) > 1`; resolution
+  does not remove entries from the rolling count, and rechecks do not add entries.
+- Age: retain the separate one-hour `TopupDepositPendingAfterReorg` alert.
+
+Restrict selectors to one environment using deployment scrape labels when both environments
+share a Prometheus. Above either S or the rolling-24-hour entry allowance, pause new quotes on
+all routes of the affected chain and escalate:
 
 ```sh
 admin POST "/v1/admin/routes/$ROUTE/pause" '{"scopes":["quotes"]}'

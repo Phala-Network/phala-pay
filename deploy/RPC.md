@@ -61,7 +61,7 @@ Both environments use Ankr read and Infura verify for payments and prices.
 | Concurrent attached pending refunds, R | 2 | 1 | Atomic attachment admission |
 | New refund attachments/rolling 24 h, N | 1 | 1 | Atomic attachment admission |
 | Unresolved finality stock/environment, S | 1 | 1 | Operational; pause affected-chain quotes and escalate above S |
-| New stuck deposits/environment/24 h | 1 | 1 | Operational; same stock stop rule |
+| New unresolved entries/environment/rolling 24 h | 1 | 1 | Operational; same stock stop rule |
 | Hint tasks/environment/UTC day, H | 80 | 80 | Atomic daily budget |
 | Fresh quote snapshots/price chain/environment/UTC day, Q | 60 | 60 | Atomic daily budget |
 | Factory receipt-verification instances/day | 60 | 20 | Operational |
@@ -124,7 +124,7 @@ Variable allowances before retries:
 
 | Work | Ankr calls | Infura credits |
 |---|---:|---:|
-| Deposit: cold discovery 3, confirm allocation 5, coverage completion/re-verification 6, initial finality 3, price snapshots 2 | 19 | 1,600 |
+| Deposit: cold discovery 3, confirm allocation 5, coverage completion/re-verification 6, initial finality 4, price snapshots 2 | 20 | 1,680 |
 | Unresolved finality recheck, including at most one replacement candidate | 4 | 320 |
 | Hint task | 12 | 640 |
 | Price snapshot, including verify's head and pin header | 1 | 240 |
@@ -139,11 +139,12 @@ Production has no periodic TWAP sampler in this pilot.
 
 Unresolved finality rechecks back off from the time a deposit first became due for finality:
 every 60 s for the first ten minutes, every ten minutes until six hours, then hourly. The
-one-hour `TopupDepositPendingAfterReorg` alert remains. S=1 bounds unresolved stock across
-each environment's payment chains, two combined. At most S new stuck deposits may enter an
-environment in each 24-hour budget window; resolving an old deposit does not reset that
-arrival tally. Budget first-day cost for S arrivals plus later-day cost for S carried stock
-each day. This stock/turnover allowance is separate from D and its initial finality allocation.
+one-hour `TopupDepositPendingAfterReorg` alert remains. A deposit enters S as soon as its first
+due finality check leaves it unresolved; do not wait for the one-hour alert. S=1 bounds the sum
+across all payment chains in each environment, two combined. At most S new unresolved entries
+may occur per environment in any rolling 24 hours; resolved entries still count in that window.
+Budget first-day cost for S arrivals plus later-day cost for S carried stock each day. This
+stock/turnover allowance is separate from D and its initial finality allocation.
 
 `ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
 A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr / 80 Infura).
@@ -161,7 +162,9 @@ release reservations to bypass this gate. Follow the
 
 The branches are mutually exclusive, so the complete per-endpoint recheck bound is
 `max(3, 1 + 3×K) = 4` methods at K=1: one original receipt plus the candidate's receipt,
-header and transaction. Charge four Ankr calls / 320 Infura credits per recheck, before ×1.1:
+header and transaction. This bound applies to the first due finality check too, so D includes
+four initial-finality methods per endpoint: 20 Ankr / 1,680 Infura per deposit in total.
+Charge four Ankr calls / 320 Infura credits per subsequent recheck, before ×1.1:
 
 | Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Infura credits/deposit/day |
 |---|---:|---:|---:|
@@ -190,22 +193,22 @@ non-refund work uses the approved ten-percent allowance:
 
 ```text
 Non-refund Ankr:
-5,112 + 528 + 19×80 + 2×12×80 + 3×80 + 3×12 + 300
-+ 688 = 10,344
+5,112 + 528 + 20×80 + 2×12×80 + 3×80 + 3×12 + 300
++ 688 = 10,424
 
 Non-refund Infura:
-337,920 + 240×528 + 1,600×80 + 2×640×80
-+ 240×80 + 160×12 + 255×300 + 55,040 = 847,700
+337,920 + 240×528 + 1,680×80 + 2×640×80
++ 240×80 + 160×12 + 255×300 + 55,040 = 854,100
 
 Refund Ankr:   3 × (684×2 + 96×3)       = 4,968
 Refund Infura: 3 × (54,720×2 + 7,680×3) = 397,440
 
-Combined Ankr:   10,344×1.1 + 4,968    = 16,346.4 calls/day
-Combined Infura: 847,700×1.1 + 397,440 = 1,329,910 credits/day
+Combined Ankr:   10,424×1.1 + 4,968    = 16,434.4 calls/day
+Combined Infura: 854,100×1.1 + 397,440 = 1,336,950 credits/day
 ```
 
-Rounded up, the complete modeled allowance is **16,347 Ankr calls/day** and
-**1,329,910 Infura credits/day**, with **34.61% Ankr / 11.34% Infura** headroom below the stop
+Rounded up, the complete modeled allowance is **16,435 Ankr calls/day** and
+**1,336,950 Infura credits/day**, with **34.26% Ankr / 10.87% Infura** headroom below the stop
 lines. Replacement reads and daily stock turnover are included; all other caps remain unchanged.
 This is an upper bound under the operating limits and retry assumptions, not a code-enforced
 quota guarantee. The ×1.1 allowance does not cover every non-refund method exhausting all
@@ -220,14 +223,27 @@ distinct factory transaction counts alone omit re-verification. Budget each plan
 batch before starting it. If a tally cannot be established, stop scheduling that load until
 the operator reconciles the evidence.
 
-Monitor unresolved finality stock separately: deposits already due for finality but neither
-final nor reversed, across the environment's payment chains. **Above S=1, pause new quotes
-on the affected chain (all its routes) and escalate.** The one-hour alert remains an age signal,
-not permission to wait before taking the stock stop action. The same stop rule applies if more
-than one new stuck deposit enters the environment in a 24-hour budget window. Track arrivals
-independently of the current stock; resolution does not free another daily arrival allowance.
-Multiple replacement candidates raise the anomaly alert and remain in this stock count.
-Verification, existing credit and reservations continue;
+Monitor stock from the first due finality check that leaves a deposit unresolved. Sum all
+payment chains per environment, independently of the one-hour age alert. #425 exposes
+`topup_finality_unresolved` (gauge, per chain) and
+`topup_finality_unresolved_entries_total` (counter of new entries, per chain). Configure three
+separate alerts:
+
+| Alert | Condition within one environment |
+|---|---|
+| Current unresolved stock | `sum(topup_finality_unresolved) > 1` |
+| New unresolved entries in rolling 24 h | `sum(increase(topup_finality_unresolved_entries_total[24h])) > 1` |
+| Unresolved age | Existing one-hour `TopupDepositPendingAfterReorg` alert |
+
+Evaluate the stock and entry expressions separately for each environment, summing across its
+chains. When a Prometheus receives both environments, restrict the selectors using the
+deployment's scrape labels before summing. Resolved entries remain in the rolling-24-hour
+counter increase; rechecks do not count as new entries.
+
+**Above either S=1 current stock or one new entry in rolling 24 h, pause new quotes on all
+routes of the affected chain and escalate.** Do not wait for the one-hour age alert. Multiple
+replacement candidates raise the anomaly alert and remain in the stock count. Verification,
+existing credit and reservations continue;
 never manufacture a finality/reversal verdict or release exposure to reduce the tally.
 
 At an operational limit, stop merchant onboarding and new payment work; stop new staging

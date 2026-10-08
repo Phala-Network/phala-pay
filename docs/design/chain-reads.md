@@ -173,9 +173,11 @@ the chain until the audited admin lift. Finality, reversal and refund consumers 
 published advances independently of hourly log coverage. Unresolved deposits back off from
 when they first became due for finality: every 60 s for ten minutes, every ten minutes until six hours,
 then hourly. The one-hour pending-after-reorg alert remains; verification and reservations
-continue. The operational stock allowance is S=1 per environment, with at most one new stuck
-deposit per environment in each 24-hour budget window. Quote pause and escalation apply above
-either limit (§5.2); resolving stock does not reset the arrival tally.
+continue. A deposit counts in S as soon as its first due finality check leaves it unresolved;
+do not wait one hour. The operational stock allowance is S=1 summed across payment chains per
+environment, with at most one new unresolved entry per environment in any rolling 24 hours.
+Resolved entries still count in that window. Quote pause and escalation apply above either
+limit (§5.2).
 
 Reversal requires positive evidence on both at or below the checkpoint: (a) the deposit's
 receipt without its transfer at its position (successor recorded as today), or (b) a directly
@@ -297,12 +299,14 @@ and Safe caps have no code enforcement; operators must tally work and stop new l
 Refund attachments have atomic concurrent and rolling-24-hour admission caps. Hint and price
 daily budgets and the permanent address cap are hard limits.
 
-With K=1, each unresolved recheck costs at most `max(3, 1 + 3×K) = 4` methods per endpoint.
-S=1 per environment and at most S arrivals per environment per 24-hour budget window give
+With K=1, the first due finality check and each unresolved recheck cost at most
+`max(3, 1 + 3×K) = 4` methods per endpoint. Including the first check, each deposit costs
+20 Ankr calls / 1,680 Infura credits before retries. S=1 per environment and at most S arrivals
+per environment per rolling 24 hours give
 `2×(62 + 24) = 172` daily rechecks, including first-day arrivals and carried stock: 688 Ankr
 calls / 55,040 Infura credits before retries. With ×1.1 non-refund work, ×3 refund attempts and
-the extra reserve, totals are 16,347 Ankr calls/day and 1,329,910 Infura credits/day, leaving
-34.61% / 11.34% headroom below the stop lines. All other caps remain unchanged. The complete
+the extra reserve, totals are 16,435 Ankr calls/day and 1,336,950 Infura credits/day, leaving
+34.26% / 10.87% headroom below the stop lines. All other caps remain unchanged. The complete
 modeled upper bound includes replacement reads and stock turnover under the operating limits
 and retry assumptions; it is not a code-enforced quota guarantee. Follow the linked monitoring
 and stop procedures before adding load.
@@ -401,10 +405,16 @@ lift, pending view, URL template and sealed-key rules, redaction, CountingLayer,
 Added: `ChainRpc {read, verify}`, coverage rounds, checkpoint, hint endpoints and task, daily
 budgets; metrics `topup_rpc_errors_total{provider,chain_id,method,class}`,
 `topup_rpc_endpoint_ready`, `topup_coverage_lag_seconds{chain_id}` (now − `through_time`),
-`topup_addresses_lagging{chain_id}`, `topup_hint_total{result}`, `topup_daily_budget_used{name}`;
-alerts: endpoint not ready 5 min, any disagreement, coverage lag > 2 h, reversal unproven,
+`topup_addresses_lagging{chain_id}`, `topup_hint_total{result}`, `topup_daily_budget_used{name}`,
+`topup_finality_unresolved{chain_id}` (current-stock gauge),
+`topup_finality_unresolved_entries_total{chain_id}` (new-entry counter).
+Alerts: endpoint not ready 5 min, any disagreement, coverage lag > 2 h, reversal unproven,
 quota run-rate (recording rules over `topup_rpc_calls_total` × provider cost tables, both
-environments summed).
+environments summed). Finality alerts separately sum each environment's chains: current stock
+above one, `sum(increase(topup_finality_unresolved_entries_total[24h])) > 1` new entries, and
+the existing one-hour age alert. Current stock uses `sum(topup_finality_unresolved) > 1`.
+Scope selectors to one environment using scrape labels; either stock or rolling-entry alert
+requires the quote-pause stop action (§5.2).
 
 Docs: architecture §0, §2 rule 7, §7, §8, §9 (cancel, snapshot cap), §13;
 `docs/configuration.md`; `docs/integration.md` (hints, cancel, latency); `deploy/RPC.md`;

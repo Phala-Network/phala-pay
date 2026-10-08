@@ -464,10 +464,15 @@ new block's:
 | No receipt without positive replacement evidence | Wait; `TopupDepositReversalUnproven`, and `TopupDepositPendingAfterReorg` after an hour. Account nonce changes alone prove nothing. |
 | Anything else (the providers disagree) | Wait for the deposit's recheck time. |
 
-The operational allowance is S=1 unresolved deposit per environment across its payment chains,
-and at most one new stuck deposit per environment per 24-hour budget window. Above either
-limit, pause new quotes on the affected chain and escalate; verification and reservations
-continue. Resolution does not reset the arrival tally. Follow the
+The operational allowance is S=1 unresolved deposit summed across all payment chains per
+environment. A deposit enters S as soon as its first due finality check leaves it unresolved;
+do not wait for the one-hour age alert. At most one new unresolved entry is allowed per
+environment per rolling 24 hours, including entries since resolved. Sum the per-chain
+`topup_finality_unresolved` gauge per environment for the current-stock alert, and
+`increase(topup_finality_unresolved_entries_total[24h])` across that environment's chains for
+the rolling-entry alert; each alerts above one. Keep the separate one-hour age alert. Above
+either stock or rolling-entry limit, pause new quotes on the affected chain and escalate;
+verification and reservations continue. Follow the
 [finality recovery runbook](../deploy/runbooks/deposit-reversed.md#replacement-candidate-anomaly)
 and [RPC stock/turnover budget](../deploy/RPC.md#worst-case-pilot-budget).
 
