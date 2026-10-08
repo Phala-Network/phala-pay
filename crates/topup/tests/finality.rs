@@ -564,7 +564,7 @@ async fn unresolved_stock_and_entries_alert_at_two_and_survive_rechecks_and_rest
             ensure!(first_unresolved(pool, first).await? == Some(now));
             let (stock, entries) = unresolved_counts(pool, now).await?;
             ensure!((stock, entries) == (1, 1), "stock has no one-hour delay");
-            ensure!(!(stock > 1 || entries > 1), "one entry does not alert");
+            ensure!(stock <= 1 && entries <= 1, "one entry does not alert");
             // Rebuilding the watch and refreshing from a fresh pool cannot depend on process counts.
             drop(watch);
             let restarted_pool = topup::db::connect(&context.app_url, "test", 2).await?;
@@ -624,6 +624,25 @@ async fn unresolved_stock_and_entries_alert_at_two_and_survive_rechecks_and_rest
                 ensure!(rule["labels"]["severity"] == "critical");
             }
             restarted_pool.close().await;
+            // Persisted rows from a previous process must appear without watch-side increments.
+            let resolved_history = insert(pool, address, 3, 20).await?;
+            let carried_history = insert(pool, address, 4, 20).await?;
+            sqlx::query("UPDATE deposits SET first_unresolved_at=$2, final_at=now() WHERE id=$1")
+                .bind(resolved_history)
+                .bind(now)
+                .execute(pool)
+                .await?;
+            sqlx::query("UPDATE deposits SET first_unresolved_at=$2 WHERE id=$1")
+                .bind(carried_history)
+                .bind(now - TimeDelta::hours(25))
+                .execute(pool)
+                .await?;
+            let refreshed_pool = topup::db::connect(&context.app_url, "test", 2).await?;
+            ensure!(
+                unresolved_counts(&refreshed_pool, now + TimeDelta::seconds(61)).await? == (3, 3),
+                "DB reload includes resolved recent history and old unresolved stock"
+            );
+            refreshed_pool.close().await;
             Ok(())
         })
     })

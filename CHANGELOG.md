@@ -81,7 +81,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   verified and published every ten minutes, and complete dual log coverage runs hourly.
   Observation-chain contract recovery remains every minute and admitted hint processing keeps
   its seconds-scale fast path. Without hints, discovery adds up to five minutes (mean 2.5), plus
-  confirmation and processing. Known-deposit finality/reversal and checkpoint-conflict detection
+  confirmation and processing. Newly due deposit finality/reversal and checkpoint-conflict detection
   add up to ten minutes plus processing; log-only conflicts still wait for coverage. Expiry,
   cancellation completion and reservation release still require dual coverage: allow chain
   finality plus ten minutes for the checkpoint, one hour for coverage and five seconds for expiry.
