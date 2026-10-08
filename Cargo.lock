@@ -5770,7 +5770,7 @@ dependencies = [
 
 [[package]]
 name = "topup"
-version = "0.10.0-rc.4"
+version = "0.10.0-rc.5"
 dependencies = [
  "alloy 2.5.0",
  "alloy-eips 2.5.0",
@@ -5822,7 +5822,7 @@ dependencies = [
 
 [[package]]
 name = "topup-adapters"
-version = "0.10.0-rc.4"
+version = "0.10.0-rc.5"
 dependencies = [
  "alloy 2.5.0",
  "alloy-consensus 2.5.0",
@@ -5861,7 +5861,7 @@ dependencies = [
 
 [[package]]
 name = "topup-core"
-version = "0.10.0-rc.4"
+version = "0.10.0-rc.5"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
