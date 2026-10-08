@@ -52,8 +52,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `Retry-After: 1`; the request has not executed. Malformed or checksum-invalid keys still return
   `401` without taking a slot. Payer reads, health checks, and admin authentication use their
   existing admission paths.
-- Object-scoped transaction-hash hint endpoints for quotes and deposit addresses always
-  acknowledge with `202 received`, use client-secret or merchant write authentication, and only
+- Object-scoped transaction-hash hint endpoints for quotes and deposit addresses acknowledge
+  admitted requests with `202 received`, use client-secret or merchant write authentication, and only
   record dual-verified successful routed transfers at confirmation. Hard call, time, concurrency
   and UTC daily task limits fall back to scanning; hints never establish negative coverage.
   Complete evidence is fetched independently after both endpoints reach confirmation depth;
