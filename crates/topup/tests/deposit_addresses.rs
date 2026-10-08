@@ -1155,6 +1155,7 @@ fn app(pool: &sqlx::PgPool, routes: Vec<RouteFile>) -> Result<Router> {
     let admin_key = SigningKey::from_bytes(&[47; 32]);
     Ok(topup::api::router(AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         routes: Arc::new(topup::routes::RouteSet::new(routes).map_err(anyhow::Error::msg)?),
         maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(

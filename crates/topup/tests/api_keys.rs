@@ -48,6 +48,8 @@ impl Harness {
             serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml"))?;
         let state = AppState {
             pool: pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route]).map_err(anyhow::Error::msg)?,
             ),

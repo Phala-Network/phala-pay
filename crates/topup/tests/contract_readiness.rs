@@ -194,6 +194,8 @@ async fn audited_lift_refuses_before_a_passing_fresh_dual_check() -> Result<()> 
             let key = SigningKey::from_bytes(&[71; 32]);
             let (app, _) = topup::api::router(AppState {
                 pool: d.app_pool.clone(),
+                max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                    .expect("positive refund limit"),
                 routes: routes.clone(),
                 admin_key: VerificationKey::from_base64(
                     "admin/test".into(),

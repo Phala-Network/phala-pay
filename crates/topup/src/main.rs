@@ -667,6 +667,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         check_payment_settings_cutover(&pool).await?;
         let state = topup::api::AppState {
             pool,
+            max_attached_pending_refunds: config.max_attached_pending_refunds,
             routes: Arc::new(routes),
             admin_key,
             maintenance_keys: config.maintenance_keys.clone(),
@@ -809,6 +810,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let mut tasks = ServiceTasks::new();
     let state = topup::api::AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds: config.max_attached_pending_refunds,
         routes: Arc::clone(&routes),
         admin_key,
         maintenance_keys: config.maintenance_keys.clone(),

@@ -161,6 +161,8 @@ async fn a_failure_before_the_response_is_saved_creates_no_quote_and_is_replayed
         seed_account(&database.app_pool, product.id, "retried").await?;
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(test_routes()),
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
@@ -266,6 +268,8 @@ impl SlowQuote {
         });
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(test_routes()),
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
@@ -597,6 +601,8 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
         limit_quote_rate(&database.app_pool, product.id, 1).await?;
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
             ),
@@ -1100,6 +1106,8 @@ async fn client_secret_reads_are_limited_per_object_and_forgeries_cost_nothing()
         seed_account(&database.app_pool, product.id, "flooded").await?;
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![test_route()]).map_err(anyhow::Error::msg)?,
             ),
@@ -1284,6 +1292,8 @@ async fn quoted_amount_rounds_up_to_the_routes_amount_decimals() -> Result<()> {
             topup_core::route::Bounded::at(AtomicAmount::new(U256::MAX));
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
             ),
@@ -1752,6 +1762,8 @@ async fn the_client_view_reports_the_credit_of_a_spot_valued_underpayment() -> R
         let admin_key = SigningKey::from_bytes(&[44; 32]);
         let app = topup::api::router(AppState {
             pool: pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
             ),
@@ -2301,6 +2313,7 @@ async fn consume_lock(pool: &sqlx::PgPool, quote_id: Uuid, number: u8) -> Result
             evidence: &json!({"test": "consume"}),
             effects: &effects,
             outbox_events: &[],
+            checked_at: Utc::now(),
         },
     )
     .await?;
@@ -2687,6 +2700,7 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
         let admin_key = SigningKey::from_bytes(&[48;32]);
         let app = topup::api::router(AppState {
             pool: pool.clone(), routes: Arc::new(test_routes()),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(ADMIN_KID.to_owned(), &public_key_base64(&admin_key)).map_err(anyhow::Error::msg)?,
             public_origin: PublicOrigin::parse(TEST_ORIGIN)?, attestor: Arc::new(DstackAttestor::new()),
@@ -2775,6 +2789,7 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
             let admin = SigningKey::from_bytes(&[44;32]);
             let app = topup::api::router(AppState {
                 pool:pool.clone(), routes,
+                max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
                 admin_key:VerificationKey::from_base64(ADMIN_KID.into(), &public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
                 maintenance_keys:Vec::new(), public_origin:PublicOrigin::parse(TEST_ORIGIN)?,
                 attestor:Arc::new(DstackAttestor::new()), rate_lock_quotes:Arc::new(locks::ConfiguredQuoteProvider::from_runtimes(runtimes)),
@@ -2813,6 +2828,7 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
         let admin=SigningKey::from_bytes(&[44;32]);
         let app=topup::api::router(AppState {
             pool:pool.clone(),routes:Arc::new(test_routes()),maintenance_keys:Vec::new(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
             admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
             public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
             rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
@@ -2851,6 +2867,7 @@ async fn routed_chain_not_ready_returns_chain_unavailable_for_both_issuance_path
         let admin=SigningKey::from_bytes(&[44;32]);
         let app=topup::api::router(AppState {
             pool:pool.clone(),routes:Arc::new(routes),maintenance_keys:Vec::new(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
             admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
             public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
             rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),

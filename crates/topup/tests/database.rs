@@ -1110,6 +1110,7 @@ async fn attempts_survive_claim_and_wait_then_reset_on_advance() -> Result<()> {
                     evidence: &json!({"wait": "paused"}),
                     effects: &db::TransitionEffects::default(),
                     outbox_events: &[],
+                    checked_at: Utc::now(),
                 },
             )
             .await?;
@@ -1144,6 +1145,7 @@ async fn attempts_survive_claim_and_wait_then_reset_on_advance() -> Result<()> {
                     evidence: &json!({"advance": true}),
                     effects: &db::TransitionEffects::default(),
                     outbox_events: &[],
+                    checked_at: Utc::now(),
                 },
             )
             .await?;
@@ -1190,6 +1192,7 @@ async fn transition_cas_and_outbox_are_atomic() -> Result<()> {
                         evidence: &json!({}),
                         effects: &db::TransitionEffects::default(),
                         outbox_events: &[],
+                        checked_at: Utc::now(),
                     },
                 )
                 .await?
@@ -1237,6 +1240,7 @@ async fn transition_cas_and_outbox_are_atomic() -> Result<()> {
                         evidence: &json!({"atomic": true}),
                         effects: &db::TransitionEffects::default(),
                         outbox_events: &events,
+                        checked_at: Utc::now(),
                     },
                 )
                 .await
@@ -1276,6 +1280,7 @@ async fn transition_cas_and_outbox_are_atomic() -> Result<()> {
                         evidence: &json!({}),
                         effects: &db::TransitionEffects::default(),
                         outbox_events: &events,
+                        checked_at: Utc::now(),
                     },
                 )
                 .await?

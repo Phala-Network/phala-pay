@@ -415,8 +415,23 @@ impl<'writer> MakeWriter<'writer> for LogBuffer {
 }
 
 async fn replacement_case(pool: &sqlx::PgPool, candidates: u64) -> Result<()> {
+    replacement_case_with_state(pool, candidates, DepositState::Rejected).await
+}
+
+async fn replacement_case_with_state(
+    pool: &sqlx::PgPool,
+    candidates: u64,
+    state: DepositState,
+) -> Result<()> {
     let address = setup(pool).await?;
     let original = insert(pool, address, 1, 10).await?;
+    if state == DepositState::Detected {
+        sqlx::query("UPDATE deposits SET state='detected',reason=NULL,first_unresolved_at=now() WHERE id=$1").bind(original).execute(pool).await?;
+        ensure!(
+            db::claim_deposit(pool, Uuid::new_v4()).await?.is_none(),
+            "pump must leave unresolved due finality to the watcher"
+        );
+    }
     let mut included = BTreeSet::new();
     for index in 2..=candidates + 1 {
         let id = insert(pool, address, index, 20).await?;
@@ -481,7 +496,7 @@ async fn replacement_case(pool: &sqlx::PgPool, candidates: u64) -> Result<()> {
             "no candidate chain reads on ambiguity: {reads:?}"
         );
         let deposit = db::get_deposit(pool, original).await?.context("original")?;
-        ensure!(deposit.state == DepositState::Rejected && deposit.final_at.is_none());
+        ensure!(deposit.state == state && deposit.final_at.is_none());
         ensure!(anomaly.len() == 1);
         let event = anomaly[0];
         ensure!(event["level"] == "ERROR");
@@ -495,6 +510,16 @@ async fn replacement_case(pool: &sqlx::PgPool, candidates: u64) -> Result<()> {
         ensure!(count(topup::observability::metrics::render(pool)?)? == before + 1);
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn unresolved_detected_deposit_reverses_only_on_watcher_replacement_proof() -> Result<()> {
+    with_database(|context| {
+        Box::pin(async move {
+            replacement_case_with_state(&context.app_pool, 1, DepositState::Detected).await
+        })
+    })
+    .await
 }
 
 #[tokio::test]

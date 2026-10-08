@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::time::{Instant, sleep, timeout_at};
@@ -39,7 +39,7 @@ const LEASE_DURATION: Duration = Duration::from_secs(5 * 60);
 const FINALITY_WAIT_INTERVAL: Duration = Duration::from_secs(12);
 /// Wait while a provider has not reached the route's depth or `safe` confirmation: the head
 /// poll interval, so a lagging provider delays a fast credit by seconds, not a slot.
-const CONFIRMATION_WAIT_INTERVAL: Duration = Duration::from_secs(2);
+pub(crate) const CONFIRMATION_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// One asynchronous operation for a non-terminal deposit state.
 #[async_trait]
@@ -80,6 +80,7 @@ impl StepResult {
                 lock_consumption: None,
                 mark_final: false,
                 sanctions_hit: false,
+                first_unresolved: false,
             },
         }
     }
@@ -291,8 +292,22 @@ impl Pump {
 
     /// Claims at most one due deposit, runs one step, and persists one transition.
     pub async fn run_once(&self) -> Result<RunOnceResult, PumpError> {
+        self.run_once_with_clock(None).await
+    }
+
+    /// Runs one claim and persistence with a supplied scheduling clock.
+    pub async fn run_once_at(&self, now: DateTime<Utc>) -> Result<RunOnceResult, PumpError> {
+        self.run_once_with_clock(Some(now)).await
+    }
+
+    async fn run_once_with_clock(
+        &self,
+        clock: Option<DateTime<Utc>>,
+    ) -> Result<RunOnceResult, PumpError> {
         let lease_token = Uuid::new_v4();
-        let Some(deposit) = db::claim_deposit(&self.pool, lease_token).await? else {
+        let Some(deposit) =
+            db::claim_deposit_at(&self.pool, lease_token, clock.unwrap_or_else(Utc::now)).await?
+        else {
             return Ok(RunOnceResult::Idle);
         };
         let result = if crate::reconciler::chain_is_blocked(&self.pool, deposit.chain_id).await? {
@@ -319,7 +334,15 @@ impl Pump {
         };
         let mut result = result;
         loop {
-            match self.persist(&deposit, lease_token, result).await? {
+            match self
+                .persist(
+                    &deposit,
+                    lease_token,
+                    result,
+                    clock.unwrap_or_else(Utc::now),
+                )
+                .await?
+            {
                 Persisted::Done(outcome) => return Ok(outcome),
                 // Another credit won the cap since the step checked it: the deposit waits for
                 // finality instead.
@@ -337,6 +360,7 @@ impl Pump {
         deposit: &Deposit,
         lease_token: Uuid,
         result: StepResult,
+        now: DateTime<Utc>,
     ) -> Result<Persisted, PumpError> {
         let deposit_id = deposit.id;
         let result = match next(deposit.state, &result.outcome) {
@@ -363,7 +387,6 @@ impl Pump {
             }
         };
         let (result, transition) = result;
-        let now = Utc::now();
         let attempt = match transition.kind {
             TransitionKind::Advanced => 0,
             TransitionKind::Retry => deposit.attempt.saturating_add(1),
@@ -407,6 +430,7 @@ impl Pump {
                 evidence: &result.evidence,
                 effects: &result.effects,
                 outbox_events: &result.events,
+                checked_at: now,
             },
         )
         .await?;

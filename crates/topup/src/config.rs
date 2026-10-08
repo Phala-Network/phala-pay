@@ -13,6 +13,7 @@
 //! deploy form holds them. Each has exactly one source; neither or both refuses to start.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,7 @@ use crate::rpc_provider::ProviderUrl;
 #[serde(deny_unknown_fields)]
 struct ConfigSpec {
     environment: String,
+    max_attached_pending_refunds: NonZeroU32,
     #[serde(default)]
     public_origin: Option<String>,
     admin_key: AdminKeySpec,
@@ -61,6 +63,8 @@ pub struct Config {
     /// The deployment's name, reported to Sentry (`<environment>-restore` while read-only). Explicit non-production names
     /// permit staging-only price opt-in; every other name requires Allowed licensing.
     pub environment: String,
+    /// Required positive concurrency limit for attached-pending refunds in this deployment.
+    pub max_attached_pending_refunds: NonZeroU32,
     /// The API's one public origin: admin signatures and treasury challenges name it. `None` when
     /// `topup run` takes it from its environment.
     pub public_origin: Option<PublicOrigin>,
@@ -94,6 +98,7 @@ impl std::fmt::Debug for AdminKeySpec {
 #[derive(Serialize)]
 struct ResolvedConfig<'a> {
     environment: &'a str,
+    max_attached_pending_refunds: NonZeroU32,
     #[serde(skip_serializing_if = "Option::is_none")]
     public_origin: Option<String>,
     admin_key: &'a AdminKeySpec,
@@ -190,6 +195,7 @@ impl Config {
         Ok(Self {
             sanctions: spec.sanctions,
             environment: spec.environment,
+            max_attached_pending_refunds: spec.max_attached_pending_refunds,
             public_origin,
             admin_key_id: spec.admin_key.id.clone(),
             admin_key,
@@ -295,6 +301,7 @@ impl Config {
     pub fn resolved_json(&self) -> Result<String, String> {
         serde_json::to_string_pretty(&ResolvedConfig {
             environment: &self.environment,
+            max_attached_pending_refunds: self.max_attached_pending_refunds,
             public_origin: self.public_origin.as_ref().map(ToString::to_string),
             admin_key: &self.admin_key_spec,
             maintenance_keys: &self.maintenance_key_specs,
@@ -350,7 +357,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "environment: staging\npublic_origin: {origin}\nadmin_key:\n  id: admin/staging-v1\n  public_key: {KEY}\n{providers}\nroutes:\n  -\n{route}\n"
+            "environment: staging\nmax_attached_pending_refunds: 2\npublic_origin: {origin}\nadmin_key:\n  id: admin/staging-v1\n  public_key: {KEY}\n{providers}\nroutes:\n  -\n{route}\n"
         )
     }
 
@@ -413,6 +420,53 @@ mod tests {
                 .maintenance_keys
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn refund_concurrency_limit_is_required_positive_and_round_trips() {
+        let yaml = config(PROVIDERS, "https://pay.example");
+        for limit in [1, 2] {
+            let configured = yaml.replace(
+                "max_attached_pending_refunds: 2",
+                &format!("max_attached_pending_refunds: {limit}"),
+            );
+            let parsed = Config::parse(&configured).expect("positive cap");
+            assert_eq!(parsed.max_attached_pending_refunds.get(), limit);
+            let shown = parsed.resolved_json().expect("show");
+            assert_eq!(
+                Config::parse(&shown)
+                    .expect("round trip")
+                    .max_attached_pending_refunds
+                    .get(),
+                limit
+            );
+        }
+        for configured in [
+            yaml.replace("max_attached_pending_refunds: 2\n", ""),
+            yaml.replace(
+                "max_attached_pending_refunds: 2",
+                "max_attached_pending_refunds: 0",
+            ),
+            yaml.replace(
+                "max_attached_pending_refunds: 2",
+                "max_attached_pending_refunds: -1",
+            ),
+        ] {
+            assert!(
+                Config::parse(&configured).is_err(),
+                "required positive cap accepted: {configured}"
+            );
+        }
+        let production = Config::parse(include_str!(
+            "../../../deploy/environments/phala-network/production/topup/topup.yaml"
+        ))
+        .expect("production");
+        let staging = Config::parse(include_str!(
+            "../../../deploy/environments/phala-network/staging/topup/topup.yaml"
+        ))
+        .expect("staging");
+        assert_eq!(production.max_attached_pending_refunds.get(), 2);
+        assert_eq!(staging.max_attached_pending_refunds.get(), 1);
     }
 
     #[test]

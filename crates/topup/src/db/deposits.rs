@@ -216,6 +216,8 @@ pub struct TransitionEffects {
     /// Records that screening named the sender of a deposit whose delivered credit stands, which
     /// keeps its forwarder from every sweep.
     pub sanctions_hit: bool,
+    /// The confirm check agreed the transfer is absent; set its durable entry once.
+    pub first_unresolved: bool,
 }
 
 /// Timeline and side effects written by one transition application.
@@ -227,6 +229,8 @@ pub struct TransitionWrites<'a> {
     pub effects: &'a TransitionEffects,
     /// Outbox rows inserted after the state compare-and-swap succeeds.
     pub outbox_events: &'a [OutboxEvent],
+    /// Clock of the check, used for durable unresolved scheduling.
+    pub checked_at: DateTime<Utc>,
 }
 
 /// Result of the lease-token compare-and-swap.
@@ -589,6 +593,15 @@ pub async fn claim_deposit(
     pool: &PgPool,
     lease_token: Uuid,
 ) -> Result<Option<ClaimedDeposit>, sqlx::Error> {
+    claim_deposit_at(pool, lease_token, Utc::now()).await
+}
+
+/// Claims with a supplied scheduling clock; unresolved due finality belongs to the watcher.
+pub async fn claim_deposit_at(
+    pool: &PgPool,
+    lease_token: Uuid,
+    now: DateTime<Utc>,
+) -> Result<Option<ClaimedDeposit>, sqlx::Error> {
     let record = sqlx::query_as!(
         DepositRecord,
         r#"
@@ -596,16 +609,22 @@ pub async fn claim_deposit(
             SELECT id
             FROM deposits
             WHERE state IN ('detected', 'confirmed')
-              AND next_attempt_at <= now()
-              AND (lease_until IS NULL OR lease_until <= now())
+              AND next_attempt_at <= $2
+              AND (lease_until IS NULL OR lease_until <= $2)
+              AND NOT (state = 'detected' AND final_at IS NULL
+                  AND first_unresolved_at IS NOT NULL
+                  AND (finality_due_at IS NULL OR finality_check_at IS NOT NULL)
+                  AND EXISTS (SELECT 1 FROM chain_checkpoints AS checkpoint
+                      WHERE checkpoint.chain_id = deposits.chain_id
+                        AND checkpoint.block_number >= deposits.block_number))
             ORDER BY next_attempt_at, created_at, id
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         )
         UPDATE deposits AS deposit
         SET lease_token = $1,
-            lease_until = now() + interval '5 minutes',
-            updated_at = now()
+            lease_until = $2 + interval '5 minutes',
+            updated_at = $2
         FROM candidate
         WHERE deposit.id = candidate.id
         RETURNING
@@ -621,7 +640,8 @@ pub async fn claim_deposit(
             deposit.credit_minor::text AS credit_minor, deposit.quote,
             deposit.created_at, deposit.updated_at
         "#,
-        lease_token
+        lease_token,
+        now
     )
     .fetch_optional(pool)
     .await?;
@@ -702,6 +722,19 @@ pub async fn apply_transition(
 
     if matched.is_none() {
         return Ok(ApplyTransitionResult::Stale);
+    }
+
+    if writes.effects.first_unresolved {
+        sqlx::query(
+            "UPDATE deposits SET first_unresolved_at=COALESCE(first_unresolved_at,$2), \
+             next_attempt_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2), \
+             finality_check_at=finality_next_check_at(COALESCE(first_unresolved_at,$2),$2) \
+             WHERE id=$1 AND state='detected'",
+        )
+        .bind(deposit_id)
+        .bind(writes.checked_at)
+        .execute(&mut **transaction)
+        .await?;
     }
 
     if let Some(consumption) = writes.effects.lock_consumption

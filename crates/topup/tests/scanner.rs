@@ -1617,6 +1617,52 @@ async fn lowered_creation_clears_marker_and_backfills_before_quote_expiry() -> R
 }
 
 #[tokio::test]
+async fn dual_agreed_coverage_boundary_conflict_freezes_before_any_publication() -> Result<()> {
+    for stored_coverage_conflict in [false, true] {
+        with_database(|d| Box::pin(async move {
+            let mut read = Reader::new(100);
+            let mut verify = Reader::new(100);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let address = address(d, 100).await?;
+            if stored_coverage_conflict {
+                // The returned hash agrees with the checkpoint, but contradicts coverage at
+                // the same height. Both persisted sources of evidence must be protected.
+                sqlx::query("UPDATE chain_coverage SET through_block=100,through_hash=$1,through_time=$2 WHERE chain_id=1")
+                    .bind(format!("{:#x}", hash(100))).bind(time(100)).execute(&d.app_pool).await?;
+                sqlx::query("UPDATE chain_checkpoints SET block_hash=$1 WHERE chain_id=1")
+                    .bind(format!("{:#x}", B256::ZERO)).execute(&d.app_pool).await?;
+            }
+            if !stored_coverage_conflict {
+                // Keep coverage below the checkpoint, so this fixture independently proves
+                // the checkpoint guard rather than also triggering the coverage guard.
+                sqlx::query("UPDATE chain_coverage SET through_block=99,through_hash=$1,through_time=$2 WHERE chain_id=1")
+                    .bind(format!("{:#x}", hash(99))).bind(time(99)).execute(&d.app_pool).await?;
+                sqlx::query("UPDATE cursors SET scanned_block=99,scanned_block_time=$1 WHERE chain_id=1")
+                    .bind(time(99)).execute(&d.app_pool).await?;
+            }
+            let before = db::chain_reads::coverage(&d.app_pool, 1).await?;
+            let cursor: (i64, Option<DateTime<Utc>>) = sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1").fetch_one(&d.app_pool).await?;
+            let marker_before = marker(d, address.id).await?;
+            sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,expires_at=to_timestamp(100) WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).execute(&d.app_pool).await?;
+            read.forged_at = Some(100);
+            verify.forged_at = Some(100);
+            ensure!(matches!(scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await, Err(scanner::ScannerError::Disagreement)));
+            let reason: String = sqlx::query_scalar("SELECT check_name FROM reconciliation_blocks WHERE chain_id=1").fetch_one(&d.app_pool).await?;
+            ensure!(reason == "finalized_checkpoint_conflict");
+            ensure!(db::chain_reads::coverage(&d.app_pool, 1).await? == before);
+            let after: (i64, Option<DateTime<Utc>>) = sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1").fetch_one(&d.app_pool).await?;
+            ensure!(after == cursor && marker(d, address.id).await? == marker_before);
+            ensure!(read.requests.lock().unwrap().is_empty() && verify.requests.lock().unwrap().is_empty(), "conflict must freeze before reading logs");
+            ensure!(topup::locks::expire_once(&d.app_pool, &routes()).await? == 0);
+            let reservation: (String, bool) = sqlx::query_as("SELECT status,exposure_reserved FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).fetch_one(&d.app_pool).await?;
+            ensure!(reservation == ("open".to_owned(), true));
+            Ok(())
+        })).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn checkpoint_conflict_freezes_instead_of_replacing_durable_hash() -> Result<()> {
     with_database(|d| {
         Box::pin(async move {

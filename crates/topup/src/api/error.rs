@@ -20,7 +20,7 @@ pub const ERROR_CODES: &[(&str, u16, &str)] = &[
     (
         "refund_attachment_limit_exceeded",
         422,
-        "The environment permits at most two attached-pending refunds and one new attachment per rolling 24 hours, across all merchants and modes. This is not retryable; contact the operator before sending or attaching another payout. The refund stays pending and reserved. Repeating the same attachment does not consume quota; existing attachments continue verification.",
+        "The environment has a configured attached-pending refund limit (production 2, staging 1), and permits one new attachment per rolling 24 hours, across all merchants and modes. This is not retryable; contact the operator before sending or attaching another payout. The refund stays pending and reserved. Repeating the same attachment does not consume quota; existing attachments continue verification.",
     ),
     (
         "address_capacity_reached",

@@ -1535,6 +1535,7 @@ fn app(
     let admin_key = SigningKey::from_bytes(&ADMIN_KEY);
     Ok(topup::api::router(AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         routes: Arc::new(RouteSet::new(routes).map_err(anyhow::Error::msg)?),
         maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(

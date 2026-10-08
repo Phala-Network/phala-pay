@@ -210,6 +210,7 @@ impl FinalityWatch {
                         &deposit,
                         primary_finalized,
                         secondary_finalized,
+                        now,
                     )
                     .await;
                 if !matches!(&watched, Ok(Applied::Final | Applied::Reversed)) {
@@ -259,6 +260,7 @@ impl FinalityWatch {
         deposit: &WatchedDeposit,
         primary_finalized: u64,
         secondary_finalized: u64,
+        now: DateTime<Utc>,
     ) -> Result<Applied, FinalityError> {
         let (primary_evidence, secondary_evidence) = tokio::try_join!(
             chain.primary.evidence(
@@ -301,7 +303,31 @@ impl FinalityWatch {
             },
             replacement,
         );
-        self.apply(deposit, verdict, chain_id).await
+        let resume_confirm = deposit.state == DepositState::Detected
+            && primary == secondary
+            && primary
+                .transfer()
+                .is_some_and(|transfer| transfer.to == deposit.address);
+        let applied = self.apply(deposit, verdict, chain_id).await?;
+        if resume_confirm && matches!(applied, Applied::Nothing | Applied::Followed) {
+            // Provisional corrections and re-inclusion still belong to confirm. A null watcher
+            // schedule after a due check hands positive evidence back to the normal pump;
+            // another agreed absence reinstates the shared schedule. Never clear entry history.
+            sqlx::query(
+                "UPDATE deposits SET finality_check_at=NULL, \
+                 first_unresolved_at=COALESCE(first_unresolved_at,$2), next_attempt_at=$3 \
+                 WHERE id=$1 AND state='detected' AND final_at IS NULL",
+            )
+            .bind(deposit.id)
+            .bind(now)
+            .bind(
+                now + chrono::Duration::from_std(crate::pump::CONFIRMATION_WAIT_INTERVAL)
+                    .expect("fixed confirmation interval fits chrono"),
+            )
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(applied)
     }
 
     async fn known_replacement(
@@ -647,7 +673,9 @@ fn decide(
 /// Claims the next page of deposits of `chain_id` that are neither final nor reversed, recorded
 /// at or below `finalized`, and due: never read, or past their recheck time. Claiming moves each
 /// one's recheck time ahead by 60s for its first ten minutes, 600s until six hours, then 3600s.
-/// The first due claim persists the age anchor, independent of block time, retries or restarts.
+/// Once present, the first unresolved entry is the shared age anchor. The first due claim
+/// otherwise establishes it independently of block time, retries and restarts. Active pump
+/// leases are excluded; a positive detected receipt can hand the next check back to confirm.
 /// Concurrent watchers skip each other's pages. Oldest block first.
 async fn claim_unfinal_deposits(
     pool: &PgPool,
@@ -662,6 +690,8 @@ async fn claim_unfinal_deposits(
             FROM deposits
             WHERE chain_id = $1 AND final_at IS NULL AND state <> 'reversed'
               AND block_number <= $3
+              AND (state <> 'detected' OR lease_until IS NULL OR lease_until <= $4)
+              AND (state <> 'detected' OR finality_due_at IS NULL OR finality_check_at IS NOT NULL)
               AND (finality_check_at IS NULL OR finality_check_at <= $4)
             ORDER BY block_number, id
             LIMIT $2
@@ -669,11 +699,12 @@ async fn claim_unfinal_deposits(
         )
         UPDATE deposits AS deposit
         SET finality_due_at = COALESCE(deposit.finality_due_at, $4),
-            finality_check_at = $4 + make_interval(secs => CASE
-                WHEN $4 < COALESCE(deposit.finality_due_at, $4) + interval '10 minutes' THEN 60
-                WHEN $4 < COALESCE(deposit.finality_due_at, $4) + interval '6 hours' THEN 600
-                ELSE 3600
-            END)
+            finality_check_at = finality_next_check_at(
+                COALESCE(deposit.first_unresolved_at, deposit.finality_due_at, $4), $4),
+            next_attempt_at = CASE WHEN deposit.state = 'detected' THEN
+                GREATEST(deposit.next_attempt_at, finality_next_check_at(
+                    COALESCE(deposit.first_unresolved_at, deposit.finality_due_at, $4), $4))
+                ELSE deposit.next_attempt_at END
         FROM due, addresses AS address
         WHERE deposit.id = due.id AND address.id = deposit.address_id
         RETURNING deposit.id, deposit.state, deposit.attempt, deposit.tx_hash,
@@ -738,6 +769,8 @@ async fn record_evidence(
         UPDATE deposits
         SET log_index = $2, block_number = $3, block_hash = $4, block_time = $5,
             final_at = CASE WHEN $6 THEN now() END,
+            next_attempt_at = CASE WHEN $6 AND state = 'detected' THEN now()
+                ELSE next_attempt_at END,
             updated_at = now()
         WHERE id = $1 AND final_at IS NULL AND state <> 'reversed'
         RETURNING state

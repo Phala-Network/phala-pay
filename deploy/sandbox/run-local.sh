@@ -119,6 +119,7 @@ FORWARDER_FACTORY="$factory" \
 {
     cat <<YAML
 environment: sandbox
+max_attached_pending_refunds: 2
 public_origin: https://topup.localhost
 admin_key:
   id: $admin_key_id

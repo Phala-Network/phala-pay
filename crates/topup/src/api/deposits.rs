@@ -639,7 +639,8 @@ pub(crate) async fn update_refund(
 /// `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
 /// transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
 /// only when its transaction is proven not to pay it.
-/// Each environment permits at most two attached-pending refunds and one new attachment per
+/// Each environment has a configured attached-pending refund limit (production 2, staging 1),
+/// and permits one new attachment per
 /// rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
 /// quota. A limit refusal preserves the reservation; contact the operator before another payout.
 pub(crate) async fn mark_refund_paid(
@@ -663,6 +664,7 @@ pub(crate) async fn mark_refund_paid(
     repository::mark_refund_paid(
         &mut *transaction,
         &state.routes,
+        state.max_attached_pending_refunds,
         merchant.scope,
         id,
         tx_hash,

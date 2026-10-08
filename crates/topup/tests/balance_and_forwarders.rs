@@ -410,6 +410,8 @@ impl Fixture {
         let admin_key = SigningKey::from_bytes(&ADMIN_KEY);
         Ok(topup::api::router(AppState {
             pool: self.pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![self.route.clone()])
                     .map_err(anyhow::Error::msg)?,

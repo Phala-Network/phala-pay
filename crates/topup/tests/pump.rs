@@ -2,7 +2,10 @@
 
 mod support;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration as StdDuration;
 
 use alloy_primitives::{Address, B256, U256};
@@ -21,7 +24,7 @@ use topup::pump::{
 use topup::routes::RouteSet;
 use topup::steps::confirm::ConfirmStep;
 use topup_adapters::chain::evm::{
-    ChainError, ChainReader, FinalizedHead, ReceiptLookup, TransferLog,
+    ChainError, ChainReader, EvmClient, FinalizedHead, FinalizedReader, ReceiptLookup, TransferLog,
 };
 use topup_adapters::pricing::{Observation, PriceError, PriceSource};
 use topup_core::deposit::{DepositState, RetryError, StepOutcome, WaitReason};
@@ -33,6 +36,212 @@ use uuid::Uuid;
 
 use support::seed::{self, NewAccount, NewAddress};
 use support::with_database;
+
+/// Counts actual JSON-RPC methods on two HTTP endpoints, including the confirm head reads.
+#[derive(Clone, Default)]
+struct AbsentRpc {
+    methods: Arc<[AtomicU64; 2]>,
+    receipts: Arc<[AtomicU64; 2]>,
+    head: Arc<AtomicU64>,
+    first_receipts: Arc<StepControl>,
+}
+
+async fn absent_rpc(
+    axum::extract::State(state): axum::extract::State<AbsentRpc>,
+    axum::extract::Path(endpoint): axum::extract::Path<usize>,
+    axum::Json(request): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    state.methods[endpoint].fetch_add(1, Ordering::SeqCst);
+    let result = match request["method"].as_str().expect("RPC method") {
+        "eth_getTransactionReceipt" => {
+            if state.receipts[endpoint].fetch_add(1, Ordering::SeqCst) == 0 {
+                state.first_receipts.started.add_permits(1);
+                state
+                    .first_receipts
+                    .release
+                    .acquire()
+                    .await
+                    .expect("release")
+                    .forget();
+            }
+            serde_json::Value::Null
+        }
+        "eth_getBlockByNumber" => {
+            let number = state.head.load(Ordering::SeqCst);
+            json!({
+                "hash": format!("{:#x}", B256::from(U256::from(number))),
+                "parentHash": format!("{:#x}", B256::ZERO),
+                "sha3Uncles": format!("{:#x}", B256::ZERO),
+                "miner": format!("{:#x}", Address::ZERO),
+                "stateRoot": format!("{:#x}", B256::ZERO),
+                "transactionsRoot": format!("{:#x}", B256::ZERO),
+                "receiptsRoot": format!("{:#x}", B256::ZERO),
+                "logsBloom": format!("0x{}", "00".repeat(256)),
+                "difficulty": "0x0", "number": format!("0x{number:x}"),
+                "gasLimit": "0x1c9c380", "gasUsed": "0x0", "timestamp": "0x0",
+                "extraData": "0x", "mixHash": format!("{:#x}", B256::ZERO),
+                "nonce": "0x0000000000000000", "transactions": [], "uncles": []
+            })
+        }
+        method => panic!("unexpected RPC method: {method}"),
+    };
+    axum::Json(json!({"jsonrpc":"2.0", "id":request["id"], "result":result}))
+}
+
+#[tokio::test]
+async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -> Result<()> {
+    for (watcher_due_at_first, previously_final) in [(false, false), (true, false), (true, true)] {
+        with_database(|context| Box::pin(async move {
+            let pool = &context.app_pool;
+            let seed = seed_account(pool, 30).await?;
+            let id = insert_deposit(pool, seed, 30).await?;
+            if !previously_final {
+                sqlx::query("UPDATE deposits SET final_at=NULL WHERE id=$1").bind(id).execute(pool).await?;
+            }
+            let due = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
+            let rpc = AbsentRpc::default();
+            if watcher_due_at_first { rpc.head.store(500, Ordering::SeqCst); }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let cancellation = CancellationToken::new();
+            let shutdown = cancellation.clone();
+            let app = axum::Router::new().route("/{endpoint}", axum::routing::post(absent_rpc)).with_state(rpc.clone());
+            let server = tokio::spawn(async move { axum::serve(listener, app).with_graceful_shutdown(shutdown.cancelled_owned()).await });
+            let result = async {
+                let reader = |endpoint| -> Result<FinalizedReader> {
+                    Ok(FinalizedReader::new(Arc::new(EvmClient::new(&format!("http://{address}/{endpoint}"))?)))
+                };
+                let pricing = Arc::new(FixedPrice(Observation {
+                    source: SourceId::new("unused"),
+                    price: ScaledPrice::new(100_000_000, PRICE_SCALE)?,
+                    observed_at: UnixSeconds::new(0),
+                }));
+                let confirm = ConfirmStep::single(pool.clone(), confirmation_route(), reader(0)?, reader(1)?, pricing, None, None);
+                let pump = test_pump(pool, static_steps(StepOutcome::Wait { reason: WaitReason::Paused }).with_detected(Box::new(confirm)), PumpConfig::default(), 0)?;
+                let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader(0)?, reader(1)?);
+                if watcher_due_at_first {
+                    db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:b256(50), time:due }).await?;
+                }
+                // A pump's active lease excludes the watcher even before the first absence is persisted.
+                let first_pump = pump.clone();
+                let first = tokio::spawn(async move { first_pump.run_once_at(due).await });
+                rpc.first_receipts.wait_started().await?;
+                let during = watch.watch_once_at(1, due).await?;
+                rpc.first_receipts.release();
+                rpc.first_receipts.release();
+                let first_outcome = first.await??;
+                ensure!(during.watched == 0, "watcher read during the pump lease");
+                ensure!(first_outcome == RunOnceResult::Applied { deposit_id:id });
+                let timeline: serde_json::Value = sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1").bind(id).fetch_one(pool).await?;
+                if watcher_due_at_first {
+                    ensure!(timeline["error"] == "log_absent_at_finality", "finality evidence lost: {timeline}");
+                } else {
+                    ensure!(timeline["result"] == "not_confirmed", "pre-confirmation evidence lost: {timeline}");
+                }
+                let gauges = topup::observability::metrics::render_chain_reads_at(pool, due).await?;
+                for name in ["topup_finality_unresolved", "topup_finality_unresolved_entries_24h"] {
+                    let count = if name == "topup_finality_unresolved" && previously_final { 0 } else { 1 };
+                    ensure!(gauges.lines().any(|line| line == format!("{name}{{chain_id=\"1\"}} {count}")), "confirm absence missing from {name}");
+                }
+                let mut elapsed = 60;
+                while elapsed < 86_400 {
+                    for probe in [elapsed - 1, elapsed, elapsed + 1] {
+                        if probe == 600 && !watcher_due_at_first {
+                            rpc.head.store(500, Ordering::SeqCst);
+                            db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:b256(50), time:due }).await?;
+                        }
+                        let now = due + Duration::seconds(probe);
+                        let before = rpc.receipts.each_ref().map(|count| count.load(Ordering::SeqCst));
+                        let (pumped, watched) = tokio::join!(pump.run_once_at(now), watch.watch_once_at(1, now));
+                        pumped?; watched?;
+                        for (endpoint, previous) in before.into_iter().enumerate() {
+                            let expected = u64::from(probe == elapsed);
+                            ensure!(rpc.receipts[endpoint].load(Ordering::SeqCst) - previous == expected, "duplicate or unscheduled check at {probe} on endpoint {endpoint}");
+                        }
+                        let (entry, next_confirm, next_watch): (DateTime<Utc>,DateTime<Utc>,DateTime<Utc>) = sqlx::query_as("SELECT first_unresolved_at,next_attempt_at,finality_check_at FROM deposits WHERE id=$1").bind(id).fetch_one(pool).await?;
+                        ensure!(entry == due, "entry timestamp overwritten");
+                        if probe == elapsed {
+                            let interval = if elapsed < 600 { 60 } else if elapsed < 21_600 { 600 } else { 3600 };
+                            ensure!(next_confirm == now + Duration::seconds(interval) && next_watch == next_confirm, "schedules differ at {elapsed}");
+                        }
+                    }
+                    elapsed += if elapsed < 600 { 60 } else if elapsed < 21_600 { 600 } else { 3600 };
+                }
+                for endpoint in 0..2 {
+                    let checks = rpc.receipts[endpoint].load(Ordering::SeqCst);
+                    let methods = rpc.methods[endpoint].load(Ordering::SeqCst);
+                    ensure!(checks <= 63, "{checks} checks on endpoint {endpoint}");
+                    ensure!(methods <= 252, "{methods} actual RPC methods on endpoint {endpoint}");
+                    println!("24h endpoint {endpoint}: {checks} checks, {methods} actual RPC methods (limit 252); watcher_due_at_first={watcher_due_at_first}, previously_final={previously_final}");
+                }
+                Ok(())
+            }.await;
+            cancellation.cancel();
+            server.await??;
+            result
+        })).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn positive_reincluded_provisional_transfer_returns_to_confirm_without_extra_watcher_reads()
+-> Result<()> {
+    with_database(|context| Box::pin(async move {
+        let pool = &context.app_pool;
+        let seed = seed_account(pool, 32).await?;
+        let id = insert_deposit(pool, seed, 32).await?;
+        let now = DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).context("PostgreSQL precision clock")?;
+        sqlx::query("UPDATE deposits SET final_at=NULL,first_unresolved_at=$2 - interval '7 hours',finality_due_at=$2 - interval '7 hours',finality_check_at=$2,next_attempt_at=$2 WHERE id=$1").bind(id).bind(now).execute(pool).await?;
+        db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:b256(50), time:now }).await?;
+        let deposit = db::get_deposit(pool, id).await?.context("deposit")?;
+        let mut corrected = transfer_log(&deposit, evm_address(32));
+        corrected.amount = AtomicAmount::new(U256::from(2000));
+        let reader = ConfirmChain { logs:Arc::new(vec![corrected.clone()]), barrier:None };
+        let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader.clone(), reader);
+        let pump = test_pump(pool, confirm_steps(pool, vec![corrected], None), PumpConfig::default(), 0)?;
+        ensure!(pump.run_once_at(now).await? == RunOnceResult::Idle);
+        ensure!(watch.watch_once_at(1, now).await?.watched == 1);
+        ensure!(watch.watch_once_at(1, now).await?.watched == 0, "positive handoff cannot restart the watcher at the same due time");
+        ensure!(pump.run_once_at(now).await? == RunOnceResult::Idle, "handoff must use a distinct next due time");
+        let (entry, scheduled): (DateTime<Utc>,Option<DateTime<Utc>>) = sqlx::query_as("SELECT first_unresolved_at,finality_check_at FROM deposits WHERE id=$1").bind(id).fetch_one(pool).await?;
+        ensure!(entry == now - Duration::hours(7) && scheduled.is_none());
+        ensure!(watch.watch_once_at(1, now + Duration::seconds(2)).await?.watched == 0);
+        ensure!(pump.run_once_at(now + Duration::seconds(2)).await? == RunOnceResult::Applied { deposit_id:id });
+        let stored = db::get_deposit(pool, id).await?.context("confirmed")?;
+        ensure!(stored.state == DepositState::Confirmed && stored.amount_atomic == AtomicAmount::new(U256::from(2000)) && stored.final_at.is_some());
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn watcher_resolution_wakes_confirm_immediately_without_clearing_entry_history() -> Result<()>
+{
+    for was_unresolved in [false, true] {
+        with_database(|context| Box::pin(async move {
+            let pool = &context.app_pool;
+            let seed = seed_account(pool, 31).await?;
+            let id = insert_deposit(pool, seed, 31).await?;
+            let now = DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).context("PostgreSQL precision clock")?;
+            sqlx::query("UPDATE deposits SET final_at=NULL,first_unresolved_at=CASE WHEN $2 THEN $3 - interval '7 hours' END,next_attempt_at=$3 + interval '1 hour' WHERE id=$1")
+                .bind(id).bind(was_unresolved).bind(now).execute(pool).await?;
+            db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:b256(50), time:now }).await?;
+            let deposit = db::get_deposit(pool, id).await?.context("deposit")?;
+            let logs = vec![transfer_log(&deposit, evm_address(31))];
+            let reader = ConfirmChain { logs:Arc::new(logs.clone()), barrier:None };
+            let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader.clone(), reader);
+            ensure!(watch.watch_once_at(1, now).await?.finalized == 1);
+            let pump = test_pump(pool, confirm_steps(pool, logs, None), PumpConfig::default(), 0)?;
+            ensure!(pump.run_once_at(now + Duration::seconds(1)).await? == RunOnceResult::Applied { deposit_id:id }, "normal finalization acquired a backoff delay");
+            let stored = db::get_deposit(pool, id).await?.context("confirmed")?;
+            ensure!(stored.state == DepositState::Confirmed && stored.final_at.is_some());
+            let entry: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1").bind(id).fetch_one(pool).await?;
+            ensure!(entry == was_unresolved.then_some(now - Duration::hours(7)));
+            Ok(())
+        })).await?;
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn two_pumps_racing_on_one_deposit_apply_exactly_one_transition() -> Result<()> {
@@ -175,6 +384,7 @@ async fn step_evidence_and_events_commit_with_the_transition() -> Result<()> {
                 }],
                 effects: TransitionEffects {
                     mark_final: false,
+                    first_unresolved: false,
                     dual_verified: false,
                     sanctions_hit: false,
                     canonical_evidence: None,

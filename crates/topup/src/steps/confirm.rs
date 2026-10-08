@@ -272,6 +272,11 @@ impl ConfirmStep {
         let (mut canonical, mut is_final) =
             match confirmed_evidence(chains, confirmations, deposit, context.address).await {
                 FinalityResult::Ready { log, is_final } => (log, is_final),
+                FinalityResult::Unresolved(outcome, evidence) => {
+                    let mut result = StepResult::new(outcome, evidence);
+                    result.effects.first_unresolved = true;
+                    return result;
+                }
                 FinalityResult::Wait(evidence) => {
                     return confirmation_wait(confirmations, evidence);
                 }
@@ -288,6 +293,11 @@ impl ConfirmStep {
             (canonical, is_final) =
                 match confirmed_evidence(chains, confirmations, deposit, context.address).await {
                     FinalityResult::Ready { log, is_final } => (log, is_final),
+                    FinalityResult::Unresolved(outcome, evidence) => {
+                        let mut result = StepResult::new(outcome, evidence);
+                        result.effects.first_unresolved = true;
+                        return result;
+                    }
                     FinalityResult::Wait(evidence) => {
                         return confirmation_wait(confirmations, evidence);
                     }
@@ -800,6 +810,7 @@ enum FinalityResult {
     Ready { log: TransferLog, is_final: bool },
     Wait(Value),
     Retry(RetryError, Value),
+    Unresolved(StepOutcome, Value),
 }
 
 fn receipt_block(lookup: &ReceiptLookup) -> Option<u64> {
@@ -865,7 +876,7 @@ async fn confirmed_evidence(
     if !confirmations.reached(required_block, primary_heads)
         || !confirmations.reached(required_block, secondary_heads)
     {
-        return FinalityResult::Wait(json!({
+        let evidence = json!({
             "stage": "finality",
             "result": "not_confirmed",
             "confirmations": confirmations.policy_value(),
@@ -874,7 +885,15 @@ async fn confirmed_evidence(
             "provider_b_horizon": confirmations.horizon(secondary_heads),
             "provider_a_finalized": primary_heads.finalized,
             "provider_b_finalized": secondary_heads.finalized,
-        }));
+        });
+        return if primary_receipt.transfer().is_none() && secondary_receipt.transfer().is_none() {
+            FinalityResult::Unresolved(
+                confirmation_wait(confirmations, evidence.clone()).outcome,
+                evidence,
+            )
+        } else {
+            FinalityResult::Wait(evidence)
+        };
     }
     let is_final =
         required_block <= primary_heads.finalized && required_block <= secondary_heads.finalized;
@@ -901,8 +920,10 @@ async fn confirmed_evidence(
         }
         // Past finality on both providers, a missing transfer is a finality or provider fault
         // until the finality watch proves the transaction dropped and reverses the deposit.
-        (None, None) if is_final => FinalityResult::Retry(
-            RetryError::InvariantViolation,
+        (None, None) if is_final => FinalityResult::Unresolved(
+            StepOutcome::Retry {
+                error: RetryError::InvariantViolation,
+            },
             json!({
                 "stage": "finality",
                 "error": "log_absent_at_finality",
@@ -911,12 +932,18 @@ async fn confirmed_evidence(
             }),
         ),
         // Before finality the transaction may be re-included; the finality watch follows it.
-        (None, None) => FinalityResult::Wait(json!({
-            "stage": "finality",
-            "result": "transfer_absent",
-            "provider_a_receipt": receipt_block(&primary_receipt),
-            "provider_b_receipt": receipt_block(&secondary_receipt),
-        })),
+        (None, None) => {
+            let evidence = json!({
+                "stage": "finality",
+                "result": "transfer_absent",
+                "provider_a_receipt": receipt_block(&primary_receipt),
+                "provider_b_receipt": receipt_block(&secondary_receipt),
+            });
+            FinalityResult::Unresolved(
+                confirmation_wait(confirmations, evidence.clone()).outcome,
+                evidence,
+            )
+        }
         (primary, secondary) => {
             tracing::warn!(
                 tags.alert = "TopupRpcDisagreement",

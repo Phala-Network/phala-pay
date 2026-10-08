@@ -36,8 +36,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   returns retryable `503 price_unavailable`; the twelve-second reuse limit is unchanged.
   Production and staging share provider free quotas: their operational deposit allocations are
   60/day and 20/day respectively. Keep hourly dual custody on every routed chain/token pair;
-  the parallel budget also requires staging to allocate at most one attached-pending refund
-  despite the common code ceiling of two per environment.
+  the required positive `max_attached_pending_refunds` deployment setting enforces production's
+  limit of two attached-pending refunds and staging's limit of one per environment.
 - Remove RPC recovery/resume commands, member pools, review sweeps, single-source backstops and
   custom head-poll flags. The expand-only migration preserves rollback to the prior stable
   release, whose RPC frozen/anchor/recovery state must be resolved before starting this version.
@@ -69,7 +69,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Changed
 
-- Unresolved deposit finality checks back off from every minute for the first ten minutes due,
+- Confirm and finality-watch checks of absent transfers share durable once-only unresolved entry
+  timestamps and the one-minute/ten-minute/hourly schedule. Due unresolved deposits at the
+  persisted finality checkpoint are checked only by the watcher; agreed positive transfer evidence
+  returns provisional correction and valuation to confirm, retaining unresolved entry history.
+  Coverage freezes immediately when dual-agreed boundary hashes contradict persisted checkpoint
+  or coverage evidence. Refund concurrency is a required positive deployment setting (production
+  2, staging 1); the one-new-attachment rolling-24-hour limit and reservation safety are unchanged.
+
+- Unresolved deposit finality checks back off from every minute for the first ten minutes unresolved,
   to every ten minutes until six hours, then hourly; normal newly due finalization and the
   one-hour pending-after-reorg alert are unchanged. Only one service-known replacement candidate
   may be read on both endpoints; multiple candidates alert and keep the deposit unresolved.
@@ -92,8 +100,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   address backfill extend these bounds. Custody remains hourly and coverage-pinned, so a newly
   finalized discrepancy can take about 130 minutes plus RPC time to freeze the chain. Chain-time
   quote eligibility is unchanged; later processing can change fresh valuation and sanctions results.
-- **Breaking:** Each environment admits at most two attached-pending refunds and one new refund
-  transaction attachment per rolling 24 hours across all merchants and modes. `mark_paid` returns
+- **Breaking:** Each environment enforces its configured attached-pending refund cap (production
+  two, staging one) and admits one new refund transaction attachment per rolling 24 hours across all merchants and modes. `mark_paid` returns
   non-retryable `422 refund_attachment_limit_exceeded` when either limit would be exceeded; contact
   the operator before sending or attaching another payout. Refusals keep the pending reservation,
   idempotent repeats consume no quota, and existing attachments continue dual-source verification.

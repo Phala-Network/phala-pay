@@ -365,6 +365,17 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     if a != b {
         return Err(ScannerError::Disagreement);
     }
+    if (end == checkpoint.number && a.0 != checkpoint.hash)
+        || (end == cursor.number && a.0 != cursor.hash)
+    {
+        chain_reads::freeze(pool, chain, "finalized_checkpoint_conflict").await?;
+        tracing::error!(
+            tags.alert = "TopupFinalizedCheckpointConflict",
+            chain_id = chain,
+            "stored coverage boundary hash changed; chain frozen"
+        );
+        return Err(ScannerError::Disagreement);
+    }
     let chain_key = i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?;
     let address_snapshot: Vec<(uuid::Uuid, i64, Option<i64>)> = sqlx::query_as(
         "SELECT id,created_block,dual_covered_through FROM addresses WHERE chain_id=$1 ORDER BY id",

@@ -75,6 +75,8 @@ pub struct AppState {
     pub pool: PgPool,
     /// Attested route configurations.
     pub routes: Arc<RouteSet>,
+    /// Positive deployment-wide admission cap; staging uses 1 and production 2.
+    pub max_attached_pending_refunds: std::num::NonZeroU32,
     /// Separately configured administrative verification key.
     pub admin_key: VerificationKey,
     /// Least-privilege signing keys for POST instance pause/resume only.
@@ -831,6 +833,8 @@ mod tests {
         let admin_key = SigningKey::from_bytes(&[1; 32]);
         AppState {
             pool,
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::default(),
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(

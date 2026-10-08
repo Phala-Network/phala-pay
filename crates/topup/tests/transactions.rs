@@ -231,6 +231,7 @@ async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<
     let queue = Arc::new(HintQueue::default());
     let state = AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         routes: routes.clone(),
         admin_key: topup::api::VerificationKey::from_base64(
             "hint/admin".into(),

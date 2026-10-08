@@ -890,6 +890,8 @@ impl FastChain {
         let client_reads = Arc::new(ClientReadLimiter::default());
         let api = topup::api::router(AppState {
             pool: pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: route_set,
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(

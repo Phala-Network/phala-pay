@@ -31,8 +31,6 @@ use super::models::{
     ReconciliationBlockReport, RouteDailyReport,
 };
 
-/// Environment-wide hard bounds on refund verification load, shared by all accounts and modes.
-pub const MAX_ATTACHED_PENDING_REFUNDS: i64 = 2;
 /// New attachments in a rolling 24-hour window, including refunds already resolved.
 pub const MAX_REFUND_ATTACHMENTS_PER_DAY: i64 = 1;
 
@@ -582,9 +580,11 @@ fn refund_subject(refund_id: Uuid) -> String {
 /// it at finality. Repeating the same transaction is a no-op; another one is
 /// `refund_unexpected_state`, since only the verification outcome ends a refund with a
 /// transaction attached. Audited, and announced as `refund.updated`.
+#[allow(clippy::too_many_arguments)]
 pub async fn mark_refund_paid<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     routes: &RouteSet,
+    max_attached_pending_refunds: std::num::NonZeroU32,
     scope: Scope,
     refund_id: Uuid,
     tx_hash: B256,
@@ -595,6 +595,7 @@ pub async fn mark_refund_paid<'c>(
     let result = mark_refund_paid_in(
         &mut transaction,
         routes,
+        max_attached_pending_refunds,
         scope,
         refund_id,
         tx_hash,
@@ -605,9 +606,11 @@ pub async fn mark_refund_paid<'c>(
     crate::db::settle(transaction, result).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mark_refund_paid_in(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     routes: &RouteSet,
+    max_attached_pending_refunds: std::num::NonZeroU32,
     scope: Scope,
     refund_id: Uuid,
     tx_hash: B256,
@@ -657,7 +660,7 @@ async fn mark_refund_paid_in(
     )
     .fetch_one(&mut **transaction)
     .await?;
-    if pending >= MAX_ATTACHED_PENDING_REFUNDS {
+    if pending >= i64::from(max_attached_pending_refunds.get()) {
         return Err(ApiError::refund_attachment_limit_exceeded(
             "the environment's attached-pending refund limit is reached; contact the operator",
         ));

@@ -96,7 +96,7 @@ async fn run_refuses_an_incomplete_payment_settings_cutover() -> Result<()> {
                 .await?;
             let route = FIXTURE.lines().map(|line| format!("    {line}")).collect::<Vec<_>>().join("\n");
             let config = format!(
-                "environment: staging\npublic_origin: http://127.0.0.1:8080\nadmin_key:\n  id: admin/v1\n  \
+                "environment: staging\nmax_attached_pending_refunds: 2\npublic_origin: http://127.0.0.1:8080\nadmin_key:\n  id: admin/v1\n  \
                  public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n{rpc}\nroutes:\n  -\n{route}\n",
                 rpc = include_str!("fixtures/chain-rpc.yaml")
             );
@@ -334,7 +334,7 @@ fn config_yaml(
             );
     }
     format!(
-        "environment: staging\npublic_origin: http://127.0.0.1:8080\nadmin_key:\n  id: admin/v1\n  public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n{rpc}\nroutes:\n  -\n{route}\n"
+        "environment: staging\nmax_attached_pending_refunds: 2\npublic_origin: http://127.0.0.1:8080\nadmin_key:\n  id: admin/v1\n  public_key: 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n{rpc}\nroutes:\n  -\n{route}\n"
     )
 }
 

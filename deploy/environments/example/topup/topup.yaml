@@ -1,6 +1,7 @@
 # A generic topup configuration (docs/configuration.md): replace every placeholder, which preflight
 # refuses: the example hosts and the example admin key.
 environment: production                   # the Sentry environment
+max_attached_pending_refunds: 2
 public_origin: https://pay-api.example.com # the API's one public origin: dstack-ingress's DOMAIN
 admin_key:                                # from `topup-sdk keygen`; the seed never leaves its machine
   id: admin/production-v1
