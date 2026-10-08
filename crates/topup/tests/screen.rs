@@ -541,13 +541,13 @@ async fn set_route_pauses(pool: &PgPool, scopes: &[&str]) -> Result<()> {
 }
 
 async fn transition_evidence(pool: &PgPool, deposit_id: Uuid) -> Result<Value> {
-    Ok(
-        sqlx::query("SELECT evidence FROM transitions WHERE deposit_id = $1 ORDER BY created_at DESC LIMIT 1")
-            .bind(deposit_id)
-            .fetch_one(pool)
-            .await?
-            .try_get("evidence")?,
+    Ok(sqlx::query(
+        "SELECT evidence FROM transitions WHERE deposit_id = $1 ORDER BY created_at DESC LIMIT 1",
     )
+    .bind(deposit_id)
+    .fetch_one(pool)
+    .await?
+    .try_get("evidence")?)
 }
 
 fn set_sanctioned(
