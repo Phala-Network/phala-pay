@@ -17,7 +17,7 @@ use sqlx::{AssertSqlSafe, PgPool, Row};
 use topup::db::{
     self, ApplyTransitionResult, EventObject, NewDeposit, OutboxEvent, TransitionUpdate,
 };
-use topup::reconciler::{CheckName, Reconciler, ReconciliationChain};
+use topup::reconciler::{CheckName, Reconciler, ReconciliationChain, ReconciliationError};
 use topup::{heartbeat, restore};
 use topup_core::deposit::{DepositState, StepOutcome, WaitReason, next};
 use topup_core::identity::deposit_id;
@@ -314,8 +314,8 @@ async fn restore_check_rejects_failed_rpc_with_current_schema_and_fresh_heartbea
             assert_session_budgets(&restore_pool, ("5min", "30s", "5min")).await?;
             let heartbeat = heartbeat::record(&context.app_pool).await?;
 
-            seed::initialize_dual_chain(&context.owner_pool, 1).await?;
-            seed_account(&context.app_pool, 11).await?;
+            let seed = seed_restore_account(&context.app_pool, 11).await?;
+            seed_restore_custody(&context.owner_pool, &seed, 11).await?;
             let reconciler = restore_reconciler(&restore_pool)?;
             let expectations = restore_expectations(&heartbeat);
             let report = restore::check(&restore_pool, &expectations, &reconciler)
@@ -342,6 +342,9 @@ async fn restore_check_rejects_failed_rpc_with_current_schema_and_fresh_heartbea
             ensure!(report.row_counts.get("heartbeat") == Some(&1));
             ensure!(report.post_restore_reconciliation.status == "incomplete");
             ensure!(
+                report.post_restore_reconciliation.failed_checks == vec![CheckName::CustodyBalance]
+            );
+            ensure!(
                 !report
                     .post_restore_reconciliation
                     .findings
@@ -361,7 +364,7 @@ async fn restore_check_without_a_source_lsn_flags_heartbeat_only_rpo() -> Result
         Box::pin(async move {
             let heartbeat = heartbeat::record(&context.app_pool).await?;
             seed::initialize_dual_chain(&context.owner_pool, 1).await?;
-            seed_account(&context.app_pool, 11).await?;
+            seed_restore_account(&context.app_pool, 11).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore::RestoreExpectations {
                 failure_at: Some(heartbeat.recorded_at),
@@ -370,7 +373,8 @@ async fn restore_check_without_a_source_lsn_flags_heartbeat_only_rpo() -> Result
             let report = restore::check(&context.owner_pool, &expectations, &reconciler)
                 .await
                 .map_err(anyhow::Error::msg)?;
-            ensure!(report.status == "incomplete");
+            ensure!(report.status == "ok");
+            ensure!(report.post_restore_reconciliation.status == "complete");
             ensure!(report.rpo_basis == "heartbeat_only");
             let encoded = serde_json::to_value(&report)?;
             ensure!(encoded["failure_at"] == serde_json::to_value(heartbeat.recorded_at)?);
@@ -389,7 +393,7 @@ async fn restore_check_at_boot_reports_an_unanchored_rpo() -> Result<()> {
         Box::pin(async move {
             let heartbeat = heartbeat::record(&context.app_pool).await?;
             seed::initialize_dual_chain(&context.owner_pool, 1).await?;
-            seed_account(&context.app_pool, 11).await?;
+            seed_restore_account(&context.app_pool, 11).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore::RestoreExpectations {
                 failure_at: None,
@@ -398,7 +402,8 @@ async fn restore_check_at_boot_reports_an_unanchored_rpo() -> Result<()> {
             let report = restore::check(&context.owner_pool, &expectations, &reconciler)
                 .await
                 .map_err(anyhow::Error::msg)?;
-            ensure!(report.status == "incomplete");
+            ensure!(report.status == "ok");
+            ensure!(report.post_restore_reconciliation.status == "complete");
             ensure!(report.rpo_basis == "unanchored");
             ensure!(report.measured_rpo_seconds.is_none());
             ensure!(report.restored_heartbeat_at == heartbeat.recorded_at);
@@ -437,19 +442,35 @@ async fn application_role_can_only_append_heartbeats() -> Result<()> {
     .await
 }
 
-/// Chain double for a restore check run without chain access; only alert-only checks use it.
+/// Chain double that fails the remaining RPC-dependent custody check.
 struct UnavailableChain;
 
 #[async_trait]
-impl ReconciliationChain for UnavailableChain {}
+impl ReconciliationChain for UnavailableChain {
+    async fn token_balances_pinned(
+        &self,
+        _token: Address,
+        _addresses: &[Address],
+        _hash: B256,
+    ) -> Result<Vec<U256>, ReconciliationError> {
+        Err(ReconciliationError::Chain(
+            "balance endpoint unavailable".into(),
+        ))
+    }
+}
 
-fn restore_reconciler(pool: &PgPool) -> Result<Reconciler> {
+fn restore_route() -> Result<RouteFile> {
     let mut route: RouteFile =
         serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml"))?;
     route.chain.rpc_providers = vec![
         "http://127.0.0.1:8546".to_owned(),
         "http://localhost:8546".to_owned(),
     ];
+    Ok(route)
+}
+
+fn restore_reconciler(pool: &PgPool) -> Result<Reconciler> {
+    let route = restore_route()?;
     let chain_id = route.chain.chain_id;
     Ok(Reconciler::with_dependencies(
         pool.clone(),
@@ -461,13 +482,57 @@ fn restore_reconciler(pool: &PgPool) -> Result<Reconciler> {
     ))
 }
 
+async fn seed_restore_account(pool: &PgPool, number: u8) -> Result<Seed> {
+    let route = restore_route()?;
+    let account = seed_account_without_address(pool, number).await?;
+    let salt = b256(number);
+    let physical = topup_core::address::forwarder_address(
+        route.chain.contracts.forwarder_factory,
+        route.chain.contracts.implementation,
+        seed::FIXTURE_TREASURY,
+        salt,
+    );
+    let mut address = new_address(account.customer_id, 1, physical, number);
+    address.route = route.route;
+    seed::insert_address(pool, &address).await?;
+    Ok(Seed {
+        account_id: account.account_id,
+        customer_id: account.customer_id,
+        address_id: address.id,
+    })
+}
+
+/// Gives custody an indexed, finalized, nonzero balance to read on both endpoints.
+async fn seed_restore_custody(pool: &PgPool, seed: &Seed, number: u8) -> Result<Uuid> {
+    let route = restore_route()?;
+    let mut deposit = new_deposit(seed.address_id, 1, number, 0);
+    deposit.route = Some(route.route);
+    deposit.asset_contract = route.asset.contract;
+    deposit.amount_atomic = AtomicAmount::new(U256::from(10_u64).pow(U256::from(19_u8)));
+    let boundary = db::chain_reads::Boundary {
+        number: deposit.block_number,
+        hash: deposit.block_hash,
+        time: deposit.block_time,
+    };
+    db::chain_reads::initialize_coverage(pool, 1, boundary).await?;
+    db::chain_reads::advance_checkpoint(pool, 1, boundary).await?;
+    sqlx::query("UPDATE addresses SET backfilled = true, dual_covered_through = $2 WHERE id = $1")
+        .bind(seed.address_id)
+        .bind(i64::try_from(boundary.number)?)
+        .execute(pool)
+        .await?;
+    let id = deposit_id(deposit.chain_id, deposit.tx_hash, deposit.log_index);
+    ensure!(db::insert_deposit(pool, &deposit).await?);
+    Ok(id)
+}
+
 #[tokio::test]
 async fn restore_check_asks_the_product_nothing_and_keeps_recorded_credits() -> Result<()> {
     with_database(|context| {
         Box::pin(async move {
             let heartbeat = heartbeat::record(&context.app_pool).await?;
-            let seed = seed_account(&context.app_pool, 3).await?;
-            let credited = insert_numbered_deposit(&context.app_pool, &seed, 3).await?;
+            let seed = seed_restore_account(&context.app_pool, 3).await?;
+            let credited = seed_restore_custody(&context.owner_pool, &seed, 3).await?;
             sqlx::query(
                 "UPDATE deposits SET state = 'credited', valuation_at = now(), \
                  price_scaled = 25000000, price_source = 'spot', credit_minor = 250 WHERE id = $1",
@@ -475,7 +540,6 @@ async fn restore_check_asks_the_product_nothing_and_keeps_recorded_credits() -> 
             .bind(credited)
             .execute(&context.owner_pool)
             .await?;
-            seed::initialize_dual_chain(&context.owner_pool, 1).await?;
             let reconciler = restore_reconciler(&context.owner_pool)?;
             let expectations = restore_expectations(&heartbeat);
 
@@ -493,13 +557,13 @@ async fn restore_check_asks_the_product_nothing_and_keeps_recorded_credits() -> 
                 report
                     .post_restore_reconciliation
                     .failed_checks
-                    .contains(&CheckName::AddressDerivation)
+                    .contains(&CheckName::CustodyBalance)
             );
             ensure!(
                 report
                     .failures
                     .iter()
-                    .any(|failure| failure.contains("address_derivation"))
+                    .any(|failure| failure.contains("custody_balance"))
             );
             let deposit = db::get_deposit(&context.app_pool, credited)
                 .await?
