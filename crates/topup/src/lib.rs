@@ -12,6 +12,10 @@
     )
 )]
 
+// Match the development signer guard: fixture endpoints must never ship in release builds.
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("the test-support feature must not be enabled in release builds");
+
 pub mod api;
 pub mod api_keys;
 pub mod audit;
@@ -41,6 +45,7 @@ pub mod restore;
 pub mod restore_mode;
 pub mod routes;
 pub mod rpc_provider;
+pub mod sanctions;
 pub mod scanner;
 pub mod steps;
 pub mod tenancy;
@@ -50,3 +55,9 @@ pub mod webhook_keys;
 
 /// Typed read/verify endpoint self-tests and checkpoint initialization.
 pub mod rpc_runtime;
+
+#[cfg(test)]
+extern crate self as topup;
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;

@@ -8,6 +8,7 @@ pub mod metrics;
 mod redaction;
 mod reporting;
 mod request;
+pub mod sanctions_metrics;
 mod spans;
 mod status;
 

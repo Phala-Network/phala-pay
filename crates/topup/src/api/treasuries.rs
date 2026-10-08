@@ -446,7 +446,7 @@ pub(crate) fn treasury_object(treasury: &treasuries::Treasury) -> Treasury {
     }
 }
 
-/// A current route of the mode on `chain_id`, whose sanctions oracle screens the treasury.
+/// A current route of the mode on `chain_id` used to screen the treasury.
 fn chain_route(state: &AppState, livemode: bool, chain_id: u64) -> ApiResult<&RouteFile> {
     state
         .routes

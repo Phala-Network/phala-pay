@@ -4,6 +4,7 @@ This file must pass `deploy/runbooks/check.sh`. It covers command shapes that ar
 misclassify; it is not an operator runbook.
 
 ```sh
+cargo run --release --locked -p topup --example inspect_sdn -- /path/to/SDN.XML
 cargo test --locked -p topup --test refunds refund_flow -- --nocapture
 docker compose -f deploy/docker-compose.staging.yml exec -T topup topup restore-check
 docker compose -f deploy/docker-compose.staging.yml exec -T postgres psql -c "SELECT 'topup bogus'"

@@ -35,8 +35,8 @@ export const FAQ = [
   { question: "How fast is a payment credited?", answer: "At the chain's confirmation: about 7 seconds on Base and about 30 seconds on Ethereum. The deposit is then watched to finality (about 15 minutes on Ethereum); if a reorg replaces it, you receive a deposit.reversed event." },
   { question: "How do refunds work?", answer: "You send the refund from your own wallet or Safe and declare it through the API. Phala Pay verifies the transfer on-chain at finality and sends deposit.refunded so your ledger stays correct." },
   { question: "Is there a hosted version?", answer: "No public hosted service. You run your own instance on your own Phala Cloud workspace, with a one-command testnet quick start. Phala runs an instance only for Phala Cloud." },
-  { question: "What is the security model?", answer: "The service runs in an Intel TDX confidential VM whose attestation you can verify. Payments are confirmed by two independent RPC providers, and payers are screened against sanctions lists. Phala Pay is pre-1.0 and has not had a third-party security audit." },
-  { question: "Do I need KYC or a merchant account?", answer: "Phala Pay has no signup and does not onboard you. You run the instance and decide your own compliance obligations; it screens payers against sanctions lists and leaves KYC to you." },
+  { question: "What is the security model?", answer: "The service runs in an Intel TDX confidential VM whose attestation you can verify. Payments are confirmed by two independent RPC providers, and payers are screened against verified OFAC SDN snapshots and operator supplements. Phala Pay is pre-1.0 and has not had a third-party security audit." },
+  { question: "Do I need KYC or a merchant account?", answer: "Phala Pay has no signup and does not onboard you. You run the instance and decide your own compliance obligations; it screens payers against verified OFAC SDN snapshots and operator supplements and leaves KYC to you." },
 ];
 
 export const HOME_KEYWORDS = "non-custodial crypto payment gateway, self-hosted crypto payments, accept USDC payments API, crypto top-up API";

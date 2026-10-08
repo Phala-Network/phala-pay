@@ -670,7 +670,9 @@ evidence](#custom-domain), and that PostgreSQL and topup's port 8080 are unreach
 API verifies every signed `@target-uri` against `public_origin`, so a correctly signed
 admin request answered `401` usually means the URL differs from it. **Egress** (HUMAN-ONLY, cloud network
 authority; dstack has no hostname allow-list): restrict outbound traffic to the RPC providers' hosts,
-the price sources, the object storage host, the Sentry ingest host, DNS, the Phala/dstack
+the price sources, `sanctionslistservice.ofac.treas.gov`,
+`wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com`, the object storage host,
+the Sentry ingest host, DNS, the Phala/dstack
 platform endpoints, and public addresses on ports 443 and 80 for webhooks (merchants register
 their own endpoints, so their hosts cannot be listed; [webhook egress](#webhook-egress) filters
 the addresses), and record the rules.
@@ -980,3 +982,6 @@ attestation and health convergence <=600 seconds each. Each call is capped by re
 time, with TERM and a two-second KILL grace. Poll sleeps cannot extend the stage. Diagnostics
 name the stage, elapsed/remaining seconds and exit status without credentials. Contract and
 release verification remain mandatory and are also bounded by workflow step deadlines.
+
+OFAC SLS host or publication contract changes fail closed: verification does not advance,
+and stale negative decisions hold. See the [sanctions runbook](runbooks/sanctions-list.md).

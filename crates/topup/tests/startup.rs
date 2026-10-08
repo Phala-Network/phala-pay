@@ -132,6 +132,8 @@ async fn run_refuses_an_incomplete_payment_settings_cutover() -> Result<()> {
 }
 
 /// A migrated database starts the pumps and advances its scanner without an operator action.
+/// The full service needs the loopback-only SLS fixture (CI tests all features).
+#[cfg(feature = "test-support")]
 #[tokio::test]
 async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
     support::with_database(|database| {
@@ -164,17 +166,11 @@ async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
                     &format!("{oracle:#x}"),
                 );
             // The guest-agent stub uses the same documented /GetKey contract as dstack_domains.
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-            let endpoint = format!("http://{}", listener.local_addr()?);
-            let guest = axum::Router::new().route(
-                "/GetKey",
-                axum::routing::post(|| async {
-                    axum::Json(
-                        serde_json::json!({"key": hex::encode([1; 32]), "signature_chain": []}),
-                    )
-                }),
-            );
-            let guest_task = tokio::spawn(async move { axum::serve(listener, guest).await });
+            let fixture = support::sanctions::Fixture::with_routes(include_str!("fixtures/sdn.xml"),
+                axum::Router::new().route("/GetKey", axum::routing::post(|| async {
+                    axum::Json(serde_json::json!({"key": hex::encode([1;32]), "signature_chain": []}))
+                }))).await?;
+            let endpoint = fixture.origin.clone();
             let result = async {
                 let mut service = StartupService::start(
                     &config,
@@ -210,8 +206,7 @@ async fn recording_starts_immediately_on_a_migrated_database() -> Result<()> {
                 Ok(())
             }
             .await;
-            guest_task.abort();
-            let _ = guest_task.await;
+            drop(fixture);
             result
         })
     })
@@ -257,6 +252,8 @@ impl StartupService {
             }
             if let Some(endpoint) = endpoint {
                 command.env("DSTACK_SIMULATOR_ENDPOINT", endpoint);
+                #[cfg(feature = "test-support")]
+                command.env("TOPUP_TEST_SLS_ORIGIN", endpoint);
             }
             if let Some(key) = rpc_key {
                 command
@@ -308,6 +305,7 @@ fn route_yaml(anvil: &Anvil, factory: Address, treasury: &str) -> String {
 }
 
 /// The service configuration of `route_yaml`, its two providers configured by id.
+#[cfg(feature = "test-support")]
 fn config_yaml(
     factory: Address,
     treasury: &str,

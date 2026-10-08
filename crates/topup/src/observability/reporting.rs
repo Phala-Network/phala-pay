@@ -204,6 +204,10 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         "TopupLockExpiryFailing" => "lock-expiry-worker-failure.md",
         "TopupLockExposureNearCap" => "lock-exposure-near-cap.md",
         "TopupUnsupportedInflows" => "rejected-funds-at-treasury.md",
+        "TopupSanctionsListStale"
+        | "TopupSanctionsListVerifyFailed"
+        | "TopupSanctionsRescreenFailed"
+        | "TopupRefundDestinationSanctioned" => "sanctions-list.md",
         "TopupTreasurySanctioned" => "treasury-change.md#sanctioned-treasury",
         "TopupDepositReversed" | "TopupDepositPendingAfterReorg" => "deposit-reversed.md",
         _ => "README.md#alert-and-symptom-index",
@@ -268,6 +272,19 @@ pub struct CronMonitor {
 }
 
 impl CronMonitor {
+    /// Hourly official sanctions publication verification.
+    pub fn sanctions() -> Self {
+        let mut monitor = Self::new(
+            "topup-sanctions-refresh".to_owned(),
+            MonitorSchedule::Interval {
+                value: 1,
+                unit: MonitorIntervalUnit::Hour,
+            },
+            5,
+        );
+        monitor.config.failure_issue_threshold = Some(6);
+        monitor
+    }
     /// Fast discovery: one completed round per minute, with a two-minute missed-check-in margin.
     #[must_use]
     pub fn fast_scanner(chain_id: u64) -> Self {

@@ -1,0 +1,3 @@
+-- Intentionally retain verified evidence and manual entries on binary rollback.
+-- N-1 uses the deprecated oracle and cannot see manual entries. Pause settlement on
+-- affected routes before rolling back; see deploy/runbooks/sanctions-list.md.

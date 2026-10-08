@@ -30,5 +30,5 @@ export OWNER_DATABASE_URL="postgres://postgres:drill@127.0.0.1:$port/postgres"
 export DATABASE_URL="postgres://topup_ci:topup_ci@127.0.0.1:$port/postgres"
 # The round trip submits a real hint-recorded deposit and interrupts an unmined in-memory task.
 # N-1 preserves the positive deposit and verification marker without touching the hint budget.
-timeout --kill-after=10 1800 cargo test --locked -p topup --test rollback_drill \
+timeout --kill-after=10 1800 cargo test --locked -p topup --features test-support --test rollback_drill \
     published_image_round_trip -- --ignored --exact --nocapture

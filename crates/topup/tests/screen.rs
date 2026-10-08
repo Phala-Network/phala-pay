@@ -21,7 +21,7 @@ use topup_core::deposit::{DepositState, RejectReason, RetryError, StepOutcome, W
 use topup_core::identity::{credited_event_id, deposit_id, event_id};
 use topup_core::money::AtomicAmount;
 use topup_core::route::{Bounded, RouteFile};
-use topup_core::screening::{SanctionsAnswer, SanctionsResult};
+use topup_core::screening::{SanctionsResult, SanctionsVerdict};
 use uuid::Uuid;
 
 use support::chain::{ANVIL_PRIVATE_KEY, Anvil, forge_create};
@@ -34,18 +34,13 @@ struct MockSanctionsSource {
 
 #[async_trait]
 impl SanctionsSource for MockSanctionsSource {
-    async fn sanctions(&self, address: Address, block_number: u64) -> SanctionsResult {
+    async fn sanctions(&self, address: Address, _block_number: u64) -> SanctionsResult {
         let answer = if address == self.sanctioned {
-            SanctionsAnswer::Sanctioned
+            SanctionsVerdict::Sanctioned
         } else {
-            SanctionsAnswer::Clear
+            SanctionsVerdict::Clear
         };
-        SanctionsResult {
-            block_hash: None,
-            provider_a: answer,
-            provider_b: answer,
-            block_number,
-        }
+        topup_core::screening::SanctionsResult::new(answer)
     }
 }
 
@@ -126,12 +121,12 @@ async fn postgres_pump_persists_screening_transitions_pauses_and_outbox() -> Res
             ensure!(rejected.reason == Some(RejectReason::Sanctioned));
 
             let clear_evidence = transition_evidence(&context.app_pool, clear_id).await?;
-            ensure!(clear_evidence["provider_a"] == "clear");
-            ensure!(clear_evidence["block_number"] == block_number);
+            ensure!(clear_evidence["sanctions"] == "clear");
+            ensure!(clear_evidence.get("block_number").is_none());
             ensure!(clear_evidence["pause_scopes"]["route"] == serde_json::json!([]));
             let rejected_evidence = transition_evidence(&context.app_pool, sanctioned_id).await?;
-            ensure!(rejected_evidence["provider_a"] == "sanctioned");
-            ensure!(rejected_evidence["oracle"] == format!("{:#x}", Address::repeat_byte(9)));
+            ensure!(rejected_evidence["sanctions"] == "sanctioned");
+            ensure!(rejected_evidence.get("oracle").is_none());
 
             // Each event names its account, mode, and deposit; its data, the deposit's API
             // representation, is rendered in the transaction that records the transition.
@@ -196,8 +191,8 @@ async fn anvil_oracle_uses_current_canonical_pins_and_maps_live_results() -> Res
         oracle,
     )?);
     let before = source.sanctions(account, recorded_block).await;
-    ensure!(before.provider_a == SanctionsAnswer::Clear);
-    ensure!(before.provider_b == SanctionsAnswer::Clear);
+    ensure!(before.verdict == SanctionsVerdict::Clear);
+    ensure!(before.verdict == SanctionsVerdict::Clear);
 
     set_sanctioned(&rpc_url, oracle, account, true)?;
     let latest_block = current_block(&rpc_url)?;
@@ -205,10 +200,10 @@ async fn anvil_oracle_uses_current_canonical_pins_and_maps_live_results() -> Res
     ensure!(latest_block > recorded_block);
     let historical = source.sanctions(account, recorded_block).await;
     let latest = source.sanctions(account, latest_block).await;
-    ensure!(historical.provider_a == SanctionsAnswer::Sanctioned);
-    ensure!(historical.provider_b == SanctionsAnswer::Sanctioned);
-    ensure!(latest.provider_a == SanctionsAnswer::Sanctioned);
-    ensure!(latest.provider_b == SanctionsAnswer::Sanctioned);
+    ensure!(historical.verdict == SanctionsVerdict::Sanctioned);
+    ensure!(historical.verdict == SanctionsVerdict::Sanctioned);
+    ensure!(latest.verdict == SanctionsVerdict::Sanctioned);
+    ensure!(latest.verdict == SanctionsVerdict::Sanctioned);
 
     with_database(|context| {
         let rpc_url = rpc_url.clone();
@@ -229,12 +224,7 @@ async fn anvil_oracle_uses_current_canonical_pins_and_maps_live_results() -> Res
                 .context("historical deposit")?;
             let old_result = step.run(&old_deposit).await;
             ensure!(old_result.outcome == StepOutcome::Reject(RejectReason::Sanctioned));
-            ensure!(
-                old_result.evidence["block_number"]
-                    .as_u64()
-                    .is_some_and(|pin| pin >= latest_block)
-            );
-            ensure!(old_result.evidence["provider_a"] == "sanctioned");
+            ensure!(old_result.evidence["sanctions"] == "sanctioned");
 
             let latest_deposit = db::get_deposit(&context.app_pool, latest_id)
                 .await?
@@ -243,8 +233,8 @@ async fn anvil_oracle_uses_current_canonical_pins_and_maps_live_results() -> Res
             ensure!(rejected.outcome == StepOutcome::Reject(RejectReason::Sanctioned));
             ensure!(rejected.events.len() == 1);
             ensure!(rejected.events[0].event_type == "deposit.rejected");
-            ensure!(rejected.evidence["provider_a"] == "sanctioned");
-            ensure!(rejected.evidence["provider_b"] == "sanctioned");
+            ensure!(rejected.evidence["sanctions"] == "sanctioned");
+            ensure!(rejected.evidence["sanctions"] == "sanctioned");
 
             let down_source = Arc::new(SanctionsOracle::new(
                 client(&rpc_url, StdDuration::from_millis(200))?,
@@ -265,7 +255,7 @@ async fn anvil_oracle_uses_current_canonical_pins_and_maps_live_results() -> Res
                         error: RetryError::SanctionsInconclusive,
                     }
             );
-            ensure!(unavailable.evidence["error"] == "sanctions_pin_before_payment");
+            ensure!(unavailable.evidence["sanctions_hold"] == true);
             Ok(())
         })
     })
@@ -551,13 +541,13 @@ async fn set_route_pauses(pool: &PgPool, scopes: &[&str]) -> Result<()> {
 }
 
 async fn transition_evidence(pool: &PgPool, deposit_id: Uuid) -> Result<Value> {
-    Ok(
-        sqlx::query("SELECT evidence FROM transitions WHERE deposit_id = $1")
-            .bind(deposit_id)
-            .fetch_one(pool)
-            .await?
-            .try_get("evidence")?,
+    Ok(sqlx::query(
+        "SELECT evidence FROM transitions WHERE deposit_id = $1 ORDER BY created_at DESC LIMIT 1",
     )
+    .bind(deposit_id)
+    .fetch_one(pool)
+    .await?
+    .try_get("evidence")?)
 }
 
 fn set_sanctioned(
@@ -624,18 +614,12 @@ fn client(rpc_url: &str, timeout: StdDuration) -> Result<Arc<EvmClient>> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_alerts() -> Result<()>
-{
-    struct Answers(SanctionsAnswer, SanctionsAnswer);
+async fn only_clear_credits_and_inconclusive_screening_holds_retries_and_alerts() -> Result<()> {
+    struct Answers(SanctionsVerdict);
     #[async_trait]
     impl SanctionsSource for Answers {
-        async fn sanctions(&self, _: Address, block_number: u64) -> SanctionsResult {
-            SanctionsResult {
-                provider_a: self.0,
-                provider_b: self.1,
-                block_number: block_number + 1,
-                block_hash: Some(B256::repeat_byte(7)),
-            }
+        async fn sanctions(&self, _: Address, _block_number: u64) -> SanctionsResult {
+            topup_core::screening::SanctionsResult::new(self.0)
         }
     }
     with_database(|database| Box::pin(async move {
@@ -644,25 +628,24 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
         let route=screen_route("screen",Address::repeat_byte(9));
         let alerter=topup::pump::AgeAlerter::new(pool.clone(),topup::pump::AgeAlertConfig::from_routes(std::slice::from_ref(&route))?,StdDuration::from_secs(1));
         let mut number=0;let mut held=None;
-        for a in [SanctionsAnswer::Clear,SanctionsAnswer::Sanctioned,SanctionsAnswer::Unavailable] {
-            for b in [SanctionsAnswer::Clear,SanctionsAnswer::Sanctioned,SanctionsAnswer::Unavailable] {
+        for a in [SanctionsVerdict::Clear,SanctionsVerdict::Sanctioned,SanctionsVerdict::Uncertain] {
                 number+=1;
                 let id=insert_confirmed(pool,seed,number,Address::repeat_byte(number),123).await?;
-                let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route.clone(),Arc::new(Answers(a,b)))])?;
+                let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route.clone(),Arc::new(Answers(a)))])?;
                 let pump=Pump::new(pool.clone(),Arc::default(),Arc::new(wait_steps().with_confirmed(Box::new(step))),PumpConfig::default())?;
                 let attempted_at=Utc::now();
                 ensure!(pump.run_once().await?==RunOnceResult::Applied {deposit_id:id});
                 let deposit=db::get_deposit(pool,id).await?.context("screened deposit")?;
-                let expected=match (a,b) {
-                    (SanctionsAnswer::Clear,SanctionsAnswer::Clear)=>DepositState::Credited,
-                    (SanctionsAnswer::Sanctioned,SanctionsAnswer::Sanctioned)=>DepositState::Rejected,
+                let expected=match a {
+                    SanctionsVerdict::Clear=>DepositState::Credited,
+                    SanctionsVerdict::Sanctioned=>DepositState::Rejected,
                     _=>DepositState::Confirmed,
                 };
-                ensure!(deposit.state==expected,"{a:?}/{b:?} -> {:?}",deposit.state);
+                ensure!(deposit.state==expected,"{a:?} -> {:?}",deposit.state);
                 let credits:i64=sqlx::query_scalar("SELECT count(*) FROM events WHERE object_id=$1 AND type='deposit.credited'").bind(id).fetch_one(pool).await?;
                 ensure!(credits==i64::from(expected==DepositState::Credited));
                 let evidence=transition_evidence(pool,id).await?;
-                ensure!(evidence["block_hash"]==format!("{:#x}",B256::repeat_byte(7)));
+                ensure!(evidence.get("block_hash").is_none());
                 if expected==DepositState::Confirmed {
                     ensure!(deposit.attempt>0 && deposit.next_attempt_at>=attempted_at);
                     ensure!(evidence["sanctions_hold"]==true);
@@ -670,7 +653,6 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
                     held=Some(id);
                     sqlx::query("UPDATE deposits SET next_attempt_at=now()+interval '1 hour' WHERE id=$1").bind(id).execute(pool).await?;
                 }
-            }
         }
         ensure!(alerter.scan_once().await?==0,"fresh sanctions holds must not alert yet");
         let held=held.context("inconclusive case")?;
@@ -678,11 +660,46 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
         sqlx::query("UPDATE deposits SET created_at=now()-($2::bigint+1)*interval '1 second' WHERE id=$1").bind(held).bind(window).execute(&database.owner_pool).await?;
         ensure!(alerter.scan_once().await?==1);
         ensure!(logs_contain("TopupSanctionsHold"));
-        let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route,Arc::new(Answers(SanctionsAnswer::Clear,SanctionsAnswer::Clear)))])?;
+        let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route,Arc::new(Answers(SanctionsVerdict::Clear)))])?;
         let pump=Pump::new(pool.clone(),Arc::default(),Arc::new(wait_steps().with_confirmed(Box::new(step))),PumpConfig::default())?;
         sqlx::query("UPDATE deposits SET next_attempt_at=now()-interval '1 second' WHERE id=$1").bind(held).execute(pool).await?;
         ensure!(pump.run_once().await?==RunOnceResult::Applied {deposit_id:held});
         ensure!(db::get_deposit(pool,held).await?.unwrap().state==DepositState::Credited);
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn local_list_stale_holds_and_latest_hit_rejects_with_event() -> Result<()> {
+    with_database(|db| Box::pin(async move {
+        let seed=seed_account(&db.app_pool).await?;
+        let sender=Address::repeat_byte(0xaa);
+        let id=insert_confirmed(&db.app_pool,seed,80,sender,123).await?;
+        let snapshot=Uuid::new_v4();
+        sqlx::query("INSERT INTO sanctions_list_snapshots(id,source,publish_date,sha256,record_count,address_count,fetched_at,activated_at,verified_at) VALUES($1,'ofac_sdn','2026-10-05',$2,1,0,now(),now(),now()-interval '25 hours')")
+            .bind(snapshot).bind(vec![1_u8;32]).execute(&db.app_pool).await?;
+        let source=Arc::new(topup::sanctions::ListScreener::new(db.app_pool.clone(),StdDuration::from_secs(86400)));
+        let step=ScreenStep::new(db.app_pool.clone(),[ScreenRoute::new(screen_route("screen",Address::repeat_byte(9)),source)])?;
+        let pump=Pump::new(db.app_pool.clone(),Arc::default(),Arc::new(wait_steps().with_confirmed(Box::new(step))),PumpConfig::default())?;
+        ensure!(pump.run_once().await?==RunOnceResult::Applied {deposit_id:id});
+        let held=topup::db::get_deposit(&db.app_pool,id).await?.context("held deposit")?;
+        ensure!(held.state==DepositState::Confirmed);
+        let evidence=transition_evidence(&db.app_pool,id).await?;
+        ensure!(evidence["sanctions_hold"]==true && evidence["sanctions"]=="uncertain");
+        ensure!(evidence["provenance"]["snapshot_id"]==snapshot.to_string());
+        // New activation at decision time sanctions a sender whose transfer block is old.
+        let newest=Uuid::new_v4();
+        sqlx::query("INSERT INTO sanctions_list_snapshots(id,source,publish_date,sha256,record_count,address_count,fetched_at,activated_at,verified_at) VALUES($1,'ofac_sdn','2026-10-06',$2,1,1,now(),now(),now())")
+            .bind(newest).bind(vec![2_u8;32]).execute(&db.app_pool).await?;
+        sqlx::query("INSERT INTO sanctions_list_addresses(snapshot_id,sdn_uid,id_type,raw_value,evm_address) VALUES($1,1,'Digital Currency Address - BSC',$2,$3)")
+            .bind(newest).bind(format!("{sender:#x}")).bind(sender.as_slice()).execute(&db.app_pool).await?;
+        sqlx::query("UPDATE deposits SET next_attempt_at=now() WHERE id=$1").bind(id).execute(&db.app_pool).await?;
+        ensure!(pump.run_once().await?==RunOnceResult::Applied {deposit_id:id});
+        ensure!(topup::db::get_deposit(&db.app_pool,id).await?.unwrap().state==DepositState::Rejected);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM events WHERE object_id=$1 AND type='deposit.rejected'").bind(id).fetch_one(&db.app_pool).await?==1);
+        let evidence=transition_evidence(&db.app_pool,id).await?;
+        ensure!(evidence["sanctions"]=="sanctioned" && evidence["provenance"]["snapshot_id"]==newest.to_string());
+        ensure!(evidence.get("block_number").is_none());
         Ok(())
     })).await
 }

@@ -1245,7 +1245,7 @@ Idempotency-Key: "…"
 - `amount_atomic` is in token base units and defaults to the unrefunded remainder; more than the
   remainder is `400 amount_too_large`. A pending refund reserves its amount until it succeeds,
   fails, or is canceled.
-- The destination is screened against the route's sanctions oracle: a listed address is
+- The destination is screened against the newest verified OFAC SDN snapshot and active operator supplements: a listed address is
   `400 destination_sanctioned`, and `503 unavailable` means screening could not answer; retry.
 - An ineligible deposit is `400 deposit_not_refundable`; a deposit that is not final yet (about
   15 minutes after its block on Ethereum) is `400 deposit_not_final`, so nothing is paid back for
@@ -1747,3 +1747,7 @@ stands). Once the freeze lifts, send your complete configuration with `POST /v1/
 even if unchanged (§1.9): it ends the hold, and every waiting payment is decided under it. While
 held, `chains` is required (`400 parameter_missing` without it), and a parameter you leave out
 takes its default: nothing of the restored settings is carried over.
+
+Sanctions checks use the latest verified list at decision time, across all EVM chains. A positive
+hit rejects even when stale; a missing snapshot, verification older than 24h by default, or failed
+list read holds and retries. See the [sanctions runbook](../deploy/runbooks/sanctions-list.md).

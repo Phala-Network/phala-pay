@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdnList xmlns="http://tempuri.org/sdnList.xsd">
+  <publshInformation><Publish_Date>10/05/2026</Publish_Date><Record_Count>2</Record_Count></publshInformation>
+  <sdnEntry><uid>100</uid><idList>
+    <id><idType>Digital Currency Address - ETH</idType><idNumber> 0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa </idNumber></id>
+    <id><idType>Digital Currency Address - USDT</idType><idNumber>0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB</idNumber></id>
+    <id><idType>Digital Currency Address - BTC</idType><idNumber>bc1fixture</idNumber></id>
+    <id><idType>Digital Currency Address - ETH</idType><idNumber>0xmalformed</idNumber></id>
+    <id><idType>Passport</idType><idNumber>0xcccccccccccccccccccccccccccccccccccccccc</idNumber></id>
+  </idList></sdnEntry>
+  <sdnEntry><uid>200</uid><idList><id><idType>Digital Currency Address - BSC</idType><idNumber>0xdddddddddddddddddddddddddddddddddddddddd</idNumber></id></idList></sdnEntry>
+</sdnList>

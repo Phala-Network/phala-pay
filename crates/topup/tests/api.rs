@@ -1412,6 +1412,7 @@ fn app_state_with_attestor(
         hint_limits: Arc::default(),
         transaction_hints: Arc::default(),
         screening: Arc::new(support::ClearScreener),
+        sanctions_rescreen: Arc::default(),
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
     }
 }
@@ -1829,4 +1830,59 @@ async fn instance_maintenance_admission_and_expiry() -> Result<()> {
     }.await;
     database.cleanup().await?;
     result
+}
+
+#[tokio::test]
+async fn manual_sanctions_require_admin_signature_and_are_audited_atomically() -> Result<()> {
+    support::with_database(|db|Box::pin(async move {
+        let key=SigningKey::from_bytes(&[29;32]);
+        let state = app_state(db.app_pool.clone(), &key);
+        let notify = state.sanctions_rescreen.clone();
+        let app = topup::api::router(state).0;
+        let address=alloy_primitives::Address::repeat_byte(0x11);
+        let body=serde_json::to_vec(&json!({"address":format!("{address:#x}"),"reason":"reviewed fixture","source_ref":"UK:test"}))?;
+        let path="/v1/admin/sanctions/manual/add";
+        let unauthorized=app.clone().oneshot(axum::http::Request::post(path).header("content-type","application/json").body(axum::body::Body::from(body.clone()))?).await?;
+        ensure!(unauthorized.status()==StatusCode::UNAUTHORIZED);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM sanctions_manual_entries").fetch_one(&db.app_pool).await?==0);
+        let missing = app.clone().oneshot(signed_request(Method::POST,"/v1/admin/sanctions/manual/remove",body.clone(),ADMIN_KID,&key,Utc::now().timestamp())).await?;
+        ensure!(missing.status() == StatusCode::NOT_FOUND);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit WHERE action='sanctions.manual_removed'").fetch_one(&db.app_pool).await? == 0);
+        let unsigned = app.clone().oneshot(axum::http::Request::get("/v1/admin/sanctions/manual").body(Body::empty())?).await?;
+        ensure!(unsigned.status() == StatusCode::UNAUTHORIZED);
+        for (path,active,reason) in [(path,true,"initial designation"),("/v1/admin/sanctions/manual/remove",false,"designation withdrawn"),(path,true,"designation reinstated")] {
+            // Distinct audited actions need distinct signatures; an exact replay is refused.
+            let body=serde_json::to_vec(&json!({"address":format!("{address:#x}"),"reason":reason,"source_ref":"UK:test"}))?;
+            let response=app.clone().oneshot(signed_request(Method::POST,path,body.clone(),ADMIN_KID,&key,Utc::now().timestamp())).await?;
+            ensure!(response.status()==StatusCode::OK);
+            let entry_active:bool=sqlx::query_scalar("SELECT removed_at IS NULL FROM sanctions_manual_entries WHERE evm_address=$1").bind(address.as_slice()).fetch_one(&db.app_pool).await?;
+            ensure!(entry_active==active);
+            tokio::time::timeout(std::time::Duration::from_secs(1), notify.notified()).await?;
+            if !active {
+                let repeated = serde_json::to_vec(&json!({"address":format!("{address:#x}"),"reason":"already removed","source_ref":"UK:test"}))?;
+                let response = app.clone().oneshot(signed_request(Method::POST,path,repeated,ADMIN_KID,&key,Utc::now().timestamp())).await?;
+                ensure!(response.status() == StatusCode::NOT_FOUND);
+            }
+        }
+        let response = app.clone().oneshot(signed_request(Method::GET,"/v1/admin/sanctions/manual",vec![],ADMIN_KID,&key,Utc::now().timestamp())).await?;
+        ensure!(response.status() == StatusCode::OK);
+        let listed: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
+        ensure!(listed["entries"].as_array().context("manual list")?.len() == 1);
+        ensure!(listed["entries"][0]["address"] == format!("{address:#x}"));
+        ensure!(listed["entries"][0]["reason"] == "designation reinstated");
+        ensure!(listed["entries"][0]["source_ref"] == "UK:test");
+        let report = app.clone().oneshot(signed_request(Method::GET,"/v1/admin/reports/daily",vec![],ADMIN_KID,&key,Utc::now().timestamp())).await?;
+        ensure!(report.status() == StatusCode::OK);
+        let report: Value = serde_json::from_slice(&to_bytes(report.into_body(), 65536).await?)?;
+        ensure!(report["sanctions_manual_entries"] == 1);
+        let unprefixed=serde_json::to_vec(&json!({"address":"11".repeat(20),"reason":"fixture","source_ref":"UK:test"}))?;
+        let response=app.clone().oneshot(signed_request(Method::POST,path,unprefixed,ADMIN_KID,&key,Utc::now().timestamp())).await?;
+        ensure!(response.status()==StatusCode::BAD_REQUEST);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit WHERE action IN ('sanctions.manual_added','sanctions.manual_removed') AND actor_type='admin'").fetch_one(&db.app_pool).await?==3);
+        let malformed=serde_json::to_vec(&json!({"address":"0xinvalid","reason":"fixture","source_ref":"UK:test"}))?;
+        let response=app.clone().oneshot(signed_request(Method::POST,path,malformed,ADMIN_KID,&key,Utc::now().timestamp())).await?;
+        ensure!(response.status()==StatusCode::BAD_REQUEST);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit WHERE action IN ('sanctions.manual_added','sanctions.manual_removed')").fetch_one(&db.app_pool).await?==3);
+        Ok(())
+    })).await
 }

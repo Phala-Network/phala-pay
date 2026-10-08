@@ -32,7 +32,7 @@ use topup_core::identity::{
 };
 use topup_core::money::{AtomicAmount, PRICE_SCALE, ScaledPrice};
 use topup_core::route::{ChainHeads, Confirmations, RouteFile};
-use topup_core::screening::{SanctionsAnswer, SanctionsResult};
+use topup_core::screening::{SanctionsResult, SanctionsVerdict};
 use topup_core::valuation::{SourceId, UnixSeconds};
 use uuid::Uuid;
 
@@ -756,12 +756,7 @@ struct ClearSanctions;
 
 #[async_trait]
 impl SanctionsSource for ClearSanctions {
-    async fn sanctions(&self, _address: Address, block_number: u64) -> SanctionsResult {
-        SanctionsResult {
-            block_hash: None,
-            provider_a: SanctionsAnswer::Clear,
-            provider_b: SanctionsAnswer::Clear,
-            block_number,
-        }
+    async fn sanctions(&self, _address: Address, _block_number: u64) -> SanctionsResult {
+        topup_core::screening::SanctionsResult::new(SanctionsVerdict::Clear)
     }
 }

@@ -36,6 +36,8 @@ struct ConfigSpec {
     maintenance_keys: Vec<MaintenanceKeySpec>,
     rpc: Vec<ChainRpcSpec>,
     routes: Vec<RouteFile>,
+    #[serde(default)]
+    sanctions: crate::sanctions::SanctionsConfig,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -73,6 +75,8 @@ pub struct Config {
     pub rpc: Vec<ChainRpcSpec>,
     /// Every enabled route version.
     pub routes: Vec<RouteFile>,
+    /// Verified sanctions-list freshness policy.
+    pub sanctions: crate::sanctions::SanctionsConfig,
     admin_key_spec: AdminKeySpec,
     maintenance_key_specs: Vec<MaintenanceKeySpec>,
 }
@@ -97,6 +101,7 @@ struct ResolvedConfig<'a> {
     maintenance_keys: &'a Vec<MaintenanceKeySpec>,
     rpc: &'a [ChainRpcSpec],
     routes: &'a [RouteFile],
+    sanctions: &'a crate::sanctions::SanctionsConfig,
 }
 
 impl Config {
@@ -181,7 +186,9 @@ impl Config {
                 .map_err(|e| e.to_string())?;
         }
 
+        spec.sanctions.duration()?;
         Ok(Self {
+            sanctions: spec.sanctions,
             environment: spec.environment,
             public_origin,
             admin_key_id: spec.admin_key.id.clone(),
@@ -293,6 +300,7 @@ impl Config {
             maintenance_keys: &self.maintenance_key_specs,
             rpc: &self.rpc,
             routes: &self.routes,
+            sanctions: &self.sanctions,
         })
         .map(|json| json + "\n")
         .map_err(|error| format!("failed to write the configuration: {error}"))

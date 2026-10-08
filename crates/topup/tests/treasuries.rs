@@ -39,7 +39,7 @@ use topup_adapters::risk::oracle::SanctionsSource;
 use topup_core::deposit::{StepOutcome, WaitReason};
 use topup_core::money::{AtomicAmount, PRICE_SCALE, ScaledPrice};
 use topup_core::route::RouteFile;
-use topup_core::screening::{SanctionsAnswer, SanctionsResult};
+use topup_core::screening::{SanctionsResult, SanctionsVerdict};
 use tower::ServiceExt;
 
 use support::chain::{ANVIL_PRIVATE_KEY, Anvil, CHAIN_ID, forge_create_in_profile, run_checked};
@@ -1550,6 +1550,7 @@ fn app(
         hint_limits: Arc::default(),
         transaction_hints: Arc::default(),
         screening,
+        sanctions_rescreen: Arc::default(),
         contract_signatures,
     })
     .0)
@@ -1641,13 +1642,8 @@ struct ClearPayers;
 
 #[async_trait]
 impl SanctionsSource for ClearPayers {
-    async fn sanctions(&self, _address: Address, block_number: u64) -> SanctionsResult {
-        SanctionsResult {
-            block_hash: None,
-            provider_a: SanctionsAnswer::Clear,
-            provider_b: SanctionsAnswer::Clear,
-            block_number,
-        }
+    async fn sanctions(&self, _address: Address, _block_number: u64) -> SanctionsResult {
+        topup_core::screening::SanctionsResult::new(SanctionsVerdict::Clear)
     }
 }
 
@@ -1662,4 +1658,31 @@ impl ContractSignatures for NoContracts {
     async fn verify(&self, _: u64, _: Address, _: B256, _: Bytes) -> ContractAnswer {
         ContractAnswer::NotDeployed
     }
+}
+
+#[tokio::test]
+async fn activated_list_rescreens_current_and_pending_before_timelock() -> Result<()> {
+    with_database(|db|Box::pin(async move {
+        let fixture=Fixture::new(&db.app_pool,Contracts::None).await?;
+        let first=PrivateKeySigner::random();
+        let next=PrivateKeySigner::random();
+        fixture.prove(&fixture.live_key,1,&first).await?;
+        let (_,pending)=fixture.prove(&fixture.live_key,1,&next).await?;
+        ensure!(pending["status"]=="pending");
+        let snapshot=uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO sanctions_list_snapshots(id,source,publish_date,sha256,record_count,address_count,fetched_at,activated_at,verified_at) VALUES($1,'ofac_sdn','2026-10-06',$2,1,2,now(),now(),now())").bind(snapshot).bind(vec![1_u8;32]).execute(&db.app_pool).await?;
+        for address in [first.address(),next.address()] {
+            sqlx::query("INSERT INTO sanctions_list_addresses(snapshot_id,sdn_uid,id_type,raw_value,evm_address) VALUES($1,1,'Digital Currency Address - USDT',$2,$3)")
+                .bind(snapshot).bind(format!("{address:#x}")).bind(address.as_slice()).execute(&db.app_pool).await?;
+        }
+        let routes=fixture.route_set()?;
+        let screener=topup::sanctions::ListScreener::new(db.app_pool.clone(),std::time::Duration::from_secs(86400));
+        topup::sanctions::rescreen(&db.app_pool,&routes,&screener).await?;
+        let (_,canceled)=fixture.get(&format!("/v1/treasuries/{}",pending["id"].as_str().unwrap())).await?;
+        ensure!(canceled["status"]=="canceled" && canceled["cancellation_reason"]=="sanctioned");
+        let scopes:Vec<String>=sqlx::query_scalar("SELECT paused_scopes FROM accounts WHERE id=$1").bind(fixture.account.id).fetch_one(&db.app_pool).await?;
+        ensure!(scopes.contains(&"quotes".to_owned()) && scopes.contains(&"settlement".to_owned()));
+        ensure!(fixture.events("treasury.canceled").await?.len()==1);
+        Ok(())
+    })).await
 }

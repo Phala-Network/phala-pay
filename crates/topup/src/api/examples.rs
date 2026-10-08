@@ -331,7 +331,15 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "block_key": "chain:1",
             "lifted_at": "2026-09-28T12:00:00Z",
         }),
+        "ManualEntryRequest" => {
+            json!({"address":PAYER,"reason":"reviewed designation","source_ref":"UK entity reference"})
+        }
+        "ManualEntryResponse" => json!({"address":PAYER,"active":true}),
+        "ManualEntry" => manual_entry(),
+        "ManualEntryList" => json!({"entries": [manual_entry()]}),
         "DailyReportResponse" => json!({
+            "sanctions_manual_entries": 0,
+            "sanctions_snapshot": null,
             "generated_at": "2026-09-28T12:00:00Z",
             "exposure_minor": "12500",
             "routes": [{
@@ -900,4 +908,9 @@ pub(super) fn updated_event() -> Value {
         },
         "pending_webhooks": 1,
     })
+}
+
+fn manual_entry() -> Value {
+    json!({"address":PAYER,"reason":"reviewed designation","source_ref":"UK entity reference",
+           "created_by":"admin:admin/test-v1","created_at":"2026-09-28T12:00:00Z"})
 }

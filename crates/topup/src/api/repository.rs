@@ -1385,6 +1385,12 @@ pub async fn daily_report(
         failing_webhook_endpoints(pool, generated_at, failing_for_hours).await?;
 
     Ok(DailyReportResponse {
+        sanctions_snapshot: crate::sanctions::active(pool).await?,
+        sanctions_manual_entries: sqlx::query_scalar(
+            "SELECT count(*) FROM sanctions_manual_entries WHERE removed_at IS NULL",
+        )
+        .fetch_one(pool)
+        .await?,
         generated_at,
         exposure_minor,
         routes: reports.into_values().collect(),

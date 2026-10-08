@@ -270,8 +270,8 @@ Deploy `upgrade`, never a runtime setting.
 - **What Deploy refuses:** a live route on a test network, a test route on a mainnet, any live
   route in `staging`, and a chain that [check-route-modes.sh](../deploy/check-route-modes.sh) does
   not list. A chain is added there, and to [networks.json](../deploy/contracts/networks.json) for
-  the contract scripts, by a pull request to Phala Pay and ships in its next release. A chain without a Chainalysis sanctions oracle needs
-  `chain.sanctions_oracle`.
+  the contract scripts, by a pull request to Phala Pay and ships in its next release. `chain.sanctions_oracle` remains parsed for N-1 rollback but is deprecated; N screens against
+  verified OFAC SDN snapshots across all EVM chains.
 - **Its RPC providers.** Require explicit `rpc` read/verify pairs and
   distinct endpoint hosts. Configure each endpoint URL, `sealed_key` and measured `max_log_blocks`
   in the attested public configuration; keep credentials sealed under their explicit key names. See [RPC configuration](../deploy/README.md#rpc-providers) and
@@ -543,3 +543,9 @@ policy allows a runtime value in no other place. A template instance also has no
 path: its restore guarantees would rest on those unattested values
 ([deploy/README.md](../deploy/README.md#the-phala-cloud-template-variant)). For an instance with
 merchants, deploy as this guide describes, where every one of them is attested.
+
+Allow outbound HTTPS to `sanctionslistservice.ofac.treas.gov` and
+`wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com`. A host or publication contract
+change fails verification and eventually holds negative decisions. Before N-1 rollback, pause
+settlement on routes affected by active manual sanctions entries, which N-1 cannot read.
+See the [sanctions runbook](../deploy/runbooks/sanctions-list.md).

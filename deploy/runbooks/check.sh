@@ -145,7 +145,7 @@ split_commands() {
 # Prints "topup" and its arguments for one simple command, or nothing if it does not run topup.
 topup_arguments() {
     local -a words
-    local index=0 count
+    local index=0 count word
     read -r -a words <<< "$1"
     count=${#words[@]}
     while (( index < count )) && [[ "${words[index]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
@@ -176,6 +176,13 @@ topup_arguments() {
         index=$((index + 1))
     elif [[ "${words[index]}" == cargo && "${words[index + 1]:-}" == run ]]; then
         [[ " ${words[*]} " == *" -p topup "* ]] || return 0
+        # Cargo examples run their own entry point, rather than the service CLI.
+        for word in "${words[@]}"; do
+            case "$word" in
+                --example | --example=*) return 0 ;;
+                --) break ;;
+            esac
+        done
         while (( index < count )) && [[ "${words[index]}" != -- ]]; do
             index=$((index + 1))
         done

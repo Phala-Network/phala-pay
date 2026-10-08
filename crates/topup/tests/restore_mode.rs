@@ -138,6 +138,7 @@ impl Harness {
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::clone(&screening) as Arc<dyn topup::refunds::DestinationScreener>,
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         };
         let account = seed::create_account(
@@ -380,14 +381,9 @@ impl topup_adapters::risk::oracle::SanctionsSource for ClearSanctions {
     async fn sanctions(
         &self,
         _address: Address,
-        block_number: u64,
+        _block_number: u64,
     ) -> topup_core::screening::SanctionsResult {
-        topup_core::screening::SanctionsResult {
-            block_hash: None,
-            provider_a: topup_core::screening::SanctionsAnswer::Clear,
-            provider_b: topup_core::screening::SanctionsAnswer::Clear,
-            block_number,
-        }
+        topup_core::screening::SanctionsResult::new(topup_core::screening::SanctionsVerdict::Clear)
     }
 }
 
@@ -4731,19 +4727,14 @@ impl topup_adapters::risk::oracle::SanctionsSource for NamesSender {
     async fn sanctions(
         &self,
         address: Address,
-        block_number: u64,
+        _block_number: u64,
     ) -> topup_core::screening::SanctionsResult {
         let answer = if address == self.0 {
-            topup_core::screening::SanctionsAnswer::Sanctioned
+            topup_core::screening::SanctionsVerdict::Sanctioned
         } else {
-            topup_core::screening::SanctionsAnswer::Clear
+            topup_core::screening::SanctionsVerdict::Clear
         };
-        topup_core::screening::SanctionsResult {
-            block_hash: None,
-            provider_a: answer,
-            provider_b: answer,
-            block_number,
-        }
+        topup_core::screening::SanctionsResult::new(answer)
     }
 }
 
@@ -4792,9 +4783,8 @@ async fn a_sanctions_hit_keeps_a_delivered_credit_and_blocks_its_sweep() -> Resu
             struct SplitSanctions;
             #[async_trait]
             impl topup_adapters::risk::oracle::SanctionsSource for SplitSanctions {
-                async fn sanctions(&self,_:Address,block_number:u64)->topup_core::screening::SanctionsResult {
-                    topup_core::screening::SanctionsResult {provider_a:topup_core::screening::SanctionsAnswer::Clear,
-                        provider_b:topup_core::screening::SanctionsAnswer::Sanctioned,block_number,block_hash:Some(B256::repeat_byte(7))}
+                async fn sanctions(&self,_:Address,_block_number:u64)->topup_core::screening::SanctionsResult {
+                    topup_core::screening::SanctionsResult::new(topup_core::screening::SanctionsVerdict::Uncertain)
                 }
             }
             let before=topup::db::get_deposit(&harness.pool,deposit).await?.context("replayed deposit")?.credit_minor;

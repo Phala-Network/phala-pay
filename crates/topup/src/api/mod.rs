@@ -27,6 +27,7 @@ mod quotes;
 mod rate_limit;
 mod repository;
 mod restore;
+mod sanctions;
 mod sweeps;
 mod transactions;
 mod treasuries;
@@ -94,6 +95,8 @@ pub struct AppState {
     pub transaction_hints: Arc<crate::hints::HintQueue>,
     /// Sanctions screening of refund destinations and treasuries.
     pub screening: Arc<dyn DestinationScreener>,
+    /// Wakes the sanctions worker after an audited manual-list mutation.
+    pub sanctions_rescreen: Arc<tokio::sync::Notify>,
     /// EIP-1271 checks of contract treasuries' proofs.
     pub contract_signatures: Arc<dyn ContractSignatures>,
 }
@@ -451,6 +454,9 @@ fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::nudge_deposit))
         .routes(routes!(handlers::lift_reconciliation_block))
         .routes(routes!(handlers::daily_report))
+        .routes(routes!(sanctions::list))
+        .routes(routes!(sanctions::add))
+        .routes(routes!(sanctions::remove))
         .routes(routes!(handlers::metrics))
         .routes(routes!(account::admin_get_attestation))
         .routes(routes!(restore::get_restore))
@@ -831,6 +837,7 @@ mod tests {
             hint_limits: Arc::default(),
             transaction_hints: Arc::default(),
             screening: Arc::new(crate::refunds::UnavailableDestinationScreener),
+            sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(crate::treasuries::UnavailableContractSignatures),
         }
     }

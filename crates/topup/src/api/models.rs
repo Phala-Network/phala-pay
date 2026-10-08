@@ -1522,6 +1522,10 @@ impl From<crate::observability::ReconciliationStatus> for ReconciliationRoundRep
 /// Daily finance report produced by C12.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct DailyReportResponse {
+    /// Active verified OFAC publication; absent before initial verification.
+    pub sanctions_snapshot: Option<crate::sanctions::Snapshot>,
+    /// Number of active operator supplements; inspect the signed manual-list endpoint.
+    pub sanctions_manual_entries: i64,
     /// Report snapshot time.
     pub generated_at: DateTime<Utc>,
     /// Open rate-lock credit across all accounts in destination minor units: the sum the global

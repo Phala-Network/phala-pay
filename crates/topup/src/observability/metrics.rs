@@ -203,6 +203,7 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     families.extend(crate::hints::collect_metrics()?);
     families.extend(super::capacity::collect()?);
     families.extend(super::price_metrics::collect()?);
+    families.extend(super::sanctions_metrics::collect()?);
     families.extend(http.requests.collect());
     families.extend(http.latency.collect());
     families.extend(http.deadlines.collect());
@@ -214,6 +215,16 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
 /// Durable coverage and daily budget gauges are reloaded on authenticated scrapes, including
 /// after restart; no RPC request or address-wide backfill is issued here.
 pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> {
+    if let Some(snapshot) = crate::sanctions::active(pool)
+        .await
+        .map_err(|_| prometheus::Error::Msg("sanctions snapshot unavailable".into()))?
+    {
+        let age = chrono::Utc::now()
+            .signed_duration_since(snapshot.verified_at)
+            .num_seconds()
+            .max(0);
+        super::sanctions_metrics::snapshot(&snapshot, age, pool).await;
+    }
     let (coverage,budgets,issued)=tokio::try_join!(
         sqlx::query_as::<_,(i64,i64,i64)>("SELECT c.chain_id,GREATEST(0,extract(epoch FROM now()-c.through_time)::bigint),(SELECT count(*) FROM addresses a WHERE a.chain_id=c.chain_id AND (a.dual_covered_through IS NULL OR a.dual_covered_through < c.through_block)) FROM chain_coverage c").fetch_all(pool),
         sqlx::query_as::<_,(String,i32)>("SELECT name,used FROM daily_budgets WHERE day=(now() AT TIME ZONE 'UTC')::date").fetch_all(pool),

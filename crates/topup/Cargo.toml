@@ -11,6 +11,8 @@ name = "topup"
 path = "src/main.rs"
 
 [features]
+# Loopback-only fixtures for full-service tests and the rollback drill; never ship this feature.
+test-support = []
 dev-signer = ["topup-adapters/dev-signer"]
 
 [dependencies]
@@ -31,7 +33,6 @@ governor.workspace = true
 hex.workspace = true
 hmac.workspace = true
 httpdate.workspace = true
-moka.workspace = true
 prometheus.workspace = true
 rand.workspace = true
 reqwest.workspace = true
@@ -57,6 +58,7 @@ url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 x509-parser = "=0.18.1"
+quick-xml = { version = "=0.42.0", features = ["serialize"] }
 
 [dev-dependencies]
 topup-adapters = { path = "../adapters", features = ["test-support"] }

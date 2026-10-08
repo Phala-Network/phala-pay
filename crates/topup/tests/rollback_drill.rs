@@ -211,6 +211,8 @@ fn new_config(route: &RouteFile, tls: &support::tls::RpcTlsProxy) -> Result<Valu
 fn previous_config(mut config: Value, anvil: &Anvil) -> Value {
     let port = anvil.rpc_url.rsplit(':').next().unwrap();
     config.as_object_mut().unwrap().remove("rpc");
+    // N-1 keeps its own strict configuration schema and deprecated oracle settings.
+    config.as_object_mut().unwrap().remove("sanctions");
     config["rpc_companies"] =
         json!({"read":{"domains":["read-drill.test"]},"verify":{"domains":["verify-drill.test"]}});
     config["rpc_budgets"] = json!({"read-account":{"requests_per_second":100,"burst":100},"read-key":{"requests_per_second":100,"burst":100},"verify-account":{"requests_per_second":100,"burst":100},"verify-key":{"requests_per_second":100,"burst":100}});
@@ -257,11 +259,15 @@ fn start_service(
         c
     } else {
         let mut c = Command::new(env!("CARGO_BIN_EXE_topup"));
-        c.env("DATABASE_URL", &database.app_url)
-            .env("DSTACK_SIMULATOR_ENDPOINT", kms)
-            .env("SSL_CERT_FILE", &tls.certificate)
-            .env("TOPUP_RPC_ANKR_KEY", "local-drill-key")
-            .env("TOPUP_RPC_INFURA_KEY", "local-drill-key");
+        c.env(
+            "TOPUP_TEST_SLS_ORIGIN",
+            std::fs::read_to_string(directory.join("sls-origin"))?,
+        )
+        .env("DATABASE_URL", &database.app_url)
+        .env("DSTACK_SIMULATOR_ENDPOINT", kms)
+        .env("SSL_CERT_FILE", &tls.certificate)
+        .env("TOPUP_RPC_ANKR_KEY", "local-drill-key")
+        .env("TOPUP_RPC_INFURA_KEY", "local-drill-key");
         c
     };
     command.args([
@@ -386,6 +392,10 @@ async fn submit_hint(origin: &str, key: &str, address: &str, hash: B256) -> Resu
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires verified published N-1 image; mandatory deploy rollback CI gate"]
 async fn published_image_round_trip() -> Result<()> {
+    ensure!(
+        cfg!(feature = "test-support"),
+        "rollback worker drill requires test-support; official OFAC fetch is forbidden"
+    );
     let image = std::env::var("TOPUP_ROLLBACK_IMAGE").context("published N-1 image required")?;
     ensure!(image.contains("@sha256:"));
     let database = TestDatabase::create_with_migrations(false)
@@ -393,6 +403,8 @@ async fn published_image_round_trip() -> Result<()> {
         .context("local Postgres required")?;
     let directory = FixtureDirectory::new()?;
     let result=async {
+        let sls = support::sanctions::Fixture::new(include_str!("fixtures/sdn.xml")).await?;
+        std::fs::write(directory.path().join("sls-origin"), &sls.origin)?;
         let anvil=Anvil::start(1,&["--slots-in-an-epoch","4"]).await?;
         let factory=forge_create(&anvil.rpc_url,"src/ForwarderFactory.sol:ForwarderFactory",&[])?;
         let oracle=forge_create(&anvil.rpc_url,"test/mocks/MockSanctionsOracle.sol:MockSanctionsOracle",&[])?;
@@ -523,6 +535,7 @@ async fn published_image_round_trip() -> Result<()> {
             maintenance_keys:Vec::new(),public_origin:topup::api::PublicOrigin::parse(support::TEST_ORIGIN).unwrap(),
             attestor:Arc::new(topup_adapters::attestation::DstackAttestor::new()),
             rate_lock_quotes:Arc::new(topup::locks::UnavailableQuoteProvider),client_reads:Arc::default(),rate_limits:Arc::default(), hint_limits: Arc::default(), transaction_hints: Arc::default(),
+            sanctions_rescreen: Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         });
         use tower::ServiceExt;

@@ -75,7 +75,7 @@ enforces absolute ceilings that no operator bound may exceed.
 | `route`, `version`, `livemode` | Operator (catalog identity) | Attested identity. A deposit records the route version that values it. |
 | `chain.chain_id`, `forwarder_factory`, `implementation` | Operator | Contracts: the custody model (D2, D3). |
 | `chain.rpc_providers` | Operator | Evidence sources and their keys. |
-| `chain.sanctions_oracle` | Operator | Screening evidence (compliance is the operator's, 2026-10-01). |
+| `chain.sanctions_oracle` | Operator | Deprecated, parsed only for N-1 rollback; screening uses verified OFAC SDN snapshots and audited supplements. |
 | `chain.confirmations` | Operator **floor**; the merchant may require more | The floor is the operator's reorg-risk judgment (D1). The merchant's requirement is bound with the deposit, and an uncredited deposit waits for the stricter of it and the **current** floor (§7). |
 | `asset.symbol`, `contract`, `decimals` | Operator | Token identity. Credit arithmetic depends on `decimals`. |
 | `pricing.mode` (`spot` or `stablecoin`) | Operator | A property of the asset's valuation. |

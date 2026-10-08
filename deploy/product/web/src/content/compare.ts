@@ -92,7 +92,7 @@ export const phalaPay: Competitor = {
   speed: { text: "About 7 s (Base) / 30 s (Ethereum), then watched to finality", source: overview, status: "verified" },
   refunds: { text: "From your wallet or Safe; verified on-chain; webhook updates ledger", source: integration, status: "verified" },
   api: { text: "Stripe-style REST; JS (browser, React, server), Python", source: readme, status: "verified" },
-  onboarding: { text: "No signup; operator onboards accounts and owns compliance; payer sanctions screening built in", source: overview, status: "verified" },
+  onboarding: { text: "No signup; operator onboards accounts and owns compliance; verified OFAC SDN and operator-supplement address screening built in", source: overview, status: "verified" },
   payoutToOwnWallet: { text: "Yes, the only possible destination; you sweep", source: integration, status: "verified" },
 };
 

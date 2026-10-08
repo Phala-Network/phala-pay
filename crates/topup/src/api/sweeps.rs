@@ -494,7 +494,7 @@ async fn sweepable_treasuries(
             continue;
         };
         let address = EvmAddress::from_str(&treasury).map_err(|_| ApiError::internal())?;
-        checks.push(async move { (treasury, screening.screen_cached(route, address).await) });
+        checks.push(async move { (treasury, screening.screen(route, address).await) });
     }
     let results = stream::iter(checks)
         .buffered(SWEEPABLE_SCREENING_CONCURRENCY)
