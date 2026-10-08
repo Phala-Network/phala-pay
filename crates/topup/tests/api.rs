@@ -1867,10 +1867,10 @@ async fn manual_sanctions_require_admin_signature_and_are_audited_atomically() -
         let response = app.clone().oneshot(signed_request(Method::GET,"/v1/admin/sanctions/manual",vec![],ADMIN_KID,&key,Utc::now().timestamp())).await?;
         ensure!(response.status() == StatusCode::OK);
         let listed: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
-        ensure!(listed.as_array().context("manual list")?.len() == 1);
-        ensure!(listed[0]["address"] == format!("{address:#x}"));
-        ensure!(listed[0]["reason"] == "designation reinstated");
-        ensure!(listed[0]["source_ref"] == "UK:test");
+        ensure!(listed["entries"].as_array().context("manual list")?.len() == 1);
+        ensure!(listed["entries"][0]["address"] == format!("{address:#x}"));
+        ensure!(listed["entries"][0]["reason"] == "designation reinstated");
+        ensure!(listed["entries"][0]["source_ref"] == "UK:test");
         let report = app.clone().oneshot(signed_request(Method::GET,"/v1/admin/reports/daily",vec![],ADMIN_KID,&key,Utc::now().timestamp())).await?;
         ensure!(report.status() == StatusCode::OK);
         let report: Value = serde_json::from_slice(&to_bytes(report.into_body(), 65536).await?)?;

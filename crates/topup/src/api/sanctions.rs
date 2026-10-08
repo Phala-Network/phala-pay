@@ -101,11 +101,19 @@ async fn change(
     }))
 }
 
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ManualEntryList {
+    /// Active supplements in normalized address order.
+    entries: Vec<crate::sanctions::ManualEntry>,
+}
+
 #[utoipa::path(get, path="/v1/admin/sanctions/manual", tag="admin",
- responses((status=200,description="Active manual sanctions entries",body=Vec<crate::sanctions::ManualEntry>)), security(("http_message_signature"=[])))]
+ responses((status=200,description="Active manual sanctions entries",body=ManualEntryList)), security(("http_message_signature"=[])))]
 pub(crate) async fn list(
     State(state): State<AppState>,
     AdminActor(_actor): AdminActor,
-) -> Result<Json<Vec<crate::sanctions::ManualEntry>>, ApiError> {
-    Ok(Json(crate::sanctions::manual_entries(&state.pool).await?))
+) -> Result<Json<ManualEntryList>, ApiError> {
+    Ok(Json(ManualEntryList {
+        entries: crate::sanctions::manual_entries(&state.pool).await?,
+    }))
 }

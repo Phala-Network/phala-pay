@@ -568,7 +568,10 @@ impl Refresher {
     async fn refresh_inner(&self) -> Result<Refresh, RefreshError> {
         let preview = self
             .bytes(
-                self.client.post(&self.preview).body(Vec::new()),
+                self.client
+                    .post(&self.preview)
+                    .header(reqwest::header::CONTENT_LENGTH, "0")
+                    .body(Vec::new()),
                 1024 * 1024,
             )
             .await?;
@@ -875,7 +878,7 @@ mod tests {
     #[test]
     fn prefixed_addresses_only_and_all_labels_retained() {
         assert!(evm_address("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());
-        let xml = XML.replace("</idList></sdnEntry>", "<id><idType>Digital Currency Address - USDC</idType><idNumber>0xdddddddddddddddddddddddddddddddddddddddd</idNumber></id><id><idType>Digital Currency Address - ETH</idType><idNumber>eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee</idNumber></id></idList></sdnEntry>");
+        let xml = XML.replace("<sdnEntry><uid>200</uid><idList>", "<sdnEntry><uid>200</uid><idList><id><idType>Digital Currency Address - USDC</idType><idNumber>0xdddddddddddddddddddddddddddddddddddddddd</idNumber></id><id><idType>Digital Currency Address - ETH</idType><idNumber>eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee</idNumber></id>");
         let parsed = parse(xml.as_bytes()).unwrap();
         assert_eq!(
             parsed
@@ -921,6 +924,7 @@ mod tests {
         let files: Vec<PreviewFile> = client
             .post(preview)
             .header("user-agent", USER_AGENT)
+            .header("content-length", "0")
             .body(Vec::new())
             .send()
             .await?

@@ -61,7 +61,7 @@ open a Sentry Cron issue; verification failures still alert immediately.
 
 Before enabling settlement, the compliance operator must add these four EU/UK-only addresses
 through the signed API. They apply across all EVM chains. The official source records were
-checked read-only on October 8, 2026; retain the reviewed source and designation evidence.
+checked read-only on October 7, 2026 (PDT); retain the reviewed source and designation evidence.
 The EU FSF export has generation date September 22, 2026 and global file id `185564`.
 
 | Address | Source and designation |
