@@ -479,6 +479,8 @@ mod tests {
                 "outbox-backlog.md"
             } else if alert == "TopupAddressCapacity" {
                 "address-capacity.md"
+            } else if alert == "TopupRefundProgressAge" {
+                "rejected-funds-at-treasury.md#pending-refund-transaction-alert"
             } else {
                 "business-health.md"
             };
