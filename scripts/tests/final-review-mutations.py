@@ -59,10 +59,16 @@ cases = [
      ["--test", "finality", "unresolved_detected_deposit_reverses_only_on_watcher_replacement_proof"]),
     (finality, "confirm positive evidence handoff", "if resume_confirm && matches!(applied, Applied::Nothing | Applied::Followed) {", "if false && matches!(applied, Applied::Nothing | Applied::Followed) {",
      ["--test", "pump", "positive_reincluded_provisional_transfer_returns_to_confirm_without_extra_watcher_reads"]),
-    (scanner, "coverage persisted checkpoint conflict", "end == checkpoint.number && a.0 != checkpoint.hash", "false",
+    (scanner, "coverage persisted checkpoint conflict", "end == checkpoint.number && (a.0 != checkpoint.hash || b.0 != checkpoint.hash)", "false",
      ["--test", "scanner", "dual_agreed_coverage_boundary_conflict_freezes_before_any_publication"]),
-    (scanner, "coverage persisted coverage conflict", "end == cursor.number && a.0 != cursor.hash", "false",
+    (scanner, "coverage persisted coverage conflict", "end == cursor.number && (a.0 != cursor.hash || b.0 != cursor.hash)", "false",
      ["--test", "scanner", "dual_agreed_coverage_boundary_conflict_freezes_before_any_publication"]),
+    (scanner, "coverage conflict precedes disagreement", "    let (a, b) = tokio::try_join!(read.header(end), verify.header(end))?;", "    let (a, b) = tokio::try_join!(read.header(end), verify.header(end))?;\n    if a != b { return Err(ScannerError::Disagreement); }",
+     ["--test", "scanner", "single_endpoint_coverage_boundary_conflict_freezes_before_disagreement"]),
+    (scanner, "coverage read endpoint checkpoint conflict", "a.0 != checkpoint.hash || b.0 != checkpoint.hash", "b.0 != checkpoint.hash",
+     ["--test", "scanner", "single_endpoint_coverage_boundary_conflict_freezes_before_disagreement"]),
+    (scanner, "coverage verify endpoint checkpoint conflict", "a.0 != checkpoint.hash || b.0 != checkpoint.hash", "a.0 != checkpoint.hash",
+     ["--test", "scanner", "single_endpoint_coverage_boundary_conflict_freezes_before_disagreement"]),
 ]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--case", action="append", choices=[case[1] for case in cases], help="Run a named proof; repeat to select several")

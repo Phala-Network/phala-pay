@@ -1252,11 +1252,13 @@ Idempotency-Key: "…"
   a payment that could still be reversed: retry after finality. A paused `refunds` scope is
   `400 paused`. The same `Idempotency-Key` with the same request returns the same response.
 
-Coordinate payout capacity with your operator first. Each environment allows at most two
-attached-pending refunds and one new attachment per rolling 24 hours, across all merchants and
-modes. A refused attachment returns non-retryable `422 refund_attachment_limit_exceeded` and
-keeps the reservation; contact the operator and do not send another payout. Repeating the same
-attachment consumes no quota, and already attached payouts continue verification.
+Coordinate payout capacity with your operator first. The deployment-configured
+`max_attached_pending_refunds` limit allows at most two attached-pending refunds in production
+and one in staging. Each environment allows one new attachment per rolling 24 hours, across
+all merchants and modes. A refused attachment returns non-retryable
+`422 refund_attachment_limit_exceeded` and keeps the reservation; contact the operator and do
+not send another payout. Repeating the same attachment consumes no quota, and already attached
+payouts continue verification.
 
 Then pay it: transfer exactly `amount_atomic` of the deposit's token from `treasury` to
 `destination_address`, from your wallet or Safe, and attach the transaction:
