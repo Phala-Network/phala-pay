@@ -2003,6 +2003,22 @@ test("the docs and the API reference are rendered from the repository, linked wi
   await expect(page.locator('[id="tag/quotes/operation/create_quote"]')).toContainText("POST");
   await expect(page.locator('[id="schema/Quote"]')).toContainText("client_secret");
   expect(problems).toEqual([]);
+  // A Mermaid diagram is its committed SVG for the page's theme (`npm run diagrams`), described by
+  // what it draws, and opens at full size.
+  await page.goto(new URL("docs/overview", env("SITE_URL")).href);
+  const diagram = page.locator(".docs-prose figure.diagram img:visible");
+  await expect(diagram).toHaveCount(1);
+  await expect(diagram).toHaveAttribute("src", /^\/diagrams\/docs-overview-1-(light|dark)\.svg$/);
+  await expect(diagram).toHaveAttribute("alt", /^Flowchart\. .*Payer to CREATE2 forwarders/);
+  expect(await diagram.evaluate((image: HTMLImageElement) => image.decode().then(() => image.naturalWidth))).toBeGreaterThan(0);
+  await expect(page.locator(".docs-prose figure.diagram figcaption a:visible")).toHaveText("Open the diagram full size");
+  // The header marks the part of the site a page is in.
+  for (const [path, current] of [["docs/overview", "Docs"], ["reference", "API reference"], ["compare", "Compare"], ["", null]] as const) {
+    await page.goto(new URL(path, env("SITE_URL")).href);
+    const marked = page.getByRole("navigation", { name: "Site" }).locator('[aria-current="page"]');
+    if (current === null) await expect(marked).toHaveCount(0);
+    else await expect(marked).toHaveText(current);
+  }
   // Without script, the docs' menu still opens: it is a native disclosure.
   const staticContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
   try {

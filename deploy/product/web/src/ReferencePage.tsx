@@ -6,8 +6,8 @@ import { DocsMobileNav, LABEL, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEB
 
 /**
  * An operation's or an object's two parts, on the page's grid: the page's nine columns again
- * (same gutter, so the same lines), the fields in five, the example in four, their first lines
- * on one baseline; stacked below xl.
+ * (same gutter, so the same lines), the fields in four, the example in five (a request's command,
+ * URL, and key each fit their line), their first lines on one baseline; stacked below xl.
  */
 const PART = "grid gap-y-8 xl:grid-cols-9 xl:items-baseline xl:gap-x-8";
 
@@ -96,7 +96,7 @@ function OperationSection({ operation }: { operation: OperationModel }) {
   return (
     <section id={operation.anchor} aria-labelledby={`${operation.anchor}-title`} className="scroll-mt-20 border-t py-12">
       <div data-layout="operation" className={PART}>
-        <div data-column="left" className="min-w-0 xl:col-span-5">
+        <div data-column="left" className="min-w-0 xl:col-span-4">
           <h3 id={`${operation.anchor}-title`} className="text-heading font-semibold">{operation.summary}</h3>
           <p className="mt-2 flex flex-wrap items-center gap-2 font-mono text-mono">
             <Method method={operation.method} />
@@ -135,7 +135,7 @@ function OperationSection({ operation }: { operation: OperationModel }) {
         {/* The request; the response is the object it returns, whose example is under Objects (once
             for every operation that returns it). In the page's flow: only the navigation scrolls on
             its own. */}
-        <div data-column="right" className="flex min-w-0 flex-col gap-3 xl:col-span-4">
+        <div data-column="right" className="flex min-w-0 flex-col gap-3 xl:col-span-5">
           <Example title="Request" label={`${operation.summary}: request`} lines={operation.request} />
           {success?.type !== undefined && (
             <p className="text-sm text-muted-foreground">
@@ -220,12 +220,12 @@ export function ReferencePage({ model }: { model: ReferenceModel }) {
           {model.schemas.map(({ name, anchor, html, fields, example }) => (
             <section key={name} id={anchor} aria-labelledby={`${anchor}-title`} className="scroll-mt-20 border-t py-10">
               <div data-layout="operation" className={PART}>
-                <div data-column={example === undefined ? undefined : "left"} className="min-w-0 xl:col-span-5">
+                <div data-column={example === undefined ? undefined : "left"} className={cn("min-w-0", example === undefined ? "xl:col-span-9" : "xl:col-span-4")}>
                   <h3 id={`${anchor}-title`} className="font-mono text-base font-semibold"><SchemaName name={name} /></h3>
                   {html !== "" && <div className={cn(PROSE, "mt-2")} dangerouslySetInnerHTML={{ __html: html }} />}
                   {fields.length > 0 && <div className="mt-4"><Fields fields={fields} /></div>}
                 </div>
-                {example !== undefined && <div data-column="right" className="min-w-0 xl:col-span-4"><Example title="Example" label={`${name} example`} lines={example} /></div>}
+                {example !== undefined && <div data-column="right" className="min-w-0 xl:col-span-5"><Example title="Example" label={`${name} example`} lines={example} /></div>}
               </div>
             </section>
           ))}

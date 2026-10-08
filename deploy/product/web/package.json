@@ -14,6 +14,7 @@
     "lint": "eslint .",
     "e2e": "playwright test",
     "e2e:docker": "../../../sdk/js/e2e/docker.sh",
+    "diagrams": "scripts/diagrams.sh",
     "brand": "node brand/render.ts",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build",
     "test": "node --test scripts/*.test.ts"
@@ -38,6 +39,7 @@
     "@axe-core/playwright": "^4.13.0",
     "@cloudflare/vite-plugin": "2.0.0-beta.sha-ad79608dd",
     "@eslint/js": "^10.0.1",
+    "@mermaid-js/mermaid-cli": "12.0.0",
     "@phala/pay-server": "file:../../../sdk/js-server",
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "^4.3.3",

@@ -104,8 +104,9 @@ function jsonOf(schema: Schema | undefined, schemas: Record<string, Schema>): Js
   return undefined;
 }
 
+/** The request as curl: the command, then the URL on a line of its own, then each option. */
 function curl(method: string, url: string, body: Json | undefined): string {
-  const lines = [`curl ${method === "get" ? "" : `-X ${method.toUpperCase()} `}${url}`, `  -H "Authorization: Bearer $PHALA_PAY_API_KEY"`];
+  const lines = [method === "get" ? "curl" : `curl -X ${method.toUpperCase()}`, `  ${url}`, `  -H "Authorization: Bearer $PHALA_PAY_API_KEY"`];
   if (body !== undefined) {
     lines.push(`  -H "Content-Type: application/json"`, `  -d '${JSON.stringify(body, null, 2).replaceAll("\n", "\n  ")}'`);
   }

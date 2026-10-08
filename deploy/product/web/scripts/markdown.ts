@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { DIAGRAMS_DIR, THEMES, describeDiagram, diagramName } from "./diagram-files.ts";
 import { posix, resolve } from "node:path";
 import type { Element, ElementContent, Root } from "hast";
 import { toString } from "hast-util-to-string";
@@ -74,8 +75,15 @@ function rehypeCodeBlocks(file: string) {
       const lang = classes.find((name) => name.startsWith("language-"))?.slice("language-".length) ?? "";
       blocks.push({ parent, index, pre: node, code, lang });
     });
+    // A Mermaid diagram is its committed SVGs (`npm run diagrams`), numbered in the doc's order.
+    let diagrams = blocks.filter(({ lang }) => lang === "mermaid").length;
     for (const { parent, index, pre, code, lang } of blocks.reverse()) {
       const source = toString(code).replace(/\n$/, "");
+      if (lang === "mermaid") {
+        parent.children.splice(index, 1, await diagram(file, diagrams, source));
+        diagrams -= 1;
+        continue;
+      }
       const lines = await tokenize(source, lang === "typescript" ? "ts" : lang);
       code.children = lines.map((line) => element("span", { className: ["line"] }, line.map((token) =>
         token.className === undefined ? text(token.text) : element("span", { className: [token.className] }, [text(token.text)]))));
@@ -84,17 +92,36 @@ function rehypeCodeBlocks(file: string) {
         element("span", {}, [text(lang === "" ? "text" : lang)]),
         element("button", { type: "button", className: ["code-block-copy"], dataCopy: "", ariaLive: "polite", hidden: true }, [text("Copy")]),
       ]);
-      const frame: ElementContent[] = [header, pre];
-      if (lang === "mermaid") {
-        frame.push(element("p", { className: ["code-block-note"] }, [
-          text("A Mermaid diagram's source. "),
-          element("a", { href: `${REPO}/blob/main/${file}` }, [text("See it drawn on GitHub")]),
-          text("."),
-        ]));
-      }
-      parent.children.splice(index, 1, element("div", { className: ["code-block"], dataLanguage: lang }, frame));
+      parent.children.splice(index, 1, element("div", { className: ["code-block"], dataLanguage: lang }, [header, pre]));
     }
   };
+}
+
+/**
+ * A doc's `index`th diagram (from 1): its light and its dark SVG, the page's theme showing one
+ * (src/index.css), each sized from its viewBox and described by the diagram's own content. The
+ * build only reads them; one missing means the committed diagrams are stale.
+ */
+async function diagram(file: string, index: number, source: string): Promise<Element> {
+  const alt = describeDiagram(source);
+  const images = await Promise.all(THEMES.map(async (theme) => {
+    const name = diagramName(file, index, theme);
+    let svg: string;
+    try {
+      svg = await readFile(resolve(DIAGRAMS_DIR, name), "utf8");
+    } catch {
+      throw new Error(`public/diagrams/${name} is missing for ${file}'s diagram ${index}: run \`npm run diagrams\` in deploy/product/web and commit the result`);
+    }
+    const [, width = "0", height = "0"] = /viewBox="[\d.-]+ [\d.-]+ ([\d.]+) ([\d.]+)"/.exec(svg) ?? [];
+    return element("img", {
+      src: `/diagrams/${name}`, alt, width: Math.round(Number(width)), height: Math.round(Number(height)),
+      loading: "lazy", decoding: "async", className: [`diagram-${theme}`],
+    }, []);
+  }));
+  // Wider than the text, a diagram scales to it; its caption opens the drawing at full size.
+  const caption = element("figcaption", {}, THEMES.map((theme) =>
+    element("a", { href: `/diagrams/${diagramName(file, index, theme)}`, className: [`diagram-${theme}`] }, [text("Open the diagram full size")])));
+  return element("figure", { className: ["diagram"] }, [...images, caption]);
 }
 
 /**
@@ -134,15 +161,30 @@ function rehypeTables() {
           headers.push(toString(node).trim());
         }
       });
-      // An identifier in a cell may wrap where it divides (`TOPUP_ADMIN_` / `PUBLIC_KEY`), and
-      // nowhere else: a word-break opportunity after each separator, so a column is never squeezed
-      // to letters.
+      // An identifier in a cell wraps where it divides (`TOPUP_ADMIN_` / `PUBLIC_KEY`) and nowhere
+      // else: each word's parts between separators are kept whole (`unbroken`, src/index.css),
+      // with a word-break opportunity after each separator; spaces still break.
       visit(table, "element", (code: Element) => {
         if (code.tagName !== "code") return;
         code.children = code.children.flatMap((child) => child.type !== "text" ? [child]
-          : child.value.split(/(?<=[_./:(,=|])/).flatMap((part, index): ElementContent[] =>
-            index === 0 ? [text(part)] : [element("wbr", {}, []), text(part)]));
+          : child.value.split(/(\s+)/).flatMap((word): ElementContent[] => /^\s*$/.test(word) ? [text(word)]
+            : word.split(/(?<=[_./:(,=|])/).flatMap((part, index): ElementContent[] => {
+              const kept = element("span", { className: ["unbroken"] }, [text(part)]);
+              return index === 0 ? [kept] : [element("wbr", {}, []), kept];
+            })));
       });
+      // An index (a first column of short links or package names, as the docs' own index) keeps
+      // each of those on one line.
+      const firsts: Element[] = [];
+      visit(table, "element", (row: Element) => {
+        const first = row.tagName === "tr" ? row.children.find((child): child is Element => child.type === "element" && child.tagName === "td") : undefined;
+        if (first !== undefined) firsts.push(first);
+      });
+      const short = (cell: Element) => toString(cell).trim().length <= 24 &&
+        cell.children.every((child) => (child.type === "text" && child.value.trim() === "") || (child.type === "element" && (child.tagName === "a" || child.tagName === "code")));
+      if (firsts.length > 0 && firsts.every(short)) {
+        table.properties.className = ["index"];
+      }
       visit(table, "element", (row: Element) => {
         if (row.tagName !== "tr") return;
         row.children

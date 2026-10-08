@@ -253,8 +253,11 @@
   .docs-prose :where(table) { @apply w-full text-sm; }
   .docs-prose :where(th) { @apply border-b px-3 py-2 text-left align-bottom text-xs font-medium tracking-wider text-muted-foreground uppercase first:pl-0; }
   .docs-prose :where(td) { @apply border-b px-3 py-2.5 align-top first:pl-0; }
-  /* In a table, code wraps only where its identifiers divide (<wbr>, scripts/markdown.ts). */
+  /* In a table, code wraps only where its identifiers divide (<wbr>, scripts/markdown.ts), and an
+     index's first column (short links, package names) not at all. */
   .docs-prose :where(td code, th code) { overflow-wrap: normal; }
+  .docs-prose :where(.unbroken) { white-space: nowrap; }
+  .docs-prose :where(table.index td:first-child) { white-space: nowrap; }
   /* On a phone, each row is a block, each cell under its column's name (scripts/markdown.ts gives
      every cell its header as data-label): long identifiers keep their line instead of breaking
      letter by letter in a narrow column. */
@@ -263,8 +266,19 @@
     .docs-prose :where(thead) { @apply sr-only; }
     .docs-prose :where(tr) { @apply border-b py-2; }
     .docs-prose :where(td) { @apply border-0 px-0 py-1; }
-    .docs-prose :where(td[data-label])::before { @apply block text-xs font-medium tracking-wider text-muted-foreground uppercase; content: attr(data-label); }
+    /* The label is the column's name, already read out by the cell's role: hidden from speech. */
+    .docs-prose :where(td[data-label])::before { @apply block text-xs font-medium tracking-wider text-muted-foreground uppercase; content: attr(data-label) / ""; }
   }
+  /* A diagram (scripts/markdown.ts): its committed SVG for the page's theme, scaled to the text. */
+  .docs-prose :where(.diagram) { @apply my-8; }
+  .docs-prose :where(.diagram img) { @apply h-auto max-w-full; }
+  .docs-prose :where(.diagram figcaption) { @apply mt-3 text-sm text-muted-foreground; }
+  .docs-prose :where(.diagram-dark) { display: none; }
+  .dark .docs-prose :where(.diagram-light) { display: none; }
+  .dark .docs-prose :where(img.diagram-dark) { display: block; }
+  .dark .docs-prose :where(a.diagram-dark) { display: inline; }
+  /* A heading that is a link (a changelog's version) keeps the heading's look. */
+  .docs-prose :where(h2, h3, h4) :where(a:not(.heading-anchor)) { color: inherit; font-weight: inherit; text-decoration: none; }
   .docs-prose :where(.heading-anchor) { @apply ml-2 text-muted-foreground no-underline opacity-0 transition-opacity; }
   .docs-prose :where(h2, h3, h4):hover .heading-anchor { @apply opacity-100; }
 }
