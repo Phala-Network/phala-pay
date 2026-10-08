@@ -90,6 +90,12 @@ pub fn screen(purpose: &str, verdict: SanctionsVerdict) {
 }
 /// Counts malformed address-shaped identifiers.
 pub fn parse_errors(count: u64) {
+    sentry::metrics::counter(
+        "topup_sanctions_list_parse_errors_total",
+        u32::try_from(count).unwrap_or(u32::MAX),
+    )
+    .attribute("source", "ofac_sdn")
+    .capture();
     if let Ok(m) = metrics() {
         m.parse_errors
             .with_label_values(&["ofac_sdn"])
@@ -100,18 +106,48 @@ pub fn parse_errors(count: u64) {
 pub async fn snapshot(snapshot: &crate::sanctions::Snapshot, age: i64, pool: &sqlx::PgPool) {
     if let Ok(m) = metrics() {
         m.age.with_label_values(&["ofac_sdn"]).set(age);
+        sentry::metrics::gauge(
+            "topup_sanctions_list_verified_age_seconds",
+            u32::try_from(age.max(0)).unwrap_or(u32::MAX),
+        )
+        .attribute("source", "ofac_sdn")
+        .capture();
         if let Some(date) = snapshot.publish_date.and_hms_opt(0, 0, 0) {
             m.publish
                 .with_label_values(&["ofac_sdn"])
                 .set(date.and_utc().timestamp());
+            sentry::metrics::gauge(
+                "topup_sanctions_list_publish_timestamp",
+                u32::try_from(date.and_utc().timestamp()).unwrap_or(u32::MAX),
+            )
+            .attribute("source", "ofac_sdn")
+            .capture();
         }
         let evm: Result<i64,_> = sqlx::query_scalar("SELECT count(*) FROM sanctions_list_addresses WHERE snapshot_id=$1 AND evm_address IS NOT NULL").bind(snapshot.id).fetch_one(pool).await;
         if let Ok(evm) = evm {
+            sentry::metrics::gauge(
+                "topup_sanctions_list_addresses",
+                u32::try_from(evm).unwrap_or(u32::MAX),
+            )
+            .attribute("source", "ofac_sdn")
+            .attribute("family", "evm")
+            .capture();
+            sentry::metrics::gauge(
+                "topup_sanctions_list_addresses",
+                u32::try_from(snapshot.address_count.saturating_sub(evm)).unwrap_or(u32::MAX),
+            )
+            .attribute("source", "ofac_sdn")
+            .attribute("family", "other")
+            .capture();
             m.addresses.with_label_values(&["ofac_sdn", "evm"]).set(evm);
             m.addresses
                 .with_label_values(&["ofac_sdn", "other"])
                 .set(snapshot.address_count.saturating_sub(evm));
+        } else {
+            tracing::error!("sanctions address metrics reload failed");
         }
+    } else {
+        tracing::error!("sanctions metrics initialization failed");
     }
 }
 /// Metric families for the signed admin endpoint.

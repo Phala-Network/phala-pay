@@ -614,17 +614,12 @@ fn client(rpc_url: &str, timeout: StdDuration) -> Result<Arc<EvmClient>> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_alerts() -> Result<()>
-{
-    struct Answers(SanctionsVerdict, SanctionsVerdict);
+async fn only_clear_credits_and_inconclusive_screening_holds_retries_and_alerts() -> Result<()> {
+    struct Answers(SanctionsVerdict);
     #[async_trait]
     impl SanctionsSource for Answers {
         async fn sanctions(&self, _: Address, _block_number: u64) -> SanctionsResult {
-            topup_core::screening::SanctionsResult::new(if self.0 == self.1 {
-                self.0
-            } else {
-                SanctionsVerdict::Uncertain
-            })
+            topup_core::screening::SanctionsResult::new(self.0)
         }
     }
     with_database(|database| Box::pin(async move {
@@ -634,20 +629,19 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
         let alerter=topup::pump::AgeAlerter::new(pool.clone(),topup::pump::AgeAlertConfig::from_routes(std::slice::from_ref(&route))?,StdDuration::from_secs(1));
         let mut number=0;let mut held=None;
         for a in [SanctionsVerdict::Clear,SanctionsVerdict::Sanctioned,SanctionsVerdict::Uncertain] {
-            for b in [SanctionsVerdict::Clear,SanctionsVerdict::Sanctioned,SanctionsVerdict::Uncertain] {
                 number+=1;
                 let id=insert_confirmed(pool,seed,number,Address::repeat_byte(number),123).await?;
-                let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route.clone(),Arc::new(Answers(a,b)))])?;
+                let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route.clone(),Arc::new(Answers(a)))])?;
                 let pump=Pump::new(pool.clone(),Arc::default(),Arc::new(wait_steps().with_confirmed(Box::new(step))),PumpConfig::default())?;
                 let attempted_at=Utc::now();
                 ensure!(pump.run_once().await?==RunOnceResult::Applied {deposit_id:id});
                 let deposit=db::get_deposit(pool,id).await?.context("screened deposit")?;
-                let expected=match (a,b) {
-                    (SanctionsVerdict::Clear,SanctionsVerdict::Clear)=>DepositState::Credited,
-                    (SanctionsVerdict::Sanctioned,SanctionsVerdict::Sanctioned)=>DepositState::Rejected,
+                let expected=match a {
+                    SanctionsVerdict::Clear=>DepositState::Credited,
+                    SanctionsVerdict::Sanctioned=>DepositState::Rejected,
                     _=>DepositState::Confirmed,
                 };
-                ensure!(deposit.state==expected,"{a:?}/{b:?} -> {:?}",deposit.state);
+                ensure!(deposit.state==expected,"{a:?} -> {:?}",deposit.state);
                 let credits:i64=sqlx::query_scalar("SELECT count(*) FROM events WHERE object_id=$1 AND type='deposit.credited'").bind(id).fetch_one(pool).await?;
                 ensure!(credits==i64::from(expected==DepositState::Credited));
                 let evidence=transition_evidence(pool,id).await?;
@@ -659,7 +653,6 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
                     held=Some(id);
                     sqlx::query("UPDATE deposits SET next_attempt_at=now()+interval '1 hour' WHERE id=$1").bind(id).execute(pool).await?;
                 }
-            }
         }
         ensure!(alerter.scan_once().await?==0,"fresh sanctions holds must not alert yet");
         let held=held.context("inconclusive case")?;
@@ -667,7 +660,7 @@ async fn only_dual_clear_credits_and_inconclusive_screening_holds_retries_and_al
         sqlx::query("UPDATE deposits SET created_at=now()-($2::bigint+1)*interval '1 second' WHERE id=$1").bind(held).bind(window).execute(&database.owner_pool).await?;
         ensure!(alerter.scan_once().await?==1);
         ensure!(logs_contain("TopupSanctionsHold"));
-        let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route,Arc::new(Answers(SanctionsVerdict::Clear,SanctionsVerdict::Clear)))])?;
+        let step=ScreenStep::new(pool.clone(),[ScreenRoute::new(route,Arc::new(Answers(SanctionsVerdict::Clear)))])?;
         let pump=Pump::new(pool.clone(),Arc::default(),Arc::new(wait_steps().with_confirmed(Box::new(step))),PumpConfig::default())?;
         sqlx::query("UPDATE deposits SET next_attempt_at=now()-interval '1 second' WHERE id=$1").bind(held).execute(pool).await?;
         ensure!(pump.run_once().await?==RunOnceResult::Applied {deposit_id:held});

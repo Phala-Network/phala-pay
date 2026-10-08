@@ -51,6 +51,8 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 
 | Tables | `topup_app` |
 |---|---|
+| `sanctions_list_snapshots`, `sanctions_manual_entries` | `SELECT`, `INSERT`, `UPDATE` (verified snapshots and audited operator entries; retained on rollback) |
+| `sanctions_list_addresses` | `SELECT`, `INSERT` (immutable publication identifiers) |
 | `price_twap_observations` | `SELECT`, `INSERT` (immutable samples, isolated by safety policy) |
 | `topup_migration_compatibility` (owner-written rollback ledger) | None |
 | `transitions`, `audit`, `reconciliation_findings`, `heartbeat`, `events` | `SELECT`, `INSERT` (append-only) |
