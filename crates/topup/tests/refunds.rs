@@ -2861,3 +2861,27 @@ async fn response_json(response: axum::response::Response) -> Result<Value> {
     let bytes = to_bytes(response.into_body(), 1_048_576).await?;
     Ok(serde_json::from_slice(&bytes)?)
 }
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn list_activation_rescreens_pending_refund_and_stale_hit_still_denies() -> Result<()> {
+    support::with_database(|db|Box::pin(async move {
+        let (_,_,_,refund)=pending_credited_refund(&db.app_pool).await?;
+        let id=Uuid::new_v4();
+        let address:Address=REFUND_DESTINATION.parse()?;
+        sqlx::query("INSERT INTO sanctions_list_snapshots(id,source,publish_date,sha256,record_count,address_count,fetched_at,activated_at,verified_at) VALUES($1,'ofac_sdn','2026-10-06',$2,1,1,now(),now(),now())")
+            .bind(id).bind(vec![1_u8;32]).execute(&db.app_pool).await?;
+        sqlx::query("INSERT INTO sanctions_list_addresses(snapshot_id,sdn_uid,id_type,raw_value,evm_address) VALUES($1,1,'Digital Currency Address - ETH',$2,$3)")
+            .bind(id).bind(REFUND_DESTINATION).bind(address.as_slice()).execute(&db.app_pool).await?;
+        let route=route_fixture();
+        let routes=topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?;
+        let source=topup::sanctions::ListScreener::new(db.app_pool.clone(),StdDuration::from_secs(86400));
+        ensure!(source.screen(&route,address).await==DestinationScreening::Sanctioned);
+        topup::sanctions::rescreen(&db.app_pool,&routes,&source).await?;
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit WHERE action='sanctions.refund_destination_hit' AND subject=$1").bind(refund.to_string()).fetch_one(&db.app_pool).await?==1);
+        ensure!(logs_contain("pending refund destination"));
+        sqlx::query("UPDATE sanctions_list_snapshots SET verified_at=now()-interval '25 hours'").execute(&db.app_pool).await?;
+        ensure!(source.screen(&route,address).await==DestinationScreening::Sanctioned);
+        Ok(())
+    })).await
+}

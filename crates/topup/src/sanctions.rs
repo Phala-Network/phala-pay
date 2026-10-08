@@ -104,6 +104,21 @@ pub fn verdict(
     }
 }
 
+fn fresh_at(verified: DateTime<Utc>, now: DateTime<Utc>, max_staleness: Duration) -> bool {
+    let age = now.signed_duration_since(verified);
+    age >= chrono::Duration::zero()
+        && chrono::Duration::from_std(max_staleness).is_ok_and(|limit| age <= limit)
+}
+
+#[derive(FromRow)]
+struct ScreenedSnapshot {
+    id: Uuid,
+    publish_date: NaiveDate,
+    sha256: Vec<u8>,
+    verified_at: DateTime<Utc>,
+    hit: bool,
+}
+
 /// Decision-time local screener shared by deposits, treasury changes and refund destinations.
 #[derive(Clone)]
 pub struct ListScreener {
@@ -121,13 +136,13 @@ impl ListScreener {
     }
     /// Screens without chain restrictions or a historical-block pin.
     pub async fn check(&self, address: Address, purpose: &'static str) -> SanctionsResult {
-        let now = Utc::now();
         // Each source is one statement, so its hit and provenance share an MVCC snapshot.
-        let snapshot: Result<Option<(Uuid, NaiveDate, Vec<u8>, DateTime<Utc>, bool)>, sqlx::Error> = sqlx::query_as(
-            "SELECT s.id,s.publish_date,s.sha256,s.verified_at,EXISTS(SELECT 1 FROM sanctions_list_addresses a WHERE a.snapshot_id=s.id AND a.evm_address=$1) FROM sanctions_list_snapshots s WHERE s.source='ofac_sdn' AND s.activated_at IS NOT NULL ORDER BY s.activated_at DESC,s.id DESC LIMIT 1")
+        let snapshot = sqlx::query_as::<_, ScreenedSnapshot>(
+            "SELECT s.id,s.publish_date,s.sha256,s.verified_at,EXISTS(SELECT 1 FROM sanctions_list_addresses a WHERE a.snapshot_id=s.id AND a.evm_address=$1) AS hit FROM sanctions_list_snapshots s WHERE s.source='ofac_sdn' AND s.activated_at IS NOT NULL ORDER BY s.activated_at DESC,s.id DESC LIMIT 1")
             .bind(address.as_slice()).fetch_optional(&self.pool).await;
         let manual: Result<bool, sqlx::Error> = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sanctions_manual_entries WHERE evm_address=$1 AND removed_at IS NULL)")
             .bind(address.as_slice()).fetch_one(&self.pool).await;
+        let now = Utc::now();
         let reads_ok = snapshot.is_ok() && manual.is_ok();
         let manual_hit = manual.unwrap_or(false);
         let mut evidence = SanctionsProvenance {
@@ -139,18 +154,20 @@ impl ListScreener {
             screened_at: now.timestamp(),
         };
         let (hit, fresh) = match snapshot {
-            Ok(Some((id, date, sha, verified, hit))) => {
+            Ok(Some(ScreenedSnapshot {
+                id,
+                publish_date: date,
+                sha256: sha,
+                verified_at: verified,
+                hit,
+            })) => {
                 evidence.snapshot_id = Some(id);
                 evidence.sha256 = B256::try_from(sha.as_slice()).ok();
                 evidence.publish_date = Some(date.to_string());
                 evidence.verified_at = Some(verified.timestamp());
-                let age = now.signed_duration_since(verified).num_seconds();
                 (
                     hit,
-                    evidence.sha256.is_some()
-                        && age >= 0
-                        && chrono::Duration::from_std(self.max_staleness)
-                            .is_ok_and(|limit| now.signed_duration_since(verified) <= limit),
+                    evidence.sha256.is_some() && fresh_at(verified, now, self.max_staleness),
                 )
             }
             _ => (false, false),
@@ -568,7 +585,7 @@ impl Refresher {
             if matches!(outcome, Ok(Refresh::Activated)) {
                 pending_rescreen = true;
             }
-            if pending_rescreen && outcome.is_ok() {
+            if pending_rescreen {
                 match rescreen(&self.pool, &routes, &*screening).await {
                     Ok(()) => pending_rescreen = false,
                     Err(_) => tracing::error!(
@@ -609,9 +626,29 @@ pub async fn rescreen(
 ) -> Result<(), sqlx::Error> {
     // Existing daily worker consumes these in bounded batches; force current treasuries due.
     sqlx::query("UPDATE treasuries SET screened_at='epoch' WHERE applied_at IS NOT NULL AND replaced_at IS NULL").execute(pool).await?;
-    crate::treasuries::rescreen_due(pool, routes, screening, Utc::now())
-        .await
-        .map_err(|_| sqlx::Error::Protocol("treasury rescreen failed".into()))?;
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM treasuries WHERE applied_at IS NOT NULL AND replaced_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+    let mut screened = 0_u64;
+    let mut incomplete = false;
+    // The existing worker bounds each pass. Keep draining complete batches after activation,
+    // and retain retry state if an unreadable list prevents progress.
+    let count =
+        u64::try_from(count).map_err(|_| sqlx::Error::Protocol("invalid treasury count".into()))?;
+    while screened < count {
+        let result = crate::treasuries::rescreen_due(pool, routes, screening, Utc::now())
+            .await
+            .map_err(|_| sqlx::Error::Protocol("treasury rescreen failed".into()))?;
+        let progress = u64::try_from(result.clear.saturating_add(result.sanctioned))
+            .map_err(|_| sqlx::Error::Protocol("invalid treasury rescreen count".into()))?;
+        if progress == 0 {
+            incomplete = true;
+            break;
+        }
+        screened = screened.saturating_add(progress);
+    }
     crate::treasuries::rescreen_pending(pool, routes, screening)
         .await
         .map_err(|_| sqlx::Error::Protocol("pending treasury rescreen failed".into()))?;
@@ -645,7 +682,13 @@ pub async fn rescreen(
             );
         }
     }
-    Ok(())
+    if incomplete {
+        Err(sqlx::Error::Protocol(
+            "treasury rescreen unavailable".into(),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -721,6 +764,22 @@ mod tests {
                 .is_err()
             );
         }
+    }
+    #[test]
+    fn freshness_boundary_is_inclusive_and_future_evidence_holds() {
+        let now = Utc::now();
+        let limit = Duration::from_secs(86400);
+        assert!(fresh_at(now - chrono::Duration::hours(24), now, limit));
+        assert!(!fresh_at(
+            now - chrono::Duration::hours(24) - chrono::Duration::milliseconds(1),
+            now,
+            limit
+        ));
+        assert!(!fresh_at(
+            now + chrono::Duration::milliseconds(1),
+            now,
+            limit
+        ));
     }
     #[derive(Clone)]
     struct PublicationState {

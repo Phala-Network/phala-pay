@@ -331,7 +331,12 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "block_key": "chain:1",
             "lifted_at": "2026-09-28T12:00:00Z",
         }),
+        "ManualEntryRequest" => {
+            json!({"address":PAYER,"reason":"reviewed designation","source_ref":"UK entity reference"})
+        }
+        "ManualEntryResponse" => json!({"address":PAYER,"active":true}),
         "DailyReportResponse" => json!({
+            "sanctions_snapshot": null,
             "generated_at": "2026-09-28T12:00:00Z",
             "exposure_minor": "12500",
             "routes": [{

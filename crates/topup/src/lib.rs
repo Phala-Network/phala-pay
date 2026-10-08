@@ -12,6 +12,10 @@
     )
 )]
 
+// Match the development signer guard: fixture endpoints must never ship in release builds.
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("the test-support feature must not be enabled in release builds");
+
 pub mod api;
 pub mod api_keys;
 pub mod audit;

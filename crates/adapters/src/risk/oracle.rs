@@ -1,4 +1,4 @@
-//! Direct sanctions-list checks through an EVM oracle contract.
+//! Deprecated oracle adapter retained for N+1 removal; production uses verified OFAC lists.
 
 use std::sync::Arc;
 
@@ -22,10 +22,10 @@ sol! {
     function isSanctioned(address account) external view returns (bool sanctioned);
 }
 
-/// Source of two-provider sanctions answers at a recorded block.
+/// Injectable sanctions decision source. Verified lists ignore historical block numbers.
 #[async_trait]
 pub trait SanctionsSource: Send + Sync {
-    /// Checks one address at the exact supplied block number.
+    /// Checks an address. The block argument is retained only for the deprecated adapter.
     async fn sanctions(&self, address: Address, block_number: u64) -> SanctionsResult;
 }
 

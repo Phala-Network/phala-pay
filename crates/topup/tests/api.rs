@@ -1830,3 +1830,29 @@ async fn instance_maintenance_admission_and_expiry() -> Result<()> {
     database.cleanup().await?;
     result
 }
+
+#[tokio::test]
+async fn manual_sanctions_require_admin_signature_and_are_audited_atomically() -> Result<()> {
+    support::with_database(|db|Box::pin(async move {
+        let key=SigningKey::from_bytes(&[29;32]);
+        let app=test_router(&db.app_pool,&key);
+        let address=alloy_primitives::Address::repeat_byte(0x11);
+        let body=serde_json::to_vec(&json!({"address":format!("{address:#x}"),"reason":"reviewed fixture","source_ref":"UK:test"}))?;
+        let path="/v1/admin/sanctions/manual/add";
+        let unauthorized=app.clone().oneshot(axum::http::Request::post(path).header("content-type","application/json").body(axum::body::Body::from(body.clone()))?).await?;
+        ensure!(unauthorized.status()==StatusCode::UNAUTHORIZED);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM sanctions_manual_entries").fetch_one(&db.app_pool).await?==0);
+        for (path,active) in [(path,true),("/v1/admin/sanctions/manual/remove",false),(path,true)] {
+            let response=app.clone().oneshot(signed_request(Method::POST,path,body.clone(),ADMIN_KID,&key,Utc::now().timestamp())).await?;
+            ensure!(response.status()==StatusCode::OK);
+            let entry_active:bool=sqlx::query_scalar("SELECT removed_at IS NULL FROM sanctions_manual_entries WHERE evm_address=$1").bind(address.as_slice()).fetch_one(&db.app_pool).await?;
+            ensure!(entry_active==active);
+        }
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit WHERE action IN ('sanctions.manual_added','sanctions.manual_removed') AND actor_type='admin'").fetch_one(&db.app_pool).await?==3);
+        let malformed=serde_json::to_vec(&json!({"address":"0xinvalid","reason":"fixture","source_ref":"UK:test"}))?;
+        let response=app.clone().oneshot(signed_request(Method::POST,path,malformed,ADMIN_KID,&key,Utc::now().timestamp())).await?;
+        ensure!(response.status()==StatusCode::BAD_REQUEST);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit WHERE action IN ('sanctions.manual_added','sanctions.manual_removed')").fetch_one(&db.app_pool).await?==3);
+        Ok(())
+    })).await
+}

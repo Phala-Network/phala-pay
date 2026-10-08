@@ -39,13 +39,14 @@ one provider's word. Sanctions decisions also require agreement at the same cano
   scanner recorded as final. That is a finality violation or a scanner-provider fault: keep
   settlement paused, open incidents with both providers, and escalate.
 - One provider behind but consistent: wait within its SLA, then replace it.
-- Sanctions: only `Clear` from both endpoints at the verified screening block permits new credit.
-  Only `Sanctioned` from both rejects; page Compliance and follow
-  [rejected funds at treasury](rejected-funds-at-treasury.md). Disagreement or unavailability
-  holds and retries; never credit or record a sanctions hit from one answer. `TopupSanctionsHold`
-  alerts after the route's confirmation window. Preserve block number/hash and both answers.
-- Restore replay of an already delivered credit: both endpoints agreeing `Sanctioned` preserves
-  the delivered credit, records the hit and blocks sweep. Disagreement or unavailability holds
+- Sanctions: a fresh verified snapshot and successful manual-list read with no hit permit new credit.
+  A hit in either active source rejects even when stale; page Compliance and follow
+  [rejected funds at treasury](rejected-funds-at-treasury.md). A missing or stale negative answer, or failed database read,
+  holds and retries. `TopupSanctionsHold`
+  alerts after the route's confirmation window. Preserve snapshot id, SHA-256, publication and verification times, and manual-hit evidence;
+  follow the [sanctions list runbook](sanctions-list.md).
+- Restore replay of an already delivered credit: an active-list hit preserves
+  the delivered credit, records the hit and blocks sweep. An uncertain verdict holds
   without a hit or any change to that credit. Follow
   [sanctioned delivered credit](restore.md#sanctioned-delivered-credit).
 
