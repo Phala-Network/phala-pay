@@ -16,12 +16,16 @@ Phala Pay is pre-1.0 and has not had a third-party security audit. The live demo
 
 ## Documentation
 
-- [Documentation](https://github.com/Phala-Network/phala-pay#documentation)
-- [How it works](https://github.com/Phala-Network/phala-pay/blob/main/docs/overview.md)
-- [Architecture](https://github.com/Phala-Network/phala-pay/blob/main/docs/architecture.md)
-- [Integration](https://github.com/Phala-Network/phala-pay/blob/main/docs/integration.md)
-- [Self-hosting](https://github.com/Phala-Network/phala-pay/blob/main/docs/self-hosting.md#one-command-deploy)
-- [API reference](https://phala-network.github.io/phala-pay/)
+- [Documentation](https://pay.phala.com/docs)
+- [How it works](https://pay.phala.com/docs/overview)
+- [Integration](https://pay.phala.com/docs/integration)
+- [Integrator sandbox](https://pay.phala.com/docs/sandbox)
+- [Self-hosting](https://pay.phala.com/docs/self-hosting#one-command-deploy)
+- [Deployment reference](https://pay.phala.com/docs/deployment)
+- [Service configuration](https://pay.phala.com/docs/configuration)
+- [API reference](https://pay.phala.com/reference)
+- [Changelog](https://pay.phala.com/docs/changelog)
+- [Architecture (specification, on GitHub)](https://github.com/Phala-Network/phala-pay/blob/main/docs/architecture.md)
 
 ## SDKs and source
 

@@ -14,3 +14,15 @@ declare module "*?highlight" {
   const highlighted: import("../scripts/highlight.ts").HighlightedCode;
   export default highlighted;
 }
+
+/** The docs, rendered from the repository's markdown at build time (scripts/content-plugin.ts). */
+declare module "virtual:docs" {
+  const docs: import("./DocsPage.tsx").DocContent[];
+  export default docs;
+}
+
+/** The API reference's model, built from crates/topup/openapi.json at build time. */
+declare module "virtual:reference" {
+  const reference: import("../scripts/reference.ts").ReferenceModel;
+  export default reference;
+}

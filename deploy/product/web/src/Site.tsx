@@ -20,13 +20,15 @@ import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 export const REPO = "https://github.com/Phala-Network/phala-pay";
 export const LINKS = {
   repo: REPO,
-  docs: `${REPO}#documentation`,
-  overview: `${REPO}/blob/main/docs/overview.md`,
-  integration: `${REPO}/blob/main/docs/integration.md`,
-  selfHosting: `${REPO}/blob/main/docs/self-hosting.md`,
+  // The docs and the API reference, rendered on this site from the repository (/docs, /reference).
+  docs: "/docs",
+  overview: "/docs/overview",
+  integration: "/docs/integration",
+  selfHosting: "/docs/self-hosting",
   // The guide's one-command deploy to your own Phala Cloud workspace, beside its other two paths.
-  deploy: `${REPO}/blob/main/docs/self-hosting.md#one-command-deploy`,
-  reference: "https://phala-network.github.io/phala-pay/",
+  deploy: "/docs/self-hosting#one-command-deploy",
+  reference: "/reference",
+  changelog: "/docs/changelog",
   license: `${REPO}/blob/main/LICENSE`,
   security: `${REPO}/blob/main/SECURITY.md`,
   issues: `${REPO}/issues`,
@@ -542,6 +544,7 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
       { href: LINKS.docs, label: "Documentation" },
       { href: LINKS.integration, label: "Integration guide" },
       { href: LINKS.reference, label: "API reference" },
+      { href: LINKS.changelog, label: "Changelog" },
     ],
   },
   {

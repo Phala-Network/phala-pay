@@ -38,10 +38,15 @@ export function isLanguage(lang: string): lang is (typeof LANGUAGES)[number] & B
 export async function tokenize(code: string, lang: string): Promise<Token[][]> {
   if (!isLanguage(lang)) return code.split("\n").map((line) => [{ text: line }]);
   const { tokens } = (await getHighlighter()).codeToTokens(code, { lang, theme: "phala-pay" });
-  return tokens.map((line) => line.map(({ content, color }) => {
-    const className = tokenClass(color);
-    return className === undefined ? { text: content } : { text: content, className };
-  }));
+  // Neighbouring tokens of one colour become one, and whitespace joins its neighbour: fewer
+  // elements on the page for the same text.
+  return tokens.map((line) => line.reduce<Token[]>((merged, { content, color }) => {
+    const className = /^\s+$/.test(content) ? merged.at(-1)?.className : tokenClass(color);
+    const last = merged.at(-1);
+    if (last !== undefined && last.className === className) last.text += content;
+    else merged.push(className === undefined ? { text: content } : { text: content, className });
+    return merged;
+  }, []));
 }
 
 const SUFFIX = "?highlight";
