@@ -28,12 +28,19 @@ groups:
         annotations:
           summary: "Address history still needs dual backfill on chain {{ $labels.chain_id }}"
           runbook: "deploy/runbooks/rpc-health.md"
-      - alert: RpcStuckDepositStock
-        expr: topup_finality_stuck_deposits > 1
+      - alert: RpcUnresolvedDepositStock
+        expr: sum(topup_finality_unresolved) > 1
         labels: { severity: critical }
         annotations:
-          summary: "More than one deposit unresolved for an hour on chain {{ $labels.chain_id }}"
-          description: "Pause new quotes in this environment until stuck deposit stock returns to at most one."
+          summary: "More than one deposit remains unresolved after a due finality check"
+          description: "Pause new quotes in this environment until unresolved deposit stock returns to at most one."
+          runbook: "deploy/runbooks/deposit-reversed.md"
+      - alert: RpcUnresolvedDepositEntries
+        expr: sum(topup_finality_unresolved_entries_24h) > 1
+        labels: { severity: critical }
+        annotations:
+          summary: "More than one deposit first became unresolved in the last 24 hours"
+          description: "Pause new quotes in this environment until the rolling unresolved entry count returns to at most one."
           runbook: "deploy/runbooks/deposit-reversed.md"
       - alert: RpcPriceSnapshotBudgetExhausted
         expr: topup_daily_budget_used{name=~"price:.*"} >= 60

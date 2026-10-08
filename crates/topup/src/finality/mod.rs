@@ -212,6 +212,18 @@ impl FinalityWatch {
                         secondary_finalized,
                     )
                     .await;
+                if !matches!(&watched, Ok(Applied::Final | Applied::Reversed)) {
+                    // Rechecks and later resolution retain the original entry timestamp.
+                    // A concurrent finalization/reversal must not create an unresolved entry.
+                    sqlx::query(
+                        "UPDATE deposits SET first_unresolved_at=$2 WHERE id=$1 \
+                         AND first_unresolved_at IS NULL AND final_at IS NULL AND state <> 'reversed'",
+                    )
+                    .bind(deposit.id)
+                    .bind(now)
+                    .execute(&self.pool)
+                    .await?;
+                }
                 match watched {
                     Ok(Applied::Final) => stats.finalized = stats.finalized.saturating_add(1),
                     Ok(Applied::Followed) => stats.followed = stats.followed.saturating_add(1),

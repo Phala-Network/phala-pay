@@ -236,6 +236,10 @@ async fn deposits_the_watch_keeps_waiting_on_do_not_starve_later_ones() -> Resul
             };
             ensure!(final_at(later).await?.is_some());
             ensure!(final_at(unreadable).await?.is_none());
+            ensure!(
+                first_unresolved(pool, unreadable).await?.is_some(),
+                "RPC failure leaves a counted unresolved entry"
+            );
 
             // The deposits it keeps waiting on have their own recheck time: an immediate pass
             // reads nothing, and a pass after it reads them all again.
@@ -384,6 +388,7 @@ async fn newly_due_deposits_finalize_immediately_beside_backed_off_deposits() ->
         ensure!(stats.watched == 1 && stats.finalized == 1);
         ensure!(db::get_deposit(pool, fresh).await?.context("fresh")?.final_at.is_some());
         ensure!(schedule(pool, fresh).await? == (now, now + TimeDelta::seconds(60)));
+        ensure!(first_unresolved(pool, fresh).await?.is_none(), "normal finalization is not an unresolved entry");
         let first_due: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT finality_due_at FROM deposits WHERE id=$1").bind(not_due).fetch_one(pool).await?;
         ensure!(first_due.is_none());
         ensure!(chain.reads.lock().expect("read recorder").as_slice() == [B256::from(U256::from(2)); 2]);
@@ -509,35 +514,167 @@ async fn ambiguous_replacements_read_no_candidates_and_alert_without_reversing()
     Ok(())
 }
 
+async fn unresolved_counts(pool: &sqlx::PgPool, now: DateTime<Utc>) -> Result<(u64, u64)> {
+    let text = topup::observability::metrics::render_chain_reads_at(pool, now).await?;
+    let count = |name: &str| -> Result<u64> {
+        let series = format!("{name}{{chain_id=\"{CHAIN_ID}\"}} ");
+        Ok(text
+            .lines()
+            .find_map(|line| line.strip_prefix(&series))
+            .context("unresolved gauge")?
+            .parse()?)
+    };
+    Ok((
+        count("topup_finality_unresolved")?,
+        count("topup_finality_unresolved_entries_24h")?,
+    ))
+}
+
+async fn first_unresolved(pool: &sqlx::PgPool, id: Uuid) -> Result<Option<DateTime<Utc>>> {
+    Ok(
+        sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1")
+            .bind(id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
 #[tokio::test]
-async fn stuck_stock_counts_only_unresolved_deposits_past_first_due_plus_an_hour() -> Result<()> {
-    with_database(|context| Box::pin(async move {
-        let pool = &context.app_pool;
-        let address = setup(pool).await?;
-        let series = format!("topup_finality_stuck_deposits{{chain_id=\"{CHAIN_ID}\"}} ");
-        let stock = || async {
-            let text = topup::observability::metrics::render_chain_reads(pool).await?;
-            Ok::<_, anyhow::Error>(text.lines().find_map(|line| line.strip_prefix(&series)).context("stock gauge")?.parse::<u64>()?)
-        };
-        ensure!(stock().await? == 0);
-        for index in 1..=6 { insert(pool, address, index, 10).await?; }
-        // Two genuinely stuck, one newly due, one not yet claimed, one final and one reversed.
-        sqlx::query("UPDATE deposits SET finality_due_at=now() - interval '61 minutes' WHERE tx_hash IN ($1,$2,$3,$4)")
-            .bind(format!("{:#x}", B256::from(U256::from(1))))
-            .bind(format!("{:#x}", B256::from(U256::from(2))))
-            .bind(format!("{:#x}", B256::from(U256::from(5))))
-            .bind(format!("{:#x}", B256::from(U256::from(6))))
-            .execute(pool).await?;
-        sqlx::query("UPDATE deposits SET finality_due_at=now() WHERE tx_hash=$1").bind(format!("{:#x}", B256::from(U256::from(3)))).execute(pool).await?;
-        sqlx::query("UPDATE deposits SET final_at=now() WHERE tx_hash=$1").bind(format!("{:#x}", B256::from(U256::from(5)))).execute(pool).await?;
-        sqlx::query("UPDATE deposits SET state='reversed', reason=NULL WHERE tx_hash=$1").bind(format!("{:#x}", B256::from(U256::from(6)))).execute(pool).await?;
-        ensure!(stock().await? == 2);
-        sqlx::query("UPDATE deposits SET final_at=now() WHERE final_at IS NULL AND state <> 'reversed'").execute(pool).await?;
-        ensure!(stock().await? == 0, "gauge reload clears resolved stock");
-        let rules: serde_json::Value = serde_saphyr::from_str(include_str!("../../../deploy/rpc-alerts.yaml"))?;
-        let alert = rules["groups"][0]["rules"].as_array().context("rules")?.iter().find(|rule| rule["alert"] == "RpcStuckDepositStock").context("stock alert")?;
-        ensure!(alert["expr"] == "topup_finality_stuck_deposits > 1");
-        ensure!(alert["labels"]["severity"] == "critical");
-        Ok(())
-    })).await
+async fn unresolved_stock_and_entries_alert_at_two_and_survive_rechecks_and_restart() -> Result<()>
+{
+    with_database(|context| {
+        Box::pin(async move {
+            let pool = &context.app_pool;
+            let address = setup(pool).await?;
+            let now = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
+            let first = insert(pool, address, 1, 10).await?;
+            ensure!(
+                unresolved_counts(pool, now).await? == (0, 0),
+                "not counted before a due check"
+            );
+            let chain = scripted(BTreeSet::new());
+            let watch = FinalityWatch::single(
+                pool.clone(),
+                Arc::default(),
+                CHAIN_ID,
+                chain.clone(),
+                chain.clone(),
+            );
+            ensure!(watch.watch_once_at(CHAIN_ID, now).await?.watched == 1);
+            ensure!(first_unresolved(pool, first).await? == Some(now));
+            let (stock, entries) = unresolved_counts(pool, now).await?;
+            ensure!((stock, entries) == (1, 1), "stock has no one-hour delay");
+            ensure!(!(stock > 1 || entries > 1), "one entry does not alert");
+            // Rebuilding the watch and refreshing from a fresh pool cannot depend on process counts.
+            drop(watch);
+            let restarted_pool = topup::db::connect(&context.app_url, "test", 2).await?;
+            let restarted = FinalityWatch::single(
+                restarted_pool.clone(),
+                Arc::default(),
+                CHAIN_ID,
+                chain.clone(),
+                chain.clone(),
+            );
+            ensure!(
+                restarted
+                    .watch_once_at(CHAIN_ID, now + TimeDelta::seconds(60))
+                    .await?
+                    .watched
+                    == 1
+            );
+            ensure!(
+                unresolved_counts(&restarted_pool, now + TimeDelta::seconds(60)).await? == (1, 1)
+            );
+            ensure!(
+                first_unresolved(pool, first).await? == Some(now),
+                "recheck cannot overwrite first entry time"
+            );
+            let second = insert(pool, address, 2, 20).await?;
+            ensure!(
+                restarted
+                    .watch_once_at(CHAIN_ID, now + TimeDelta::seconds(61))
+                    .await?
+                    .watched
+                    == 1
+            );
+            ensure!(first_unresolved(pool, second).await? == Some(now + TimeDelta::seconds(61)));
+            let (stock, entries) =
+                unresolved_counts(&restarted_pool, now + TimeDelta::seconds(61)).await?;
+            ensure!((stock, entries) == (2, 2));
+            ensure!(stock > 1 && entries > 1, "two entries alert");
+            let rules: serde_json::Value =
+                serde_saphyr::from_str(include_str!("../../../deploy/rpc-alerts.yaml"))?;
+            for (name, expression) in [
+                (
+                    "RpcUnresolvedDepositStock",
+                    "sum(topup_finality_unresolved) > 1",
+                ),
+                (
+                    "RpcUnresolvedDepositEntries",
+                    "sum(topup_finality_unresolved_entries_24h) > 1",
+                ),
+            ] {
+                let rule = rules["groups"][0]["rules"]
+                    .as_array()
+                    .context("rules")?
+                    .iter()
+                    .find(|rule| rule["alert"] == name)
+                    .context("unresolved alert")?;
+                ensure!(rule["expr"] == expression);
+                ensure!(rule["labels"]["severity"] == "critical");
+            }
+            restarted_pool.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn resolved_unresolved_entries_remain_in_the_rolling_window_until_twenty_four_hours()
+-> Result<()> {
+    with_database(|context| {
+        Box::pin(async move {
+            let pool = &context.app_pool;
+            let address = setup(pool).await?;
+            let id = insert(pool, address, 1, 20).await?;
+            let now = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
+            let chain = scripted(BTreeSet::new());
+            let watch =
+                FinalityWatch::single(pool.clone(), Arc::default(), CHAIN_ID, chain.clone(), chain);
+            ensure!(watch.watch_once_at(CHAIN_ID, now).await?.watched == 1);
+            let resolved = scripted(BTreeSet::from([B256::from(U256::from(1))]));
+            let watch = FinalityWatch::single(
+                pool.clone(),
+                Arc::default(),
+                CHAIN_ID,
+                resolved.clone(),
+                resolved,
+            );
+            ensure!(
+                watch
+                    .watch_once_at(CHAIN_ID, now + TimeDelta::seconds(60))
+                    .await?
+                    .finalized
+                    == 1
+            );
+            ensure!(
+                first_unresolved(pool, id).await? == Some(now),
+                "resolution retains the entry"
+            );
+            ensure!(unresolved_counts(pool, now + TimeDelta::seconds(60)).await? == (0, 1));
+            ensure!(
+                unresolved_counts(pool, now + TimeDelta::hours(24) - TimeDelta::seconds(1)).await?
+                    == (0, 1)
+            );
+            ensure!(unresolved_counts(pool, now + TimeDelta::hours(24)).await? == (0, 0));
+            ensure!(unresolved_counts(pool, now + TimeDelta::hours(25)).await? == (0, 0));
+            ensure!(
+                first_unresolved(pool, id).await? == Some(now),
+                "expiry does not clear durable history"
+            );
+            Ok(())
+        })
+    })
+    .await
 }

@@ -73,8 +73,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   to every ten minutes until six hours, then hourly; normal newly due finalization and the
   one-hour pending-after-reorg alert are unchanged. Only one service-known replacement candidate
   may be read on both endpoints; multiple candidates alert and keep the deposit unresolved.
-  Per-chain stuck-deposit stock alerts above one deposit unresolved for an hour after first due;
-  operators must pause new quotes in that environment until stock is at most one.
+  DB-derived per-chain gauges track current unresolved stock immediately and distinct first
+  unresolved entries over the rolling 24 hours, retaining resolved entries in that window.
+  Either environment total above one alerts; operators must pause new quotes until both
+  counts return to at most one. The first unresolved timestamp survives rechecks and rollback.
 - Payment discovery runs every five minutes, dual finalized checkpoints are independently
   verified and published every ten minutes, and complete dual log coverage runs hourly.
   Observation-chain contract recovery remains every minute and admitted hint processing keeps
