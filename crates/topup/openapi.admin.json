@@ -1060,6 +1060,11 @@
             },
             "type": "array"
           },
+          "sanctions_manual_entries": {
+            "description": "Number of active operator supplements; inspect the signed manual-list endpoint.",
+            "format": "int64",
+            "type": "integer"
+          },
           "sanctions_snapshot": {
             "oneOf": [
               {
@@ -1073,6 +1078,7 @@
           }
         },
         "required": [
+          "sanctions_manual_entries",
           "generated_at",
           "exposure_minor",
           "routes",
@@ -2296,6 +2302,40 @@
         ],
         "type": "object"
       },
+      "ManualEntry": {
+        "description": "Active operator supplement with its designation and creation evidence.",
+        "properties": {
+          "address": {
+            "description": "Normalized full EVM address.",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "Last addition or reactivation time.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "description": "Signing administrator identity.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Audited operator reason.",
+            "type": "string"
+          },
+          "source_ref": {
+            "description": "Official source document or entity reference.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "reason",
+          "source_ref",
+          "created_by",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "ManualEntryRequest": {
         "additionalProperties": false,
         "example": {
@@ -2305,7 +2345,7 @@
         },
         "properties": {
           "address": {
-            "description": "EVM address, normalized to 20 bytes without EIP-55 validation.",
+            "description": "EVM address with 0x prefix, normalized to 20 bytes without EIP-55 validation.",
             "type": "string"
           },
           "reason": {
@@ -9854,6 +9894,88 @@
         ]
       }
     },
+    "/v1/admin/sanctions/manual": {
+      "get": {
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ManualEntry"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Active manual sanctions entries",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional: minimum seconds to wait before retrying; sent for database admission failures and service_restoring, and may be absent for other unavailable errors",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "http_message_signature": []
+          }
+        ],
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/v1/admin/sanctions/manual/add": {
       "post": {
         "operationId": "add",
@@ -10050,6 +10172,34 @@
               }
             },
             "description": "Invalid input",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No active entry",
             "headers": {
               "Cache-Control": {
                 "description": "Tenant data and credentials must never be stored, including errors",

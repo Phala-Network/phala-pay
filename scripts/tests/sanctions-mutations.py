@@ -49,6 +49,8 @@ core_original = core.read_text()
 core_command = ["cargo", "test", "--locked", "-p", "topup-core", "--lib",
                 "screening::tests::sanctions_verdict_truth_table", "--", "--exact"]
 core_mutants = [
+    ("clear verdict proceeds", "SanctionsVerdict::Clear => {}", "SanctionsVerdict::Clear => return StepOutcome::Reject(RejectReason::Sanctioned),"),
+    ("uncertain verdict holds rather than proceeding", "SanctionsVerdict::Uncertain => {\n            return StepOutcome::Retry {\n                error: RetryError::SanctionsInconclusive,\n            };\n        }", "SanctionsVerdict::Uncertain => {}"),
     ("sanctioned verdict rejects", "SanctionsVerdict::Sanctioned => return StepOutcome::Reject(RejectReason::Sanctioned),", "SanctionsVerdict::Sanctioned => {},"),
     ("uncertain verdict retries with the stable hold code", "error: RetryError::SanctionsInconclusive,", "error: RetryError::Transient,"),
 ]
@@ -72,4 +74,4 @@ try:
         core.write_text(core_original)
 finally:
     core.write_text(core_original)
-print("PASS all 14 verdict/action mutants killed; original sources restored", flush=True)
+print(f"PASS all {len(mutations) + len(core_mutants)} verdict/action mutants killed; original sources restored", flush=True)
