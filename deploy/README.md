@@ -615,10 +615,17 @@ coverage, bounded backfill and six-hour catch-up. Compare measured call counters
 provider's dashboard. Both environments share keys and upstream quotas. Each fresh quote snapshot costs one read call and
 240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
 [RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all nine
-chain/token routes (three production, six staging), refunds, unresolved finality stock and
-proof work. Parallel-mode caps are production D=60/day and staging D=20/day, with H=80 hint
-tasks per environment/UTC day and Q=60 fresh snapshots per price chain/environment/UTC day.
+chain/token routes (three production, six staging), refunds, unresolved finality stock, slow
+confirmation lane L and proof work. Parallel-mode caps are production D=46/day and staging
+D=20/day, with H=80 hint tasks per environment/UTC day and Q=60 fresh snapshots per price
+chain/environment/UTC day.
 D, factory and Safe counts are operational caps with monitoring and stop actions.
+L accepts normal-window exhaustion solely from height lag, credits without a checkpoint wait
+and does not count toward S. Current L stock and rolling-24-hour entries are each ≤1 per
+environment across payment chains. Monitor `topup_confirmation_slow` and
+`topup_confirmation_slow_entries_24h`: L lasting ten minutes alerts on provider lag; either sum
+above one triggers its capacity alert and affected-chain quote pause. See the
+[confirmation budget and retry caveat](RPC.md#worst-case-pilot-budget).
 
 ## Attestation, ingress, and egress
 

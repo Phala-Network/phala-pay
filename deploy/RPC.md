@@ -73,11 +73,13 @@ Both environments use Ankr read and Infura verify for payments and prices.
 
 | Limit | Production | Staging | Enforcement |
 |---|---:|---:|---|
-| Deposits handled/day, D | 60 | 20 | Operational |
+| Deposits handled/day, D | 46 | 20 | Operational |
 | Concurrent attached pending refunds, R | 2 | 1 | Atomic attachment admission |
 | New refund attachments/rolling 24 h, N | 1 | 1 | Atomic attachment admission |
 | Unresolved finality stock/environment, S | 1 | 1 | Operational; pause affected-chain quotes and escalate above S |
 | New unresolved entries/environment/rolling 24 h | 1 | 1 | Operational; same stock stop rule |
+| Current slow-confirmation stock, L/environment | 1 | 1 | Operational; pause affected-chain quotes above the limit |
+| New slow-confirmation entries/environment/rolling 24 h | 1 | 1 | Operational; same L capacity stop rule |
 | Hint tasks/environment/UTC day, H | 80 | 80 | Atomic daily budget |
 | Fresh quote snapshots/price chain/environment/UTC day, Q | 60 | 60 | Atomic daily budget |
 | Factory receipt-verification instances/day | 60 | 20 | Operational |
@@ -140,13 +142,33 @@ Variable allowances before retries:
 
 | Work | Ankr calls | Infura credits |
 |---|---:|---:|
-| Deposit: cold discovery 3, confirm allocation 5, coverage completion/re-verification 6, initial finality 4, price snapshots 2 | 20 | 1,680 |
+| Deposit: cold discovery 3, confirmation and first finality verification 13, coverage completion/re-verification 6, price snapshots 2 | 24 | 2,000 |
 | Unresolved finality recheck, including at most one replacement candidate | 4 | 320 |
+| Combined L stock/turnover: 172 head methods per endpoint/day | 172 | 13,760 |
 | Hint task | 12 | 640 |
 | Price snapshot, including verify's head and pin header | 1 | 240 |
 | Factory receipt verification | 3 | 240 |
 | Safe challenge/proof set | 3 | 160 |
 | Extra operation, conservatively priced as logs | 1 | 255 |
+
+Confirmation first probes the required head independently on both endpoints. Once both reach
+the requirement, the same claim reads full evidence once per endpoint: receipt, canonical
+header and transaction, at most three methods. Recheck the actual receipt's inclusion and
+applicable confirmation policy before crediting. Waiting for heads does not repeatedly read
+receipts. Normal logical bounds per endpoint are:
+
+| Mode | Head probes | Full evidence methods | First later finality verification | Total |
+|---|---:|---:|---:|---:|
+| Depth | 6 | 3 | 4 | 13 |
+| Safe | 3 | 3 | 4 | 10 |
+| Finalized | 7 | 3 | 0 | 10 |
+
+Finalized confirmation records finality without a duplicate first watcher check. Depth sets a
+fixed estimated-depth anchor `a` and probes immediately, then at `a + 4, 12, 28, 60, 124 s`.
+Safe probes immediately and every 384 s, at most three probes in a 768 s window; Finalized
+allows seven in a 2,304 s window. Missed slots are skipped, deadlines do not extend, and
+normal/L together permit only one full confirmation-evidence read per endpoint. See the
+[confirmation schedule](../docs/design/chain-reads.md#confirmation-waits-and-slow-lane-l).
 
 Sanctions screening uses local OFAC/manual lists, with no RPC term; address derivation is local.
 Staging's two PHA routes share one TWAP pool and five-minute sampler: `86,400 / 300 = 288`
@@ -162,8 +184,9 @@ one-hour `TopupDepositPendingAfterReorg` alert remains. S=1 bounds the sum acros
 chains in each environment, two combined. At most S new unresolved entries may occur per
 environment in any rolling 24 hours; resolved entries still count in that window. Budget
 first-day cost for S arrivals plus later-day cost for S carried stock each day. This
-stock/turnover allowance is separate from D and its initial finality allocation. The budget
-numbers below are retained pending the confirm-wait budget update.
+stock/turnover allowance is separate from D and its initial finality allocation. Height lag
+alone stays in normal confirmation or L and does not enter S. Missing transfers, conflicting
+or changed evidence, and RPC failures that cannot establish height-only lag enter S.
 
 `ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
 A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr / 80 Infura).
@@ -181,8 +204,8 @@ release reservations to bypass this gate. Follow the
 
 The branches are mutually exclusive, so the complete per-endpoint recheck bound is
 `max(3, 1 + 3×K) = 4` methods at K=1: one original receipt plus the candidate's receipt,
-header and transaction. This bound applies to the first due finality check too, so D includes
-four initial-finality methods per endpoint: 20 Ankr / 1,680 Infura per deposit in total.
+header and transaction. D includes four first-finality methods in its worst-case Depth
+allocation: 24 Ankr / 2,000 Infura per deposit in total.
 Charge four Ankr calls / 320 Infura credits per subsequent recheck, before ×1.1:
 
 | Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Infura credits/deposit/day |
@@ -203,6 +226,15 @@ again to the extra-operation reserve. Manual anomaly investigation consumes that
 More-than-one-candidate cases retain their stock slot and verification; the operator preserves
 the timeline and canonical evidence and resolves the anomaly through reviewed, audited action.
 
+L separately budgets first-day head probes for one new entry plus hourly probes for one carried
+entry per environment. Its full evidence read is already in D's three-method allocation:
+
+```text
+L head methods: 2 environments × (1 new × 62 + 1 carried × 24) = 172 per endpoint
+Ankr:          172 calls
+Infura:        172 × 80 = 13,760 credits
+```
+
 Refund checks run every 60 s for the first 30 min after attachment, every ten minutes until 24 h,
 then hourly. Asymmetric evidence can cost four methods per endpoint per check. Before retries,
 each first refund-day costs at most 684 Ankr / 54,720 Infura, and each later day 96 / 7,680.
@@ -212,26 +244,75 @@ non-refund work uses the approved ten-percent allowance:
 
 ```text
 Non-refund Ankr:
-5,112 + 528 + 20×80 + 2×12×80 + 3×80 + 3×12 + 300
-+ 688 = 10,424
+5,112 + 528 + 24×66 + 2×12×80 + 3×80 + 3×12 + 300
++ 688 + 172 = 10,580
 
 Non-refund Infura:
-337,920 + 240×528 + 1,680×80 + 2×640×80
-+ 240×80 + 160×12 + 255×300 + 55,040 = 854,100
+337,920 + 240×528 + 2,000×66 + 2×640×80
++ 240×80 + 160×12 + 255×300 + 55,040 + 13,760 = 865,460
 
 Refund Ankr:   3 × (684×2 + 96×3)       = 4,968
 Refund Infura: 3 × (54,720×2 + 7,680×3) = 397,440
 
-Combined Ankr:   10,424×1.1 + 4,968    = 16,434.4 calls/day
-Combined Infura: 854,100×1.1 + 397,440 = 1,336,950 credits/day
+Combined Ankr:   10,580×1.1 + 4,968    = 16,606 calls/day
+Combined Infura: 865,460×1.1 + 397,440 = 1,349,446 credits/day
+
+From the previous allocation:
+Ankr:   10,424 − 20×80 + 24×66 + 172 = 10,580 before retries
+Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 = 865,460 before retries
+
+Headroom Ankr:   (25,000 − 16,606) / 25,000       = 33.58%
+Headroom Infura: (1,500,000 − 1,349,446) / 1,500,000 = 10.04%
 ```
 
-Rounded up, the retained modeled allowance is **16,435 Ankr calls/day** and
-**1,336,950 Infura credits/day**, with **34.26% Ankr / 10.87% Infura** headroom below the stop
-lines. Replacement reads and daily stock turnover are included; all other caps remain unchanged.
-These figures await the confirm-wait budget update and are not a code-enforced quota guarantee.
-The ×1.1 allowance does not cover every non-refund method exhausting all
-three transport attempts simultaneously.
+The modeled allowance is **16,606 Ankr calls/day** and **1,349,446 Infura credits/day**, with
+**33.58% Ankr / 10.04% Infura** headroom below the stop lines. Production D=46 and staging D=20
+give 66 deposits/day combined; all other existing caps remain unchanged. Production D=47 would
+cost 1,351,646 Infura credits/day and leave 9.89%, so 46 is the largest production D that fits
+the approved headroom with this allocation.
+
+Non-refund reads use ×1.1; refunds reserve all three transport attempts. Logical method counts
+have hard bounds, while each method can make up to three physical sends. These totals do not
+guarantee ten-percent headroom if all non-refund requests exhaust retries. Approved caveat, verbatim:
+
+> 延续已批准的计费口径：非退款 ×1.1，退款预留全部三次 transport attempts。逻辑方法数有硬上界；每方法的物理发送上界仍为三倍。不能把上述总额描述成“所有非退款请求都耗尽重试时仍保留 10%”。
+
+### Slow confirmation lane L
+
+L receives a deposit only when its normal confirmation window ran out solely because a required
+head was behind. Unequal head heights alone are not evidence disagreement. L is separate from
+S: height-only waiting does not set `first_unresolved_at` or consume S capacity. A missing
+transfer, conflicting or changed receipt evidence, or an RPC failure that prevents establishing
+height-only lag goes to S; a stored-checkpoint hash conflict freezes the chain.
+
+L uses the persisted `first_slow_at` age: 60 s until ten minutes, ten minutes until six hours,
+then hourly. The entry probe was already charged in the normal window; the first L probe is
+60 s later. Each due time reads only the corresponding head once per endpoint. As soon as both
+reach the requirement, read the one allowed full evidence set and continue confirmation and
+credit without waiting for the published checkpoint. Discovery/hint evidence does not substitute
+for that read. A failed or anomalous full read enters S and never restarts the normal window.
+
+Current L stock and rolling-24-hour first entries are each limited to one, summed across all
+payment chains per environment. `first_slow_at` is set once and retained; entries still count
+after leaving L. The DB-derived gauges are `topup_confirmation_slow{chain_id}` and
+`topup_confirmation_slow_entries_24h{chain_id}`. Current stock excludes deposits that entered S,
+confirmed or terminated. Scope selectors to one environment before summing:
+
+- A deposit in L for ten minutes triggers the provider-lag alert.
+- `sum(topup_confirmation_slow) > 1` or `sum(topup_confirmation_slow_entries_24h) > 1`
+  triggers the independent L capacity alert. Pause new quotes on all routes of the affected
+  chain and coordinate merchant intake. Existing funded work continues verification; keep its
+  reservations and excess records.
+
+Do not treat L as S or use that separation to allow unbounded load. L limits are operational;
+resume new quotes only when L inventory, its rolling entries, S and the daily work all fit.
+Normal, L and S share the persisted chain-read due time and atomic lease claim. Consume the
+probe/evidence allowance and advance due time before RPC; failed or crashed reads do not refund
+it. RPC runs outside the transaction and chain lock; evidence commits check the lease token
+and record version. One logical reader owns each due time. Restarts, missed ticks, pump/watcher
+handoffs and price retries never reopen the normal window or evidence allowance. Reuse persisted finalized
+evidence for valuation; non-final evidence retains watcher eligibility for finality verification.
+N-1 data compatibility preserves history but does not make its binary obey these new budgets.
 
 ### Monitoring and stop actions
 
@@ -303,6 +384,9 @@ can extend them. Time measured from inclusion also includes chain confirmation/f
 |---|---|
 | Manual transfer without a hint | Discovery in 0–5 min, average about 2.5 min, then confirmation and processing |
 | Checkout with an admitted hint | Instant processing path: credit in seconds at route confirmation, independent of scan ticks |
+| Depth confirmation | About 4 s after expected depth when healthy; under lag, up to the current probe interval (maximum 64 s in the normal window), then L |
+| Safe / Finalized confirmation | One 384 s epoch interval after the corresponding head satisfies the requirement, within the normal window |
+| L confirmation after heads recover | Current L interval: 60 s / ten minutes / one hour by age, then RPC and processing; no checkpoint wait |
 | Quote expiry, cancel completion and unpaid reservation release | ≤ about 70 min after finality: checkpoint ≤10 min + coverage ≤60 min + expiry worker ≤5 s |
 | Known-deposit reversal and checkpoint-conflict freeze | ≤10 min checkpoint scheduling delay, then watch/RPC processing |
 | Custody discrepancy | ≤ about 130 min after finality: checkpoint ≤10 min + coverage ≤60 min + hourly custody ≤60 min |

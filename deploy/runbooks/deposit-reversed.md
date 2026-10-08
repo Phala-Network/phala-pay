@@ -89,6 +89,46 @@ the anomaly through reviewed, audited action backed by independent canonical evi
 runbook does not authorize a forced reversal. Manual investigation consumes the
 [extra-operation reserve](../RPC.md#worst-case-pilot-budget).
 
+## Confirmation delay and slow lane L
+
+Ordinary height lag stays outside S. Normal confirmation reads only the corresponding head on
+each endpoint until both meet the requirement, then reads complete receipt/header/transaction
+evidence once in that claim. Depth allows six normal probes, targeting about four seconds after
+expected depth when healthy; under lag, delay is bounded by the current interval, up to
+64 seconds. Safe/Finalized target one 384-second epoch interval within their bounded windows.
+
+L receives only a normal window exhausted solely by height lag. Its persisted `first_slow_at`
+anchors 60-second probes until ten minutes, ten-minute probes until six hours, then hourly;
+the first L probe is 60 seconds after entry. Each due reads heads only. When both satisfy the
+actual policy, read the single allowed complete evidence set and continue credit immediately,
+without waiting for the checkpoint. Normal and L share that one full read allowance; a failure
+or anomaly goes to S, never a fresh normal window. Existing hint/discovery evidence cannot
+replace the independent complete read at credit.
+
+Monitor `topup_confirmation_slow` and `topup_confirmation_slow_entries_24h`. Current L stock
+and rolling-24-hour first entries are each limited to one per environment, summed across payment
+chains. `first_slow_at` stays set, so entries still count after confirmation, termination or
+transition to S; those transitions remove the current L stock slot. L does not count toward S.
+A deposit in L for ten minutes raises the provider-lag alert; either environment's sum above
+one raises the independent L capacity alert. Pause new quotes on all affected-chain routes
+using the quote-pause command below and coordinate merchant intake. Keep funded verification,
+reservations and excess records. See [provider lag](rpc-health.md#confirmation-provider-lag).
+
+Normal/L pump reads and S/watcher reads share one atomic lease claim and chain-read due time.
+Counts and the next due are consumed before RPC; failure/crash does not return them. Exactly
+one logical reader owns a due time. Missed slots are skipped. Restarts, handoffs and valuation
+retries cannot reopen windows or evidence allowances. S follows re-inclusion until finality
+and passes usable final evidence to confirmation/valuation in the same claim, without a second
+receipt read. Persisted final evidence can serve price retries; non-final evidence retains
+watcher eligibility. Never clear due fields or infer proof from `dual_verified_at` alone.
+
+L budgets `2×(62 + 24) = 172` head methods per endpoint across both environments daily:
+172 Ankr calls / 13,760 Infura credits before retries. The complete read is already in D's
+24 Ankr / 2,000 Infura allocation. Production D=46 and staging D=20 remain operational caps;
+follow the [full arithmetic and retry caveat](../RPC.md#worst-case-pilot-budget).
+Resume new quotes only when L stock/entries, S and daily work fit. N-1 preserves compatible
+rows, but its binary does not obey the new scheduler budget; use the prior operating budget.
+
 ## Unresolved finality stock and recovery
 
 At its first unresolved check, a deposit enters S and persists `first_unresolved_at`. This
@@ -99,6 +139,8 @@ six hours, then hourly. Exactly one reader runs per due time. The first day budg
 `10 + 34 + 18 = 62` rechecks; each later day budgets 24. The existing one-hour
 `TopupDepositPendingAfterReorg` alert remains, including while a replacement anomaly waits
 for operator resolution.
+Missing or conflicting/changed evidence and RPC failures that cannot establish height-only lag
+enter S. Normal head waiting or L alone does not set `first_unresolved_at` or count toward S.
 
 Count a deposit in S from that first unresolved check, not after one hour. Monitor S=1 as the
 sum across all payment chains per environment, two combined.

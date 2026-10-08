@@ -136,7 +136,8 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
 
 ### 2.4 Money evidence (both endpoints)
 
-- **Confirm**: each endpoint independently reads receipt, transaction, header and its own head;
+- **Confirm**: probe each endpoint's required head first; once both meet the requirement, read
+  full receipt, transaction and canonical header evidence once per endpoint in the same claim;
   equal fields required: chain, tx hash, receipt status, block number and hash, receipt log
   index, token, from, to, amount, block time, sender nonce (OP-stack `0x7e`: receipt `from` and
   `depositNonce`), confirmation reached on each. Read's detection values are never passed to
@@ -162,6 +163,60 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
 - **Treasury EIP-1271** (`treasuries/proof.rs`): dual calls at the same canonical pin.
 - **Flush records**: only from §2.2 step 4.
 
+#### Confirmation waits and slow lane L
+
+Normal head probes are bounded and persisted independently of the one full evidence read.
+For Depth, with block time T=12 s on Ethereum and 2 s on Base:
+
+```text
+B = deposit.block_number + required_depth − 1
+t0 = completion time of the first dual head probe
+h_i, s_i = each endpoint's returned height and timestamp
+e_i = t0 if h_i >= B, otherwise s_i + (B − h_i) × T
+a = max(t0, min(e_read, e_verify))
+```
+
+Probe immediately, then at `a + 4, 12, 28, 60, 124 s`: six probes total. Estimation schedules
+wake-ups only; both actual heads must satisfy the actual receipt's applicable policy. Anchor
+and deadline never extend. Skip missed slots instead of replaying them; recovery executes at
+most one current probe. Safe probes immediately and every 384 s, at most three probes in
+768 s; Finalized allows seven probes in 2,304 s. Head differences alone do not prove disagreement.
+
+If the normal window expires solely because the required height is still missing, enter L.
+Do not wait for the checkpoint or set `first_unresolved_at`. L uses `first_slow_at`, set once
+and never cleared, with 60 s checks until ten minutes, ten-minute checks until six hours, then
+hourly. The last normal probe already paid for entry; the first L probe is 60 s later. Each
+probe reads just one corresponding head per endpoint. Once both satisfy the requirement, read
+the full evidence set in that claim and continue credit immediately, without a checkpoint wait.
+Discovery/hint evidence cannot replace this full read.
+
+Normal and L together allow only one full confirmation-evidence read per endpoint. A missing
+transfer, disagreement, changed receipt evidence, or an RPC failure that prevents proving
+height-only lag enters S; it never reopens the normal window. A persisted checkpoint conflict
+still freezes the chain. L does not count toward S.
+
+Current L stock and rolling-24-hour first entries are each ≤1 per environment, summed across
+payment chains. `topup_confirmation_slow{chain_id}` counts current L; moving to S, confirming or
+terminating removes its stock slot. `topup_confirmation_slow_entries_24h{chain_id}` is the exact
+DB-derived first-entry count, including deposits that left L. A deposit in L for ten minutes
+raises a provider-lag alert. Either environment-scoped sum above one raises the L capacity
+alert: pause new quotes on the affected chain and coordinate merchant intake. Keep funded work,
+verification and reservations; never drop excess entries to fit the allowance.
+
+Normal/L pump reads and S/first-finality watcher reads use one atomic claim, lease and shared
+chain-read due time. Consume counts and advance due time in the atomic claim before RPC.
+Run RPC outside the database transaction and chain lock; commit evidence only with the valid
+lease token and record version. Failure/crash does not refund counts;
+restarts, handoffs and price retries cannot reset them. S follows re-inclusion until finality
+without handing back to a fresh normal window. Finalized watcher evidence goes to common
+confirmation/valuation in the same claim without a second receipt read. Persisted final evidence
+can serve price retries; non-final evidence retains watcher eligibility and cannot prove credit
+forever. N-1 migrations preserve fields/history, but its binary needs its own operating budget.
+Normal probe slots use `confirm_head_checks` (default 0), the single complete read uses
+`confirm_receipt_checks` (default 0), and the fixed window uses nullable `confirm_deadline_at`;
+`first_slow_at` is nullable. The shared chain-read
+due time is `finality_check_at`. `first_slow_at` remains separate from `first_unresolved_at`.
+
 ### 2.5 Checkpoint, reorgs, reversal
 
 An independent ten-minute loop per payment chain checks and publishes
@@ -175,7 +230,8 @@ unresolved check, persisted as `first_unresolved_at`. This includes a `detected`
 transfer both endpoints agree is absent during confirmation, without waiting for the checkpoint.
 The pump and finality watcher share one persisted backoff anchored to `first_unresolved_at`:
 every 60 s until ten minutes, every ten minutes until six hours, then hourly, with exactly one
-reader per due time. The separate one-hour pending-after-reorg alert remains; verification and
+reader per due time. Ordinary height lag uses normal confirmation/L rather than S. The separate
+one-hour pending-after-reorg alert remains; verification and
 reservations continue. The operational stock allowance is S=1 summed across payment chains per
 environment, with at most one new unresolved entry per environment in any rolling 24 hours.
 Resolved entries still count in that window. Quote pause and escalation apply above either
@@ -301,18 +357,31 @@ and Safe caps have no code enforcement; operators must tally work and stop new l
 Refund attachments have atomic concurrent and rolling-24-hour admission caps. Hint and price
 daily budgets and the permanent address cap are hard limits.
 
-With K=1, the first due finality check and each unresolved recheck cost at most
-`max(3, 1 + 3×K) = 4` methods per endpoint. Including the first check, each deposit costs
-20 Ankr calls / 1,680 Infura credits before retries. S=1 per environment and at most S arrivals
-per environment per rolling 24 hours give
-`2×(62 + 24) = 172` daily rechecks, including first-day arrivals and carried stock: 688 Ankr
-calls / 55,040 Infura credits before retries. With ×1.1 non-refund work, ×3 refund attempts and
-the extra reserve, totals are 16,435 Ankr calls/day and 1,336,950 Infura credits/day, leaving
-34.26% / 10.87% headroom below the stop lines. All other caps remain unchanged. The retained
-calculation includes replacement reads and stock turnover under the operating limits and retry
-assumptions; it is not a code-enforced quota guarantee. Follow the linked monitoring
-and stop procedures before adding load. These budget numbers are retained pending the
-confirm-wait budget update.
+Per endpoint, Depth's normal allocation is 6 head methods + 3 complete-evidence methods + 4
+first-finality methods = 13. Safe uses 3 + 3 + 4 = 10; Finalized uses 7 + 3 + 0 = 10 and records
+finality without a duplicate first watcher check. Each deposit budgets 3 cold-discovery + 13
+confirmation/finality + 6 coverage + 2 price methods = **24 Ankr / 2,000 Infura**.
+
+With K=1, S rechecks cost `max(3, 1 + 3×K) = 4` methods per endpoint. S=1 plus at most one new
+entry per environment per rolling 24 h gives `2×(62 + 24) = 172` daily rechecks: 688 Ankr /
+55,040 Infura before retries. L has its own one-stock/one-entry limits, giving 172 head methods
+per endpoint: **172 Ankr / 13,760 Infura**. Its final full evidence read is already in D.
+
+Production D=46 and staging D=20 give 66 deposits/day; other existing caps remain unchanged.
+The approved arithmetic, including all existing proof/reserve allocations, is:
+
+```text
+Non-refund Ankr:   10,424 − 20×80 + 24×66 + 172 = 10,580
+Non-refund Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 = 865,460
+Combined Ankr:     10,580×1.1 + 4,968 = 16,606 calls/day
+Combined Infura:   865,460×1.1 + 397,440 = 1,349,446 credits/day
+```
+
+Headroom is **33.58% Ankr / 10.04% Infura**. Non-refund reads use ×1.1; refunds reserve all
+three transport attempts. Logical method counts have hard bounds; each method can still make
+up to three physical sends. These totals do not guarantee ten-percent headroom if all
+non-refund requests exhaust retries. See the
+[approved retry caveat](../../deploy/RPC.md#worst-case-pilot-budget) and monitoring/stop actions.
 
 ### 5.3 Latency and recovery targets
 
@@ -323,6 +392,9 @@ healthy-operation SLOs and backlog exceptions:
 |---|---|
 | Manual transfer | Discovery in 0–5 min, then confirmation and processing |
 | Admitted checkout hint | Instant processing path; seconds at route confirmation |
+| Depth confirmation | About 4 s after expected depth when healthy; lag waits up to the current normal probe interval, at most 64 s, then L |
+| Safe / Finalized confirmation | One 384 s epoch interval after the corresponding head meets the requirement, within the normal window |
+| L confirmation after heads recover | Current 60 s / ten-minute / hourly interval by age, then processing; no checkpoint wait |
 | Quote expiry / cancel / unpaid reservation release | ≤ about 70 min after qualifying finality |
 | Known-deposit reversal / checkpoint conflict | ≤10 min, plus watch/RPC processing |
 | Custody discrepancy | ≤ about 130 min after finality |
@@ -337,7 +409,8 @@ use fresh processing-time prices and screening uses the verified local lists at 
 
 ## 6. DB changes and N-1
 
-One expand-only migration, compatibility floor = N-1's maximum migration:
+Schema additions are expand-only with safe defaults/nullable confirmation fields and preserve
+N-1 reads and writes; compatibility floor = N-1's maximum migration. The chain-read schema is:
 
 ```sql
 CREATE TABLE chain_checkpoints (
@@ -412,6 +485,8 @@ budgets; metrics `topup_rpc_errors_total{provider,chain_id,method,class}`,
 `topup_finality_unresolved{chain_id}` (current-stock gauge),
 `topup_finality_unresolved_entries_24h{chain_id}` (DB-derived rolling-entry gauge: deposits
 whose persisted `first_unresolved_at` is within the last 24 hours, including resolved ones).
+L adds `topup_confirmation_slow{chain_id}` and `topup_confirmation_slow_entries_24h{chain_id}`,
+both DB-derived gauges, using persistent `first_slow_at` for first entries.
 Alerts: endpoint not ready 5 min, any disagreement, coverage lag > 2 h, reversal unproven,
 quota run-rate (recording rules over `topup_rpc_calls_total` × provider cost tables, both
 environments summed). Finality alerts separately sum each environment's chains: current stock
@@ -420,6 +495,9 @@ the existing one-hour age alert. Current stock uses `sum(topup_finality_unresolv
 Scope selectors to one environment using scrape labels; either stock or rolling-entry alert
 requires the quote-pause stop action (§5.2). Use the rolling-entry gauge directly for the exact
 DB count; rechecks do not add entries, and resolution does not remove deposits from the window.
+L has an independent ten-minute provider-lag alert and capacity alert when either environment's
+current-stock or rolling-entry sum exceeds one; pause that chain's new quotes. It never uses
+the S anomaly stop rule merely for height lag (§2.4).
 
 Docs: architecture §0, §2 rule 7, §7, §8, §9 (cancel, snapshot cap), §13;
 `docs/configuration.md`; `docs/integration.md` (hints, cancel, latency); `deploy/RPC.md`;

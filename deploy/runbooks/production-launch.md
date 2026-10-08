@@ -11,10 +11,15 @@ Production and staging share the Ankr and Infura accounts.
 > destination re-screening completed successfully. The deprecated oracle addresses remain only
 > for rollback compatibility; a passing binary/database rollback drill is not screening approval.
 
-The approved parallel pilot limits are production D=60, R=2, N=1, factory=60/day and Safe=10/day;
+The approved parallel pilot limits are production D=46, R=2, N=1, factory=60/day and Safe=10/day;
 staging D=20, R=1, N=1, factory=20/day and Safe=2/day. Each environment has H=80 hint tasks/day,
 Q=60 fresh quote snapshots per price chain/UTC day and a 150-call extra reserve per endpoint/day.
 R counts concurrent attached pending refunds; N counts new attachments in a rolling 24 hours.
+Each environment also limits current L confirmation stock and rolling-24-hour first entries
+to one across all payment chains. L is height-only delay after the normal window, credits without
+waiting for the checkpoint and does not consume S. Its ten-minute provider-lag alert and
+independent capacity quote-pause action use `topup_confirmation_slow` and
+`topup_confirmation_slow_entries_24h`; S's one-stock/one-entry limits remain separate.
 The permanent `ISSUED_ADDRESS_CAP=1000` counts all historical addresses per payment chain.
 Production contributes three custody routes and staging six, nine in total. Monitor
 `topup_rpc_endpoint_ready`, `topup_rpc_errors_total`, `topup_coverage_lag_seconds`,
