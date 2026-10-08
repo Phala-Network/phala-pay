@@ -557,8 +557,8 @@ environment is `topup.yaml`'s `environment`, both attested.
 
   | Monitor | Checks in | Margin |
   |---|---|---|
-  | `topup-fast-scanner-<chain_id>` | after fast discovery (every minute); three failures alert | 2 min |
-  | `topup-coverage-scanner-<chain_id>` | after each dual coverage round (every ten minutes), `error` while coverage fails | 2 min |
+  | `topup-fast-scanner-<chain_id>` | after fast discovery (every five minutes); three failures alert | 2 min |
+  | `topup-coverage-scanner-<chain_id>` | after each dual coverage round (hourly), `error` while coverage fails | 2 min |
   | `topup-pump-<n>`, `topup-outbox-test`, `topup-outbox-live` | each iteration or poll, every minute | 5 min |
   | `topup-lock-expiry` | after each successful expiry scan, every minute | 5 min |
   | `topup-finality-watch` | after each `finalized` advance's passes, and every minute | 5 min |
@@ -566,6 +566,9 @@ environment is `topup.yaml`'s `environment`, both attested.
   | `topup-backup` | `ok` while the WAL-G success marker is at most 120 s old, else `error`; 3 errors open an issue | 2 min |
 
   After upgrading, delete or mute the old `topup-scanner-<chain>` monitors.
+  Independent dual checkpoint checks publish every ten minutes for finality, reversal and
+  refund completion; hourly coverage does not set their cadence. Custody remains hourly.
+  The coverage-lag warning is two hours; see [scanner lag](runbooks/scanner-lag.md).
 
 - **Uptime**: `/healthz` of each Environment ([One-time setup](#one-time-setup-human-only-repository-owner)).
 - **Egress**: `topup` sends HTTPS to the DSN's ingest host.
@@ -607,12 +610,15 @@ cost per month = 30 × cost per day
 ```
 
 [Chain reads §5.2](../docs/design/chain-reads.md#52-worst-case-daily-budget-staging--production-combined)
-accounts for the fixed 60-second discovery and ten-minute coverage cadences, bounded backfill,
-and hourly catch-up. Compare measured call counters with each provider's dashboard. Both
-environments share keys and upstream quotas. Each fresh quote snapshot costs one read call and
+accounts for fixed 300-second discovery, independent 600-second checkpoints, 3,600-second
+coverage, bounded backfill and six-hour catch-up. Compare measured call counters with each
+provider's dashboard. Both environments share keys and upstream quotas. Each fresh quote snapshot costs one read call and
 240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
-[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all twelve
-chain/token routes and the reduced combined deposit pilot bound of 100/day.
+[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all nine
+chain/token routes (three production, six staging), refunds, unresolved finality stock and
+proof work. Parallel-mode caps are production D=60/day and staging D=20/day, with H=80 hint
+tasks per environment/UTC day and Q=60 fresh snapshots per price chain/environment/UTC day.
+D, factory and Safe counts are operational caps with monitoring and stop actions.
 
 ## Attestation, ingress, and egress
 

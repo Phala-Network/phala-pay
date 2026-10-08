@@ -170,7 +170,11 @@ An independent ten-minute loop per payment chain checks and publishes
 checkpoint height still has the stored hash on both. A conflict inserts a chain-scope
 `reconciliation_blocks` row (`'finalized_checkpoint_conflict'`); the existing freeze gate halts
 the chain until the audited admin lift. Finality, reversal and refund consumers use these
-published advances independently of hourly log coverage.
+published advances independently of hourly log coverage. Unresolved deposits back off from
+when they first became due for finality: every 60 s for 30 min, every ten minutes until 24 h,
+then hourly. The one-hour pending-after-reorg alert remains; verification and reservations
+continue. The operational stock allowance is S=2 per environment, with quote pause and
+escalation above S (§5.2).
 
 Reversal requires positive evidence on both at or below the checkpoint: (a) the deposit's
 receipt without its transfer at its position (successor recorded as today), or (b) a directly
@@ -279,8 +283,9 @@ exhaustion response, address-less logs over 3 000 blocks (self-test covers it).
 [RPC operations](../../deploy/RPC.md#worst-case-pilot-budget) is the authoritative budget:
 five-minute read discovery, ten-minute dual checkpoints, hourly dual coverage, six-hour
 19,200-block catch-up, all nine hourly custody routes, prices, deposits, hints, factory proofs,
-Safe proofs, attached refunds and extra operations. It assumes every payment chain runs all day,
-one caught-up recipient chunk plus one lagging chunk, and all 1,000 historical addresses.
+Safe proofs, attached refunds, unresolved finality stock and extra operations. It assumes every
+payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and all 1,000
+historical addresses.
 
 The approved [parallel operating mode and limits](../../deploy/RPC.md#pilot-limits-and-operating-modes)
 run staging tests, including refunds, alongside production on the shared free quotas. D, factory
@@ -288,11 +293,14 @@ and Safe caps have no code enforcement; operators must tally work and stop new l
 Refund attachments have atomic concurrent and rolling-24-hour admission caps. Hint and price
 daily budgets and the permanent address cap are hard limits.
 
-With ×1.1 non-refund calls, ×3 refund attempts and the approved extra reserve, combined usage is
-15,590 Ankr calls/day and 1,269,366 Infura credits/day: 37.64% and 15.38% below the stop lines.
-This model depends on the documented caps and retry assumptions; it does not guarantee quota
-compliance if every non-refund call exhausts all allowed attempts. Follow the linked monitoring,
-stop and recovery procedures before adding load.
+With S=2 per environment and four first-day stock items using three original-receipt methods
+per recheck, ×1.1 non-refund work, ×3 refund attempts and the extra reserve, the combined stock
+case is 17,808 Ankr calls/day and 1,446,774 Infura credits/day: 28.77% and 3.55% below the stop
+lines. Infura is below the requested ten-percent headroom; caps stay unchanged pending budget
+escalation. Missing-receipt-only calls cost less, but do not bound every unresolved deposit.
+Replacement-candidate fan-out and first-day stock turnover require separate accounting and
+escalation if they exceed the daily allowance. This is a conditional stress case, not a full
+upper bound for unbounded work. Follow the linked monitoring and stop procedures before adding load.
 
 ### 5.3 Latency and recovery targets
 
@@ -308,7 +316,9 @@ healthy-operation SLOs and backlog exceptions:
 | Custody discrepancy | ≤ about 130 min after finality |
 | Recovery from ≤24 h equivalent backlog | ≤12 h continuous healthy operation, within work allowances |
 
-Hint readiness, task budgets and confirmations still apply. Conflicts visible only in full logs
+Hint readiness, task budgets and confirmations still apply. Already unresolved deposits follow
+the age-dependent recheck cadence; later-day evidence can wait up to an hour for the next check.
+The ten-minute reversal target concerns newly due deposits. Conflicts visible only in full logs
 may wait for hourly coverage. Payment windows and negative-evidence gates are unchanged:
 in-window qualifying payments retain quote terms; late, partial and persistent-address payments
 use fresh processing-time prices and screening uses the verified local lists at decision time.

@@ -60,6 +60,7 @@ Both environments use Ankr read and Infura verify for payments and prices.
 | Deposits handled/day, D | 60 | 20 | Operational |
 | Concurrent attached pending refunds, R | 2 | 1 | Atomic attachment admission |
 | New refund attachments/rolling 24 h, N | 1 | 1 | Atomic attachment admission |
+| Unresolved finality stock/environment, S | 2 | 2 | Operational; pause affected-chain quotes and escalate above S |
 | Hint tasks/environment/UTC day, H | 80 | 80 | Atomic daily budget |
 | Fresh quote snapshots/price chain/environment/UTC day, Q | 60 | 60 | Atomic daily budget |
 | Factory receipt-verification instances/day | 60 | 20 | Operational |
@@ -74,9 +75,9 @@ chains; reattaching the same transaction is idempotent. An attached refund retai
 and continues verification until finalized evidence resolves it; never cancel it to make room.
 
 Production-only operation uses the same production caps and leaves additional provider headroom.
-During recovery or maintenance, count preflights, restarts, manual reconciliation, restore checks and extra range
-requests against the 150-call reserve on each endpoint in each environment. Pause new tests and
-onboarding while backlog consumes operational allowances. New routes, pools, samplers or larger
+During recovery or maintenance, count preflights, restarts, manual reconciliation, restore checks
+and extra range requests against the 150-call reserve on each endpoint in each environment.
+Pause new tests and onboarding while backlog consumes operational allowances. New routes, pools, samplers or larger
 caps require a reviewed budget before adding load.
 
 ### Worst-case pilot budget
@@ -122,7 +123,8 @@ Variable allowances before retries:
 
 | Work | Ankr calls | Infura credits |
 |---|---:|---:|
-| Deposit: cold discovery 3, confirm allocation 5, coverage completion/re-verification 6, finality 3, price snapshots 2 | 19 | 1,600 |
+| Deposit: cold discovery 3, confirm allocation 5, coverage completion/re-verification 6, initial finality 3, price snapshots 2 | 19 | 1,600 |
+| Unresolved finality stock: original transaction recheck with a present receipt | 3 | 240 |
 | Hint task | 12 | 640 |
 | Price snapshot, including verify's head and pin header | 1 | 240 |
 | Factory receipt verification | 3 | 240 |
@@ -134,6 +136,36 @@ Staging's two PHA routes share one TWAP pool and five-minute sampler: `86,400 / 
 snapshots/day. Quotes have four price-chain/environment instances, so `288 + 4Q = 528` snapshots.
 Production has no periodic TWAP sampler in this pilot.
 
+Unresolved finality rechecks back off from the time a deposit first became due for finality:
+every 60 s for 30 min, every ten minutes until 24 h, then hourly. The one-hour
+`TopupDepositPendingAfterReorg` alert remains. Budget S=2 unresolved deposits per environment
+across its payment chains, four combined. This stock is separate from D and its initial
+finality allocation.
+
+`ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
+A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr / 80 Infura).
+A present ordinary EVM receipt also requires its block header and transaction: three methods
+per endpoint (3 / 240), even if the evidence disagrees and remains unresolved. Use that
+three-method original-receipt case for the stock line, before the ×1.1 non-refund allowance:
+
+| Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Infura credits/deposit/day |
+|---|---:|---:|---:|
+| First due-day | 30 + 138 + 0 = 168 | 168×3 = 504 | 168×240 = 40,320 |
+| Every later day | 24 | 24×3 = 72 | 24×240 = 5,760 |
+
+The first-day stock allowance is `4×504 = 2,016` Ankr and `4×40,320 = 161,280` Infura;
+all four carried-over deposits instead cost 288 / 23,040 per later day. For the narrower
+case where both receipts remain missing and there is no service-known replacement candidate,
+the first-day stock costs 672 / 53,760, and later-day stock 96 / 7,680.
+
+When both original receipts are missing, `known_replacement` also independently checks every
+service-known same-sender/same-nonce candidate. Each candidate adds 1–3 methods per endpoint
+(80–240 Infura credits). Count those extra calls against the existing extra-operation reserve;
+they are not covered by the three-method original-receipt line. A stock count alone does not
+bound candidate fan-out or replacement of resolved stock by new first-day stock. If that work
+exceeds the modeled daily allowance, escalate for a reviewed budget; never stop verification
+or release reservations to fit it.
+
 Refund checks run every 60 s for the first 30 min after attachment, every ten minutes until 24 h,
 then hourly. Asymmetric evidence can cost four methods per endpoint per check. Before retries,
 each first refund-day costs at most 684 Ankr / 54,720 Infura, and each later day 96 / 7,680.
@@ -143,23 +175,31 @@ non-refund work uses the approved ten-percent allowance:
 
 ```text
 Non-refund Ankr:
-5,112 + 528 + 19×80 + 2×12×80 + 3×80 + 3×12 + 300 = 9,656
+5,112 + 528 + 19×80 + 2×12×80 + 3×80 + 3×12 + 300
++ 4×168×3 = 11,672
 
 Non-refund Infura:
 337,920 + 240×528 + 1,600×80 + 2×640×80
-+ 240×80 + 160×12 + 255×300 = 792,660
++ 240×80 + 160×12 + 255×300 + 4×168×240 = 953,940
 
 Refund Ankr:   3 × (684×2 + 96×3)       = 4,968
 Refund Infura: 3 × (54,720×2 + 7,680×3) = 397,440
 
-Combined Ankr:   9,656×1.1 + 4,968    = 15,589.6 calls/day
-Combined Infura: 792,660×1.1 + 397,440 = 1,269,366 credits/day
+Combined Ankr:   11,672×1.1 + 4,968    = 17,807.2 calls/day
+Combined Infura: 953,940×1.1 + 397,440 = 1,446,774 credits/day
 ```
 
-Rounded up, the Ankr allowance is 15,590 calls/day. Headroom below the stop lines is
-**37.64% Ankr / 15.38% Infura**. This is a model upper bound under the load caps and retry
-assumptions, not a code-enforced quota guarantee. The ×1.1 allowance does not cover every
-non-refund method exhausting all three transport attempts simultaneously.
+Rounded up, this original-receipt stock case costs 17,808 Ankr calls/day. Headroom below the
+stop lines is **28.77% Ankr / 3.55% Infura**, below the requested ten-percent minimum on Infura.
+The caps remain unchanged; escalate this budget before approving additional pilot load.
+With all four stock items in later days, totals are 15,907 / 1,294,710, with 36.37% / 13.69%
+headroom. The missing-receipt-only first-day case is 16,329 / 1,328,502, with 34.68% / 11.43%
+headroom; it is not an upper bound for every unresolved deposit.
+
+These are conditional stock stress cases, not a code-enforced quota guarantee or a full
+upper bound on unbounded replacement-candidate work and first-day stock churn. The ×1.1
+allowance does not cover every non-refund method exhausting all three transport attempts
+simultaneously.
 
 ### Monitoring and stop actions
 
@@ -169,6 +209,13 @@ Reconcile reports, events/audit records and application evidence with billed RPC
 distinct factory transaction counts alone omit re-verification. Budget each planned test/proof
 batch before starting it. If a tally cannot be established, stop scheduling that load until
 the operator reconciles the evidence.
+
+Monitor unresolved finality stock separately: deposits already due for finality but neither
+final nor reversed, across the environment's payment chains. **Above S=2, pause new quotes
+on the affected chain (all its routes) and escalate.** The one-hour alert remains an age signal,
+not permission to wait before taking the stock stop action. Track first-day stock turnover and
+replacement-candidate calls too. Verification, existing credit and reservations continue;
+never manufacture a finality/reversal verdict or release exposure to reduce the tally.
 
 At an operational limit, stop merchant onboarding and new payment work; stop new staging
 payments, factory/proof batches and nonessential manual RPC operations as applicable.
@@ -210,7 +257,9 @@ can extend them. Time measured from inclusion also includes chain confirmation/f
 
 Hints require ready endpoints, available hint budget and the route's confirmation requirement.
 A conflict visible only in full logs may wait for hourly coverage; the ten-minute target concerns
-checkpoint hash conflicts and known-deposit evidence. Refund completion keeps ten-minute
+checkpoint hash conflicts and newly due deposit evidence. Already unresolved deposits follow
+their age-dependent recheck schedule; later-day evidence can wait up to an hour for its next
+check, in addition to checkpoint and RPC processing. Refund completion keeps ten-minute
 checkpoints plus its existing age-dependent verification interval. Hints and fast cursors never
 establish negative evidence.
 

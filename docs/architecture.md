@@ -438,14 +438,16 @@ once final, whatever the cap, or once earlier credits become final. It is still 
 later; nothing is rejected. A merchant selling what it cannot take back requires `finalized`
 confirmations in its payment settings instead (§9), which credits nothing before finality.
 
-**Finality watch.** Whenever dual coverage publishes an agreed checkpoint (§8),
+**Finality watch.** Whenever the independent ten-minute loop publishes an agreed checkpoint (§8),
 and every minute besides, the deposits of the chain that are neither final nor reversed, whose
 recorded block is at or below it, and whose recheck time (`finality_check_at`) has come are
 re-read independently on both endpoints by receipt, transaction and block header, with the
 agreed checkpoint as the finality boundary; nothing is read while
 no deposit is due. A pass claims deposits in pages of 500, oldest block first, at most 10 pages,
-with `FOR UPDATE SKIP LOCKED`, and moves each claimed deposit's recheck time a minute ahead as it
-claims it: a deposit the watch keeps waiting on (the providers disagree, the transaction is
+with `FOR UPDATE SKIP LOCKED`, and schedules each claimed deposit's next recheck using the time
+it first became due for finality: every 60 seconds for 30 minutes, every ten minutes until
+24 hours, then hourly. The one-hour pending-after-reorg alert remains. A deposit the watch
+keeps waiting on (the providers disagree, the transaction is
 pending again, a read failed) comes back only at its own recheck time, so however many are stuck
 at the head of the backlog, the later ones are read in the same pass, and one deposit's failed
 read does not end the pass. A pass that stops at its page limit is followed by another at once. A
@@ -534,7 +536,7 @@ wait and alert. An endpoint failure makes only its chain or observing price feat
 The API and other chains continue. Both agreeing on unreviewed factory, implementation or
 Multicall3 code freezes the chain; disagreement or unavailable code evidence only blocks readiness.
 
-**Fast discovery** runs on read every 60 seconds. It requests recipient-topic ERC-20 logs in
+**Fast discovery** runs on read every 300 seconds. It requests recipient-topic ERC-20 logs in
 chunks of 1,000 issued addresses, with no contract filter, and inserts routed, confirmed
 candidates as `detected` with NULL `dual_verified_at`. It advances only `confirmed_block`.
 
@@ -546,13 +548,17 @@ RPC runs outside the chain lock; insertion strictly rechecks the address snapsho
 all receipt-position history under that lock. Any reversed history defers the hint to scanning:
 identical evidence cannot re-enter, and differing evidence needs the finalized successor path.
 Root's admission decision is no per-IP limit on hints: controls are authenticated per-object
-limits of 3/minute and 10/day, a hard daily cap of 150 tasks per environment per UTC day, and
+limits of 3/minute and 10/day, a hard daily cap of 80 tasks per environment per UTC day, and
 at most four tasks in flight. See the operator [API admission limits](configuration.md#api-admission-limits).
 
-**Finalized dual coverage** runs every ten minutes, staggered by chain. The checkpoint advances
-only after both sources agree on the new finalized boundary and retain the previous checkpoint's
-hash. A conflict freezes the chain. Coverage ends at `e = min(checkpoint, cursor + L)`, with
-`L = 3,000`, or 19,200 every sixth round. Both endpoints must agree on `e`'s hash and time.
+**Agreed checkpoints** are checked and published independently every 600 seconds, only after
+both sources agree on the new finalized boundary and retain the previous checkpoint's hash.
+A conflict freezes the chain; finality, reversal and refunds consume these published advances.
+
+**Finalized dual coverage** runs every 3,600 seconds, staggered by chain, using the stored
+checkpoint without repeating its advance. Coverage ends at `e = min(checkpoint, cursor + L)`,
+with `L = 3,000`, or 19,200 every sixth round (six-hour catch-up). Both endpoints must agree on
+`e`'s hash and time. The coverage-lag warning is two hours.
 Caught-up addresses scan `(cursor, e]`; at most 1,000 lagging addresses backfill from their own
 `dual_covered_through + 1`, or `created_block` when NULL. Every log request must succeed.
 The union of both candidate sets is resolved independently by receipt, transaction and header.
@@ -686,7 +692,9 @@ Invoice model, with this service's exception profile:
   `cancel_requested_at = now()` and `expires_at = now()` and returns the quote still open.
   An in-window payment discovered later consumes it normally. Once dual coverage permits closure,
   a cancel-requested quote becomes `cancelled` with `quote.canceled`; otherwise `expired` with
-  `quote.expired`. Both release the reservation atomically.
+  `quote.expired`. Both release the reservation atomically. With healthy endpoints, caught-up
+  addresses and work within pilot allowances, expiry/cancel and unpaid reservation release
+  target about 70 minutes after qualifying finality; backlog and outages can extend this.
 - Fresh quote price snapshots use the DB daily budget: at most 60 per price chain per environment
   per UTC day. Exhaustion returns retryable `503 price_unavailable`, with no stale price. Quote
   reuse remains twelve seconds; confirmation always requests a fresh dual Multicall3 snapshot.
@@ -1720,7 +1728,7 @@ Crons and issue history supply worker/incident evidence.
 | API availability | 99.9% successful `/healthz` probes over 30 days; inspect Sentry Uptime history. Authenticated API diagnostic error ratio is 5xx / (2xx + 3xx + 5xx). | Uptime failures page; inspect load-shed and 5xx request counts on demand. |
 | API latency | During an observed interval, p95 successful GET/HEAD response headers ≤ 250 ms and POST ≤ 1 s. Use HTTP histogram bucket deltas for matched routes; exclude admin reports/attestation and intentional waits. | This percentile is a diagnostic target with no automatic alert; investigate an Uptime or worker incident using snapshots. |
 | RPC evidence availability | Every configured read/verify pair is ready; three consecutive request failures make its endpoint not-ready, and recovery probes run at most every 30 s. Infura 402 remains unavailable until UTC midnight. | `TopupRpcEndpointUnavailable` after five minutes; `TopupRpcDisagreement` and chain freezes require immediate triage. Address capacity warns at 70% and 90%. |
-| Deposit progress | For unpaused, supported deposits, target 99% leaving `detected` and `confirmed` within 30 minutes after satisfying the configured confirmation policy (for example `depth2`, `depth3`, or `finalized`), rather than starting all clocks at finalization. Review the policy, daily report ages and deposit timelines; this target is not a measured percentile. | Route age alerts and scanner/finality Crons identify stalled work. Sanctions holds alert after the configured confirmation window. Fast and coverage scanner monitors expect 1-minute and 10-minute check-ins with 2-minute margins. This is not an automatically computed percentile. |
+| Deposit progress | For unpaused, supported deposits, target 99% leaving `detected` and `confirmed` within 30 minutes after satisfying the configured confirmation policy (for example `depth2`, `depth3`, or `finalized`), rather than starting all clocks at finalization. Review the policy, daily report ages and deposit timelines; this target is not a measured percentile. | Route age alerts and scanner/finality Crons identify stalled work. Sanctions holds alert after the configured confirmation window. Fast and coverage scanner monitors expect 5-minute and 60-minute check-ins with 2-minute margins; checkpoints publish independently every 10 minutes. This is not an automatically computed percentile. |
 | Reconciliation and backup | Every scheduled reconciliation succeeds before its next round; backup success marker age ≤ 2 minutes. Inspect Sentry Crons and the daily report. | Existing reconciliation and backup monitors alert; backup requires three stale observations to avoid restart noise. |
 
 Configure Sentry issue rules by the above alert names and existing Crons/Uptime monitors; this
@@ -1745,7 +1753,7 @@ freeze, `503 service_restoring`, and each reconciliation action); fast credit wi
 nothing; a transaction re-included in a later block keeps its deposit id and is followed, not
 reversed, when its block-wide `log_index` changes; a transaction replaced with the same nonce is
 reversed with one `deposit.reversed` and its quote reopened; a lagging verify endpoint delays the
-credit; independent receipt fields agree before credit; the 60-second discovery cadence and
+credit; independent receipt fields agree before credit; the 300-second discovery cadence and
 bounded dual coverage commit only scanned ranges, with errors aborting the range and address
 reissues catching up before negative decisions). Tenancy
 (`404` across accounts and modes), API keys, restricted key permissions, treasuries (EOA, Safe
