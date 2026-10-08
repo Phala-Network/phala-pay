@@ -390,6 +390,7 @@ main() {
                 echo "# Written by deploy.sh $release: the kit's phala-cloud-template routes and sealed RPC"
                 echo "# providers (Phala's staging), served at this domain (docs/configuration.md)."
                 echo "environment: testnet"
+                sed -n '/^max_attached_pending_refunds:/p' "$kit/deploy/environments/phala-cloud-template/topup/topup.yaml"
                 echo "public_origin: https://$DOMAIN"
                 echo "admin_key:"
                 echo "  id: admin/v1"
