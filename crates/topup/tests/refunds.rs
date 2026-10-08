@@ -1760,17 +1760,17 @@ async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Res
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/", post(refund_rpc))).await
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/", post(refund_rpc))
+                .route("/hang", post(std::future::pending::<Json<Value>>)),
+        )
+        .await
     });
     let reader = EvmRefundChainReader::new(
         database.app_pool.clone(),
-        BTreeMap::from([(
-            1,
-            Arc::new(EvmClient::with_timeout(
-                &format!("http://{address}"),
-                StdDuration::from_millis(50),
-            )?),
-        )]),
+        BTreeMap::from([(1, Arc::new(EvmClient::new(&format!("http://{address}"))?))]),
     );
     let token = route_fixture().asset.contract;
     // Scenario 1 transfers another token, 4 is above `finalized`, 5 reverted.
@@ -1805,9 +1805,19 @@ async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Res
             .await?
             .is_none()
     );
+    let hanging = EvmRefundChainReader::new(
+        database.app_pool.clone(),
+        BTreeMap::from([(
+            1,
+            Arc::new(EvmClient::with_timeout(
+                &format!("http://{address}/hang"),
+                StdDuration::from_millis(50),
+            )?),
+        )]),
+    );
     ensure!(matches!(
-        reader.receipt(1, B256::from(U256::from(6_u64))).await,
-        Err(RefundReadError::Rpc(_))
+        hanging.receipt(1, B256::from(U256::from(6_u64))).await,
+        Err(RefundReadError::Rpc("transaction receipt fetch"))
     ));
     ensure!(matches!(
         reader.receipt(2, B256::ZERO).await,
@@ -2138,9 +2148,6 @@ async fn refund_rpc(Json(request): Json<Value>) -> Json<Value> {
     }
     if method == "eth_getTransactionReceipt" {
         let tx_hash = request["params"][0].as_str().unwrap_or_default();
-        if tx_hash == format!("{:#x}", B256::from(U256::from(6_u64))) {
-            tokio::time::sleep(StdDuration::from_millis(250)).await;
-        }
         let receipt = if unknown(tx_hash) {
             Value::Null
         } else {
@@ -2161,7 +2168,7 @@ async fn refund_rpc(Json(request): Json<Value>) -> Json<Value> {
 }
 
 fn refund_receipt(tx_hash: &str) -> Value {
-    let scenario = (1_u64..=6)
+    let scenario = (1_u64..=5)
         .find(|value| tx_hash == format!("{:#x}", B256::from(U256::from(*value))))
         .unwrap_or_default();
     let asset = if scenario == 1 {

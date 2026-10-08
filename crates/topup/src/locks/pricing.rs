@@ -1892,11 +1892,14 @@ mod tests {
             let source = source.clone();
             tokio::spawn(async move { source.quote_shared(test_deadline()).await })
         };
-        let second = {
-            let source = source.clone();
-            tokio::spawn(async move { source.quote_shared(test_deadline()).await })
-        };
         inner.entered.wait().await;
+        let mut second = Box::pin({
+            let source = source.clone();
+            async move { source.quote_shared(test_deadline()).await }
+        });
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        assert_eq!(source.coalesced.state.lock().unwrap().waiters, 2);
+        let second = tokio::spawn(second);
         first.abort();
         second.abort();
         let _ = first.await;
