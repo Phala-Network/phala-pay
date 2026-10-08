@@ -160,6 +160,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- Freeze persisted boundary conflicts from either successful RPC endpoint even when its peer
+  errors. Preserve terminal proofs and final markers across held-settings waits, so subsequent
+  business retries reuse the same evidence without chain reads; watcher completion reflects
+  the actual handoff persistence result.
+
 - Reference-product sweep groups retain their last successful balances and sweep history for up to
   ten minutes when a refresh fails, while disabling stale signable calls.
 - Deploy pause and resume requests retry transport errors and HTTP 408, 429, 500, 502, 503, and 504

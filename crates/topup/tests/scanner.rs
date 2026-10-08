@@ -37,6 +37,7 @@ struct Reader {
     logs: Vec<TransferLog>,
     receipt: Option<TransferLog>,
     error: bool,
+    header_error: bool,
     forged_header: bool,
     forged_at: Option<u64>,
     requests: Mutex<Vec<(Vec<Address>, u64, u64)>>,
@@ -57,6 +58,7 @@ impl Reader {
             logs: Vec::new(),
             receipt: None,
             error: false,
+            header_error: false,
             forged_header: false,
             forged_at: None,
             requests: Mutex::new(Vec::new()),
@@ -97,6 +99,9 @@ impl ChainReader for Reader {
             resume.notified().await;
         }
         self.header_reads.lock().unwrap().push(number);
+        if self.header_error {
+            return Err(ChainError::Rpc("header"));
+        }
         Ok((
             if self.forged_header || self.forged_at == Some(number) {
                 B256::ZERO
@@ -1628,6 +1633,7 @@ async fn assert_coverage_boundary_conflict(
     stored_coverage_conflict: bool,
     forged_read: bool,
     forged_verify: bool,
+    peer_error: bool,
 ) -> Result<()> {
     with_database(|d| Box::pin(async move {
         let mut read = Reader::new(100);
@@ -1656,6 +1662,8 @@ async fn assert_coverage_boundary_conflict(
         sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,expires_at=to_timestamp(100) WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).execute(&d.app_pool).await?;
         read.forged_at = forged_read.then_some(100);
         verify.forged_at = forged_verify.then_some(100);
+        read.header_error = peer_error && !forged_read;
+        verify.header_error = peer_error && !forged_verify;
         ensure!(matches!(scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await, Err(scanner::ScannerError::Disagreement)));
         let reason: String = sqlx::query_scalar("SELECT check_name FROM reconciliation_blocks WHERE chain_id=1").fetch_one(&d.app_pool).await?;
         ensure!(reason == "finalized_checkpoint_conflict");
@@ -1673,7 +1681,7 @@ async fn assert_coverage_boundary_conflict(
 #[tokio::test]
 async fn dual_agreed_coverage_boundary_conflict_freezes_before_any_publication() -> Result<()> {
     for stored_coverage_conflict in [false, true] {
-        assert_coverage_boundary_conflict(stored_coverage_conflict, true, true).await?;
+        assert_coverage_boundary_conflict(stored_coverage_conflict, true, true, false).await?;
     }
     Ok(())
 }
@@ -1682,8 +1690,13 @@ async fn dual_agreed_coverage_boundary_conflict_freezes_before_any_publication()
 async fn single_endpoint_coverage_boundary_conflict_freezes_before_disagreement() -> Result<()> {
     for stored_coverage_conflict in [false, true] {
         for (forged_read, forged_verify) in [(true, false), (false, true)] {
-            assert_coverage_boundary_conflict(stored_coverage_conflict, forged_read, forged_verify)
-                .await?;
+            assert_coverage_boundary_conflict(
+                stored_coverage_conflict,
+                forged_read,
+                forged_verify,
+                false,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -1859,6 +1872,57 @@ async fn previous_checkpoint_is_rechecked_on_each_endpoint_before_a_new_checkpoi
                 .fetch_one(&d.app_pool)
                 .await?;
                 ensure!(check == "finalized_checkpoint_conflict");
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn coverage_boundary_conflict_freezes_even_when_peer_errors() -> Result<()> {
+    for coverage in [false, true] {
+        for (read, verify) in [(true, false), (false, true)] {
+            assert_coverage_boundary_conflict(coverage, read, verify, true).await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn previous_checkpoint_conflict_freezes_even_when_peer_errors() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            for (chain, conflict_read) in [(1, true), (8453, false)] {
+                let initial = Reader::new(100);
+                topup::checkpoint::advance(&d.app_pool, chain, &initial, &initial).await?;
+                let mut read = Reader::new(200);
+                let mut verify = Reader::new(200);
+                read.forged_at = conflict_read.then_some(100);
+                verify.forged_at = (!conflict_read).then_some(100);
+                read.header_error = !conflict_read;
+                verify.header_error = conflict_read;
+                ensure!(matches!(
+                    topup::checkpoint::advance(&d.app_pool, chain, &read, &verify).await,
+                    Err(scanner::ScannerError::Disagreement)
+                ));
+                let previous = db::chain_reads::checkpoint(&d.app_pool, chain)
+                    .await?
+                    .context("checkpoint")?;
+                ensure!(previous.number == 100 && previous.hash == hash(100));
+                let reason: String = sqlx::query_scalar(
+                    "SELECT check_name FROM reconciliation_blocks WHERE chain_id=$1",
+                )
+                .bind(i64::try_from(chain)?)
+                .fetch_one(&d.app_pool)
+                .await?;
+                ensure!(reason == "finalized_checkpoint_conflict");
+                ensure!(*read.header_reads.lock().unwrap() == [100]);
+                ensure!(*verify.header_reads.lock().unwrap() == [100]);
+                ensure!(
+                    *read.finalized_reads.lock().unwrap() == 0
+                        && *verify.finalized_reads.lock().unwrap() == 0
+                );
             }
             Ok(())
         })

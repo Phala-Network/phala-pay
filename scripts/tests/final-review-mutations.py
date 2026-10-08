@@ -17,11 +17,12 @@ finality = root / "crates/topup/src/finality/mod.rs"
 schedule = root / "crates/topup/migrations/20261102000000_finality_due.up.sql"
 deposits = root / "crates/topup/src/db/deposits.rs"
 scanner = root / "crates/topup/src/scanner/mod.rs"
+checkpoint = root / "crates/topup/src/checkpoint.rs"
 confirmation = root / "crates/topup/src/db/confirmation.rs"
 bounds = root / "crates/topup/migrations/20261103000000_confirmation_bounds.up.sql"
 confirm_step = root / "crates/topup/src/steps/confirm.rs"
 metrics = root / "crates/topup/src/observability/metrics.rs"
-originals = {path: path.read_text() for path in [refunds, api, repository, finality, schedule, deposits, scanner, confirmation, bounds, confirm_step, metrics]}
+originals = {path: path.read_text() for path in [refunds, api, repository, finality, schedule, deposits, scanner, checkpoint, confirmation, bounds, confirm_step, metrics]}
 cases = [
     (schedule, "finality ten-minute boundary", "WHEN checked_at < COALESCE(anchor, checked_at) + interval '10 minutes' THEN 60", "WHEN checked_at <= COALESCE(anchor, checked_at) + interval '10 minutes' THEN 60",
      ["--test", "finality", "unresolved_finality_cadence_keeps_first_due_time_and_exact_boundaries"]),
@@ -63,15 +64,15 @@ cases = [
      ["--test", "finality", "unresolved_detected_deposit_reverses_only_on_watcher_replacement_proof"]),
     (finality, "confirm positive evidence handoff", "if deposit.state == DepositState::Detected && terminal_transfer {", "if false && terminal_transfer {",
      ["--test", "pump", "positive_reincluded_provisional_transfer_returns_to_confirm_without_extra_watcher_reads"]),
-    (scanner, "coverage persisted checkpoint conflict", "end == checkpoint.number && (a.0 != checkpoint.hash || b.0 != checkpoint.hash)", "false",
+    (scanner, "coverage persisted checkpoint conflict", "end == checkpoint.number && contradicts(checkpoint.hash)", "false",
      ["--test", "scanner", "dual_agreed_coverage_boundary_conflict_freezes_before_any_publication"]),
-    (scanner, "coverage persisted coverage conflict", "end == cursor.number && (a.0 != cursor.hash || b.0 != cursor.hash)", "false",
+    (scanner, "coverage persisted coverage conflict", "end == cursor.number && contradicts(cursor.hash)", "false",
      ["--test", "scanner", "dual_agreed_coverage_boundary_conflict_freezes_before_any_publication"]),
-    (scanner, "coverage conflict precedes disagreement", "    let (a, b) = tokio::try_join!(read.header(end), verify.header(end))?;", "    let (a, b) = tokio::try_join!(read.header(end), verify.header(end))?;\n    if a != b { return Err(ScannerError::Disagreement); }",
+    (scanner, "coverage conflict precedes disagreement", "    let successful = [a.as_ref().ok(), b.as_ref().ok()];", "    if matches!((&a, &b), (Ok(a), Ok(b)) if a != b) { return Err(ScannerError::Disagreement); }\n    let successful = [a.as_ref().ok(), b.as_ref().ok()];",
      ["--test", "scanner", "single_endpoint_coverage_boundary_conflict_freezes_before_disagreement"]),
-    (scanner, "coverage read endpoint checkpoint conflict", "a.0 != checkpoint.hash || b.0 != checkpoint.hash", "b.0 != checkpoint.hash",
+    (scanner, "coverage read endpoint checkpoint conflict", "let successful = [a.as_ref().ok(), b.as_ref().ok()];", "let successful = [None, b.as_ref().ok()];",
      ["--test", "scanner", "single_endpoint_coverage_boundary_conflict_freezes_before_disagreement"]),
-    (scanner, "coverage verify endpoint checkpoint conflict", "a.0 != checkpoint.hash || b.0 != checkpoint.hash", "a.0 != checkpoint.hash",
+    (scanner, "coverage verify endpoint checkpoint conflict", "let successful = [a.as_ref().ok(), b.as_ref().ok()];", "let successful = [a.as_ref().ok(), None];",
      ["--test", "scanner", "single_endpoint_coverage_boundary_conflict_freezes_before_disagreement"]),
 ]
 cases += [
@@ -135,6 +136,22 @@ cases += [
      ["--test", "confirmation_bounds", "terminal_reference_requires_new_schema_and_complete_terminal_identity"]),
     (bounds, "terminal proof complete secondary identity", "AND (evidence #> '{chain_confirmation,receipts,1,Included,transfer}')\n          ?& ARRAY['to','token','from','amount','tx_from','tx_nonce']", "AND true",
      ["--test", "confirmation_bounds", "terminal_reference_requires_new_schema_and_complete_terminal_identity"]),
+]
+cases += [
+    (confirm_step, "confirmation conflict before peer error", "        let successful_heads = [a.as_ref().ok(), b.as_ref().ok()]", "        if a.is_err() || b.is_err() { return unresolved(\"rpc_failure\"); }\n        let successful_heads = [a.as_ref().ok(), b.as_ref().ok()]",
+     ["--test", "confirmation_bounds", "confirmation_boundary_conflict_freezes_even_when_peer_errors"]),
+    (scanner, "coverage conflict before peer error", "    let successful = [a.as_ref().ok(), b.as_ref().ok()];", "    if a.is_err() || b.is_err() { return Err(ScannerError::Disagreement); }\n    let successful = [a.as_ref().ok(), b.as_ref().ok()];",
+     ["--test", "scanner", "coverage_boundary_conflict_freezes_even_when_peer_errors"]),
+    (checkpoint, "checkpoint conflict before peer error", "        if [a.as_ref().ok(), b.as_ref().ok()]", "        if a.is_err() || b.is_err() { return Err(crate::scanner::ScannerError::Disagreement); }\n        if [a.as_ref().ok(), b.as_ref().ok()]",
+     ["--test", "scanner", "previous_checkpoint_conflict_freezes_even_when_peer_errors"]),
+    (confirm_step, "held handoff retains terminal evidence", "if settings_held && supplied.is_none() {", "if settings_held {",
+     ["--test", "confirmation_bounds", "held_terminal_evidence_survives_business_waits_without_further_chain_reads"]),
+    (confirm_step, "held cached wait retains effects", "return settings_unconfirmed(effects);", "return settings_unconfirmed(TransitionEffects::default());",
+     ["--test", "confirmation_bounds", "held_terminal_evidence_survives_business_waits_without_further_chain_reads"]),
+    (finality, "watcher Final requires persisted terminal proof", "if !persisted {", "if false {",
+     ["--test", "confirmation_bounds", "watcher_does_not_report_final_when_handoff_does_not_persist_terminal_evidence"]),
+    (finality, "watcher propagates stale handoff", "if !matches!(outcome, crate::pump::RunOnceResult::Applied { .. }) {", "if false {",
+     ["--test", "confirmation_bounds", "watcher_propagates_stale_handoff_even_when_another_writer_saved_a_proof"]),
 ]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--case", action="append", choices=[case[1] for case in cases], help="Run a named proof; repeat to select several")

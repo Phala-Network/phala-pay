@@ -350,7 +350,18 @@ impl FinalityWatch {
                 {
                     return Ok(Applied::Nothing);
                 }
-                pump.confirm_final_evidence(&current, evidence, now).await?;
+                let outcome = pump.confirm_final_evidence(&current, evidence, now).await?;
+                if !matches!(outcome, crate::pump::RunOnceResult::Applied { .. }) {
+                    return Ok(Applied::Nothing);
+                }
+                let persisted: bool =
+                    sqlx::query_scalar("SELECT confirmation_terminal_evidence($1) IS NOT NULL")
+                        .bind(deposit.id)
+                        .fetch_one(&self.pool)
+                        .await?;
+                if !persisted {
+                    return Ok(Applied::Nothing);
+                }
             } else {
                 // Test-only watches without a pump still persist the full terminal proof.
                 let block = BlockEvidence::from(primary.transfer().expect("terminal transfer"));

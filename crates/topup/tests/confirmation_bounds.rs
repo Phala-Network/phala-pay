@@ -50,6 +50,7 @@ struct Rpc {
     checks: Arc<Mutex<[Vec<u64>; 2]>>,
     clock: Arc<AtomicU64>,
     head_time: u64,
+    head_fault: Arc<Mutex<[u8; 2]>>,
     transfer: Arc<Mutex<[Option<TransferLog>; 2]>>,
 }
 async fn rpc(
@@ -71,7 +72,16 @@ async fn rpc(
                 )
             } else {
                 s.checks.lock().expect("checks")[e].push(s.clock.load(Ordering::SeqCst));
-                block(s.heads[e].load(Ordering::SeqCst), s.head_time)
+                let fault = s.head_fault.lock().expect("head fault")[e];
+                if fault == 2 {
+                    return axum::Json(json!({"jsonrpc":"2.0","id":req["id"],
+                        "error":{"code":-32603,"message":"fixture head failure"}}));
+                }
+                let mut header = block(s.heads[e].load(Ordering::SeqCst), s.head_time);
+                if fault == 1 {
+                    header["hash"] = json!(format!("{:#x}", B256::ZERO));
+                }
+                header
             }
         }
         "eth_getBlockByHash" => {
@@ -218,6 +228,17 @@ async fn run_fixture<F>(pool: &PgPool, f: &Fixture, body: F) -> Result<()>
 where
     F: AsyncFnOnce(Arc<Pump>, FinalityWatch, Rpc, Arc<AtomicU64>) -> Result<()>,
 {
+    run_fixture_with_step(pool, f, None, body).await
+}
+async fn run_fixture_with_step<F>(
+    pool: &PgPool,
+    f: &Fixture,
+    step: Option<Box<dyn Step>>,
+    body: F,
+) -> Result<()>
+where
+    F: AsyncFnOnce(Arc<Pump>, FinalityWatch, Rpc, Arc<AtomicU64>) -> Result<()>,
+{
     let state = Rpc {
         chain: f.route.chain.chain_id,
         methods: Arc::new([AtomicU64::new(0), AtomicU64::new(0)]),
@@ -225,6 +246,7 @@ where
         checks: Arc::new(Mutex::new([Vec::new(), Vec::new()])),
         clock: Arc::new(AtomicU64::new(f.due.timestamp().try_into()?)),
         head_time: (f.due - Duration::seconds(24)).timestamp().try_into()?,
+        head_fault: Arc::new(Mutex::new([0; 2])),
         transfer: Arc::new(Mutex::new([Some(f.log.clone()), Some(f.log.clone())])),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -252,7 +274,7 @@ where
                 fail: fail.clone(),
             }) as Arc<dyn PriceSource>
         };
-        let step = ConfirmStep::single(
+        let confirm = ConfirmStep::single(
             pool.clone(),
             f.route.clone(),
             reader(0)?,
@@ -265,7 +287,10 @@ where
         let pump = Arc::new(Pump::new(
             pool.clone(),
             routes.clone(),
-            Arc::new(StepSet::new(Box::new(step), Box::new(Paused))),
+            Arc::new(StepSet::new(
+                step.unwrap_or_else(|| Box::new(confirm)),
+                Box::new(Paused),
+            )),
             PumpConfig::default(),
         )?);
         let watch = FinalityWatch::single(
@@ -981,4 +1006,196 @@ async fn terminal_reference_requires_new_schema_and_complete_terminal_identity()
         }
         Ok(())
     })).await
+}
+
+#[tokio::test]
+async fn confirmation_boundary_conflict_freezes_even_when_peer_errors() -> Result<()> {
+    for coverage in [false, true] {
+        for conflict_endpoint in 0..2 {
+            with_database(|ctx| Box::pin(async move {
+                let p = &ctx.app_pool;
+                let f = fixture(p, Confirmations::Finalized, 1).await?;
+                let boundary = db::chain_reads::Boundary {number:200,hash:hash(200),time:f.due};
+                db::chain_reads::advance_checkpoint(p, 1, boundary).await?;
+                if coverage {
+                    sqlx::query("INSERT INTO chain_coverage(chain_id,through_block,through_hash,through_time) VALUES(1,200,$1,$2)")
+                        .bind(format!("{:#x}",hash(200))).bind(f.due).execute(p).await?;
+                    sqlx::query("UPDATE chain_checkpoints SET block_number=199,block_hash=$1 WHERE chain_id=1")
+                        .bind(format!("{:#x}",hash(199))).execute(p).await?;
+                }
+                run_fixture(p, &f, async |pump, _, r, _| {
+                    for head in r.heads.iter() {head.store(200,Ordering::SeqCst);}
+                    let mut faults = [2; 2]; faults[conflict_endpoint] = 1;
+                    *r.head_fault.lock().expect("faults") = faults;
+                    // Persistence can be refused by the newly frozen chain; the conflict
+                    // must already be durable before ordinary RPC failure is handled.
+                    let _ = pump.run_once_at(f.due).await;
+                    let reason: String = sqlx::query_scalar("SELECT check_name FROM reconciliation_blocks WHERE chain_id=1")
+                        .fetch_one(p).await?;
+                    ensure!(reason == "finalized_checkpoint_conflict");
+                    let deposit = db::get_deposit(p,f.id).await?.context("deposit")?;
+                    ensure!(deposit.state == DepositState::Detected && deposit.final_at.is_none() && deposit.valuation_at.is_none());
+                    let receipts: i32 = sqlx::query_scalar("SELECT confirm_receipt_checks FROM deposits WHERE id=$1")
+                        .bind(f.id).fetch_one(p).await?;
+                    ensure!(receipts == 0, "conflict allowed full evidence reads");
+                    ensure!(counts(&r)[conflict_endpoint] == 1 && counts(&r)[1-conflict_endpoint] >= 1);
+                    Ok(())
+                }).await
+            })).await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn held_terminal_evidence_survives_business_waits_without_further_chain_reads() -> Result<()>
+{
+    with_database(|ctx| Box::pin(async move {
+        let p = &ctx.app_pool;
+        let f = fixture(p,Confirmations::Finalized,1).await?;
+        let restore = Uuid::new_v4();
+        sqlx::query("INSERT INTO restores(id,detected_by,timeline_id,unfrozen_at,unfrozen_by,unfreeze_reason) VALUES($1,'restore_check',1,now(),'fixture','reconciled')")
+            .bind(restore).execute(p).await?;
+        sqlx::query("UPDATE deposits SET settings_revision_id=NULL,settings_hold_id=$2,final_at=$3 WHERE id=$1")
+            .bind(f.id).bind(restore).bind(f.due).execute(p).await?;
+        db::chain_reads::advance_checkpoint(p,1,db::chain_reads::Boundary {number:200,hash:hash(200),time:f.due}).await?;
+        run_fixture(p,&f,async |pump,watch,r,_| {
+            for head in r.heads.iter() {head.store(200,Ordering::SeqCst);}
+            let first = watch.watch_once_at(1,f.due).await?;
+            ensure!(first.watched == 1 && first.finalized == 1);
+            let reference = terminal_reference(p,f.id).await?;
+            let stored = db::get_deposit(p,f.id).await?.context("held deposit")?;
+            ensure!(stored.state == DepositState::Detected
+                && stored.valuation_at.is_none() && stored.credit_minor.is_none());
+            let verified: bool = sqlx::query_scalar("SELECT dual_verified_at IS NOT NULL FROM deposits WHERE id=$1")
+                .bind(f.id).fetch_one(p).await?;
+            ensure!(verified);
+            let before = counts(&r); ensure!(before == [3,3]);
+            for elapsed in [60,600,21_600,86_400] {
+                let now = f.due + Duration::seconds(elapsed);set_clock(&r,now);
+                ensure!(watch.watch_once_at(1,now).await?.watched == 0,"held proof lost watcher eligibility");
+                ensure!(matches!(pump.run_once_at(now).await?,topup::pump::RunOnceResult::Applied{..}));
+                ensure!(counts(&r) == before,"business wait re-read terminal evidence");
+                ensure!(terminal_reference(p,f.id).await? == reference,"business wait replaced final marker/proof");
+                let proof: Option<Value> = sqlx::query_scalar("SELECT confirmation_terminal_evidence($1)")
+                    .bind(f.id).fetch_one(p).await?;
+                ensure!(proof.is_some());
+            }
+            let transitions: i64 = sqlx::query_scalar("SELECT count(*) FROM transitions WHERE deposit_id=$1 AND evidence ->> 'result'='awaiting_reconfirmation'")
+                .bind(f.id).fetch_one(p).await?;
+            ensure!(transitions == 5);
+            let events: i64 = sqlx::query_scalar("SELECT count(*) FROM events WHERE object_id=$1")
+                .bind(f.id).fetch_one(p).await?;
+            ensure!(events == 0);Ok(())
+        }).await
+    })).await
+}
+
+#[tokio::test]
+async fn watcher_does_not_report_final_when_handoff_does_not_persist_terminal_evidence()
+-> Result<()> {
+    with_database(|ctx| {
+        Box::pin(async move {
+            let p = &ctx.app_pool;
+            let f = fixture(p, Confirmations::Finalized, 1).await?;
+            sqlx::query("UPDATE deposits SET final_at=$2 WHERE id=$1")
+                .bind(f.id)
+                .bind(f.due)
+                .execute(p)
+                .await?;
+            db::chain_reads::advance_checkpoint(
+                p,
+                1,
+                db::chain_reads::Boundary {
+                    number: 200,
+                    hash: hash(200),
+                    time: f.due,
+                },
+            )
+            .await?;
+            // A handler that returns a retry without evidence models a context-load failure.
+            run_fixture_with_step(p, &f, Some(Box::new(Paused)), async |_, watch, r, _| {
+                let result = watch.watch_once_at(1, f.due).await?;
+                ensure!(result.watched == 1 && result.finalized == 0);
+                let proof: Option<Value> =
+                    sqlx::query_scalar("SELECT confirmation_terminal_evidence($1)")
+                        .bind(f.id)
+                        .fetch_one(p)
+                        .await?;
+                ensure!(proof.is_none());
+                ensure!(counts(&r) == [3, 3]);
+                Ok(())
+            })
+            .await
+        })
+    })
+    .await
+}
+
+// Models another writer winning the version CAS while the watcher's handoff is running.
+struct ConcurrentTerminalWriter(PgPool);
+#[async_trait]
+impl Step for ConcurrentTerminalWriter {
+    async fn run(&self, deposit: &db::Deposit) -> StepResult {
+        Paused.run(deposit).await
+    }
+    async fn run_with_final_evidence(
+        &self,
+        deposit: &db::Deposit,
+        evidence: topup::steps::confirm::ConfirmationEvidence,
+        _: tokio::time::Instant,
+        _: DateTime<Utc>,
+    ) -> StepResult {
+        let proof = Uuid::new_v4();
+        let mut tx = self.0.begin().await.expect("competing transaction");
+        sqlx::query("INSERT INTO transitions(id,deposit_id,from_state,to_state,attempt,evidence) VALUES($1,$2,'detected','detected',0,$3)")
+            .bind(proof).bind(deposit.id).bind(json!({"confirmation_proof_version":1,"chain_confirmation":evidence}))
+            .execute(&mut *tx).await.expect("competing proof");
+        sqlx::query("UPDATE deposits SET final_at=now(),confirmation_terminal_transition_id=$2,updated_at=now()+interval '1 second',lease_token=NULL,lease_until=NULL WHERE id=$1")
+            .bind(deposit.id).bind(proof).execute(&mut *tx).await.expect("competing final marker");
+        tx.commit().await.expect("competing commit");
+        Paused.run(deposit).await
+    }
+}
+
+#[tokio::test]
+async fn watcher_propagates_stale_handoff_even_when_another_writer_saved_a_proof() -> Result<()> {
+    with_database(|ctx| {
+        Box::pin(async move {
+            let p = &ctx.app_pool;
+            let f = fixture(p, Confirmations::Finalized, 1).await?;
+            sqlx::query("UPDATE deposits SET final_at=$2 WHERE id=$1")
+                .bind(f.id)
+                .bind(f.due)
+                .execute(p)
+                .await?;
+            db::chain_reads::advance_checkpoint(
+                p,
+                1,
+                db::chain_reads::Boundary {
+                    number: 200,
+                    hash: hash(200),
+                    time: f.due,
+                },
+            )
+            .await?;
+            run_fixture_with_step(
+                p,
+                &f,
+                Some(Box::new(ConcurrentTerminalWriter(p.clone()))),
+                async |_, watch, r, _| {
+                    let result = watch.watch_once_at(1, f.due).await?;
+                    ensure!(
+                        result.watched == 1 && result.finalized == 0,
+                        "stale handoff reported Final"
+                    );
+                    ensure!(terminal_reference(p, f.id).await?.0 != Uuid::nil());
+                    ensure!(counts(&r) == [3, 3]);
+                    Ok(())
+                },
+            )
+            .await
+        })
+    })
+    .await
 }

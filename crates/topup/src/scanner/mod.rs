@@ -361,9 +361,11 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     if end < cursor.number {
         return Err(ScannerError::Disagreement);
     }
-    let (a, b) = tokio::try_join!(read.header(end), verify.header(end))?;
-    if (end == checkpoint.number && (a.0 != checkpoint.hash || b.0 != checkpoint.hash))
-        || (end == cursor.number && (a.0 != cursor.hash || b.0 != cursor.hash))
+    let (a, b) = tokio::join!(read.header(end), verify.header(end));
+    let successful = [a.as_ref().ok(), b.as_ref().ok()];
+    let contradicts = |hash| successful.iter().flatten().any(|header| header.0 != hash);
+    if (end == checkpoint.number && contradicts(checkpoint.hash))
+        || (end == cursor.number && contradicts(cursor.hash))
     {
         chain_reads::freeze(pool, chain, "finalized_checkpoint_conflict").await?;
         tracing::error!(
@@ -373,6 +375,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         );
         return Err(ScannerError::Disagreement);
     }
+    let (a, b) = (a?, b?);
     if a != b {
         return Err(ScannerError::Disagreement);
     }

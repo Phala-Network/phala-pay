@@ -11,9 +11,12 @@ pub async fn advance<R: ChainReader, V: ChainReader>(
     verify: &V,
 ) -> Result<Boundary, crate::scanner::ScannerError> {
     if let Some(previous) = chain_reads::checkpoint(pool, chain).await? {
-        let (a, b) =
-            tokio::try_join!(read.header(previous.number), verify.header(previous.number))?;
-        if a.0 != previous.hash || b.0 != previous.hash {
+        let (a, b) = tokio::join!(read.header(previous.number), verify.header(previous.number));
+        if [a.as_ref().ok(), b.as_ref().ok()]
+            .iter()
+            .flatten()
+            .any(|header| header.0 != previous.hash)
+        {
             chain_reads::freeze(pool, chain, "finalized_checkpoint_conflict").await?;
             tracing::error!(
                 tags.alert = "TopupFinalizedCheckpointConflict",
@@ -22,6 +25,8 @@ pub async fn advance<R: ChainReader, V: ChainReader>(
             );
             return Err(crate::scanner::ScannerError::Disagreement);
         }
+        a?;
+        b?;
     }
     let ((a, ah), b) = tokio::try_join!(read.finalized_header(), verify.finalized_head())?;
     if a.number > b.number {

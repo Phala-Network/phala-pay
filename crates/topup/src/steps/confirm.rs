@@ -244,18 +244,6 @@ impl ConfirmStep {
                 json!({"stage":"finality","error":error}),
             )
         };
-        let supplied = match supplied {
-            Some(evidence) => Some(evidence),
-            None => match self.context_lookup.terminal_evidence(deposit.id).await {
-                Ok(evidence) => evidence,
-                Err(_) => {
-                    return FinalityResult::Retry(
-                        RetryError::Transient,
-                        json!({"stage":"finality","error":"cached_evidence_invalid"}),
-                    );
-                }
-            },
-        };
         if let Some(evidence) = supplied {
             if evidence
                 .receipts
@@ -297,19 +285,22 @@ impl ConfirmStep {
             }
         };
         let (a, b) = tokio::join!(chains.primary.probe(policy), chains.secondary.probe(policy));
-        let ((a, ah), (b, bh)) = match (a, b) {
-            (Ok(a), Ok(b)) => (a, b),
-            _ => return unresolved("rpc_failure"),
-        };
+        // Successful evidence must freeze a conflicting boundary even if its peer failed.
+        let successful_heads = [a.as_ref().ok(), b.as_ref().ok()]
+            .map(|result| result.map(|(head, hash)| (head.number, *hash)));
         match self
             .context_lookup
-            .check_boundary(deposit.chain_id, [(a.number, ah), (b.number, bh)])
+            .check_boundary(deposit.chain_id, successful_heads)
             .await
         {
             Ok(true) => {}
             Ok(false) => return unresolved("finalized_checkpoint_conflict"),
             Err(_) => return unresolved("checkpoint_lookup_failed"),
         }
+        let ((a, _), (b, _)) = match (a, b) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => return unresolved("rpc_failure"),
+        };
         let heads = |head: FinalizedHead| match policy {
             Confirmations::Depth(_) => ChainHeads {
                 latest: Some(head.number),
@@ -485,19 +476,26 @@ impl ConfirmStep {
             );
         };
 
-        // A deposit recorded while its account's payment settings were held waits for the
-        // merchant's reconfirmation, unless the merchant was told its outcome before a restore
-        // (docs/design/payment-settings.md §11).
-        if matches!(context.binding, Binding::Pending { .. })
+        let supplied = match supplied {
+            Some(evidence) => Some(evidence),
+            None => match self.context_lookup.terminal_evidence(deposit.id).await {
+                Ok(evidence) => evidence,
+                Err(_) => {
+                    return retry(
+                        RetryError::Transient,
+                        json!({"stage":"finality","error":"cached_evidence_invalid"}),
+                        TransitionEffects::default(),
+                    );
+                }
+            },
+        };
+        // Held settings still wait for reconfirmation, but supplied or cached terminal
+        // evidence must be validated and retained in this claim before that business wait.
+        let settings_held = matches!(context.binding, Binding::Pending { .. })
             && context.delivered.is_none()
-            && context.delivered_rejection.is_none()
-        {
-            return StepResult::new(
-                StepOutcome::Wait {
-                    reason: WaitReason::SettingsUnconfirmed,
-                },
-                json!({"stage": "payment_settings", "result": "awaiting_reconfirmation"}),
-            );
+            && context.delivered_rejection.is_none();
+        if settings_held && supplied.is_none() {
+            return settings_unconfirmed(TransitionEffects::default());
         }
         // The stricter of the chain's current floor, the confirmation the deposit's binding
         // requires, and, for a payment of a quote's asset to its address, the quote's (design
@@ -577,6 +575,9 @@ impl ConfirmStep {
             },
             ..TransitionEffects::default()
         };
+        if settings_held {
+            return settings_unconfirmed(effects);
+        }
         // After a restore, the credit the merchant was told for this deposit stands: a settled
         // amount is immutable. A delivered transfer that is not the chain's holds the deposit
         // until the operator discards the delivered credit (deploy/runbooks/restore.md).
@@ -685,14 +686,7 @@ impl ConfirmStep {
             None => {
                 let revision = match &context.binding {
                     Binding::Revision { id, .. } => *id,
-                    Binding::Pending { .. } => {
-                        return StepResult::new(
-                            StepOutcome::Wait {
-                                reason: WaitReason::SettingsUnconfirmed,
-                            },
-                            json!({"stage": "payment_settings", "result": "awaiting_reconfirmation"}),
-                        );
-                    }
+                    Binding::Pending { .. } => return settings_unconfirmed(effects),
                 };
                 let basis = json!({"revision": crate::ids::format("psrev_", revision)});
                 match context.binding.resolve(&runtime.route) {
@@ -928,6 +922,17 @@ struct StoredLock {
     terms: Terms,
 }
 
+fn settings_unconfirmed(effects: TransitionEffects) -> StepResult {
+    let mut result = StepResult::new(
+        StepOutcome::Wait {
+            reason: WaitReason::SettingsUnconfirmed,
+        },
+        json!({"stage": "payment_settings", "result": "awaiting_reconfirmation"}),
+    );
+    result.effects = effects;
+    result
+}
+
 #[async_trait]
 trait ContextLookup: Send + Sync {
     async fn terminal_evidence(
@@ -939,7 +944,7 @@ trait ContextLookup: Send + Sync {
     async fn check_boundary(
         &self,
         _chain: u64,
-        _heads: [(u64, B256); 2],
+        _heads: [Option<(u64, B256)>; 2],
     ) -> Result<bool, sqlx::Error> {
         Ok(true)
     }
@@ -992,7 +997,7 @@ impl ContextLookup for PostgresContextLookup {
     async fn check_boundary(
         &self,
         chain: u64,
-        heads: [(u64, B256); 2],
+        heads: [Option<(u64, B256)>; 2],
     ) -> Result<bool, sqlx::Error> {
         let (checkpoint, coverage) = tokio::try_join!(
             crate::db::chain_reads::checkpoint(&self.0, chain),
@@ -1001,6 +1006,7 @@ impl ContextLookup for PostgresContextLookup {
         for boundary in checkpoint.into_iter().chain(coverage) {
             if heads
                 .iter()
+                .flatten()
                 .any(|(number, hash)| *number == boundary.number && *hash != boundary.hash)
             {
                 crate::db::chain_reads::freeze(&self.0, chain, "finalized_checkpoint_conflict")
