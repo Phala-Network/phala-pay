@@ -1,5 +1,6 @@
-import { ChevronRight } from "lucide-react";
-import { useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import { ChevronRight, type LucideIcon } from "lucide-react";
+import { useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import { Hash } from "@/components/ui/hash";
 import type { StatusTone } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
@@ -9,6 +10,9 @@ import { useNetworks } from "./queries.js";
 
 /** An inline text link, in the page's text colour. */
 export const LINK = "font-medium underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground";
+
+/** The integration guide, where each tab's one-line explanation is told in full. */
+export const INTEGRATION_GUIDE = "https://github.com/Phala-Network/phala-pay/blob/main/docs/integration.md";
 
 /** On a phone, a control is 44px tall: a touch target's size. */
 export const TOUCH = "max-sm:h-11";
@@ -130,9 +134,55 @@ export function Disclosure({ summary, children }: { summary: ReactNode; children
   );
 }
 
-/** A panel's message while it has nothing to show: one line of text, one per panel. */
+/**
+ * A long list's most recent `limit` items, and a "Show all (N)" button that shows the rest in the
+ * page's flow (the page grows; nothing scrolls inside). `newestFirst` lists keep their first items;
+ * the others (logs, oldest first) their last. With a `limit` of 0 the list is a disclosure, the
+ * button named by `name`: "Show finalized sweeps (3)".
+ */
+export function useShowAll<T>(items: T[], limit: number, newestFirst = true, name = "all"): { shown: T[]; toggle: ReactNode } {
+  const [all, setAll] = useState(false);
+  const hidden = items.length - limit;
+  const shown = all || hidden <= 0 ? items : newestFirst ? items.slice(0, limit) : items.slice(-limit);
+  // The label lines up with the list above it; the button's hover fill reaches into the gutter.
+  const toggle = hidden <= 0 ? null : (
+    <Button type="button" variant="ghost" size="sm" className={cn("-ml-3 self-start", TOUCH)} aria-expanded={all} onClick={() => setAll((open) => !open)}>
+      {all ? (limit === 0 ? `Hide ${name}` : "Show fewer") : `Show ${name} (${items.length})`}
+    </Button>
+  );
+  return { shown, toggle };
+}
+
+/** A one-line explanation's link to the integration guide, which explains it in full. */
+export function LearnMore({ anchor, topic }: { anchor: string; topic: string }) {
+  return (
+    <a className={cn(LINK, "whitespace-nowrap")} href={`${INTEGRATION_GUIDE}#${anchor}`} target="_blank" rel="noreferrer">
+      Learn more<span className="sr-only"> about {topic}</span>
+    </a>
+  );
+}
+
+/** A part's message while it has nothing to show: one line of text. */
 export function Empty({ children }: { children: ReactNode }) {
   return <p className="text-sm text-pretty text-muted-foreground">{children}</p>;
+}
+
+/**
+ * A whole panel with nothing to show yet: centred in the space the panel has, its icon, what will
+ * appear, and how to make it appear.
+ */
+export function EmptyState({ icon: Icon, title, children }: { icon: LucideIcon; title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+      <span className="flex size-10 items-center justify-center rounded-full border bg-muted/60 text-muted-foreground">
+        <Icon className="size-5" strokeWidth={1.75} aria-hidden="true" />
+      </span>
+      <div className="flex max-w-xs flex-col gap-1">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-sm text-pretty text-muted-foreground">{children}</p>
+      </div>
+    </div>
+  );
 }
 
 const TONES: Record<string, StatusTone> = {

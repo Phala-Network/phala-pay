@@ -1,16 +1,17 @@
-import { ChevronDown, Menu, X } from "lucide-react";
+import { ArrowDown, ArrowRight, Menu, Plus, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { CodeBlock } from "@/components/ui/code-block";
-import { CopyButton } from "@/components/ui/hash";
-import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CopyButton } from "@/components/ui/copy-button";
+import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
+import { cn } from "@/lib/utils";
 import { useHydrated } from "./islands.js";
 import { ComparisonCell } from "./ComparisonCell.js";
+import { Versus } from "./Versus.js";
 import { TEASER, TEASER_OTHERS } from "./content/compare.js";
 import { HERO_CODE, HERO_CODE_NOTE } from "./content/hero-code.js";
 import {
-  CLOSING_LEAD, CLOSING_TITLE, DEMO_LEAD, DEMO_TITLE, FAQ, HERO_META, HERO_SUBHEAD, PROPERTIES, PROPERTIES_LEAD, STEPS,
-  TAGLINE,
+  CLOSING_LEAD, CLOSING_TITLE, CUSTODY_LINKS, CUSTODY_NOTE, CUSTODY_PATH, DEMO_LEAD, DEMO_STATUS, DEMO_TITLE, DEPLOY_COMMAND, FAQ,
+  HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES, PROPERTIES_LEAD, TAGLINE,
 } from "./content/site.js";
 import { unbroken } from "./text.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
@@ -27,17 +28,23 @@ export const LINKS = {
   reference: "https://phala-network.github.io/phala-pay/",
   license: `${REPO}/blob/main/LICENSE`,
   security: `${REPO}/blob/main/SECURITY.md`,
+  issues: `${REPO}/issues`,
 };
 
 /**
- * The page's width, one for every section and the header and footer, so all share a left edge; text
- * inside it keeps to a readable measure (max-w-prose and narrower).
+ * The page's grid: one width for every section and the header and footer, so all share a left
+ * edge (1280px, 16 to 32px gutters), 12 columns inside it. Text keeps to a readable measure.
  */
 export const CONTAINER = "mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8";
-export const H2 = "text-2xl font-semibold tracking-tight";
-/** Below the 56px sticky header, with room above the heading scrolled to. */
-const SECTION = "scroll-mt-20 pt-16 md:pt-24";
+/** Every H2, and every other page's H1. */
+export const H2 = "text-title-sm font-semibold text-balance sm:text-title";
+/** A section's introduction under its heading. */
+export const LEAD = "text-lead text-pretty text-body-foreground";
+/** One rhythm for every section: 64px above and below on phones, 80px from lg; below the 64px header when scrolled to. */
+export const SECTION = "scroll-mt-16 py-16 lg:py-20";
 const ICON = { "aria-hidden": true, strokeWidth: 1.75 } as const;
+/** An inline text link, in the text's colour. */
+export const TEXT_LINK = "font-medium text-foreground underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground";
 
 const NAV = [
   { href: "/#demo", label: "Demo" },
@@ -75,28 +82,29 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
   }, [menuOpen]);
 
   return (
-    <header ref={header} className="sticky top-0 z-50 border-b bg-background">
-      <div className={`${CONTAINER} flex h-14 items-center gap-6`}>
-        <a href="/" className="mr-auto flex rounded-md">
+    <header ref={header} className="sticky top-0 z-50 border-b bg-background/90 backdrop-blur-md">
+      <div className={`${CONTAINER} flex h-16 items-center`}>
+        <a href="/" className="mr-auto flex rounded-md" aria-label="Phala Pay home">
           <Lockup />
         </a>
         <nav aria-label="Site" className="hidden md:block">
-          <ul className="flex items-center gap-1">
+          <ul className="flex items-center">
             {NAV.map(({ href, label }) => (
               <li key={label}>
-                <a href={href} className="inline-flex h-8 items-center rounded-md px-3 text-sm text-muted-foreground transition-colors hover:text-foreground">
+                <a href={href} className="inline-flex h-9 items-center rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
                   {label}
                 </a>
               </li>
             ))}
           </ul>
         </nav>
-        <div className="flex items-center gap-2">
+        <span aria-hidden="true" className="mx-3 hidden h-5 w-px bg-border md:block" />
+        <div className="flex items-center gap-1">
           <a href={LINKS.repo} aria-label="GitHub" className={ICON_BUTTON}>
             <span aria-hidden="true" className="github-icon inline-block size-4 shrink-0 bg-current" />
           </a>
           <ThemeToggle theme={theme} onChange={onThemeChange} />
-          <Button asChild size="sm" className="ml-2 hidden md:inline-flex">
+          <Button asChild size="sm" className="ml-3 hidden h-9 md:inline-flex">
             <a href={LINKS.selfHosting}>Self-host</a>
           </Button>
           {hydrated && (
@@ -127,168 +135,229 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
 }
 
 /**
- * The logo, as brand/lockup-light.svg and, with the mark's edge on the dark theme,
- * brand/lockup-dark.svg: the mark and PHALA PAY in the lettering of Phala's logo, laid out in that
- * logo's units, where the mark is 48 units and the caps 16 (brand/README.md). At 32 px, the edge's
- * 1-unit ring is 1 px.
+ * The logo: the mark (brand/README.md: a lime dot in a near-black tile, with its edge on the dark
+ * theme) at 24px, beside the name set in the page's typeface, as a product's name sits beside its
+ * mark in an interface; the brand's lettered lockup stays for the link preview and the brand files.
  */
-function Lockup() {
+export function Lockup({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 192 48" role="img" aria-label="Phala Pay" className="h-8 w-32 shrink-0">
-      <g transform="scale(1.5)">
+    <span className={cn("flex items-center gap-2.5", className)}>
+      <svg viewBox="0 0 32 32" aria-hidden="true" className="size-6 shrink-0">
         <rect width="32" height="32" rx="8" className="fill-neutral-950" />
         <path
           fillRule="evenodd"
-          d="M8 0H24A8 8 0 0 1 32 8V24A8 8 0 0 1 24 32H8A8 8 0 0 1 0 24V8A8 8 0 0 1 8 0ZM8 1A7 7 0 0 0 1 8V24A7 7 0 0 0 8 31H24A7 7 0 0 0 31 24V8A7 7 0 0 0 24 1Z"
+          d="M8 0H24A8 8 0 0 1 32 8V24A8 8 0 0 1 24 32H8A8 8 0 0 1 0 24V8A8 8 0 0 1 8 0ZM8 1.33A6.67 6.67 0 0 0 1.33 8V24A6.67 6.67 0 0 0 8 30.67H24A6.67 6.67 0 0 0 30.67 24V8A6.67 6.67 0 0 0 24 1.33Z"
           className="hidden fill-white/15 dark:block"
         />
         <rect x="10" y="10" width="12" height="12" rx="3" className="fill-brand" />
-      </g>
-      <g className="fill-foreground">
-        <path d="M71.8631 21.5534C71.8631 25.2787 69.5299 27.4266 65.459 27.4266H62.2804V31.9977H58.6666V15.9998H65.459C69.5299 15.9998 71.8631 18.0111 71.8631 21.5534ZM68.4325 21.6676C68.4325 19.8852 67.2886 18.9941 65.2763 18.9941H62.2804V24.4105H65.2763C67.2886 24.4105 68.4325 23.4958 68.4325 21.6676Z" />
-        <path d="M77.5266 15.9998V23.999H84.7766V15.9998H88.3883V31.9977H84.7766V27.1982H77.5266V31.9977H73.916V15.9998H77.5266Z" />
-        <path d="M102.261 28.798H94.9242L93.6297 31.9998H89.9017L96.8542 16.002H100.582L107.421 31.9998H103.555L102.261 28.798ZM100.974 25.5962L98.6133 19.7711L96.2332 25.5984L100.974 25.5962Z" />
-        <path d="M112.686 15.9998V28.8439H119.547V31.9977H109.072V15.9998H112.686Z" />
-        <path d="M132.71 28.798H125.373L124.078 31.9998H120.35L127.303 16.002H131.031L137.867 31.9998H134.001L132.71 28.798ZM131.423 25.5962L129.064 19.7689L126.684 25.5962H131.423Z" />
-        <path transform="translate(87.15)" d="M71.8631 21.5534C71.8631 25.2787 69.5299 27.4266 65.459 27.4266H62.2804V31.9977H58.6666V15.9998H65.459C69.5299 15.9998 71.8631 18.0111 71.8631 21.5534ZM68.4325 21.6676C68.4325 19.8852 67.2886 18.9941 65.2763 18.9941H62.2804V24.4105H65.2763C67.2886 24.4105 68.4325 23.4958 68.4325 21.6676Z" />
-        <path transform="translate(69.32)" d="M102.261 28.798H94.9242L93.6297 31.9998H89.9017L96.8542 16.002H100.582L107.421 31.9998H103.555L102.261 28.798ZM100.974 25.5962L98.6133 19.7711L96.2332 25.5984L100.974 25.5962Z" />
-        <path d="M176.19 16H180.056L182.8794 22.9868L185.7267 16H189.4547L184.6856 26.9738V32H181.0731V27.4227Z" />
-      </g>
-    </svg>
+      </svg>
+      <span className="text-wordmark font-semibold text-foreground">Phala Pay</span>
+    </span>
   );
 }
 
-// The headline, with the fact behind each of its words (docs/architecture.md §8, the typical credit
-// at depth 2, `typical_credit_seconds`; README.md), the way to run it (self-hosting on Phala Cloud),
-// and beside them, what integrating it takes.
-export function Hero() {
+// The headline, the way to run it (self-hosting on Phala Cloud), and beside them, what integrating it
+// takes. The facts behind it (fees, speed, custody) follow the demo, once each.
+export function Hero({ code }: { code: ReactNode }) {
   return (
-    <section aria-labelledby="hero-title">
-      <div className={`${CONTAINER} grid gap-12 py-12 md:py-20 lg:grid-cols-12 lg:items-start lg:gap-8`}>
-        <div className="lg:col-span-7">
-          <h1 id="hero-title" className="max-w-2xl text-3xl/tight font-semibold tracking-tight text-balance sm:text-4xl/tight">
+    <section aria-labelledby="hero-title" className="border-b">
+      <div className={`${CONTAINER} grid gap-12 pt-14 pb-16 sm:pt-20 lg:grid-cols-12 lg:items-center lg:gap-10 lg:py-20`}>
+        <div className="lg:col-span-6">
+          <h1 id="hero-title" className="max-w-xl text-display-sm font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display">
             {TAGLINE}
           </h1>
-          <p className="mt-4 max-w-xl text-lg/8 text-pretty text-muted-foreground">{unbroken(HERO_SUBHEAD)}</p>
+          <p className="mt-6 max-w-xl text-lead text-pretty text-body-foreground">{unbroken(HERO_SUBHEAD)}</p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
             <Button asChild size="lg" variant="secondary"><a href={LINKS.docs}>Read the docs</a></Button>
           </div>
-          <p className="mt-6 text-sm text-muted-foreground">{HERO_META}</p>
+          <p className="mt-4 text-sm text-muted-foreground">{HERO_META}</p>
         </div>
-        <div id="hero-code" className="min-w-0 lg:col-span-5">
-          <HeroCode />
-        </div>
+        <div className="min-w-0 lg:col-span-6">{code}</div>
       </div>
     </section>
   );
 }
 
 /**
- * The hero's code, an island of its own. Each snippet's copy button sits in its caption, clear of
- * lines that scroll on a phone, and appears once the island hydrates.
+ * The hero's code, an island of its own: one window, a tab for each side of the integration (the
+ * WAI-ARIA tabs pattern: arrow keys move between tabs), the shown one's file name and copy button in
+ * its header. Radix Tabs is not used here: it writes style attributes into the prerendered HTML,
+ * which the CSP's style-src refuses. Without script the window shows the server's code; the tabs
+ * and the copy button work once it hydrates.
  */
 export function HeroCode() {
   const hydrated = useHydrated();
+  const id = useId();
+  const [shown, setShown] = useState(0);
+  const tabs = useRef<(HTMLButtonElement | null)[]>([]);
+  const current = HERO_CODE[shown] ?? HERO_CODE[0];
+  const select = (index: number) => {
+    const next = (index + HERO_CODE.length) % HERO_CODE.length;
+    setShown(next);
+    tabs.current[next]?.focus();
+  };
   return (
-    <div className="grid gap-5">
-      {HERO_CODE.map(({ label, file, code }) => (
-        <figure key={file} className="min-w-0">
-          <figcaption className="mb-2 flex h-8 items-center gap-3 text-sm">
-            <span className="mr-auto font-medium">{label}</span>
-            <span className="font-mono text-xs text-muted-foreground">{file}</span>
-            {hydrated && <CopyButton value={code} label={`Copy ${file}`} />}
-          </figcaption>
-          <CodeBlock value={code} label={file} copyable={false} className="max-h-none pr-3 text-[13px]" />
-        </figure>
-      ))}
-      <p className="text-sm text-muted-foreground">
-        {HERO_CODE_NOTE.before}<code className="font-mono text-[13px]">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}
-      </p>
+    <figure className="min-w-0">
+      <CodeWindow
+        header={
+          <>
+            <div role="tablist" aria-label="Integration code" className="flex h-full items-stretch gap-5"
+              onKeyDown={(event) => {
+                if (event.key === "ArrowRight") select(shown + 1);
+                else if (event.key === "ArrowLeft") select(shown - 1);
+                else return;
+                event.preventDefault();
+              }}>
+              {HERO_CODE.map(({ id: key, label }, index) => (
+                <button key={key} ref={(node) => { tabs.current[index] = node; }} type="button" role="tab"
+                  id={`${id}-tab-${key}`} aria-controls={`${id}-panel-${key}`} aria-selected={index === shown}
+                  tabIndex={index === shown ? 0 : -1} disabled={!hydrated && index !== shown} onClick={() => setShown(index)}
+                  className="relative text-sm font-medium text-code-muted transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-code-foreground after:opacity-0 hover:text-code-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 aria-selected:text-code-foreground aria-selected:after:opacity-100">
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="ml-auto font-mono text-xs text-code-muted">{current?.file}</span>
+            {hydrated && current !== undefined
+              ? <CopyButton value={current.code} label={`Copy ${current.file}`} className="text-code-muted hover:bg-white/10 hover:text-code-foreground" />
+              : <span aria-hidden="true" className="size-8" />}
+          </>
+        }
+      >
+        {/* The panels share one grid cell, so the window is as tall as the longer snippet whichever
+            is shown; the other is invisible (and so out of the accessibility tree too). */}
+        <div className="grid">
+          {HERO_CODE.map(({ id: key, file, lines }, index) => (
+            <div key={key} role="tabpanel" id={`${id}-panel-${key}`} aria-labelledby={`${id}-tab-${key}`}
+              className={cn("col-start-1 row-start-1 min-w-0", index !== shown && "invisible")}>
+              <CodeBody label={file}>
+                <HighlightedLines lines={lines} />
+              </CodeBody>
+            </div>
+          ))}
+        </div>
+      </CodeWindow>
+      <figcaption className="mt-4 text-sm text-muted-foreground">
+        {HERO_CODE_NOTE.before}<code className="font-mono text-mono text-foreground">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}
+      </figcaption>
+    </figure>
+  );
+}
+
+/** A section's heading and introduction: the heading on the left, the introduction beside it from lg. */
+function SectionHeader({ id, title, lead }: { id: string; title: string; lead?: ReactNode }) {
+  return (
+    // The lead's last line sits on the heading's baseline.
+    <div className="grid gap-4 lg:grid-cols-12 lg:items-baseline-last lg:gap-10">
+      <div className="lg:col-span-6">
+        <h2 id={id} className={H2}>{title}</h2>
+      </div>
+      {lead !== undefined && <p className={cn(LEAD, "max-w-xl lg:col-span-6 lg:justify-self-end")}>{lead}</p>}
     </div>
   );
 }
 
 /**
- * The demo, directly below the hero. Until its chunk renders, its placeholder holds the height the
- * demo's first view measures at each breakpoint, so nothing below it moves when it arrives.
+ * The demo, directly below the hero, on a band of its own: the product itself, sized so that its
+ * heading and both panels fit one 1440×900 screen.
  */
 export function DemoSection({ children }: { children?: ReactNode }) {
   return (
-    <section id="demo" aria-labelledby="demo-title" className="scroll-mt-20">
+    <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface py-6">
       <div className={CONTAINER}>
-        <h2 id="demo-title" className={H2}>{DEMO_TITLE}</h2>
-        <p className="mt-2 max-w-prose text-pretty text-muted-foreground">{DEMO_LEAD}</p>
-        <div id="demo-root" className="mt-8">{children ?? <DemoPlaceholder />}</div>
+        <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-2">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <h2 id="demo-title" className={H2}>{DEMO_TITLE}</h2>
+            <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <span aria-hidden="true" className="size-2 rounded-full bg-brand ring-1 ring-foreground/25" />
+              {DEMO_STATUS}
+            </p>
+          </div>
+          <p className="max-w-md text-pretty text-body-foreground">{DEMO_LEAD}</p>
+        </div>
+        <div id="demo-root" className="mt-4">{children ?? <DemoPlaceholder />}</div>
       </div>
     </section>
   );
 }
 
-// The demo's first view (product and backend, the account loaded) measures 1885px tall at 390px wide
-// (1973px at 320), 1669 to 1709px from 640px, and 1096 to 1176px from 1024px, where its columns sit
-// side by side. Without scripting the demo never arrives, so nothing is reserved.
-const DEMO_HEIGHT = "min-h-[117rem] sm:min-h-[104rem] lg:min-h-[68rem] noscript:min-h-0";
-
-/** The demo's space in static HTML and while the page hydrates. */
+/**
+ * The demo's place in the static HTML and while the page hydrates. Nothing is reserved: the demo
+ * arrives under the hero, so it moves nothing in view (e2e/demo.spec.ts measures the layout shift).
+ */
 export function DemoPlaceholder() {
   return (
-    <div className={DEMO_HEIGHT}>
-      <noscript>
-        <p className="text-sm text-muted-foreground">The demo needs JavaScript.</p>
-      </noscript>
-    </div>
+    <noscript>
+      <p className="text-sm text-muted-foreground">The demo needs JavaScript.</p>
+    </noscript>
   );
 }
 
-/** The demo's space while its chunk loads. */
+/** The demo's place while its chunk loads. */
 export function DemoLoading() {
-  return (
-    <div className={DEMO_HEIGHT}>
-      <p role="status" className="text-sm text-muted-foreground">Loading the demo…</p>
-    </div>
-  );
+  return <p role="status" className="text-sm text-muted-foreground">Loading the demo…</p>;
 }
 
-export function HowItWorks() {
+/**
+ * The path a payment takes, drawn as the page's one diagram: three stations in a row (a column on a
+ * phone), each joined to the next by a labelled arrow that takes the space between them. The last
+ * station, the merchant's own, is set apart.
+ */
+function CustodyPath() {
   return (
-    <section aria-labelledby="how-title" className={SECTION}>
-      <div className={CONTAINER}>
-        <h2 id="how-title" className={H2}>How it works</h2>
-        <ol className="mt-8 grid gap-8 md:grid-cols-3 md:gap-6">
-          {STEPS.map(({ title, text }, index) => (
-            <li key={title} className="border-l pl-5">
-              <span aria-hidden="true" className="font-mono text-sm text-muted-foreground">
-                {String(index + 1).padStart(2, "0")}
+    <figure>
+      <ol className="flex flex-col gap-3 lg:flex-row lg:items-stretch lg:gap-0">
+        {CUSTODY_PATH.map(({ role, name, detail }, index) => (
+          <li key={name} className="contents">
+            {index > 0 && (
+              <span className="flex items-center gap-2 self-start pl-5 text-xs font-medium text-muted-foreground lg:min-w-28 lg:flex-col lg:justify-center lg:self-auto lg:px-3 lg:pl-3">
+                <ArrowDown {...ICON} className="size-4 lg:hidden" />
+                <span className="hidden h-px w-full bg-border-strong lg:block" />
+                {CUSTODY_LINKS[index - 1]}
+                <ArrowRight {...ICON} className="hidden size-4 lg:block" />
               </span>
-              <h3 className="mt-2 font-semibold">{title}</h3>
-              <p className="mt-1 max-w-prose text-sm/6 text-pretty text-muted-foreground">{unbroken(text)}</p>
-            </li>
-          ))}
-        </ol>
-      </div>
-    </section>
+            )}
+            <div className={cn("flex-1 rounded-lg border px-5 py-4", index === CUSTODY_PATH.length - 1 ? "border-foreground bg-card" : "bg-card")}>
+              <p className="text-xs font-medium text-muted-foreground">{role}</p>
+              <p className="mt-1 font-semibold">{name}</p>
+              <p className="mt-1 text-sm text-pretty text-body-foreground">{detail}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+      <figcaption className="mt-4 text-sm text-muted-foreground">{CUSTODY_NOTE}</figcaption>
+    </figure>
   );
 }
 
-export function Properties() {
+/**
+ * What the demo just showed, told once: where the money goes, as a diagram under the claim, then the
+ * other facts as a ruled spec list (a term and its line), not a grid of cards.
+ */
+export function WhereTheMoneyGoes() {
+  const [custody, ...rest] = PROPERTIES;
   return (
-    <section aria-labelledby="properties-title" className={SECTION}>
-      <div className={`${CONTAINER} grid gap-8 lg:grid-cols-12`}>
-        <div className="lg:col-span-4">
-          <div className="lg:sticky lg:top-20">
-            <h2 id="properties-title" className={H2}>Why Phala Pay</h2>
-            <p className="mt-2 max-w-sm text-pretty text-muted-foreground">{PROPERTIES_LEAD}</p>
-          </div>
+    <section aria-labelledby="money-title" className={SECTION}>
+      <div className={CONTAINER}>
+        <SectionHeader id="money-title" title={MONEY_TITLE} lead={custody === undefined ? undefined : unbroken(custody.text)} />
+        <div className="mt-10 lg:mt-12">
+          <CustodyPath />
         </div>
-        <dl className="divide-y border-y lg:col-span-8">
-          {PROPERTIES.map(({ title, text }) => (
-            <div key={title} className="grid gap-1 py-5 sm:grid-cols-3 sm:gap-6">
-              <dt className="font-semibold">{title}</dt>
-              <dd className="text-sm/6 text-pretty text-muted-foreground sm:col-span-2">{unbroken(text)}</dd>
-            </div>
-          ))}
-        </dl>
+        <div className="mt-14 grid gap-6 lg:grid-cols-12 lg:gap-10">
+          <div className="lg:col-span-4">
+            <h3 className="text-heading font-semibold">For platforms that sell credits</h3>
+            <p className="mt-2 max-w-xs text-pretty text-body-foreground">{PROPERTIES_LEAD}</p>
+          </div>
+          <dl className="border-t lg:col-span-8">
+            {rest.map(({ title, text }) => (
+              <div key={title} className="grid gap-1 border-b py-4 sm:grid-cols-[12rem_minmax(0,1fr)] sm:gap-6">
+                <dt className="font-semibold">{title}</dt>
+                <dd className="text-pretty text-body-foreground">{unbroken(text)}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
       </div>
     </section>
   );
@@ -297,79 +366,81 @@ export function Properties() {
 /** Names in prose: "A, B, and C". */
 const list = new Intl.ListFormat("en", { type: "conjunction" });
 
+/**
+ * The comparison's summary: from md a table, Phala Pay's column set apart by a tint and a rule above
+ * it; on a phone, Phala Pay beside one provider at a time.
+ */
 export function CompareTeaser() {
   const [phala, ...others] = TEASER.vendors;
   return (
-    <section aria-labelledby="compare-title" className={SECTION}>
+    <section aria-labelledby="compare-title" className={cn(SECTION, "border-t")}>
       <div className={CONTAINER}>
-        <h2 id="compare-title" className={H2}>How Phala Pay compares</h2>
-        <p className="mt-2 max-w-prose text-pretty text-muted-foreground">
-          Beside {list.format(others.map(({ name }) => name))}, as each states it. The full comparison
-          adds {list.format(TEASER_OTHERS)}, with a source for every value.
-        </p>
-        <Table className="mt-8 hidden table-fixed md:table">
-          <TableCaption className="sr-only">{list.format(TEASER.vendors.map(({ name }) => name))} on {TEASER.dimensions.length} dimensions.</TableCaption>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead scope="col" className="w-48 pl-0 text-xs text-muted-foreground">Dimension</TableHead>
-              {TEASER.vendors.map(({ id, name }) => (
-                <TableHead key={id} scope="col" className={`px-4 whitespace-normal ${id === phala?.id ? "bg-muted/40" : ""}`}>{name}</TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {TEASER.dimensions.map(({ key, label }) => (
-              <TableRow key={key}>
-                <TableHead scope="row" className="h-auto py-3 pl-0 align-top whitespace-normal">{label}</TableHead>
-                {TEASER.vendors.map((vendor) => (
-                  <TableCell key={vendor.id} className={`px-4 py-3 align-top leading-6 whitespace-normal ${vendor.id === phala?.id ? "bg-muted/40" : "text-muted-foreground"}`}>
-                    <ComparisonCell cell={vendor[key]} linkSource={false} />
-                  </TableCell>
+        <SectionHeader
+          id="compare-title"
+          title="How Phala Pay compares"
+          lead={<>Beside {list.format(others.map(({ name }) => name))}, as each states it. The full comparison adds {list.format(TEASER_OTHERS)}, with a source for every value.</>}
+        />
+        <div className="mt-10 hidden md:block">
+          <table className="w-full table-fixed border-collapse text-left">
+            <caption className="sr-only">{list.format(TEASER.vendors.map(({ name }) => name))} on {TEASER.dimensions.length} dimensions.</caption>
+            <thead>
+              <tr>
+                <td className="w-44 lg:w-56" />
+                {TEASER.vendors.map(({ id, name }) => (
+                  <th key={id} scope="col" className={cn("border-t-2 px-5 py-4 align-bottom text-base font-semibold", id === phala?.id ? PHALA_COLUMN : "border-transparent text-body-foreground")}>
+                    {name}
+                  </th>
                 ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        {/* Below md, one list per dimension instead of a table four columns wide. */}
-        <dl className="mt-6 divide-y border-y md:hidden">
-          {TEASER.dimensions.map(({ key, label }) => (
-            <div key={key} className="py-4">
-              <dt className="font-semibold">{label}</dt>
-              <dd>
-                <dl className="mt-2 grid gap-3 text-sm">
+              </tr>
+            </thead>
+            <tbody>
+              {TEASER.dimensions.map(({ key, label }) => (
+                <tr key={key} className="border-t">
+                  <th scope="row" className="py-5 pr-5 align-top text-sm font-medium text-muted-foreground">{label}</th>
                   {TEASER.vendors.map((vendor) => (
-                    <div key={vendor.id}>
-                      <dt className="text-muted-foreground">{vendor.name}</dt>
-                      <dd><ComparisonCell cell={vendor[key]} linkSource={false} /></dd>
-                    </div>
+                    <td key={vendor.id} className={cn("px-5 py-5 align-top text-table text-pretty", vendor.id === phala?.id ? "bg-muted/50 text-foreground" : "text-body-foreground")}>
+                      <ComparisonCell cell={vendor[key]} linkSource={false} />
+                    </td>
                   ))}
-                </dl>
-              </dd>
-            </div>
-          ))}
-        </dl>
-        <a href="/compare" className="mt-4 inline-flex min-h-11 items-center text-sm font-medium underline underline-offset-4">
-          Full comparison
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {phala !== undefined && (
+          <Versus phala={phala} others={others} dimensions={TEASER.dimensions} linkSource={false} name="teaser-versus" className="mt-8 md:hidden" />
+        )}
+        <a href="/compare" className={cn(TEXT_LINK, "mt-6 inline-flex min-h-11 items-center gap-1.5 text-sm")}>
+          See the full comparison
         </a>
       </div>
     </section>
   );
 }
 
+/** Phala Pay's column in a comparison table: a rule above it and a tint down it. */
+export const PHALA_COLUMN = "border-foreground bg-muted/50 text-foreground";
+
 /** Each answer folds under its question, natively: no script, so it works before and without hydration. */
 export function Faq() {
   return (
-    <section aria-labelledby="faq-title" className={SECTION}>
-      <div className={`${CONTAINER} grid gap-8 lg:grid-cols-12`}>
-        <h2 id="faq-title" className={`${H2} lg:col-span-4`}>Frequently asked questions</h2>
+    <section aria-labelledby="faq-title" className={cn(SECTION, "border-t")}>
+      <div className={`${CONTAINER} grid gap-10 lg:grid-cols-12`}>
+        <div className="lg:col-span-4">
+          <h2 id="faq-title" className={H2}>Frequently asked questions</h2>
+          <p className="mt-4 max-w-sm text-pretty text-body-foreground">
+            Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask
+            on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.
+          </p>
+        </div>
         <div className="border-t lg:col-span-8">
           {FAQ.map(({ question, answer }) => (
             <details key={question} className="group border-b">
-              <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 py-3 font-medium [&::-webkit-details-marker]:hidden">
+              <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-4 text-base font-medium sm:text-lg [&::-webkit-details-marker]:hidden">
                 {question}
-                <ChevronDown {...ICON} className="size-4 shrink-0 text-muted-foreground group-open:rotate-180 motion-safe:transition-transform" />
+                <Plus {...ICON} className="size-5 shrink-0 text-muted-foreground group-open:rotate-45 motion-safe:transition-transform" />
               </summary>
-              <p className="max-w-prose pb-5 text-sm/6 text-pretty text-muted-foreground">{unbroken(answer)}</p>
+              <p className="max-w-2xl pr-10 pb-6 text-pretty text-body-foreground">{unbroken(answer)}</p>
             </details>
           ))}
         </div>
@@ -378,23 +449,51 @@ export function Faq() {
   );
 }
 
-export function ClosingCta() {
+/**
+ * The close: a band of its own, as the demo's is, with the call to deploy, and beside it the one
+ * command that does.
+ */
+export function ClosingCta({ command }: { command: ReactNode }) {
   return (
-    <section aria-labelledby="closing-title" className={SECTION}>
-      <div className={CONTAINER}>
-        {/* Ruled above; the footer's rule closes it below. */}
-        <div className="flex flex-col gap-6 border-t py-10 md:flex-row md:items-center md:justify-between md:py-12">
-          <div>
-            <h2 id="closing-title" className={H2}>{CLOSING_TITLE}</h2>
-            <p className="mt-2 text-pretty text-muted-foreground">{CLOSING_LEAD}</p>
-          </div>
-          <div className="flex shrink-0 flex-col gap-3 sm:flex-row">
+    <section aria-labelledby="closing-title" className="border-t bg-surface py-16 lg:py-20">
+      <div className={`${CONTAINER} grid gap-10 lg:grid-cols-12 lg:items-center lg:gap-10`}>
+        <div className="lg:col-span-6">
+          <h2 id="closing-title" className={H2}>{CLOSING_TITLE}</h2>
+          <p className={cn(LEAD, "mt-4 max-w-md")}>{CLOSING_LEAD}</p>
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
             <Button asChild size="lg" variant="secondary"><a href={LINKS.repo}>View on GitHub</a></Button>
           </div>
         </div>
+        <div className="min-w-0 lg:col-span-6">
+          {command}
+          <p className="mt-3 text-sm text-pretty text-muted-foreground">
+            Deploys the latest release. To verify the release's provenance first, follow
+            the <a className={cn(TEXT_LINK, "whitespace-nowrap")} href={LINKS.deploy}>high-assurance path</a>.
+          </p>
+        </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * The one-command deploy in a terminal window, an island for its copy button. The command wraps
+ * rather than scrolling: every character stays in view on a phone.
+ */
+export function DeployCommand() {
+  const hydrated = useHydrated();
+  return (
+    <CodeWindow header={<>
+      <span className="text-sm text-code-muted">Terminal</span>
+      {hydrated
+        ? <CopyButton value={DEPLOY_COMMAND} label="Copy the deploy command" className="ml-auto text-code-muted hover:bg-white/10 hover:text-code-foreground" />
+        : <span aria-hidden="true" className="ml-auto size-8" />}
+    </>}>
+      <pre className="px-5 py-4 font-mono text-mono whitespace-pre-wrap text-code-foreground [overflow-wrap:anywhere]">
+        <code><span aria-hidden="true" className="text-code-muted select-none">$ </span>{DEPLOY_COMMAND}</code>
+      </pre>
+    </CodeWindow>
   );
 }
 
@@ -438,17 +537,17 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
 export function SiteFooter() {
   return (
     <footer className="border-t">
-      <div className={`${CONTAINER} grid gap-10 py-12 text-sm md:py-16 lg:grid-cols-12 lg:gap-8`}>
+      <div className={`${CONTAINER} grid gap-12 pt-14 pb-10 text-sm lg:grid-cols-12 lg:gap-10 lg:pt-16`}>
         <div className="lg:col-span-4">
           <Lockup />
-          <p className="mt-4 text-muted-foreground">© 2026 Phala Network</p>
+          <p className="mt-4 max-w-xs text-pretty text-muted-foreground">{TAGLINE}. Open source, self-hosted, on Ethereum and Base.</p>
         </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-4 lg:col-span-8">
           {FOOTER.map((column) => (
             <nav key={column.title} aria-label={column.title}>
-              <p className="font-medium">{column.title}</p>
+              <p className="font-medium text-foreground">{column.title}</p>
               {/* Rows 44px tall for touch, 32px from md. */}
-              <ul className="mt-2">
+              <ul className="mt-3">
                 {column.links.map(({ href, label }) => (
                   <li key={label}>
                     <a className="inline-flex min-h-11 items-center text-muted-foreground transition-colors hover:text-foreground md:min-h-8" href={href}>
@@ -460,6 +559,7 @@ export function SiteFooter() {
             </nav>
           ))}
         </div>
+        <p className="border-t pt-8 text-muted-foreground lg:col-span-12">© 2026 Phala Network</p>
       </div>
     </footer>
   );

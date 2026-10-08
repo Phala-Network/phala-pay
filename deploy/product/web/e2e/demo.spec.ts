@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { errors, expect, test as base, type Locator, type Page, type Request } from "@playwright/test";
+import { expect, test as base, type Locator, type Page } from "@playwright/test";
 import {
   createPublicClient,
   createTestClient,
@@ -18,10 +18,15 @@ import {
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
 import type { Timeline } from "../src/api.js";
+import { tokens } from "../src/format.js";
 import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
 
 declare global {
   interface Window {
+    /** The page's layout shifts, collected by a test. */
+    layoutShifts: number[];
+    /** The page's timeline reads (`GET /api/quotes/{id}`): how many it has begun, and ended. */
+    timelineReads: { started: number; settled: number };
     anvilRequest(
       chainId: number,
       method: string,
@@ -38,28 +43,29 @@ function env(name: string): string {
   return value;
 }
 
-// Track in-flight reads from before navigation so the assertion can finish them before its window.
-const test = base.extend<{ timelineRequests: Set<Request> }>({
-  timelineRequests: async ({ page }, runTest) => {
-    const requests = new Set<Request>();
-    const timelineUrl = new URLPattern(`${env("API_URL")}/api/quotes/*`);
-    const record = (request: Request) => {
-      if (timelineUrl.test(request.url())) {
-        requests.add(request);
-      }
-    };
-    const finished = (request: Request) => requests.delete(request);
-    page.on("request", record);
-    page.on("requestfinished", finished);
-    page.on("requestfailed", finished);
-    try {
-      await runTest(requests);
-    } finally {
-      page.off("request", record);
-      page.off("requestfinished", finished);
-      page.off("requestfailed", finished);
-    }
-  },
+// Counts the page's timeline reads where they begin, in the page's own fetch, so that a count
+// taken there includes every read the page has started, however late its network events reach
+// the test (an intercepted request's can trail the page by a few milliseconds).
+const test = base.extend<{ timelineReads: undefined }>({
+  timelineReads: [async ({ page }, use) => {
+    await page.addInitScript(() => {
+      const reads = { started: 0, settled: 0 };
+      window.timelineReads = reads;
+      const fetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+        const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+        if (method !== "GET" || !/^\/api\/quotes\/[^/]+$/.test(url.pathname)) {
+          return fetch(input, init);
+        }
+        reads.started += 1;
+        return fetch(input, init).finally(() => {
+          reads.settled += 1;
+        });
+      };
+    });
+    await use(undefined);
+  }, { auto: true }],
 });
 
 /** Finish the visible page's initial timeline refresh before observing its polling interval. */
@@ -71,22 +77,17 @@ async function refetchTimeline(page: Page) {
   return current;
 }
 
-/** Finish existing reads, then observe whether a new request is issued during the window. */
-async function expectNoTimelineRequests(page: Page, requests: Set<Request>, windowMs: number) {
-  while (requests.size > 0) {
-    await Promise.all([...requests].map(async (request) => {
-      const response = await request.response();
-      if (response !== null) {
-        await response.finished();
-      }
-      requests.delete(request);
-    }));
-  }
-  const issued = page.waitForRequest("**/api/quotes/*", { timeout: windowMs });
-  await Promise.all([
-    page.clock.runFor(windowMs),
-    expect(issued).rejects.toThrow(errors.TimeoutError),
-  ]);
+/**
+ * The page has stopped polling its timeline. A first window lets every read already set in motion
+ * (by loading, the checkout's status reports, a refocus) begin and end; over a second window of the
+ * same length, the page begins no read. Polling would begin one in each.
+ */
+async function expectNoTimelineRequests(page: Page, windowMs: number) {
+  await page.clock.runFor(windowMs);
+  await page.waitForFunction(() => window.timelineReads.started === window.timelineReads.settled, undefined, { polling: 100 });
+  const before = await page.evaluate(() => window.timelineReads.started);
+  await page.clock.runFor(windowMs);
+  expect(await page.evaluate(() => window.timelineReads.started), "timeline reads begun in the second window").toBe(before);
 }
 
 /** The owner's balance of a token: Sepolia's test PHA unless named. */
@@ -376,8 +377,9 @@ async function expectAccessible(page: Page, state: string): Promise<void> {
   for (const width of [viewport.width, 390]) {
     await page.setViewportSize({ width, height: viewport.height });
     for (let pass = 0; pass < 2; pass++) {
-      // Colours are read once the theme's colour transitions have settled.
-      await page.waitForFunction(() => !document.getAnimations().some((animation) => animation instanceof CSSTransition));
+      // Colours are read once the theme's colour transitions have settled. Polled on a timer, not
+      // on animation frames, which axe's helper page can hold back.
+      await page.waitForFunction(() => !document.getAnimations().some((animation) => animation instanceof CSSTransition), undefined, { polling: 100 });
       const theme = (await page.locator("html").getAttribute("class"))?.includes("dark") ? "dark" : "light";
       const { violations } = await new AxeBuilder({ page }).analyze();
       const serious = violations
@@ -433,15 +435,19 @@ function step(timeline: Locator, key: string): Locator {
   return timeline.locator(`[data-step="${key}"]`);
 }
 
-/** Opens a step's line to its hint, time, and data (closed lines render none). */
+/** An opened step's details: its hint, time, and data, shown under the stepper. */
+function stepDetails(timeline: Locator, key: string): Locator {
+  return timeline.page().locator(`[data-step-details="${key}"]`);
+}
+
+/** Opens a step to its hint, time, and data (closed steps render none), and returns them. */
 async function openStep(timeline: Locator, key: string): Promise<Locator> {
-  const line = step(timeline, key);
-  const trigger = line.getByRole("button").first();
+  const trigger = step(timeline, key).getByRole("button");
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
   }
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
-  return line;
+  return stepDetails(timeline, key);
 }
 
 async function expectComplete(timeline: Locator, keys: string[], timeout = 60_000) {
@@ -456,8 +462,19 @@ async function openTab(scenes: Locator, name: string): Promise<Locator> {
   return scenes.getByRole("tabpanel", { name: new RegExp(`^${name}`) });
 }
 
-/** Declares a refund of `amount` PHA of the selected deposit and returns its list item. */
-async function declareRefund(scenes: Locator, amount: string): Promise<Locator> {
+/** Opens every "Show … (N)" list in `scope`: "Show all (5)", "Show finalized sweeps (2)". */
+async function showAll(scope: Locator): Promise<void> {
+  const buttons = scope.getByRole("button", { name: /^Show [a-z ]+ \(\d+\)$/ });
+  while ((await buttons.count()) > 0) {
+    await buttons.first().click();
+  }
+}
+
+/**
+ * Declares a refund of `amount` PHA and returns its list item, opened to its transfer and forms
+ * unless `open` is false (a refund's row starts closed).
+ */
+async function declareRefund(scenes: Locator, amount: string, open = true): Promise<Locator> {
   await openTab(scenes, "Refunds");
   const refunds = scenes.getByTestId("refund");
   const before = await refunds.count();
@@ -469,6 +486,11 @@ async function declareRefund(scenes: Locator, amount: string): Promise<Locator> 
   const id = await refunds.first().getAttribute("data-refund");
   const refund = scenes.locator(`[data-refund="${id ?? ""}"]`);
   await expect(refund).toHaveAttribute("data-status", "pending");
+  if (open) {
+    const trigger = refund.getByRole("button", { name: /^Refund / });
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  }
   return refund;
 }
 
@@ -518,7 +540,7 @@ test("query outages show retrying states, recover, and preserve the last account
   await expect(product).not.toContainText("Account is unavailable");
 });
 
-test("a missing timeline shows a terminal message and stops polling", async ({ page, timelineRequests }) => {
+test("a missing timeline shows a terminal message and stops polling", async ({ page }) => {
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
     await route.fulfill({
@@ -536,10 +558,10 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
   await expect(scenes.getByTestId("stream-status")).toHaveText("Unavailable");
   await expect(scenes.getByRole("list", { name: /^Loading/ })).toHaveCount(0);
   expect((await refetchTimeline(page)).status()).toBe(404);
-  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
 });
 
-test("a refused timeline keeps its cached data and shows paused updates", async ({ page, timelineRequests }) => {
+test("a refused timeline keeps its cached data and shows paused updates", async ({ page }) => {
   let missing = false;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
@@ -570,11 +592,11 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
   await refused.finished();
   await expect(scenes.getByText("Updates paused.", { exact: true })).toBeVisible();
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
-  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
 });
 
 for (const sent of [false, true]) {
-  test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page, timelineRequests }) => {
+  test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page }) => {
     await page.clock.install();
     await page.route("**/api/quotes/*", async (route) => {
       const timeline: Timeline = {
@@ -605,7 +627,7 @@ for (const sent of [false, true]) {
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     expect((await refetchTimeline(page)).status()).toBe(200);
     if (!sent) {
-      await expectNoTimelineRequests(page, timelineRequests, TIMELINE_INTERVAL_MS);
+      await expectNoTimelineRequests(page, TIMELINE_INTERVAL_MS);
     }
     const response = page.waitForResponse("**/api/quotes/*");
     await page.clock.runFor(sent ? TIMELINE_ACTIVE_INTERVAL_MS : EXPIRED_QUOTE_INTERVAL_MS - TIMELINE_INTERVAL_MS);
@@ -615,7 +637,7 @@ for (const sent of [false, true]) {
   });
 }
 
-test("a swept payment keeps polling until its webhook arrives", async ({ page, timelineRequests }) => {
+test("a swept payment keeps polling until its webhook arrives", async ({ page }) => {
   let delivered = false;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
@@ -653,28 +675,36 @@ test("a swept payment keeps polling until its webhook arrives", async ({ page, t
   await update.finished();
   await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "complete");
   await expect(scenes.getByTestId("stream-status")).toHaveText("Done");
-  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
 });
 
+/** A deposit the service reports `status`, and the webhook events the product has received. */
+function depositTimeline(status: "reversed" | "rejected", events: Timeline["events"]): Timeline {
+  const reversed = status === "reversed";
+  return {
+    kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events, api: [],
+    deposit: {
+      id: `dep_${"1".repeat(32)}`, status, final: false, swept: false,
+      amount: reversed ? 2000 : null, amount_atomic: (80n * 10n ** 18n).toString(),
+      chain_id: sepolia.id, asset: "pha", exchange_rate: reversed ? "0.25" : null,
+      price_source: reversed ? "quote" : null,
+      amount_refunded_atomic: "0", amount_refunded: 0, amount_reversed: reversed ? 2000 : 0,
+      from_address: env("PAYER_ADDRESS"), asset_contract: env("TOKEN_ADDRESS"),
+      tx_hash: `0x${"1".repeat(64)}`, metadata: {},
+    },
+    steps: [{ key: reversed ? "reversed" : "credited", state: "failed", at: 1, details: [] }],
+  };
+}
+
+const REVERSED_EVENT = { id: `evt_${"1".repeat(32)}`, type: "deposit.reversed", received_at: 1, verified: true, data: {} };
+
 for (const status of ["reversed", "rejected"] as const) {
-  test(`a ${status} deposit ${status === "reversed" ? "stops" : "continues"} timeline polling`, async ({ page, timelineRequests }) => {
+  test(`a ${status} deposit ${status === "reversed" ? "stops" : "continues"} timeline polling`, async ({ page }) => {
     await page.clock.install();
     await page.route("**/api/quotes/*", async (route) => {
-      const timeline: Timeline = {
-        kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events: [], api: [],
-        deposit: {
-          id: `dep_${"1".repeat(32)}`, status, final: false, swept: false,
-          amount: status === "reversed" ? 2000 : null, amount_atomic: (80n * 10n ** 18n).toString(),
-          chain_id: sepolia.id, asset: "pha", exchange_rate: status === "reversed" ? "0.25" : null,
-          price_source: status === "reversed" ? "quote" : null,
-          amount_refunded_atomic: "0", amount_refunded: 0, amount_reversed: status === "reversed" ? 2000 : 0,
-          from_address: env("PAYER_ADDRESS"), asset_contract: env("TOKEN_ADDRESS"),
-          tx_hash: `0x${"1".repeat(64)}`, metadata: {},
-        },
-        steps: [{ key: status === "reversed" ? "reversed" : "credited", state: "failed", at: 1, details: [] }],
-      };
       await route.fulfill({
-        json: timeline,
+        // The reversal's webhook has reached the product: nothing is left to follow.
+        json: depositTimeline(status, status === "reversed" ? [REVERSED_EVENT] : []),
         headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
       });
     });
@@ -685,7 +715,7 @@ for (const status of ["reversed", "rejected"] as const) {
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     expect((await refetchTimeline(page)).status()).toBe(200);
     if (status === "reversed") {
-      await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+      await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
     } else {
       const response = page.waitForResponse("**/api/quotes/*");
       await page.clock.runFor(TIMELINE_INTERVAL_MS);
@@ -693,6 +723,36 @@ for (const status of ["reversed", "rejected"] as const) {
     }
   });
 }
+
+test("a reversed deposit keeps polling while the reversal's webhook has not arrived", async ({ page }) => {
+  let delivered = false;
+  await page.clock.install();
+  await page.route("**/api/quotes/*", async (route) => {
+    await route.fulfill({
+      json: depositTimeline("reversed", delivered ? [REVERSED_EVENT] : []),
+      headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+    });
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Customer view" });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
+  await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  expect((await refetchTimeline(page)).status()).toBe(200);
+  // The service says reversed; the product has not heard yet: the timeline keeps following.
+  const waiting = page.waitForResponse("**/api/quotes/*");
+  await page.clock.runFor(TIMELINE_INTERVAL_MS);
+  const stillWaiting = await waiting;
+  expect(stillWaiting.status()).toBe(200);
+  await stillWaiting.finished();
+  delivered = true;
+  const response = page.waitForResponse("**/api/quotes/*");
+  await page.clock.runFor(TIMELINE_INTERVAL_MS);
+  const update = await response;
+  expect(update.status()).toBe(200);
+  await update.finished();
+  await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
+});
 
 test("a quote: locked price, metadata, the merchant's sweep, and refunds that succeed, fail, or are canceled", async ({
   page,
@@ -734,7 +794,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   );
   await expectMetadata(page);
   const product = page.getByRole("region", { name: "Customer view" });
-  await expect(product.getByTestId("testnet-notice")).toHaveText("Testnet demo: test tokens only.");
+  await expect(product.getByTestId("testnet-notice")).toHaveText("Testnet");
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const preview = scenes.getByRole("list", { name: "The steps of a payment" });
   await expect(preview).toBeVisible();
@@ -779,7 +839,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   const created = await openStep(timeline, "quote_created");
   await expect(created).toContainText("1 PHA = $0.25");
   await expect(created).toContainText("80 PHA");
-  const order = (await scenes.getByTestId("meta-order").locator("[title]").getAttribute("title"))?.match(/^order_[0-9a-f]{12}$/)?.[0];
+  const order = (await scenes.getByTestId("meta-order").locator("[data-value]").getAttribute("data-value"))?.match(/^order_[0-9a-f]{12}$/)?.[0];
   expect(order).toBeDefined();
   // Nothing of the backend shows in the product.
   await expect(product).not.toContainText("order_");
@@ -805,11 +865,11 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(credited).toContainText("the quote's locked price");
   // Each step opens to its data. The order id arrives in the verified deposit.credited's
   // data.object.metadata.
-  await openStep(timeline, "webhook_received");
-  await expect(step(timeline, "webhook_received").getByText("data.object.metadata")).toBeVisible();
-  await expect(step(timeline, "webhook_received")).toContainText("verified");
-  await expect(step(timeline, "webhook_received")).toContainText(`"order_id": "${order ?? ""}"`);
-  await expect(step(timeline, "webhook_received")).toContainText("+$20.00");
+  const webhook = await openStep(timeline, "webhook_received");
+  await expect(webhook.getByText("data.object.metadata")).toBeVisible();
+  await expect(webhook).toContainText("verified");
+  await expect(webhook).toContainText(`"order_id": "${order ?? ""}"`);
+  await expect(webhook).toContainText("+$20.00");
   await openTab(scenes, "API");
   await expect(scenes.getByTestId("webhook-event").first()).toContainText("deposit.credited");
   // Refunds wait for finality.
@@ -820,7 +880,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
 
   // The merchant sweeps: the SDK's flush, signed from a wallet (anyone may send it; the funds can
   // only reach the treasury), indexed by the service once final.
-  const sweeps = (await openTab(scenes, "Sweeps")).getByRole("region", { name: "PHA on Sepolia testnet" });
+  const sweepsPanel = await openTab(scenes, "Sweeps");
+  const sweeps = sweepsPanel.getByRole("region", { name: "PHA on Sepolia testnet" });
   await expect(sweeps.getByTestId("unswept")).toContainText("80 PHA in 1 forwarder", { timeout: 30_000 });
   await sweeps.getByRole("button", { name: "Sweep from wallet" }).click();
   await expect(sweeps.getByTestId("flush-status")).toContainText("Flush sent: 0x");
@@ -830,11 +891,12 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
     "href",
     /^https:\/\/sepolia\.etherscan\.io\/tx\/0x[0-9a-f]{64}$/,
   );
-  await expect(sweeps.getByTestId("sweep")).toContainText("80 PHA", { timeout: 30_000 });
+  await sweepsPanel.getByRole("button", { name: /^Show finalized sweeps/ }).click({ timeout: 30_000 });
+  await expect(sweepsPanel.getByTestId("sweep").first()).toContainText("80 PHA", { timeout: 30_000 });
 
   // A refund paid from the treasury succeeds: 20 of 80 PHA takes back a quarter of the credit.
   const paid = await declareRefund(scenes, "20");
-  await expect(paid.getByTestId("refund-transfer")).toContainText(env("TREASURY").toLowerCase());
+  await expect(paid.getByTestId("refund-transfer")).toContainText(env("TREASURY"));
   const hash = await payFromTreasury(env("PAYER_ADDRESS"), parseEther("20"));
   await paid.getByLabel("Transaction hash of the payment").fill(hash);
   await paid.getByRole("button", { name: "Mark paid" }).click();
@@ -861,7 +923,9 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await canceled.getByRole("button", { name: "Cancel refund" }).click();
   await expect(canceled).toHaveAttribute("data-status", "canceled");
   await expectAccessible(page, "refunds that succeeded, failed, and were canceled");
-  await openTab(scenes, "API");
+  // The tab shows the latest events and requests; the rest open in the page.
+  const apiPanel = await openTab(scenes, "API");
+  await showAll(apiPanel);
   const events = scenes.getByTestId("webhook-event");
   for (const type of ["refund.created", "refund.updated", "refund.failed", "deposit.refunded"]) {
     await expect(events.filter({ hasText: type }).first()).toBeVisible();
@@ -875,8 +939,8 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(api).toContainText("Bearer ppay_rk_test_…");
   await expect(api).not.toContainText("AAAAAAAA");
 
-  // The history row and the ledger lines behind the balance.
-  await openTab(scenes, "Credits");
+  // The history row and the ledger lines behind the balance, all of them.
+  await showAll(await openTab(scenes, "Credits"));
   const row = scenes.getByTestId("payment").first();
   await expect(row).toContainText("Quote");
   await expect(row).toContainText("80 PHA");
@@ -899,19 +963,19 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
 
   // A quote that ends unpaid, expired or canceled, says so; another top-up starts from the button.
   await page.setViewportSize({ width: 1360, height: 1000 });
-  // The quote the backend follows, its id the title of the header's Quote.
-  const followed = scenes.getByTestId("meta-selected").locator('[title^="qt_"]');
+  // The quote the backend follows, its id in full in the header's Quote.
+  const followed = scenes.getByTestId("meta-selected").locator('[data-value^="qt_"]');
   for (const [end, message] of [
     ["expire", "Quote expired"],
     ["cancel", "Quote canceled"],
   ] as const) {
-    const before = await followed.getAttribute("title");
+    const before = await followed.getAttribute("data-value");
     await product.getByRole("button", { name: "Start a new top-up" }).click();
     await product.getByText("$5", { exact: true }).click();
     await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
-    await expect(followed).not.toHaveAttribute("title", before ?? "");
+    await expect(followed).not.toHaveAttribute("data-value", before ?? "");
     await expect(summary).toContainText("20 PHA");
-    const quote = (await followed.getAttribute("title")) ?? "";
+    const quote = (await followed.getAttribute("data-value")) ?? "";
     const ended = await fetch(`${env("SERVICE_URL")}/_test/quotes/${quote}/${end}`, { method: "POST" });
     expect(ended.status).toBe(200);
     await expect(product.getByRole("status").first()).toContainText(message, { timeout: 10_000 });
@@ -996,14 +1060,19 @@ test("a deposit address: one verified address, any amount credited at spot, then
   }
 
   // 25 PHA at 0.25 USD, credited at spot; the address's metadata arrived with the deposit.
-  await openStep(timeline, "credited");
-  await openStep(timeline, "webhook_received");
-  await expect(step(timeline, "credited")).toContainText("spot");
-  await expect(step(timeline, "credited")).toContainText("$6.25");
-  await expect(step(timeline, "webhook_received")).toContainText('"workspace": "demo-');
-  await expect(step(timeline, "webhook_received")).toContainText("+$6.25");
+  // Two steps open at once, each with its own details.
+  const creditedDetails = await openStep(timeline, "credited");
+  const webhookDetails = await openStep(timeline, "webhook_received");
+  await expect(creditedDetails).toContainText("spot");
+  await expect(creditedDetails).toContainText("$6.25");
+  await expect(webhookDetails).toContainText('"workspace": "demo-');
+  await expect(webhookDetails).toContainText("+$6.25");
   await expect(step(timeline, "reversed")).toHaveAttribute("data-state", "failed", { timeout: 30_000 });
-  await expect(product.getByTestId("balance")).toHaveText("$0.00", { timeout: 10_000 });
+  // The service reverses first; the balance follows once the reversal's webhook reaches the
+  // product's ledger, which the step shows by the event's name (its hint names it too, in a sentence).
+  const reversedDetails = await openStep(timeline, "reversed");
+  await expect(reversedDetails.getByText("deposit.reversed", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
   await openTab(scenes, "Refunds");
   await expect(scenes.getByTestId("nets-to")).toHaveText("$0.00");
   await expect(scenes.getByTestId("refund-unavailable")).toContainText("reversed");
@@ -1014,7 +1083,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   // The customer sees each payment at the rate it was credited at.
   await expect(product.getByTestId("credit").first()).toContainText("25 Test PHA");
   await expect(product.getByTestId("credit").first()).toContainText("Credited at $0.25 / PHA, then reversed");
-  await openTab(scenes, "Credits");
+  await showAll(await openTab(scenes, "Credits"));
   const lines = scenes.getByTestId("ledger-line");
   await expect(lines.filter({ hasText: "deposit.credited" })).toContainText("+$6.25");
   // A reversal takes the whole bonus back with the credit.
@@ -1355,7 +1424,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     const home = await staticPage.goto(env("SITE_URL"));
     expect(home?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("Crypto payments, without a custodian");
-    await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(6);
+    await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(5);
     // The answers fold natively, without script.
     const question = staticPage.locator("summary", { hasText: "Which chains and tokens are supported?" });
     const answer = staticPage.getByText("The live demo uses test tokens on Sepolia and Base Sepolia.", { exact: false });
@@ -1376,13 +1445,31 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
-    // A phone reads one list per dimension; from md, the table, all six vendors at 1280px.
-    await expect(staticPage.getByRole("table")).toBeHidden();
-    await expect(staticPage.getByRole("heading", { level: 3, name: "Custody" })).toBeVisible();
-    await staticPage.setViewportSize({ width: 1280, height: 900 });
-    await expect(staticPage.getByRole("table")).toBeVisible();
-    const scroller = staticPage.getByRole("region", { name: "Comparison table" });
-    expect(await scroller.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    // A phone reads Phala Pay beside one provider, chosen above the table (natively, without
+    // script): two columns, ten dimensions, up to lg; a tablet too. From lg, the full table, all six
+    // vendors in the page's width: nothing scrolls inside it, and no cell overflows.
+    const full = staticPage.getByRole("table", { name: /five crypto payment services/ });
+    const versus = staticPage.getByRole("table", { name: /provider chosen above/ });
+    await expect(full).toBeHidden();
+    await expect(versus.getByRole("columnheader", { name: "Stripe stablecoin payments" })).toBeVisible();
+    await staticPage.getByRole("group", { name: "Compare Phala Pay with" }).getByText("BTCPay Server", { exact: true }).click();
+    await expect(versus.getByRole("columnheader", { name: "BTCPay Server" })).toBeVisible();
+    await expect(versus.getByRole("columnheader", { name: "Stripe stablecoin payments" })).toBeHidden();
+    await expect(versus.getByRole("rowgroup").filter({ has: staticPage.getByRole("cell") })).toHaveCount(10);
+    await staticPage.setViewportSize({ width: 768, height: 900 });
+    await expect(full).toBeHidden();
+    await expect(versus).toBeVisible();
+    for (const width of [1024, 1280]) {
+      await staticPage.setViewportSize({ width, height: 900 });
+      await expect(full).toBeVisible();
+      await expect(versus).toBeHidden();
+      const overflow = await full.evaluate((table) => {
+        const parent = table.parentElement?.getBoundingClientRect().right ?? 0;
+        const cells = [...table.querySelectorAll("th, td")].filter((cell) => cell.scrollWidth > cell.clientWidth + 1);
+        return { beyond: Math.max(0, Math.round(table.getBoundingClientRect().right - parent)), cells: cells.length };
+      });
+      expect(overflow, `the full table at ${width}px`).toEqual({ beyond: 0, cells: 0 });
+    }
     await staticPage.setViewportSize({ width: 390, height: 844 });
     await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
@@ -1513,4 +1600,211 @@ test("home and comparison hydrate in either theme without CSP violations or Reac
       }
     }
   }
+});
+
+test("sweeps from the last good data show their balances and age, without sweep actions; an unavailable group says so", async ({ page }) => {
+  const problems = await watchConsole(page);
+  const asOf = Math.floor(Date.now() / 1000) - 12;
+  // The product serves its last good data when a refresh fails: stale, with no flush to sign.
+  await page.route(`${env("API_URL")}/api/sweeps`, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { groups?: Record<string, unknown>[] };
+    // Only a successful listing is rewritten (one before the demo account exists is refused).
+    if (!response.ok() || body.groups === undefined) return route.fulfill({ response });
+    const [first, second, ...rest] = body.groups;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    const groups = [
+      { ...first, unswept_atomic: "80000000000000000000", final_unswept_atomic: "80000000000000000000", sweepable_forwarders: 1, stale: true, as_of: asOf, flush: [], safe_batch: null },
+      { ...second, unavailable: true, stale: false },
+      ...rest,
+    ];
+    await route.fulfill({ response, json: { ...body, groups } });
+  });
+  await page.goto(env("SITE_URL"));
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  const panel = await openTab(scenes, "Sweeps");
+  const [stale, unavailable] = [panel.getByTestId("sweep-group").nth(0), panel.getByTestId("sweep-group").nth(1)];
+  // The listing is read once the demo account exists.
+  await expect(stale).toHaveAttribute("data-stale", "true", { timeout: 15_000 });
+  await expect(stale.getByTestId("unswept")).toContainText("80");
+  await expect(stale.getByTestId("sweep-stale")).toHaveText(/^Updated \d+\u00a0s ago; refreshing$/);
+  await expect(stale.getByRole("button", { name: "Sweep from wallet" })).toHaveCount(0);
+  await expect(stale.getByRole("button", { name: "Safe batch" })).toHaveCount(0);
+  await expect(unavailable.getByTestId("sweep-unavailable")).toHaveText("Temporarily unavailable; retrying");
+  await expect(unavailable.getByTestId("unswept")).toHaveCount(0);
+  // The treasury is shown in full, grouped in fours, never shortened.
+  const treasury = panel.getByTestId("treasury");
+  await expect(treasury.locator("[data-value]")).toHaveAttribute("data-value", new RegExp(`^${env("TREASURY")}$`, "i"));
+  expect((await treasury.innerText()).replace(/\s/g, "").toLowerCase()).toContain(env("TREASURY").toLowerCase());
+  await expectAccessible(page, "sweeps from the last good data");
+  expect(problems).toEqual([]);
+});
+
+test("every page fits every width in either theme, with no serious accessibility violation", async ({ browser }) => {
+  for (const colorScheme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ colorScheme });
+    try {
+      const page = await context.newPage();
+      for (const path of ["", "compare", "no-such-page/deeper"]) {
+        const response = await page.goto(new URL(path, env("SITE_URL")).href);
+        expect(response?.status(), path).toBe(path.startsWith("no-such-page") ? 404 : 200);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+        for (const width of [1440, 1024, 768, 390]) {
+          await page.setViewportSize({ width, height: 900 });
+          const [scrollWidth, clientWidth] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+          expect(scrollWidth, `/${path} at ${width}px, ${colorScheme}`).toBe(clientWidth);
+          const { violations } = await new AxeBuilder({ page }).analyze();
+          const serious = violations
+            .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
+            .map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(" ")).join(", ")}`);
+          expect(serious, `/${path} at ${width}px, ${colorScheme}`).toEqual([]);
+        }
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
+
+/**
+ * Nothing in the demo is cut off sideways: no tab panel, and nothing that hides its overflow,
+ * holds content wider than itself (scrolling regions, which show theirs, are exempt).
+ */
+const DEMO_TABS = ["Credits", "Refunds", "Sweeps", "API", "Trust"];
+
+async function expectNothingClipped(page: Page, state: string): Promise<void> {
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  for (const tab of DEMO_TABS) {
+    await openTab(scenes, tab);
+    const clipped = await page.locator("#demo-root").evaluate((root) => [...root.querySelectorAll<HTMLElement>("*")]
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        const hides = style.overflowX === "hidden" || style.overflowX === "clip" || element.getAttribute("role") === "tabpanel";
+        // Visually hidden text (a 1px box for screen readers) is clipped on purpose.
+        return hides && element.clientWidth > 1 && element.checkVisibility() && element.scrollWidth > element.clientWidth + 1;
+      })
+      .map((element) => `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")} (${element.scrollWidth} > ${element.clientWidth})`));
+    expect(clipped, `${state}, ${tab} tab`).toEqual([]);
+    // Nothing scrolls inside the demo: every element shows its overflow, but for code blocks, which
+    // may scroll sideways on a phone and never scroll down. Native controls, images, and visually
+    // hidden text keep their own.
+    const scrolling = await page.locator("#demo-root").evaluate((root) => [...root.querySelectorAll<HTMLElement>("*")]
+      .filter((element) => {
+        if (element.matches("input, textarea, select, img, svg, svg *") || element.clientWidth <= 1) return false;
+        const style = getComputedStyle(element);
+        if (element.tagName === "PRE") return element.scrollHeight > element.clientHeight + 1;
+        return style.overflowX !== "visible" || style.overflowY !== "visible";
+      })
+      .map((element) => `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")}`));
+    expect(scrolling, `${state}, ${tab} tab: inner scrolling`).toEqual([]);
+  }
+  await openTab(scenes, "Credits");
+}
+
+test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each state, and clips nothing", async ({ page }) => {
+  test.setTimeout(420_000);
+  await installWallet(page);
+  const product = page.getByRole("region", { name: "Customer view" });
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  // The section, scrolled to as the nav's Demo link lands, is no taller than the screen under the
+  // 64px header, whichever tab is open, before anything in it is expanded.
+  const fits = async (state: string) => {
+    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+      await page.setViewportSize({ width, height });
+      for (const tab of DEMO_TABS) {
+        await openTab(scenes, tab);
+        const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
+        expect(demo, `${state}, ${tab} tab, at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
+      }
+      await expectNothingClipped(page, `${state} at ${width}×${height}`);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectNothingClipped(page, `${state} at 390px`);
+    await page.setViewportSize({ width: 1440, height: 900 });
+  };
+  await page.goto(env("SITE_URL"));
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  await fits("idle");
+  const testTokens = page.getByRole("note", { name: "Test tokens" });
+  await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
+  await expect(testTokens).toContainText("Minted:");
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await expect(product.locator(".pp-summary")).toContainText("80 PHA");
+  await fits("paying");
+  await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+  await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
+  await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
+  await fits("credited");
+  // After the merchant's actions: the payment swept, and a refund requested (its row closed).
+  const timeline = scenes.getByRole("list", { name: "Payment timeline" });
+  await expectComplete(timeline, ["final"]);
+  // The merchant is every visitor's: other payments may wait in its forwarders too, and the sweeps
+  // view is the product's cached one, which can predate this payment. Swept once the view shows the
+  // service's final unswept balance, which counts this payment now that it is final: that view's
+  // flush names this forwarder, with any others.
+  const sweepsPanel = await openTab(scenes, "Sweeps");
+  const sweeps = sweepsPanel.getByRole("region", { name: "PHA on Sepolia testnet" });
+  // The stand-in service takes any key of a restricted key's form, as the product sends.
+  const response = await fetch(`${env("SERVICE_URL")}/v1/balance`, { headers: { authorization: `Bearer ppay_rk_test_${"A".repeat(43)}000000` } });
+  expect(response.ok, "the service's balance").toBe(true);
+  const balance = (await response.json()) as {
+    unswept: { chain_id: number; token: string; final_amount_atomic: string }[];
+  };
+  const pha = balance.unswept.find(({ chain_id, token }) => chain_id === sepolia.id && token.toLowerCase() === env("TOKEN_ADDRESS").toLowerCase());
+  expect(BigInt(pha?.final_amount_atomic ?? "0")).toBeGreaterThanOrEqual(parseEther("80"));
+  const sweepable = tokens(pha?.final_amount_atomic ?? "0", "PHA").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await expect(sweeps.getByTestId("unswept")).toContainText(new RegExp(`^${sweepable} in `), { timeout: 30_000 });
+  await sweeps.getByRole("button", { name: "Sweep from wallet" }).click();
+  await expectComplete(timeline, ["swept"]);
+  await expect(sweepsPanel.getByRole("button", { name: /^Show finalized sweeps/ })).toBeVisible({ timeout: 30_000 });
+  await declareRefund(scenes, "20", false);
+  // Measured once the request's own webhook has arrived, the API tab's tallest case.
+  await openTab(scenes, "API");
+  await expect(scenes.getByTestId("webhook-event").filter({ hasText: "refund.created" })).toBeVisible({ timeout: 30_000 });
+  await fits("after a sweep and a refund request");
+});
+
+test("the demo arrives without shifting what is in view, from the top and at /#demo", async ({ page }) => {
+  // Cumulative layout shift, as the browser reports it, while the page loads and the demo renders:
+  // under 0.05 at a desktop and a phone ("good" is under 0.1), opened at the top and at the demo.
+  // The demo's code arrives a second late, as on a slow network, after the page has painted.
+  await page.route("**/assets/Demo-*.js", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await route.continue();
+  });
+  for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+    for (const path of ["", "#demo"]) {
+      await page.setViewportSize({ width, height });
+      await page.addInitScript(() => {
+        window.layoutShifts = [];
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if ("value" in entry && typeof entry.value === "number" && "hadRecentInput" in entry && entry.hadRecentInput === false) {
+              window.layoutShifts.push(entry.value);
+            }
+          }
+        }).observe({ type: "layout-shift", buffered: true });
+      });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+      await page.waitForTimeout(500);
+      const shift = await page.evaluate(() => window.layoutShifts.reduce((sum, value) => sum + value, 0));
+      expect(shift, `/${path} at ${width}px`).toBeLessThan(0.05);
+    }
+  }
+});
+
+test("the hero's code fits its window at 1440 and 1024; on a phone it scrolls sideways inside it", async ({ page }) => {
+  await page.goto(env("SITE_URL"));
+  for (const width of [1440, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    // Both snippets, the shown and the other (laid out in the same cell).
+    const wide = await page.locator("#hero-code pre").evaluateAll((blocks) =>
+      blocks.filter((block) => block.scrollWidth > block.clientWidth).map((block) => block.getAttribute("aria-label")));
+    expect(wide, `${width}px`).toEqual([]);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 });

@@ -3,18 +3,11 @@ import { CircleAlert, ExternalLink, Wallet } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import type { Asset, Network } from "./api.js";
-import { ChainIcon, TokenIcon } from "./chains.js";
+import { TokenIcon } from "./chains.js";
 import { ExplorerLink, TOUCH, errorMessage, wallet } from "./common.js";
 import { tokenName, tokens } from "./format.js";
 import type { PaidWith } from "./testTokens.js";
-
-/**
- * A row of the test tokens list, the same for its actions and its links: the token's or network's
- * mark, then what the row does; 44px on a phone.
- */
-const TOKEN_ROW = cn("w-full justify-start", TOUCH);
 
 // The mint's whole tokens: 1,000 test PHA (about $75 at staging's rate) unless a payment needs
 // more, then that payment's amount, rounded up to a whole hundred tokens.
@@ -57,23 +50,22 @@ function useMint(network: Network, need: Need | null, using?: PaidWith) {
   return { mint, label };
 }
 
-/** A faucet, off the page: its mark and name, marked as a link out. */
-function FaucetLink({ href, icon, title, children }: { href: string; icon: ReactNode; title?: string; children: ReactNode }) {
+/** A faucet, off the page: its mark and name as a link, marked as leaving the page; 44px tall on a phone. */
+function FaucetLink({ href, icon, title, children }: { href: string; icon?: ReactNode; title?: string; children: ReactNode }) {
   return (
-    <Button asChild variant="secondary" className={TOKEN_ROW}>
-      <a href={href} target="_blank" rel="noreferrer" title={title}>
-        {icon}
-        {children}
-        <ExternalLink className="size-3.5 text-muted-foreground" aria-hidden="true" />
-      </a>
-    </Button>
+    <a href={href} target="_blank" rel="noreferrer" title={title}
+      className="inline-flex min-h-11 items-center gap-2 text-sm font-medium sm:min-h-8 text-foreground underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground">
+      {icon}
+      {children}
+      <ExternalLink className="size-3.5 text-muted-foreground" aria-hidden="true" />
+    </a>
   );
 }
 
-/** The mint button: the token's mark and the amount. */
+/** The mint button: the token's mark and the amount; 44px on a phone. */
 function MintButton({ token, label, mint }: { token: Asset } & ReturnType<typeof useMint>) {
   return (
-    <Button type="button" variant="secondary" className={TOKEN_ROW} onClick={() => mint.mutate(token)} disabled={mint.isPending}>
+    <Button type="button" variant="secondary" size="sm" className={TOUCH} onClick={() => mint.mutate(token)} disabled={mint.isPending}>
       <TokenIcon asset={token.asset} className="size-4" />
       {mint.isPending && mint.variables.asset === token.asset ? "Confirm in your wallet…" : label(token)}
     </Button>
@@ -101,40 +93,32 @@ export function TestTokens({ network, need }: { network: Network; need: Need | n
   const { mint, label } = useMint(network, need);
   const chain = chainName(network);
   const id = useId();
-  const sources = [
-    ...(mintable.length > 0 ? [`mint test ${mintable.map((each) => each.symbol).join(" or ")} from your wallet`] : []),
-    ...(fromFaucet === undefined ? [] : [`get test ${fromFaucet.symbol} from Circle's faucet`]),
-    `get ${chain} ETH for gas from a faucet`,
-  ];
+  // One row: the mints from the wallet, then the faucets off the page; the links name what each
+  // gives (a test token, or gas).
   return (
-    <div role="note" aria-labelledby={id} className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h4 id={id} className="text-sm font-semibold">
+    <div role="note" aria-labelledby={id} className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 lg:gap-x-3">
+        {/* From lg the row speaks for itself, and fits one line: its name is for screen readers. */}
+        <h4 id={id} className="text-sm font-medium text-muted-foreground lg:sr-only">
           Test tokens
         </h4>
-        <p className="text-sm text-pretty text-muted-foreground">
-          Free on {chain}: {sources.join(", ")}.
-        </p>
-      </div>
-      <div className="flex flex-col gap-2">
         {mintable.map((each) => (
           <MintButton key={each.asset} token={each} mint={mint} label={label} />
         ))}
-        {fromFaucet !== undefined && fromFaucet.faucet !== null && (
-          <FaucetLink href={fromFaucet.faucet} icon={<TokenIcon asset={fromFaucet.asset} className="size-4" />} title={`On the faucet, pick ${chain} as the network.`}>
-            Circle {fromFaucet.symbol} faucet
-          </FaucetLink>
-        )}
-        {network.faucet !== null && (
-          <FaucetLink href={network.faucet} icon={<ChainIcon chainId={network.chain_id} className="size-4 rounded-full" />}>
-            {chain} ETH faucets
-          </FaucetLink>
-        )}
+        {/* The faucets wrap together, onto a line of their own where the row is narrow. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 lg:gap-x-3">
+          {fromFaucet !== undefined && fromFaucet.faucet !== null && (
+            <FaucetLink href={fromFaucet.faucet} title={`On the faucet, pick ${chain} as the network.`}>
+              Circle {fromFaucet.symbol} faucet
+            </FaucetLink>
+          )}
+          {network.faucet !== null && <FaucetLink href={network.faucet}>{chain} ETH faucets</FaucetLink>}
+        </div>
       </div>
-      <p aria-live="polite" className="text-sm text-muted-foreground empty:hidden">
+      <p aria-live="polite" className="flex items-start gap-2 text-sm text-muted-foreground empty:hidden">
         {mint.isSuccess && (
           <>
-            Minted: <ExplorerLink chainId={network.chain_id} kind="tx" value={mint.data} copy />
+            <span className="shrink-0">Minted:</span> <ExplorerLink chainId={network.chain_id} kind="tx" value={mint.data} copy />
           </>
         )}
         {mint.isError && <MintError error={mint.error} />}

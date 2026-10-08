@@ -2,7 +2,6 @@ import type { Appearance } from "@phala/pay-react";
 import "@phala/pay-react/styles.css";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import type { CreatedQuote, DepositAddressResponse, Selection } from "./api.js";
 import { Backend } from "./Backend.js";
 import { queryView } from "./queryView.js";
@@ -50,6 +49,8 @@ function DemoContent({ theme }: { theme: Theme }) {
       deposit?.amount_refunded_atomic,
       [...timeline.data.refunds].sort((left, right) => left.id.localeCompare(right.id))
         .map((refund) => [refund.id, refund.status]),
+      // Each webhook the product receives may move its ledger after the service's state did.
+      timeline.data.events.map((event) => event.id),
     ]);
     const key = `${selected.kind}:${selected.id}`;
     const previous = observedTimeline.current;
@@ -83,11 +84,11 @@ function DemoContent({ theme }: { theme: Theme }) {
   };
 
   return (
-    <TooltipProvider delayDuration={150}>
-      {/* Two sibling cards at their natural heights: the customer's view, then (beside it from lg)
-          what the backend sees. */}
-      <div className="grid items-start gap-6 lg:grid-cols-12">
-        <div className="min-w-0 lg:col-span-5">
+    <>
+      {/* Two sibling cards, each at its own content's height, top-aligned: the customer's view, then
+          (beside it from lg) what the backend sees. */}
+      <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
+        <div className="flex min-w-0 flex-col lg:col-span-6">
           <Product
             account={views.account}
             networks={views.networks}
@@ -105,7 +106,7 @@ function DemoContent({ theme }: { theme: Theme }) {
             appearance={appearance}
           />
         </div>
-        <div className="min-w-0 lg:col-span-7">
+        <div className="flex min-w-0 flex-col lg:col-span-6">
           <Backend
             account={views.account}
             selected={selected}
@@ -117,6 +118,6 @@ function DemoContent({ theme }: { theme: Theme }) {
           />
         </div>
       </div>
-    </TooltipProvider>
+    </>
   );
 }

@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import { basename, resolve } from "node:path";
 import { defineConfig } from "vite";
 import { PAGES, ROOT_MARKER, type Page } from "./src/content/template.ts";
+import { highlightPlugin } from "./scripts/highlight.ts";
 import { renderPage } from "./scripts/prerender-page.ts";
 
 // The website, pay.phala.com: static pages at `/` and `/compare` with their assets in `assets/`, served by Cloudflare
@@ -14,8 +15,9 @@ import { renderPage } from "./scripts/prerender-page.ts";
 // so two builds of the same sources are identical. Cloudflare asset routing also returns 404 for
 // unknown development pages; sitemap.xml exists only in build output.
 export default defineConfig({
-  base: "./",
-  plugins: [react(), tailwindcss(), cloudflare(), {
+  // Absolute asset URLs: the 404 page is served at any unmatched path, however deep.
+  base: "/",
+  plugins: [highlightPlugin(), react(), tailwindcss(), cloudflare(), {
     name: "static-marketing-dev",
     apply: "serve",
     async transformIndexHtml(html, context) {

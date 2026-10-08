@@ -99,8 +99,10 @@ export function useTimeline(selection: Selection | null) {
       if (timeline?.refunds.some((refund) => !TERMINAL_REFUND_STATUSES.has(refund.status))) {
         return TIMELINE_ACTIVE_INTERVAL_MS;
       }
+      // A reversal ends the timeline once its webhook has reached the product: until then the
+      // product's ledger, and the balance read from it, have yet to take it back.
       if (timeline?.deposit?.status === "reversed") {
-        return false;
+        return timeline.events.some((event) => event.type === "deposit.reversed") ? false : TIMELINE_INTERVAL_MS;
       }
       if (timeline?.deposit?.status === "credited" && timeline.deposit.swept) {
         return timeline.steps.some((step) => step.key === "webhook_received" && step.state === "current")
@@ -132,8 +134,9 @@ export function useDepositAddress(enabled: boolean) {
   });
 }
 
-export function useSweeps() {
-  return useQuery({ queryKey: keys.sweeps, queryFn: ({ signal }) => getSweeps(signal), refetchInterval: SWEEPS_INTERVAL_MS });
+/** The account's sweeps, read once its demo account exists (the API knows the visitor by its cookie). */
+export function useSweeps(enabled: boolean) {
+  return useQuery({ queryKey: keys.sweeps, queryFn: ({ signal }) => getSweeps(signal), refetchInterval: SWEEPS_INTERVAL_MS, enabled });
 }
 
 export function useCreateQuote() {

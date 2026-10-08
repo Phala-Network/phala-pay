@@ -1,68 +1,57 @@
 import * as React from "react"
-import { Check, Copy, X } from "lucide-react"
-import { cn } from "cn"
+import { ArrowUpRight } from "lucide-react"
+import { cn } from "@/lib/utils"
+import { getAddress, isAddress } from "viem"
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { short } from "@/format"
+import { CopyButton } from "@/components/ui/copy-button"
 
 /**
- * Copies `value`, confirming with a tick for a moment (announced too). 32px, with a 44px hit area
- * around it.
+ * The page's one way to show an address, hash, or id: in full, in groups of four characters, as the
+ * SDK shows a payer's address (@phala/pay-react). A type prefix (`0x`, `dep_`, `order_`, `demo-`)
+ * stays with the first group. It wraps only between groups, and a group is never shorter than four
+ * characters (a remainder joins the last group), so no character is ever left alone on a line.
+ * Selecting or copying it gives the value without spaces. Only hex and ids are grouped: a key in
+ * base64 (a webhook key) is shown as it is, wrapping anywhere.
  */
-function CopyButton({
-  value,
-  label,
-  className,
-}: {
-  value: string
-  label: string
-  className?: string | undefined
-}) {
-  const [result, setResult] = React.useState<"copied" | "failed" | null>(null)
-  const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  React.useEffect(() => () => clearTimeout(timer.current), [])
-  const show = (outcome: "copied" | "failed") => {
-    setResult(outcome)
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => setResult(null), 1500)
+function groups(value: string): string[] | null {
+  const id = /^(?:0x|[A-Za-z]+[_-])?[0-9A-Za-z]+$/.exec(value)
+  if (id === null || value.length < 12) return null
+  const prefix = /^(?:0x|[A-Za-z]+[_-])/.exec(value)?.[0].length ?? 0
+  const result = [value.slice(0, prefix + 4)]
+  for (let start = prefix + 4; start < value.length; start += 4) {
+    result.push(value.slice(start, start + 4))
   }
-  return (
-    <>
-      <button
-        type="button"
-        data-slot="copy-button"
-        aria-label={label}
-        className={cn(
-          "relative inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors before:absolute before:-inset-1.5 hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&_svg]:size-4",
-          className
-        )}
-        onClick={() => {
-          navigator.clipboard.writeText(value).then(
-            () => show("copied"),
-            () => show("failed")
-          )
-        }}
-      >
-        {result === "copied" ? (
-          <Check aria-hidden="true" />
-        ) : result === "failed" ? (
-          <X aria-hidden="true" />
-        ) : (
-          <Copy aria-hidden="true" />
-        )}
-      </button>
-      <span className="sr-only" aria-live="polite">
-        {result === "copied" ? "Copied" : result === "failed" ? "Could not copy" : ""}
+  const last = result.at(-1) ?? ""
+  if (result.length > 1 && last.length < 4) {
+    result.splice(-2, 2, `${result.at(-2) ?? ""}${last}`)
+  }
+  return result
+}
+
+/** The value's groups; `suffix` (a link's arrow) is part of the last, so it never starts a line. */
+function Grouped({ value, suffix }: { value: string; suffix?: React.ReactNode }) {
+  const parts = groups(value)
+  if (parts === null) return <span className="break-all">{value}{suffix}</span>
+  return parts.map((group, index) => (
+    <React.Fragment key={index}>
+      {index > 0 && <wbr />}
+      <span className="mr-[0.5ch] whitespace-nowrap last:mr-0">
+        {group}
+        {index === parts.length - 1 && suffix}
       </span>
-    </>
-  )
+    </React.Fragment>
+  ))
+}
+
+/** An EVM address in its EIP-55 checksum case, as wallets and explorers show it; anything else as it is. */
+function displayed(value: string): string {
+  return isAddress(value, { strict: false }) ? getAddress(value) : value
 }
 
 /**
- * A hash, address, or id: monospaced and middle-truncated by the page's one rule (`short`); linked
- * when `href` is given, with a copy button when `copyLabel` is. The full value is a link's tooltip
- * (on hover and focus); unlinked, it is the text's title, and what screen readers read. A link's
- * target is 44px tall, around its line.
+ * A hash, address, or id, always in full (never shortened, so it can be compared character by
+ * character): monospaced, grouped in fours. Linked when `href` is given, marked by an arrow;
+ * with a copy button when `copyLabel` is. Inline, it wraps with the sentence around it.
  */
 function Hash({
   value,
@@ -75,51 +64,42 @@ function Hash({
   copyLabel?: string | undefined
   className?: string | undefined
 }) {
-  const text = short(value)
-  const truncated = text !== value
-  let shown: React.ReactNode
-  if (href === undefined) {
-    shown = truncated ? (
-      <span data-slot="hash-value" className="font-mono text-[13px]" title={value}>
-        <span aria-hidden="true">{text}</span>
-        <span className="sr-only">{value}</span>
-      </span>
-    ) : (
-      <span data-slot="hash-value" className="font-mono text-[13px]">
-        {text}
-      </span>
-    )
-  } else {
-    const link = (
-      <a
-        data-slot="hash-value"
-        className="relative rounded-sm font-mono text-[13px] underline decoration-foreground/30 underline-offset-4 transition-colors before:absolute before:inset-x-0 before:-inset-y-3 hover:decoration-foreground"
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-      >
-        {text}
-      </a>
-    )
-    shown = truncated ? (
-      <Tooltip>
-        <TooltipTrigger asChild>{link}</TooltipTrigger>
-        <TooltipContent className="font-mono break-all">{value}</TooltipContent>
-      </Tooltip>
-    ) : (
-      link
-    )
-  }
-  // 8px apart: the copy button's 44px hit area (6px around it) stays clear of a link beside it.
+  const shown = displayed(value)
+  const arrow = href === undefined ? undefined : (
+    <ArrowUpRight aria-hidden="true" className="ml-0.5 inline size-3.5 align-[-0.125em] text-muted-foreground" />
+  )
+  const text = (
+    // Its own box, its lines balanced: a wrapped value never leaves one group alone on a line.
+    <span data-slot="hash-value" className="inline-block max-w-full font-mono text-mono text-balance text-foreground">
+      <Grouped value={shown} suffix={arrow} />
+    </span>
+  )
   return (
+    // With a copy button: the value and the button in one row, the value wrapping beside it.
     <span
       data-slot="hash"
-      className={cn("inline-flex max-w-full items-center gap-2 align-middle", className)}
+      data-value={shown}
+      className={cn(copyLabel === undefined ? "inline" : "inline-flex max-w-full items-start gap-1 align-top", className)}
     >
-      {shown}
-      {copyLabel !== undefined && <CopyButton value={value} label={copyLabel} />}
+      {href === undefined ? (
+        text
+      ) : (
+        <a
+          // A block of its own lines, padded to a 44px target without moving the text around it.
+          className="-my-1.5 inline-block max-w-full rounded-sm py-1.5 decoration-foreground/40 underline-offset-4 hover:underline"
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {text}
+          <span className="sr-only"> (opens the block explorer)</span>
+        </a>
+      )}
+      {copyLabel !== undefined && (
+        <CopyButton value={shown} label={copyLabel} className="-my-1.5 shrink-0" />
+      )}
     </span>
   )
 }
 
-export { CopyButton, Hash }
+export { Hash }

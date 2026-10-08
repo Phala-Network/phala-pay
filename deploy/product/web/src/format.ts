@@ -11,11 +11,6 @@ export function presetDollars(cents: number): string {
   return cents % 100 === 0 ? usd.format(cents / 100).replace(/\.00$/, "") : dollars(cents);
 }
 
-/** An amount taken off: `−$5.00`, but `$0.00` when nothing was. */
-export function minusDollars(cents: number): string {
-  return cents === 0 ? dollars(0) : `−${dollars(cents)}`;
-}
-
 /** `+$20.00` or `−$2.50`. */
 export function signedDollars(cents: number): string {
   return `${cents < 0 ? "−" : "+"}${usd.format(Math.abs(cents) / 100)}`;
@@ -36,16 +31,6 @@ export function atomicAmount(amount: string, decimals: number): bigint | null {
   } catch {
     return null;
   }
-}
-
-/**
- * The page's one truncation of a hash, an address, or an id: its first 6 and last 4 characters,
- * besides its type prefix (`0x`, `qt_`, …), `0x1a2b3c…7e8f`. Its full value goes beside it (a
- * tooltip or title).
- */
-export function short(value: string): string {
-  const prefix = /^(?:0x|[a-z]+_)/.exec(value)?.[0].length ?? 0;
-  return value.length > prefix + 11 ? `${value.slice(0, prefix + 6)}…${value.slice(-4)}` : value;
 }
 
 /** A moment, `Oct 6, 13:05:05`: the 24-hour clock, as every time on the page. */
