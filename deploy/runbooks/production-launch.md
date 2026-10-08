@@ -5,21 +5,25 @@ committed routes are live USDC and USDT on Ethereum (chain 1) and live USDC on B
 Base USDC has a sequencer uptime grace period and uses a separately deployed Base factory.
 Production and staging share the Ankr and Infura accounts.
 
-> **BLOCKER:** Chainalysis has deprecated its on-chain sanctions oracle and says it is not
-> recommended for production sanctions screening. Its official notice records the last oracle
-> update as March 18, 2026 ([Chainalysis oracle documentation](https://go.chainalysis.com/chainalysis-oracle-docs.html)).
-> The configured addresses remain for compatibility, but no production charges may be enabled
-> until the replacement screening decision is made and implemented.
+> **Screening launch gates:** Before enabling production charges, verify a fresh OFAC SDN
+> snapshot and a sanctions smoke check proving a known SDN hit. Add and audit all four
+> [EU/UK supplements](sanctions-list.md#launch-supplements-from-eu-and-uk-lists), and verify that
+> destination re-screening completed successfully. The deprecated oracle addresses remain only
+> for rollback compatibility; a passing binary/database rollback drill is not screening approval.
 
-The combined pilot limits are D=100 deposits/day (stop adding merchants above a seven-day average
-of 80), Q=60 fresh quote snapshots per price chain and Environment per UTC day, at most 12 custody
-routes, and `ISSUED_ADDRESS_CAP=1000` issued addresses per chain. Production contributes three
-routes and staging contributes six, nine custody routes in use under the 12-route ceiling. Monitor
+The approved parallel pilot limits are production D=60, R=2, N=1, factory=60/day and Safe=10/day;
+staging D=20, R=1, N=1, factory=20/day and Safe=2/day. Each environment has H=80 hint tasks/day,
+Q=60 fresh quote snapshots per price chain/UTC day and a 150-call extra reserve per endpoint/day.
+R counts concurrent attached pending refunds; N counts new attachments in a rolling 24 hours.
+The permanent `ISSUED_ADDRESS_CAP=1000` counts all historical addresses per payment chain.
+Production contributes three custody routes and staging six, nine in total. Monitor
 `topup_rpc_endpoint_ready`, `topup_rpc_errors_total`, `topup_coverage_lag_seconds`,
 `topup_addresses_lagging`, `topup_daily_budget_used`, Sentry RPC alerts, daily reports, and provider
-dashboards. Stop adding merchants or other load when the seven-day deposit average is above 80,
-Ankr's seven-day run rate reaches 25,000 calls/day, Infura reaches 50% daily credits, or a chain
-approaches the address cap; follow [RPC operations](../RPC.md#outages-lag-and-quotas) before resuming.
+dashboards. D, factory and Safe are operational caps with no code enforcement: tally work,
+including recovery and failed proof attempts, and stop new load at each limit. Stop adding
+merchants or other load when Ankr's seven-day run rate reaches 25,000 calls/day, Infura reaches
+1,500,000 daily credits, or a chain approaches the address cap. Follow
+[RPC operating modes and stop actions](../RPC.md#pilot-limits-and-operating-modes) before resuming.
 
 Finance must sign off every route amount and the explicit `max_unfinalized_credit` pilot value
 before upgrade and again before enabling charges. The amount defaults copied into `topup.yaml` are
@@ -278,18 +282,23 @@ admin() {
 }
 
 prove_live_treasuries() {
-  local merchant_key=$1 eth_safe=$2 base_safe=$3 prefix=$4 safe_address challenge_message safe_signature
+  local merchant_key=$1 eth_safe=$2 base_safe=$3 prefix=$4 safe_address challenge_message safe_signature CHAIN_ID
   for CHAIN_ID in 1 8453; do
     safe_address="$eth_safe"; [ "$CHAIN_ID" = 8453 ] && safe_address="$base_safe"
     curl -fsS -X POST "$ORIGIN/v1/treasuries/challenge" \
       -H "Authorization: Bearer $merchant_key" -H 'content-type: application/json' \
       -d "{\"chain_id\":$CHAIN_ID,\"address\":\"$safe_address\"}" \
-      > "${prefix}-treasury-challenge-$CHAIN_ID.json"
-    challenge_message="$(jq -er '.message' "${prefix}-treasury-challenge-$CHAIN_ID.json")"
+      > "${prefix}-treasury-challenge-$CHAIN_ID.json" || return 1
+    challenge_message="$(jq -er '.message' "${prefix}-treasury-challenge-$CHAIN_ID.json")" || return 1
     safe_signature="<Safe{Core}-threshold-signature-for-the-unchanged-message>"
-    curl -fsS -X POST "$ORIGIN/v1/treasuries" \
-      -H "Authorization: Bearer $merchant_key" -H 'content-type: application/json' \
-      -d "{\"chain_id\":$CHAIN_ID,\"message\":\"$challenge_message\",\"signature\":\"$safe_signature\"}"
+    (
+      set -o pipefail
+      jq -cn --arg message "$challenge_message" --arg signature "$safe_signature" \
+        --argjson chain_id "$CHAIN_ID" '{chain_id:$chain_id,message:$message,signature:$signature}' \
+        | curl -fsS -X POST "$ORIGIN/v1/treasuries" \
+          -H "Authorization: Bearer $merchant_key" -H 'content-type: application/json' \
+          --data-binary @-
+    ) || return 1
   done
 }
 
@@ -340,7 +349,7 @@ print("pin these verified live webhook keys:", [key.to_dict()["public_key"] for 
 ```
 
 Create the smoke account with charges disabled. Finance must confirm the explicit pilot value;
-template-copied amounts remain illustrative. Complete the sanctions-screening decision and every
+template-copied amounts remain illustrative. Complete the verified screening gates and every
 other launch gate before enabling charges:
 
 ```sh
@@ -357,7 +366,7 @@ response under mode 0600. The response contains the first live key; extract it w
 
 ```sh
 (umask 077 && admin POST "/v1/admin/accounts/$SMOKE_ACCOUNT_ID" \
-  '{"charges_enabled":true,"reason":"sanctions replacement and Finance gates approved"}' \
+  '{"charges_enabled":true,"reason":"verified screening and Finance gates approved"}' \
   > smoke-live.json)
 export SMOKE_MERCHANT_SECRET_KEY="$(jq -er '.api_keys[] | select(.livemode == true and .type == "secret") | .secret' smoke-live.json)"
 shred -u smoke-account.json smoke-account-limits.json smoke-live.json
@@ -369,11 +378,11 @@ attestation. The owner signing steps are in [integration §1.6](../../docs/integ
 
 ```sh
 export ETH_TREASURY_SAFE="<ethereum-smoke-safe>" BASE_TREASURY_SAFE="<base-smoke-safe>"
-prove_live_treasuries "$SMOKE_MERCHANT_SECRET_KEY" "$ETH_TREASURY_SAFE" "$BASE_TREASURY_SAFE" smoke
-configure_live_payment_settings "$SMOKE_MERCHANT_SECRET_KEY"
-register_live_webhook "$SMOKE_MERCHANT_SECRET_KEY"
-pin_live_webhook_keys "$SMOKE_MERCHANT_SECRET_KEY" "$SMOKE_ACCOUNT_ID" smoke || {
-  echo "smoke webhook key pinning failed; stop" >&2
+prove_live_treasuries "$SMOKE_MERCHANT_SECRET_KEY" "$ETH_TREASURY_SAFE" "$BASE_TREASURY_SAFE" smoke &&
+  configure_live_payment_settings "$SMOKE_MERCHANT_SECRET_KEY" &&
+  register_live_webhook "$SMOKE_MERCHANT_SECRET_KEY" &&
+  pin_live_webhook_keys "$SMOKE_MERCHANT_SECRET_KEY" "$SMOKE_ACCOUNT_ID" smoke || {
+  echo "smoke live configuration failed; stop" >&2
   false
 }
 ```
@@ -442,6 +451,7 @@ live_isolated() {
 }
 
 restore_drill() {
+  local BASE_URL=$BASE_URL
   restore_cleanup() {
     trap - RETURN
     if [[ -n "${RESTORE_CVM_ID:-}" ]]; then
@@ -620,13 +630,14 @@ export PHALA_CLOUD_ACCOUNT_ID="$(jq -er '.id' phala-cloud-account.json)"
   > phala-cloud-account-limits.json)
 ```
 
-After the sanctions replacement decision, Finance sign-off, the smoke payments, the restore
+After the fresh OFAC snapshot, SDN-hit smoke, audited EU/UK supplements and successful re-screening,
+Finance sign-off, the smoke payments, the restore
 report, and the monitoring gates all pass, enable charges and save the response under mode 0600.
 Extract the first live key without printing it:
 
 ```sh
 (umask 077 && admin POST "/v1/admin/accounts/$PHALA_CLOUD_ACCOUNT_ID" \
-  '{"charges_enabled":true,"reason":"sanctions replacement, Finance, smoke, and restore gates approved"}' \
+  '{"charges_enabled":true,"reason":"verified screening, Finance, smoke, and restore gates approved"}' \
   > phala-cloud-live.json)
 export PHALA_CLOUD_MERCHANT_SECRET_KEY="$(jq -er '.api_keys[] | select(.livemode == true and .type == "secret") | .secret' phala-cloud-live.json)"
 ```
@@ -637,11 +648,11 @@ keys from the verified attestation:
 
 ```sh
 export PHALA_ETH_TREASURY_SAFE="<ethereum-phala-cloud-safe>" PHALA_BASE_TREASURY_SAFE="<base-phala-cloud-safe>"
-prove_live_treasuries "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_ETH_TREASURY_SAFE" "$PHALA_BASE_TREASURY_SAFE" phala-cloud
-configure_live_payment_settings "$PHALA_CLOUD_MERCHANT_SECRET_KEY"
-register_live_webhook "$PHALA_CLOUD_MERCHANT_SECRET_KEY"
-pin_live_webhook_keys "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_CLOUD_ACCOUNT_ID" phala-cloud || {
-  echo "Phala Cloud webhook key pinning failed; stop" >&2
+prove_live_treasuries "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_ETH_TREASURY_SAFE" "$PHALA_BASE_TREASURY_SAFE" phala-cloud &&
+  configure_live_payment_settings "$PHALA_CLOUD_MERCHANT_SECRET_KEY" &&
+  register_live_webhook "$PHALA_CLOUD_MERCHANT_SECRET_KEY" &&
+  pin_live_webhook_keys "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_CLOUD_ACCOUNT_ID" phala-cloud || {
+  echo "Phala Cloud live configuration failed; stop" >&2
   false
 }
 ```
@@ -665,5 +676,6 @@ account-level setup credentials, live read-write token, and restore read-only to
 and factory deployer private key plus transaction broadcasts; DNS provider access and gateway-derived
 records; smoke and Phala Cloud treasury Safe addresses, owners, and signatures; merchant secret/live
 keys, webhook receivers, and attested webhook-key pins; Finance's route amount and
-`max_unfinalized_credit` approvals; the sanctions-screening replacement decision and implementation;
+`max_unfinalized_credit` approvals; the fresh OFAC snapshot, SDN-hit smoke and audited EU/UK
+supplement/re-screening gates;
 and restore-drill approval and release records.

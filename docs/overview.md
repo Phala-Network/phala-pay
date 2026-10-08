@@ -84,18 +84,21 @@ flowchart LR
 merchant backend creates a quote (or the customer's deposit address) with its API key
   → service locks the price and computes a CREATE2 forwarder address over the merchant's treasury
   → the merchant recomputes the address from its own pins before showing it
-  → the per-block scan shows the payment as "seen, N confirmations" within seconds of its block
+  → a checkout transaction hint starts immediate verification; unhinted transfers are discovered
+    by the fixed five-minute read scan
   → recorded once its block reaches the confirmation (2 blocks on Ethereum, about 30 s after
     paying; 3 blocks on an OP-stack chain such as Base, about 7 s; or the account's stricter
     policy)
-  → a second RPC provider confirms block hash and log; the quote is taken at that instant
+  → both RPC providers independently agree on receipt, transaction, header and transfer fields;
+    the quote is taken at that instant
   → sanctions screening and per-deposit bounds
   → credited: a signed deposit.credited webhook, retried until the merchant fulfills it once
-  → watched to finality; a payment a reorg proves replaced becomes deposit.reversed; one gone
+  → independent dual checkpoints every ten minutes watch finality; a payment a reorg proves
+    replaced becomes deposit.reversed; one gone
     with its nonce unspent stays credited, not final, within the cap, and alerts the operator
   → the merchant (or anyone) flushes forwarders to its treasury; the service marks deposits swept
     from the finalized Flushed events
-  → reconciliation of chain and service ledger per forwarder
+  → hourly dual log coverage and custody reconciliation per forwarder
 ```
 
 No payment needs an operator step, and there is no failure state: anything that cannot complete
