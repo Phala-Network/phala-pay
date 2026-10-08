@@ -73,6 +73,11 @@ def _parse_response(
 
         return response_409
 
+    if response.status_code == 422:
+        response_422 = ErrorResponse.from_dict(response.json())
+
+        return response_422
+
     if response.status_code == 429:
         response_429 = ErrorResponse.from_dict(response.json())
 
@@ -114,6 +119,9 @@ def sync_detailed(
     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
+    Each environment permits at most two attached-pending refunds and one new attachment per
+    rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+    quota. A limit refusal preserves the reservation; contact the operator before another payout.
 
     Args:
         id (str):
@@ -157,6 +165,9 @@ def sync(
     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
+    Each environment permits at most two attached-pending refunds and one new attachment per
+    rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+    quota. A limit refusal preserves the reservation; contact the operator before another payout.
 
     Args:
         id (str):
@@ -195,6 +206,9 @@ async def asyncio_detailed(
     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
+    Each environment permits at most two attached-pending refunds and one new attachment per
+    rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+    quota. A limit refusal preserves the reservation; contact the operator before another payout.
 
     Args:
         id (str):
@@ -236,6 +250,9 @@ async def asyncio(
     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
+    Each environment permits at most two attached-pending refunds and one new attachment per
+    rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+    quota. A limit refusal preserves the reservation; contact the operator before another payout.
 
     Args:
         id (str):

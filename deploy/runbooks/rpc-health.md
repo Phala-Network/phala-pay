@@ -1,7 +1,7 @@
 # RPC endpoint health
 
 Use this procedure for an endpoint unavailable for five minutes, dual evidence disagreement,
-coverage lag over 45 minutes, or provider quota pressure. [RPC operations](../RPC.md) lists the
+coverage lag over two hours, or provider quota pressure. [RPC operations](../RPC.md) lists the
 fixed cadences and shared quotas.
 
 ## First steps
@@ -19,7 +19,10 @@ fixed cadences and shared quotas.
    `RpcPriceSnapshotBudgetExhausted` fires at `topup_daily_budget_used{name=~"price:.*"} >= 60`,
    including exactly the hard cap. This repository has no Prometheus rule-test harness; when
    importing the rules, verify with the operator's rule evaluator that a sample of 59 does not
-   fire and a sample of 60 does.
+   fire and a sample of 60 does. Admitted hint tasks have a hard 80/day/environment cap;
+   `RpcHintBudgetExhausted` fires at `topup_daily_budget_used{name="hints"} >= 80`.
+   Verify that 79 does not fire and 80 does. Exhausted hints keep their quiet acknowledgement
+   and fall back to scanning; they cannot establish negative coverage.
 5. On disagreement, preserve decoded evidence and wait. Never pick one source or manually
    advance coverage. A checkpoint conflict or progressed evidence mismatch uses the existing
    [chain freeze gate](chain-frozen.md) and audited lift.

@@ -546,6 +546,13 @@ impl<'a> Chain<'a> {
     }
 
     async fn scan(&self) -> Result<topup::scanner::ScanStats> {
+        topup::checkpoint::advance(
+            self.pool(),
+            self.routes.chain.chain_id,
+            &self.reader,
+            &self.reader,
+        )
+        .await?;
         Ok(coverage_once(self.pool(), &self.reader, &self.reader, &self.routes, 1).await?)
     }
 

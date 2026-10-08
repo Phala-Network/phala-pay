@@ -627,6 +627,7 @@ pub(crate) async fn update_refund(
         ),
         (status = 401, description = "Unauthorized", body = ErrorResponse),
         (status = 404, description = "Not Found", body = ErrorResponse),
+        (status = 422, description = "Non-retryable `refund_attachment_limit_exceeded`; contact the operator. The reservation is preserved.", body = ErrorResponse),
     ),
     security(("api_key" = [])),
     tag = "refunds"
@@ -638,6 +639,9 @@ pub(crate) async fn update_refund(
 /// `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
 /// transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
 /// only when its transaction is proven not to pay it.
+/// Each environment permits at most two attached-pending refunds and one new attachment per
+/// rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+/// quota. A limit refusal preserves the reservation; contact the operator before another payout.
 pub(crate) async fn mark_refund_paid(
     State(state): State<AppState>,
     Extension(merchant): Extension<Merchant>,

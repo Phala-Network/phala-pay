@@ -2830,6 +2830,7 @@ impl Pipeline {
     /// The finalized scanner's pass, as the rescan after a restore runs it; returns the deposits it
     /// recorded.
     async fn finalized_scan(&self, harness: &Harness) -> Result<u64> {
+        topup::checkpoint::advance(&harness.pool, 1, &self.chain, &self.chain).await?;
         let routes = chain_routes(&self.routes)
             .into_iter()
             .next()

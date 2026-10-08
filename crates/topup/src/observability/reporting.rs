@@ -287,24 +287,32 @@ impl CronMonitor {
         monitor.config.failure_issue_threshold = Some(6);
         monitor
     }
-    /// Fast discovery: one completed round per minute, with a two-minute missed-check-in margin.
+    /// Fast discovery every five minutes; three failed rounds open an issue.
     #[must_use]
     pub fn fast_scanner(chain_id: u64) -> Self {
-        let mut monitor = Self::heartbeat(format!("topup-fast-scanner-{chain_id}"), 2);
-        monitor.config.failure_issue_threshold = Some(3);
-        monitor
+        Self::scanner_monitor(format!("topup-fast-scanner-{chain_id}"), 5, 3)
     }
-    /// Dual coverage: one round per ten minutes, with a two-minute missed-check-in margin.
+    /// Independent checkpoint verification every ten minutes; one failure opens an issue.
+    #[must_use]
+    pub fn checkpoint_scanner(chain_id: u64) -> Self {
+        Self::scanner_monitor(format!("topup-checkpoint-scanner-{chain_id}"), 10, 1)
+    }
+    /// Dual coverage hourly; one failed round opens an issue.
     #[must_use]
     pub fn coverage_scanner(chain_id: u64) -> Self {
-        Self::new(
-            format!("topup-coverage-scanner-{chain_id}"),
+        Self::scanner_monitor(format!("topup-coverage-scanner-{chain_id}"), 60, 1)
+    }
+    fn scanner_monitor(slug: String, minutes: u64, failures: u64) -> Self {
+        let mut monitor = Self::new(
+            slug,
             MonitorSchedule::Interval {
-                value: 10,
+                value: minutes,
                 unit: MonitorIntervalUnit::Minute,
             },
             2,
-        )
+        );
+        monitor.config.failure_issue_threshold = Some(failures);
+        monitor
     }
 
     /// Polls of the finality watch.
@@ -650,10 +658,11 @@ mod tests {
     }
 
     #[test]
-    fn scanner_monitors_report_separate_per_chain_fast_and_coverage_cadences() {
+    fn scanner_monitors_report_separate_per_chain_cadences_and_failure_thresholds() {
         let envelopes = with_captured_envelopes_options(
             || {
                 CronMonitor::fast_scanner(1).check_in(true);
+                CronMonitor::checkpoint_scanner(1).check_in(true);
                 CronMonitor::coverage_scanner(1).check_in(false);
                 CronMonitor::coverage_scanner(8453).check_in(true);
             },
@@ -667,11 +676,27 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(checks.len(), 3);
-        for (check, (slug, minutes, status)) in checks.iter().zip([
-            ("topup-fast-scanner-1", 1, MonitorCheckInStatus::Ok),
-            ("topup-coverage-scanner-1", 10, MonitorCheckInStatus::Error),
-            ("topup-coverage-scanner-8453", 10, MonitorCheckInStatus::Ok),
+        assert_eq!(checks.len(), 4);
+        for (check, (slug, minutes, failures, status)) in checks.iter().zip([
+            ("topup-fast-scanner-1", 5, 3, MonitorCheckInStatus::Ok),
+            (
+                "topup-checkpoint-scanner-1",
+                10,
+                1,
+                MonitorCheckInStatus::Ok,
+            ),
+            (
+                "topup-coverage-scanner-1",
+                60,
+                1,
+                MonitorCheckInStatus::Error,
+            ),
+            (
+                "topup-coverage-scanner-8453",
+                60,
+                1,
+                MonitorCheckInStatus::Ok,
+            ),
         ]) {
             assert_eq!(check.monitor_slug, slug);
             assert_eq!(check.status, status);
@@ -681,6 +706,7 @@ mod tests {
                 serde_json::json!({"type":"interval","value":minutes,"unit":"minute"})
             );
             assert_eq!(config["checkin_margin"], 2);
+            assert_eq!(config["failure_issue_threshold"], failures);
         }
     }
 

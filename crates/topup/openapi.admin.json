@@ -2209,6 +2209,7 @@
       },
       "KnownErrorCode": {
         "enum": [
+          "refund_attachment_limit_exceeded",
           "address_capacity_reached",
           "chain_unavailable",
           "price_unavailable",

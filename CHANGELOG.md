@@ -34,9 +34,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `cancel_requested_at`; completion emits `quote.canceled`. Expiry uses the same evidence gate.
 - Fresh quote price snapshots are capped at 60 per price chain/environment/UTC day. Exhaustion
   returns retryable `503 price_unavailable`; the twelve-second reuse limit is unchanged.
-  The combined deposit pilot bound is 100/day; stop adding merchants above an 80/day seven-day
-  average. These bounds include hourly dual custody on every routed chain/token pair and keep
-  worst-case usage below both provider stop lines, including the ten-percent retry allowance.
+  Production and staging share provider free quotas: their operational deposit allocations are
+  60/day and 20/day respectively. Keep hourly dual custody on every routed chain/token pair;
+  the parallel budget also requires staging to allocate at most one attached-pending refund
+  despite the common code ceiling of two per environment.
 - Remove RPC recovery/resume commands, member pools, review sweeps, single-source backstops and
   custom head-poll flags. The expand-only migration preserves rollback to the prior stable
   release, whose RPC frozen/anchor/recovery state must be resolved before starting this version.
@@ -68,6 +69,28 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Changed
 
+- Payment discovery runs every five minutes, dual finalized checkpoints are independently
+  verified and published every ten minutes, and complete dual log coverage runs hourly.
+  Observation-chain contract recovery remains every minute and admitted hint processing keeps
+  its seconds-scale fast path. Without hints, discovery adds up to five minutes (mean 2.5), plus
+  confirmation and processing. Known-deposit finality/reversal and checkpoint-conflict detection
+  add up to ten minutes plus processing; log-only conflicts still wait for coverage. Expiry,
+  cancellation completion and reservation release still require dual coverage: allow chain
+  finality plus ten minutes for the checkpoint, one hour for coverage and five seconds for expiry.
+  Coverage lag now warns after two hours; Sentry monitors track all three independent cadences.
+  Every sixth coverage round scans up to 19,200 blocks (every six hours); normal rounds retain
+  3,000 blocks. Healthy continuous recovery can clear a 24-hour-equivalent backlog within twelve
+  hours, subject to the recovery-day deposit/factory operational caps. Failures, restarts and
+  address backfill extend these bounds. Custody remains hourly and coverage-pinned, so a newly
+  finalized discrepancy can take about 130 minutes plus RPC time to freeze the chain. Chain-time
+  quote eligibility is unchanged; later processing can change fresh valuation and sanctions results.
+- **Breaking:** Each environment admits at most two attached-pending refunds and one new refund
+  transaction attachment per rolling 24 hours across all merchants and modes. `mark_paid` returns
+  non-retryable `422 refund_attachment_limit_exceeded` when either limit would be exceeded; contact
+  the operator before sending or attaching another payout. Refusals keep the pending reservation,
+  idempotent repeats consume no quota, and existing attachments continue dual-source verification.
+  Admitted transaction hint tasks are capped at 80 per environment/UTC day; fresh quote snapshots
+  remain capped at 60 per price chain/environment/UTC day, with alerts at both caps.
 - **Breaking:** Refund transactions never seen by either endpoint after 24 hours remain `pending`
   and keep their reservation, with `TopupRefundProgressAge` alerting the operator. They no longer
   become `failed` with `transaction_not_found` or emit `refund.failed`; merchants cannot refund

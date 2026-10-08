@@ -963,7 +963,7 @@ async fn whole_task_caps_include_unmined_receipt_polls_and_confirmation_head_pol
 }
 
 #[tokio::test]
-async fn daily_budget_is_atomic_hard_counter_and_151st_task_per_utc_day_is_ignored() -> Result<()> {
+async fn daily_budget_is_atomic_hard_counter_and_81st_task_per_utc_day_is_ignored() -> Result<()> {
     let Some(db) = TestDatabase::create().await? else {
         return Ok(());
     };
@@ -975,7 +975,7 @@ async fn daily_budget_is_atomic_hard_counter_and_151st_task_per_utc_day_is_ignor
             for _ in 0..10 {
                 let pool = db.app_pool.clone();
                 claims.spawn(async move {
-                    topup::db::daily_budgets::claim_on(&pool, day, "hints-concurrent-test", 150)
+                    topup::db::daily_budgets::claim_on(&pool, day, "hints-concurrent-test", 80)
                         .await
                 });
             }
@@ -983,18 +983,18 @@ async fn daily_budget_is_atomic_hard_counter_and_151st_task_per_utc_day_is_ignor
                 admitted += i32::from(claim??);
             }
         }
-        ensure!(admitted == 150);
+        ensure!(admitted == 80);
         ensure!(
             topup::db::daily_budgets::claim_on(
                 &db.app_pool,
                 day.succ_opt().unwrap(),
                 "hints-concurrent-test",
-                150
+                80
             )
             .await?
         );
         let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
-        sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES($1,'hints',150)")
+        sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES($1,'hints',80)")
             .bind(chrono::Utc::now().date_naive())
             .execute(&db.app_pool)
             .await?;
@@ -1011,7 +1011,7 @@ async fn daily_budget_is_atomic_hard_counter_and_151st_task_per_utc_day_is_ignor
             sqlx::query_scalar::<_, i32>("SELECT used FROM daily_budgets WHERE name='hints'")
                 .fetch_one(&db.app_pool)
                 .await?
-                == 150
+                == 80
         );
         cancel.cancel();
         Ok(())
@@ -1317,6 +1317,7 @@ async fn verify_lagging_for_one_and_a_half_seconds_records_within_whole_task_bud
             json!({"transaction_hash":TX}),
         )
         .await?;
+        let started = tokio::time::Instant::now();
         let (cancel, _worker) = h.worker(&db.app_pool);
         wait_until(async || {
             Ok(verify
@@ -1337,6 +1338,11 @@ async fn verify_lagging_for_one_and_a_half_seconds_records_within_whole_task_bud
         }
         *verify.receipt.lock().unwrap() = receipt;
         wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+        ensure!(
+            started.elapsed() < Duration::from_secs(5),
+            "hint waited for the five-minute discovery cadence"
+        );
+        ensure!(started.elapsed() < topup::scanner::FAST_INTERVAL);
         cancel.cancel();
         ensure!(read.calls.load(Ordering::SeqCst) <= read_start + 12);
         ensure!(verify.calls.load(Ordering::SeqCst) <= verify_start + 8);

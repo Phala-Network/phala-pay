@@ -64,7 +64,7 @@ pub(crate) fn collect_metrics() -> Result<Vec<prometheus::proto::MetricFamily>, 
         .map_err(|_| prometheus::Error::Msg("hint metrics initialization failed".into()))
 }
 /// Hard number of hint tasks per environment and UTC day.
-pub const HINTS_PER_DAY: i32 = 150;
+pub const HINTS_PER_DAY: i32 = 80;
 
 /// A server-derived object network. No caller-supplied recipient is used.
 #[derive(Clone, Debug)]

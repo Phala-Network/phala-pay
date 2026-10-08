@@ -249,6 +249,7 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             chain.anvil.mine(1)?;
             run_checked("cast", &["rpc", "evm_increaseTime", "60", "--rpc-url", &chain.anvil.rpc_url], None)?;
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader).await?;
             coverage_once(&chain.pool,&chain.reader,&chain.reader,&chain.routes,1).await?;
             ensure!(topup::locks::expire_once(&chain.pool,&RouteSet::new(vec![chain.route.clone()]).unwrap()).await?==1);
             ensure!(chain.events("quote.expired").await?.len()==1);
@@ -599,6 +600,8 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
                 chain.events("deposit.reversed").await? == vec![reversed_event_id(credited.id)]
             );
 
+            topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader)
+                .await?;
             let stats =
                 coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1).await?;
             ensure!(

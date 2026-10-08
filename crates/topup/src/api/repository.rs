@@ -31,6 +31,11 @@ use super::models::{
     ReconciliationBlockReport, RouteDailyReport,
 };
 
+/// Environment-wide hard bounds on refund verification load, shared by all accounts and modes.
+pub const MAX_ATTACHED_PENDING_REFUNDS: i64 = 2;
+/// New attachments in a rolling 24-hour window, including refunds already resolved.
+pub const MAX_REFUND_ATTACHMENTS_PER_DAY: i64 = 1;
+
 /// Records a verified request signature exactly once within the acceptance window.
 pub async fn record_signature(
     pool: &PgPool,
@@ -641,12 +646,33 @@ async fn mark_refund_paid_in(
     if status != "pending" {
         return Err(ApiError::refund_unexpected_state(status));
     }
+    // Serialize admission across this environment. Idempotent attachments returned above do
+    // not claim quota. Count after acquiring the lock so competing transactions see commits.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('refund-attachment-budget', 0))")
+        .execute(&mut **transaction)
+        .await?;
+    let (pending, recent): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE status = 'pending' AND tx_hash IS NOT NULL), \
+         count(*) FILTER (WHERE paid_at > statement_timestamp() - interval '24 hours') FROM refunds",
+    )
+    .fetch_one(&mut **transaction)
+    .await?;
+    if pending >= MAX_ATTACHED_PENDING_REFUNDS {
+        return Err(ApiError::refund_attachment_limit_exceeded(
+            "the environment's attached-pending refund limit is reached; contact the operator",
+        ));
+    }
+    if recent >= MAX_REFUND_ATTACHMENTS_PER_DAY {
+        return Err(ApiError::refund_attachment_limit_exceeded(
+            "the environment's rolling 24-hour refund attachment limit is reached; contact the operator",
+        ));
+    }
     let object = crate::db::EventObject::Refund(refund_id);
     let before = crate::db::render(transaction, routes, scope, object).await?;
     let updated = sqlx::query(
         r#"
         UPDATE refunds
-        SET tx_hash = $2, receipt_log_index = $3, paid_at = now(), next_check_at = now(),
+        SET tx_hash = $2, receipt_log_index = $3, paid_at = clock_timestamp(), next_check_at = now(),
             updated_at = now()
         WHERE id = $1
         "#,

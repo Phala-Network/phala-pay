@@ -632,6 +632,9 @@ export interface paths {
          *     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
          *     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
          *     only when its transaction is proven not to pay it.
+         *     Each environment permits at most two attached-pending refunds and one new attachment per
+         *     rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+         *     quota. A limit refusal preserves the reservation; contact the operator before another payout.
          */
         readonly post: operations["mark_refund_paid"];
         readonly delete?: never;
@@ -2706,7 +2709,7 @@ export interface components {
             readonly url: string;
         };
         /** @enum {string} */
-        readonly KnownErrorCode: "address_capacity_reached" | "chain_unavailable" | "price_unavailable" | "parameter_invalid" | "parameter_missing" | "parameter_unknown" | "amount_too_small" | "amount_too_large" | "exposure_cap_exceeded" | "paused" | "chain_frozen" | "asset_not_accepted" | "payment_settings_unconfirmed" | "treasury_not_set" | "treasury_proof_invalid" | "treasury_challenge_expired" | "treasury_challenge_used" | "treasury_not_deployed" | "treasury_sanctioned" | "treasury_change_pending" | "treasury_unchanged" | "treasury_unexpected_state" | "quote_payment_received" | "quote_window_closed" | "quote_unexpected_state" | "deposit_unexpected_state" | "deposit_not_refundable" | "deposit_not_final" | "destination_sanctioned" | "transfer_already_used" | "refund_unexpected_state" | "api_key_inactive" | "last_api_key" | "deposit_address_cap_exceeded" | "deposit_address_retired" | "webhook_endpoint_cap_exceeded" | "webhook_endpoint_disabled" | "idempotency_key_reused" | "signature_invalid" | "signature_replayed" | "api_key_missing" | "api_key_invalid" | "api_key_expired" | "permission_denied" | "testmode_charges_only" | "resource_missing" | "idempotency_key_in_use" | "rate_limit" | "customer_rate_limit" | "internal_error" | "unavailable" | "service_maintenance" | "service_restoring" | "restore_not_frozen" | "restore_rescan_incomplete";
+        readonly KnownErrorCode: "refund_attachment_limit_exceeded" | "address_capacity_reached" | "chain_unavailable" | "price_unavailable" | "parameter_invalid" | "parameter_missing" | "parameter_unknown" | "amount_too_small" | "amount_too_large" | "exposure_cap_exceeded" | "paused" | "chain_frozen" | "asset_not_accepted" | "payment_settings_unconfirmed" | "treasury_not_set" | "treasury_proof_invalid" | "treasury_challenge_expired" | "treasury_challenge_used" | "treasury_not_deployed" | "treasury_sanctioned" | "treasury_change_pending" | "treasury_unchanged" | "treasury_unexpected_state" | "quote_payment_received" | "quote_window_closed" | "quote_unexpected_state" | "deposit_unexpected_state" | "deposit_not_refundable" | "deposit_not_final" | "destination_sanctioned" | "transfer_already_used" | "refund_unexpected_state" | "api_key_inactive" | "last_api_key" | "deposit_address_cap_exceeded" | "deposit_address_retired" | "webhook_endpoint_cap_exceeded" | "webhook_endpoint_disabled" | "idempotency_key_reused" | "signature_invalid" | "signature_replayed" | "api_key_missing" | "api_key_invalid" | "api_key_expired" | "permission_denied" | "testmode_charges_only" | "resource_missing" | "idempotency_key_in_use" | "rate_limit" | "customer_rate_limit" | "internal_error" | "unavailable" | "service_maintenance" | "service_restoring" | "restore_not_frozen" | "restore_rescan_incomplete";
         /**
          * @description `POST /v1/refunds/{id}/mark_paid` body: the merchant's refund transaction.
          * @example {
@@ -8114,6 +8117,19 @@ export interface operations {
             };
             /** @description `idempotency_key_in_use`: a request with this `Idempotency-Key` is still running; retry with the same key */
             readonly 409: {
+                headers: {
+                    /** @description Tenant data and credentials must never be stored, including errors */
+                    readonly "Cache-Control": "no-store";
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Non-retryable `refund_attachment_limit_exceeded`; contact the operator. The reservation is preserved. */
+            readonly 422: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */
                     readonly "Cache-Control": "no-store";

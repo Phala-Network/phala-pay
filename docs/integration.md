@@ -901,7 +901,7 @@ receipt visibility keeps polling within the task budget; only confirmed evidence
 raises an alert. They do not advance coverage or cause expiry, cancellation, rejection or
 credit by themselves. Each task is limited to 12 read calls and 8 verify calls including retries
 and head polling, and 90 seconds on Ethereum chains or 30 seconds on Base chains. Limits are
-3/minute and 10/day per authenticated object, four active tasks and a hard 150 tasks
+3/minute and 10/day per authenticated object, four active tasks and a hard 80 tasks
 per environment per UTC day. Hint endpoints have no per-IP limit; see the operator
 [API admission limits](configuration.md#api-admission-limits) for the ingress protection model.
 Transfers before the address's `created_block` are ignored, as in coverage scanning.
@@ -1251,6 +1251,12 @@ Idempotency-Key: "…"
   15 minutes after its block on Ethereum) is `400 deposit_not_final`, so nothing is paid back for
   a payment that could still be reversed: retry after finality. A paused `refunds` scope is
   `400 paused`. The same `Idempotency-Key` with the same request returns the same response.
+
+Coordinate payout capacity with your operator first. Each environment allows at most two
+attached-pending refunds and one new attachment per rolling 24 hours, across all merchants and
+modes. A refused attachment returns non-retryable `422 refund_attachment_limit_exceeded` and
+keeps the reservation; contact the operator and do not send another payout. Repeating the same
+attachment consumes no quota, and already attached payouts continue verification.
 
 Then pay it: transfer exactly `amount_atomic` of the deposit's token from `treasury` to
 `destination_address`, from your wallet or Safe, and attach the transaction:

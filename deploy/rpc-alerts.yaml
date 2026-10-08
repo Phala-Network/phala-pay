@@ -16,10 +16,10 @@ groups:
           summary: "Endpoint {{ $labels.provider }} unavailable on chain {{ $labels.chain_id }}"
           runbook: "deploy/runbooks/rpc-health.md"
       - alert: RpcCoverageLag
-        expr: topup_coverage_lag_seconds > 2700
+        expr: topup_coverage_lag_seconds > 7200
         labels: { severity: warning }
         annotations:
-          summary: "Dual coverage is over 45 minutes behind on chain {{ $labels.chain_id }}"
+          summary: "Dual coverage is over two hours behind on chain {{ $labels.chain_id }}"
           runbook: "deploy/runbooks/rpc-health.md"
       - alert: RpcAddressBackfillLag
         expr: topup_addresses_lagging > 0
@@ -33,6 +33,12 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Fresh quote snapshot budget exhausted until UTC midnight"
+          runbook: "deploy/runbooks/rpc-health.md"
+      - alert: RpcHintBudgetExhausted
+        expr: topup_daily_budget_used{name="hints"} >= 80
+        labels: { severity: warning }
+        annotations:
+          summary: "Transaction hint task budget exhausted until UTC midnight"
           runbook: "deploy/runbooks/rpc-health.md"
       - alert: RpcAddressCapacityWarning
         expr: topup_issued_addresses / topup_issued_address_cap >= 0.7

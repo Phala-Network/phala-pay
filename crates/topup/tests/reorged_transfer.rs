@@ -513,6 +513,7 @@ impl Scenario {
 
     /// The chain's finalized scanner pass; returns the deposits it recorded.
     async fn finalized_scan(&self) -> Result<u64> {
+        topup::checkpoint::advance(&self.pool, CHAIN_ID, &self.chain, &self.chain).await?;
         Ok(
             coverage_once(&self.pool, &self.chain, &self.chain, &self.routes, 1)
                 .await?

@@ -4,7 +4,10 @@ mod support;
 use alloy_primitives::{Address, B256, U256};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use support::{
     TestDatabase,
     seed::{self, NewAccount, NewAddress},
@@ -29,6 +32,8 @@ fn hash(number: u64) -> B256 {
 }
 struct Reader {
     head: u64,
+    live_head: Option<Arc<AtomicU64>>,
+    finalized_reads: Mutex<usize>,
     logs: Vec<TransferLog>,
     receipt: Option<TransferLog>,
     error: bool,
@@ -47,6 +52,8 @@ impl Reader {
     fn new(head: u64) -> Self {
         Self {
             head,
+            live_head: None,
+            finalized_reads: Mutex::new(0),
             logs: Vec::new(),
             receipt: None,
             error: false,
@@ -65,13 +72,19 @@ impl Reader {
 }
 impl ChainReader for Reader {
     async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
+        *self.finalized_reads.lock().unwrap() += 1;
+        let head = self
+            .live_head
+            .as_ref()
+            .map_or(self.head, |head| head.load(Ordering::SeqCst));
         Ok(FinalizedHead {
-            number: self.head,
-            time: time(self.head),
+            number: head,
+            time: time(head),
         })
     }
     async fn finalized_header(&self) -> Result<(FinalizedHead, B256), ChainError> {
-        Ok((self.finalized_head().await?, hash(self.head)))
+        let head = self.finalized_head().await?;
+        Ok((head, hash(head.number)))
     }
     async fn latest_header(&self) -> Result<FinalizedHead, ChainError> {
         self.finalized_head().await
@@ -369,6 +382,198 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
 }
 
 #[tokio::test]
+async fn checkpoint_loop_advances_independently_of_failed_hourly_coverage() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            use std::time::Duration;
+            use tokio_util::sync::CancellationToken;
+            let address = address(d, 100).await?;
+            let head = Arc::new(AtomicU64::new(40_000));
+            let mut read = Reader::new(40_000);
+            read.live_head = Some(head.clone());
+            let mut verify = Reader::new(40_000);
+            verify.live_head = Some(head.clone());
+            verify.error = true;
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let read = Arc::new(read);
+            let verify = Arc::new(verify);
+            let heads = scanner::FinalizedHeads::default();
+            let cancel = CancellationToken::new();
+            // Keep the paused runtime runnable while PostgreSQL completes real I/O; only explicit
+            // advance calls below move the controlled clock.
+            tokio::time::pause();
+            let guard_cancel = cancel.clone();
+            let guard = tokio::spawn(async move {
+                while !guard_cancel.is_cancelled() {
+                    tokio::task::yield_now().await;
+                }
+            });
+            let checkpoint = {
+                let (pool, read, verify, heads, cancel) = (
+                    d.app_pool.clone(),
+                    read.clone(),
+                    verify.clone(),
+                    heads.clone(),
+                    cancel.clone(),
+                );
+                tokio::spawn(async move {
+                    scanner::checkpoint_loop(
+                        &pool,
+                        1,
+                        (&*read, &*verify),
+                        &heads,
+                        || true,
+                        &cancel,
+                    )
+                    .await;
+                })
+            };
+            let coverage = {
+                let (pool, read, verify, cancel) = (
+                    d.app_pool.clone(),
+                    read.clone(),
+                    verify.clone(),
+                    cancel.clone(),
+                );
+                tokio::spawn(async move {
+                    scanner::coverage_loop(
+                        &pool,
+                        &chain(),
+                        (&*read, &*verify),
+                        Duration::ZERO,
+                        || true,
+                        &cancel,
+                    )
+                    .await;
+                })
+            };
+            let result = async {
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+                tokio::time::advance(Duration::from_millis(1)).await;
+                wait_for_condition(|| {
+                    heads.get(1).is_some_and(|h| h.number == 40_000)
+                        && !read.requests.lock().unwrap().is_empty()
+                })
+                .await
+                .with_context(|| {
+                    format!(
+                        "initial tick: head {:?}, requests {}, finalized reads {}",
+                        heads.get(1),
+                        read.requests.lock().unwrap().len(),
+                        *read.finalized_reads.lock().unwrap()
+                    )
+                })?;
+                for tick in 1..=36_u64 {
+                    tokio::time::advance(Duration::from_secs(599)).await;
+                    // Every prior checkpoint completed, so neither loop may run early.
+                    for _ in 0..20 {
+                        tokio::task::yield_now().await;
+                    }
+                    ensure!(heads.get(1).context("published head")?.number == 40_000 + tick - 1);
+                    ensure!(
+                        read.requests.lock().unwrap().len() == usize::try_from(1 + (tick - 1) / 6)?
+                    );
+                    head.store(40_000 + tick, Ordering::SeqCst);
+                    tokio::time::advance(Duration::from_secs(1)).await;
+                    wait_for_condition(|| heads.get(1).is_some_and(|h| h.number == 40_000 + tick))
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "checkpoint tick {tick}: published {:?}, finalized reads {}",
+                                heads.get(1),
+                                *read.finalized_reads.lock().unwrap()
+                            )
+                        })?;
+                    if tick.is_multiple_of(6) {
+                        wait_for_condition(|| {
+                            read.requests.lock().unwrap().len()
+                                == usize::try_from(1 + tick / 6).unwrap()
+                        })
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "coverage tick {tick}: {} requests",
+                                read.requests.lock().unwrap().len()
+                            )
+                        })?;
+                    }
+                }
+                ensure!(
+                    marker(d, address.id).await?.is_none(),
+                    "failed coverage published negative evidence"
+                );
+                ensure!(
+                    db::chain_reads::coverage(&d.app_pool, 1)
+                        .await?
+                        .context("coverage")?
+                        .number
+                        == 99
+                );
+                ensure!(
+                    compat(d).await?.0 == 99,
+                    "checkpoint alone advanced the N-1 cursor"
+                );
+                Ok(())
+            }
+            .await;
+            cancel.cancel();
+            checkpoint.await?;
+            coverage.await?;
+            guard.await?;
+            tokio::time::resume();
+            result
+        })
+    })
+    .await
+}
+
+async fn wait_for_condition(condition: impl Fn() -> bool) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !condition() {
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "scheduled round did not finish"
+        );
+        tokio::task::yield_now().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordinary_coverage_uses_the_published_checkpoint_without_advancing_it() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            address(d, 100).await?;
+            let mut read = Reader::new(4_000);
+            let mut verify = Reader::new(4_000);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            read.head = 10_000;
+            verify.head = 10_000;
+            let reads = (
+                *read.finalized_reads.lock().unwrap(),
+                *verify.finalized_reads.lock().unwrap(),
+            );
+            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 6).await?;
+            ensure!(stats.finalized == 4_000 && stats.cursor == 4_000);
+            ensure!(
+                reads
+                    == (
+                        *read.finalized_reads.lock().unwrap(),
+                        *verify.finalized_reads.lock().unwrap()
+                    )
+            );
+            topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
+            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 12).await?;
+            ensure!(stats.finalized == 10_000 && stats.cursor == 10_000);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn first_round_caps_future_creation_at_the_agreed_checkpoint() -> Result<()> {
     with_database(|d| {
         Box::pin(async move {
@@ -385,6 +590,7 @@ async fn first_round_caps_future_creation_at_the_agreed_checkpoint() -> Result<(
             ensure!(marker(d, address.id).await?.is_none());
             read.head = 10100;
             verify.head = 10100;
+            topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 6).await?;
             ensure!(
                 marker(d, address.id).await? == Some(10100),
