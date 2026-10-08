@@ -22,6 +22,7 @@
 #   would read differently deploys nothing.
 # Every run leaves no temporary directory and prints no secret. TOPUP names a local topup binary
 # for preflight and the route-mode check (CI's build).
+# The quick start's printed attestation command also keeps the OS pin after its kit is removed.
 set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
@@ -278,6 +279,27 @@ grep -qx '  URL       https://abcdef0123456789abcdef0123456789abcdef01.dstack-ph
 grep -qx 'Phala Pay v9.9.9 is provisioned.' "$tmp/quick.out" || fail "quick did not print its summary"
 grep -qF 'https://github.com/Phala-Network/phala-pay/blob/v9.9.9/docs/self-hosting.md#5-verify-the-attestation' \
     "$tmp/quick.out" || fail "quick did not link the release's guide"
+# succeeds already proved the temporary kit was deleted. Execute the printed command with a fresh
+# operator kit's verifier stub and check its arguments, so a reference to the deleted pin fails.
+verification_command=$(sed -n 's/^      \(kit\/deploy\/verify-attestation\.sh .*\)$/\1/p' "$tmp/quick.out")
+[[ -n "$verification_command" ]] || fail "quick did not print its attestation command"
+mkdir -p "$tmp/operator/kit/deploy"
+cat >"$tmp/operator/kit/deploy/verify-attestation.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@"
+STUB
+chmod +x "$tmp/operator/kit/deploy/verify-attestation.sh"
+verification_arguments=$(cd "$tmp/operator" && bash -c "$verification_command") ||
+    fail "quick's printed attestation command failed after cleanup"
+expected_os_hash=$(<"$root/deploy/environments/phala-cloud-template/topup/os-image-hash")
+diff <(printf '%s\n' "$verification_arguments") - <<ARGS || fail "quick's printed attestation command lost its OS pin after cleanup"
+attestation.json
+info.json
+0xabcdef0123456789abcdef0123456789abcdef01
+phala-cloud-template.yml
+template
+$expected_os_hash
+ARGS
 ! grep -q '^phala cvms attestation' "$tmp/log" || fail "quick waited for the attestation"
 ! grep -q '^phala.toml in' "$tmp/log" || fail "quick ran the CLI where a phala.toml is"
 [[ "$(cat "$tmp/quick.cvm-id")" == cvm-0123 ]] || fail "quick did not record its CVM"

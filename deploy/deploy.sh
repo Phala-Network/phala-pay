@@ -167,7 +167,7 @@ The provision proves nothing about the instance's health. It is accepted once
   - $answers, and
   - you have verified its attestation with the release's verified kit
     ($docs#5-verify-the-attestation):
-      kit/deploy/verify-attestation.sh attestation.json info.json $app_id $record $variant "\$(cat "$env_dir/os-image-hash")"
+      kit/deploy/verify-attestation.sh attestation.json info.json $app_id $record $variant $os_image_hash
 
 Next, create a merchant account with the admin key (BASE_URL=$url):
 $docs#6-onboard-your-first-account
@@ -195,6 +195,7 @@ main() {
     exec 3>&1
     # What finish and summary read: the temporary directories, and what is known of the new CVM.
     work="" sealed="" env_dir="" cvm_id="" app_id="" url="" gateway="" instance_id="" record="" answers=""
+    os_image_hash=""
     [[ "${PHALA_PAY_REQUIRE_ATTESTATION:-}" != 1 ]] || strict=1
     local argument
     for argument in "$@"; do
@@ -418,6 +419,10 @@ YAML
             say "wrote $env_dir: this instance's settings, no secret"
         fi
     fi
+    # The quick start's environment is in the temporary kit; retain its pin for the summary
+    # printed after finish removes that kit.
+    os_image_hash=$(cat "$env_dir/os-image-hash") || die "could not read $env_dir/os-image-hash"
+    check os_image_hash '^[0-9a-f]{64}$' "64 lowercase hexadecimal characters"
     local compose=$work/docker-compose.yml pinned_compose
     "$kit/deploy/render.sh" "${render[@]}" --images "$images" "$env_dir" >"$compose"
     pinned_compose=$("$kit/deploy/pinned-compose.sh")
