@@ -232,6 +232,30 @@ Each report entry records the target, network, expected chain id, and the chain 
 returned; a mismatch fails verification. Compare the Sepolia and mainnet JSON reports. Factory,
 implementation, every sample forwarder, and runtime code hashes must be identical.
 
+## Base mainnet
+
+Production's Base route uses the same deterministic factory and implementation at chain 8453.
+Deploy and verify it only after the Ethereum mainnet deployment has passed the same human release
+approval. The network name is `base` in `deploy/contracts/networks.json`; the broadcast key stays
+in the operator's environment and is never an argument or a repository value.
+
+**HUMAN-ONLY:**
+
+```sh
+deploy/contracts/deploy-proxy.sh --rpc-url "$BASE_RPC_A"
+deploy/contracts/deploy-factory.sh --rpc base/a="$BASE_RPC_A" --dry-run
+deploy/contracts/deploy-factory.sh --rpc base/a="$BASE_RPC_A" --broadcast
+
+deploy/contracts/verify-deployment.sh \
+  --rpc base/a="$BASE_RPC_A" \
+  --rpc base/b="$BASE_RPC_B" \
+  > base-contract-verification.json
+jq -e '.passed == true' base-contract-verification.json
+```
+
+Compare the Base report with the Ethereum mainnet report. The factory, implementation, sample
+forwarders, and runtime code hashes must be identical; a mismatch blocks the production deploy.
+
 ## Route and compose update
 
 A route file carries only `chain.forwarder_factory`; the implementation is derived as the

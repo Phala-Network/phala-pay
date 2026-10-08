@@ -44,24 +44,31 @@ decisions are the [design](design/multi-tenant.md) (§16 is its PR plan), and th
 |---|---|---|
 | Mainnet PHA contract (proposed `0x6c5bA91642F10282b576d91922Ae6448C9d52f4E`) | Finance | to confirm |
 | Phala Cloud's treasury Safe per chain (owners, threshold), set by Phala Cloud through the API; not a route input | Finance | open |
-| Independent Ankr read and Infura verify endpoints for every payment and price chain, configured with `rpc` and the sealed `TOPUP_RPC_ANKR_KEY` / `TOPUP_RPC_INFURA_KEY` ([RPC configuration and preflight](../deploy/RPC.md#configuration-and-preflight)) | Ops | open |
-| Production R2 bucket and keys for WAL-G | Ops | open |
-| Production Phala Cloud workspace and API key for the CVM (`production` Environment) | Ops | open |
-| Production admin key (the operator's RFC 9421 key) | Operator | open |
-| `TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` secret and `TOPUP_MAINTENANCE_KEY_ID` variable in the production Environment, matching the attested `maintenance_keys` entry; separate from the full admin key ([planned upgrades](../deploy/README.md#planned-upgrade-admission-and-downtime)) | Operator / Ops | open |
-| Sentry quota for production | Ops | open |
-| DNS for Phala's production domain, `pay-api.phala.com` (CNAME and `_dstack-app-address` TXT) | Ops | open |
+| Production routes (live USDC and USDT on Ethereum and Base, deterministic factory/oracles, and Chainlink sources) | Engineering | provided by this PR; PHA remains disabled because it has no second Allowed source |
+| Independent Ankr read and Infura verify endpoints for every production payment and price chain, configured with `rpc` and the sealed `TOPUP_RPC_ANKR_KEY` / `TOPUP_RPC_INFURA_KEY` ([RPC configuration and preflight](../deploy/RPC.md#configuration-and-preflight)) | Engineering / Ops | endpoint configuration provided by this PR; shared provider keys remain operator-only |
+| Production R2 bucket `phala-pay-production/production-v1` and public WAL-G settings | Engineering | prefix, endpoint, region, and path-style setting provided by this PR; owner must create the bucket and supply sealed access keys |
+| Production Phala Cloud workspace and API key for the CVM (`production` Environment) | Ops | open; operator-only |
+| Production admin key (the operator's RFC 9421 key) | Operator | public key provided by this PR; private seed remains operator-only |
+| `TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` secret and `TOPUP_MAINTENANCE_KEY_ID` variable in the production Environment, matching the attested `maintenance_keys` entry; separate from the full admin key ([planned upgrades](../deploy/README.md#planned-upgrade-admission-and-downtime)) | Operator / Ops | public key provided by this PR; PEM and Environment variable remain operator-only |
+| Sentry DSN and production alert quota | Ops | open; required sealed `SENTRY_DSN` remains operator-only |
+| DNS for Phala's production domain, `pay-api.phala.com` (CNAME and `_dstack-app-address` TXT) | Ops | open; operator-only after provision |
 | Route defaults in architecture §14 (minimum deposit 0, minimum credit $1, 4 quote decimals, deposit bounds, open exposure caps) and Phala Cloud's `max_unfinalized_credit` (default $1 000) | Finance | to confirm |
 | Phala Cloud PHA production pricing | Engineering | disabled: the on-chain Uniswap TWAP has no second Allowed independent source; the Kraken check is staging-only |
 
 ### Before mainnet
 
-- [ ] Deploy the factory on mainnet at the same deterministic address (HUMAN-ONLY).
-- [ ] Production deploy (`provision`) with an enabled stablecoin route. The
-      [PHA example](../examples/phala-cloud-pha.yaml) remains a staging/test configuration;
-      PHA quotes and spot credit are disabled in production because no second Allowed source
-      exists.
-- [ ] Restore drill against production backups, including the freeze and reconciliation.
+- [ ] Create the `phala-pay-production` R2 bucket, configure the production GitHub Environment,
+      and seal `SENTRY_DSN`, both RPC keys, and both WAL-G access keys.
+- [ ] Deploy and verify the factory on Ethereum and Base at the deterministic address
+      (HUMAN-ONLY), then run the compose-path preflight and `provision`.
+- [ ] Create the DNS CNAME and `_dstack-app-address` TXT records, run `upgrade`, verify the
+      attestation and ingress evidence, and perform a small USDC or USDT test payment.
+- [ ] Complete a restore drill against production backups, including the freeze and
+      reconciliation. The production configuration has live USDC and USDT routes only;
+      [the PHA example](../examples/phala-cloud-pha.yaml) remains a staging/test configuration
+      because no second Allowed source exists.
+- [ ] Onboard Phala Cloud's account, set its Ethereum and Base treasury Safes through the API,
+      and enable charges after Finance and Operations approve the pilot caps.
 
 ### Later
 

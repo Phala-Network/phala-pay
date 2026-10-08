@@ -1,0 +1,162 @@
+# Phala's production instance (deploy/phala.md): the service configuration of `topup`
+# (docs/configuration.md), attested as an inline config of the rendered compose. A change is a pull
+# request and a Deploy `upgrade`.
+environment: production
+public_origin: https://pay-api.phala.com
+admin_key:
+  id: admin/production-v1
+  public_key: zoojlIGtFOK8IsaTbkXIgtm9oBsfWzzqJh1X8IEpp3U=
+# Maintenance-only key for deploy pause/resume (deploy/README.md); its PEM is the production
+# Environment's TOPUP_MAINTENANCE_PRIVATE_KEY_PEM, its id TOPUP_MAINTENANCE_KEY_ID.
+maintenance_keys:
+  - id: maintenance/production-v1
+    public_key: 3Gnbo5Er8uURAOH1OON7mNZWpghmbJTeyelV7HsLjhE=
+# Independent Ankr read and Infura verify endpoints, with both sealed keys (deploy/RPC.md).
+# Fast discovery uses read; coverage and money decisions require read/verify agreement. The same
+# owner-managed credentials are shared with staging, so the combined pilot caps in chain-reads.md
+# apply across both environments.
+rpc:
+  - chain_id: 1
+    read:
+      id: ankr-mainnet
+      url: "https://rpc.ankr.com/eth/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-mainnet
+      url: "https://mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 8453
+    read:
+      id: ankr-base-mainnet
+      url: "https://rpc.ankr.com/base/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-base-mainnet
+      url: "https://base-mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+
+routes:
+  # Ethereum mainnet USDC. The route uses Circle's canonical 6-decimal token and Chainlink's
+  # same-chain USDC/USD feed; every route value is live because this is a production environment.
+  - route: phala-cloud-ethereum-usdc-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 1
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2
+      sanctions_oracle: "0x40C57923924B5c5c5455c48D93317139ADDaC8fb"
+
+    asset:
+      symbol: usdc
+      contract: "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+      decimals: 6
+
+    price:
+      mode: stablecoin
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 1 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 100 }
+      max_deposit_atomic: { default: "10000000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }
+
+  # Ethereum mainnet USDT. Tether's canonical token is a no-return ERC-20; the factory's
+  # SafeERC20 path supports it. See deploy/runbooks/usdt-issuer-controls.md for issuer controls.
+  - route: phala-cloud-ethereum-usdt-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 1
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2
+      sanctions_oracle: "0x40C57923924B5c5c5455c48D93317139ADDaC8fb"
+
+    asset:
+      symbol: usdt
+      contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+      decimals: 6
+
+    price:
+      mode: stablecoin
+      sources:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 100 }
+      max_deposit_atomic: { default: "10000000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }
+
+  # Base mainnet USDC. Base requires the Chainlink sequencer uptime grace period in addition to
+  # the same-chain USDC/USD feed.
+  - route: phala-cloud-base-usdc-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 8453
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 3
+      sanctions_oracle: "0x3A91A31cB3dC49b4db9Ce721F50a9D076c8D739B"
+
+    asset:
+      symbol: usdc
+      contract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      decimals: 6
+
+    price:
+      mode: stablecoin
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 8453 }
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, observation_chain_id: 8453 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 100 }
+      max_deposit_atomic: { default: "10000000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }
+
+  # Base mainnet USDT is the canonical bridged Tether token and has a reviewed Chainlink USDT/USD
+  # feed on Base (docs/design/price-feed-registry.json). Issuer controls are covered by the USDT
+  # runbook linked above.
+  - route: phala-cloud-base-usdt-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 8453
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 3
+      sanctions_oracle: "0x3A91A31cB3dC49b4db9Ce721F50a9D076c8D739B"
+
+    asset:
+      symbol: usdt
+      contract: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2"
+      decimals: 6
+
+    price:
+      mode: stablecoin
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
+      sources:
+        - { source: chainlink, feed: USDT_USD, chain_id: 8453 }
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 8453 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 100 }
+      max_deposit_atomic: { default: "10000000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }
