@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { errors, expect, test as base, type Locator, type Page, type Request } from "@playwright/test";
+import { expect, test as base, type Locator, type Page } from "@playwright/test";
 import {
   createPublicClient,
   createTestClient,
@@ -25,6 +25,8 @@ declare global {
   interface Window {
     /** The page's layout shifts, collected by a test. */
     layoutShifts: number[];
+    /** The page's timeline reads (`GET /api/quotes/{id}`): how many it has begun, and ended. */
+    timelineReads: { started: number; settled: number };
     anvilRequest(
       chainId: number,
       method: string,
@@ -41,28 +43,29 @@ function env(name: string): string {
   return value;
 }
 
-// Track in-flight reads from before navigation so the assertion can finish them before its window.
-const test = base.extend<{ timelineRequests: Set<Request> }>({
-  timelineRequests: async ({ page }, runTest) => {
-    const requests = new Set<Request>();
-    const timelineUrl = new URLPattern(`${env("API_URL")}/api/quotes/*`);
-    const record = (request: Request) => {
-      if (timelineUrl.test(request.url())) {
-        requests.add(request);
-      }
-    };
-    const finished = (request: Request) => requests.delete(request);
-    page.on("request", record);
-    page.on("requestfinished", finished);
-    page.on("requestfailed", finished);
-    try {
-      await runTest(requests);
-    } finally {
-      page.off("request", record);
-      page.off("requestfinished", finished);
-      page.off("requestfailed", finished);
-    }
-  },
+// Counts the page's timeline reads where they begin, in the page's own fetch, so that a count
+// taken there includes every read the page has started, however late its network events reach
+// the test (an intercepted request's can trail the page by a few milliseconds).
+const test = base.extend<{ timelineReads: undefined }>({
+  timelineReads: [async ({ page }, use) => {
+    await page.addInitScript(() => {
+      const reads = { started: 0, settled: 0 };
+      window.timelineReads = reads;
+      const fetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+        const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+        if (method !== "GET" || !/^\/api\/quotes\/[^/]+$/.test(url.pathname)) {
+          return fetch(input, init);
+        }
+        reads.started += 1;
+        return fetch(input, init).finally(() => {
+          reads.settled += 1;
+        });
+      };
+    });
+    await use(undefined);
+  }, { auto: true }],
 });
 
 /** Finish the visible page's initial timeline refresh before observing its polling interval. */
@@ -74,22 +77,17 @@ async function refetchTimeline(page: Page) {
   return current;
 }
 
-/** Finish existing reads, then observe whether a new request is issued during the window. */
-async function expectNoTimelineRequests(page: Page, requests: Set<Request>, windowMs: number) {
-  while (requests.size > 0) {
-    await Promise.all([...requests].map(async (request) => {
-      const response = await request.response();
-      if (response !== null) {
-        await response.finished();
-      }
-      requests.delete(request);
-    }));
-  }
-  const issued = page.waitForRequest("**/api/quotes/*", { timeout: windowMs });
-  await Promise.all([
-    page.clock.runFor(windowMs),
-    expect(issued).rejects.toThrow(errors.TimeoutError),
-  ]);
+/**
+ * The page has stopped polling its timeline. A first window lets every read already set in motion
+ * (by loading, the checkout's status reports, a refocus) begin and end; over a second window of the
+ * same length, the page begins no read. Polling would begin one in each.
+ */
+async function expectNoTimelineRequests(page: Page, windowMs: number) {
+  await page.clock.runFor(windowMs);
+  await page.waitForFunction(() => window.timelineReads.started === window.timelineReads.settled, undefined, { polling: 100 });
+  const before = await page.evaluate(() => window.timelineReads.started);
+  await page.clock.runFor(windowMs);
+  expect(await page.evaluate(() => window.timelineReads.started), "timeline reads begun in the second window").toBe(before);
 }
 
 /** The owner's balance of a token: Sepolia's test PHA unless named. */
@@ -542,7 +540,7 @@ test("query outages show retrying states, recover, and preserve the last account
   await expect(product).not.toContainText("Account is unavailable");
 });
 
-test("a missing timeline shows a terminal message and stops polling", async ({ page, timelineRequests }) => {
+test("a missing timeline shows a terminal message and stops polling", async ({ page }) => {
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
     await route.fulfill({
@@ -560,10 +558,10 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
   await expect(scenes.getByTestId("stream-status")).toHaveText("Unavailable");
   await expect(scenes.getByRole("list", { name: /^Loading/ })).toHaveCount(0);
   expect((await refetchTimeline(page)).status()).toBe(404);
-  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
 });
 
-test("a refused timeline keeps its cached data and shows paused updates", async ({ page, timelineRequests }) => {
+test("a refused timeline keeps its cached data and shows paused updates", async ({ page }) => {
   let missing = false;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
@@ -594,11 +592,11 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
   await refused.finished();
   await expect(scenes.getByText("Updates paused.", { exact: true })).toBeVisible();
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
-  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
 });
 
 for (const sent of [false, true]) {
-  test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page, timelineRequests }) => {
+  test(`a quote past its deadline polls ${sent ? "in-flight transfers" : "slowly for late payments"}`, async ({ page }) => {
     await page.clock.install();
     await page.route("**/api/quotes/*", async (route) => {
       const timeline: Timeline = {
@@ -629,7 +627,7 @@ for (const sent of [false, true]) {
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     expect((await refetchTimeline(page)).status()).toBe(200);
     if (!sent) {
-      await expectNoTimelineRequests(page, timelineRequests, TIMELINE_INTERVAL_MS);
+      await expectNoTimelineRequests(page, TIMELINE_INTERVAL_MS);
     }
     const response = page.waitForResponse("**/api/quotes/*");
     await page.clock.runFor(sent ? TIMELINE_ACTIVE_INTERVAL_MS : EXPIRED_QUOTE_INTERVAL_MS - TIMELINE_INTERVAL_MS);
@@ -639,7 +637,7 @@ for (const sent of [false, true]) {
   });
 }
 
-test("a swept payment keeps polling until its webhook arrives", async ({ page, timelineRequests }) => {
+test("a swept payment keeps polling until its webhook arrives", async ({ page }) => {
   let delivered = false;
   await page.clock.install();
   await page.route("**/api/quotes/*", async (route) => {
@@ -677,28 +675,36 @@ test("a swept payment keeps polling until its webhook arrives", async ({ page, t
   await update.finished();
   await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "complete");
   await expect(scenes.getByTestId("stream-status")).toHaveText("Done");
-  await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+  await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
 });
 
+/** A deposit the service reports `status`, and the webhook events the product has received. */
+function depositTimeline(status: "reversed" | "rejected", events: Timeline["events"]): Timeline {
+  const reversed = status === "reversed";
+  return {
+    kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events, api: [],
+    deposit: {
+      id: `dep_${"1".repeat(32)}`, status, final: false, swept: false,
+      amount: reversed ? 2000 : null, amount_atomic: (80n * 10n ** 18n).toString(),
+      chain_id: sepolia.id, asset: "pha", exchange_rate: reversed ? "0.25" : null,
+      price_source: reversed ? "quote" : null,
+      amount_refunded_atomic: "0", amount_refunded: 0, amount_reversed: reversed ? 2000 : 0,
+      from_address: env("PAYER_ADDRESS"), asset_contract: env("TOKEN_ADDRESS"),
+      tx_hash: `0x${"1".repeat(64)}`, metadata: {},
+    },
+    steps: [{ key: reversed ? "reversed" : "credited", state: "failed", at: 1, details: [] }],
+  };
+}
+
+const REVERSED_EVENT = { id: `evt_${"1".repeat(32)}`, type: "deposit.reversed", received_at: 1, verified: true, data: {} };
+
 for (const status of ["reversed", "rejected"] as const) {
-  test(`a ${status} deposit ${status === "reversed" ? "stops" : "continues"} timeline polling`, async ({ page, timelineRequests }) => {
+  test(`a ${status} deposit ${status === "reversed" ? "stops" : "continues"} timeline polling`, async ({ page }) => {
     await page.clock.install();
     await page.route("**/api/quotes/*", async (route) => {
-      const timeline: Timeline = {
-        kind: "quote", quote: null, sent: null, refunds: [], ledger: null, events: [], api: [],
-        deposit: {
-          id: `dep_${"1".repeat(32)}`, status, final: false, swept: false,
-          amount: status === "reversed" ? 2000 : null, amount_atomic: (80n * 10n ** 18n).toString(),
-          chain_id: sepolia.id, asset: "pha", exchange_rate: status === "reversed" ? "0.25" : null,
-          price_source: status === "reversed" ? "quote" : null,
-          amount_refunded_atomic: "0", amount_refunded: 0, amount_reversed: status === "reversed" ? 2000 : 0,
-          from_address: env("PAYER_ADDRESS"), asset_contract: env("TOKEN_ADDRESS"),
-          tx_hash: `0x${"1".repeat(64)}`, metadata: {},
-        },
-        steps: [{ key: status === "reversed" ? "reversed" : "credited", state: "failed", at: 1, details: [] }],
-      };
       await route.fulfill({
-        json: timeline,
+        // The reversal's webhook has reached the product: nothing is left to follow.
+        json: depositTimeline(status, status === "reversed" ? [REVERSED_EVENT] : []),
         headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
       });
     });
@@ -709,7 +715,7 @@ for (const status of ["reversed", "rejected"] as const) {
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     expect((await refetchTimeline(page)).status()).toBe(200);
     if (status === "reversed") {
-      await expectNoTimelineRequests(page, timelineRequests, 3 * TIMELINE_INTERVAL_MS);
+      await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
     } else {
       const response = page.waitForResponse("**/api/quotes/*");
       await page.clock.runFor(TIMELINE_INTERVAL_MS);
@@ -717,6 +723,36 @@ for (const status of ["reversed", "rejected"] as const) {
     }
   });
 }
+
+test("a reversed deposit keeps polling while the reversal's webhook has not arrived", async ({ page }) => {
+  let delivered = false;
+  await page.clock.install();
+  await page.route("**/api/quotes/*", async (route) => {
+    await route.fulfill({
+      json: depositTimeline("reversed", delivered ? [REVERSED_EVENT] : []),
+      headers: { "access-control-allow-origin": new URL(env("SITE_URL")).origin, "access-control-allow-credentials": "true" },
+    });
+  });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Customer view" });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
+  await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
+  expect((await refetchTimeline(page)).status()).toBe(200);
+  // The service says reversed; the product has not heard yet: the timeline keeps following.
+  const waiting = page.waitForResponse("**/api/quotes/*");
+  await page.clock.runFor(TIMELINE_INTERVAL_MS);
+  const stillWaiting = await waiting;
+  expect(stillWaiting.status()).toBe(200);
+  await stillWaiting.finished();
+  delivered = true;
+  const response = page.waitForResponse("**/api/quotes/*");
+  await page.clock.runFor(TIMELINE_INTERVAL_MS);
+  const update = await response;
+  expect(update.status()).toBe(200);
+  await update.finished();
+  await expectNoTimelineRequests(page, 3 * TIMELINE_INTERVAL_MS);
+});
 
 test("a quote: locked price, metadata, the merchant's sweep, and refunds that succeed, fail, or are canceled", async ({
   page,
@@ -1032,7 +1068,11 @@ test("a deposit address: one verified address, any amount credited at spot, then
   await expect(webhookDetails).toContainText('"workspace": "demo-');
   await expect(webhookDetails).toContainText("+$6.25");
   await expect(step(timeline, "reversed")).toHaveAttribute("data-state", "failed", { timeout: 30_000 });
-  await expect(product.getByTestId("balance")).toHaveText("$0.00", { timeout: 10_000 });
+  // The service reverses first; the balance follows once the reversal's webhook reaches the
+  // product's ledger, which the step shows by the event's name (its hint names it too, in a sentence).
+  const reversedDetails = await openStep(timeline, "reversed");
+  await expect(reversedDetails.getByText("deposit.reversed", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
   await openTab(scenes, "Refunds");
   await expect(scenes.getByTestId("nets-to")).toHaveText("$0.00");
   await expect(scenes.getByTestId("refund-unavailable")).toContainText("reversed");

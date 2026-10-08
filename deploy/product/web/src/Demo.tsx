@@ -49,6 +49,8 @@ function DemoContent({ theme }: { theme: Theme }) {
       deposit?.amount_refunded_atomic,
       [...timeline.data.refunds].sort((left, right) => left.id.localeCompare(right.id))
         .map((refund) => [refund.id, refund.status]),
+      // Each webhook the product receives may move its ledger after the service's state did.
+      timeline.data.events.map((event) => event.id),
     ]);
     const key = `${selected.kind}:${selected.id}`;
     const previous = observedTimeline.current;
