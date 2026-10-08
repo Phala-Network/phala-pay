@@ -3,7 +3,6 @@ import { useId, useState } from "react";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Hash } from "@/components/ui/hash";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type {
   ApiExchange,
@@ -14,7 +13,7 @@ import type {
   Timeline,
   WebhookEvent,
 } from "./api.js";
-import { DataItem, DataList, Empty, ExplorerLink, LearnMore, Subsection, TABLE, useShowAll } from "./common.js";
+import { DataItem, DataList, Empty, ExplorerLink, LearnMore, Subsection, useShowAll } from "./common.js";
 import { assetOf, networkOf } from "./chains.js";
 import { approx, clock, dollars, duration, rate, signedDollars, time, tokens } from "./format.js";
 import { QueryState, type QueryView } from "./queryView.js";
@@ -371,7 +370,10 @@ export function LedgerPanel({ ledger }: { ledger: LedgerView }) {
   );
 }
 
-/** The webhook events the product's server received; their ids where there is room. */
+/**
+ * The webhook events the product's server received, newest last: a row each, like the requests
+ * below it, with its type, when it arrived, and whether its signature verified.
+ */
 export function EventsLog({ events }: { events: WebhookEvent[] }) {
   // The latest events (the log runs oldest first); the rest on request.
   const recent = useShowAll(events, 2, false);
@@ -380,26 +382,21 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
       {events.length === 0 ? (
         <Empty>None yet.</Empty>
       ) : (
-        <Table className={TABLE}>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead scope="col">Type</TableHead>
-              <TableHead scope="col">Received</TableHead>
-              <TableHead scope="col">Signature</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {recent.shown.map((event) => (
-              <TableRow key={event.id} data-testid="webhook-event">
-                <TableCell className="font-mono text-mono">{event.type}</TableCell>
-                <TableCell className="text-muted-foreground tabular-nums" title={time(event.received_at)}>
-                  {clock(event.received_at)}
-                </TableCell>
-                <TableCell>{event.verified ? "Verified" : "—"}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <ul className="flex flex-col divide-y border-y text-sm">
+          {recent.shown.map((event) => (
+            <li key={event.id} data-testid="webhook-event" className="flex min-h-11 items-center gap-3 px-2 py-2">
+              <code className="min-w-0 flex-1 font-mono text-mono wrap-anywhere">{event.type}</code>
+              <span className="text-muted-foreground tabular-nums" title={time(event.received_at)}>
+                {clock(event.received_at)}
+              </span>
+              {event.verified ? (
+                <StatusBadge tone="success">Verified</StatusBadge>
+              ) : (
+                <StatusBadge tone="neutral">Not verified</StatusBadge>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
       {recent.toggle}
     </Subsection>
@@ -408,8 +405,8 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
 
 /** The product's API requests: sent from its server with its restricted key, never the browser. */
 export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; title: string; id: string }) {
-  // The latest request (oldest first); the rest on request.
-  const recent = useShowAll(exchanges, 1, false);
+  // The latest requests (oldest first); the rest on request.
+  const recent = useShowAll(exchanges, 2, false);
   return (
     <Subsection title={`${title} (${exchanges.length})`} id={id}>
       <p className="text-sm text-pretty text-muted-foreground">

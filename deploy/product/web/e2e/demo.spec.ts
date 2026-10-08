@@ -18,6 +18,7 @@ import {
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
 import type { Timeline } from "../src/api.js";
+import { tokens } from "../src/format.js";
 import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
 
 declare global {
@@ -1405,7 +1406,8 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
     // A phone reads Phala Pay beside one provider, chosen above the table (natively, without
-    // script): two columns, ten dimensions. From md, the full table, all six vendors at 1280px.
+    // script): two columns, ten dimensions, up to lg; a tablet too. From lg, the full table, all six
+    // vendors in the page's width: nothing scrolls inside it, and no cell overflows.
     const full = staticPage.getByRole("table", { name: /five crypto payment services/ });
     const versus = staticPage.getByRole("table", { name: /provider chosen above/ });
     await expect(full).toBeHidden();
@@ -1414,11 +1416,20 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     await expect(versus.getByRole("columnheader", { name: "BTCPay Server" })).toBeVisible();
     await expect(versus.getByRole("columnheader", { name: "Stripe stablecoin payments" })).toBeHidden();
     await expect(versus.getByRole("rowgroup").filter({ has: staticPage.getByRole("cell") })).toHaveCount(10);
-    await staticPage.setViewportSize({ width: 1280, height: 900 });
-    await expect(full).toBeVisible();
-    await expect(versus).toBeHidden();
-    const scroller = staticPage.getByRole("region", { name: "Comparison table" });
-    expect(await scroller.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await staticPage.setViewportSize({ width: 768, height: 900 });
+    await expect(full).toBeHidden();
+    await expect(versus).toBeVisible();
+    for (const width of [1024, 1280]) {
+      await staticPage.setViewportSize({ width, height: 900 });
+      await expect(full).toBeVisible();
+      await expect(versus).toBeHidden();
+      const overflow = await full.evaluate((table) => {
+        const parent = table.parentElement?.getBoundingClientRect().right ?? 0;
+        const cells = [...table.querySelectorAll("th, td")].filter((cell) => cell.scrollWidth > cell.clientWidth + 1);
+        return { beyond: Math.max(0, Math.round(table.getBoundingClientRect().right - parent)), cells: cells.length };
+      });
+      expect(overflow, `the full table at ${width}px`).toEqual({ beyond: 0, cells: 0 });
+    }
     await staticPage.setViewportSize({ width: 390, height: 844 });
     await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
@@ -1689,12 +1700,22 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
   // After the merchant's actions: the payment swept, and a refund requested (its row closed).
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
   await expectComplete(timeline, ["final"]);
-  // The merchant is every visitor's, so other payments may wait here too.
+  // The merchant is every visitor's: other payments may wait in its forwarders too, and the sweeps
+  // view is the product's cached one, which can predate this payment. Swept once the view shows the
+  // service's final unswept balance, which counts this payment now that it is final: that view's
+  // flush names this forwarder, with any others.
   const sweepsPanel = await openTab(scenes, "Sweeps");
   const sweeps = sweepsPanel.getByRole("region", { name: "PHA on Sepolia testnet" });
-  // The flush takes only final balances: it is sent once this payment is final here too, when no
-  // part of the unswept balance is still waiting ("… sweepable of … unswept").
-  await expect(sweeps.getByTestId("unswept")).toContainText(/PHA in \d+ forwarders? sweepable$/, { timeout: 60_000 });
+  // The stand-in service takes any key of a restricted key's form, as the product sends.
+  const response = await fetch(`${env("SERVICE_URL")}/v1/balance`, { headers: { authorization: `Bearer ppay_rk_test_${"A".repeat(43)}000000` } });
+  expect(response.ok, "the service's balance").toBe(true);
+  const balance = (await response.json()) as {
+    unswept: { chain_id: number; token: string; final_amount_atomic: string }[];
+  };
+  const pha = balance.unswept.find(({ chain_id, token }) => chain_id === sepolia.id && token.toLowerCase() === env("TOKEN_ADDRESS").toLowerCase());
+  expect(BigInt(pha?.final_amount_atomic ?? "0")).toBeGreaterThanOrEqual(parseEther("80"));
+  const sweepable = tokens(pha?.final_amount_atomic ?? "0", "PHA").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await expect(sweeps.getByTestId("unswept")).toContainText(new RegExp(`^${sweepable} in `), { timeout: 30_000 });
   await sweeps.getByRole("button", { name: "Sweep from wallet" }).click();
   await expectComplete(timeline, ["swept"]);
   await expect(sweepsPanel.getByRole("button", { name: /^Show finalized sweeps/ })).toBeVisible({ timeout: 30_000 });

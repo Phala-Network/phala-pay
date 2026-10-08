@@ -8,48 +8,41 @@ const vendors = [phalaPay, ...competitors];
 const SECTION = "scroll-mt-20 border-t pt-12 lg:pt-16";
 
 /**
- * From md, a table whose first column stays put while the rest scrolls; it needs 64rem, so from
- * 1024px of container all six vendors show, and below that the right edge fades and a line says it
- * scrolls. Phala Pay's column is marked by a rule above it. Below md, one provider at a time.
+ * From lg, the whole table: six vendors, ten dimensions, no scrolling. Phala Pay's column is marked
+ * by a rule above it and a tint. Below lg, one provider at a time beside Phala Pay (Versus).
  */
 function ComparisonTable() {
   return (
-    <div className="@container mt-8 hidden md:block">
-      <p aria-hidden="true" className="mb-3 hidden text-sm text-muted-foreground @max-5xl:block">Scroll for all six →</p>
-      <div role="region" aria-label="Comparison table" tabIndex={0}
-        className="overflow-x-auto rounded-sm @max-5xl:pr-16 @max-5xl:mask-r-from-[calc(100%-4rem)]">
-        <table className="w-full min-w-5xl table-fixed border-separate border-spacing-0 text-left text-sm">
-          <caption className="sr-only">Phala Pay and five crypto payment services, compared across ten dimensions.</caption>
-          <thead>
-            <tr>
-              <th scope="col" className="sticky left-0 z-10 w-40 border-r bg-background pr-4 pb-4 align-bottom text-xs font-medium text-muted-foreground">
-                Dimension
-              </th>
-              {vendors.map(({ id, name }) => (
-                <th key={id} scope="col"
-                  className={cn("border-t-2 px-4 pt-4 pb-4 align-bottom text-table font-semibold", id === phalaPay.id ? PHALA_COLUMN : "border-transparent text-body-foreground")}>
-                  {name}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {dimensions.map(({ key, label }) => (
-              <tr key={key}>
-                <th scope="row" className="sticky left-0 z-10 border-t border-r bg-background py-4 pr-4 align-top font-medium">
-                  {label}
-                </th>
-                {vendors.map((vendor) => (
-                  <td key={vendor.id} className={cn("border-t px-4 py-4 align-top leading-6 text-pretty", vendor.id === phalaPay.id ? "bg-muted/50 text-foreground" : "text-body-foreground")}>
-                    <ComparisonCell cell={vendor[key]} linkSource />
-                  </td>
-                ))}
-              </tr>
+    <table className="mt-8 hidden w-full table-fixed border-collapse text-left text-sm lg:table">
+      <caption className="sr-only">Phala Pay and five crypto payment services, compared across ten dimensions.</caption>
+      <thead>
+        <tr>
+          <th scope="col" className="w-32 pr-3 pb-4 align-bottom text-xs font-medium text-muted-foreground xl:w-40 xl:pr-4">
+            Dimension
+          </th>
+          {vendors.map(({ id, name }) => (
+            <th key={id} scope="col"
+              className={cn("border-t-2 px-3 pt-4 pb-4 align-bottom text-table font-semibold xl:px-4", id === phalaPay.id ? PHALA_COLUMN : "border-transparent text-body-foreground")}>
+              {name}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {dimensions.map(({ key, label }) => (
+          <tr key={key} className="border-t">
+            <th scope="row" className="py-4 pr-3 align-top font-medium xl:pr-4">
+              {label}
+            </th>
+            {vendors.map((vendor) => (
+              <td key={vendor.id} className={cn("px-3 py-4 align-top leading-6 text-pretty wrap-break-word xl:px-4", vendor.id === phalaPay.id ? "bg-muted/50 text-foreground" : "text-body-foreground")}>
+                <ComparisonCell cell={vendor[key]} linkSource />
+              </td>
             ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -94,7 +87,7 @@ export function ComparePage() {
       <section id="glance" aria-labelledby="glance-title" className="mt-12 scroll-mt-20 lg:mt-16">
         <h2 id="glance-title" className={H2}>At a glance</h2>
         <ComparisonTable />
-        <Versus phala={phalaPay} others={competitors} dimensions={dimensions} linkSource name="compare-versus" className="mt-8 md:hidden" />
+        <Versus phala={phalaPay} others={competitors} dimensions={dimensions} linkSource name="compare-versus" className="mt-8 lg:hidden" />
         <div className="mt-6 grid gap-1 text-sm text-muted-foreground">
           <p id="partial-note">(partial): Partially stated by the vendor; see source.</p>
           <p id="not-stated-note">—: Not stated publicly as of {COMPARE_ACCESSED}.</p>

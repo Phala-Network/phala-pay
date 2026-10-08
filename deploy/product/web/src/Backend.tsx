@@ -1,4 +1,4 @@
-import { ExternalLink, Eye, ReceiptText, Undo2, Webhook } from "lucide-react";
+import { ExternalLink, ReceiptText, Undo2, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -174,8 +174,7 @@ function Tab({ value, count, children }: { value: string; count?: number | undef
 function ViewButton({ selected, id, onClick }: { selected: boolean; id: string; onClick: () => void }) {
   if (selected) {
     return (
-      <span className={cn("inline-flex h-8 items-center gap-1.5 rounded-md bg-muted px-3 text-sm font-medium", TOUCH)}>
-        <Eye className="size-4 text-muted-foreground" aria-hidden="true" />
+      <span className={cn("inline-flex h-8 items-center rounded-md bg-muted px-3 text-sm font-medium", TOUCH)}>
         Viewing
       </span>
     );
@@ -232,8 +231,9 @@ function CreditsTab({
       {payments.length > 0 && (
         <section aria-label="Credits" className="flex flex-col gap-2">
           {wide ? (
-            // The first column clears the shown row's indicator.
-            <Table className={cn(TABLE, "[&_tr>*:first-child]:pl-3")}>
+            // The first column clears the shown row's indicator; the last keeps the cells' padding,
+            // off the row's tinted edge.
+            <Table className={cn(TABLE, "[&_tr>*:first-child]:pl-3 [&_tr>*:last-child]:pr-2")}>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   {/* The payment takes the row's free width; the other columns, and the action at

@@ -144,8 +144,9 @@ export function useShowAll<T>(items: T[], limit: number, newestFirst = true, nam
   const [all, setAll] = useState(false);
   const hidden = items.length - limit;
   const shown = all || hidden <= 0 ? items : newestFirst ? items.slice(0, limit) : items.slice(-limit);
+  // The label lines up with the list above it; the button's hover fill reaches into the gutter.
   const toggle = hidden <= 0 ? null : (
-    <Button type="button" variant="ghost" size="sm" className={cn("self-start", TOUCH)} aria-expanded={all} onClick={() => setAll((open) => !open)}>
+    <Button type="button" variant="ghost" size="sm" className={cn("-ml-3 self-start", TOUCH)} aria-expanded={all} onClick={() => setAll((open) => !open)}>
       {all ? (limit === 0 ? `Hide ${name}` : "Show fewer") : `Show ${name} (${items.length})`}
     </Button>
   );

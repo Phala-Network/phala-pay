@@ -105,12 +105,15 @@ export function TestTokens({ network, need }: { network: Network; need: Need | n
         {mintable.map((each) => (
           <MintButton key={each.asset} token={each} mint={mint} label={label} />
         ))}
-        {fromFaucet !== undefined && fromFaucet.faucet !== null && (
-          <FaucetLink href={fromFaucet.faucet} title={`On the faucet, pick ${chain} as the network.`}>
-            Circle {fromFaucet.symbol} faucet
-          </FaucetLink>
-        )}
-        {network.faucet !== null && <FaucetLink href={network.faucet}>{chain} ETH faucets</FaucetLink>}
+        {/* The faucets wrap together, onto a line of their own where the row is narrow. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 lg:gap-x-3">
+          {fromFaucet !== undefined && fromFaucet.faucet !== null && (
+            <FaucetLink href={fromFaucet.faucet} title={`On the faucet, pick ${chain} as the network.`}>
+              Circle {fromFaucet.symbol} faucet
+            </FaucetLink>
+          )}
+          {network.faucet !== null && <FaucetLink href={network.faucet}>{chain} ETH faucets</FaucetLink>}
+        </div>
       </div>
       <p aria-live="polite" className="flex items-start gap-2 text-sm text-muted-foreground empty:hidden">
         {mint.isSuccess && (

@@ -11,15 +11,17 @@ export function ComparisonCell({ cell, linkSource }: { cell: Cell; linkSource: b
   }
   const sourceNumber = sources.findIndex(({ url }) => url === cell.source) + 1;
   const text = cell.text.trimEnd();
-  const lastWord = text.slice(text.lastIndexOf(" ") + 1);
-  // The text's last word, its "(partial)" note, and its source number stay together on one line:
-  // a marker never starts a line of its own.
+  const partial = cell.status === "partially";
+  // The source number never starts a line of its own: it stays with the "(partial)" note, or
+  // without one, with the text's last word. The note itself may wrap to the next line.
+  const lastWord = partial ? "" : text.slice(text.lastIndexOf(" ") + 1);
   return (
     <>
       {unbroken(text.slice(0, text.length - lastWord.length))}
+      {partial && " "}
       <span className="whitespace-nowrap">
         {unbroken(lastWord)}
-        {cell.status === "partially" && <span className="text-body-foreground">{"\u00a0"}(partial)</span>}
+        {partial && <span className="text-body-foreground">(partial)</span>}
         {linkSource && sourceNumber > 0 && (
           <sup className="ml-0.5">
             {/* Padding widens the target to about 24px without raising the line: an inline box's
