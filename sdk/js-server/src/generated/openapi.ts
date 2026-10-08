@@ -298,6 +298,23 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/v1/deposit_addresses/{id}/transactions": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /** Submit a deposit-address transaction hint on one of its issued networks. */
+        readonly post: operations["submit_deposit_address_transaction"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/v1/deposits": {
         readonly parameters: {
             readonly query?: never;
@@ -509,6 +526,23 @@ export interface paths {
          *     address are credited at spot.
          */
         readonly post: operations["cancel_quote"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/v1/quotes/{id}/transactions": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /** Submit a quote transaction hint. The stored quote selects the chain and recipient. */
+        readonly post: operations["submit_quote_transaction"];
         readonly delete?: never;
         readonly options?: never;
         readonly head?: never;
@@ -3402,6 +3436,32 @@ export interface components {
             readonly expires_in?: number;
         };
         /**
+         * @description The deposit address must already have a network for this chain.
+         * @example {
+         *       "chain_id": 84532,
+         *       "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+         *     }
+         */
+        readonly SubmitDepositAddressTransactionRequest: {
+            /**
+             * Format: int64
+             * @description One of this object's issued network identifiers.
+             */
+            readonly chain_id: number;
+            /** @description Transaction hash, exactly 32 hexadecimal bytes prefixed by `0x`. */
+            readonly transaction_hash: string;
+        };
+        /**
+         * @description A quote's chain is derived from its stored terms.
+         * @example {
+         *       "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+         *     }
+         */
+        readonly SubmitQuoteTransactionRequest: {
+            /** @description Transaction hash, exactly 32 hexadecimal bytes prefixed by `0x`. */
+            readonly transaction_hash: string;
+        };
+        /**
          * @description A sweep: one finalized `Flushed` event of the factory, which moved a forwarder's whole balance
          *     of a token to its treasury (Stripe's Payout). Anyone can send the `flush`; the merchant usually
          *     does, with the SDK's `flush_transaction` or `safe_batch`.
@@ -3490,6 +3550,32 @@ export interface components {
             /** @description The list's path, `/v1/sweeps`. */
             readonly url: string;
         };
+        /**
+         * @description A quiet acknowledgement, including for ignored hints.
+         * @example {
+         *       "object": "transaction_submission",
+         *       "status": "received",
+         *       "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+         *     }
+         */
+        readonly TransactionSubmission: {
+            /** @description Object discriminator. */
+            readonly object: components["schemas"]["TransactionSubmissionObject"];
+            /** @description Acknowledgement only; poll the original object for payment status. */
+            readonly status: components["schemas"]["TransactionSubmissionStatus"];
+            /** @description Hash echoed from the submission. */
+            readonly transaction_hash: string;
+        };
+        /**
+         * @description Constant submission object discriminator.
+         * @enum {string}
+         */
+        readonly TransactionSubmissionObject: "transaction_submission";
+        /**
+         * @description Received acknowledges submission only, never detection or verification.
+         * @enum {string}
+         */
+        readonly TransactionSubmissionStatus: "received";
         /**
          * @description An account's treasury of one chain and mode (design D10): the only address the forwarders
          *     issued over it can pay.
@@ -5731,6 +5817,40 @@ export interface operations {
             };
         };
     };
+    readonly submit_deposit_address_transaction: {
+        readonly parameters: {
+            readonly query?: {
+                /** @description Object's browser client secret; omit with a merchant key */
+                readonly client_secret?: string;
+            };
+            readonly header?: never;
+            readonly path: {
+                /** @description Deposit-address identifier */
+                readonly id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["SubmitDepositAddressTransactionRequest"];
+            };
+        };
+        readonly responses: {
+            /** @description Received, including ignored hints. No payment result is disclosed. */
+            readonly 202: {
+                headers: {
+                    /** @description Tenant data and credentials must never be stored, including errors */
+                    readonly "Cache-Control": "no-store";
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["TransactionSubmission"];
+                };
+            };
+        };
+    };
     readonly list_deposits: {
         readonly parameters: {
             readonly query?: {
@@ -7300,6 +7420,40 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    readonly submit_quote_transaction: {
+        readonly parameters: {
+            readonly query?: {
+                /** @description Object's browser client secret; omit with a merchant key */
+                readonly client_secret?: string;
+            };
+            readonly header?: never;
+            readonly path: {
+                /** @description Quote identifier */
+                readonly id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["SubmitQuoteTransactionRequest"];
+            };
+        };
+        readonly responses: {
+            /** @description Received, including ignored hints. No payment result is disclosed. */
+            readonly 202: {
+                headers: {
+                    /** @description Tenant data and credentials must never be stored, including errors */
+                    readonly "Cache-Control": "no-store";
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["TransactionSubmission"];
                 };
             };
         };

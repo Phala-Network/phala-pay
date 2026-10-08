@@ -106,6 +106,51 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     #[tokio::test]
+    async fn whole_hint_call_limits_include_transport_retries_and_stop_both_sides() {
+        for (read_limit, verify_limit) in [(12, 0), (0, 8)] {
+            let count = Arc::new(AtomicUsize::new(0));
+            let received = count.clone();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                axum::serve(listener, Router::new().route("/", post(move |Json(request): Json<Value>| {
+                    let received = received.clone();
+                    async move {
+                        // Every first attempt overloads, so logical calls and billed calls differ.
+                        let attempt = received.fetch_add(1, Ordering::SeqCst);
+                        if attempt.is_multiple_of(2) {
+                            (StatusCode::TOO_MANY_REQUESTS, Json(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32005,"message":"busy"}})))
+                        } else {
+                            (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":request["id"],"result":"0x1"})))
+                        }
+                    }
+                }))).await.unwrap();
+            });
+            let read = EvmClient::new(&url).unwrap().with_provider("hint-read");
+            let verify = EvmClient::new(&url).unwrap().with_provider("hint-verify");
+            read.hint_call_limits(&verify, async {
+                let side = if read_limit > 0 { &read } else { &verify };
+                let limit = read_limit + verify_limit;
+                for _ in 0..limit / 2 {
+                    assert_eq!(side.latest_head().await.unwrap(), 1);
+                }
+                assert!(read.latest_head().await.is_err());
+                assert!(verify.latest_head().await.is_err());
+                assert_eq!(count.load(Ordering::SeqCst), limit);
+                assert!(
+                    side.ready(),
+                    "task exhaustion must not change endpoint readiness"
+                );
+            })
+            .await;
+            // Scope termination restores the other callers' normal transport behavior.
+            assert_eq!(read.latest_head().await.unwrap(), 1);
+            assert_eq!(count.load(Ordering::SeqCst), read_limit + verify_limit + 2);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn overload_retries_and_infura_quota_does_not_send_again() {
         for status in [429_u16, 503, 402] {
             let count = Arc::new(AtomicUsize::new(0));

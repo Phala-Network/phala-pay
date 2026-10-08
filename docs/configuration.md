@@ -31,6 +31,12 @@ limits are built in, with no new configuration setting.
 Carrying real client IPs via PROXY protocol is future work: it requires the dstack gateway's
 `port_policy` option `pp` and a corresponding ingress change.
 
+Transaction-hash hints have no per-IP limit. Their controls are credential-gated per-object
+limits of 3/minute and 10/day, a hard cap of 150 tasks per environment per UTC day, and at most
+four tasks in flight. Merchant-key hints share the database authentication gate above.
+dstack-ingress uses HAProxy in TCP mode and forwards to `topup:8080` without PROXY protocol;
+client-supplied forwarding headers are not trusted.
+
 ## Commands
 
 `topup --help` lists them; each takes `--help`.

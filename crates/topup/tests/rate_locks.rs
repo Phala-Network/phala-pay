@@ -173,6 +173,8 @@ async fn a_failure_before_the_response_is_saved_creates_no_quote_and_is_replayed
             rate_lock_quotes: Arc::new(FixedQuote),
             client_reads: Arc::default(),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
@@ -275,6 +277,8 @@ impl SlowQuote {
             rate_lock_quotes: quotes.clone(),
             client_reads: Arc::default(),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
@@ -605,6 +609,8 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
             rate_lock_quotes: Arc::new(FixedQuote),
             client_reads: Arc::default(),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
@@ -1107,6 +1113,8 @@ async fn client_secret_reads_are_limited_per_object_and_forgeries_cost_nothing()
             // machine answers the flood.
             client_reads: Arc::new(ManualClock::new().client_read_limiter()),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
@@ -1286,6 +1294,8 @@ async fn quoted_amount_rounds_up_to_the_routes_amount_decimals() -> Result<()> {
             rate_lock_quotes: Arc::new(CentsPriceQuote),
             client_reads: Arc::default(),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
@@ -1751,6 +1761,8 @@ async fn the_client_view_reports_the_credit_of_a_spot_valued_underpayment() -> R
             rate_lock_quotes: Arc::new(FixedQuote),
             client_reads: Arc::default(),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         })
@@ -2672,7 +2684,7 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(ADMIN_KID.to_owned(), &public_key_base64(&admin_key)).map_err(anyhow::Error::msg)?,
             public_origin: PublicOrigin::parse(TEST_ORIGIN)?, attestor: Arc::new(DstackAttestor::new()),
-            rate_lock_quotes: quotes, client_reads: Arc::default(), rate_limits: Arc::default(),
+            rate_lock_quotes: quotes, client_reads: Arc::default(), rate_limits: Arc::default(), hint_limits: Arc::default(), transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;
@@ -2759,7 +2771,7 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
                 admin_key:VerificationKey::from_base64(ADMIN_KID.into(), &public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
                 maintenance_keys:Vec::new(), public_origin:PublicOrigin::parse(TEST_ORIGIN)?,
                 attestor:Arc::new(DstackAttestor::new()), rate_lock_quotes:Arc::new(locks::ConfiguredQuoteProvider::from_runtimes(runtimes)),
-                client_reads:Arc::default(),rate_limits:Arc::default(),
+                client_reads:Arc::default(),rate_limits:Arc::default(), hint_limits: Arc::default(), transaction_hints: Arc::default(),
                 screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
                 contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
             }).0;
@@ -2796,6 +2808,7 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
             admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
             public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
             rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
+            hint_limits:Arc::default(),transaction_hints:Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;
@@ -2832,6 +2845,7 @@ async fn routed_chain_not_ready_returns_chain_unavailable_for_both_issuance_path
             admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
             public_origin:PublicOrigin::parse(TEST_ORIGIN)?,attestor:Arc::new(DstackAttestor::new()),
             rate_lock_quotes:Arc::new(FixedQuote),client_reads:Arc::default(),rate_limits:Arc::default(),
+            hint_limits:Arc::default(),transaction_hints:Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;

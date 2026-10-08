@@ -211,6 +211,9 @@ pub enum ChainError {
         /// Lower finalized head returned by the provider.
         current: u64,
     },
+    /// A local hint task has spent its call budget; endpoint health is unchanged.
+    #[error("hint task RPC call limit exhausted")]
+    HintCallLimit,
     /// The finalized-head guard lock was poisoned.
     #[error("provider health state unavailable")]
     HealthStateUnavailable,
@@ -504,6 +507,11 @@ fn counted_providers(
 }
 
 impl EvmClient {
+    /// Enforce the hint's 12 read / 8 verify calls over its entire future, retries included.
+    pub async fn hint_call_limits<T>(&self, verify: &Self, work: impl Future<Output = T>) -> T {
+        metrics::task_call_limits(self.labels.clone(), verify.labels.clone(), work).await
+    }
+
     /// Creates a client with the production request timeout.
     pub fn new(rpc_url: &str) -> Result<Self, ChainError> {
         Self::with_timeout(rpc_url, REQUEST_TIMEOUT)
@@ -741,6 +749,9 @@ impl EvmClient {
                 self.state.succeeded();
                 Ok(value)
             }
+            Ok(Err(TransportError::Transport(
+                alloy::transports::TransportErrorKind::NonRetryable(error),
+            ))) if error.is::<metrics::HintCallLimit>() => Err(ChainError::HintCallLimit),
             Ok(Err(error)) => {
                 self.state.failed();
                 Err(self.transport(operation, &error))
@@ -1007,6 +1018,45 @@ pub struct FinalizedReader {
     receipt_facts: Mutex<FifoCache<(B256, B256), ReceiptFacts>>,
     /// A transaction's sender and nonce, which its hash commits to.
     origins: Mutex<FifoCache<B256, (Address, u64)>>,
+}
+
+/// A freshly fetched receipt bound to the endpoint that fetched it.
+pub struct HintReceipt<'a> {
+    reader: &'a FinalizedReader,
+    receipt: AnyTransactionReceipt,
+    block_number: u64,
+    block_hash: B256,
+}
+impl HintReceipt<'_> {
+    /// Including height, used only to wait for confirmation.
+    pub fn block_number(&self) -> u64 {
+        self.block_number
+    }
+    /// Including hash, useful for tracking re-inclusion without reusing old decision fields.
+    pub fn block_hash(&self) -> B256 {
+        self.block_hash
+    }
+    /// Read this endpoint's header and nonce independently, without reader caches.
+    pub async fn complete(
+        self,
+        recipient: Address,
+        tokens: &[Address],
+    ) -> Result<HintEvidence, ChainError> {
+        self.reader
+            .complete_hint(&self.receipt, recipient, tokens)
+            .await
+    }
+}
+/// Independently decoded decision fields at the confirmed inclusion.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HintEvidence {
+    /// Routed positive transfers to the object's server-derived address.
+    pub transfers: Vec<TransferLog>,
+    block_number: u64,
+    block_hash: B256,
+    status: bool,
+    block_time: DateTime<Utc>,
+    origin: (Address, u64),
 }
 
 /// EIP-2718 type of an OP-stack deposit transaction (specs.optimism.io, "Deposits").
@@ -1721,6 +1771,128 @@ impl ChainReader for FinalizedReader {
 }
 
 impl FinalizedReader {
+    /// Poll inclusion without reading decision fields before confirmation. Completion stays bound
+    /// to this reader, so another endpoint cannot complete or reuse its receipt.
+    pub async fn hint_receipt(&self, tx_hash: B256) -> Result<Option<HintReceipt<'_>>, ChainError> {
+        let Some(receipt) = self.receipt(tx_hash).await? else {
+            return Ok(None);
+        };
+        if receipt.transaction_hash != tx_hash {
+            return Err(ChainError::Reorganized("hint receipt transaction hash"));
+        }
+        let block_number = receipt
+            .block_number
+            .ok_or(ChainError::MissingField("receipt.block_number"))?;
+        let block_hash = receipt
+            .block_hash
+            .ok_or(ChainError::MissingField("receipt.block_hash"))?;
+        Ok(Some(HintReceipt {
+            reader: self,
+            receipt,
+            block_number,
+            block_hash,
+        }))
+    }
+
+    async fn complete_hint(
+        &self,
+        receipt: &AnyTransactionReceipt,
+        recipient: Address,
+        tokens: &[Address],
+    ) -> Result<HintEvidence, ChainError> {
+        let tx_hash = receipt.transaction_hash;
+        let mut candidates = Vec::new();
+        if receipt.status() {
+            for (position, log) in receipt.logs().iter().enumerate() {
+                if is_transfer(log)
+                    && let Some(decoded) = decode_transfer_log(log)?
+                    && decoded.to == recipient
+                    && tokens.contains(&decoded.token)
+                {
+                    if log.transaction_hash != Some(tx_hash)
+                        || log.block_number != receipt.block_number
+                        || log.block_hash != receipt.block_hash
+                    {
+                        return Err(ChainError::MissingField("hint receipt.log_identity"));
+                    }
+                    let position = u64::try_from(position)
+                        .map_err(|_| ChainError::MissingField("hint receipt position"))?;
+                    candidates.push((position, decoded));
+                }
+            }
+        }
+        let (time, origin) = self.receipt_details(tx_hash, receipt).await?;
+        Ok(HintEvidence {
+            transfers: candidates
+                .into_iter()
+                .map(|(position, log)| log.complete(position, time, origin))
+                .collect(),
+            status: receipt.status(),
+            block_time: time,
+            origin,
+            block_number: receipt
+                .block_number
+                .ok_or(ChainError::MissingField("receipt.block_number"))?,
+            block_hash: receipt
+                .block_hash
+                .ok_or(ChainError::MissingField("receipt.block_hash"))?,
+        })
+    }
+
+    async fn receipt_details(
+        &self,
+        tx_hash: B256,
+        receipt: &AnyTransactionReceipt,
+    ) -> Result<(DateTime<Utc>, (Address, u64)), ChainError> {
+        let block_number = receipt
+            .block_number
+            .ok_or(ChainError::MissingField("receipt.block_number"))?;
+        let block_hash = receipt
+            .block_hash
+            .ok_or(ChainError::MissingField("receipt.block_hash"))?;
+        let block = self
+            .client
+            .bounded(
+                "receipt block header",
+                self.client.provider.get_block_by_hash(block_hash),
+            )
+            .await?
+            .ok_or(ChainError::MissingField("receipt block header"))?;
+        if block.header.inner.number != block_number || block.header.hash != block_hash {
+            return Err(ChainError::Reorganized("receipt block header"));
+        }
+        let block_time = utc_timestamp(block.header.inner.timestamp)?;
+        let origin = match deposit_origin(receipt)? {
+            Some(origin) => origin,
+            None => {
+                use alloy::consensus::Transaction as _;
+                use alloy::network::TransactionResponse as _;
+                let transaction = self
+                    .client
+                    .bounded(
+                        "receipt transaction",
+                        self.client.provider.get_transaction_by_hash(tx_hash),
+                    )
+                    .await?
+                    .ok_or(ChainError::Reorganized("receipt transaction"))?;
+                if transaction.tx_hash() != tx_hash
+                    || transaction.from() != receipt.from()
+                    || transaction.block_hash != Some(block_hash)
+                    || transaction.block_number != Some(block_number)
+                    || self
+                        .client
+                        .labels
+                        .chain_id
+                        .is_some_and(|chain| transaction.chain_id() != Some(chain))
+                {
+                    return Err(ChainError::Reorganized("receipt transaction identity"));
+                }
+                (transaction.from(), transaction.nonce())
+            }
+        };
+        Ok((block_time, origin))
+    }
+
     async fn receipt_lookup(
         &self,
         tx_hash: B256,
@@ -1753,46 +1925,7 @@ impl FinalizedReader {
             }
             _ => None,
         };
-        let block = self
-            .client
-            .bounded(
-                "receipt block header",
-                self.client.provider.get_block_by_hash(block_hash),
-            )
-            .await?
-            .ok_or(ChainError::MissingField("receipt block header"))?;
-        if block.header.inner.number != block_number || block.header.hash != block_hash {
-            return Err(ChainError::Reorganized("receipt block header"));
-        }
-        let block_time = utc_timestamp(block.header.inner.timestamp)?;
-        let origin = match deposit_origin(&receipt)? {
-            Some(origin) => origin,
-            None => {
-                use alloy::consensus::Transaction as _;
-                use alloy::network::TransactionResponse as _;
-                let transaction = self
-                    .client
-                    .bounded(
-                        "receipt transaction",
-                        self.client.provider.get_transaction_by_hash(tx_hash),
-                    )
-                    .await?
-                    .ok_or(ChainError::Reorganized("receipt transaction"))?;
-                if transaction.tx_hash() != tx_hash
-                    || transaction.from() != receipt.from()
-                    || transaction.block_hash != Some(block_hash)
-                    || transaction.block_number != Some(block_number)
-                    || self
-                        .client
-                        .labels
-                        .chain_id
-                        .is_some_and(|chain| transaction.chain_id() != Some(chain))
-                {
-                    return Err(ChainError::Reorganized("receipt transaction identity"));
-                }
-                (transaction.from(), transaction.nonce())
-            }
-        };
+        let (block_time, origin) = self.receipt_details(tx_hash, &receipt).await?;
         let transfer = decoded
             .map(|decoded| Box::new(decoded.complete(receipt_log_index, block_time, origin)));
         Ok(ReceiptLookup::Included {

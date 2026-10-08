@@ -24,6 +24,7 @@ pub mod db;
 pub mod deposit_addresses;
 pub mod finality;
 pub mod heartbeat;
+pub mod hints;
 pub mod ids;
 pub mod jitter;
 pub mod keys;

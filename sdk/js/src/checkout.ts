@@ -1,3 +1,4 @@
+import { bindQuoteSubmission } from "./transactions.js";
 import { requestSignal, trimTrailingSlashes } from "./request.js";
 import { getAddress, isAddress, isAddressEqual } from "viem";
 import { parseClientQuote, quoteIdFromClientSecret, type ClientQuote } from "./quote.js";
@@ -208,6 +209,11 @@ export async function retrieveQuote(options: RetrieveQuoteOptions): Promise<Clie
       { status: response.status },
     );
   }
+  bindQuoteSubmission(quote, {
+    apiBase: options.apiBase, clientSecret: options.clientSecret,
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+    ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout }),
+  });
   return quote;
 }
 

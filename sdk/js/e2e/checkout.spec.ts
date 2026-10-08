@@ -73,13 +73,28 @@ function newQuote(overrides: Partial<ClientQuote> = {}): { quote: ClientQuote; s
  * payment status read from the chain (`seen` on the first read after the transfer, then `credited`).
  */
 async function serveQuote(page: Page, quote: ClientQuote, secret: string) {
-  const requests: { method: string; headers: string[] }[] = [];
+  const requests: { method: string; headers: string[]; path: string; body: string | null }[] = [];
   let reads = 0;
   await page.route(`${API_BASE}/v1/quotes/**`, async (route) => {
     const request = route.request();
-    requests.push({ method: request.method(), headers: Object.keys(request.headers()) });
     const url = new URL(request.url());
-    const cors = { "access-control-allow-origin": "*" };
+    requests.push({ method: request.method(), headers: Object.keys(request.headers()), path: url.pathname, body: request.postData() });
+    const cors = {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "Content-Type",
+      "access-control-max-age": "600",
+    };
+    if (url.pathname === `/v1/quotes/${quote.id}/transactions`) {
+      if (request.method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: cors, body: "" });
+        return;
+      }
+      const body: unknown = request.postDataJSON();
+      const hash = typeof body === "object" && body !== null && "transaction_hash" in body ? body.transaction_hash : "";
+      await route.fulfill({ status: 202, headers: cors, json: { object: "transaction_submission", transaction_hash: hash, status: "received" } });
+      return;
+    }
     if (url.pathname !== `/v1/quotes/${quote.id}` || url.searchParams.get("client_secret") !== secret) {
       await route.fulfill({ status: 404, headers: cors, json: { error: { type: "invalid_request_error", code: "resource_missing" } } });
       return;
@@ -230,9 +245,12 @@ test("pays a quote from a browser wallet, end to end on Anvil", async ({ page })
   const calls = await page.evaluate(() => window.walletCalls);
   expect(calls).toContain("wallet_addEthereumChain");
   expect(calls.filter((m) => m === "eth_sendTransaction")).toHaveLength(1);
-  // Only simple GETs: no custom header that would need a CORS preflight.
+  // Public reads stay simple GETs; broadcasting also sends one object-scoped JSON hint.
   const safelisted = /^(accept|accept-language|referer|user-agent|origin|sec-.*)$/;
-  expect(requests.every((r) => r.method === "GET" && r.headers.every((h) => safelisted.test(h)))).toBe(true);
+  expect(requests.filter((r) => r.path === `/v1/quotes/${quote.id}`).every((r) => r.method === "GET" && r.headers.every((h) => safelisted.test(h)))).toBe(true);
+  const hints = requests.filter((r) => r.method === "POST" && r.path.endsWith("/transactions"));
+  expect(hints).toHaveLength(1);
+  expect(JSON.parse(hints[0]?.body ?? "{}")).toEqual({ transaction_hash: await page.locator(".pp-tx__hash").textContent() });
 });
 
 test("pays with the page's own viem wallet client instead of discovered wallets", async ({ page }) => {

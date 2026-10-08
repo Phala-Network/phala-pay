@@ -95,8 +95,25 @@ struct Relay {
     client: reqwest::Client,
     gate: Arc<AtomicBool>,
     observed: Arc<AtomicBool>,
+    scanner_gate: Arc<AtomicBool>,
+    scanner_observed: Arc<AtomicBool>,
 }
 async fn relay(State(s): State<Relay>, Json(request): Json<Value>) -> Json<Value> {
+    // Block all scanner range queries, including fast detection, while allowing startup's
+    // 1000-recipient capability test and block-hash receipt checks to finish normally.
+    if s.scanner_gate.load(Ordering::SeqCst)
+        && request["method"] == "eth_getLogs"
+        && !request["params"][0]["fromBlock"].is_null()
+        && !request["params"][0]["toBlock"].is_null()
+        && !request["params"][0]["topics"][2]
+            .as_array()
+            .is_some_and(|recipients| recipients.len() == 1000)
+    {
+        s.scanner_observed.store(true, Ordering::SeqCst);
+        while s.scanner_gate.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
     if s.gate.load(Ordering::SeqCst)
         && request["method"] == "eth_getLogs"
         && request["params"][0]["topics"][2]
@@ -348,8 +365,23 @@ fn reconcile(
     );
     Ok(())
 }
-/// PR 3 extends this fixture to write hint-recorded deposits and pending tasks before rollback.
-fn pr3_hint_extension_point() {}
+/// A real N API submission. Rollback must preserve positive rows and abandon pending memory tasks.
+async fn submit_hint(origin: &str, key: &str, address: &str, hash: B256) -> Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{origin}/v1/deposit_addresses/{address}/transactions"
+        ))
+        .bearer_auth(key)
+        .json(&json!({"transaction_hash":format!("{hash:#x}"),"chain_id":1}))
+        .send()
+        .await?;
+    ensure!(response.status().as_u16() == 202);
+    ensure!(
+        response.json::<Value>().await?
+            == json!({"object":"transaction_submission","transaction_hash":format!("{hash:#x}"),"status":"received"})
+    );
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires verified published N-1 image; mandatory deploy rollback CI gate"]
@@ -375,7 +407,8 @@ async fn published_image_round_trip() -> Result<()> {
         }
         anvil.mine(16)?;
         let gate=Arc::new(AtomicBool::new(false));let observed=Arc::new(AtomicBool::new(false));
-        let (proxy,_proxy_task)=serve(Router::new().route("/{*path}",post(relay)).with_state(Relay {upstream:anvil.rpc_url.clone(),client:reqwest::Client::new(),gate:gate.clone(),observed:observed.clone()})).await?;
+        let scanner_gate=Arc::new(AtomicBool::new(false));let scanner_observed=Arc::new(AtomicBool::new(false));
+        let (proxy,_proxy_task)=serve(Router::new().route("/{*path}",post(relay)).with_state(Relay {upstream:anvil.rpc_url.clone(),client:reqwest::Client::new(),gate:gate.clone(),observed:observed.clone(),scanner_gate:scanner_gate.clone(),scanner_observed:scanner_observed.clone()})).await?;
         let tls=support::tls::RpcTlsProxy::start(&proxy)?;
         let (kms,_kms_task)=serve(Router::new().route("/GetKey",post(||async {Json(json!({"key":"01".repeat(32),"signature_chain":[]}))}))).await?;
         let mut route:RouteFile=serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml"))?;
@@ -414,10 +447,27 @@ async fn published_image_round_trip() -> Result<()> {
         let historical_receipt=cast(&anvil,&["receipt",&format!("{historical:#x}"),"--json"])?;
         let historical_block=u64::from_str_radix(historical_receipt["blockNumber"].as_str().context("historical block")?.trim_start_matches("0x"),16)?;
         topup::db::migrate(&database.owner_pool).await?;
+        scanner_gate.store(true,Ordering::SeqCst);
         let mut current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;
+        wait_until("scanner held off before hint-only phase",||async {Ok(scanner_observed.load(Ordering::SeqCst))}).await?;
+        let hint_boundary:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;
         let second=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(16)?;
+        submit_hint(&origin,&key,address["id"].as_str().unwrap(),second).await?;
+        wait_until("hint recorded dual-verified positive deposit",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT dual_verified_at=created_at FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_optional(&database.app_pool).await?==Some(true))}).await?;
+        ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&database.app_pool).await?==1);
+
+        let after_hint:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;
+        ensure!(hint_boundary==after_hint,"scanner advanced during the hint-only phase");
+
+        // RPC no longer holds the chain lock, so the pump can claim the hint row even
+        // while scanning is blocked. Finish it before the deliberate restart; killing an
+        // in-flight step would leave its five-minute lease beyond this drill's wait bound.
+        credited(&database,second).await?;
+        let after_credit:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;
+        ensure!(hint_boundary==after_credit,"scanner advanced before hint payment processing finished");
+
         // Restart at a scheduled-round boundary without changing production cadences.
-        current_service.stop()?;current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;credited(&database,second).await?;
+        current_service.stop()?;scanner_gate.store(false,Ordering::SeqCst);current_service=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut current_service,&origin).await?;credited(&database,second).await?;
         wait_until("N finalized second payment",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT final_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?)}).await?;
         let first_salt:String=sqlx::query_scalar("SELECT salt FROM addresses WHERE deposit_address_id=$1").bind(da_id).fetch_one(&database.app_pool).await?;
         let n_flush=send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&format!("[{first_salt}]"),&format!("{token:#x}")])?;
@@ -439,7 +489,12 @@ async fn published_image_round_trip() -> Result<()> {
         sqlx::query("UPDATE quotes SET expires_at=now()-interval '1 second' WHERE id=$1").bind(expiry_id).execute(&database.owner_pool).await?;
         ensure!(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM deposits WHERE tx_hash=$1)")
             .bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?,"restored history was recorded before reissue");
+        let pending_hint=B256::repeat_byte(0x79);
+        // Use a deposit-address object, whose endpoint requires the explicit network.
+        submit_hint(&origin,&key,address["id"].as_str().unwrap(),pending_hint).await?;
+        wait_until("N pending hint task started",||async {Ok(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&database.app_pool).await?==2)}).await?;
         current_service.stop()?;
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{pending_hint:#x}")).fetch_one(&database.app_pool).await?==0);
         let historic_block:i64=sqlx::query_scalar("SELECT block_number FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?;
         let (reissued,created)=topup::deposit_addresses::reissue(&database.app_pool,&account,true,"round-trip",&[ChainContracts::of(&route)],ReissueTarget {version:Some(2),address:Some(historical_forwarder)},None,None,Some(Utc::now()-chrono::TimeDelta::hours(1)),&std::collections::BTreeMap::from([(1,u64::try_from(historic_block.saturating_sub(16))?)]),&Actor::system("rollback-drill"),"historical payment reissue").await?;
         ensure!(created && reissued.version==2);
@@ -455,7 +510,6 @@ async fn published_image_round_trip() -> Result<()> {
         wait_until("coverage request interrupted",||async {Ok(observed.load(Ordering::SeqCst))}).await?;
         interrupted.stop()?;gate.store(false,Ordering::SeqCst);
         let after:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;ensure!(before==after,"interrupted coverage advanced");
-        pr3_hint_extension_point();
         topup::db::chain_reads::freeze(&database.app_pool,1,"contract_code_mismatch").await?;
         let mut previous=start_service(Some(&image),&old_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
         let frozen=reqwest::Client::new().post(format!("{origin}/v1/quotes")).bearer_auth(&key).header("Idempotency-Key",Uuid::new_v4().to_string()).json(&json!({"client_reference_id":"frozen","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"})).send().await?;
@@ -468,7 +522,7 @@ async fn published_image_round_trip() -> Result<()> {
             admin_key:topup::api::VerificationKey::from_base64("drill/admin".into(),&support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))).unwrap(),
             maintenance_keys:Vec::new(),public_origin:topup::api::PublicOrigin::parse(support::TEST_ORIGIN).unwrap(),
             attestor:Arc::new(topup_adapters::attestation::DstackAttestor::new()),
-            rate_lock_quotes:Arc::new(topup::locks::UnavailableQuoteProvider),client_reads:Arc::default(),rate_limits:Arc::default(),
+            rate_lock_quotes:Arc::new(topup::locks::UnavailableQuoteProvider),client_reads:Arc::default(),rate_limits:Arc::default(), hint_limits: Arc::default(), transaction_hints: Arc::default(),
             screening:Arc::new(topup::refunds::UnavailableDestinationScreener),contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         });
         use tower::ServiceExt;
@@ -483,6 +537,9 @@ async fn published_image_round_trip() -> Result<()> {
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?==1);
         wait_until("N-1 indexed flush",||async {Ok(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM flushed").fetch_one(&database.app_pool).await?>0)}).await?;
         previous.stop()?;
+        ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&database.app_pool).await?==2,"N-1 touched pending hint state");
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{pending_hint:#x}")).fetch_one(&database.app_pool).await?==0,"N-1 materialized an unmined hint");
+        ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_verified_at=created_at FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?,"N-1 discarded N's hint verification marker");
         reconcile(Some(&image),&old_path,&database,&tls)?;
         let unverified:bool=sqlx::query_scalar("SELECT dual_verified_at IS NULL FROM deposits WHERE tx_hash=$1").bind(format!("{third:#x}")).fetch_one(&database.app_pool).await?;ensure!(unverified);
         let mut final_current=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut final_current,&origin).await?;

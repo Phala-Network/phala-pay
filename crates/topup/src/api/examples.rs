@@ -48,6 +48,13 @@ const RUNTIME_PERMISSIONS: [&str; 8] = [
 /// The example of the component schema `name`, if it has one.
 pub(super) fn schema(name: &str) -> Option<Value> {
     Some(match name {
+        "SubmitQuoteTransactionRequest" => json!({"transaction_hash": TX}),
+        "SubmitDepositAddressTransactionRequest" => {
+            json!({"transaction_hash": TX, "chain_id":84532})
+        }
+        "TransactionSubmission" => {
+            json!({"object":"transaction_submission", "transaction_hash": TX, "status":"received"})
+        }
         "Quote" => quote(),
         "QuoteView" => quote(),
         "ClientQuote" => client_quote(),

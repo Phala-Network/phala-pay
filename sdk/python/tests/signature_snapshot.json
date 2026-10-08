@@ -30,6 +30,7 @@
     "list_page": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
     "retrieve": "(self, deposit_address_id, **options)",
     "rotate": "(self, deposit_address_id, *, idempotency_key=None, **options)",
+    "submit_transaction": "(self, deposit_address_id, *, transaction_hash, chain_id, **options)",
     "update": "(self, deposit_address_id, *, metadata=None, idempotency_key=None, **options)"
   },
   "Deposits": {
@@ -72,6 +73,7 @@
     "list": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
     "list_page": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
     "retrieve": "(self, quote_id, *, expand=None, **options)",
+    "submit_transaction": "(self, quote_id, *, transaction_hash, **options)",
     "update": "(self, quote_id, *, metadata=None, idempotency_key=None, **options)"
   },
   "Refunds": {
@@ -149,6 +151,8 @@
     "roll_api_key": "(self, api_key_id, *, expires_in=0, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "roll_webhook_key": "(self, *, expires_in=172800, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "rotate_deposit_address": "(self, deposit_address_id, *, idempotency_key=None, request_deadline=None, upgrade_tolerance=None)",
+    "submit_deposit_address_transaction": "(self, deposit_address_id, transaction_hash, *, chain_id, request_deadline=None, upgrade_tolerance=None)",
+    "submit_quote_transaction": "(self, quote_id, transaction_hash, *, request_deadline=None, upgrade_tolerance=None)",
     "test_webhook_endpoint": "(self, endpoint_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "update_deposit": "(self, deposit_id, *, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "update_deposit_address": "(self, deposit_address_id, *, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",

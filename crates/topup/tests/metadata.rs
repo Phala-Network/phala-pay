@@ -482,6 +482,8 @@ fn router(pool: &sqlx::PgPool, route: &RouteFile) -> Result<axum::Router> {
         rate_lock_quotes: Arc::new(FixedQuote),
         client_reads: Arc::default(),
         rate_limits: Arc::default(),
+        hint_limits: Arc::default(),
+        transaction_hints: Arc::default(),
         screening: Arc::new(support::ClearScreener),
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
     })

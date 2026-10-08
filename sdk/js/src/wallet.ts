@@ -1,3 +1,4 @@
+import { submitWalletTransaction } from "./transactions.js";
 import { createStore } from "mipd";
 import {
   BaseError,
@@ -136,7 +137,7 @@ export async function payWithWallet(
           `${formatTokenAmount(quote)} ${symbol} to pay. Nothing was sent.`,
       );
     }
-    return await client.writeContract({
+    const hash = await client.writeContract({
       account,
       chain: knownChain(transfer.chainId) ?? null,
       address: transfer.token,
@@ -144,6 +145,8 @@ export async function payWithWallet(
       functionName: "transfer",
       args: [transfer.to, transfer.amount],
     });
+    submitWalletTransaction(quote, hash);
+    return hash;
   } catch (error) {
     if (error instanceof WalletError) {
       throw error;

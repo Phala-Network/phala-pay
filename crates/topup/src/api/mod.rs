@@ -28,6 +28,7 @@ mod rate_limit;
 mod repository;
 mod restore;
 mod sweeps;
+mod transactions;
 mod treasuries;
 mod webhook_endpoints;
 
@@ -62,7 +63,7 @@ pub use client_limit::ClientReadLimiter;
 pub use deadlines::DeadlineListener;
 pub use idempotency::IdempotencyKeyPruner;
 pub(crate) use keys::api_key_object;
-pub use rate_limit::{ApiRateLimiter, RateLimits};
+pub use rate_limit::{ApiRateLimiter, HintRateLimiter, RateLimits};
 pub use topup_adapters::http_signature::PublicOrigin;
 pub(crate) use treasuries::treasury_object;
 
@@ -87,6 +88,10 @@ pub struct AppState {
     pub client_reads: Arc<ClientReadLimiter>,
     /// Per-account and platform rate limits of authenticated merchant requests.
     pub rate_limits: Arc<ApiRateLimiter>,
+    /// Dedicated authenticated object limits for transaction hints.
+    pub hint_limits: Arc<HintRateLimiter>,
+    /// Shared bounded process-local hint queue.
+    pub transaction_hints: Arc<crate::hints::HintQueue>,
     /// Sanctions screening of refund destinations and treasuries.
     pub screening: Arc<dyn DestinationScreener>,
     /// EIP-1271 checks of contract treasuries' proofs.
@@ -279,6 +284,16 @@ const ROUTE_PERMISSIONS: &[(&str, &str, Permission)] = &[
     ("POST", "/v1/quotes/{id}", Permission::QuotesWrite),
     ("POST", "/v1/quotes/{id}/cancel", Permission::QuotesWrite),
     (
+        "POST",
+        "/v1/quotes/{id}/transactions",
+        Permission::QuotesWrite,
+    ),
+    (
+        "POST",
+        "/v1/deposit_addresses/{id}/transactions",
+        Permission::DepositAddressesWrite,
+    ),
+    (
         "GET",
         "/v1/deposit_addresses",
         Permission::DepositAddressesRead,
@@ -406,6 +421,13 @@ fn client_secret_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(deposit_addresses::get_deposit_address))
 }
 
+/// Object-authenticated hint writes, mounted separately from the shared peer-IP limiter.
+fn hint_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(transactions::submit_quote_transaction))
+        .routes(routes!(transactions::submit_deposit_address_transaction))
+}
+
 /// The operator's routes, authenticated by RFC 9421 signatures.
 fn admin_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -448,6 +470,7 @@ fn admin_routes() -> OpenApiRouter<AppState> {
 fn documents() -> (utoipa::openapi::OpenApi, utoipa::openapi::OpenApi) {
     let (_, merchant) = merchant_routes()
         .merge(client_secret_routes())
+        .merge(hint_routes())
         .split_for_parts();
     let (_, admin) = admin_routes().split_for_parts();
     (merchant, admin)
@@ -507,7 +530,7 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
     let client_secret = client_secret_routes()
         .route_layer(middleware::from_fn(auth::authorize))
         .route_layer(middleware::from_fn_with_state(
-            merchant_auth,
+            merchant_auth.clone(),
             auth::authenticate_merchant_or_client_secret,
         ));
     let admin = admin_routes()
@@ -516,7 +539,16 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
             state.clone(),
             auth::authenticate_admin,
         ));
-    let merchant = merchant.merge(client_secret);
+    let hints = hint_routes()
+        .route_layer(middleware::from_fn(auth::authorize))
+        // Keep merchant-key hints on the shared authentication and admission path.
+        .route_layer(middleware::from_fn_with_state(
+            merchant_auth,
+            auth::authenticate_merchant_or_client_secret,
+        ));
+    // No per-client IP is available behind the ingress, so hints have no per-IP limit.
+    // Authenticated object limits, the daily hard cap and the in-flight cap bound hint work.
+    let merchant = merchant.merge(client_secret).merge(hints);
     router_from_routes(state, pause, merchant, admin)
 }
 
@@ -550,6 +582,7 @@ fn router_from_routes(
         // Stripe's error object for any other path or method too, never an empty body.
         .fallback(unrecognized_request)
         .method_not_allowed_fallback(unrecognized_request)
+        .layer(middleware::from_fn(transactions::received))
         .layer(Extension(Arc::new(docs.clone())))
         .layer(Extension(pause))
         .with_state(state);
@@ -573,13 +606,15 @@ fn restoring() -> Response {
 /// Builds the router of an instance restored from backup (`TOPUP_SERVICE_ENABLED=read-only`,
 /// `deploy/RESTORE.md`): every request other than `GET`, `HEAD`, and the operator's restore
 /// reconciliation (`/v1/admin/restore/…`) is refused with `503 service_restoring`, and so is every
-/// request with a merchant API key, frozen or not: `restore-check` records the freeze in parallel,
+/// request with a merchant API key, frozen or not. Transaction hints return quiet `202`s and
+/// enqueue nothing in this mode. `restore-check` records the freeze in parallel,
 /// and may fail before it does. `/healthz` reports the boot-time `restore-check` result read from
 /// `restore_report`.
 pub fn read_only_router(state: AppState, restore_report: Option<PathBuf>) -> Router {
     let (router, _) = router_inner(state, Arc::new(crate::pause::InstancePause::default()));
     router
         .layer(middleware::from_fn(reject_writes))
+        .layer(middleware::from_fn(transactions::received))
         .layer(middleware::from_fn(cache::no_store))
         .layer(Extension(ReadOnly {
             restore_report: restore_report.map(Arc::from),
@@ -793,6 +828,8 @@ mod tests {
             rate_lock_quotes: Arc::new(crate::locks::UnavailableQuoteProvider),
             client_reads: Arc::default(),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(crate::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(crate::treasuries::UnavailableContractSignatures),
         }

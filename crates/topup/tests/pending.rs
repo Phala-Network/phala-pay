@@ -95,6 +95,8 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         rate_lock_quotes: Arc::new(FixedQuote),
         client_reads: Arc::default(),
         rate_limits: Arc::default(),
+        hint_limits: Arc::default(),
+        transaction_hints: Arc::default(),
         screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
     })

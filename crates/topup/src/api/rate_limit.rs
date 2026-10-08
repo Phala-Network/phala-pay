@@ -384,3 +384,70 @@ mod tests {
         );
     }
 }
+
+/// Authenticated object quotas for transaction hints; refusals remain quiet `202`s.
+#[derive(Default)]
+pub struct HintRateLimiter {
+    state: Mutex<HintLimits>,
+}
+#[derive(Default)]
+struct HintLimits {
+    objects: HashMap<uuid::Uuid, (Instant, Instant)>,
+}
+impl HintRateLimiter {
+    pub(crate) fn allow_object(&self, object: uuid::Uuid) -> bool {
+        self.object_at(object, Instant::now())
+    }
+    fn object_at(&self, object: uuid::Uuid, now: Instant) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = state.objects.get(&object).copied();
+        let Ok(minute) = trial_admission(
+            previous.map(|value| value.0),
+            now,
+            3,
+            Duration::from_secs(60),
+        ) else {
+            return false;
+        };
+        let Ok(day) = trial_admission(
+            previous.map(|value| value.1),
+            now,
+            10,
+            Duration::from_secs(24 * 60 * 60),
+        ) else {
+            return false;
+        };
+        if state.objects.len() >= PRUNE_ABOVE {
+            state
+                .objects
+                .retain(|_, (minute, day)| *minute > now || *day > now);
+        }
+        state.objects.insert(object, (minute, day));
+        true
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+    #[test]
+    fn hint_limits_are_per_object_and_refusals_do_not_charge_other_quotas() {
+        let limits = HintRateLimiter::default();
+        let now = Instant::now();
+        let object = uuid::Uuid::new_v4();
+        for _ in 0..3 {
+            assert!(limits.object_at(object, now));
+        }
+        assert!(!limits.object_at(object, now));
+        assert!(limits.object_at(uuid::Uuid::new_v4(), now));
+        // Spread submissions so the minute quota refills while the day quota stays spent.
+        for minute in 1..8 {
+            assert!(limits.object_at(object, now + Duration::from_secs(minute * 60)));
+        }
+        assert!(!limits.object_at(object, now + Duration::from_secs(8 * 60)));
+        assert!(limits.object_at(object, now + Duration::from_secs(24 * 60 * 60)));
+    }
+}

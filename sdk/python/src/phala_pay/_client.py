@@ -25,6 +25,7 @@ from topup_client.models import (
     Quote,
     Refund,
     Sweep,
+    TransactionSubmission,
     Treasury,
     TreasuryChallenge,
     WebhookEndpointObject,
@@ -436,6 +437,18 @@ class Quotes:
             idempotency_key=idempotency_key,
         )
 
+    def submit_transaction(
+        self,
+        quote_id: str,
+        *,
+        transaction_hash: str,
+        **options: Unpack[RequestOptions],
+    ) -> TransactionSubmission:
+        """Forwards a quote hint; poll the quote to determine payment status."""
+        return self._client.submit_quote_transaction(
+            quote_id, transaction_hash, **_request_options(options)
+        )
+
 
 class Deposits:
     def __init__(self, client: TopupClient) -> None:
@@ -652,6 +665,19 @@ class DepositAddresses:
             deposit_address_id,
             idempotency_key=idempotency_key,
             **_request_options(options),
+        )
+
+    def submit_transaction(
+        self,
+        deposit_address_id: str,
+        *,
+        transaction_hash: str,
+        chain_id: int,
+        **options: Unpack[RequestOptions],
+    ) -> TransactionSubmission:
+        """Forwards a hint on an issued network without exposing a payment result."""
+        return self._client.submit_deposit_address_transaction(
+            deposit_address_id, transaction_hash, chain_id=chain_id, **_request_options(options)
         )
 
 

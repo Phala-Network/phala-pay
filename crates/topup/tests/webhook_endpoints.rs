@@ -43,6 +43,8 @@ impl Harness {
             rate_lock_quotes: Arc::new(topup::locks::UnavailableQuoteProvider),
             client_reads: Arc::default(),
             rate_limits: Arc::default(),
+            hint_limits: Arc::default(),
+            transaction_hints: Arc::default(),
             screening: Arc::new(topup::refunds::UnavailableDestinationScreener),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         };
