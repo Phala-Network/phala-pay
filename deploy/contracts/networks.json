@@ -8,6 +8,9 @@
     },
     "mainnet": {
       "chain_id": 1
+    },
+    "base": {
+      "chain_id": 8453
     }
   }
 }

@@ -35,8 +35,11 @@ sealed() {
 }
 
 staging="$root/deploy/environments/phala-network/staging"
+production="$root/deploy/environments/phala-network/production"
 render service "$staging/topup"
 render restore-check "$staging/topup" --restore-check
+render production "$production/topup"
+render production-restore-check "$production/topup" --restore-check
 render example "$root/deploy/environments/example/topup"
 render example-restore-check "$root/deploy/environments/example/topup" --restore-check
 render product "$staging/product"
@@ -48,6 +51,10 @@ render template "$root/deploy/environments/phala-cloud-template/topup" --templat
     fail "staging's sealed names changed: $(sealed service)"
 [[ "$(sealed restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
     fail "staging's restore-check sealed names changed: $(sealed restore-check)"
+[[ "$(sealed production)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
+    fail "production's sealed names changed: $(sealed production)"
+[[ "$(sealed production-restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
+    fail "production's restore-check sealed names changed: $(sealed production-restore-check)"
 [[ "$(sealed product)" == "PRODUCT_API_KEY " ]] || fail "the product's sealed names changed"
 
 # The restore-check variant is the service with the service-only services removed, topup read-only

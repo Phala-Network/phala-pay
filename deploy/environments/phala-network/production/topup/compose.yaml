@@ -1,0 +1,21 @@
+# Phala's production public settings and complete Ankr/Infura sealed-key mappings.
+# topup's own settings are in topup.yaml. The owner creates the R2 bucket named by WALG_S3_PREFIX
+# before provisioning; credentials remain sealed Environment secrets.
+services:
+  postgres:
+    environment: &walg
+      WALG_S3_PREFIX: s3://phala-pay-production/production-v1
+      AWS_ENDPOINT: https://1d694c298092ffa09c793cbca4587812.r2.cloudflarestorage.com
+      AWS_REGION: auto
+      AWS_S3_FORCE_PATH_STYLE: "true"
+  backup:
+    environment: *walg
+  dstack-ingress:
+    environment:
+      DOMAIN: pay-api.phala.com
+  topup:
+    environment: &sealed
+      TOPUP_RPC_ANKR_KEY: ${TOPUP_RPC_ANKR_KEY:-}
+      TOPUP_RPC_INFURA_KEY: ${TOPUP_RPC_INFURA_KEY:-}
+  restore-check:
+    environment: *sealed
