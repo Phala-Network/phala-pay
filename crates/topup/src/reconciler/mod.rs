@@ -7,7 +7,7 @@
 //!
 //! Chain reads stay proportional to what changed: the service's rounds run only after the
 //! agreed checkpoint advances or custody is due, reuse the published head, verify each stored
-//! `(address, salt, treasury)` against the factory with a bounded LRU cache, and read balances only of
+//! `(address, salt, treasury)` by local CREATE2 derivation with a bounded LRU cache, and read balances only of
 //! forwarders that hold unswept funds by the ledger.
 
 mod chain;
@@ -24,6 +24,7 @@ use sqlx::PgPool;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep_until};
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::FinalizedReader;
+use topup_core::address::forwarder_address;
 use topup_core::money::{PRICE_SCALE, ScaledPrice, credit};
 use topup_core::route::{RouteFile, UNIT_DECIMALS};
 use uuid::Uuid;
@@ -100,7 +101,7 @@ impl From<ApplyTransitionError> for ReconciliationError {
 /// Finalized heads read once per chain and shared by every check in a round.
 type RoundHeads = BTreeMap<u64, u64>;
 
-/// A stored address the factory derived identically: `(chain, row, salt, treasury, address)`.
+/// A stored address locally derived identically: `(chain, row, salt, treasury, address)`.
 type VerifiedDerivation = (u64, Uuid, alloy_primitives::B256, Address, Address);
 
 /// Bounded LRU cache. A changed row has a different key; eviction re-verifies old addresses.
@@ -444,16 +445,16 @@ impl Reconciler {
         }
     }
 
-    /// Verifies every stored `(salt, treasury)` with the on-chain factory and freezes mismatching
-    /// chains.
+    /// Locally derives stored addresses using the dual-source verified contract configuration.
+    /// A database mismatch still freezes its chain; no single-source RPC can trigger this check.
     async fn address_derivation(
         &self,
         findings: &mut Vec<Finding>,
     ) -> Result<(), ReconciliationError> {
         let mut failure = None;
-        for (chain_id, factory) in self.chain_factories()? {
+        for (chain_id, (factory, implementation)) in self.chain_factories()? {
             if let Err(error) = self
-                .address_derivation_for_chain(chain_id, factory, findings)
+                .address_derivation_for_chain(chain_id, factory, implementation, findings)
                 .await
             {
                 tracing::error!(chain_id, %error, "address derivation check failed for chain");
@@ -467,9 +468,9 @@ impl Reconciler {
         &self,
         chain_id: u64,
         factory: Address,
+        implementation: Address,
         findings: &mut Vec<Finding>,
     ) -> Result<(), ReconciliationError> {
-        let chain = self.chain(chain_id)?;
         let key = |address: &db::Address| {
             (
                 chain_id,
@@ -502,17 +503,8 @@ impl Reconciler {
             }
         }
         for (treasury, addresses) in by_treasury {
-            let salts = addresses
-                .iter()
-                .map(|address| address.salt)
-                .collect::<Vec<_>>();
-            let derived = chain.factory_addresses(factory, treasury, &salts).await?;
-            if derived.len() != addresses.len() {
-                return Err(ReconciliationError::Invariant(
-                    "addressOf response length did not match address count",
-                ));
-            }
-            for (stored, observed) in addresses.iter().zip(derived) {
+            for stored in &addresses {
+                let observed = forwarder_address(factory, implementation, treasury, stored.salt);
                 if stored.address == observed {
                     self.verified
                         .lock()
@@ -524,7 +516,7 @@ impl Reconciler {
                     &self.pool,
                     chain_id,
                     CheckName::AddressDerivation.code(),
-                    "factory addressOf(treasury, salt) disagrees with stored address",
+                    "local forwarder derivation disagrees with stored address",
                 )
                 .await?;
                 findings.push(Finding::new(
@@ -911,22 +903,25 @@ impl Reconciler {
         self.routes.current().collect()
     }
 
-    /// Returns each chain's factory; every route of a chain must name the same one.
-    fn chain_factories(&self) -> Result<Vec<(u64, Address)>, ReconciliationError> {
+    /// Returns each chain's factory and implementation; all routes must agree on both.
+    fn chain_factories(&self) -> Result<BTreeMap<u64, (Address, Address)>, ReconciliationError> {
         let mut factories = BTreeMap::new();
         for route in self.routes.routes() {
-            let factory = route.chain.contracts.forwarder_factory;
-            match factories.insert(route.chain.chain_id, factory) {
-                Some(existing) if existing != factory => {
+            let contracts = (
+                route.chain.contracts.forwarder_factory,
+                route.chain.contracts.implementation,
+            );
+            match factories.insert(route.chain.chain_id, contracts) {
+                Some(existing) if existing != contracts => {
                     return Err(ReconciliationError::Configuration(format!(
-                        "routes disagree on the factory for chain {}",
+                        "routes disagree on the factory or implementation for chain {}",
                         route.chain.chain_id
                     )));
                 }
                 Some(_) | None => {}
             }
         }
-        Ok(factories.into_iter().collect())
+        Ok(factories)
     }
 }
 

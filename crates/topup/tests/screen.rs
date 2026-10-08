@@ -1,8 +1,7 @@
-//! PostgreSQL and Anvil integration coverage for the C5 screen step.
+//! PostgreSQL integration coverage for the C5 screen step.
 
 mod support;
 
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
@@ -15,16 +14,14 @@ use sqlx::{PgPool, Row};
 use topup::db::{self, NewDeposit};
 use topup::pump::{Pump, PumpConfig, RunOnceResult, Step, StepResult, StepSet};
 use topup::steps::screen::{ScreenRoute, ScreenStep};
-use topup_adapters::chain::evm::EvmClient;
-use topup_adapters::risk::oracle::{SanctionsOracle, SanctionsSource};
-use topup_core::deposit::{DepositState, RejectReason, RetryError, StepOutcome, WaitReason};
+use topup_adapters::risk::SanctionsSource;
+use topup_core::deposit::{DepositState, RejectReason, StepOutcome, WaitReason};
 use topup_core::identity::{credited_event_id, deposit_id, event_id};
 use topup_core::money::AtomicAmount;
 use topup_core::route::{Bounded, RouteFile};
 use topup_core::screening::{SanctionsResult, SanctionsVerdict};
 use uuid::Uuid;
 
-use support::chain::{ANVIL_PRIVATE_KEY, Anvil, forge_create};
 use support::seed::{self, NewAccount, NewAddress};
 use support::with_database;
 
@@ -165,97 +162,6 @@ async fn postgres_pump_persists_screening_transitions_pauses_and_outbox() -> Res
                 ensure!(payload["object"]["status"] == status, "{payload}");
                 ensure!(payload["object"]["object"] == "deposit", "{payload}");
             }
-            Ok(())
-        })
-    })
-    .await
-}
-
-#[tokio::test]
-async fn anvil_oracle_uses_current_canonical_pins_and_maps_live_results() -> Result<()> {
-    let Some(anvil) = Anvil::start_if_available(&[]).await? else {
-        return Ok(());
-    };
-    let rpc_url = anvil.rpc_url.clone();
-    let oracle = forge_create(
-        &rpc_url,
-        "test/mocks/MockSanctionsOracle.sol:MockSanctionsOracle",
-        &[],
-    )?;
-    let account = Address::repeat_byte(0x22);
-    let recorded_block = current_block(&rpc_url)?;
-    anvil.mine(2)?;
-    let source = Arc::new(SanctionsOracle::new(
-        client(&rpc_url, StdDuration::from_secs(2))?,
-        client(&rpc_url, StdDuration::from_secs(2))?,
-        oracle,
-    )?);
-    let before = source.sanctions(account, recorded_block).await;
-    ensure!(before.verdict == SanctionsVerdict::Clear);
-    ensure!(before.verdict == SanctionsVerdict::Clear);
-
-    set_sanctioned(&rpc_url, oracle, account, true)?;
-    let latest_block = current_block(&rpc_url)?;
-    anvil.mine(2)?;
-    ensure!(latest_block > recorded_block);
-    let historical = source.sanctions(account, recorded_block).await;
-    let latest = source.sanctions(account, latest_block).await;
-    ensure!(historical.verdict == SanctionsVerdict::Sanctioned);
-    ensure!(historical.verdict == SanctionsVerdict::Sanctioned);
-    ensure!(latest.verdict == SanctionsVerdict::Sanctioned);
-    ensure!(latest.verdict == SanctionsVerdict::Sanctioned);
-
-    with_database(|context| {
-        let rpc_url = rpc_url.clone();
-        let source = Arc::<SanctionsOracle>::clone(&source);
-        Box::pin(async move {
-            let seed = seed_account(&context.app_pool).await?;
-            let old_id =
-                insert_confirmed(&context.app_pool, seed, 3, account, recorded_block).await?;
-            let latest_id =
-                insert_confirmed(&context.app_pool, seed, 4, account, latest_block).await?;
-            let step = ScreenStep::new(
-                context.app_pool.clone(),
-                [ScreenRoute::new(screen_route("screen", oracle), source)],
-            )?;
-
-            let old_deposit = db::get_deposit(&context.app_pool, old_id)
-                .await?
-                .context("historical deposit")?;
-            let old_result = step.run(&old_deposit).await;
-            ensure!(old_result.outcome == StepOutcome::Reject(RejectReason::Sanctioned));
-            ensure!(old_result.evidence["sanctions"] == "sanctioned");
-
-            let latest_deposit = db::get_deposit(&context.app_pool, latest_id)
-                .await?
-                .context("latest deposit")?;
-            let rejected = step.run(&latest_deposit).await;
-            ensure!(rejected.outcome == StepOutcome::Reject(RejectReason::Sanctioned));
-            ensure!(rejected.events.len() == 1);
-            ensure!(rejected.events[0].event_type == "deposit.rejected");
-            ensure!(rejected.evidence["sanctions"] == "sanctioned");
-            ensure!(rejected.evidence["sanctions"] == "sanctioned");
-
-            let down_source = Arc::new(SanctionsOracle::new(
-                client(&rpc_url, StdDuration::from_millis(200))?,
-                client("http://127.0.0.1:1", StdDuration::from_millis(200))?,
-                oracle,
-            )?);
-            let down_step = ScreenStep::new(
-                context.app_pool.clone(),
-                [ScreenRoute::new(screen_route("down", oracle), down_source)],
-            )?;
-            let mut down_deposit = latest_deposit;
-            down_deposit.route = Some("down".to_owned());
-            down_deposit.from_address = Address::repeat_byte(0x11);
-            let unavailable = down_step.run(&down_deposit).await;
-            ensure!(
-                unavailable.outcome
-                    == StepOutcome::Retry {
-                        error: RetryError::SanctionsInconclusive,
-                    }
-            );
-            ensure!(unavailable.evidence["sanctions_hold"] == true);
             Ok(())
         })
     })
@@ -550,45 +456,6 @@ async fn transition_evidence(pool: &PgPool, deposit_id: Uuid) -> Result<Value> {
     .try_get("evidence")?)
 }
 
-fn set_sanctioned(
-    rpc_url: &str,
-    oracle: Address,
-    account: Address,
-    sanctioned: bool,
-) -> Result<()> {
-    let output = Command::new("cast")
-        .args([
-            "send",
-            "--rpc-url",
-            rpc_url,
-            "--private-key",
-            ANVIL_PRIVATE_KEY,
-            &format!("{oracle:#x}"),
-            "setSanctioned(address,bool)",
-            &format!("{account:#x}"),
-            if sanctioned { "true" } else { "false" },
-        ])
-        .output()?;
-    ensure!(
-        output.status.success(),
-        "cast send failed: {}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(())
-}
-
-fn current_block(rpc_url: &str) -> Result<u64> {
-    let output = Command::new("cast")
-        .args(["block-number", "--rpc-url", rpc_url])
-        .output()?;
-    ensure!(output.status.success(), "cast block-number failed");
-    String::from_utf8(output.stdout)?
-        .trim()
-        .parse()
-        .context("cast returned an invalid block number")
-}
-
 /// Leaves every deposit waiting so only the step under test advances state.
 struct WaitStep;
 
@@ -606,10 +473,6 @@ impl Step for WaitStep {
 
 fn wait_steps() -> StepSet {
     StepSet::new(Box::new(WaitStep), Box::new(WaitStep))
-}
-
-fn client(rpc_url: &str, timeout: StdDuration) -> Result<Arc<EvmClient>> {
-    Ok(Arc::new(EvmClient::with_timeout(rpc_url, timeout)?))
 }
 
 #[tokio::test]

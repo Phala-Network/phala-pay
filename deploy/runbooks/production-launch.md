@@ -252,7 +252,8 @@ export COMPOSE_HASH="$(jq -j '.compose_file' attestation.json | sha256sum | cut 
 export INSTANCE_ID="$(jq -er '[.tcb_info.event_log[] | select(.event == "instance-id") | .event_payload | ascii_downcase | select(test("^[0-9a-f]{40}$"))] | select(length == 1)[0]' attestation.json)"
 export GATEWAY_DOMAIN="$(jq -er '.gateway.base_domain' cvm.json)"
 curl -fsS "https://${INSTANCE_ID}-8090.$GATEWAY_DOMAIN/prpc/Info" > info.json
-kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" "$UPGRADE_COMPOSE" service
+EXPECTED_OS_IMAGE_HASH="$(cat deploy/environments/phala-network/production/topup/os-image-hash)"
+kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" "$UPGRADE_COMPOSE" service "$EXPECTED_OS_IMAGE_HASH"
 kit/deploy/verify-ingress-evidence.sh pay-api.phala.com "$APP_ID"
 test "$(curl -fsS -o /dev/null -w '%{http_code}' https://pay-api.phala.com/healthz)" = 200
 ```
@@ -493,8 +494,9 @@ restore_drill() {
   export RESTORE_GATEWAY_DOMAIN
   curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \
     > restore-info.json || return 1
+  EXPECTED_OS_IMAGE_HASH="$(cat deploy/environments/phala-network/production/topup/os-image-hash)" || return 1
   kit/deploy/verify-attestation.sh restore-attestation.json restore-info.json "$APP_ID" \
-    restore-check.yml restore-check || return 1
+    restore-check.yml restore-check "$EXPECTED_OS_IMAGE_HASH" || return 1
 
   # Restore step 3: wait for the report, checking live isolation at least every five minutes.
   live_isolated || { restore_cleanup; return 1; }
@@ -546,8 +548,9 @@ restore_drill() {
   export RESTORE_INSTANCE_ID
   curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \
     > restore-info-final.json || return 1
+  EXPECTED_OS_IMAGE_HASH="$(cat deploy/environments/phala-network/production/topup/os-image-hash)" || return 1
   kit/deploy/verify-attestation.sh restore-attestation-final.json restore-info-final.json "$APP_ID" \
-    restore-check.yml restore-check || return 1
+    restore-check.yml restore-check "$EXPECTED_OS_IMAGE_HASH" || return 1
 
   # Restore step 5: verify a nonce-bound admin attestation, the frozen state, and every smoke deposit.
   live_isolated || { restore_cleanup; return 1; }

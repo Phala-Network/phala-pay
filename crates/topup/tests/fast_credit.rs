@@ -30,7 +30,7 @@ use topup_adapters::chain::evm::{
     ChainError, ChainReader, EvmClient, FinalizedHead, FinalizedReader, ReceiptLookup, TransferLog,
 };
 use topup_adapters::pricing::{Observation, PriceError, PriceSource};
-use topup_adapters::risk::oracle::SanctionsSource;
+use topup_adapters::risk::SanctionsSource;
 use topup_core::deposit::DepositState;
 use topup_core::identity::{credited_event_id, deposit_id, reversed_event_id};
 use topup_core::money::{AtomicAmount, PRICE_SCALE, ScaledPrice};

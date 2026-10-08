@@ -377,7 +377,7 @@ impl Receiver {
 struct ClearSanctions;
 
 #[async_trait]
-impl topup_adapters::risk::oracle::SanctionsSource for ClearSanctions {
+impl topup_adapters::risk::SanctionsSource for ClearSanctions {
     async fn sanctions(
         &self,
         _address: Address,
@@ -4723,7 +4723,7 @@ async fn delivered_outcomes_stand_whatever_the_reconfirmed_settings_accept() -> 
 struct NamesSender(Address);
 
 #[async_trait]
-impl topup_adapters::risk::oracle::SanctionsSource for NamesSender {
+impl topup_adapters::risk::SanctionsSource for NamesSender {
     async fn sanctions(
         &self,
         address: Address,
@@ -4782,7 +4782,7 @@ async fn a_sanctions_hit_keeps_a_delivered_credit_and_blocks_its_sweep() -> Resu
             // A disagreement on replay cannot undo delivered value or create a sanctions hit.
             struct SplitSanctions;
             #[async_trait]
-            impl topup_adapters::risk::oracle::SanctionsSource for SplitSanctions {
+            impl topup_adapters::risk::SanctionsSource for SplitSanctions {
                 async fn sanctions(&self,_:Address,_block_number:u64)->topup_core::screening::SanctionsResult {
                     topup_core::screening::SanctionsResult::new(topup_core::screening::SanctionsVerdict::Uncertain)
                 }

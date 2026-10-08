@@ -604,9 +604,9 @@ export interface paths {
          * Cancels a pending refund that has no transaction attached and releases its reservation of the
          *     deposit; canceling a canceled refund returns it. Once `mark_paid` attached a transaction, the
          *     refund cannot be canceled, so that the deposit is never paid back twice: it stays reserved
-         *     until verification ends it, `succeeded`, or `failed` when the transaction does not pay it,
-         *     was dropped (its nonce consumed by another transaction at finality), or was never seen by the
-         *     service's providers within 24 hours. Then request a new refund.
+         *     until dual-source finalized verification ends it, `succeeded`, or `failed` when the transaction
+         *     does not pay it. A transaction never seen for 24 hours raises an alert and remains pending;
+         *     contact the operator before taking any further refund action.
          */
         readonly post: operations["cancel_refund"];
         readonly delete?: never;
@@ -3315,10 +3315,10 @@ export interface components {
             readonly destination_address: string;
             /**
              * @description Why the refund failed: `transaction_failed`, `transfer_not_found`, `sender_mismatch`,
-             *     `destination_mismatch`, `amount_mismatch`, `transfer_already_used`,
-             *     `transaction_dropped` (in no block while, at `finalized` on both providers, its sender's
-             *     nonce was used by another transaction), or `transaction_not_found` (no provider returned
-             *     it within 24 hours of `mark_paid`). New values may be added.
+             *     `destination_mismatch`, `amount_mismatch`, or `transfer_already_used`.
+             *     Historical refunds may retain `transaction_dropped` or `transaction_not_found`; missing
+             *     transactions now remain pending with their reservation and alert after 24 hours.
+             *     New values may be added.
              */
             readonly failure_reason?: string | null;
             /** @description `re_` id. */

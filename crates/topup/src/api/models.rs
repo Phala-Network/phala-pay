@@ -754,10 +754,10 @@ pub struct Refund {
     /// `failed`.
     pub status: String,
     /// Why the refund failed: `transaction_failed`, `transfer_not_found`, `sender_mismatch`,
-    /// `destination_mismatch`, `amount_mismatch`, `transfer_already_used`,
-    /// `transaction_dropped` (in no block while, at `finalized` on both providers, its sender's
-    /// nonce was used by another transaction), or `transaction_not_found` (no provider returned
-    /// it within 24 hours of `mark_paid`). New values may be added.
+    /// `destination_mismatch`, `amount_mismatch`, or `transfer_already_used`.
+    /// Historical refunds may retain `transaction_dropped` or `transaction_not_found`; missing
+    /// transactions now remain pending with their reservation and alert after 24 hours.
+    /// New values may be added.
     pub failure_reason: Option<String>,
     /// The attached refund transaction, once marked paid.
     pub transaction_hash: Option<String>,

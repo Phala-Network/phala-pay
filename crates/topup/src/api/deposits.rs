@@ -700,9 +700,9 @@ pub(crate) async fn mark_refund_paid(
 /// Cancels a pending refund that has no transaction attached and releases its reservation of the
 /// deposit; canceling a canceled refund returns it. Once `mark_paid` attached a transaction, the
 /// refund cannot be canceled, so that the deposit is never paid back twice: it stays reserved
-/// until verification ends it, `succeeded`, or `failed` when the transaction does not pay it,
-/// was dropped (its nonce consumed by another transaction at finality), or was never seen by the
-/// service's providers within 24 hours. Then request a new refund.
+/// until dual-source finalized verification ends it, `succeeded`, or `failed` when the transaction
+/// does not pay it. A transaction never seen for 24 hours raises an alert and remains pending;
+/// contact the operator before taking any further refund action.
 pub(crate) async fn cancel_refund(
     State(state): State<AppState>,
     Extension(merchant): Extension<Merchant>,

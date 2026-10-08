@@ -179,7 +179,6 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         }
         "TopupHeartbeatStale"
         | "TopupTreasuryProgressAge"
-        | "TopupRefundProgressAge"
         | "TopupCertificateExpiry"
         | "TopupCertificateProbeFailed"
         | "TopupBusinessProbeFailed" => "business-health.md",
@@ -203,6 +202,9 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         "TopupAddressCapacity" => "address-capacity.md",
         "TopupLockExpiryFailing" => "lock-expiry-worker-failure.md",
         "TopupLockExposureNearCap" => "lock-exposure-near-cap.md",
+        "TopupRefundProgressAge" => {
+            "rejected-funds-at-treasury.md#pending-refund-transaction-alert"
+        }
         "TopupUnsupportedInflows" => "rejected-funds-at-treasury.md",
         "TopupSanctionsListStale"
         | "TopupSanctionsListVerifyFailed"

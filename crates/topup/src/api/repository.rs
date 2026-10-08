@@ -709,7 +709,7 @@ async fn cancel_refund_in(
         "canceled" => return Ok(()),
         "pending" if tx_hash.is_some() => {
             return Err(ApiError::refund_unexpected_state(
-                "marked paid: it ends when its transaction is verified or proven dropped",
+                "marked paid: its reservation remains until finalized verification resolves it",
             ));
         }
         "pending" => {}

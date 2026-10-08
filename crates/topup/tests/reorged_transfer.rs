@@ -25,7 +25,7 @@ use topup_adapters::chain::evm::{
     ChainError, ChainReader, FactoryLog, FinalizedHead, ReceiptLookup, TransferLog,
 };
 use topup_adapters::pricing::{Observation, PriceError, PriceSource};
-use topup_adapters::risk::oracle::SanctionsSource;
+use topup_adapters::risk::SanctionsSource;
 use topup_core::deposit::{DepositState, RejectReason};
 use topup_core::identity::{
     credited_event_id, deposit_id, deposit_revision_id, event_id, reversed_event_id,

@@ -523,6 +523,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_upgrade_monitor.py
           deploy/tests/phala-cvm-wait.sh
           deploy/tests/attested-compose.sh
+          deploy/tests/verify-attestation.sh
           deploy/tests/instance-pause.sh
           deploy/tests/verify-ingress-evidence.sh
           deploy/tests/preflight-phala.sh

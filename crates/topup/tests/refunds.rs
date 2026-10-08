@@ -1136,7 +1136,8 @@ async fn only_an_unpaid_refund_is_canceled_and_missing_receipts_keep_the_reserva
 }
 
 #[tokio::test]
-async fn a_refund_transaction_no_provider_ever_returned_fails_after_a_day() -> Result<()> {
+#[tracing_test::traced_test]
+async fn an_unseen_refund_alerts_after_a_day_and_cannot_be_refunded_twice() -> Result<()> {
     let Some(database) = TestDatabase::create().await? else {
         return Ok(());
     };
@@ -1157,26 +1158,161 @@ async fn a_refund_transaction_no_provider_ever_returned_fails_after_a_day() -> R
         ensure!(worker.check_once().await? == Verification::Waiting);
         ensure!(refund_status(pool, refund_id).await? == "pending");
 
-        // A day after `mark_paid`, still never seen, it fails and releases the deposit.
+        // A day after `mark_paid`, absence still cannot prove it will never pay.
         sqlx::query("UPDATE refunds SET paid_at = now() - interval '25 hours' WHERE id = $1")
             .bind(refund_id)
             .execute(pool)
             .await?;
         let worker = test_worker(pool, missing(), missing());
-        ensure!(worker.check_once().await? == Verification::Failed);
+        ensure!(worker.check_once().await? == Verification::Waiting);
         let (_, refund) = merchant
             .call(Method::GET, &format!("/v1/refunds/{id}"), Vec::new())
             .await?;
         ensure!(
-            refund["status"] == "failed" && refund["failure_reason"] == "transaction_not_found",
+            refund["status"] == "pending" && refund["failure_reason"].is_null(),
             "{refund}"
         );
-        merchant.refund(deposit, "100").await?;
+        let evidence: Value =
+            sqlx::query_scalar("SELECT confirmation_evidence FROM refunds WHERE id=$1")
+                .bind(refund_id)
+                .fetch_one(pool)
+                .await?;
+        ensure!(evidence["result"] == "not_found_overdue", "{evidence}");
+        ensure!(
+            logs_contain("TopupRefundProgressAge"),
+            "missing timeout alert"
+        );
+        let events: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM events WHERE type = 'refund.failed'")
+                .fetch_one(pool)
+                .await?;
+        ensure!(events == 0, "absence emitted a failure event");
+        let (status, error) = merchant
+            .post(
+                "/v1/refunds",
+                refund_body(deposit, REFUND_DESTINATION, "100")?,
+            )
+            .await?;
+        ensure!(status == StatusCode::BAD_REQUEST, "{error}");
+        let (status, _) = merchant
+            .post(&format!("/v1/refunds/{id}/cancel"), Vec::new())
+            .await?;
+        ensure!(status == StatusCode::BAD_REQUEST);
+        // The original payout can still arrive later and must resolve the same reservation.
+        let paying = finalized(vec![transfer(
+            FIXTURE_TREASURY,
+            REFUND_DESTINATION,
+            100,
+            0,
+        )?]);
+        let worker = test_worker(pool, vec![paying.clone()], vec![paying]);
+        ensure!(worker.check_once().await? == Verification::Succeeded);
+        ensure!(refund_status(pool, refund_id).await? == "succeeded");
         Ok(())
     }
     .await;
     let cleanup = database.cleanup().await;
     result.and(cleanup)
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn pending_refund_cadence_uses_attachment_age_without_catching_up() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            #[derive(Clone, Default)]
+            struct MissingReader(Arc<AtomicUsize>);
+            #[async_trait]
+            impl RefundChainReader for MissingReader {
+                async fn receipt(&self, _: u64, _: B256) -> Result<RefundReceipt, RefundReadError> {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    Ok(RefundReceipt::Missing)
+                }
+                async fn origin(
+                    &self,
+                    _: u64,
+                    _: B256,
+                ) -> Result<Option<(Address, u64)>, RefundReadError> {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    Ok(None)
+                }
+            }
+            let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
+            let admin_key = SigningKey::from_bytes(&[49; 32]);
+            let app = test_router(pool, &admin_key);
+            let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
+            let deposit = seed_rejected_deposit(pool, merchant.account.id, "cadence", 100).await?;
+            let id = merchant.refund(deposit, "100").await?;
+            merchant.mark_paid(&id, REFUND_TX).await?;
+            let id = topup::ids::parse(topup::ids::REFUND, &id).context("refund id")?;
+            let attached = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+                .context("attachment time")?;
+            sqlx::query("UPDATE refunds SET paid_at=$2,next_check_at=$2 WHERE id=$1")
+                .bind(id)
+                .bind(attached)
+                .execute(pool)
+                .await?;
+            let read = MissingReader::default();
+            let verify = MissingReader::default();
+            let worker = RefundVerificationWorker::new(
+                pool.clone(),
+                Arc::new(
+                    topup::routes::RouteSet::new(vec![route_fixture()])
+                        .map_err(anyhow::Error::msg)?,
+                ),
+                read.clone(),
+                verify.clone(),
+                RefundVerificationConfig::default(),
+            );
+            let mut checks = 0;
+            // Half-open phase intervals: [0, 30 min), [30 min, 24 h), then hourly forever.
+            for (start, count, interval) in
+                [(0_i64, 30, 60_i64), (1800, 141, 600), (86400, 24, 3600)]
+            {
+                for index in 0..count {
+                    let now = attached + Duration::seconds(start + i64::from(index) * interval);
+                    if checks > 0 {
+                        ensure!(
+                            worker.check_once_at(now - Duration::seconds(1)).await?
+                                == Verification::Idle
+                        );
+                        ensure!(read.0.load(Ordering::SeqCst) == checks * 2);
+                        ensure!(verify.0.load(Ordering::SeqCst) == checks * 2);
+                    }
+                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                    checks += 1;
+                    ensure!(read.0.load(Ordering::SeqCst) == checks * 2);
+                    ensure!(verify.0.load(Ordering::SeqCst) == checks * 2);
+                    let next: chrono::DateTime<Utc> =
+                        sqlx::query_scalar("SELECT next_check_at FROM refunds WHERE id=$1")
+                            .bind(id)
+                            .fetch_one(pool)
+                            .await?;
+                    ensure!(
+                        next == now + Duration::seconds(interval),
+                        "phase at {now}: next {next}"
+                    );
+                    ensure!(worker.check_once_at(now).await? == Verification::Idle);
+                }
+            }
+            ensure!(checks == 195);
+            // A restart long after the last check performs one observation, with no catch-up burst.
+            let later = attached + Duration::days(365);
+            ensure!(worker.check_once_at(later).await? == Verification::Waiting);
+            ensure!(
+                worker.check_once_at(later + Duration::minutes(59)).await? == Verification::Idle
+            );
+            ensure!(
+                worker.check_once_at(later + Duration::hours(1)).await? == Verification::Waiting
+            );
+            ensure!(read.0.load(Ordering::SeqCst) == 394 && verify.0.load(Ordering::SeqCst) == 394);
+            ensure!(refund_status(pool, id).await? == "pending");
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[tokio::test]
@@ -2417,33 +2553,53 @@ fn test_worker(
     pool: &sqlx::PgPool,
     primary: Vec<RefundReceipt>,
     secondary: Vec<RefundReceipt>,
-) -> RefundVerificationWorker<ScriptedReader, ScriptedReader> {
+) -> TestWorker {
     test_worker_with(pool, primary, secondary, None)
 }
 
-/// [`test_worker`] whose providers both return the transaction as sent by `origin`, and the
-/// sender's nonce at `finalized` as `finalized_nonce`.
+/// [`test_worker`] whose providers both return the transaction as sent by `origin`.
 fn test_worker_with(
     pool: &sqlx::PgPool,
     primary: Vec<RefundReceipt>,
     secondary: Vec<RefundReceipt>,
     origin: Option<(Address, u64)>,
-) -> RefundVerificationWorker<ScriptedReader, ScriptedReader> {
+) -> TestWorker {
     let reader = |receipts: Vec<RefundReceipt>| ScriptedReader {
         receipts: Mutex::new(receipts.into()),
         origin,
     };
-    RefundVerificationWorker::new(
-        pool.clone(),
-        Arc::new(topup::routes::RouteSet::new(vec![route_fixture()]).expect("route fixture loads")),
-        reader(primary),
-        reader(secondary),
-        RefundVerificationConfig {
-            poll_interval: StdDuration::ZERO,
-            retry_interval: StdDuration::ZERO,
-            observe_timeout: StdDuration::from_secs(1),
-        },
-    )
+    TestWorker {
+        pool: pool.clone(),
+        inner: RefundVerificationWorker::new(
+            pool.clone(),
+            Arc::new(
+                topup::routes::RouteSet::new(vec![route_fixture()]).expect("route fixture loads"),
+            ),
+            reader(primary),
+            reader(secondary),
+            RefundVerificationConfig {
+                poll_interval: StdDuration::ZERO,
+                retry_interval: StdDuration::ZERO,
+                observe_timeout: StdDuration::from_secs(1),
+            },
+        ),
+    }
+}
+
+/// Monetary behavior fixtures explicitly make pending rows due between scripted observations.
+/// Cadence is exercised separately with the real worker and a controlled clock.
+struct TestWorker {
+    pool: sqlx::PgPool,
+    inner: RefundVerificationWorker<ScriptedReader, ScriptedReader>,
+}
+
+impl TestWorker {
+    async fn check_once(&self) -> Result<Verification> {
+        sqlx::query("UPDATE refunds SET next_check_at=now() WHERE status='pending'")
+            .execute(&self.pool)
+            .await?;
+        Ok(self.inner.check_once().await?)
+    }
 }
 
 /// Screening that lists [`SANCTIONED`], or that cannot answer.

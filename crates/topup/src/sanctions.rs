@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use topup_adapters::risk::oracle::SanctionsSource;
+use topup_adapters::risk::SanctionsSource;
 use topup_core::screening::{SanctionsProvenance, SanctionsResult, SanctionsVerdict};
 use uuid::Uuid;
 

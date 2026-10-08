@@ -2,7 +2,8 @@
 set -eu
 
 # Verifies a deployed CVM with the official dstack verifier (dstack-verifier.sh): the TDX quote
-# and TCB, the RTMR3 event-log replay, and the OS image measurements. The replayed app id must be
+# and TCB, the RTMR3 event-log replay, and the OS image measurements. The verified OS image hash
+# must match EXPECTED_OS_IMAGE_HASH, pinned in the reviewed environment directory. The replayed app id must be
 # APP_ID and the replayed compose hash the SHA-256 of the attested app-compose (the full
 # app-compose JSON the Phala CLI built, not the compose file), whose docker_compose_file must be
 # EXPECTED_COMPOSE byte for byte. Then the compose's own policy for VARIANT (`service`,
@@ -18,8 +19,8 @@ set -eu
 # CVM runs with public tcbinfo): the vm_config the quote does not carry. The app-compose's binding to
 # EXPECTED_COMPOSE and the pre-launch script is deploy/attested-compose.sh's, which deploy.sh uses
 # too.
-if [ "$#" -ne 5 ]; then
-    echo "usage: verify-attestation.sh ATTESTATION_JSON INFO_JSON APP_ID EXPECTED_COMPOSE service|restore-check|template|product" >&2
+if [ "$#" -ne 6 ]; then
+    echo "usage: verify-attestation.sh ATTESTATION_JSON INFO_JSON APP_ID EXPECTED_COMPOSE service|restore-check|template|product EXPECTED_OS_IMAGE_HASH" >&2
     exit 64
 fi
 case "$5" in
@@ -32,6 +33,11 @@ attestation=$1
 info=$2
 app_id=$(printf '%s' "${3#0x}" | tr 'A-F' 'a-f')
 expected_compose=$4
+expected_os_hash=$6
+printf '%s' "$expected_os_hash" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || {
+    echo "EXPECTED_OS_IMAGE_HASH must be 64 lowercase hexadecimal characters" >&2
+    exit 64
+}
 tmp=$(mktemp -d)
 
 cleanup() {
@@ -52,13 +58,15 @@ jq -e --slurpfile info "$info" '{
 "$root/deploy/dstack-verifier.sh" <"$tmp/request.json" >"$tmp/result.json"
 
 compose_hash=$("$root/deploy/attested-compose.sh" "$attestation" "$expected_compose" "$tmp")
-jq -e --arg app_id "$app_id" --arg compose_hash "$compose_hash" '
-    .details.tcb_status == "UpToDate"
+jq -e --arg app_id "$app_id" --arg compose_hash "$compose_hash" --arg os_hash "$expected_os_hash" '
+    .is_valid == true
+    and .details.tcb_status == "UpToDate"
     and .details.app_info.app_id == $app_id
     and .details.app_info.compose_hash == $compose_hash
+    and .details.app_info.os_image_hash == $os_hash
 ' "$tmp/result.json" >/dev/null || {
-    echo "the verified attestation does not match: expected TCB UpToDate, app id $app_id, compose hash $compose_hash" >&2
-    jq '.details | {tcb_status, advisory_ids, app_id: .app_info.app_id, compose_hash: .app_info.compose_hash}' \
+    echo "the verified attestation does not match: expected TCB UpToDate, app id $app_id, compose hash $compose_hash, OS image hash $expected_os_hash" >&2
+    jq '.details | {tcb_status, advisory_ids, app_id: .app_info.app_id, compose_hash: .app_info.compose_hash, os_image_hash: .app_info.os_image_hash}' \
         "$tmp/result.json" >&2
     exit 1
 }

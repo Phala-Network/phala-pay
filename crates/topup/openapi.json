@@ -3643,7 +3643,7 @@
             "type": "string"
           },
           "failure_reason": {
-            "description": "Why the refund failed: `transaction_failed`, `transfer_not_found`, `sender_mismatch`,\n`destination_mismatch`, `amount_mismatch`, `transfer_already_used`,\n`transaction_dropped` (in no block while, at `finalized` on both providers, its sender's\nnonce was used by another transaction), or `transaction_not_found` (no provider returned\nit within 24 hours of `mark_paid`). New values may be added.",
+            "description": "Why the refund failed: `transaction_failed`, `transfer_not_found`, `sender_mismatch`,\n`destination_mismatch`, `amount_mismatch`, or `transfer_already_used`.\nHistorical refunds may retain `transaction_dropped` or `transaction_not_found`; missing\ntransactions now remain pending with their reservation and alert after 24 hours.\nNew values may be added.",
             "type": [
               "string",
               "null"
@@ -13777,7 +13777,7 @@
             "api_key": []
           }
         ],
-        "summary": "Cancels a pending refund that has no transaction attached and releases its reservation of the\ndeposit; canceling a canceled refund returns it. Once `mark_paid` attached a transaction, the\nrefund cannot be canceled, so that the deposit is never paid back twice: it stays reserved\nuntil verification ends it, `succeeded`, or `failed` when the transaction does not pay it,\nwas dropped (its nonce consumed by another transaction at finality), or was never seen by the\nservice's providers within 24 hours. Then request a new refund.",
+        "summary": "Cancels a pending refund that has no transaction attached and releases its reservation of the\ndeposit; canceling a canceled refund returns it. Once `mark_paid` attached a transaction, the\nrefund cannot be canceled, so that the deposit is never paid back twice: it stays reserved\nuntil dual-source finalized verification ends it, `succeeded`, or `failed` when the transaction\ndoes not pay it. A transaction never seen for 24 hours raises an alert and remains pending;\ncontact the operator before taking any further refund action.",
         "tags": [
           "refunds"
         ]

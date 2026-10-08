@@ -11,9 +11,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::chain::flush::{
-    ContractAddressGetter, FactoryEvent, addressOfCall, balanceOfCall,
-    decode_contract_address_getter, encode_address_of, encode_balance_of,
-    encode_contract_address_getter, factory_event_signatures,
+    ContractAddressGetter, FactoryEvent, balanceOfCall, decode_contract_address_getter,
+    encode_balance_of, encode_contract_address_getter, factory_event_signatures,
 };
 use crate::redaction::{Redacted, RedactedTransportError};
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -446,7 +445,7 @@ type BlockTimes = FifoCache<B256, DateTime<Utc>>;
 
 /// Timeout for one bounded RPC request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// Canonical Multicall3 deployment, through which every balance and `addressOf` read is
+/// Canonical Multicall3 deployment, through which every batched balance read is
 /// aggregated; `topup run` refuses a chain where it is missing or differs.
 pub const MULTICALL3: Address = MULTICALL3_ADDRESS;
 /// Calls aggregated into one Multicall3 `eth_call`, bounding its calldata (about 200 bytes per
@@ -827,22 +826,6 @@ impl EvmClient {
             .map(|address| CallItem::<balanceOfCall>::new(token, encode_balance_of(*address)))
             .collect();
         self.aggregate("balanceOf multicall", calls, block.into())
-            .await
-    }
-
-    /// Reads the deterministic forwarder addresses of `treasury` at the latest block through
-    /// Multicall3.
-    pub async fn factory_addresses(
-        &self,
-        factory: Address,
-        treasury: Address,
-        salts: &[B256],
-    ) -> Result<Vec<Address>, ChainError> {
-        let calls = salts
-            .iter()
-            .map(|salt| CallItem::<addressOfCall>::new(factory, encode_address_of(treasury, *salt)))
-            .collect();
-        self.aggregate("addressOf multicall", calls, BlockId::latest())
             .await
     }
 
@@ -2538,27 +2521,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn balance_and_address_reads_never_depend_on_provider_batch_limits() {
+    async fn balance_reads_never_depend_on_provider_batch_limits() {
         let (client, observed, server) = batch_capped_node().await;
         let count = MULTICALL_CHUNK + 1;
         let addresses = (0..count)
             .map(|index| Address::with_last_byte(u8::try_from(index % 256).expect("byte")))
             .collect::<Vec<_>>();
-        let salts = vec![B256::repeat_byte(1); 6];
 
         let tokens = client
             .token_balances(Address::ZERO, &addresses, BlockNumberOrTag::Number(7))
             .await;
-        let derived = client
-            .factory_addresses(Address::ZERO, Address::ZERO, &salts)
-            .await;
         server.abort();
 
         assert_eq!(tokens.expect("token balances"), vec![U256::from(1); count]);
-        assert_eq!(
-            derived.expect("derived addresses"),
-            vec![Address::with_last_byte(1); 6]
-        );
         // One aggregate3 `eth_call` per chunk, at the read's block, where no call may fail.
         let observed = observed.lock().expect("observed calls").clone();
         let shape = observed
@@ -2570,7 +2545,6 @@ mod tests {
             vec![
                 (Value::from("0x7"), MULTICALL_CHUNK),
                 (Value::from("0x7"), 1),
-                (Value::from("latest"), 6),
             ]
         );
         assert!(

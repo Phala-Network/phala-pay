@@ -35,7 +35,7 @@ use topup::treasuries::{
 };
 use topup_adapters::attestation::DstackAttestor;
 use topup_adapters::chain::evm::EvmClient;
-use topup_adapters::risk::oracle::SanctionsSource;
+use topup_adapters::risk::SanctionsSource;
 use topup_core::deposit::{StepOutcome, WaitReason};
 use topup_core::money::{AtomicAmount, PRICE_SCALE, ScaledPrice};
 use topup_core::route::RouteFile;

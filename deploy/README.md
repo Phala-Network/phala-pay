@@ -40,7 +40,13 @@ deploy, makes it detectable.
 
 ### OS image
 
-The approved OS image is `dstack-0.5.9`, non-dev. [preflight.sh](preflight.sh) accepts only that name and, online, requires a node of the
+The approved OS image is `dstack-0.5.9`, non-dev, with verified image hash
+`bd369a8c2f9edb2b52dad48ac8e0b32dde5f1337c423a506b48d07403a7d8033`.
+The reviewed `os-image-hash` file in each environment directory pins this hash, including both
+Phala staging and production topup configurations. Staging must run this production image before
+acceptance; a dev image fails verification. Changing the approved pin requires a reviewed PR.
+Both provision and upgrade pass the pin to [verify-attestation.sh](verify-attestation.sh), which
+fails if the official verifier's attested OS hash differs or is missing. [preflight.sh](preflight.sh) accepts only that name and, online, requires a node of the
 workspace to offer it. The service speaks the dstack 0.5 guest API (`dstack-sdk = "=0.1.3"`); the
 local simulator is built from the same release. dstack 0.6 derives different keys for the same
 domain, so moving to it changes every account's webhook keys (which merchants pin), the backup
@@ -620,14 +626,16 @@ kit/deploy/phala cvms get "$CVM_ID" --json > cvm.json
 kit/deploy/phala cvms attestation "$CVM_ID" --json > attestation.json
 APP_ID=$(jq -er '.app_id' cvm.json) && GATEWAY_DOMAIN=$(jq -er '.gateway.base_domain' cvm.json)
 curl -fsS "https://${APP_ID#0x}-8090.$GATEWAY_DOMAIN/prpc/Info" > info.json
-kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" docker-compose.ENV.yml service
+EXPECTED_OS_IMAGE_HASH="$(cat production/topup/os-image-hash)"
+kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" docker-compose.ENV.yml service \
+  "$EXPECTED_OS_IMAGE_HASH"
 export ORIGIN="https://$DOMAIN"   # topup.yaml's public_origin
 kit/deploy/verify-ingress-evidence.sh "$DOMAIN" "$APP_ID"
 ```
 
 [verify-attestation.sh](verify-attestation.sh) runs the official dstack verifier
 ([dstack-verifier.sh](dstack-verifier.sh), `dstacktee/dstack-verifier:0.5.9` pinned by digest:
-TDX quote and TCB, RTMR3 event-log replay, OS image measurements). It requires TCB `UpToDate`, the
+TDX quote and TCB, RTMR3 event-log replay, OS image measurements). It requires the approved OS image hash, TCB `UpToDate`, the
 app id, and a compose hash whose app-compose holds exactly the rendered compose. The compose hash
 is the hash of the full app-compose JSON the Phala CLI builds (with `allowed_envs` and the CVM
 options), not of the YAML file, so every upgrade's hash is new and goes to merchants

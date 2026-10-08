@@ -1280,11 +1280,16 @@ POST /v1/refunds/re_…/mark_paid
   `400 refund_unexpected_state`.
 - **Once marked paid, a refund cannot be canceled** (`400 refund_unexpected_state`): the attached
   transaction may still be mined, and a second refund would pay the customer twice. It stays
-  `pending`, holding its reservation, until it `succeeded`, or `failed` because the transaction is
-  proven not to pay it: final without the transfer (above); or `transaction_not_found`, when
-  neither provider has ever returned the transaction within 24 hours of `mark_paid` (a mistyped
-  hash, or one never broadcast; do not broadcast it afterwards). An observed transaction that
-  disappears stays pending with its reservation. Sender nonce changes cannot prove it dropped.
+  `pending`, holding its reservation, until dual-source finalized receipt verification resolves
+  it as `succeeded` or `failed` (above). Neither elapsed time nor a sender nonce change proves the
+  transaction cannot pay it. If neither provider has ever returned it after 24 hours, the service
+  alerts the operator and keeps it pending. **Do not create or pay a replacement refund** in this
+  state; contact your operator to investigate the attached transaction. There is currently no
+  API to release this reservation based on a claimed replacement or dropped transaction.
+  Historical failed refunds may still carry `transaction_not_found` or `transaction_dropped`.
+- Pending attached refunds are checked every 60 seconds for the first 30 minutes after
+  `mark_paid`, every 10 minutes until 24 hours, then every hour indefinitely until resolved.
+  Each check uses both endpoints. This cadence can delay the success event for an older payout.
 - `POST /v1/refunds/{id}/cancel` cancels a pending refund that has no transaction attached and
   releases its reservation. `GET /v1/refunds/{id}` reads a refund.
 - When `deposit.refunded` arrives, apply its snapshot by the balance rule (§2.3): its

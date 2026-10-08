@@ -68,6 +68,16 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Changed
 
+- **Breaking:** Refund transactions never seen by either endpoint after 24 hours remain `pending`
+  and keep their reservation, with `TopupRefundProgressAge` alerting the operator. They no longer
+  become `failed` with `transaction_not_found` or emit `refund.failed`; merchants cannot refund
+  the reserved amount again or cancel after `mark_paid`. Attached refunds are checked every 60 s
+  for the first 30 min, every 10 min until 24 h, then hourly until finalized verification resolves
+  them. Historical failure values remain readable.
+- **Breaking:** Global API overload on transaction-hint endpoints returns the standard retryable
+  `503 unavailable` instead of `202 received`, before reading the request body. Admitted hints
+  retain their quiet acknowledgement behavior.
+
 - Removed the per-source pre-authentication budget: Phala's TCP ingress exposes only the shared
   gateway's WireGuard address, so one client could exhaust it and cause every merchant to receive
   `429`. There is no per-client-IP limiting; see

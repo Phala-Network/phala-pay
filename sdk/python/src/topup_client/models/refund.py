@@ -53,10 +53,10 @@ class Refund:
                 differ from the account's current treasury.
             failure_reason (None | str | Unset): Why the refund failed: `transaction_failed`, `transfer_not_found`,
                 `sender_mismatch`,
-                `destination_mismatch`, `amount_mismatch`, `transfer_already_used`,
-                `transaction_dropped` (in no block while, at `finalized` on both providers, its sender's
-                nonce was used by another transaction), or `transaction_not_found` (no provider returned
-                it within 24 hours of `mark_paid`). New values may be added.
+                `destination_mismatch`, `amount_mismatch`, or `transfer_already_used`.
+                Historical refunds may retain `transaction_dropped` or `transaction_not_found`; missing
+                transactions now remain pending with their reservation and alert after 24 hours.
+                New values may be added.
             receipt_log_index (int | None | Unset): Position of the paying `Transfer` log among the logs of the
                 transaction's receipt: as named
                 when marked paid, or found at verification.

@@ -352,7 +352,8 @@ kit/deploy/phala cvms get "$CVM_ID" --json > cvm.json
 kit/deploy/phala cvms attestation "$CVM_ID" --json > attestation.json
 APP_ID=$(jq -er '.app_id' cvm.json) && GATEWAY_DOMAIN=$(jq -er '.gateway.base_domain' cvm.json)
 curl -fsS "https://${APP_ID#0x}-8090.$GATEWAY_DOMAIN/prpc/Info" > info.json
-kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" docker-compose.production.yml service
+EXPECTED_OS_IMAGE_HASH="$(cat production/topup/os-image-hash)"
+kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" docker-compose.production.yml service "$EXPECTED_OS_IMAGE_HASH"
 kit/deploy/verify-ingress-evidence.sh "<your domain>" "$APP_ID"
 ```
 

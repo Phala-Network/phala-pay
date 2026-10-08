@@ -780,7 +780,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let screen_step = ScreenStep::from_source(
         pool.clone(),
         &routes,
-        Arc::clone(&screening) as Arc<dyn topup_adapters::risk::oracle::SanctionsSource>,
+        Arc::clone(&screening) as Arc<dyn topup_adapters::risk::SanctionsSource>,
     )
     .context("failed to configure screening step")?;
     let steps = Arc::new(StepSet::new(Box::new(confirm_step), Box::new(screen_step)));

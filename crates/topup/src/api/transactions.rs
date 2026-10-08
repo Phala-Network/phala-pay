@@ -1,4 +1,4 @@
-//! Object-scoped transaction submissions. Responses never report validation or chain results.
+//! Object-scoped transaction submissions. Admitted responses disclose no validation or chain result.
 
 use alloy_primitives::{Address, B256};
 use axum::{
@@ -77,18 +77,58 @@ fn acknowledgement(hash: String) -> Response {
     response
 }
 
-/// Normalize every submission outcome, including auth, input, rate and infrastructure failures.
-pub(super) async fn received(mut request: Request, next: Next) -> Response {
-    let hint_route = request
-        .extensions()
-        .get::<MatchedPath>()
-        .is_some_and(|path| {
-            matches!(
-                path.as_str(),
-                "/v1/quotes/{id}/transactions" | "/v1/deposit_addresses/{id}/transactions"
-            )
-        });
-    if !hint_route {
+/// True for hint submissions and their CORS preflight requests.
+pub(super) fn is_submission(request: &Request) -> bool {
+    matches!(*request.method(), Method::POST | Method::OPTIONS)
+        && request
+            .extensions()
+            .get::<MatchedPath>()
+            .is_some_and(|path| {
+                matches!(
+                    path.as_str(),
+                    "/v1/quotes/{id}/transactions" | "/v1/deposit_addresses/{id}/transactions"
+                )
+            })
+}
+
+#[derive(Clone)]
+struct SubmissionHash(String);
+
+#[derive(Clone)]
+struct UnreadSubmission;
+
+/// Read a bounded hint body only after the global concurrency gate has admitted it.
+pub(super) async fn read_body(mut request: Request, next: Next) -> Response {
+    if !is_submission(&request) || request.method() != Method::POST {
+        return next.run(request).await;
+    }
+    let body = std::mem::replace(request.body_mut(), Body::empty());
+    let bytes =
+        match tokio::time::timeout(super::client_limit::READ_TIMEOUT, to_bytes(body, 4096)).await {
+            Ok(Ok(bytes)) => bytes,
+            _ => {
+                request.extensions_mut().insert(UnreadSubmission);
+                return next.run(request).await;
+            }
+        };
+    let hash = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("transaction_hash")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_default();
+    *request.body_mut() = Body::from(bytes);
+    request.extensions_mut().insert(SubmissionHash(hash));
+    next.run(request).await
+}
+
+/// Normalize admitted submission outcomes, including auth, input and processing failures.
+/// Global overload is returned outside this conversion, before any body is read.
+pub(super) async fn received(request: Request, next: Next) -> Response {
+    if !is_submission(&request) {
         return next.run(request).await;
     }
     if request.method() == Method::OPTIONS {
@@ -108,26 +148,16 @@ pub(super) async fn received(mut request: Request, next: Next) -> Response {
         );
         return response;
     }
-    if request.method() != Method::POST {
-        return next.run(request).await;
-    }
-    let body = std::mem::replace(request.body_mut(), Body::empty());
-    let bytes =
-        match tokio::time::timeout(super::client_limit::READ_TIMEOUT, to_bytes(body, 4096)).await {
-            Ok(Ok(bytes)) => bytes,
-            _ => return acknowledgement(String::new()),
-        };
-    let hash = serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("transaction_hash")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
+    let hash = request
+        .extensions()
+        .get::<SubmissionHash>()
+        .map(|hash| hash.0.clone())
         .unwrap_or_default();
-    *request.body_mut() = Body::from(bytes);
-    let _ = next.run(request).await;
+    if request.extensions().get::<super::ReadOnly>().is_none()
+        && request.extensions().get::<UnreadSubmission>().is_none()
+    {
+        let _ = next.run(request).await;
+    }
     acknowledgement(hash)
 }
 

@@ -167,7 +167,7 @@ The provision proves nothing about the instance's health. It is accepted once
   - $answers, and
   - you have verified its attestation with the release's verified kit
     ($docs#5-verify-the-attestation):
-      kit/deploy/verify-attestation.sh attestation.json info.json $app_id $record $variant
+      kit/deploy/verify-attestation.sh attestation.json info.json $app_id $record $variant "\$(cat "$env_dir/os-image-hash")"
 
 Next, create a merchant account with the admin key (BASE_URL=$url):
 $docs#6-onboard-your-first-account
@@ -414,6 +414,7 @@ services:
     environment:
       DOMAIN: $DOMAIN
 YAML
+            cp "$kit/deploy/environments/phala-cloud-template/topup/os-image-hash" "$env_dir/os-image-hash"
             say "wrote $env_dir: this instance's settings, no secret"
         fi
     fi

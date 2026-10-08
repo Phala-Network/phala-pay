@@ -17,7 +17,7 @@ use sqlx::{AssertSqlSafe, PgPool, Row};
 use topup::db::{
     self, ApplyTransitionResult, EventObject, NewDeposit, OutboxEvent, TransitionUpdate,
 };
-use topup::reconciler::{CheckName, Reconciler, ReconciliationChain, ReconciliationError};
+use topup::reconciler::{CheckName, Reconciler, ReconciliationChain};
 use topup::{heartbeat, restore};
 use topup_core::deposit::{DepositState, StepOutcome, WaitReason, next};
 use topup_core::identity::deposit_id;
@@ -440,23 +440,8 @@ async fn application_role_can_only_append_heartbeats() -> Result<()> {
 /// Chain double for a restore check run without chain access; only alert-only checks use it.
 struct UnavailableChain;
 
-impl UnavailableChain {
-    fn error<T>() -> Result<T, ReconciliationError> {
-        Err(ReconciliationError::Chain("chain unavailable".to_owned()))
-    }
-}
-
 #[async_trait]
-impl ReconciliationChain for UnavailableChain {
-    async fn factory_addresses(
-        &self,
-        _factory: Address,
-        _treasury: Address,
-        _salts: &[B256],
-    ) -> Result<Vec<Address>, ReconciliationError> {
-        Self::error()
-    }
-}
+impl ReconciliationChain for UnavailableChain {}
 
 fn restore_reconciler(pool: &PgPool) -> Result<Reconciler> {
     let mut route: RouteFile =
