@@ -126,7 +126,7 @@ async fn postgres_pump_persists_screening_transitions_pauses_and_outbox() -> Res
             ensure!(clear_evidence["pause_scopes"]["route"] == serde_json::json!([]));
             let rejected_evidence = transition_evidence(&context.app_pool, sanctioned_id).await?;
             ensure!(rejected_evidence["sanctions"] == "sanctioned");
-            ensure!(rejected_evidence["oracle"] == format!("{:#x}", Address::repeat_byte(9)));
+            ensure!(rejected_evidence.get("oracle").is_none());
 
             // Each event names its account, mode, and deposit; its data, the deposit's API
             // representation, is rendered in the transaction that records the transition.
@@ -542,7 +542,7 @@ async fn set_route_pauses(pool: &PgPool, scopes: &[&str]) -> Result<()> {
 
 async fn transition_evidence(pool: &PgPool, deposit_id: Uuid) -> Result<Value> {
     Ok(
-        sqlx::query("SELECT evidence FROM transitions WHERE deposit_id = $1")
+        sqlx::query("SELECT evidence FROM transitions WHERE deposit_id = $1 ORDER BY created_at DESC LIMIT 1")
             .bind(deposit_id)
             .fetch_one(pool)
             .await?
