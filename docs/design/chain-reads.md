@@ -171,15 +171,19 @@ checkpoint height still has the stored hash on both. A conflict inserts a chain-
 `reconciliation_blocks` row (`'finalized_checkpoint_conflict'`); the existing freeze gate halts
 the chain until the audited admin lift. Finality, reversal and refund consumers use these
 published advances independently of hourly log coverage. Unresolved deposits back off from
-when they first became due for finality: every 60 s for 30 min, every ten minutes until 24 h,
+when they first became due for finality: every 60 s for ten minutes, every ten minutes until six hours,
 then hourly. The one-hour pending-after-reorg alert remains; verification and reservations
-continue. The operational stock allowance is S=2 per environment, with quote pause and
-escalation above S (§5.2).
+continue. The operational stock allowance is S=1 per environment, with at most one new stuck
+deposit per environment in each 24-hour budget window. Quote pause and escalation apply above
+either limit (§5.2); resolving stock does not reset the arrival tally.
 
 Reversal requires positive evidence on both at or below the checkpoint: (a) the deposit's
 receipt without its transfer at its position (successor recorded as today), or (b) a directly
-evident replacement: a transaction already known to the service with the same sender and nonce
-and another hash, finalized and agreed on both. Otherwise wait and alert
+evident replacement: exactly one transaction already known to the service with the same chain,
+sender and nonce and another hash, finalized and agreed on both. When both original receipts
+are missing, read only that one candidate (K=1). With multiple candidates, read none, raise an
+anomaly alert and keep the deposit unresolved in S for operator resolution; make no reversal.
+Otherwise wait and alert
 (`TopupDepositPendingAfterReorg`, new `TopupDepositReversalUnproven`). No nonce search (EIP-7702
 authorizations also increment nonces). Refunds' nonce-based "dropped" verdict is removed.
 
@@ -293,14 +297,15 @@ and Safe caps have no code enforcement; operators must tally work and stop new l
 Refund attachments have atomic concurrent and rolling-24-hour admission caps. Hint and price
 daily budgets and the permanent address cap are hard limits.
 
-With S=2 per environment and four first-day stock items using three original-receipt methods
-per recheck, ×1.1 non-refund work, ×3 refund attempts and the extra reserve, the combined stock
-case is 17,808 Ankr calls/day and 1,446,774 Infura credits/day: 28.77% and 3.55% below the stop
-lines. Infura is below the requested ten-percent headroom; caps stay unchanged pending budget
-escalation. Missing-receipt-only calls cost less, but do not bound every unresolved deposit.
-Replacement-candidate fan-out and first-day stock turnover require separate accounting and
-escalation if they exceed the daily allowance. This is a conditional stress case, not a full
-upper bound for unbounded work. Follow the linked monitoring and stop procedures before adding load.
+With K=1, each unresolved recheck costs at most `max(3, 1 + 3×K) = 4` methods per endpoint.
+S=1 per environment and at most S arrivals per environment per 24-hour budget window give
+`2×(62 + 24) = 172` daily rechecks, including first-day arrivals and carried stock: 688 Ankr
+calls / 55,040 Infura credits before retries. With ×1.1 non-refund work, ×3 refund attempts and
+the extra reserve, totals are 16,347 Ankr calls/day and 1,329,910 Infura credits/day, leaving
+34.61% / 11.34% headroom below the stop lines. All other caps remain unchanged. The complete
+modeled upper bound includes replacement reads and stock turnover under the operating limits
+and retry assumptions; it is not a code-enforced quota guarantee. Follow the linked monitoring
+and stop procedures before adding load.
 
 ### 5.3 Latency and recovery targets
 

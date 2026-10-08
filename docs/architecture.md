@@ -445,8 +445,8 @@ re-read independently on both endpoints by receipt, transaction and block header
 agreed checkpoint as the finality boundary; nothing is read while
 no deposit is due. A pass claims deposits in pages of 500, oldest block first, at most 10 pages,
 with `FOR UPDATE SKIP LOCKED`, and schedules each claimed deposit's next recheck using the time
-it first became due for finality: every 60 seconds for 30 minutes, every ten minutes until
-24 hours, then hourly. The one-hour pending-after-reorg alert remains. A deposit the watch
+it first became due for finality: every 60 seconds for ten minutes, every ten minutes until
+six hours, then hourly. The one-hour pending-after-reorg alert remains. A deposit the watch
 keeps waiting on (the providers disagree, the transaction is
 pending again, a read failed) comes back only at its own recheck time, so however many are stuck
 at the head of the backlog, the later ones are read in the same pass, and one deposit's failed
@@ -459,9 +459,17 @@ new block's:
 | The receipt at or below `finalized`, with the same transfer at the deposit's receipt position | `final_at` is set, the evidence follows the block, and a credited deposit is swept by a finalized `Flushed` event after it. |
 | The receipt in a newer block that is not final, with the same transfer | The transaction was re-included: the evidence (block, hash, block-wide `log_index`) is followed; nothing is reversed. |
 | The receipt at or below `finalized` without the transfer at that position | `reversed` (a `detected` deposit with other agreed evidence to its address is left to its confirm step). If another transfer is at that position (the re-included transaction ran against other state: a router or swap paying another amount or recipient), it is recorded in the same transaction as a new deposit, as the scanner records one, when it pays an issued address: evidence `transfer_changed_at_finality` with `successor_deposit_id`. |
-| No receipt, and a service-known same-sender/same-nonce different transaction is agreed finalized by both at or below the checkpoint | Positively proven replacement: `reversed`. |
+| No receipt, and exactly one service-known same-chain/same-sender/same-nonce different transaction is agreed finalized by both at or below the checkpoint | Positively proven replacement: `reversed`; read only that candidate (K=1). |
+| No receipt, and more than one service-known replacement candidate | Read no candidates; raise an anomaly alert. No reversal: stay unresolved in stock S for operator resolution. |
 | No receipt without positive replacement evidence | Wait; `TopupDepositReversalUnproven`, and `TopupDepositPendingAfterReorg` after an hour. Account nonce changes alone prove nothing. |
 | Anything else (the providers disagree) | Wait for the deposit's recheck time. |
+
+The operational allowance is S=1 unresolved deposit per environment across its payment chains,
+and at most one new stuck deposit per environment per 24-hour budget window. Above either
+limit, pause new quotes on the affected chain and escalate; verification and reservations
+continue. Resolution does not reset the arrival tally. Follow the
+[finality recovery runbook](../deploy/runbooks/deposit-reversed.md#replacement-candidate-anomaly)
+and [RPC stock/turnover budget](../deploy/RPC.md#worst-case-pilot-budget).
 
 A reversal is one transaction: the `reversed` transition with its evidence; `deposit.reversed`
 (event id `uuid_v5(NS, "deposit.reversed:" + deposit UUID)`) when the merchant was told of the

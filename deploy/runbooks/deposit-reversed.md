@@ -24,8 +24,8 @@ rare one means the chain, or a provider, is misbehaving.
    ```
 
    In `admin.transitions`, the transition to `reversed` has `evidence.result`
-   `known_finalized_replacement` (another transaction already known to the service with the same
-   sender and nonce, independently agreed at or below the checkpoint),
+   `known_finalized_replacement` (exactly one other transaction already known to the service with
+   the same chain, sender and nonce, independently agreed at or below the checkpoint),
    `transfer_absent_at_finality` (with the block both providers showed), or
    `transfer_changed_at_finality`: another transfer is final at the deposit's receipt position (a
    contract-mediated payment re-executed against other state), and `successor_deposit_id`, when
@@ -41,8 +41,9 @@ rare one means the chain, or a provider, is misbehaving.
 
 ## Decide
 
-- `TopupDepositReversed`, one deposit, both providers agree the transaction is gone (or the
-  transfer is missing from its final receipt): a real reorg or a replaced transaction. Confirm the
+- `TopupDepositReversed`, one deposit, both providers positively prove a finalized replacement
+  under the single-candidate rule or a transfer missing from its final receipt: a real reorg or
+  a replaced transaction. Missing receipts alone do not prove reversal. Confirm the
   merchant received `deposit.reversed` (the view's `events` shows `delivered_at`); if the payer
   still wants to top up, they pay a new quote. With `transfer_changed_at_finality` and a
   `successor_deposit_id`, the payer's payment is the successor instead (the reversed deposit's
@@ -67,6 +68,54 @@ rare one means the chain, or a provider, is misbehaving.
   (for example stuck in a mempool at a low fee). Wait for positive evidence. A changed account nonce, including an EIP-7702 authorization,
   does not prove replacement. `TopupDepositReversalUnproven` records this wait. If the providers disagree about the receipt, follow
   [Provider disagreement](provider-disagreement.md).
+
+## Replacement-candidate anomaly
+
+When both providers return no receipt for the original transaction, replacement lookup considers
+only service-known transactions with the same chain, sender and nonce and a different hash.
+K=1 bounds candidate reads:
+
+- Exactly one candidate: independently read its evidence on both endpoints. Reverse only when
+  both agree it is finalized at or below the published checkpoint.
+- More than one candidate: read none of the candidates and raise an anomaly alert. Make no
+  reversal; the deposit stays unresolved, retains its reservations and counts toward stock S
+  until an operator resolves the anomaly.
+- No candidates: make no candidate reads and wait for positive evidence.
+
+Do not choose among multiple candidates, infer replacement from an account nonce, delete
+candidate history or release reservations to bypass the gate. Preserve the deposit timeline,
+original and candidate hashes, and existing canonical evidence for operator review. Resolve
+the anomaly through reviewed, audited action backed by independent canonical evidence; this
+runbook does not authorize a forced reversal. Manual investigation consumes the
+[extra-operation reserve](../RPC.md#worst-case-pilot-budget).
+
+## Unresolved finality stock and recovery
+
+Rechecks are keyed to the time the deposit first became due for finality: every 60 seconds for
+the first ten minutes, every ten minutes until six hours, then hourly. The first day budgets
+`10 + 34 + 18 = 62` rechecks; each later day budgets 24. The existing one-hour
+`TopupDepositPendingAfterReorg` alert remains, including while a replacement anomaly waits
+for operator resolution.
+
+Monitor S=1 unresolved deposit per environment across all its payment chains, two combined.
+Also allow at most one new stuck deposit per environment in each 24-hour budget window;
+resolving a deposit does not reset the arrival tally. Each day's budget includes first-day cost
+for one arrival plus later-day cost for one carried deposit in each environment. A recheck
+costs at most four methods per endpoint: `max(3, 1 + 3×K) = 4` at K=1. See the
+[complete stock/turnover arithmetic](../RPC.md#worst-case-pilot-budget).
+
+Above S, or above the daily arrival allowance, pause new quotes on all routes of the affected
+chain and escalate:
+
+```sh
+admin POST "/v1/admin/routes/$ROUTE/pause" '{"scopes":["quotes"]}'
+```
+
+The one-hour age alert is not permission to delay the stock stop action. Verification, existing
+credit and reservations continue. Never force a verdict to reduce the stock. Resume new quotes
+only after the incident has been reviewed, positive evidence has resolved the affected deposits,
+and pending inventory and the next budget window fit the operating limits. Keep the timeline
+and resolution audit intact.
 
 ## Fix
 

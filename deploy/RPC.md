@@ -60,7 +60,8 @@ Both environments use Ankr read and Infura verify for payments and prices.
 | Deposits handled/day, D | 60 | 20 | Operational |
 | Concurrent attached pending refunds, R | 2 | 1 | Atomic attachment admission |
 | New refund attachments/rolling 24 h, N | 1 | 1 | Atomic attachment admission |
-| Unresolved finality stock/environment, S | 2 | 2 | Operational; pause affected-chain quotes and escalate above S |
+| Unresolved finality stock/environment, S | 1 | 1 | Operational; pause affected-chain quotes and escalate above S |
+| New stuck deposits/environment/24 h | 1 | 1 | Operational; same stock stop rule |
 | Hint tasks/environment/UTC day, H | 80 | 80 | Atomic daily budget |
 | Fresh quote snapshots/price chain/environment/UTC day, Q | 60 | 60 | Atomic daily budget |
 | Factory receipt-verification instances/day | 60 | 20 | Operational |
@@ -124,7 +125,7 @@ Variable allowances before retries:
 | Work | Ankr calls | Infura credits |
 |---|---:|---:|
 | Deposit: cold discovery 3, confirm allocation 5, coverage completion/re-verification 6, initial finality 3, price snapshots 2 | 19 | 1,600 |
-| Unresolved finality stock: original transaction recheck with a present receipt | 3 | 240 |
+| Unresolved finality recheck, including at most one replacement candidate | 4 | 320 |
 | Hint task | 12 | 640 |
 | Price snapshot, including verify's head and pin header | 1 | 240 |
 | Factory receipt verification | 3 | 240 |
@@ -137,34 +138,48 @@ snapshots/day. Quotes have four price-chain/environment instances, so `288 + 4Q 
 Production has no periodic TWAP sampler in this pilot.
 
 Unresolved finality rechecks back off from the time a deposit first became due for finality:
-every 60 s for 30 min, every ten minutes until 24 h, then hourly. The one-hour
-`TopupDepositPendingAfterReorg` alert remains. Budget S=2 unresolved deposits per environment
-across its payment chains, four combined. This stock is separate from D and its initial
-finality allocation.
+every 60 s for the first ten minutes, every ten minutes until six hours, then hourly. The
+one-hour `TopupDepositPendingAfterReorg` alert remains. S=1 bounds unresolved stock across
+each environment's payment chains, two combined. At most S new stuck deposits may enter an
+environment in each 24-hour budget window; resolving an old deposit does not reset that
+arrival tally. Budget first-day cost for S arrivals plus later-day cost for S carried stock
+each day. This stock/turnover allowance is separate from D and its initial finality allocation.
 
 `ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
 A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr / 80 Infura).
 A present ordinary EVM receipt also requires its block header and transaction: three methods
-per endpoint (3 / 240), even if the evidence disagrees and remains unresolved. Use that
-three-method original-receipt case for the stock line, before the ×1.1 non-refund allowance:
+per endpoint (3 / 240), even if the evidence disagrees and remains unresolved.
+
+When both original receipts are missing, replacement lookup considers service-known candidates
+with the same chain, sender and nonce but a different hash. **Exactly one candidate** permits
+independent evidence reads for that candidate, at most three methods per endpoint. **More than
+one candidate** permits no candidate RPC reads: raise an anomaly alert, make no reversal, and
+keep the deposit unresolved in S for operator resolution. Zero candidates also makes no
+candidate RPC reads. Never choose among multiple candidates, infer replacement from an account nonce, or
+release reservations to bypass this gate. Follow the
+[finality recovery runbook](runbooks/deposit-reversed.md#replacement-candidate-anomaly).
+
+The branches are mutually exclusive, so the complete per-endpoint recheck bound is
+`max(3, 1 + 3×K) = 4` methods at K=1: one original receipt plus the candidate's receipt,
+header and transaction. Charge four Ankr calls / 320 Infura credits per recheck, before ×1.1:
 
 | Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Infura credits/deposit/day |
 |---|---:|---:|---:|
-| First due-day | 30 + 138 + 0 = 168 | 168×3 = 504 | 168×240 = 40,320 |
-| Every later day | 24 | 24×3 = 72 | 24×240 = 5,760 |
+| First due-day | 10 + 34 + 18 = 62 | 62×4 = 248 | 62×320 = 19,840 |
+| Every later day | 24 | 24×4 = 96 | 24×320 = 7,680 |
 
-The first-day stock allowance is `4×504 = 2,016` Ankr and `4×40,320 = 161,280` Infura;
-all four carried-over deposits instead cost 288 / 23,040 per later day. For the narrower
-case where both receipts remain missing and there is no service-known replacement candidate,
-the first-day stock costs 672 / 53,760, and later-day stock 96 / 7,680.
+The daily stock/turnover bound per endpoint is:
 
-When both original receipts are missing, `known_replacement` also independently checks every
-service-known same-sender/same-nonce candidate. Each candidate adds 1–3 methods per endpoint
-(80–240 Infura credits). Count those extra calls against the existing extra-operation reserve;
-they are not covered by the three-method original-receipt line. A stock count alone does not
-bound candidate fan-out or replacement of resolved stock by new first-day stock. If that work
-exceeds the modeled daily allowance, escalate for a reviewed budget; never stop verification
-or release reservations to fit it.
+```text
+Rechecks: 2 environments × (1 new × 62 + 1 carried × 24) = 172
+Ankr:     172 × 4   = 688 calls
+Infura:   172 × 320 = 55,040 credits
+```
+
+This includes all allowed replacement-candidate reads and stock turnover; neither is charged
+again to the extra-operation reserve. Manual anomaly investigation consumes that reserve.
+More-than-one-candidate cases retain their stock slot and verification; the operator preserves
+the timeline and canonical evidence and resolves the anomaly through reviewed, audited action.
 
 Refund checks run every 60 s for the first 30 min after attachment, every ten minutes until 24 h,
 then hourly. Asymmetric evidence can cost four methods per endpoint per check. Before retries,
@@ -176,30 +191,25 @@ non-refund work uses the approved ten-percent allowance:
 ```text
 Non-refund Ankr:
 5,112 + 528 + 19×80 + 2×12×80 + 3×80 + 3×12 + 300
-+ 4×168×3 = 11,672
++ 688 = 10,344
 
 Non-refund Infura:
 337,920 + 240×528 + 1,600×80 + 2×640×80
-+ 240×80 + 160×12 + 255×300 + 4×168×240 = 953,940
++ 240×80 + 160×12 + 255×300 + 55,040 = 847,700
 
 Refund Ankr:   3 × (684×2 + 96×3)       = 4,968
 Refund Infura: 3 × (54,720×2 + 7,680×3) = 397,440
 
-Combined Ankr:   11,672×1.1 + 4,968    = 17,807.2 calls/day
-Combined Infura: 953,940×1.1 + 397,440 = 1,446,774 credits/day
+Combined Ankr:   10,344×1.1 + 4,968    = 16,346.4 calls/day
+Combined Infura: 847,700×1.1 + 397,440 = 1,329,910 credits/day
 ```
 
-Rounded up, this original-receipt stock case costs 17,808 Ankr calls/day. Headroom below the
-stop lines is **28.77% Ankr / 3.55% Infura**, below the requested ten-percent minimum on Infura.
-The caps remain unchanged; escalate this budget before approving additional pilot load.
-With all four stock items in later days, totals are 15,907 / 1,294,710, with 36.37% / 13.69%
-headroom. The missing-receipt-only first-day case is 16,329 / 1,328,502, with 34.68% / 11.43%
-headroom; it is not an upper bound for every unresolved deposit.
-
-These are conditional stock stress cases, not a code-enforced quota guarantee or a full
-upper bound on unbounded replacement-candidate work and first-day stock churn. The ×1.1
-allowance does not cover every non-refund method exhausting all three transport attempts
-simultaneously.
+Rounded up, the complete modeled allowance is **16,347 Ankr calls/day** and
+**1,329,910 Infura credits/day**, with **34.61% Ankr / 11.34% Infura** headroom below the stop
+lines. Replacement reads and daily stock turnover are included; all other caps remain unchanged.
+This is an upper bound under the operating limits and retry assumptions, not a code-enforced
+quota guarantee. The ×1.1 allowance does not cover every non-refund method exhausting all
+three transport attempts simultaneously.
 
 ### Monitoring and stop actions
 
@@ -211,10 +221,13 @@ batch before starting it. If a tally cannot be established, stop scheduling that
 the operator reconciles the evidence.
 
 Monitor unresolved finality stock separately: deposits already due for finality but neither
-final nor reversed, across the environment's payment chains. **Above S=2, pause new quotes
+final nor reversed, across the environment's payment chains. **Above S=1, pause new quotes
 on the affected chain (all its routes) and escalate.** The one-hour alert remains an age signal,
-not permission to wait before taking the stock stop action. Track first-day stock turnover and
-replacement-candidate calls too. Verification, existing credit and reservations continue;
+not permission to wait before taking the stock stop action. The same stop rule applies if more
+than one new stuck deposit enters the environment in a 24-hour budget window. Track arrivals
+independently of the current stock; resolution does not free another daily arrival allowance.
+Multiple replacement candidates raise the anomaly alert and remain in this stock count.
+Verification, existing credit and reservations continue;
 never manufacture a finality/reversal verdict or release exposure to reduce the tally.
 
 At an operational limit, stop merchant onboarding and new payment work; stop new staging
@@ -302,7 +315,9 @@ A changed checkpoint hash or a progressed, unverified deposit contradicting agre
 evidence freezes the chain through `reconciliation_blocks`. Use the audited
 [chain freeze procedure](runbooks/chain-frozen.md); do not edit hashes or remove records.
 A missing receipt is not replacement proof. Reversal needs a finalized receipt without the
-transfer, or a service-known same-sender/same-nonce transaction agreed by both providers.
+transfer, or exactly one service-known same-chain/same-sender/same-nonce replacement candidate
+agreed finalized by both providers. Multiple candidates trigger an anomaly alert with no candidate
+reads or reversal; the deposit stays unresolved in S for operator resolution.
 No account nonce query is proof; EIP-7702 authorizations can increment it.
 
 The migration is expand-only. N keeps N-1's cursor/address compatibility fields and writes no
