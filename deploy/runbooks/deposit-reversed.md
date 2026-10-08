@@ -91,14 +91,17 @@ runbook does not authorize a forced reversal. Manual investigation consumes the
 
 ## Unresolved finality stock and recovery
 
-Rechecks are keyed to the time the deposit first became due for finality: every 60 seconds for
-the first ten minutes, every ten minutes until six hours, then hourly. The first day budgets
+At its first unresolved check, a deposit enters S and persists `first_unresolved_at`. This
+includes a `detected` deposit whose transfer both endpoints agree is absent during confirmation;
+do not wait for the checkpoint. The pump and finality watcher share one persisted backoff
+anchored to `first_unresolved_at`: every 60 seconds until ten minutes, every ten minutes until
+six hours, then hourly. Exactly one reader runs per due time. The first day budgets
 `10 + 34 + 18 = 62` rechecks; each later day budgets 24. The existing one-hour
 `TopupDepositPendingAfterReorg` alert remains, including while a replacement anomaly waits
 for operator resolution.
 
-Count a deposit in S as soon as its first due finality check leaves it unresolved, not after
-one hour. Monitor S=1 as the sum across all payment chains per environment, two combined.
+Count a deposit in S from that first unresolved check, not after one hour. Monitor S=1 as the
+sum across all payment chains per environment, two combined.
 Also allow at most one new unresolved entry per environment in any rolling 24 hours; resolved
 entries still count in that window. Each day's budget includes first-day cost for one arrival
 plus later-day cost for one carried deposit in each environment. A recheck

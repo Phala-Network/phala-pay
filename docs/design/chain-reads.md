@@ -170,11 +170,13 @@ An independent ten-minute loop per payment chain checks and publishes
 checkpoint height still has the stored hash on both. A conflict inserts a chain-scope
 `reconciliation_blocks` row (`'finalized_checkpoint_conflict'`); the existing freeze gate halts
 the chain until the audited admin lift. Finality, reversal and refund consumers use these
-published advances independently of hourly log coverage. Unresolved deposits back off from
-when they first became due for finality: every 60 s for ten minutes, every ten minutes until six hours,
-then hourly. The one-hour pending-after-reorg alert remains; verification and reservations
-continue. A deposit counts in S as soon as its first due finality check leaves it unresolved;
-do not wait one hour. The operational stock allowance is S=1 summed across payment chains per
+published advances independently of hourly log coverage. A deposit enters S at its first
+unresolved check, persisted as `first_unresolved_at`. This includes a `detected` deposit whose
+transfer both endpoints agree is absent during confirmation, without waiting for the checkpoint.
+The pump and finality watcher share one persisted backoff anchored to `first_unresolved_at`:
+every 60 s until ten minutes, every ten minutes until six hours, then hourly, with exactly one
+reader per due time. The separate one-hour pending-after-reorg alert remains; verification and
+reservations continue. The operational stock allowance is S=1 summed across payment chains per
 environment, with at most one new unresolved entry per environment in any rolling 24 hours.
 Resolved entries still count in that window. Quote pause and escalation apply above either
 limit (§5.2).
@@ -306,10 +308,11 @@ per environment per rolling 24 hours give
 `2×(62 + 24) = 172` daily rechecks, including first-day arrivals and carried stock: 688 Ankr
 calls / 55,040 Infura credits before retries. With ×1.1 non-refund work, ×3 refund attempts and
 the extra reserve, totals are 16,435 Ankr calls/day and 1,336,950 Infura credits/day, leaving
-34.26% / 10.87% headroom below the stop lines. All other caps remain unchanged. The complete
-modeled upper bound includes replacement reads and stock turnover under the operating limits
-and retry assumptions; it is not a code-enforced quota guarantee. Follow the linked monitoring
-and stop procedures before adding load.
+34.26% / 10.87% headroom below the stop lines. All other caps remain unchanged. The retained
+calculation includes replacement reads and stock turnover under the operating limits and retry
+assumptions; it is not a code-enforced quota guarantee. Follow the linked monitoring
+and stop procedures before adding load. These budget numbers are retained pending the
+confirm-wait budget update.
 
 ### 5.3 Latency and recovery targets
 

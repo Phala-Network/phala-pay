@@ -444,9 +444,11 @@ recorded block is at or below it, and whose recheck time (`finality_check_at`) h
 re-read independently on both endpoints by receipt, transaction and block header, with the
 agreed checkpoint as the finality boundary; nothing is read while
 no deposit is due. A pass claims deposits in pages of 500, oldest block first, at most 10 pages,
-with `FOR UPDATE SKIP LOCKED`, and schedules each claimed deposit's next recheck using the time
-it first became due for finality: every 60 seconds for ten minutes, every ten minutes until
-six hours, then hourly. The one-hour pending-after-reorg alert remains. A deposit the watch
+with `FOR UPDATE SKIP LOCKED`. The pump and watcher share one persisted backoff anchored to
+`first_unresolved_at`, the first unresolved check: every 60 seconds until ten minutes, every
+ten minutes until six hours, then hourly. Exactly one reader runs per due time; an active pump
+lease excludes the watcher from reading the same deposit. The one-hour pending-after-reorg
+alert remains. A deposit the watch
 keeps waiting on (the providers disagree, the transaction is
 pending again, a read failed) comes back only at its own recheck time, so however many are stuck
 at the head of the backlog, the later ones are read in the same pass, and one deposit's failed
@@ -465,8 +467,9 @@ new block's:
 | Anything else (the providers disagree) | Wait for the deposit's recheck time. |
 
 The operational allowance is S=1 unresolved deposit summed across all payment chains per
-environment. A deposit enters S as soon as its first due finality check leaves it unresolved;
-do not wait for the one-hour age alert. At most one new unresolved entry is allowed per
+environment. A deposit enters S at its first unresolved check. This includes `detected` deposits
+whose transfer both endpoints agree is absent during confirmation, without waiting for the
+checkpoint or the one-hour age alert. At most one new unresolved entry is allowed per
 environment per rolling 24 hours, including entries since resolved. Sum the per-chain
 `topup_finality_unresolved` gauge per environment for the current-stock alert, and use
 `sum(topup_finality_unresolved_entries_24h) > 1` within that environment for the rolling-entry

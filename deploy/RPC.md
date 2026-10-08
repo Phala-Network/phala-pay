@@ -12,6 +12,22 @@ and positive `max_log_blocks`. Read and verify hosts must differ. Configure obse
 Ethereum and Base price chains too. Both environments share `TOPUP_RPC_ANKR_KEY` and
 `TOPUP_RPC_INFURA_KEY`, including for staging's mainnet price observations.
 
+`topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:
+production sets it to 2 and staging to 1. It atomically limits attached-pending refunds across
+all accounts and modes in that environment; one new attachment per rolling 24 hours remains
+a fixed admission limit. Missing, zero or negative values fail configuration validation.
+
+For an N-1 rollback, use the previous release's verified configuration without this field;
+its strict schema rejects it. The current N-1, v0.9.2, has **no environment-wide attached-pending
+or rolling attachment-count cap**. Its built-in checks reserve pending and succeeded refund
+amounts against each deposit and reject a new refund above the remaining refundable amount.
+Its worker claims one due refund at a time (`LIMIT 1`), which does not cap attached inventory.
+See the
+[v0.9.2 refund API](https://github.com/Phala-Network/phala-pay/blob/v0.9.2/crates/topup/src/api/repository.rs#L603)
+and [worker](https://github.com/Phala-Network/phala-pay/blob/v0.9.2/crates/topup/src/refunds.rs#L699).
+The current R/N admission limits are not inherited by that release; retain operational
+inventory and load controls during rollback.
+
 ```sh
 topup config check --secrets /etc/topup/topup.yaml
 topup rpc check --config /etc/topup/topup.yaml
@@ -137,14 +153,17 @@ Staging's two PHA routes share one TWAP pool and five-minute sampler: `86,400 / 
 snapshots/day. Quotes have four price-chain/environment instances, so `288 + 4Q = 528` snapshots.
 Production has no periodic TWAP sampler in this pilot.
 
-Unresolved finality rechecks back off from the time a deposit first became due for finality:
-every 60 s for the first ten minutes, every ten minutes until six hours, then hourly. The
-one-hour `TopupDepositPendingAfterReorg` alert remains. A deposit enters S as soon as its first
-due finality check leaves it unresolved; do not wait for the one-hour alert. S=1 bounds the sum
-across all payment chains in each environment, two combined. At most S new unresolved entries
-may occur per environment in any rolling 24 hours; resolved entries still count in that window.
-Budget first-day cost for S arrivals plus later-day cost for S carried stock each day. This
-stock/turnover allowance is separate from D and its initial finality allocation.
+A deposit enters S at its first unresolved check, persisted as `first_unresolved_at`. This
+includes a `detected` deposit whose transfer both endpoints agree is absent during confirmation,
+without waiting for the checkpoint or the one-hour alert. The pump and finality watcher share
+one persisted backoff anchored to that timestamp: every 60 s until ten minutes, every ten
+minutes until six hours, then hourly, with exactly one reader per due time. The separate
+one-hour `TopupDepositPendingAfterReorg` alert remains. S=1 bounds the sum across all payment
+chains in each environment, two combined. At most S new unresolved entries may occur per
+environment in any rolling 24 hours; resolved entries still count in that window. Budget
+first-day cost for S arrivals plus later-day cost for S carried stock each day. This
+stock/turnover allowance is separate from D and its initial finality allocation. The budget
+numbers below are retained pending the confirm-wait budget update.
 
 `ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
 A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr / 80 Infura).
@@ -168,7 +187,7 @@ Charge four Ankr calls / 320 Infura credits per subsequent recheck, before ×1.1
 
 | Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Infura credits/deposit/day |
 |---|---:|---:|---:|
-| First due-day | 10 + 34 + 18 = 62 | 62×4 = 248 | 62×320 = 19,840 |
+| First unresolved-day | 10 + 34 + 18 = 62 | 62×4 = 248 | 62×320 = 19,840 |
 | Every later day | 24 | 24×4 = 96 | 24×320 = 7,680 |
 
 The daily stock/turnover bound per endpoint is:
@@ -207,11 +226,11 @@ Combined Ankr:   10,424×1.1 + 4,968    = 16,434.4 calls/day
 Combined Infura: 854,100×1.1 + 397,440 = 1,336,950 credits/day
 ```
 
-Rounded up, the complete modeled allowance is **16,435 Ankr calls/day** and
+Rounded up, the retained modeled allowance is **16,435 Ankr calls/day** and
 **1,336,950 Infura credits/day**, with **34.26% Ankr / 10.87% Infura** headroom below the stop
 lines. Replacement reads and daily stock turnover are included; all other caps remain unchanged.
-This is an upper bound under the operating limits and retry assumptions, not a code-enforced
-quota guarantee. The ×1.1 allowance does not cover every non-refund method exhausting all
+These figures await the confirm-wait budget update and are not a code-enforced quota guarantee.
+The ×1.1 allowance does not cover every non-refund method exhausting all
 three transport attempts simultaneously.
 
 ### Monitoring and stop actions
@@ -223,8 +242,10 @@ distinct factory transaction counts alone omit re-verification. Budget each plan
 batch before starting it. If a tally cannot be established, stop scheduling that load until
 the operator reconciles the evidence.
 
-Monitor stock from the first due finality check that leaves a deposit unresolved. Sum all
-payment chains per environment, independently of the one-hour age alert. #425 exposes
+Monitor stock from the first unresolved check, including a `detected` deposit whose transfer
+both endpoints agree is absent during confirmation, before the checkpoint. The pump and watcher
+share `first_unresolved_at` and the persisted backoff, with exactly one reader per due time.
+Sum all payment chains per environment, independently of the one-hour age alert. #425 exposes
 `topup_finality_unresolved` (gauge, per chain) and
 `topup_finality_unresolved_entries_24h` (DB-derived gauge, per chain). The latter counts
 deposits whose persisted `first_unresolved_at` is within the last 24 hours, including resolved
