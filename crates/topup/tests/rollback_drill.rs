@@ -201,7 +201,7 @@ async fn merchant(origin: &str, key: &str, path: &str, body: Value) -> Result<Va
     Ok(value)
 }
 fn new_config(route: &RouteFile, tls: &support::tls::RpcTlsProxy) -> Result<Value> {
-    let raw = json!({"environment":"local","public_origin":"http://topup:8080","admin_key":{"id":"drill/admin","public_key":support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))},
+    let raw = json!({"environment":"local","public_origin":"http://topup:8080","max_attached_pending_refunds":2,"admin_key":{"id":"drill/admin","public_key":support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))},
         "rpc":[{"chain_id":1,"read":{"id":"ankr-drill","url":format!("{}/{{key}}",tls.read_url),"sealed_key":"TOPUP_RPC_ANKR_KEY","max_log_blocks":3000},"verify":{"id":"infura-drill","url":format!("{}/{{key}}",tls.verify_url),"sealed_key":"TOPUP_RPC_INFURA_KEY","max_log_blocks":3000}}],"routes":[route]});
     let config = topup::config::Config::parse(&raw.to_string()).map_err(anyhow::Error::msg)?;
     Ok(serde_json::from_str(
@@ -213,6 +213,10 @@ fn previous_config(mut config: Value, anvil: &Anvil) -> Value {
     config.as_object_mut().unwrap().remove("rpc");
     // N-1 keeps its own strict configuration schema and deprecated oracle settings.
     config.as_object_mut().unwrap().remove("sanctions");
+    config
+        .as_object_mut()
+        .unwrap()
+        .remove("max_attached_pending_refunds");
     config["rpc_companies"] =
         json!({"read":{"domains":["read-drill.test"]},"verify":{"domains":["verify-drill.test"]}});
     config["rpc_budgets"] = json!({"read-account":{"requests_per_second":100,"burst":100},"read-key":{"requests_per_second":100,"burst":100},"verify-account":{"requests_per_second":100,"burst":100},"verify-key":{"requests_per_second":100,"burst":100}});
