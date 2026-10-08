@@ -131,7 +131,10 @@ while [[ -z "$PROVISION_RUN_ID" && SECONDS -lt $PROVISION_LOOKUP_DEADLINE ]]; do
     --jq '.workflow_runs | sort_by(.created_at) | last | .id' 2>/dev/null || true)"
   [[ -n "$PROVISION_RUN_ID" ]] || sleep 5
 done
-[[ -n "$PROVISION_RUN_ID" ]] || { echo "timed out waiting for the provisioning workflow run" >&2; return 1; }
+[[ -n "$PROVISION_RUN_ID" ]] || {
+  echo "timed out waiting for the provisioning workflow run; stop here" >&2
+  false
+}
 gh run watch "$PROVISION_RUN_ID" --repo "$GITHUB_REPOSITORY"
 gh run view "$PROVISION_RUN_ID" --repo "$GITHUB_REPOSITORY"
 ```
@@ -204,7 +207,10 @@ while [[ -z "$UPGRADE_RUN_ID" && SECONDS -lt $UPGRADE_LOOKUP_DEADLINE ]]; do
     --jq '.workflow_runs | sort_by(.created_at) | last | .id' 2>/dev/null || true)"
   [[ -n "$UPGRADE_RUN_ID" ]] || sleep 5
 done
-[[ -n "$UPGRADE_RUN_ID" ]] || { echo "timed out waiting for the upgrade workflow run" >&2; return 1; }
+[[ -n "$UPGRADE_RUN_ID" ]] || {
+  echo "timed out waiting for the upgrade workflow run; stop here" >&2
+  false
+}
 gh run watch "$UPGRADE_RUN_ID" --repo "$GITHUB_REPOSITORY"
 gh run view "$UPGRADE_RUN_ID" --repo "$GITHUB_REPOSITORY"
 shred -u .env.production.unsealed .env.production
@@ -215,9 +221,11 @@ shred -u .env.production.unsealed .env.production
 Use the upgrade run's rendered compose artifact and verify the guest attestation and certificate:
 
 ```sh
+UPGRADE_ATTEMPT="$(gh run view "$UPGRADE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json attempt --jq .attempt)"
+ART="$(mktemp -d)"
 gh run download "$UPGRADE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-  -n "production-topup-deploy-$UPGRADE_RUN_ID-<attempt>"
-mapfile -t UPGRADE_COMPOSE_FILES < <(find . -type f -name 'docker-compose.*.yml' -print)
+  -n "production-topup-deploy-$UPGRADE_RUN_ID-$UPGRADE_ATTEMPT" -D "$ART"
+mapfile -t UPGRADE_COMPOSE_FILES < <(find "$ART" -type f -name 'docker-compose.*.yml' -print)
 test "${#UPGRADE_COMPOSE_FILES[@]}" -eq 1
 export UPGRADE_COMPOSE="${UPGRADE_COMPOSE_FILES[0]}"
 kit/deploy/phala cvms get "$TOPUP_CVM_ID" --json > cvm.json
@@ -284,17 +292,19 @@ register_live_webhook() {
 
 pin_live_webhook_keys() {
   local merchant_key=$1 account_id=$2 prefix=$3 nonce
-  nonce="$(openssl rand -hex 32)"
+  local report_data
+  nonce="$(openssl rand -hex 32)" || return 1
   curl -fsS -H "Authorization: Bearer $merchant_key" "$ORIGIN/v1/attestation?nonce=$nonce" \
-    > "${prefix}-public-attestation.json"
+    > "${prefix}-public-attestation.json" || return 1
   jq '{quote: null, attestation: .tdx_quote}' "${prefix}-public-attestation.json" \
-    | deploy/dstack-verifier.sh > "${prefix}-public-verification.json"
+    | deploy/dstack-verifier.sh > "${prefix}-public-verification.json" || return 1
+  report_data="$(jq -er '.report_data' "${prefix}-public-attestation.json")" || return 1
   jq -e --arg app "$ATTESTED_APP_ID" --arg compose "$COMPOSE_HASH" \
-    --arg report_data "$(jq -r '.report_data' "${prefix}-public-attestation.json")" \
+    --arg report_data "$report_data" \
     '.details.tcb_status == "UpToDate" and .details.app_info.app_id == $app
      and .details.app_info.compose_hash == $compose
      and .details.report_data == $report_data + ("0" * 64)' \
-    "${prefix}-public-verification.json"
+    "${prefix}-public-verification.json" || return 1
   NONCE="$nonce" ACCOUNT_ID="$account_id" ATTESTATION_FILE="${prefix}-public-attestation.json" \
     uv run --project sdk/python --locked python -c '
 import json, os
@@ -308,7 +318,7 @@ verify_attestation_binding(
     expected_account=os.environ["ACCOUNT_ID"],
     expected_livemode=True,
 )
-print("pin these verified live webhook keys:", [key.to_dict()["public_key"] for key in response.webhook_keys])'
+print("pin these verified live webhook keys:", [key.to_dict()["public_key"] for key in response.webhook_keys])' || return 1
 }
 ```
 
@@ -345,12 +355,16 @@ export ETH_TREASURY_SAFE="<ethereum-smoke-safe>" BASE_TREASURY_SAFE="<base-smoke
 prove_live_treasuries "$SMOKE_MERCHANT_SECRET_KEY" "$ETH_TREASURY_SAFE" "$BASE_TREASURY_SAFE" smoke
 configure_live_payment_settings "$SMOKE_MERCHANT_SECRET_KEY"
 register_live_webhook "$SMOKE_MERCHANT_SECRET_KEY"
-pin_live_webhook_keys "$SMOKE_MERCHANT_SECRET_KEY" "$SMOKE_ACCOUNT_ID" smoke
+pin_live_webhook_keys "$SMOKE_MERCHANT_SECRET_KEY" "$SMOKE_ACCOUNT_ID" smoke || {
+  echo "smoke webhook key pinning failed; stop" >&2
+  false
+}
 ```
 
 Only after those live configuration steps pass, create the three required $1 quotes. Each payment
 uses a Foundry keystore and waits with a bounded 15-minute timeout for a credited deposit and signed
-webhook. Base is a separate factory and sequencer-gated:
+webhook. On any payment or wait failure, stop and do not continue to the next payment. Base is a
+separate factory and sequencer-gated:
 
 ```sh
 export PAYER_ACCOUNT="<foundry-keystore-account>" PAYER_PASSWORD_FILE="<mode-0600-keystore-password-file>"
@@ -369,12 +383,15 @@ wait_for_credit() {
   return 1
 }
 
+run_smoke_payments() {
 QUOTE_JSON="$(curl -fsS -X POST "$ORIGIN/v1/quotes" -H "Authorization: Bearer $SMOKE_MERCHANT_SECRET_KEY" -H 'content-type: application/json' -H 'Idempotency-Key: production-smoke-ethereum-usdc-1' -d '{"client_reference_id":"production-smoke-ethereum-usdc","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"}')"; QUOTE_ID="$(jq -er '.id' <<<"$QUOTE_JSON")"; ADDRESS="$(jq -er '.address' <<<"$QUOTE_JSON")"; AMOUNT="$(jq -er '.amount_atomic' <<<"$QUOTE_JSON")"
-cast send --account "$PAYER_ACCOUNT" --password-file "$PAYER_PASSWORD_FILE" --rpc-url "$MAINNET_RPC_A" 0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48 'transfer(address,uint256)' "$ADDRESS" "$AMOUNT"; wait_for_credit "$QUOTE_ID"; export SMOKE_ETH_USDC_DEPOSIT_ID="$CREDITED_DEPOSIT_ID"
+cast send --account "$PAYER_ACCOUNT" --password-file "$PAYER_PASSWORD_FILE" --rpc-url "$MAINNET_RPC_A" 0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48 'transfer(address,uint256)' "$ADDRESS" "$AMOUNT" || { echo "smoke payment 1 failed; stop" >&2; false; } || return 1; wait_for_credit "$QUOTE_ID" || { echo "smoke payment 1 failed; stop" >&2; false; } || return 1; export SMOKE_ETH_USDC_DEPOSIT_ID="$CREDITED_DEPOSIT_ID"
 QUOTE_JSON="$(curl -fsS -X POST "$ORIGIN/v1/quotes" -H "Authorization: Bearer $SMOKE_MERCHANT_SECRET_KEY" -H 'content-type: application/json' -H 'Idempotency-Key: production-smoke-ethereum-usdt-1' -d '{"client_reference_id":"production-smoke-ethereum-usdt","amount":100,"currency":"usd","chain_id":1,"asset":"usdt"}')"; QUOTE_ID="$(jq -er '.id' <<<"$QUOTE_JSON")"; ADDRESS="$(jq -er '.address' <<<"$QUOTE_JSON")"; AMOUNT="$(jq -er '.amount_atomic' <<<"$QUOTE_JSON")"
-cast send --account "$PAYER_ACCOUNT" --password-file "$PAYER_PASSWORD_FILE" --rpc-url "$MAINNET_RPC_A" 0xdAC17F958D2ee523a2206206994597C13D831ec7 'transfer(address,uint256)' "$ADDRESS" "$AMOUNT"; wait_for_credit "$QUOTE_ID"; export SMOKE_ETH_USDT_DEPOSIT_ID="$CREDITED_DEPOSIT_ID"
+cast send --account "$PAYER_ACCOUNT" --password-file "$PAYER_PASSWORD_FILE" --rpc-url "$MAINNET_RPC_A" 0xdAC17F958D2ee523a2206206994597C13D831ec7 'transfer(address,uint256)' "$ADDRESS" "$AMOUNT" || { echo "smoke payment 2 failed; stop" >&2; false; } || return 1; wait_for_credit "$QUOTE_ID" || { echo "smoke payment 2 failed; stop" >&2; false; } || return 1; export SMOKE_ETH_USDT_DEPOSIT_ID="$CREDITED_DEPOSIT_ID"
 QUOTE_JSON="$(curl -fsS -X POST "$ORIGIN/v1/quotes" -H "Authorization: Bearer $SMOKE_MERCHANT_SECRET_KEY" -H 'content-type: application/json' -H 'Idempotency-Key: production-smoke-base-usdc-1' -d '{"client_reference_id":"production-smoke-base-usdc","amount":100,"currency":"usd","chain_id":8453,"asset":"usdc"}')"; QUOTE_ID="$(jq -er '.id' <<<"$QUOTE_JSON")"; ADDRESS="$(jq -er '.address' <<<"$QUOTE_JSON")"; AMOUNT="$(jq -er '.amount_atomic' <<<"$QUOTE_JSON")"
-cast send --account "$PAYER_ACCOUNT" --password-file "$PAYER_PASSWORD_FILE" --rpc-url "$BASE_RPC_A" 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 'transfer(address,uint256)' "$ADDRESS" "$AMOUNT"; wait_for_credit "$QUOTE_ID"; export SMOKE_BASE_USDC_DEPOSIT_ID="$CREDITED_DEPOSIT_ID"
+cast send --account "$PAYER_ACCOUNT" --password-file "$PAYER_PASSWORD_FILE" --rpc-url "$BASE_RPC_A" 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 'transfer(address,uint256)' "$ADDRESS" "$AMOUNT" || { echo "smoke payment 3 failed; stop" >&2; false; } || return 1; wait_for_credit "$QUOTE_ID" || { echo "smoke payment 3 failed; stop" >&2; false; } || return 1; export SMOKE_BASE_USDC_DEPOSIT_ID="$CREDITED_DEPOSIT_ID"
+}
+run_smoke_payments || { echo "smoke payment sequence failed; stop" >&2; false; }
 ```
 
 Record the three deposits' original state before starting the restore drill. The restore check must
@@ -400,6 +417,13 @@ The function and `RETURN` trap below ensure that a failed or successful drill al
 throwaway instance and removes the temporary env file:
 
 ```sh
+live_isolated() {
+  for _ in $(seq 20); do
+    test "$(curl -sS -o live-healthz.body -w '%{http_code}' "$ORIGIN/healthz")" = 200 &&
+      test ! -s live-healthz.body || return 1
+  done
+}
+
 restore_drill() {
   restore_cleanup() {
     trap - RETURN
@@ -509,12 +533,36 @@ restore_drill() {
   export BASE_URL="$RESTORE_URL" NONCE="$(openssl rand -hex 32)"
   admin GET "/v1/admin/attestation?account=$SMOKE_ACCOUNT_ID&livemode=true&nonce=$NONCE" \
     > restore-public-attestation.json || return 1
+  jq -e '.compose_file != null' restore-attestation-final.json >/dev/null || return 1
+  export RESTORE_COMPOSE_HASH="$(jq -j '.compose_file' restore-attestation-final.json | sha256sum | cut -d' ' -f1)"
+  export RESTORE_PUBLIC_REPORT_DATA="$(jq -er '.report_data' restore-public-attestation.json)" || return 1
+  jq '{quote: null, attestation: .tdx_quote}' restore-public-attestation.json \
+    | deploy/dstack-verifier.sh > restore-public-verification.json || return 1
+  jq -e --arg app "$ATTESTED_APP_ID" --arg compose "$RESTORE_COMPOSE_HASH" \
+    --arg report_data "$RESTORE_PUBLIC_REPORT_DATA" \
+    '.details.tcb_status == "UpToDate" and .details.app_info.app_id == $app
+     and .details.app_info.compose_hash == $compose
+     and .details.report_data == $report_data + ("0" * 64)' \
+    restore-public-verification.json || return 1
+  NONCE="$NONCE" ACCOUNT_ID="$SMOKE_ACCOUNT_ID" ATTESTATION_FILE=restore-public-attestation.json \
+    uv run --project sdk/python --locked python -c '
+import json, os
+from topup_client.models import AttestationResponse
+from topup_sdk import verify_attestation_binding
+with open(os.environ["ATTESTATION_FILE"]) as stream:
+    response = AttestationResponse.from_dict(json.load(stream))
+verify_attestation_binding(
+    response,
+    bytes.fromhex(os.environ["NONCE"]),
+    expected_account=os.environ["ACCOUNT_ID"],
+    expected_livemode=True,
+)' || return 1
   admin GET /v1/admin/restore | jq -e '.frozen == true' >/dev/null || return 1
   for INDEX in "${!SMOKE_DEPOSIT_IDS[@]}"; do
     admin GET "/v1/admin/deposits/${SMOKE_DEPOSIT_IDS[$INDEX]}" \
       > "restore-deposit-$INDEX.json" || return 1
-    jq -e --argfile expected "smoke-deposit-$INDEX-state.json" \
-      '({id,status,amount,amount_atomic,amount_refunded,amount_refunded_atomic,amount_reversed,replaces,replaced_by,revision}) == $expected' \
+    jq -e --slurpfile expected "smoke-deposit-$INDEX-state.json" \
+      '({id,status,amount,amount_atomic,amount_refunded,amount_refunded_atomic,amount_reversed,replaces,replaced_by,revision}) == $expected[0]' \
       "restore-deposit-$INDEX.json" >/dev/null || return 1
   done
   return 0
@@ -563,7 +611,10 @@ export PHALA_ETH_TREASURY_SAFE="<ethereum-phala-cloud-safe>" PHALA_BASE_TREASURY
 prove_live_treasuries "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_ETH_TREASURY_SAFE" "$PHALA_BASE_TREASURY_SAFE" phala-cloud
 configure_live_payment_settings "$PHALA_CLOUD_MERCHANT_SECRET_KEY"
 register_live_webhook "$PHALA_CLOUD_MERCHANT_SECRET_KEY"
-pin_live_webhook_keys "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_CLOUD_ACCOUNT_ID" phala-cloud
+pin_live_webhook_keys "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_CLOUD_ACCOUNT_ID" phala-cloud || {
+  echo "Phala Cloud webhook key pinning failed; stop" >&2
+  false
+}
 ```
 
 Only after all live configuration succeeds, hand the account id and live key to Phala Cloud's
