@@ -28,6 +28,10 @@ illustrative until Finance confirms them.
 Run commands that create or change cloud resources, DNS, contracts, GitHub settings, or secrets
 from the operator's release checkout. Never commit a private key or an env file.
 
+> **One shell session:** Run §§7–10 in one shell session. If a new session is unavoidable, re-export
+> `APP_ID`, `ATTESTED_APP_ID`, `COMPOSE_HASH`, and `ORIGIN`, re-define the `admin` helper, and
+> recreate `SMOKE_DEPOSIT_IDS` before continuing.
+
 ## 1. Create the workspace and GitHub Environment
 
 Create the production Phala Cloud workspace and an API key scoped to it. Confirm that it offers
@@ -120,32 +124,37 @@ From the environment repository's `main`, dispatch provisioning exactly once. Re
 and use the exact workflow run returned by the API query; never select the newest unrelated run:
 
 ```sh
-export PROVISION_REQUESTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-gh workflow run deploy-phala.yml --repo "$GITHUB_REPOSITORY" --ref main \
-  -f environment=production -f target=topup -f mode=provision
-export PROVISION_RUN_ID=""
-PROVISION_LOOKUP_DEADLINE=$((SECONDS + 300))
-while [[ -z "$PROVISION_RUN_ID" && SECONDS -lt $PROVISION_LOOKUP_DEADLINE ]]; do
-  PROVISION_RUN_ID="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/deploy-phala.yml/runs" \
-    -f event=workflow_dispatch -f branch=main -f "created=>=$PROVISION_REQUESTED_AT" -F per_page=100 \
-    --jq '.workflow_runs | sort_by(.created_at) | last | .id' 2>/dev/null || true)"
-  [[ -n "$PROVISION_RUN_ID" ]] || sleep 5
-done
-[[ -n "$PROVISION_RUN_ID" ]] || {
-  echo "timed out waiting for the provisioning workflow run; stop here" >&2
+provision_topup() {
+  PROVISION_REQUESTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+  export PROVISION_REQUESTED_AT
+  gh workflow run deploy-phala.yml --repo "$GITHUB_REPOSITORY" --ref main \
+    -f environment=production -f target=topup -f mode=provision || return 1
+  PROVISION_RUN_ID=""
+  PROVISION_LOOKUP_DEADLINE=$((SECONDS + 300))
+  while [[ -z "$PROVISION_RUN_ID" && SECONDS -lt $PROVISION_LOOKUP_DEADLINE ]]; do
+    PROVISION_RUN_ID="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/deploy-phala.yml/runs" \
+      -f event=workflow_dispatch -f branch=main -f "created=>=$PROVISION_REQUESTED_AT" -F per_page=100 \
+      --jq '.workflow_runs | sort_by(.created_at) | last | .id' 2>/dev/null || true)"
+    [[ -n "$PROVISION_RUN_ID" ]] || sleep 5
+  done
+  [[ -n "$PROVISION_RUN_ID" ]] || {
+    echo "timed out waiting for the provisioning workflow run; stop here" >&2
+    return 1
+  }
+  gh run watch "$PROVISION_RUN_ID" --repo "$GITHUB_REPOSITORY" || return 1
+  gh run view "$PROVISION_RUN_ID" --repo "$GITHUB_REPOSITORY" || return 1
+  # Copy TOPUP_CVM_ID from the run summary; it must never enter committed config.
+  TOPUP_CVM_ID="<cvm-id-from-provision-summary>"
+  export TOPUP_CVM_ID
+  gh variable set TOPUP_CVM_ID --repo "$GITHUB_REPOSITORY" --env production --body "$TOPUP_CVM_ID" || return 1
+}
+provision_topup || {
+  echo "Provisioning did not complete; stop here and do not run later steps" >&2
   false
 }
-gh run watch "$PROVISION_RUN_ID" --repo "$GITHUB_REPOSITORY"
-gh run view "$PROVISION_RUN_ID" --repo "$GITHUB_REPOSITORY"
 ```
 
-Copy `TOPUP_CVM_ID` from the run summary and set the protected Environment variable. The same
-summary prints the CNAME and TXT records used in step 5. Do not put the id in committed config:
-
-```sh
-export TOPUP_CVM_ID="<cvm-id-from-provision-summary>"
-gh variable set TOPUP_CVM_ID --repo "$GITHUB_REPOSITORY" --env production --body "$TOPUP_CVM_ID"
-```
+The provisioning run summary also prints the CNAME and TXT records used in step 5.
 
 ## 5. Create DNS records from the provision summary
 
@@ -195,25 +204,32 @@ has empty values and the second has the production values. Use the editor, never
 gates before this upgrade preflight.
 
 ```sh
-kit/deploy/phala envs update "$TOPUP_CVM_ID" -e .env.production
-export UPGRADE_REQUESTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-gh workflow run deploy-phala.yml --repo "$GITHUB_REPOSITORY" --ref main \
-  -f environment=production -f target=topup -f mode=upgrade
-export UPGRADE_RUN_ID=""
-UPGRADE_LOOKUP_DEADLINE=$((SECONDS + 300))
-while [[ -z "$UPGRADE_RUN_ID" && SECONDS -lt $UPGRADE_LOOKUP_DEADLINE ]]; do
-  UPGRADE_RUN_ID="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/deploy-phala.yml/runs" \
-    -f event=workflow_dispatch -f branch=main -f "created=>=$UPGRADE_REQUESTED_AT" -F per_page=100 \
-    --jq '.workflow_runs | sort_by(.created_at) | last | .id' 2>/dev/null || true)"
-  [[ -n "$UPGRADE_RUN_ID" ]] || sleep 5
-done
-[[ -n "$UPGRADE_RUN_ID" ]] || {
-  echo "timed out waiting for the upgrade workflow run; stop here" >&2
+upgrade_topup() {
+  kit/deploy/phala envs update "$TOPUP_CVM_ID" -e .env.production || return 1
+  UPGRADE_REQUESTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+  export UPGRADE_REQUESTED_AT
+  gh workflow run deploy-phala.yml --repo "$GITHUB_REPOSITORY" --ref main \
+    -f environment=production -f target=topup -f mode=upgrade || return 1
+  UPGRADE_RUN_ID=""
+  UPGRADE_LOOKUP_DEADLINE=$((SECONDS + 300))
+  while [[ -z "$UPGRADE_RUN_ID" && SECONDS -lt $UPGRADE_LOOKUP_DEADLINE ]]; do
+    UPGRADE_RUN_ID="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/deploy-phala.yml/runs" \
+      -f event=workflow_dispatch -f branch=main -f "created=>=$UPGRADE_REQUESTED_AT" -F per_page=100 \
+      --jq '.workflow_runs | sort_by(.created_at) | last | .id' 2>/dev/null || true)"
+    [[ -n "$UPGRADE_RUN_ID" ]] || sleep 5
+  done
+  [[ -n "$UPGRADE_RUN_ID" ]] || {
+    echo "timed out waiting for the upgrade workflow run; stop here" >&2
+    return 1
+  }
+  gh run watch "$UPGRADE_RUN_ID" --repo "$GITHUB_REPOSITORY" || return 1
+  gh run view "$UPGRADE_RUN_ID" --repo "$GITHUB_REPOSITORY" || return 1
+  shred -u .env.production.unsealed .env.production || return 1
+}
+upgrade_topup || {
+  echo "Upgrade did not complete; stop here and do not run later steps" >&2
   false
 }
-gh run watch "$UPGRADE_RUN_ID" --repo "$GITHUB_REPOSITORY"
-gh run view "$UPGRADE_RUN_ID" --repo "$GITHUB_REPOSITORY"
-shred -u .env.production.unsealed .env.production
 ```
 
 ## 7. Verify attestation, ingress, and health
@@ -446,7 +462,8 @@ restore_drill() {
   export PHALA_CLOUD_API_KEY
   live_isolated || { restore_cleanup; return 1; }
 
-  export RESTORE_ENV_DIR="$(mktemp -d)" || return 1
+  RESTORE_ENV_DIR="$(mktemp -d)" || return 1
+  export RESTORE_ENV_DIR
   umask 077
   : > "$RESTORE_ENV_DIR/restore.env"
   ${EDITOR:-vi} "$RESTORE_ENV_DIR/restore.env" || return 1
@@ -461,7 +478,8 @@ restore_drill() {
   kit/deploy/phala instances add --app-id "$APP_ID" --compose-file restore-check.yml \
     --pre-launch-script kit/deploy/phala-cloud-pre-launch.sh --env-file "$RESTORE_ENV_DIR/restore.env" \
     --name phala-pay-production-restore --json > restore-instance.json || return 1
-  export RESTORE_CVM_ID="$(jq -er '.vm_uuid' restore-instance.json)" || return 1
+  RESTORE_CVM_ID="$(jq -er '.vm_uuid' restore-instance.json)" || return 1
+  export RESTORE_CVM_ID
 
   # Restore step 2: fetch by vm_uuid, address the guest by its attested instance id, and verify.
   live_isolated || { restore_cleanup; return 1; }
@@ -469,8 +487,10 @@ restore_drill() {
   curl -fsS -H "X-API-Key: $PHALA_CLOUD_API_KEY" "$PHALA_ATTESTATION_URL" \
     > restore-attestation.json || return 1
   kit/deploy/phala cvms get "$RESTORE_CVM_ID" --json > restore-cvm.json || return 1
-  export RESTORE_INSTANCE_ID="$(jq -er '[.tcb_info.event_log[] | select(.event == "instance-id") | .event_payload | ascii_downcase | select(test("^[0-9a-f]{40}$"))] | select(length == 1)[0]' restore-attestation.json)" || return 1
-  export RESTORE_GATEWAY_DOMAIN="$(jq -er '.gateway.base_domain' restore-cvm.json)" || return 1
+  RESTORE_INSTANCE_ID="$(jq -er '[.tcb_info.event_log[] | select(.event == "instance-id") | .event_payload | ascii_downcase | select(test("^[0-9a-f]{40}$"))] | select(length == 1)[0]' restore-attestation.json)" || return 1
+  export RESTORE_INSTANCE_ID
+  RESTORE_GATEWAY_DOMAIN="$(jq -er '.gateway.base_domain' restore-cvm.json)" || return 1
+  export RESTORE_GATEWAY_DOMAIN
   curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \
     > restore-info.json || return 1
   kit/deploy/verify-attestation.sh restore-attestation.json restore-info.json "$APP_ID" \
@@ -522,7 +542,8 @@ restore_drill() {
   live_isolated || { restore_cleanup; return 1; }
   curl -fsS -H "X-API-Key: $PHALA_CLOUD_API_KEY" "$PHALA_ATTESTATION_URL" \
     > restore-attestation-final.json || return 1
-  export RESTORE_INSTANCE_ID="$(jq -er '[.tcb_info.event_log[] | select(.event == "instance-id") | .event_payload | ascii_downcase | select(test("^[0-9a-f]{40}$"))] | select(length == 1)[0]' restore-attestation-final.json)" || return 1
+  RESTORE_INSTANCE_ID="$(jq -er '[.tcb_info.event_log[] | select(.event == "instance-id") | .event_payload | ascii_downcase | select(test("^[0-9a-f]{40}$"))] | select(length == 1)[0]' restore-attestation-final.json)" || return 1
+  export RESTORE_INSTANCE_ID
   curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \
     > restore-info-final.json || return 1
   kit/deploy/verify-attestation.sh restore-attestation-final.json restore-info-final.json "$APP_ID" \
@@ -530,12 +551,17 @@ restore_drill() {
 
   # Restore step 5: verify a nonce-bound admin attestation, the frozen state, and every smoke deposit.
   live_isolated || { restore_cleanup; return 1; }
-  export BASE_URL="$RESTORE_URL" NONCE="$(openssl rand -hex 32)"
+  BASE_URL="$RESTORE_URL"
+  export BASE_URL
+  NONCE="$(openssl rand -hex 32)" || return 1
+  export NONCE
   admin GET "/v1/admin/attestation?account=$SMOKE_ACCOUNT_ID&livemode=true&nonce=$NONCE" \
     > restore-public-attestation.json || return 1
   jq -e '.compose_file != null' restore-attestation-final.json >/dev/null || return 1
-  export RESTORE_COMPOSE_HASH="$(jq -j '.compose_file' restore-attestation-final.json | sha256sum | cut -d' ' -f1)"
-  export RESTORE_PUBLIC_REPORT_DATA="$(jq -er '.report_data' restore-public-attestation.json)" || return 1
+  RESTORE_COMPOSE_HASH="$(jq -j '.compose_file' restore-attestation-final.json | sha256sum | cut -d' ' -f1)" || return 1
+  export RESTORE_COMPOSE_HASH
+  RESTORE_PUBLIC_REPORT_DATA="$(jq -er '.report_data' restore-public-attestation.json)" || return 1
+  export RESTORE_PUBLIC_REPORT_DATA
   jq '{quote: null, attestation: .tdx_quote}' restore-public-attestation.json \
     | deploy/dstack-verifier.sh > restore-public-verification.json || return 1
   jq -e --arg app "$ATTESTED_APP_ID" --arg compose "$RESTORE_COMPOSE_HASH" \
