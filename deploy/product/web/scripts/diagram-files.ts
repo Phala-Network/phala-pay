@@ -24,9 +24,12 @@ export function mermaidBlocks(source: string): string[] {
   return [...source.matchAll(/^```mermaid[^\S\n]*\n([\s\S]*?)\n```[^\S\n]*$/gm)].map(([, body = ""]) => body);
 }
 
+const ENTITIES: Record<string, string> = { lt: "<", gt: ">", amp: "&", quot: '"' };
+
 const clean = (label: string) => label
   .replace(/,?\s*<br\s*\/?>/g, ", ")
-  .replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&").replaceAll("&quot;", '"')
+  // Each entity decoded once, in one pass: `&amp;lt;` is the text `&lt;`, not `<`.
+  .replace(/&(lt|gt|amp|quot);/g, (_entity, name: string) => ENTITIES[name] ?? "")
   .replace(/\s+/g, " ")
   .trim();
 
