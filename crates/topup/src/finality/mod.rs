@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::{
-    ChainError, ChainReader, FinalizedHead, FinalizedReader, ReceiptLookup, TransferLog,
+    ChainError, ChainReader, FinalizedReader, ReceiptLookup, TransferLog,
 };
 use topup_core::deposit::{DepositState, reverse};
 use topup_core::identity::reversed_event_id;
@@ -319,7 +319,7 @@ impl FinalityWatch {
         );
         let terminal_transfer = primary == secondary
             && primary.transfer().is_some_and(|transfer| {
-                transfer.to == deposit.address
+                deposit.is_same_transfer(transfer)
                     && transfer.block_number <= primary_finalized.min(secondary_finalized)
             });
         let evidence = crate::steps::confirm::ConfirmationEvidence {
@@ -425,12 +425,7 @@ impl FinalityWatch {
             let mut healthy = true;
             let mut more = false;
             for &chain_id in self.chains.keys() {
-                let Some(&FinalizedHead {
-                    number: finalized, ..
-                }) = published.get(&chain_id)
-                else {
-                    continue;
-                };
+                let finalized = published.get(&chain_id).map_or(0, |head| head.number);
                 let result = tokio::select! {
                     () = cancellation.cancelled() => return,
                     result = self.watch_at(chain_id, finalized, Utc::now()) => result,
@@ -603,10 +598,14 @@ struct WatchedDeposit {
 
 impl WatchedDeposit {
     fn is_same_transfer(&self, transfer: &TransferLog) -> bool {
-        transfer.to == self.address
-            && transfer.token == self.asset_contract
-            && transfer.from == self.from_address
-            && transfer.amount == self.amount_atomic
+        crate::steps::confirm::transfer_identity_matches(
+            transfer,
+            self.address,
+            self.asset_contract,
+            self.from_address,
+            self.amount_atomic,
+            (Some(self.origin.0), Some(self.origin.1)),
+        )
     }
 }
 
@@ -687,21 +686,6 @@ fn decide(
                         Verdict::Wait
                     }
                 }
-                // A detected deposit's evidence is provisional: its confirm step corrects a
-                // transfer both providers agree on, still to this address.
-                Some(transfer)
-                    if deposit.state == DepositState::Detected
-                        && transfer.to == deposit.address =>
-                {
-                    if transfer.block_number != deposit.block_number
-                        || transfer.block_hash != deposit.block_hash
-                        || transfer.log_index != deposit.log_index
-                    {
-                        Verdict::Follow(BlockEvidence::from(transfer))
-                    } else {
-                        Verdict::Wait
-                    }
-                }
                 _ if is_final => Verdict::Reverse(
                     json!({
                         "stage": "finality",
@@ -748,7 +732,7 @@ async fn claim_unfinal_deposits(
 ) -> Result<Vec<WatchedDeposit>, FinalityError> {
     let ids: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM deposits WHERE chain_id=$1 AND deposit_finality_pending(deposits) \
-         AND (first_unresolved_at IS NOT NULL OR block_number <= $2) \
+         AND (first_unresolved_at IS NOT NULL OR (state='detected' AND final_at IS NOT NULL) OR block_number <= $2) \
          AND (lease_until IS NULL OR lease_until <= $3) \
          AND (finality_check_at IS NULL OR finality_check_at <= $3) \
          ORDER BY block_number,id LIMIT $4",
@@ -849,7 +833,7 @@ async fn record_evidence(
     };
     let state: String = row.try_get("state")?;
     let moved = block.block_hash != deposit.block_hash || block.log_index != deposit.log_index;
-    insert_transition(
+    let transition_id = insert_transition(
         &mut transaction,
         deposit.id,
         &state,
@@ -857,6 +841,7 @@ async fn record_evidence(
         deposit.attempt,
         &json!({
             "chain_confirmation": confirmation,
+            "confirmation_proof_version": db::confirmation::TERMINAL_PROOF_VERSION,
             "stage": "finality",
             "result": if is_final { "final" } else { "followed" },
             "moved": moved,
@@ -867,6 +852,10 @@ async fn record_evidence(
     )
     .await?;
     if is_final {
+        if confirmation.is_some() {
+            db::confirmation::link_terminal_evidence(&mut transaction, deposit.id, transition_id)
+                .await?;
+        }
         db::mark_swept(&mut transaction, Some(deposit.id), &[]).await?;
     }
     transaction.commit().await?;
@@ -942,15 +931,16 @@ async fn reverse_deposit(
         // its existing lease and receipt quota inside the atomic reversal transaction.
         sqlx::query("UPDATE deposits SET lease_token=$2,lease_until=$3+interval '5 minutes',confirm_receipt_checks=GREATEST(confirm_receipt_checks,1),final_at=$3 WHERE id=$1 AND state='detected'")
             .bind(id).bind(deposit.token).bind(now).execute(&mut *transaction).await?;
-        insert_transition(
+        let transition_id = insert_transition(
             &mut transaction,
             id,
             "detected",
             "detected",
             0,
-            &json!({"stage":"finality","result":"successor_final","chain_confirmation":complete}),
+            &json!({"stage":"finality","result":"successor_final","chain_confirmation":complete,"confirmation_proof_version":db::confirmation::TERMINAL_PROOF_VERSION}),
         )
         .await?;
+        db::confirmation::link_terminal_evidence(&mut transaction, id, transition_id).await?;
     }
     let scope = Scope::new(account_id, livemode);
     let pending_refunds: Vec<Uuid> = sqlx::query_scalar(
@@ -1059,14 +1049,15 @@ async fn insert_transition(
     to: &str,
     attempt: i32,
     evidence: &Value,
-) -> Result<(), sqlx::Error> {
+) -> Result<Uuid, sqlx::Error> {
+    let transition_id = Uuid::new_v4();
     sqlx::query(
         r#"
         INSERT INTO transitions (id, deposit_id, from_state, to_state, attempt, evidence)
         VALUES ($1, $2, $3, $4, $5, $6)
         "#,
     )
-    .bind(Uuid::new_v4())
+    .bind(transition_id)
     .bind(deposit_id)
     .bind(from)
     .bind(to)
@@ -1074,7 +1065,7 @@ async fn insert_transition(
     .bind(evidence)
     .execute(&mut **transaction)
     .await?;
-    Ok(())
+    Ok(transition_id)
 }
 
 fn to_i64(value: u64) -> Result<i64, sqlx::Error> {
@@ -1292,22 +1283,26 @@ mod tests {
     }
 
     #[test]
-    fn a_detected_deposit_with_other_provisional_evidence_is_left_to_its_confirm_step() {
+    fn changed_identity_reverses_detected_and_credited_deposits_only_at_finality() {
         let deposit = deposit(DepositState::Detected);
         let mut corrected = transfer(&deposit, 100, 2);
         corrected.amount = AtomicAmount::new(U256::from(8));
         let receipt = included(Some(corrected.clone()), 100, 2);
+        assert!(matches!(
+            decide(&deposit, observed(100, &receipt), observed(100, &receipt), false),
+            Verdict::Reverse(evidence, Some(successor))
+                if evidence["result"] == "transfer_changed_at_finality" && *successor == corrected
+        ));
         assert_eq!(
             decide(
                 &deposit,
-                observed(100, &receipt),
+                observed(99, &receipt),
                 observed(100, &receipt),
                 false
             ),
             Verdict::Wait
         );
-        // Past `detected`, another transfer at the position reverses the deposit, and that
-        // transfer becomes a new one.
+        // Once final, the changed transfer becomes a distinct successor in either state.
         let credited = WatchedDeposit {
             state: DepositState::Credited,
             ..deposit

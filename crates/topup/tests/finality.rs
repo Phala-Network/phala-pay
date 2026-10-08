@@ -316,7 +316,7 @@ async fn unresolved_finality_cadence_keeps_first_due_time_and_exact_boundaries()
                 chain.clone(),
                 chain.clone(),
             );
-            let due = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
+            let due = DateTime::from_timestamp(1_700_000_000, 0).context("clock")?;
             ensure!(watch.watch_once_at(CHAIN_ID, due).await?.watched == 1);
             ensure!(schedule(pool, id).await? == (due, due + TimeDelta::seconds(60)));
             // No wall-clock sleeps: run every due check through both boundaries and one slow phase.
@@ -377,7 +377,7 @@ async fn newly_due_deposits_finalize_immediately_beside_backed_off_deposits() ->
         let pool = &context.app_pool;
         let address = setup(pool).await?;
         let old = insert(pool, address, 1, 10).await?;
-        let now = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
+        let now = DateTime::from_timestamp(1_700_000_000, 0).context("clock")?;
         sqlx::query("UPDATE deposits SET finality_due_at=$2 - interval '7 hours', finality_check_at=$2 + interval '1 hour' WHERE id=$1")
             .bind(old).bind(now).execute(pool).await?;
         let fresh = insert(pool, address, 2, 20).await?;
@@ -582,7 +582,7 @@ async fn unresolved_stock_and_entries_alert_at_two_and_survive_rechecks_and_rest
         Box::pin(async move {
             let pool = &context.app_pool;
             let address = setup(pool).await?;
-            let now = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
+            let now = DateTime::from_timestamp(1_700_000_000, 0).context("clock")?;
             let first = insert(pool, address, 1, 10).await?;
             ensure!(
                 unresolved_counts(pool, now).await? == (0, 0),
@@ -693,7 +693,7 @@ async fn resolved_unresolved_entries_remain_in_the_rolling_window_until_twenty_f
             let pool = &context.app_pool;
             let address = setup(pool).await?;
             let id = insert(pool, address, 1, 20).await?;
-            let now = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
+            let now = DateTime::from_timestamp(1_700_000_000, 0).context("clock")?;
             let chain = scripted(BTreeSet::new());
             let watch =
                 FinalityWatch::single(pool.clone(), Arc::default(), CHAIN_ID, chain.clone(), chain);
@@ -738,7 +738,7 @@ async fn resolved_unresolved_entries_remain_in_the_rolling_window_until_twenty_f
 async fn old_final_detected_absence_keeps_s_until_fresh_terminal_proof() -> Result<()> {
     with_database(|context|Box::pin(async move {
         let p=&context.app_pool;let address=setup(p).await?;let id=insert(p,address,1,20).await?;
-        let now=DateTime::from_timestamp(2_000_000_000,0).context("clock")?;
+        let now=DateTime::from_timestamp(1_700_000_000,0).context("clock")?;
         sqlx::query("UPDATE deposits SET state='detected',reason=NULL,final_at=$2,first_unresolved_at=$2,next_attempt_at=$2,finality_check_at=$2 WHERE id=$1").bind(id).bind(now).execute(p).await?;
         let chain=scripted(BTreeSet::new());
         let watch=FinalityWatch::single(p.clone(),Arc::default(),CHAIN_ID,chain.clone(),chain.clone());

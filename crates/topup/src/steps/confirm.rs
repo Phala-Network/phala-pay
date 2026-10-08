@@ -77,6 +77,23 @@ pub struct ConfirmationEvidence {
     pub receipts: [ReceiptLookup; 2],
 }
 
+/// Transfer identity is immutable; its inclusion position may change after a reorg.
+pub(crate) fn transfer_identity_matches(
+    transfer: &TransferLog,
+    to: Address,
+    token: Address,
+    from: Address,
+    amount: AtomicAmount,
+    origin: (Option<Address>, Option<u64>),
+) -> bool {
+    transfer.to == to
+        && transfer.token == token
+        && transfer.from == from
+        && transfer.amount == amount
+        && origin.0 == Some(transfer.tx_from)
+        && origin.1 == Some(transfer.tx_nonce)
+}
+
 struct ChainPair {
     confirmations: Confirmations,
     primary: Arc<dyn ConfirmationReader>,
@@ -219,6 +236,14 @@ impl ConfirmStep {
         clock: Option<DateTime<Utc>>,
         supplied: Option<ConfirmationEvidence>,
     ) -> FinalityResult {
+        let unresolved = |error: &str| {
+            FinalityResult::Unresolved(
+                StepOutcome::Retry {
+                    error: RetryError::RpcDisagreement,
+                },
+                json!({"stage":"finality","error":error}),
+            )
+        };
         let supplied = match supplied {
             Some(evidence) => Some(evidence),
             None => match self.context_lookup.terminal_evidence(deposit.id).await {
@@ -232,6 +257,23 @@ impl ConfirmStep {
             },
         };
         if let Some(evidence) = supplied {
+            if evidence
+                .receipts
+                .iter()
+                .filter_map(ReceiptLookup::transfer)
+                .any(|log| {
+                    !transfer_identity_matches(
+                        log,
+                        address,
+                        deposit.asset_contract,
+                        deposit.from_address,
+                        deposit.amount_atomic,
+                        (deposit.tx_from, deposit.tx_nonce),
+                    )
+                })
+            {
+                return unresolved("supplied_confirmation_identity_changed");
+            }
             return confirmed_evidence_from(
                 Ok((evidence.heads[0], evidence.receipts[0].clone())),
                 Ok((evidence.heads[1], evidence.receipts[1].clone())),
@@ -240,14 +282,6 @@ impl ConfirmStep {
                 address,
             );
         }
-        let unresolved = |error: &str| {
-            FinalityResult::Unresolved(
-                StepOutcome::Retry {
-                    error: RetryError::RpcDisagreement,
-                },
-                json!({"stage":"finality","error":error}),
-            )
-        };
         let claim = match self
             .context_lookup
             .claim_probe(deposit, policy, clock.unwrap_or_else(Utc::now))
@@ -379,11 +413,14 @@ impl ConfirmStep {
                     || log.block_time != deposit.block_time
                     || log.block_hash != deposit.block_hash
                     || log.log_index != deposit.log_index
-                    || log.token != deposit.asset_contract
-                    || log.from != deposit.from_address
-                    || log.amount != deposit.amount_atomic
-                    || deposit.tx_from.is_some_and(|from| from != log.tx_from)
-                    || deposit.tx_nonce.is_some_and(|nonce| nonce != log.tx_nonce) =>
+                    || !transfer_identity_matches(
+                        log,
+                        address,
+                        deposit.asset_contract,
+                        deposit.from_address,
+                        deposit.amount_atomic,
+                        (deposit.tx_from, deposit.tx_nonce),
+                    ) =>
             {
                 unresolved("confirmation_evidence_changed")
             }
@@ -2084,11 +2121,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agreed_canonical_evidence_corrects_provisional_row() {
+    async fn supplied_evidence_requires_every_transfer_identity_field() {
+        for field in ["to", "token", "from", "amount", "tx_from", "tx_nonce"] {
+            let deposit = deposit(1_000);
+            let mut changed = transfer(&deposit);
+            match field {
+                "to" => changed.to = Address::repeat_byte(9),
+                "token" => changed.token = Address::repeat_byte(9),
+                "from" => changed.from = Address::repeat_byte(9),
+                "amount" => changed.amount = AtomicAmount::new(U256::from(2_000)),
+                "tx_from" => changed.tx_from = Address::repeat_byte(9),
+                "tx_nonce" => changed.tx_nonce += 1,
+                _ => unreachable!(),
+            }
+            let result = step(
+                route(PricingMode::Spot),
+                chain(100, vec![]),
+                chain(100, vec![]),
+                prices(now_seconds()),
+                context(None),
+            )
+            .run_with_final_evidence(
+                &deposit,
+                terminal(&changed),
+                tokio::time::Instant::now() + crate::pump::STEP_TIMEOUT,
+                Utc::now(),
+            )
+            .await;
+            assert_eq!(
+                result.evidence["error"], "supplied_confirmation_identity_changed",
+                "{field}"
+            );
+            assert!(result.effects.first_unresolved, "{field}");
+            assert!(result.effects.valuation.is_none(), "{field}");
+            assert!(result.effects.canonical_evidence.is_none(), "{field}");
+            assert!(result.events.is_empty(), "{field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn agreed_reincluded_evidence_corrects_inclusion_position() {
         let deposit = deposit(1_000);
         let mut canonical = transfer(&deposit);
         canonical.block_hash = B256::repeat_byte(7);
-        canonical.from = Address::repeat_byte(8);
+        canonical.block_time += chrono::TimeDelta::seconds(1);
+        canonical.log_index += 1;
         let result = step(
             route(PricingMode::Spot),
             chain(100, vec![canonical.clone()]),
@@ -2143,7 +2220,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_token_reselects_route_and_its_valuation_policy() {
+    async fn changed_supplied_token_cannot_reselect_route_or_value_original() {
         let deposit = deposit(1_000);
         let mut canonical_route = route(PricingMode::Spot);
         canonical_route.route = "canonical-token-route".to_owned();
@@ -2195,15 +2272,19 @@ mod tests {
                 Utc::now(),
             )
             .await;
-        assert_eq!(result.outcome, StepOutcome::Advance);
-        let correction = result.effects.canonical_evidence.expect("token correction");
-        assert_eq!(correction.route.as_deref(), Some("canonical-token-route"));
-        assert_eq!(correction.route_version, Some(7));
         assert_eq!(
-            result.effects.valuation.expect("valuation").credit_minor,
-            MinorAmount::new(10)
+            result.outcome,
+            StepOutcome::Retry {
+                error: RetryError::RpcDisagreement
+            }
         );
-        // Confirmation announces nothing; the product learns of the deposit when it is credited.
+        assert_eq!(
+            result.evidence["error"],
+            "supplied_confirmation_identity_changed"
+        );
+        assert!(result.effects.first_unresolved);
+        assert!(result.effects.canonical_evidence.is_none());
+        assert!(result.effects.valuation.is_none());
         assert!(result.events.is_empty());
     }
 
@@ -2268,9 +2349,11 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_canonical_token_rejects_with_event() {
-        let deposit = deposit(1_000);
-        let mut canonical = transfer(&deposit);
-        canonical.token = Address::repeat_byte(9);
+        let mut deposit = deposit(1_000);
+        deposit.asset_contract = Address::repeat_byte(9);
+        deposit.route = None;
+        deposit.route_version = None;
+        let canonical = transfer(&deposit);
         let context = context(None);
         let result = step(
             route(PricingMode::Spot),
@@ -2684,14 +2767,14 @@ mod tests {
             assert_eq!(
                 result.outcome,
                 StepOutcome::Retry {
-                    error: RetryError::InvariantViolation,
+                    error: RetryError::RpcDisagreement,
                 }
             );
             assert_eq!(
                 result.evidence["error"],
-                "delivered_event_contradicts_chain"
+                "supplied_confirmation_identity_changed"
             );
-            assert_eq!(result.evidence["field"], "asset_contract");
+            assert!(result.effects.first_unresolved);
             assert!(result.events.is_empty());
             assert!(result.effects.valuation.is_none());
         }

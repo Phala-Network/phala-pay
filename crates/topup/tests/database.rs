@@ -1042,7 +1042,10 @@ async fn deposits_are_idempotent_and_concurrent_claimers_get_different_rows() ->
     with_database(|context| {
         Box::pin(async move {
             let seed = seed_account(&context.app_pool, 30).await?;
-            let first = new_deposit(seed.address_id, 1, 30, 0);
+            let first = NewDeposit {
+                is_final: false,
+                ..new_deposit(seed.address_id, 1, 30, 0)
+            };
             ensure!(db::insert_deposit(&context.app_pool, &first).await?);
             ensure!(!db::insert_deposit(&context.app_pool, &first).await?);
             ensure!(
@@ -1055,7 +1058,14 @@ async fn deposits_are_idempotent_and_concurrent_claimers_get_different_rows() ->
                 )
                 .await?
             );
-            db::insert_deposit(&context.app_pool, &new_deposit(seed.address_id, 1, 31, 0)).await?;
+            db::insert_deposit(
+                &context.app_pool,
+                &NewDeposit {
+                    is_final: false,
+                    ..new_deposit(seed.address_id, 1, 31, 0)
+                },
+            )
+            .await?;
 
             let (first_claim, second_claim) = tokio::join!(
                 db::claim_deposit(&context.app_pool, Uuid::new_v4()),
@@ -1075,7 +1085,10 @@ async fn attempts_survive_claim_and_wait_then_reset_on_advance() -> Result<()> {
     with_database(|context| {
         Box::pin(async move {
             let seed = seed_account(&context.app_pool, 40).await?;
-            let deposit = new_deposit(seed.address_id, 1, 40, 0);
+            let deposit = NewDeposit {
+                is_final: false,
+                ..new_deposit(seed.address_id, 1, 40, 0)
+            };
             let id = deposit_id(deposit.chain_id, deposit.tx_hash, deposit.log_index);
             db::insert_deposit(&context.app_pool, &deposit).await?;
             sqlx::query("UPDATE deposits SET attempt = 3 WHERE id = $1")
@@ -1165,7 +1178,10 @@ async fn transition_cas_and_outbox_are_atomic() -> Result<()> {
     with_database(|context| {
         Box::pin(async move {
             let seed = seed_account(&context.app_pool, 50).await?;
-            let deposit = new_deposit(seed.address_id, 1, 50, 0);
+            let deposit = NewDeposit {
+                is_final: false,
+                ..new_deposit(seed.address_id, 1, 50, 0)
+            };
             let id = deposit_id(deposit.chain_id, deposit.tx_hash, deposit.log_index);
             db::insert_deposit(&context.app_pool, &deposit).await?;
             let claimed = db::claim_deposit(&context.app_pool, Uuid::new_v4())

@@ -166,7 +166,7 @@ async fn fixture(pool: &PgPool, policy: Confirmations, chain: u64) -> Result<Fix
         address: Address::repeat_byte(1),
     };
     seed::insert_address(pool, &address).await?;
-    let due = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
+    let due = DateTime::from_timestamp(1_700_000_000, 0).context("clock")?;
     let log = TransferLog {
         tx_hash: hash(8),
         receipt_log_index: 0,
@@ -283,6 +283,42 @@ where
     server.await??;
     result
 }
+fn terminal_proof(log: &TransferLog) -> topup::steps::confirm::ConfirmationEvidence {
+    let receipt = topup_adapters::chain::evm::ReceiptLookup::Included {
+        block_number: log.block_number,
+        block_hash: log.block_hash,
+        block_time: log.block_time,
+        status: true,
+        tx_from: log.tx_from,
+        tx_nonce: log.tx_nonce,
+        transfer: Some(Box::new(log.clone())),
+    };
+    topup::steps::confirm::ConfirmationEvidence {
+        policy: Confirmations::Finalized,
+        terminal: true,
+        heads: [topup_core::route::ChainHeads {
+            finalized: 200,
+            ..Default::default()
+        }; 2],
+        receipts: [receipt.clone(), receipt],
+    }
+}
+
+async fn terminal_reference(pool: &PgPool, id: Uuid) -> Result<(Uuid, DateTime<Utc>)> {
+    let (proof, marker, created): (Uuid, DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+        "SELECT d.confirmation_terminal_transition_id,d.final_at,t.created_at FROM deposits d \
+         JOIN transitions t ON t.id=d.confirmation_terminal_transition_id WHERE d.id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    ensure!(
+        marker == created,
+        "proof and final marker were not established together"
+    );
+    Ok((proof, marker))
+}
+
 async fn due(pool: &PgPool, id: Uuid) -> Result<DateTime<Utc>> {
     Ok(
         sqlx::query_scalar("SELECT finality_check_at FROM deposits WHERE id=$1")
@@ -290,6 +326,14 @@ async fn due(pool: &PgPool, id: Uuid) -> Result<DateTime<Utc>> {
             .fetch_one(pool)
             .await?,
     )
+}
+async fn pump_due(pool: &PgPool, id: Uuid) -> Result<DateTime<Utc>> {
+    Ok(sqlx::query_scalar(
+        "SELECT GREATEST(finality_check_at,next_attempt_at) FROM deposits WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?)
 }
 fn set_clock(r: &Rpc, now: DateTime<Utc>) {
     r.clock
@@ -328,8 +372,12 @@ async fn normal_modes_and_slow_lane_have_hard_method_bounds() -> Result<()> {
                 while now<entry+Duration::days(1) {
                     set_clock(&r,now);
                     // Both pump calls race with watcher; only one owns this due, including restart.
+                    let before=counts(&r);
                     let (a,b,c)=tokio::join!(pump.run_once_at(now),pump.run_once_at(now),watch.watch_once_at(chain,now));a?;b?;ensure!(c?.watched==0);
-                    first_day+=1;now=due(p,f.id).await?;
+                    if counts(&r)!=before {ensure!(counts(&r)==before.map(|n|n+1),"duplicate L reads");first_day+=1;}
+                    // SKIP LOCKED can defer an otherwise due claim without any RPC. Advance
+                    // through both persisted gates rather than repeating the same fake time.
+                    let next=pump_due(p,f.id).await?;ensure!(next>now,"L simulation did not advance");now=next;
                 }
                 ensure!(first_day==62,"first L day has {first_day} checks");
                 ensure!(counts(&r)==[u64::try_from(normal+62)?;2],"duplicate L reads");
@@ -552,7 +600,8 @@ async fn missed_positions_restart_crash_and_stale_claims_never_reset_budgets() -
         ensure!(!confirmation::reserve_receipt(p,f.id,token,last.version).await?);
         let after=now+Duration::minutes(5);
         ensure!(confirmation::claim_read(p,f.id,Uuid::new_v4(),Reader::Confirm(Confirmations::Depth(2)),after).await?.is_none());
-        ensure!(confirmation::claim_read(p,f.id,Uuid::new_v4(),Reader::Watcher,after).await?.is_some(),"crash permanently excluded detected row");
+        let admitted=confirmation::claim_read(p,f.id,Uuid::new_v4(),Reader::Watcher,after).await?;
+        ensure!(admitted.is_some(),"crash permanently excluded detected row");
         let history:(i32,i32,DateTime<Utc>)=sqlx::query_as("SELECT confirm_head_checks,confirm_receipt_checks,confirm_deadline_at FROM deposits WHERE id=$1").bind(f.id).fetch_one(p).await?;
         ensure!(history==(6,1,f.due+Duration::seconds(124)));Ok(())
     })).await
@@ -581,6 +630,8 @@ async fn slow_gauges_are_db_derived_once_only_and_keep_resolved_entries() -> Res
         let claim=db::confirmation::claim_read(p,first.id,token,db::confirmation::Reader::Confirm(Confirmations::Depth(2)),now).await?.context("L recheck")?;
         db::confirmation::finish_probe(p,first.id,token,claim,Confirmations::Depth(2),now,false,now).await?;
         ensure!(count(now).await?==(2,2),"recheck double-counted or overwrote entry");
+        sqlx::query("UPDATE deposits SET final_at=$2 WHERE id=$1").bind(first.id).bind(now).execute(p).await?;
+        ensure!(count(now).await?==(1,2),"final detected row still occupied L stock");
         sqlx::query("UPDATE deposits SET state='confirmed' WHERE id=$1").bind(first.id).execute(p).await?;
         ensure!(count(now).await?==(1,2),"resolved entry lost");
         // Fresh metric collectors read the same DB after all worker objects have gone.
@@ -620,5 +671,314 @@ async fn nonterminal_price_failure_then_reorg_reverses_with_atomic_successor() -
             ensure!(db::get_deposit(p,successor).await?.context("confirmed successor")?.state==DepositState::Confirmed);
             Ok(())
         }).await
+    })).await
+}
+
+#[tokio::test]
+async fn watcher_changed_identity_never_confirms_or_values_original() -> Result<()> {
+    for field in ["token", "from", "amount"] {
+        with_database(|ctx| Box::pin(async move {
+            let p = &ctx.app_pool;
+            let f = fixture(p, Confirmations::Depth(2), 1).await?;
+            sqlx::query("UPDATE deposits SET first_unresolved_at=$2,confirm_receipt_checks=1,finality_check_at=$2 WHERE id=$1")
+                .bind(f.id).bind(f.due).execute(p).await?;
+            run_fixture(p, &f, async |_, watch, r, _| {
+                let mut changed = f.log.clone();
+                match field {
+                    "token" => changed.token = Address::repeat_byte(9),
+                    "from" => changed.from = Address::repeat_byte(9),
+                    "amount" => changed.amount = AtomicAmount::new(U256::from(2_000)),
+                    _ => unreachable!(),
+                }
+                *r.transfer.lock().expect("fixture") = [Some(changed.clone()), Some(changed)];
+                for head in r.heads.iter() {head.store(200, Ordering::SeqCst);}
+                // Changed identity above the checkpoint stays in S, with no valuation.
+                let first = watch.watch_once_at(1, f.due).await?;
+                ensure!(first.watched == 1 && first.finalized == 0 && first.reversed == 0, "{field}");
+                let original = db::get_deposit(p, f.id).await?.context("original")?;
+                ensure!(original.state == DepositState::Detected && original.valuation_at.is_none(), "{field}");
+                db::chain_reads::advance_checkpoint(p, 1, db::chain_reads::Boundary {
+                    number: 200, hash: hash(200), time: f.due,
+                }).await?;
+                let next = due(p, f.id).await?;
+                set_clock(&r, next);
+                let final_check = watch.watch_once_at(1, next).await?;
+                ensure!(final_check.reversed == 1 && final_check.finalized == 0, "changed {field} bypassed reversal");
+                let original = db::get_deposit(p, f.id).await?.context("original")?;
+                ensure!(original.state == DepositState::Reversed && original.valuation_at.is_none(), "{field}");
+                let handed: i64 = sqlx::query_scalar("SELECT count(*) FROM transitions WHERE deposit_id=$1 AND evidence ? 'chain_confirmation'")
+                    .bind(f.id).fetch_one(p).await?;
+                ensure!(handed == 0, "changed {field} handed to confirm");
+                Ok(())
+            }).await
+        })).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn old_terminal_proof_is_retired_on_s_and_only_fresh_watcher_evidence_is_reused() -> Result<()>
+{
+    for legacy in [false, true] {
+        with_database(|ctx| Box::pin(async move {
+        let p = &ctx.app_pool;
+        let mut f = fixture(p, Confirmations::Depth(2), 1).await?;
+        // The controlled scheduling clock is in the past so DB-created proofs are fresh.
+        f.due = DateTime::from_timestamp(Utc::now().timestamp(), 0)
+            .context("RPC second precision clock")? - Duration::hours(1);
+        f.log.block_time = f.due - Duration::seconds(10);
+        let proof = terminal_proof(&f.log);
+        let old = Uuid::new_v4();
+        sqlx::query("INSERT INTO transitions (id,deposit_id,from_state,to_state,attempt,evidence,created_at) VALUES ($1,$2,'detected','detected',0,$3,$4)")
+            .bind(old).bind(f.id).bind(json!({"chain_confirmation": proof,"confirmation_proof_version":1}))
+            .bind(f.due-Duration::hours(1)).execute(p).await?;
+        sqlx::query("UPDATE deposits SET block_time=$2,final_at=$3,next_attempt_at=$3,finality_check_at=NULL,first_unresolved_at=CASE WHEN $5 THEN NULL ELSE $3 END,confirmation_terminal_transition_id=CASE WHEN $5 THEN NULL ELSE $4 END WHERE id=$1")
+            .bind(f.id).bind(f.log.block_time).bind(f.due).bind(old).bind(legacy).execute(p).await?;
+        run_fixture(p, &f, async |pump, watch, r, fail| {
+            *r.transfer.lock().expect("fixture") = [None, None];
+            ensure!(pump.run_once_at(f.due).await? == topup::pump::RunOnceResult::Idle, "pump reused old-final proof before due watcher");
+            ensure!(counts(&r) == [0, 0]);
+            // No checkpoint exists: the old final marker must still enter S.
+            let first = watch.watch_once_at(1, f.due).await?;
+            ensure!(first.watched == 1 && first.finalized == 0 && first.reversed == 0);
+            let entry: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1")
+                .bind(f.id).fetch_one(p).await?;
+            ensure!(entry == Some(f.due), "old-final row did not enter S");
+            let cached: Option<Value> = sqlx::query_scalar("SELECT confirmation_terminal_evidence($1)")
+                .bind(f.id).fetch_one(p).await?;
+            ensure!(cached.is_none(), "old proof survived S admission");
+            let gauges = topup::observability::metrics::render_chain_reads_at(p, f.due).await?;
+            ensure!(gauges.contains("topup_finality_unresolved{chain_id=\"1\"} 1"));
+            ensure!(gauges.contains("topup_finality_unresolved_entries_24h{chain_id=\"1\"} 1"));
+            ensure!(counts(&r) == [1,1], "first absent check methods");
+            let before = counts(&r);
+            ensure!(pump.run_once_at(f.due+Duration::seconds(1)).await? == topup::pump::RunOnceResult::Idle);
+            ensure!(counts(&r) == before);
+            let next = due(p, f.id).await?;
+            ensure!(pump.run_once_at(next).await? == topup::pump::RunOnceResult::Idle, "pump stole S with stale proof");
+            let mut reincluded = f.log.clone();
+            reincluded.block_number = 101; reincluded.block_hash = hash(101);
+            reincluded.block_time += Duration::seconds(1); reincluded.log_index = 1;
+            *r.transfer.lock().expect("fixture") = [Some(reincluded.clone()), Some(reincluded.clone())];
+            for head in r.heads.iter() {head.store(200, Ordering::SeqCst);}
+            db::chain_reads::advance_checkpoint(p, 1, db::chain_reads::Boundary {
+                number: 200, hash: hash(200), time: next,
+            }).await?;
+            fail.store(1, Ordering::SeqCst); set_clock(&r, next);
+            ensure!(watch.watch_once_at(1, next).await?.finalized == 1);
+            let current = db::get_deposit(p, f.id).await?.context("price retry")?;
+            ensure!(current.state == DepositState::Detected && current.block_number == 101 && current.valuation_at.is_none());
+            let fresh: Value = sqlx::query_scalar("SELECT confirmation_terminal_evidence($1)")
+                .bind(f.id).fetch_one(p).await?;
+            let fresh: topup::steps::confirm::ConfirmationEvidence = serde_json::from_value(fresh)?;
+            ensure!(fresh.receipts[0].transfer() == Some(&reincluded));
+            ensure!(counts(&r) == [4,4], "legacy/S handoff reread or exceeded methods");
+            let reference = terminal_reference(p,f.id).await?;
+            ensure!(reference.0 != old, "fresh proof reused old reference");
+            let before = counts(&r); fail.store(0, Ordering::SeqCst);
+            pump.run_once_at(current.next_attempt_at).await?;
+            ensure!(counts(&r) == before, "fresh handoff re-read receipt");
+            ensure!(terminal_reference(p,f.id).await? == reference, "price retry replaced its proof");
+            ensure!(db::get_deposit(p, f.id).await?.context("confirmed")?.state == DepositState::Confirmed);
+            ensure!(sqlx::query_scalar::<_, Option<DateTime<Utc>>>("SELECT first_unresolved_at FROM deposits WHERE id=$1").bind(f.id).fetch_one(p).await? == entry);
+            Ok(())
+        }).await
+    })).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn terminal_proof_freshness_boundary_is_inclusive() -> Result<()> {
+    with_database(|ctx| Box::pin(async move {
+        let p = &ctx.app_pool;
+        let f = fixture(p, Confirmations::Depth(2), 1).await?;
+        sqlx::query("UPDATE deposits SET first_unresolved_at=$2 WHERE id=$1")
+            .bind(f.id).bind(f.due).execute(p).await?;
+        for (created, fresh) in [(f.due-Duration::microseconds(1), false), (f.due, true)] {
+            let proof = Uuid::new_v4();
+            let mut tx = p.begin().await?;
+            sqlx::query("INSERT INTO transitions (id,deposit_id,from_state,to_state,attempt,evidence,created_at) VALUES ($1,$2,'detected','detected',0,$3,$4)")
+                .bind(proof).bind(f.id).bind(json!({"chain_confirmation":terminal_proof(&f.log),"confirmation_proof_version":1}))
+                .bind(created).execute(&mut *tx).await?;
+            sqlx::query("UPDATE deposits SET final_at=now(),confirmation_terminal_transition_id=$2 WHERE id=$1")
+                .bind(f.id).bind(proof).execute(&mut *tx).await?;
+            tx.commit().await?;
+            let present: bool = sqlx::query_scalar("SELECT confirmation_terminal_evidence($1) IS NOT NULL")
+                .bind(f.id).fetch_one(p).await?;
+            ensure!(present == fresh, "freshness boundary");
+        }
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn terminal_price_retry_keeps_the_normal_method_ceiling() -> Result<()> {
+    with_database(|ctx| {
+        Box::pin(async move {
+            let p = &ctx.app_pool;
+            let f = fixture(p, Confirmations::Finalized, 1).await?;
+            run_fixture(p, &f, async |pump, watch, r, fail| {
+                fail.store(1, Ordering::SeqCst);
+                let ready_at = f.due + Duration::seconds(6 * 384);
+                for position in 0..7 {
+                    let now = f.due + Duration::seconds(position * 384);
+                    if position == 6 {
+                        for h in r.heads.iter() {
+                            h.store(200, Ordering::SeqCst);
+                        }
+                    }
+                    set_clock(&r, now);
+                    pump.run_once_at(now).await?;
+                }
+                let stored = db::get_deposit(p, f.id).await?.context("price retry")?;
+                ensure!(stored.state == DepositState::Detected && stored.final_at.is_some());
+                db::chain_reads::advance_checkpoint(
+                    p,
+                    1,
+                    db::chain_reads::Boundary {
+                        number: 200,
+                        hash: hash(200),
+                        time: f.due,
+                    },
+                )
+                .await?;
+                let before = counts(&r);
+                ensure!(before == [10, 10] && before.iter().all(|n| *n <= 10));
+                let reference = terminal_reference(p, f.id).await?;
+                for elapsed in [60, 600, 21_600, 86_400] {
+                    let now = ready_at + Duration::seconds(elapsed);
+                    set_clock(&r, now);
+                    ensure!(
+                        watch.watch_once_at(1, now).await?.watched == 0,
+                        "normal terminal proof handed to watcher"
+                    );
+                    pump.run_once_at(now).await?;
+                    ensure!(
+                        counts(&r) == before,
+                        "normal terminal price retry added RPC"
+                    );
+                    ensure!(
+                        terminal_reference(p, f.id).await? == reference,
+                        "price retry replaced its proof or marker"
+                    );
+                }
+                fail.store(0, Ordering::SeqCst);
+                let retry = db::get_deposit(p, f.id)
+                    .await?
+                    .context("retry")?
+                    .next_attempt_at;
+                pump.run_once_at(retry).await?;
+                ensure!(
+                    counts(&r) == before
+                        && db::get_deposit(p, f.id).await?.context("confirmed")?.state
+                            == DepositState::Confirmed
+                );
+                Ok(())
+            })
+            .await
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn n_minus_one_final_marker_requires_one_fresh_watcher_proof_then_zero_retry_reads()
+-> Result<()> {
+    with_database(|ctx| {
+        Box::pin(async move {
+            let p = &ctx.app_pool;
+            let f = fixture(p, Confirmations::Finalized, 1).await?;
+            run_fixture(p, &f, async |pump, watch, r, fail| {
+                for h in r.heads.iter() {
+                    h.store(200, Ordering::SeqCst);
+                }
+                fail.store(1, Ordering::SeqCst);
+                pump.run_once_at(f.due).await?;
+                let original = terminal_reference(p, f.id).await?;
+                // This is the N-1 write: it does not know or set the new reference column.
+                sqlx::query(
+                    "UPDATE deposits SET final_at=final_at+interval '1 second' WHERE id=$1",
+                )
+                .bind(f.id)
+                .execute(p)
+                .await?;
+                let cached: Option<Value> =
+                    sqlx::query_scalar("SELECT confirmation_terminal_evidence($1)")
+                        .bind(f.id)
+                        .fetch_one(p)
+                        .await?;
+                ensure!(
+                    cached.is_none(),
+                    "N-1 marker retained the new path's old proof"
+                );
+                let next = due(p, f.id).await?;
+                ensure!(pump.run_once_at(next).await? == topup::pump::RunOnceResult::Idle);
+                db::chain_reads::advance_checkpoint(
+                    p,
+                    1,
+                    db::chain_reads::Boundary {
+                        number: 200,
+                        hash: hash(200),
+                        time: next,
+                    },
+                )
+                .await?;
+                let before = counts(&r);
+                set_clock(&r, next);
+                ensure!(watch.watch_once_at(1, next).await?.finalized == 1);
+                ensure!(
+                    counts(&r) == before.map(|n| n + 3),
+                    "legacy marker needs exactly one full watcher read"
+                );
+                let fresh = terminal_reference(p, f.id).await?;
+                ensure!(fresh.0 != original.0);
+                let before = counts(&r);
+                for elapsed in [60, 600, 21_600, 86_400] {
+                    let now = next + Duration::seconds(elapsed);
+                    ensure!(watch.watch_once_at(1, now).await?.watched == 0);
+                    pump.run_once_at(now).await?;
+                    ensure!(counts(&r) == before && terminal_reference(p, f.id).await? == fresh);
+                }
+                fail.store(0, Ordering::SeqCst);
+                let retry = db::get_deposit(p, f.id)
+                    .await?
+                    .context("retry")?
+                    .next_attempt_at;
+                pump.run_once_at(retry).await?;
+                ensure!(
+                    counts(&r) == before
+                        && db::get_deposit(p, f.id).await?.context("confirmed")?.state
+                            == DepositState::Confirmed
+                );
+                Ok(())
+            })
+            .await
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn terminal_reference_requires_new_schema_and_complete_terminal_identity() -> Result<()> {
+    with_database(|ctx| Box::pin(async move {
+        let p=&ctx.app_pool;let f=fixture(p,Confirmations::Finalized,1).await?;
+        for missing in ["version","terminal","to","token","from","amount","tx_from","tx_nonce","valid"] {
+            for endpoint in 0..2 {
+                let mut evidence=json!({"chain_confirmation":terminal_proof(&f.log),"confirmation_proof_version":1});
+                if missing == "version" {evidence.as_object_mut().context("evidence")?.remove("confirmation_proof_version");}
+                else if missing == "terminal" {evidence["chain_confirmation"]["terminal"]=json!(false);}
+                else if missing != "valid" {evidence["chain_confirmation"]["receipts"][endpoint]["Included"]["transfer"].as_object_mut().context("identity")?.remove(missing);}
+                let proof=Uuid::new_v4();let mut tx=p.begin().await?;
+                sqlx::query("INSERT INTO transitions (id,deposit_id,from_state,to_state,attempt,evidence) VALUES ($1,$2,'detected','detected',0,$3)")
+                    .bind(proof).bind(f.id).bind(evidence).execute(&mut *tx).await?;
+                sqlx::query("UPDATE deposits SET final_at=now(),confirmation_terminal_transition_id=$2 WHERE id=$1")
+                    .bind(f.id).bind(proof).execute(&mut *tx).await?;
+                tx.commit().await?;
+                let present:bool=sqlx::query_scalar("SELECT confirmation_terminal_evidence($1) IS NOT NULL").bind(f.id).fetch_one(p).await?;
+                ensure!(present==(missing=="valid"),"incomplete {missing} on endpoint {endpoint} was reusable");
+            }
+        }
+        Ok(())
     })).await
 }

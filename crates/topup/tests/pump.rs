@@ -97,6 +97,8 @@ async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -
             let id = insert_deposit(pool, seed, 30).await?;
             if !previously_final {
                 sqlx::query("UPDATE deposits SET final_at=NULL WHERE id=$1").bind(id).execute(pool).await?;
+            } else {
+                sqlx::query("UPDATE deposits SET final_at=now() WHERE id=$1").bind(id).execute(pool).await?;
             }
             let due = DateTime::from_timestamp(2_000_000_000, 0).context("clock")?;
             let rpc = AbsentRpc::default();
@@ -118,22 +120,31 @@ async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -
                 }));
                 let confirm = ConfirmStep::single(pool.clone(), confirmation_route(), reader(0)?, reader(1)?, pricing, None, None);
                 let pump = test_pump(pool, static_steps(StepOutcome::Wait { reason: WaitReason::Paused }).with_detected(Box::new(confirm)), PumpConfig::default(), 0)?;
-                let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader(0)?, reader(1)?);
+                let watch = Arc::new(topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader(0)?, reader(1)?));
                 if watcher_due_at_first {
                     db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:B256::from(U256::from(500)), time:due }).await?;
                 }
-                // A pump's active lease excludes the watcher even before the first absence is persisted.
-                let first_pump = pump.clone();
-                let first = tokio::spawn(async move { first_pump.run_once_at(due).await });
-                rpc.first_receipts.wait_started().await?;
-                let during = watch.watch_once_at(1, due).await?;
-                rpc.first_receipts.release();
-                rpc.first_receipts.release();
-                let first_outcome = first.await??;
-                ensure!(during.watched == 0, "watcher read during the pump lease");
-                ensure!(first_outcome == RunOnceResult::Applied { deposit_id:id });
-                let timeline: serde_json::Value = sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1").bind(id).fetch_one(pool).await?;
-                ensure!(timeline["error"] == "log_absent_at_finality", "finality evidence lost: {timeline}");
+                if previously_final {
+                    // Old final markers belong to the watcher even before S is persisted.
+                    let first_watch = Arc::clone(&watch);
+                    let first = tokio::spawn(async move { first_watch.watch_once_at(1, due).await });
+                    rpc.first_receipts.wait_started().await?;
+                    ensure!(pump.run_once_at(due).await? == RunOnceResult::Idle);
+                    ensure!(watch.watch_once_at(1, due).await?.watched == 0, "duplicate watcher during lease");
+                    rpc.first_receipts.release(); rpc.first_receipts.release();
+                    ensure!(first.await??.watched == 1);
+                } else {
+                    // A pump's active lease excludes the watcher before initial S entry.
+                    let first_pump = pump.clone();
+                    let first = tokio::spawn(async move { first_pump.run_once_at(due).await });
+                    rpc.first_receipts.wait_started().await?;
+                    let during = watch.watch_once_at(1, due).await?;
+                    rpc.first_receipts.release(); rpc.first_receipts.release();
+                    ensure!(first.await?? == RunOnceResult::Applied { deposit_id:id });
+                    ensure!(during.watched == 0, "watcher read during the pump lease");
+                    let timeline: serde_json::Value = sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1").bind(id).fetch_one(pool).await?;
+                    ensure!(timeline["error"] == "log_absent_at_finality", "finality evidence lost: {timeline}");
+                }
                 let gauges = topup::observability::metrics::render_chain_reads_at(pool, due).await?;
                 for name in ["topup_finality_unresolved", "topup_finality_unresolved_entries_24h"] {
                     let count = 1;
@@ -192,7 +203,9 @@ async fn positive_reincluded_provisional_transfer_returns_to_confirm_without_ext
         db::chain_reads::advance_checkpoint(pool, 1, db::chain_reads::Boundary { number:500, hash:b256(50), time:now }).await?;
         let deposit = db::get_deposit(pool, id).await?.context("deposit")?;
         let mut corrected = transfer_log(&deposit, evm_address(32));
-        corrected.amount = AtomicAmount::new(U256::from(2000));
+        corrected.block_number += 1;
+        corrected.block_hash = b256(99);
+        corrected.log_index += 1;
         let reader = ConfirmChain { logs:Arc::new(vec![corrected.clone()]), barrier:None };
         let pump = test_pump(pool, confirm_steps(pool, vec![corrected], None), PumpConfig::default(), 0)?;
         let watch = topup::finality::FinalityWatch::single(pool.clone(), Arc::default(), 1, reader.clone(), reader).with_pump(Arc::new(pump.clone()));
@@ -205,7 +218,7 @@ async fn positive_reincluded_provisional_transfer_returns_to_confirm_without_ext
         ensure!(watch.watch_once_at(1, now + Duration::seconds(2)).await?.watched == 0);
 
         let stored = db::get_deposit(pool, id).await?.context("confirmed")?;
-        ensure!(stored.state == DepositState::Confirmed && stored.amount_atomic == AtomicAmount::new(U256::from(2000)) && stored.final_at.is_some());
+        ensure!(stored.state == DepositState::Confirmed && stored.amount_atomic == deposit.amount_atomic && stored.block_hash == b256(99) && stored.final_at.is_some());
         Ok(())
     })).await
 }
@@ -1230,7 +1243,7 @@ async fn insert_deposit(pool: &PgPool, seed: Seed, number: u8) -> Result<Uuid> {
         receipt_log_index: 0,
         tx_from: alloy_primitives::Address::ZERO,
         tx_nonce: 0,
-        is_final: true,
+        is_final: false,
         block_number: 100 + u64::from(number),
         block_hash: b256(number.wrapping_add(1)),
         block_time: Utc::now(),

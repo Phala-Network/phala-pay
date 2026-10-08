@@ -616,7 +616,7 @@ pub async fn claim_deposit_at(
               AND (state = 'confirmed' OR
                   (state = 'detected' AND
                     (confirmation_terminal_evidence(id) IS NOT NULL OR
-                     (first_unresolved_at IS NULL AND confirm_receipt_checks=0
+                     (first_unresolved_at IS NULL AND confirm_receipt_checks=0 AND final_at IS NULL
                       AND (finality_check_at IS NULL OR finality_check_at <= $2)))))
             ORDER BY next_attempt_at, created_at, id
             FOR UPDATE SKIP LOCKED
@@ -870,14 +870,19 @@ pub async fn apply_transition(
         }
         if let Some(object) = evidence.as_object_mut() {
             object.insert("chain_confirmation".into(), confirmation.clone());
+            object.insert(
+                "confirmation_proof_version".into(),
+                serde_json::json!(super::confirmation::TERMINAL_PROOF_VERSION),
+            );
         }
     }
+    let transition_id = Uuid::new_v4();
     sqlx::query!(
         r#"
         INSERT INTO transitions (id, deposit_id, from_state, to_state, attempt, evidence)
         VALUES ($1, $2, $3, $4, $5, $6)
         "#,
-        Uuid::new_v4(),
+        transition_id,
         deposit_id,
         expected,
         target,
@@ -886,6 +891,10 @@ pub async fn apply_transition(
     )
     .execute(&mut **transaction)
     .await?;
+
+    if writes.effects.mark_final && writes.effects.confirmation_evidence.is_some() {
+        super::confirmation::link_terminal_evidence(transaction, deposit_id, transition_id).await?;
+    }
 
     // A deposit that is final when it is credited, or credited when it becomes final, is swept
     // at once by a finalized `Flushed` event already indexed after it.

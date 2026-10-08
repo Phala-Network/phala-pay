@@ -662,6 +662,11 @@ async fn frozen_chain_gates_startup_pumps_and_scanner() -> Result<()> {
             DepositSeed::new(101, DepositState::Detected),
         )
         .await?;
+        // An unfinalized detected row is pump-owned; legacy final markers are watcher-owned.
+        sqlx::query("UPDATE deposits SET final_at=NULL WHERE id=$1")
+            .bind(deposit_id)
+            .execute(&pool)
+            .await?;
         ensure!(frozen_chains(&pool, &*route_set(route.clone())?).await?.is_empty());
         sqlx::query(
             r#"

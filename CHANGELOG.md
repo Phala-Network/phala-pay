@@ -22,7 +22,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   hourly; it confirms when both heads qualify without waiting for checkpoint. DB gauges alert
   on ten-minute L occupancy and current/rolling-entry totals above one per environment.
   Missing/conflicting evidence stays in S under one shared atomic read lease and backoff;
-  terminal evidence flows directly to valuation and is reused for price retries. Expand-only
+  terminal evidence flows directly to valuation. Re-inclusion can change position but cannot
+  change transfer identity. Price retries reuse the exact new-path proof linked atomically to the
+  current final marker; legacy markers and proofs predating S require fresh watcher evidence.
+  Finalized price failures retain the ten-method per-endpoint ceiling. Expand-only
   counters/history survive rollback, but N-1 keeps its old RPC allocation. Production's operational
   deposit allocation is 46/day (staging 20) to retain 10.04% shared Infura budget headroom.
 

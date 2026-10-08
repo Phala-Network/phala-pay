@@ -1,8 +1,28 @@
 //! Durable confirmation read admission shared by the pump and finality watcher.
 use chrono::{DateTime, Duration, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use topup_core::route::Confirmations;
 use uuid::Uuid;
+
+/// Identifies complete proofs written by this terminal-evidence path.
+pub(crate) const TERMINAL_PROOF_VERSION: u64 = 1;
+
+/// Establishes the final marker and its exact proof in the same transaction. A reusable
+/// proof is retained during price-only retries, including its original creation time.
+pub(crate) async fn link_terminal_evidence(
+    transaction: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    proof: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE deposits SET final_at=now(),confirmation_terminal_transition_id=$2,updated_at=now() \
+         WHERE id=$1 AND confirmation_terminal_evidence(id) IS NULL \
+         AND EXISTS (SELECT 1 FROM transitions WHERE id=$2 AND deposit_id=$1 \
+             AND evidence -> 'confirmation_proof_version' = '1'::jsonb \
+             AND evidence -> 'chain_confirmation' -> 'terminal' = 'true'::jsonb)",
+    ).bind(id).bind(proof).execute(&mut **transaction).await?;
+    Ok(())
+}
 
 /// Fixed normal Depth wake-up offsets after the estimated depth anchor.
 pub const DEPTH_OFFSETS: [i64; 6] = [0, 4, 12, 28, 60, 124];

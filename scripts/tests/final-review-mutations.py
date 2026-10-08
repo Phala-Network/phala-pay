@@ -20,7 +20,8 @@ scanner = root / "crates/topup/src/scanner/mod.rs"
 confirmation = root / "crates/topup/src/db/confirmation.rs"
 bounds = root / "crates/topup/migrations/20261103000000_confirmation_bounds.up.sql"
 confirm_step = root / "crates/topup/src/steps/confirm.rs"
-originals = {path: path.read_text() for path in [refunds, api, repository, finality, schedule, deposits, scanner, confirmation, bounds, confirm_step]}
+metrics = root / "crates/topup/src/observability/metrics.rs"
+originals = {path: path.read_text() for path in [refunds, api, repository, finality, schedule, deposits, scanner, confirmation, bounds, confirm_step, metrics]}
 cases = [
     (schedule, "finality ten-minute boundary", "WHEN checked_at < COALESCE(anchor, checked_at) + interval '10 minutes' THEN 60", "WHEN checked_at <= COALESCE(anchor, checked_at) + interval '10 minutes' THEN 60",
      ["--test", "finality", "unresolved_finality_cadence_keeps_first_due_time_and_exact_boundaries"]),
@@ -93,9 +94,47 @@ cases += [
     (bounds, "old final S watcher eligibility", "(deposit.state = 'detected'", "(deposit.state = 'detected' AND deposit.final_at IS NULL",
      ["--test", "finality", "old_final_detected_absence_keeps_s_until_fresh_terminal_proof"]),
     (bounds, "nonterminal proof cannot be cached", "AND evidence -> 'chain_confirmation' -> 'terminal' = 'true'::jsonb", "AND true",
-     ["--test", "confirmation_bounds", "receipt_anomalies_and_price_failure_keep_watcher_ownership_and_one_quota"]),
+     ["--test", "confirmation_bounds", "terminal_reference_requires_new_schema_and_complete_terminal_identity"]),
     (finality, "successor inherits consumed receipt quota", "confirm_receipt_checks=GREATEST(confirm_receipt_checks,1)", "confirm_receipt_checks=confirm_receipt_checks",
      ["--test", "confirmation_bounds", "nonterminal_price_failure_then_reorg_reverses_with_atomic_successor"]),
+]
+cases += [
+    (confirm_step, "handed evidence token identity", "        && transfer.token == token", "        && { let _ = token; true }",
+     ["--test", "confirmation_bounds", "watcher_changed_identity_never_confirms_or_values_original"]),
+    (confirm_step, "handed evidence sender identity", "        && transfer.from == from", "        && { let _ = from; true }",
+     ["--test", "confirmation_bounds", "watcher_changed_identity_never_confirms_or_values_original"]),
+    (confirm_step, "handed evidence amount identity", "        && transfer.amount == amount", "        && { let _ = amount; true }",
+     ["--test", "confirmation_bounds", "watcher_changed_identity_never_confirms_or_values_original"]),
+    (finality, "watcher terminal handoff identity guard", "deposit.is_same_transfer(transfer)\n                    &&", "transfer.to == deposit.address\n                    &&",
+     ["--test", "confirmation_bounds", "watcher_changed_identity_never_confirms_or_values_original"]),
+    (confirm_step, "supplied identity rejection", 'return unresolved("supplied_confirmation_identity_changed");', '// supplied identity rejection removed',
+     ["--lib", "supplied_evidence_requires_every_transfer_identity_field"]),
+    (bounds, "terminal proof freshness", "OR transitions.created_at >= deposits.first_unresolved_at", "OR true",
+     ["--test", "confirmation_bounds", "old_terminal_proof_is_retired_on_s_and_only_fresh_watcher_evidence_is_reused"]),
+    (bounds, "terminal proof equality boundary", "transitions.created_at >= deposits.first_unresolved_at", "transitions.created_at > deposits.first_unresolved_at",
+     ["--test", "confirmation_bounds", "terminal_proof_freshness_boundary_is_inclusive"]),
+    (bounds, "old final watcher admission before S", "OR deposit.final_at IS NOT NULL)", ")",
+     ["--test", "confirmation_bounds", "old_terminal_proof_is_retired_on_s_and_only_fresh_watcher_evidence_is_reused"]),
+    (bounds, "N-1 final marker invalidates proof reference", "IF NEW.final_at IS DISTINCT FROM OLD.final_at", "IF FALSE",
+     ["--test", "confirmation_bounds", "n_minus_one_final_marker_requires_one_fresh_watcher_proof_then_zero_retry_reads"]),
+    (finality, "old final watcher selection without checkpoint", "OR (state='detected' AND final_at IS NOT NULL)", "OR false",
+     ["--test", "confirmation_bounds", "old_terminal_proof_is_retired_on_s_and_only_fresh_watcher_evidence_is_reused"]),
+    (confirmation, "price retry retains original proof reference", "WHERE id=$1 AND confirmation_terminal_evidence(id) IS NULL", "WHERE id=$1",
+     ["--test", "confirmation_bounds", "terminal_price_retry_keeps_the_normal_method_ceiling"]),
+    (deposits, "old final pump fallback excluded", "AND confirm_receipt_checks=0 AND final_at IS NULL", "AND confirm_receipt_checks=0",
+     ["--test", "confirmation_bounds", "old_terminal_proof_is_retired_on_s_and_only_fresh_watcher_evidence_is_reused"]),
+    (metrics, "final detected deposit leaves L stock", "AND state='detected' AND final_at IS NULL AND confirm_receipt_checks=0", "AND state='detected' AND confirm_receipt_checks=0",
+     ["--test", "confirmation_bounds", "slow_gauges_are_db_derived_once_only_and_keep_resolved_entries"]),
+]
+cases += [
+    (bounds, "terminal proof exact reference", "AND deposits.confirmation_terminal_transition_id = transitions.id", "AND true",
+     ["--test", "confirmation_bounds", "old_terminal_proof_is_retired_on_s_and_only_fresh_watcher_evidence_is_reused"]),
+    (bounds, "terminal proof new path version", "AND evidence -> 'confirmation_proof_version' = '1'::jsonb", "AND true",
+     ["--test", "confirmation_bounds", "terminal_reference_requires_new_schema_and_complete_terminal_identity"]),
+    (bounds, "terminal proof complete primary identity", "AND (evidence #> '{chain_confirmation,receipts,0,Included,transfer}')\n          ?& ARRAY['to','token','from','amount','tx_from','tx_nonce']", "AND true",
+     ["--test", "confirmation_bounds", "terminal_reference_requires_new_schema_and_complete_terminal_identity"]),
+    (bounds, "terminal proof complete secondary identity", "AND (evidence #> '{chain_confirmation,receipts,1,Included,transfer}')\n          ?& ARRAY['to','token','from','amount','tx_from','tx_nonce']", "AND true",
+     ["--test", "confirmation_bounds", "terminal_reference_requires_new_schema_and_complete_terminal_identity"]),
 ]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--case", action="append", choices=[case[1] for case in cases], help="Run a named proof; repeat to select several")
