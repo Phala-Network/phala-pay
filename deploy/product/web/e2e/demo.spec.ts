@@ -1445,9 +1445,9 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
-    // A phone reads Phala Pay beside one provider, chosen above the table (natively, without
-    // script): two columns, ten dimensions, up to lg; a tablet too. From lg, the full table, all six
-    // vendors in the page's width: nothing scrolls inside it, and no cell overflows.
+    // Below xl (a phone, a tablet, a small laptop), Phala Pay beside one provider, chosen above the
+    // table (natively, without script): two columns, ten dimensions. From xl, the full table, all
+    // six vendors in the page's width: nothing scrolls inside it, and no cell overflows.
     const full = staticPage.getByRole("table", { name: /five crypto payment services/ });
     const versus = staticPage.getByRole("table", { name: /provider chosen above/ });
     await expect(full).toBeHidden();
@@ -1456,10 +1456,12 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     await expect(versus.getByRole("columnheader", { name: "BTCPay Server" })).toBeVisible();
     await expect(versus.getByRole("columnheader", { name: "Stripe stablecoin payments" })).toBeHidden();
     await expect(versus.getByRole("rowgroup").filter({ has: staticPage.getByRole("cell") })).toHaveCount(10);
-    await staticPage.setViewportSize({ width: 768, height: 900 });
-    await expect(full).toBeHidden();
-    await expect(versus).toBeVisible();
-    for (const width of [1024, 1280]) {
+    for (const width of [768, 1024]) {
+      await staticPage.setViewportSize({ width, height: 900 });
+      await expect(full, `${width}px`).toBeHidden();
+      await expect(versus, `${width}px`).toBeVisible();
+    }
+    for (const width of [1280, 1440]) {
       await staticPage.setViewportSize({ width, height: 900 });
       await expect(full).toBeVisible();
       await expect(versus).toBeHidden();
@@ -1642,6 +1644,8 @@ test("sweeps from the last good data show their balances and age, without sweep 
 });
 
 test("every page fits every width in either theme, with no serious accessibility violation", async ({ browser }) => {
+  // 24 axe scans (three pages, four widths, two themes): a few seconds each on a loaded machine.
+  test.setTimeout(300_000);
   for (const colorScheme of ["light", "dark"] as const) {
     const context = await browser.newContext({ colorScheme });
     try {
@@ -1717,6 +1721,8 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
         await openTab(scenes, tab);
         const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
         expect(demo, `${state}, ${tab} tab, at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
+        // Its text at least 14px too, in every state and on every tab.
+        expect(await smallText(page, "#demo"), `${state}, ${tab} tab: text under 14px`).toEqual([]);
       }
       await expectNothingClipped(page, `${state} at ${width}×${height}`);
     }
@@ -1796,15 +1802,108 @@ test("the demo arrives without shifting what is in view, from the top and at /#d
   }
 });
 
-test("the hero's code fits its window at 1440 and 1024; on a phone it scrolls sideways inside it", async ({ page }) => {
+test("the hero's code fits its window at every width, a phone's too: no line is cut", async ({ page }) => {
   await page.goto(env("SITE_URL"));
-  for (const width of [1440, 1024]) {
+  for (const width of [1440, 1280, 1024, 768, 390]) {
     await page.setViewportSize({ width, height: 900 });
     // Both snippets, the shown and the other (laid out in the same cell).
     const wide = await page.locator("#hero-code pre").evaluateAll((blocks) =>
       blocks.filter((block) => block.scrollWidth > block.clientWidth).map((block) => block.getAttribute("aria-label")));
     expect(wide, `${width}px`).toEqual([]);
   }
-  await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 });
+
+/**
+ * Every two-column part of the page (src/layout.ts marks its columns), measured by what it shows:
+ * each right column's left edge, and in each part where the left and right columns' first lines of
+ * text sit (their baselines), or, where the part centres its columns on each other
+ * (`data-align="center"`: the hero, the close), the columns' middles.
+ */
+async function columnLayout(page: Page) {
+  return page.evaluate(() => {
+    // The baseline of a column's first shown line: an empty inline-block's bottom sits on it.
+    const baseline = (column: Element): number | null => {
+      const walker = document.createTreeWalker(column, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if ((node.textContent ?? "").trim() === "" || parent === null || parent.closest(".sr-only") !== null || !parent.checkVisibility()) continue;
+        const probe = document.createElement("span");
+        probe.style.display = "inline-block";
+        parent.insertBefore(probe, node);
+        const y = probe.getBoundingClientRect().bottom;
+        probe.remove();
+        return y;
+      }
+      return null;
+    };
+    return [...document.querySelectorAll('[data-column="right"]')].filter((right) => right.checkVisibility()).map((right) => {
+      const grid = right.parentElement;
+      const left = [...(grid?.children ?? [])].find((child) => child.getAttribute("data-column") === "left");
+      const name = right.closest("[aria-labelledby]")?.getAttribute("aria-labelledby") ?? right.closest("footer, main")?.tagName.toLowerCase() ?? "?";
+      const centred = grid?.getAttribute("data-align") === "center";
+      const middle = (element: Element) => { const box = element.getBoundingClientRect(); return box.top + box.height / 2; };
+      return {
+        name,
+        x: right.getBoundingClientRect().left,
+        how: centred ? "middles" : "baselines",
+        left: left === undefined ? null : centred ? middle(left) : baseline(left),
+        right: centred ? middle(right) : baseline(right),
+      };
+    });
+  });
+}
+
+test("one layout grid: every right column starts on one line, and each part's columns line up", async ({ page }) => {
+  // On the home page: the hero, each section's header, the demo's cards, the spec list, the FAQ,
+  // the close, and the footer; on /compare, its header, its sources, and the footer.
+  for (const [path, least] of [["", 9], ["compare", 3]] as const) {
+    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+      const parts = await columnLayout(page);
+      const where = `/${path} at ${width}px`;
+      expect(parts.length, `${where}: two-column parts`).toBeGreaterThanOrEqual(least);
+      const line = parts[0]?.x ?? 0;
+      expect(parts.filter(({ x }) => Math.abs(x - line) > 1).map(({ name, x }) => `${name} starts at ${x.toFixed(1)}, not ${line.toFixed(1)}`), where).toEqual([]);
+      // A right column with no left one beside it (the FAQ's questions, under its header) is
+      // measured by its left edge only.
+      expect(parts.filter(({ left, right }) => left !== null && (right === null || Math.abs(left - right) > 1))
+        .map(({ name, how, left, right }) => `${name}: ${how} at ${left?.toFixed(1) ?? "none"} and ${right?.toFixed(1) ?? "none"}`), where).toEqual([]);
+    }
+  }
+});
+
+/**
+ * The text in `scope` smaller than 14px, save what may be: code and ids (monospace), footnote
+ * markers, text not shown, and uppercase, tracked labels.
+ */
+async function smallText(page: Page, scope = "body"): Promise<string[]> {
+  return page.locator(scope).first().evaluate((root) => {
+    const found: string[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      const text = node.textContent?.trim() ?? "";
+      const element = node.parentElement;
+      if (text === "" || element === null || element.closest("pre, code, sup, .sr-only") !== null || !element.checkVisibility()) continue;
+      const style = getComputedStyle(element);
+      if (style.fontFamily.includes("Mono")) continue;
+      const label = style.textTransform === "uppercase" && style.letterSpacing !== "normal";
+      if (parseFloat(style.fontSize) < 14 && !label) found.push(`${element.tagName.toLowerCase()} "${text.slice(0, 40)}" ${style.fontSize}`);
+    }
+    return found;
+  });
+}
+
+test("body text is at least 14px; only uppercase, tracked labels are smaller", async ({ page }) => {
+  for (const path of ["", "compare"]) {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+      expect(await smallText(page), `/${path} at ${width}px`).toEqual([]);
+    }
+  }
+});
+

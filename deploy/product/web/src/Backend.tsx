@@ -68,7 +68,8 @@ export function Backend({
             {selected === null ? "" : ` · ${selected.kind === "quote" ? "quote" : "deposit"}`}
           </p>
         </div>
-        <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+        {/* The ids on a line of their own, under the title. */}
+        <dl className="flex basis-full flex-wrap items-center gap-x-5 gap-y-1 text-sm">
           {account !== null && selected === null && <MetaItem label="Workspace" value={account.account_id} testId="meta-workspace" />}
           {selected !== null && order !== undefined && <MetaItem label="Order" value={order} testId="meta-order" />}
           {selected !== null && (

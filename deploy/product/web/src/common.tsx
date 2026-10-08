@@ -22,7 +22,7 @@ export const TOUCH = "max-sm:h-11";
  * the panel's content edges.
  */
 export const TABLE =
-  "text-sm [&_th]:h-10 [&_th]:px-2 [&_th]:text-xs [&_th]:font-medium [&_th]:text-muted-foreground [&_td]:h-11 [&_td]:px-2 [&_td]:py-2 [&_tr>*:first-child]:pl-0 [&_tr>*:last-child]:pr-0";
+  "text-sm [&_th]:h-10 [&_th]:px-2 [&_th]:text-xs [&_th]:font-medium [&_th]:tracking-wider [&_th]:text-muted-foreground [&_th]:uppercase [&_td]:h-11 [&_td]:px-2 [&_td]:py-2 [&_tr>*:first-child]:pl-0 [&_tr>*:last-child]:pr-0";
 
 /**
  * The visitor's wallet helpers (./testTokens), loaded on first use: they carry the chain and wallet

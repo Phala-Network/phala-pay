@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils"
  * the text's contrast whatever the tone.
  */
 const statusBadgeVariants = cva(
-  "inline-flex h-6 w-fit shrink-0 items-center gap-1.5 rounded-full border px-2 text-xs font-medium whitespace-nowrap text-foreground before:size-1.5 before:shrink-0 before:rounded-full",
+  "inline-flex h-6 w-fit shrink-0 items-center gap-1.5 rounded-full border px-2 text-sm font-medium whitespace-nowrap text-foreground before:size-1.5 before:shrink-0 before:rounded-full",
   {
     variants: {
       tone: {

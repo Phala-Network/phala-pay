@@ -1,9 +1,10 @@
-import { ArrowDown, ArrowRight, Menu, Plus, X } from "lucide-react";
+import { Menu, MoveDown, MoveRight, Plus, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
+import { GRID, LEFT, RIGHT } from "./layout.js";
 import { useHydrated } from "./islands.js";
 import { ComparisonCell } from "./ComparisonCell.js";
 import { Versus } from "./Versus.js";
@@ -32,8 +33,8 @@ export const LINKS = {
 };
 
 /**
- * The page's grid: one width for every section and the header and footer, so all share a left
- * edge (1280px, 16 to 32px gutters), 12 columns inside it. Text keeps to a readable measure.
+ * The page's width: one for every section and the header and footer, so all share a left edge
+ * (1280px, 16 to 32px gutters); the 12-column grid inside it is src/layout.ts.
  */
 export const CONTAINER = "mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8";
 /** Every H2, and every other page's H1. */
@@ -151,7 +152,8 @@ export function Lockup({ className }: { className?: string }) {
         />
         <rect x="10" y="10" width="12" height="12" rx="3" className="fill-brand" />
       </svg>
-      <span className="text-wordmark font-semibold text-foreground">Phala Pay</span>
+      {/* The lockup's baseline is the name's (where a row aligns it on baselines, as the footer's). */}
+      <span className="self-baseline text-wordmark font-semibold text-foreground">Phala Pay</span>
     </span>
   );
 }
@@ -160,9 +162,10 @@ export function Lockup({ className }: { className?: string }) {
 // takes. The facts behind it (fees, speed, custody) follow the demo, once each.
 export function Hero({ code }: { code: ReactNode }) {
   return (
+    // The two columns centred on each other: the pitch, and the code window with its caption inside.
     <section aria-labelledby="hero-title" className="border-b">
-      <div className={`${CONTAINER} grid gap-12 pt-14 pb-16 sm:pt-20 lg:grid-cols-12 lg:items-center lg:gap-10 lg:py-20`}>
-        <div className="lg:col-span-6">
+      <div data-align="center" className={cn(CONTAINER, GRID, "gap-y-12 pt-14 pb-16 sm:pt-20 lg:items-center lg:py-20")}>
+        <div data-column="left" className={LEFT}>
           <h1 id="hero-title" className="max-w-xl text-display-sm font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display">
             {TAGLINE}
           </h1>
@@ -173,7 +176,7 @@ export function Hero({ code }: { code: ReactNode }) {
           </div>
           <p className="mt-4 text-sm text-muted-foreground">{HERO_META}</p>
         </div>
-        <div className="min-w-0 lg:col-span-6">{code}</div>
+        <div data-column="right" className={RIGHT}>{code}</div>
       </div>
     </section>
   );
@@ -200,6 +203,11 @@ export function HeroCode() {
   return (
     <figure className="min-w-0">
       <CodeWindow
+        footer={
+          <figcaption>
+            {HERO_CODE_NOTE.before}<code className="font-mono text-mono text-code-foreground">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}
+          </figcaption>
+        }
         header={
           <>
             <div role="tablist" aria-label="Integration code" className="flex h-full items-stretch gap-5"
@@ -218,7 +226,7 @@ export function HeroCode() {
                 </button>
               ))}
             </div>
-            <span className="ml-auto font-mono text-xs text-code-muted">{current?.file}</span>
+            <span className="ml-auto font-mono text-mono text-code-muted">{current?.file}</span>
             {hydrated && current !== undefined
               ? <CopyButton value={current.code} label={`Copy ${current.file}`} className="text-code-muted hover:bg-white/10 hover:text-code-foreground" />
               : <span aria-hidden="true" className="size-8" />}
@@ -231,29 +239,30 @@ export function HeroCode() {
           {HERO_CODE.map(({ id: key, file, lines }, index) => (
             <div key={key} role="tabpanel" id={`${id}-panel-${key}`} aria-labelledby={`${id}-tab-${key}`}
               className={cn("col-start-1 row-start-1 min-w-0", index !== shown && "invisible")}>
-              <CodeBody label={file}>
+              {/* On a phone, 12px code in a 16px margin: the snippets' 45-character lines fit 390px. */}
+              <CodeBody label={file} className="px-4 text-xs/relaxed sm:px-5 sm:text-mono">
                 <HighlightedLines lines={lines} />
               </CodeBody>
             </div>
           ))}
         </div>
       </CodeWindow>
-      <figcaption className="mt-4 text-sm text-muted-foreground">
-        {HERO_CODE_NOTE.before}<code className="font-mono text-mono text-foreground">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}
-      </figcaption>
     </figure>
   );
 }
 
-/** A section's heading and introduction: the heading on the left, the introduction beside it from lg. */
-function SectionHeader({ id, title, lead }: { id: string; title: string; lead?: ReactNode }) {
+/**
+ * Every section's heading and introduction, one way: the heading in the left half, the
+ * introduction in the right, their first lines on one baseline; stacked below lg.
+ */
+function SectionHeader({ id, title, aside, lead }: { id: string; title: string; aside?: ReactNode; lead?: ReactNode }) {
   return (
-    // The lead's last line sits on the heading's baseline.
-    <div className="grid gap-4 lg:grid-cols-12 lg:items-baseline-last lg:gap-10">
-      <div className="lg:col-span-6">
+    <div className={cn(GRID, "gap-y-3 lg:items-baseline")}>
+      <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-1")}>
         <h2 id={id} className={H2}>{title}</h2>
+        {aside}
       </div>
-      {lead !== undefined && <p className={cn(LEAD, "max-w-xl lg:col-span-6 lg:justify-self-end")}>{lead}</p>}
+      {lead !== undefined && <p data-column="right" className={cn(LEAD, RIGHT)}>{lead}</p>}
     </div>
   );
 }
@@ -266,17 +275,18 @@ export function DemoSection({ children }: { children?: ReactNode }) {
   return (
     <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface py-6">
       <div className={CONTAINER}>
-        <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-2">
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-            <h2 id="demo-title" className={H2}>{DEMO_TITLE}</h2>
+        <SectionHeader
+          id="demo-title"
+          title={DEMO_TITLE}
+          aside={
             <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
               <span aria-hidden="true" className="size-2 rounded-full bg-brand ring-1 ring-foreground/25" />
               {DEMO_STATUS}
             </p>
-          </div>
-          <p className="max-w-md text-pretty text-body-foreground">{DEMO_LEAD}</p>
-        </div>
-        <div id="demo-root" className="mt-4">{children ?? <DemoPlaceholder />}</div>
+          }
+          lead={DEMO_LEAD}
+        />
+        <div id="demo-root" className="mt-5">{children ?? <DemoPlaceholder />}</div>
       </div>
     </section>
   );
@@ -300,40 +310,39 @@ export function DemoLoading() {
 }
 
 /**
- * The path a payment takes, drawn as the page's one diagram: three stations in a row (a column on a
- * phone), each joined to the next by a labelled arrow that takes the space between them. The last
- * station, the merchant's own, is set apart.
+ * The path a payment takes, drawn as the page's one diagram: three stations in a row from xl (a
+ * column below it, where a row would wrap the stations' names), each joined to the next by an
+ * arrow under its label, with room around it. The last station, the merchant's own, is set apart.
  */
 function CustodyPath() {
   return (
     <figure>
-      <ol className="flex flex-col gap-3 lg:flex-row lg:items-stretch lg:gap-0">
+      <ol className="flex flex-col gap-2 xl:flex-row xl:items-stretch">
         {CUSTODY_PATH.map(({ role, name, detail }, index) => (
           <li key={name} className="contents">
             {index > 0 && (
-              <span className="flex items-center gap-2 self-start pl-5 text-xs font-medium text-muted-foreground lg:min-w-28 lg:flex-col lg:justify-center lg:self-auto lg:px-3 lg:pl-3">
-                <ArrowDown {...ICON} className="size-4 lg:hidden" />
-                <span className="hidden h-px w-full bg-border-strong lg:block" />
-                {CUSTODY_LINKS[index - 1]}
-                <ArrowRight {...ICON} className="hidden size-4 lg:block" />
+              <span className="flex items-center gap-2 py-1 pl-6 text-sm text-muted-foreground xl:w-36 xl:shrink-0 xl:flex-col xl:justify-center xl:gap-1 xl:px-4 xl:py-0">
+                <MoveDown {...ICON} className="size-5 xl:hidden" />
+                <span>{CUSTODY_LINKS[index - 1]}</span>
+                <MoveRight {...ICON} className="hidden size-6 xl:block" />
               </span>
             )}
-            <div className={cn("flex-1 rounded-lg border px-5 py-4", index === CUSTODY_PATH.length - 1 ? "border-foreground bg-card" : "bg-card")}>
-              <p className="text-xs font-medium text-muted-foreground">{role}</p>
-              <p className="mt-1 font-semibold">{name}</p>
-              <p className="mt-1 text-sm text-pretty text-body-foreground">{detail}</p>
+            <div className={cn("flex-1 rounded-lg border bg-card p-6", index === CUSTODY_PATH.length - 1 && "border-foreground")}>
+              <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">{role}</p>
+              <p className="mt-2 font-semibold">{name}</p>
+              <p className="mt-1.5 text-sm/6 text-pretty text-body-foreground">{detail}</p>
             </div>
           </li>
         ))}
       </ol>
-      <figcaption className="mt-4 text-sm text-muted-foreground">{CUSTODY_NOTE}</figcaption>
+      <figcaption className="mt-5 text-sm text-muted-foreground">{CUSTODY_NOTE}</figcaption>
     </figure>
   );
 }
 
 /**
  * What the demo just showed, told once: where the money goes, as a diagram under the claim, then the
- * other facts as a ruled spec list (a term and its line), not a grid of cards.
+ * other facts as a ruled spec list (a term and its line) in the right half, its heading in the left.
  */
 export function WhereTheMoneyGoes() {
   const [custody, ...rest] = PROPERTIES;
@@ -344,16 +353,17 @@ export function WhereTheMoneyGoes() {
         <div className="mt-10 lg:mt-12">
           <CustodyPath />
         </div>
-        <div className="mt-14 grid gap-6 lg:grid-cols-12 lg:gap-10">
-          <div className="lg:col-span-4">
+        {/* The heading's first line on the list's first term's baseline, as every header's is. */}
+        <div className={cn(GRID, "mt-16 gap-y-6 lg:items-baseline")}>
+          <div data-column="left" className={LEFT}>
             <h3 className="text-heading font-semibold">For platforms that sell credits</h3>
-            <p className="mt-2 max-w-xs text-pretty text-body-foreground">{PROPERTIES_LEAD}</p>
+            <p className="mt-2 max-w-sm text-pretty text-body-foreground">{PROPERTIES_LEAD}</p>
           </div>
-          <dl className="border-t lg:col-span-8">
+          <dl data-column="right" className={cn(RIGHT, "border-t")}>
             {rest.map(({ title, text }) => (
-              <div key={title} className="grid gap-1 border-b py-4 sm:grid-cols-[12rem_minmax(0,1fr)] sm:gap-6">
+              <div key={title} className="grid gap-1.5 border-b py-5 xl:grid-cols-[10rem_minmax(0,1fr)] xl:gap-6">
                 <dt className="font-semibold">{title}</dt>
-                <dd className="text-pretty text-body-foreground">{unbroken(text)}</dd>
+                <dd className="leading-7 text-pretty text-body-foreground">{unbroken(text)}</dd>
               </div>
             ))}
           </dl>
@@ -380,14 +390,19 @@ export function CompareTeaser() {
           title="How Phala Pay compares"
           lead={<>Beside {list.format(others.map(({ name }) => name))}, as each states it. The full comparison adds {list.format(TEASER_OTHERS)}, with a source for every value.</>}
         />
-        <div className="mt-10 hidden md:block">
+        <div className="mt-10 hidden lg:block">
+          {/* Four equal columns, on the grid's quarters: the dimension, then each provider. */}
           <table className="w-full table-fixed border-collapse text-left">
             <caption className="sr-only">{list.format(TEASER.vendors.map(({ name }) => name))} on {TEASER.dimensions.length} dimensions.</caption>
+            <colgroup>
+              <col className="w-1/4" />
+              {TEASER.vendors.map(({ id }) => <col key={id} className="w-1/4" />)}
+            </colgroup>
             <thead>
               <tr>
-                <td className="w-44 lg:w-56" />
+                <td />
                 {TEASER.vendors.map(({ id, name }) => (
-                  <th key={id} scope="col" className={cn("border-t-2 px-5 py-4 align-bottom text-base font-semibold", id === phala?.id ? PHALA_COLUMN : "border-transparent text-body-foreground")}>
+                  <th key={id} scope="col" className={cn("border-t-2 px-6 pt-4 pb-4 align-bottom text-base font-semibold", id === phala?.id ? PHALA_COLUMN : "border-transparent text-body-foreground")}>
                     {name}
                   </th>
                 ))}
@@ -396,21 +411,29 @@ export function CompareTeaser() {
             <tbody>
               {TEASER.dimensions.map(({ key, label }) => (
                 <tr key={key} className="border-t">
-                  <th scope="row" className="py-5 pr-5 align-top text-sm font-medium text-muted-foreground">{label}</th>
+                  <th scope="row" className="py-6 pr-6 align-top text-sm/7 font-medium text-muted-foreground">{label}</th>
                   {TEASER.vendors.map((vendor) => (
-                    <td key={vendor.id} className={cn("px-5 py-5 align-top text-table text-pretty", vendor.id === phala?.id ? "bg-muted/50 text-foreground" : "text-body-foreground")}>
+                    <td key={vendor.id} className={cn("px-6 py-6 align-top text-base/7 text-pretty", vendor.id === phala?.id ? PHALA_CELL : "text-body-foreground")}>
                       <ComparisonCell cell={vendor[key]} linkSource={false} />
                     </td>
                   ))}
                 </tr>
               ))}
             </tbody>
+            {/* The table's footer: the way to the full comparison, at its right edge. */}
+            <tfoot>
+              <tr className="border-t">
+                <td colSpan={TEASER.vendors.length + 1} className="pt-4 text-right">
+                  <a href="/compare" className={cn(TEXT_LINK, "inline-flex min-h-11 items-center text-sm")}>See the full comparison</a>
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
         {phala !== undefined && (
-          <Versus phala={phala} others={others} dimensions={TEASER.dimensions} linkSource={false} name="teaser-versus" className="mt-8 md:hidden" />
+          <Versus phala={phala} others={others} dimensions={TEASER.dimensions} linkSource={false} name="teaser-versus" className="mt-8 lg:hidden" />
         )}
-        <a href="/compare" className={cn(TEXT_LINK, "mt-6 inline-flex min-h-11 items-center gap-1.5 text-sm")}>
+        <a href="/compare" className={cn(TEXT_LINK, "mt-6 inline-flex min-h-11 items-center text-sm lg:hidden")}>
           See the full comparison
         </a>
       </div>
@@ -418,31 +441,37 @@ export function CompareTeaser() {
   );
 }
 
-/** Phala Pay's column in a comparison table: a rule above it and a tint down it. */
-export const PHALA_COLUMN = "border-foreground bg-muted/50 text-foreground";
+/**
+ * Phala Pay's column in a comparison table: a rule above its heading and a faint tint down it, a
+ * highlight rather than a fill, in either theme.
+ */
+export const PHALA_COLUMN = "border-foreground bg-foreground/3 text-foreground";
+/** A cell of Phala Pay's column. */
+export const PHALA_CELL = "bg-foreground/3 text-foreground";
 
 /** Each answer folds under its question, natively: no script, so it works before and without hydration. */
 export function Faq() {
   return (
     <section aria-labelledby="faq-title" className={cn(SECTION, "border-t")}>
-      <div className={`${CONTAINER} grid gap-10 lg:grid-cols-12`}>
-        <div className="lg:col-span-4">
-          <h2 id="faq-title" className={H2}>Frequently asked questions</h2>
-          <p className="mt-4 max-w-sm text-pretty text-body-foreground">
-            Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask
-            on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.
-          </p>
-        </div>
-        <div className="border-t lg:col-span-8">
-          {FAQ.map(({ question, answer }) => (
-            <details key={question} className="group border-b">
-              <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-4 text-base font-medium sm:text-lg [&::-webkit-details-marker]:hidden">
-                {question}
-                <Plus {...ICON} className="size-5 shrink-0 text-muted-foreground group-open:rotate-45 motion-safe:transition-transform" />
-              </summary>
-              <p className="max-w-2xl pr-10 pb-6 text-pretty text-body-foreground">{unbroken(answer)}</p>
-            </details>
-          ))}
+      {/* The section's header, as every section's; the questions under its introduction. */}
+      <div className={CONTAINER}>
+        <SectionHeader
+          id="faq-title"
+          title="Frequently asked questions"
+          lead={<>Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.</>}
+        />
+        <div className={cn(GRID, "mt-8")}>
+          <div data-column="right" className={cn(RIGHT, "border-t")}>
+            {FAQ.map(({ question, answer }) => (
+              <details key={question} className="group border-b">
+                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-4 text-base font-medium sm:text-lg [&::-webkit-details-marker]:hidden">
+                  {question}
+                  <Plus {...ICON} className="size-5 shrink-0 text-muted-foreground group-open:rotate-45 motion-safe:transition-transform" />
+                </summary>
+                <p className="pr-10 pb-6 leading-7 text-pretty text-body-foreground">{unbroken(answer)}</p>
+              </details>
+            ))}
+          </div>
         </div>
       </div>
     </section>
@@ -456,8 +485,8 @@ export function Faq() {
 export function ClosingCta({ command }: { command: ReactNode }) {
   return (
     <section aria-labelledby="closing-title" className="border-t bg-surface py-16 lg:py-20">
-      <div className={`${CONTAINER} grid gap-10 lg:grid-cols-12 lg:items-center lg:gap-10`}>
-        <div className="lg:col-span-6">
+      <div data-align="center" className={cn(CONTAINER, GRID, "gap-y-10 lg:items-center")}>
+        <div data-column="left" className={LEFT}>
           <h2 id="closing-title" className={H2}>{CLOSING_TITLE}</h2>
           <p className={cn(LEAD, "mt-4 max-w-md")}>{CLOSING_LEAD}</p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -465,13 +494,7 @@ export function ClosingCta({ command }: { command: ReactNode }) {
             <Button asChild size="lg" variant="secondary"><a href={LINKS.repo}>View on GitHub</a></Button>
           </div>
         </div>
-        <div className="min-w-0 lg:col-span-6">
-          {command}
-          <p className="mt-3 text-sm text-pretty text-muted-foreground">
-            Deploys the latest release. To verify the release's provenance first, follow
-            the <a className={cn(TEXT_LINK, "whitespace-nowrap")} href={LINKS.deploy}>high-assurance path</a>.
-          </p>
-        </div>
+        <div data-column="right" className={RIGHT}>{command}</div>
       </div>
     </section>
   );
@@ -484,7 +507,12 @@ export function ClosingCta({ command }: { command: ReactNode }) {
 export function DeployCommand() {
   const hydrated = useHydrated();
   return (
-    <CodeWindow header={<>
+    <CodeWindow
+      footer={<>
+        Deploys the latest release. To verify the release's provenance first, follow
+        the <a className={cn(TEXT_LINK, "whitespace-nowrap text-code-foreground decoration-code-foreground/40 hover:decoration-code-foreground")} href={LINKS.deploy}>high-assurance path</a>.
+      </>}
+      header={<>
       <span className="text-sm text-code-muted">Terminal</span>
       {hydrated
         ? <CopyButton value={DEPLOY_COMMAND} label="Copy the deploy command" className="ml-auto text-code-muted hover:bg-white/10 hover:text-code-foreground" />
@@ -537,12 +565,14 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
 export function SiteFooter() {
   return (
     <footer className="border-t">
-      <div className={`${CONTAINER} grid gap-12 pt-14 pb-10 text-sm lg:grid-cols-12 lg:gap-10 lg:pt-16`}>
-        <div className="lg:col-span-4">
+      <div className={cn(CONTAINER, GRID, "gap-y-12 pt-14 pb-10 text-sm lg:items-baseline lg:pt-16")}>
+        <div data-column="left" className={LEFT}>
           <Lockup />
           <p className="mt-4 max-w-xs text-pretty text-muted-foreground">{TAGLINE}. Open source, self-hosted, on Ethereum and Base.</p>
         </div>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-4 lg:col-span-8">
+        {/* Four columns of links where they fit (from sm, and from xl beside the brand); two by two
+            in the right half between lg and xl, where four would break their names. */}
+        <div data-column="right" className={cn(RIGHT, "grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4")}>
           {FOOTER.map((column) => (
             <nav key={column.title} aria-label={column.title}>
               <p className="font-medium text-foreground">{column.title}</p>

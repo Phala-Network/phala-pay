@@ -55,7 +55,7 @@ export function Versus({ phala, others, dimensions, linkSource, name, className 
         {dimensions.map(({ key, label }) => (
           <tbody key={key}>
             <tr>
-              <th scope="rowgroup" colSpan={2} className="pt-4 pb-1 text-xs font-medium text-muted-foreground">{label}</th>
+              <th scope="rowgroup" colSpan={2} className="pt-5 pb-1.5 text-xs font-medium tracking-wider text-muted-foreground uppercase">{label}</th>
             </tr>
             <tr className="border-b">
               <td className="pr-3 pb-3 align-top leading-6 text-foreground"><ComparisonCell cell={phala[key]} linkSource={linkSource} /></td>
