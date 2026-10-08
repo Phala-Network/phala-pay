@@ -31,9 +31,9 @@ permissions:
 
 jobs:
   deploy:
-    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@de320a6e76e254ac23956a2bb11dc74cec1d9fa0 # v0.10.0-rc.4
+    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@73b5878d0b3d22c3376963bf33d3084ebd08c997 # v0.10.0-rc.5
     with:
-      version: v0.10.0-rc.4
+      version: v0.10.0-rc.5
       environment: ${{ inputs.environment }}
       target: ${{ inputs.target }}
       mode: ${{ inputs.mode }}
