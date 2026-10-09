@@ -45,6 +45,7 @@ from reference_product.server import (
 )
 from topup_client.models import Quote, TransactionSubmission
 from topup_sdk import (
+    ApiError,
     RequestSigner,
     SigningAuth,
     TopupClient,
@@ -668,6 +669,26 @@ def test_transaction_hints_only_name_the_workspaces_own_quotes() -> None:
     client.submit_quote_transaction.assert_called_once_with(QUOTE_ID, tx_hash)
 
 
+@pytest.mark.parametrize(("service_status", "product_status"), [(404, 404), (500, 502)])
+def test_transaction_hint_preserves_quote_not_found(
+    service_status: int, product_status: int
+) -> None:
+    ledger = ProductLedger()
+    ledger.add_team(TEAM)
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    client.get_quote.side_effect = ApiError(service_status, "not_found", "quote unavailable")
+    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()), client=client)
+    answer = _account_call(
+        api,
+        "POST",
+        f"/accounts/{TEAM}/quotes/{QUOTE_ID}/transactions",
+        json.dumps({"transaction_hash": "0x" + "ab" * 32}).encode(),
+    )
+    assert answer.status == product_status
+    client.get_quote.assert_called_once_with(QUOTE_ID)
+    client.submit_quote_transaction.assert_not_called()
+
+
 @pytest.mark.parametrize("tx_hash", [None, 1, "0x12", "0x" + "gg" * 32, "0x" + "ab" * 32 + "\n"])
 def test_transaction_hint_rejects_malformed_hashes(tx_hash: object) -> None:
     ledger = ProductLedger()
@@ -707,9 +728,15 @@ def test_product_api_submits_a_signed_transaction_hint() -> None:
         assert api.submit_transaction(TEAM, QUOTE_ID, tx_hash) == submission
 
 
-@pytest.mark.parametrize("hint_fails", [False, True])
+@pytest.mark.parametrize(
+    "hint_error",
+    [None, driver.ProductApiError(503, "unavailable"), httpx.ConnectError("connection refused")],
+    ids=["received", "api_error", "connect_error"],
+)
 def test_deposit_driver_submits_after_payment_and_keeps_scanner_fallback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, hint_fails: bool
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    hint_error: driver.ProductApiError | httpx.HTTPError | None,
 ) -> None:
     api = create_autospec(driver.ProductApi, instance=True, spec_set=True)
     api.__enter__.return_value = api
@@ -718,8 +745,8 @@ def test_deposit_driver_submits_after_payment_and_keeps_scanner_fallback(
     payer.address = CONFIG.payer
     tx_hash = "0x" + "ab" * 32
     payer.mint_and_transfer.return_value = tx_hash
-    if hint_fails:
-        api.submit_transaction.side_effect = driver.ProductApiError(503, "unavailable")
+    if hint_error is not None:
+        api.submit_transaction.side_effect = hint_error
 
     def account(team: str) -> dict[str, Any]:
         _, payload = _credited(client_reference_id=team)
@@ -745,7 +772,7 @@ def test_deposit_driver_submits_after_payment_and_keeps_scanner_fallback(
         call.submit(team, QUOTE_ID, tx_hash),
     ]
     api.account.assert_called_once_with(team)
-    assert ("scanner discovery will continue" in caplog.text) == hint_fails
+    assert ("scanner discovery will continue" in caplog.text) == (hint_error is not None)
 
 
 # Service restores: the product exports what the operator asks merchants for, as the admin

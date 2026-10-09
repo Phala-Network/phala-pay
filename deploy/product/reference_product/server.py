@@ -410,7 +410,13 @@ class AccountApi:
                     raise ValueError("transaction_hash must be a 0x-prefixed 32-byte hash")
                 if self.ledger.team_suspended(team) is None:
                     return Answer(HTTPStatus.NOT_FOUND)
-                if self._service().get_quote(quote_id).client_reference_id != team:
+                try:
+                    quote = self._service().get_quote(quote_id)
+                except ApiError as error:
+                    if error.status_code == HTTPStatus.NOT_FOUND:
+                        return Answer(HTTPStatus.NOT_FOUND)
+                    raise
+                if quote.client_reference_id != team:
                     return Answer(HTTPStatus.NOT_FOUND)
                 submission = self._service().submit_quote_transaction(quote_id, tx_hash)
                 return Answer(HTTPStatus.OK, submission.to_dict())

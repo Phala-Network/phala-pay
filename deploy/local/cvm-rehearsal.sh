@@ -515,6 +515,7 @@ done
 dc exec -T postgres psql -U postgres -d topup -X -v ON_ERROR_STOP=1 <"$twap_sql" >/dev/null
 # Price readers pin two blocks below head; make the final sample available at that height.
 for i in 1 2; do
+    cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setNextBlockTimestamp "$((sample_timestamp + 12 * i))" >/dev/null
     cast rpc --rpc-url "$mainnet_price_rpc_url" evm_mine >/dev/null
 done
 cast rpc --rpc-url "$base_mainnet_price_rpc_url" evm_mine >/dev/null

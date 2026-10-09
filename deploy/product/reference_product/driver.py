@@ -226,7 +226,7 @@ def run_deposit(
         try:
             api.submit_transaction(team, quote.id, tx_hash)
             LOG.info("transaction hint received for %s", tx_hash)
-        except ProductApiError as error:
+        except (ProductApiError, httpx.HTTPError) as error:
             LOG.warning("transaction hint unavailable: %s; scanner discovery will continue", error)
         LOG.info("paid %s atomic in %s from %s", amount_atomic, tx_hash, payer.address)
         if until in {"rejected", "refunded"}:
