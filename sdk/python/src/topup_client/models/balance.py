@@ -25,9 +25,8 @@ class Balance:
     payments put there and no finalized `Flushed` event has moved to a treasury yet.
 
         Example:
-            {'livemode': False, 'object': 'balance', 'unswept': [{'amount_atomic': '202510000000000000000', 'asset': 'PHA',
-                'chain_id': 1, 'final_amount_atomic': '202510000000000000000', 'token':
-                '0x6c5ba91642f10282b576d91922ae6448c9d52f4e'}]}
+            {'livemode': False, 'object': 'balance', 'unswept': [{'amount_atomic': '25000000', 'asset': 'usdc', 'chain_id':
+                1, 'final_amount_atomic': '25000000', 'token': '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'}]}
 
         Attributes:
             livemode (bool): The mode.

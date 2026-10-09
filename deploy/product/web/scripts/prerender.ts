@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { THEME_SCRIPT } from "../src/content/theme-script.ts";
-import { PAGES, ROOT_MARKER, type Page } from "../src/content/template.ts";
+import { ALL_PAGES, ENTRIES, ROOT_MARKER, route } from "../src/content/template.ts";
 import { renderPage } from "./prerender-page.ts";
 
 const web = resolve(import.meta.dirname, "..");
@@ -16,12 +16,20 @@ async function prerender() {
   const scriptPolicy = /\bscript-src\s+([^;\r\n]+)/i.exec(headers)?.[1];
   if (!scriptPolicy?.split(/\s+/).includes(`'sha256-${themeHash}'`)) throw new Error("Theme bootstrap CSP hash is stale");
   const { render } = await import(pathToFileURL(resolve(web, ".prerender/entry-server.js")).href) as typeof import("../src/entry-server.js");
-  for (const page of Object.keys(PAGES) as Page[]) {
-    const file = resolve(assets, PAGES[page].file);
-    const template = await readFile(file, "utf8");
-    await writeFile(file, renderPage(template, render(page), ROOT_MARKER));
+  // Every template is read before any page is written: a template's own file is also a page (the
+  // docs' index is docs.html).
+  const templates = new Map(await Promise.all(Object.values(ENTRIES).map(async (template) =>
+    [template, await readFile(resolve(assets, template), "utf8")] as const)));
+  for (const page of ALL_PAGES) {
+    const { template, file } = route(page);
+    const html = templates.get(template);
+    if (html === undefined) throw new Error(`No built template ${template} for ${page}`);
+    await mkdir(dirname(resolve(assets, file)), { recursive: true });
+    await writeFile(resolve(assets, file), renderPage(html, render(page), ROOT_MARKER));
   }
-  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${Object.values(PAGES).flatMap(({ path, lastmod }) => path === null ? [] : [`  <url><loc>${origin}${path}</loc><lastmod>${lastmod}</lastmod></url>`]).join("\n")}\n</urlset>\n`;
+  const urls = ALL_PAGES.map(route).flatMap(({ path, lastmod }) => path === null ? [] :
+    [`  <url><loc>${origin}${path}</loc>${lastmod === null ? "" : `<lastmod>${lastmod}</lastmod>`}</url>`]);
+  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join("\n")}\n</urlset>\n`;
   await writeFile(resolve(assets, "sitemap.xml"), sitemap);
 }
 

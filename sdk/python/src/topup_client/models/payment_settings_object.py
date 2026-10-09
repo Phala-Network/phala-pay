@@ -27,27 +27,25 @@ class PaymentSettingsObject:
     (docs/design/payment-settings.md).
 
         Example:
-            {'available': [{'assets': [{'accepted': True, 'asset': 'PHA', 'contract':
-                '0x6c5ba91642f10282b576d91922ae6448c9d52f4e', 'decimals': 18, 'enabled': True, 'max_deposit_atomic': {'default':
-                '1000000000000000000000000', 'max': '1000000000000000000000000', 'min': '0'}, 'min_amount': {'default': 100,
-                'max': 18446744073709551615, 'min': 100}, 'min_deposit_atomic': {'default': '0', 'max':
+            {'available': [{'assets': [{'accepted': True, 'asset': 'usdc', 'contract':
+                '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', 'decimals': 6, 'enabled': True, 'max_deposit_atomic': {'default':
+                '10000000000', 'max': '10000000000', 'min': '0'}, 'min_amount': {'default': 100, 'max': 18446744073709551615,
+                'min': 100}, 'min_deposit_atomic': {'default': '0', 'max':
                 '115792089237316195423570985008687907853269984665640564039457584007913129639935', 'min': '0'},
-                'min_refund_atomic': {'default': '1000000000000000000', 'max': '1000000000000000000', 'min':
-                '1000000000000000000'}, 'pricing': 'spot', 'quote_amount_decimals': 4, 'quote_spread_bps': {'default': 50,
-                'max': 500, 'min': 0}, 'quote_tolerance_bps': {'default': 100, 'max': 500, 'min': 0}, 'quote_ttl_seconds':
-                {'default': 900, 'max': 3600, 'min': 30}}, {'accepted': True, 'asset': 'USDT', 'contract':
-                '0xdac17f958d2ee523a2206206994597c13d831ec7', 'decimals': 6, 'enabled': True, 'max_deposit_atomic': {'default':
-                '1000000000000000000000000', 'max': '1000000000000000000000000', 'min': '0'}, 'min_amount': {'default': 100,
-                'max': 18446744073709551615, 'min': 100}, 'min_deposit_atomic': {'default': '0', 'max':
-                '115792089237316195423570985008687907853269984665640564039457584007913129639935', 'min': '0'},
-                'min_refund_atomic': {'default': '1000000000000000000', 'max': '1000000000000000000', 'min':
-                '1000000000000000000'}, 'pricing': 'stablecoin', 'quote_amount_decimals': 4, 'quote_spread_bps': {'default': 50,
-                'max': 500, 'min': 0}, 'quote_tolerance_bps': {'default': 100, 'max': 500, 'min': 0}, 'quote_ttl_seconds':
-                {'default': 900, 'max': 3600, 'min': 30}}], 'chain_id': 1, 'confirmations': {'default': '2', 'floor': '2'},
-                'status': 'active'}], 'chains': [{'assets': [{'asset': 'PHA', 'quote_spread_bps': 100}, {'asset': 'USDT'}],
-                'chain_id': 1, 'confirmations': '12'}], 'livemode': False, 'object': 'payment_settings',
-                'quote_creations_per_customer_per_minute': None, 'revision': 'psrev_5b0e4f1a9c3d4e7f8a2b6c1d0e9f8a7b', 'status':
-                'configured', 'updated': 1790467200}
+                'min_refund_atomic': {'default': '1000000', 'max': '1000000', 'min': '1000000'}, 'pricing': 'stablecoin',
+                'quote_amount_decimals': 4, 'quote_spread_bps': {'default': 0, 'max': 500, 'min': 0}, 'quote_tolerance_bps':
+                {'default': 100, 'max': 500, 'min': 0}, 'quote_ttl_seconds': {'default': 900, 'max': 3600, 'min': 30}},
+                {'accepted': True, 'asset': 'usdt', 'contract': '0xdac17f958d2ee523a2206206994597c13d831ec7', 'decimals': 6,
+                'enabled': True, 'max_deposit_atomic': {'default': '10000000000', 'max': '10000000000', 'min': '0'},
+                'min_amount': {'default': 100, 'max': 18446744073709551615, 'min': 100}, 'min_deposit_atomic': {'default': '0',
+                'max': '115792089237316195423570985008687907853269984665640564039457584007913129639935', 'min': '0'},
+                'min_refund_atomic': {'default': '1000000', 'max': '1000000', 'min': '1000000'}, 'pricing': 'stablecoin',
+                'quote_amount_decimals': 4, 'quote_spread_bps': {'default': 0, 'max': 500, 'min': 0}, 'quote_tolerance_bps':
+                {'default': 100, 'max': 500, 'min': 0}, 'quote_ttl_seconds': {'default': 900, 'max': 3600, 'min': 30}}],
+                'chain_id': 1, 'confirmations': {'default': '2', 'floor': '2'}, 'status': 'active'}], 'chains': [{'assets':
+                [{'asset': 'usdc', 'quote_spread_bps': 0}, {'asset': 'usdt'}], 'chain_id': 1, 'confirmations': '12'}],
+                'livemode': False, 'object': 'payment_settings', 'quote_creations_per_customer_per_minute': None, 'revision':
+                'psrev_5b0e4f1a9c3d4e7f8a2b6c1d0e9f8a7b', 'status': 'configured', 'updated': 1790467200}
 
         Attributes:
             available (list[AvailableChain]): The operator's catalog of the mode: every chain and asset you may accept, with

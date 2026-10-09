@@ -78,9 +78,10 @@ export const competitors: Competitor[] = [
 
 // Phala Pay facts: README.md; docs/overview.md; docs/architecture.md §§1, 8; docs/integration.md §§1.6, 3, 5.
 const repo = "https://github.com/Phala-Network/phala-pay";
-const overview = `${repo}/blob/main/docs/overview.md`;
+// The docs as this site renders them (/docs); the specification, which it does not, on GitHub.
+const overview = "https://pay.phala.com/docs/overview";
 const architecture = `${repo}/blob/main/docs/architecture.md`;
-const integration = `${repo}/blob/main/docs/integration.md`;
+const integration = "https://pay.phala.com/docs/integration";
 const readme = `${repo}/blob/main/README.md`;
 export const phalaPay: Competitor = {
   id: "phala-pay", name: "Phala Pay",

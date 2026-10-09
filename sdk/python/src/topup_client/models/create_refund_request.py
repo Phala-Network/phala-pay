@@ -25,8 +25,8 @@ class CreateRefundRequest:
     """`POST /v1/refunds` body.
 
     Example:
-        {'amount_atomic': '202510000000000000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516',
-            'destination_address': '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata': {'ticket': 'support-311'}}
+        {'amount_atomic': '25000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516', 'destination_address':
+            '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata': {'ticket': 'support-311'}}
 
     Attributes:
         deposit (str): `dep_` id of the deposit to refund.

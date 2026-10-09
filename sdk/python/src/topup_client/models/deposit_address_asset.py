@@ -17,7 +17,7 @@ class DepositAddressAsset:
     """A token a deposit address takes on one network.
 
     Attributes:
-        asset (str): Asset code, such as `pha`.
+        asset (str): Asset code, such as `usdc`.
         contract (str): ERC-20 contract address.
         decimals (int): ERC-20 decimal count.
         payment_uri (str): EIP-681 ERC-20 transfer URI carrying the token, chain, and address, and no amount: the

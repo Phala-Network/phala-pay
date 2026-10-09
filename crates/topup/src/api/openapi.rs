@@ -18,7 +18,7 @@ use super::examples;
 const SERVERS: &[(&str, &str)] = &[
     (
         "https://pay-api.phala.com",
-        "Production: Ethereum Mainnet, live and test mode",
+        "Production: USDC and USDT on Ethereum, USDC on Base; live and test mode",
     ),
     (
         "https://pay-api-staging.phala.com",

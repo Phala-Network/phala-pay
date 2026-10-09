@@ -20,13 +20,15 @@ import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 export const REPO = "https://github.com/Phala-Network/phala-pay";
 export const LINKS = {
   repo: REPO,
-  docs: `${REPO}#documentation`,
-  overview: `${REPO}/blob/main/docs/overview.md`,
-  integration: `${REPO}/blob/main/docs/integration.md`,
-  selfHosting: `${REPO}/blob/main/docs/self-hosting.md`,
+  // The docs and the API reference, rendered on this site from the repository (/docs, /reference).
+  docs: "/docs",
+  overview: "/docs/overview",
+  integration: "/docs/integration",
+  selfHosting: "/docs/self-hosting",
   // The guide's one-command deploy to your own Phala Cloud workspace, beside its other two paths.
-  deploy: `${REPO}/blob/main/docs/self-hosting.md#one-command-deploy`,
-  reference: "https://phala-network.github.io/phala-pay/",
+  deploy: "/docs/self-hosting#one-command-deploy",
+  reference: "/reference",
+  changelog: "/docs/changelog",
   license: `${REPO}/blob/main/LICENSE`,
   security: `${REPO}/blob/main/SECURITY.md`,
   issues: `${REPO}/issues`,
@@ -47,14 +49,21 @@ const ICON = { "aria-hidden": true, strokeWidth: 1.75 } as const;
 /** An inline text link, in the text's colour. */
 export const TEXT_LINK = "font-medium text-foreground underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground";
 
-const NAV = [
+/** The part of the site a page belongs to, which the header marks as current. */
+export type Section = "compare" | "docs" | "reference";
+
+export function isSection(value: string | undefined): value is Section {
+  return value === "compare" || value === "docs" || value === "reference";
+}
+
+const NAV: { href: string; label: string; section?: Section }[] = [
   { href: "/#demo", label: "Demo" },
-  { href: "/compare", label: "Compare" },
-  { href: LINKS.docs, label: "Docs" },
-  { href: LINKS.reference, label: "API reference" },
+  { href: "/compare", label: "Compare", section: "compare" },
+  { href: LINKS.docs, label: "Docs", section: "docs" },
+  { href: LINKS.reference, label: "API reference", section: "reference" },
 ];
 
-export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
+export function SiteHeader({ theme, onThemeChange, current }: { theme: Theme; onThemeChange: (theme: Theme) => void; current: Section | null }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
   const hydrated = useHydrated();
@@ -90,9 +99,10 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
         </a>
         <nav aria-label="Site" className="hidden md:block">
           <ul className="flex items-center">
-            {NAV.map(({ href, label }) => (
+            {NAV.map(({ href, label, section }) => (
               <li key={label}>
-                <a href={href} className="inline-flex h-9 items-center rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+                <a href={href} aria-current={section !== undefined && section === current ? "page" : undefined}
+                  className="inline-flex h-9 items-center rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:bg-muted aria-[current=page]:text-foreground">
                   {label}
                 </a>
               </li>
@@ -120,9 +130,10 @@ export function SiteHeader({ theme, onThemeChange }: { theme: Theme; onThemeChan
         <div id={menuId} hidden={!menuOpen} className="absolute inset-x-0 top-full border-b bg-background md:hidden">
           <nav aria-label="Menu" className={CONTAINER}>
             <ul className="divide-y">
-              {[...NAV, { href: LINKS.selfHosting, label: "Self-host" }].map(({ href, label }) => (
+              {[...NAV, { href: LINKS.selfHosting, label: "Self-host", section: undefined }].map(({ href, label, section }) => (
                 <li key={label}>
-                  <a href={href} className="flex h-12 items-center text-base font-medium" onClick={() => setMenuOpen(false)}>
+                  <a href={href} aria-current={section !== undefined && section === current ? "page" : undefined}
+                    className="flex h-12 items-center text-base font-medium aria-[current=page]:underline aria-[current=page]:decoration-2 aria-[current=page]:underline-offset-8" onClick={() => setMenuOpen(false)}>
                     {label}
                   </a>
                 </li>
@@ -542,6 +553,7 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
       { href: LINKS.docs, label: "Documentation" },
       { href: LINKS.integration, label: "Integration guide" },
       { href: LINKS.reference, label: "API reference" },
+      { href: LINKS.changelog, label: "Changelog" },
     ],
   },
   {

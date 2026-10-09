@@ -5,6 +5,12 @@
       "purls": ["pkg:npm/sharp@0.35.4"],
       "statement": "dev-only: sharp is pulled in by cf → miniflare (local Workers dev server), a native module never included in the deployed Workers static-asset bundle; no fixed version reachable because miniflare pins sharp 0.35.4; remove when cf/miniflare allow sharp ≥0.35.5. deploy/product/web/pnpm-lock.yaml is the only lockfile in the repo that resolves sharp 0.35.4.",
       "expired_at": "2026-11-05T00:00:00Z"
+    },
+    {
+      "id": "CVE-2026-103923",
+      "purls": ["pkg:npm/katex@0.16.47"],
+      "statement": "dev-only: katex is pulled in by mermaid through @mermaid-js/mermaid-cli, used only by `npm run diagrams` (deploy/product/web/scripts/diagrams.sh), which renders the repository's own docs' diagrams offline (no network, in Playwright's image) to committed SVGs; katex renders only math in diagram labels, which the docs' diagrams have none of, and nothing of it is in the site's build output. No fixed version reachable: mermaid 12.1.0 requires katex ^0.16.47 and the fix is 0.18.2; remove when mermaid allows katex >=0.18.2. deploy/product/web/pnpm-lock.yaml is the only lockfile that resolves katex. Tracked in https://github.com/Phala-Network/phala-pay/issues/430.",
+      "expired_at": "2026-11-07T00:00:00Z"
     }
   ]
 }

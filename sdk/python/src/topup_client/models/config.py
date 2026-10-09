@@ -24,10 +24,10 @@ class Config:
     """What a product's UI reads instead of hardcoding: assets, limits, and quote terms.
 
     Example:
-        {'assets': [{'asset': 'PHA', 'chain_id': 1, 'confirmations': '12', 'contract':
-            '0x6c5ba91642f10282b576d91922ae6448c9d52f4e', 'decimals': 18, 'max_deposit_atomic': '1000000000000000000000000',
-            'min_amount': 100, 'min_deposit_atomic': '0', 'min_refund_atomic': '1000000000000000000', 'pricing': 'spot',
-            'quote_amount_decimals': 4, 'quote_spread_bps': 100, 'quote_tolerance_bps': 100, 'quote_ttl_seconds': 900,
+        {'assets': [{'asset': 'usdc', 'chain_id': 1, 'confirmations': '12', 'contract':
+            '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', 'decimals': 6, 'max_deposit_atomic': '10000000000', 'min_amount':
+            100, 'min_deposit_atomic': '0', 'min_refund_atomic': '1000000', 'pricing': 'stablecoin',
+            'quote_amount_decimals': 4, 'quote_spread_bps': 0, 'quote_tolerance_bps': 100, 'quote_ttl_seconds': 900,
             'typical_credit_seconds': 150, 'typical_finality_seconds': 900}], 'currency': 'usd', 'livemode': False,
             'max_open_amount_per_account': 1000000, 'max_open_amount_per_customer': 500000, 'max_open_quotes': 100,
             'object': 'config', 'quote_creations_per_customer_per_minute': 10}

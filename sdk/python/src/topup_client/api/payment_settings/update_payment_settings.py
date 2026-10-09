@@ -111,7 +111,7 @@ def sync_detailed(
         body (UpdatePaymentSettingsRequest): `POST /v1/payment_settings` body. A parameter not
             sent is unchanged; `chains`, when sent,
             replaces the whole list. Writes are last-write-wins. Example: {'chains': [{'assets':
-            [{'asset': 'PHA', 'quote_spread_bps': 100}, {'asset': 'USDT'}], 'chain_id': 1,
+            [{'asset': 'usdc', 'quote_spread_bps': 0}, {'asset': 'usdt'}], 'chain_id': 1,
             'confirmations': '12'}]}.
 
     Raises:
@@ -153,7 +153,7 @@ def sync(
         body (UpdatePaymentSettingsRequest): `POST /v1/payment_settings` body. A parameter not
             sent is unchanged; `chains`, when sent,
             replaces the whole list. Writes are last-write-wins. Example: {'chains': [{'assets':
-            [{'asset': 'PHA', 'quote_spread_bps': 100}, {'asset': 'USDT'}], 'chain_id': 1,
+            [{'asset': 'usdc', 'quote_spread_bps': 0}, {'asset': 'usdt'}], 'chain_id': 1,
             'confirmations': '12'}]}.
 
     Raises:
@@ -190,7 +190,7 @@ async def asyncio_detailed(
         body (UpdatePaymentSettingsRequest): `POST /v1/payment_settings` body. A parameter not
             sent is unchanged; `chains`, when sent,
             replaces the whole list. Writes are last-write-wins. Example: {'chains': [{'assets':
-            [{'asset': 'PHA', 'quote_spread_bps': 100}, {'asset': 'USDT'}], 'chain_id': 1,
+            [{'asset': 'usdc', 'quote_spread_bps': 0}, {'asset': 'usdt'}], 'chain_id': 1,
             'confirmations': '12'}]}.
 
     Raises:
@@ -230,7 +230,7 @@ async def asyncio(
         body (UpdatePaymentSettingsRequest): `POST /v1/payment_settings` body. A parameter not
             sent is unchanged; `chains`, when sent,
             replaces the whole list. Writes are last-write-wins. Example: {'chains': [{'assets':
-            [{'asset': 'PHA', 'quote_spread_bps': 100}, {'asset': 'USDT'}], 'chain_id': 1,
+            [{'asset': 'usdc', 'quote_spread_bps': 0}, {'asset': 'usdt'}], 'chain_id': 1,
             'confirmations': '12'}]}.
 
     Raises:

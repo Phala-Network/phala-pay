@@ -1,7 +1,10 @@
 # Dependencies whose install scripts pnpm may run. esbuild's and workerd's (cf's and the Cloudflare
 # Vite plugin's) only check the platform binary that their optional dependency already provides.
+# puppeteer's (through @mermaid-js/mermaid-cli) would download a browser: none is downloaded here,
+# in CI, or in the Cloudflare build; `npm run diagrams` drives Playwright's Chromium instead.
 allowBuilds:
   esbuild: false
+  puppeteer: false
   workerd: false
 
 # miniflare's 7.29.0 has published advisories; keep its transitive Undici on a fixed release.

@@ -247,6 +247,17 @@ jobs:
       - name: Install the page's locked dependencies
         working-directory: deploy/product/web
         run: pnpm install --frozen-lockfile
+      # The docs' Mermaid diagrams are committed SVGs, generated like the OpenAPI document and the
+      # SDK types: rendering them again (in Playwright's image, as anywhere) must change nothing.
+      - name: Check that the docs' diagrams match their markdown
+        working-directory: deploy/product/web
+        run: |
+          pnpm run diagrams
+          if [ -n "$(git status --porcelain -- public/diagrams)" ]; then
+            git status --short -- public/diagrams
+            echo "::error::deploy/product/web/public/diagrams is stale: run 'pnpm run diagrams' in deploy/product/web and commit the result."
+            exit 1
+          fi
       - name: Typecheck, lint, and build the page
         working-directory: deploy/product/web
         run: pnpm run check

@@ -1,4 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
+import { existsSync, readdirSync } from "node:fs";
 import { expect, test as base, type Locator, type Page } from "@playwright/test";
 import {
   createPublicClient,
@@ -18,6 +19,7 @@ import {
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
 import type { Timeline } from "../src/api.js";
+import { DOCS, docPath } from "../src/content/docs.js";
 import { tokens } from "../src/format.js";
 import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
 
@@ -772,7 +774,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   const hero = page.getByRole("region", { name: headline });
   await expect(hero.getByRole("link", { name: "Start a testnet instance" })).toHaveAttribute(
     "href",
-    "https://github.com/Phala-Network/phala-pay/blob/main/docs/self-hosting.md#one-command-deploy",
+    "/docs/self-hosting#one-command-deploy",
   );
   // The one-command deploy is a release asset: the site only redirects to it (public/_redirects).
   const releases = "https://github.com/Phala-Network/phala-pay/releases";
@@ -786,11 +788,11 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   }
   await expect(hero.getByRole("link", { name: "Read the docs" })).toHaveAttribute(
     "href",
-    "https://github.com/Phala-Network/phala-pay#documentation",
+    "/docs",
   );
   await expect(page.getByRole("banner").getByRole("link", { name: "Self-host", exact: true })).toHaveAttribute(
     "href",
-    "https://github.com/Phala-Network/phala-pay/blob/main/docs/self-hosting.md",
+    "/docs/self-hosting",
   );
   await expectMetadata(page);
   const product = page.getByRole("region", { name: "Customer view" });
@@ -1644,21 +1646,30 @@ test("sweeps from the last good data show their balances and age, without sweep 
 });
 
 test("every page fits every width in either theme, with no serious accessibility violation", async ({ browser }) => {
-  // 24 axe scans (three pages, four widths, two themes): a few seconds each on a loaded machine.
-  test.setTimeout(300_000);
+  // Each page is checked for sideways scrolling at every width, and with axe at the widths its
+  // layout changes the content: every width for the marketing pages, a desktop and a phone for the
+  // long docs, and the desktop for the API reference, whose markup is the same at every width (axe
+  // takes most of a minute over its 15,000 elements).
+  test.setTimeout(600_000);
+  const all = [1440, 1280, 1024, 768, 390];
+  const pages: [string, number[]][] = [
+    ["", all], ["compare", all], ["no-such-page/deeper", all], ["docs", all], ["docs/sdk/react", all],
+    ["docs/integration", [1440, 390]], ["reference", [1440]],
+  ];
   for (const colorScheme of ["light", "dark"] as const) {
     const context = await browser.newContext({ colorScheme });
     try {
       const page = await context.newPage();
-      for (const path of ["", "compare", "no-such-page/deeper"]) {
+      for (const [path, axeWidths] of pages) {
         const response = await page.goto(new URL(path, env("SITE_URL")).href);
         expect(response?.status(), path).toBe(path.startsWith("no-such-page") ? 404 : 200);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
         if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
-        for (const width of [1440, 1024, 768, 390]) {
+        for (const width of all) {
           await page.setViewportSize({ width, height: 900 });
           const [scrollWidth, clientWidth] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
           expect(scrollWidth, `/${path} at ${width}px, ${colorScheme}`).toBe(clientWidth);
+          if (!axeWidths.includes(width)) continue;
           const { violations } = await new AxeBuilder({ page }).analyze();
           const serious = violations
             .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
@@ -1842,9 +1853,11 @@ async function columnLayout(page: Page) {
       const left = [...(grid?.children ?? [])].find((child) => child.getAttribute("data-column") === "left");
       const name = right.closest("[aria-labelledby]")?.getAttribute("aria-labelledby") ?? right.closest("footer, main")?.tagName.toLowerCase() ?? "?";
       const centred = grid?.getAttribute("data-align") === "center";
+      const layout = grid?.getAttribute("data-layout") ?? "split";
       const middle = (element: Element) => { const box = element.getBoundingClientRect(); return box.top + box.height / 2; };
       return {
         name,
+        layout,
         x: right.getBoundingClientRect().left,
         how: centred ? "middles" : "baselines",
         left: left === undefined ? null : centred ? middle(left) : baseline(left),
@@ -1856,24 +1869,36 @@ async function columnLayout(page: Page) {
 
 test("one layout grid: every right column starts on one line, and each part's columns line up", async ({ page }) => {
   // On the home page: the hero, each section's header, the demo's cards, the spec list, the FAQ,
-  // the close, and the footer; on /compare, its header, its sources, and the footer.
-  for (const [path, least] of [["", 9], ["compare", 3]] as const) {
-    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+  // the close, and the footer; on /compare, its header, its sources, and the footer; on the docs
+  // and the reference, the navigation beside the page, each operation's and object's fields beside
+  // their example, and the footer. Within a page, every right column of one layout (the 6/6 split,
+  // the docs' sidebar layout, the reference's parts) starts on one line; the sidebar layout's page
+  // starts on one line across the docs and the reference.
+  const pages = [["", 9], ["compare", 3], ["docs", 2], ["docs/integration", 2], ["docs/configuration", 2], ["docs/sdk/react", 2], ["reference", 40]] as const;
+  for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+    const sidebar = new Set<number>();
+    for (const [path, least] of pages) {
       await page.setViewportSize({ width, height });
       await page.goto(new URL(path, env("SITE_URL")).href);
       if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
       const parts = await columnLayout(page);
       const where = `/${path} at ${width}px`;
       expect(parts.length, `${where}: two-column parts`).toBeGreaterThanOrEqual(least);
-      const line = parts[0]?.x ?? 0;
-      expect(parts.filter(({ x }) => Math.abs(x - line) > 1).map(({ name, x }) => `${name} starts at ${x.toFixed(1)}, not ${line.toFixed(1)}`), where).toEqual([]);
+      for (const layout of new Set(parts.map((part) => part.layout))) {
+        const group = parts.filter((part) => part.layout === layout);
+        const line = group[0]?.x ?? 0;
+        expect(group.filter(({ x }) => Math.abs(x - line) > 1).map(({ name, x }) => `${name} starts at ${x.toFixed(1)}, not ${line.toFixed(1)}`), `${where}, ${layout}`).toEqual([]);
+        if (layout === "sidebar") sidebar.add(Math.round(line));
+      }
       // A right column with no left one beside it (the FAQ's questions, under its header) is
       // measured by its left edge only.
       expect(parts.filter(({ left, right }) => left !== null && (right === null || Math.abs(left - right) > 1))
         .map(({ name, how, left, right }) => `${name}: ${how} at ${left?.toFixed(1) ?? "none"} and ${right?.toFixed(1) ?? "none"}`), where).toEqual([]);
     }
+    expect([...sidebar], `the docs' and the reference's page column at ${width}px`).toHaveLength(1);
   }
 });
+
 
 /**
  * The text in `scope` smaller than 14px, save what may be: code and ids (monospace), footnote
@@ -1897,7 +1922,8 @@ async function smallText(page: Page, scope = "body"): Promise<string[]> {
 }
 
 test("body text is at least 14px; only uppercase, tracked labels are smaller", async ({ page }) => {
-  for (const path of ["", "compare"]) {
+  test.setTimeout(240_000);
+  for (const path of ["", "compare", "docs", "docs/integration", "docs/configuration", "docs/sdk/react", "reference"]) {
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(new URL(path, env("SITE_URL")).href);
@@ -1907,3 +1933,239 @@ test("body text is at least 14px; only uppercase, tracked labels are smaller", a
   }
 });
 
+/**
+ * The owner's rule for the docs and the reference: the left navigation may stick and scroll on its
+ * own; nothing else scrolls inside the page, save a code block sideways.
+ */
+async function expectOnlyNavScrolls(page: Page, label: string): Promise<void> {
+  const scrollers = await page.evaluate(() => {
+    // An axis scrolls when the element lets it (auto or scroll; CSS computes the other axis of
+    // `overflow-y: auto` as auto too) and its content is larger than its box on it.
+    const scrolls = (value: string) => value === "auto" || value === "scroll";
+    const found: string[] = [];
+    for (const element of document.body.querySelectorAll("*")) {
+      const style = getComputedStyle(element);
+      const x = scrolls(style.overflowX) && element.scrollWidth > element.clientWidth + 1;
+      const y = scrolls(style.overflowY) && element.scrollHeight > element.clientHeight + 1;
+      if (!x && !y) continue;
+      const navigation = element.closest("aside") !== null && element.querySelector("nav") !== null;
+      if (navigation && !x) continue;
+      if (element.tagName === "PRE" && !y) continue;
+      found.push(`${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")} (${style.overflowX} ${style.overflowY})`);
+    }
+    return found;
+  });
+  expect(scrollers, `${label}: elements that scroll inside the page`).toEqual([]);
+}
+
+/**
+ * A diagram's drawing at its natural size (1:1, as the docs' column shows it on a desktop): what
+ * overlaps or overflows. No two labels overlap; no sequence number's disc (the marker at its
+ * message's start) touches a label; every note, actor, and node contains its text.
+ */
+async function diagramProblems(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const svg = document.querySelector("svg");
+    if (svg === null) return ["no svg"];
+    svg.style.maxWidth = "none";
+    svg.setAttribute("width", String(svg.viewBox.baseVal.width));
+    svg.setAttribute("height", String(svg.viewBox.baseVal.height));
+    const box = (element: Element) => element.getBoundingClientRect();
+    const meet = (a: { left: number; right: number; top: number; bottom: number }, b: DOMRect) =>
+      a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+    const outside = (inner: DOMRect, outer: DOMRect) =>
+      inner.left < outer.left - 0.5 || inner.right > outer.right + 0.5 || inner.top < outer.top - 0.5 || inner.bottom > outer.bottom + 0.5;
+    const label = (element: SVGElement) => `"${element.textContent.trim().slice(0, 32)}"`;
+    const texts = [...svg.querySelectorAll("text")].filter((text) => text.textContent.trim() !== "" && box(text).width > 0);
+    const problems: string[] = [];
+    texts.forEach((a, index) => {
+      for (const b of texts.slice(index + 1)) {
+        if (!a.contains(b) && !b.contains(a) && meet(box(a), box(b))) problems.push(`${label(a)} overlaps ${label(b)}`);
+      }
+    });
+    const ctm = svg.getScreenCTM();
+    for (const line of svg.querySelectorAll('line[marker-start*="sequencenumber"]')) {
+      const id = /#([^)]+)\)/.exec(line.getAttribute("marker-start") ?? "")?.[1] ?? "";
+      const radius = Number(document.getElementById(id)?.querySelector("circle")?.getAttribute("r") ?? 0) *
+        (parseFloat(getComputedStyle(line).strokeWidth) || 1) * (ctm === null ? 1 : ctm.a);
+      const centre = new DOMPoint(Number(line.getAttribute("x1")), Number(line.getAttribute("y1"))).matrixTransform(ctm === null ? undefined : ctm);
+      const disc = { left: centre.x - radius, right: centre.x + radius, top: centre.y - radius, bottom: centre.y + radius };
+      for (const text of texts) {
+        if (!text.classList.contains("sequenceNumber") && meet(disc, box(text))) problems.push(`a number's marker touches ${label(text)}`);
+      }
+    }
+    for (const shape of svg.querySelectorAll("rect.note, rect.actor")) {
+      for (const text of shape.parentElement?.querySelectorAll("text") ?? []) {
+        if (box(text).width > 0 && outside(box(text), box(shape))) problems.push(`${label(text)} overflows its ${shape.getAttribute("class") ?? "box"}`);
+      }
+    }
+    // No edge crosses a subgraph's title: points every 2px along each edge, against each title.
+    for (const title of svg.querySelectorAll<SVGGraphicsElement>("g.cluster-label")) {
+      const area = box(title);
+      if (area.width === 0) continue;
+      for (const edge of svg.querySelectorAll<SVGPathElement>("path.flowchart-link")) {
+        const matrix = edge.getScreenCTM();
+        for (let at = 0; at <= edge.getTotalLength(); at += 2) {
+          const point = edge.getPointAtLength(at).matrixTransform(matrix ?? undefined);
+          if (point.x > area.left && point.x < area.right && point.y > area.top && point.y < area.bottom) {
+            problems.push(`an edge crosses the title ${label(title)}`);
+            break;
+          }
+        }
+      }
+    }
+    for (const node of svg.querySelectorAll("g.node")) {
+      const shape = node.querySelector("rect, path, polygon, circle, ellipse");
+      const text = node.querySelector<SVGElement>(".label, text");
+      if (shape !== null && text !== null && outside(box(text), box(shape))) problems.push(`${label(text)} overflows its node`);
+    }
+    return problems;
+  });
+}
+
+test("the docs' diagrams are legible: at least 12px text on a desktop, nothing overlapping", async ({ page }) => {
+  const names = readdirSync(new URL("../public/diagrams/", import.meta.url)).filter((name) => name.endsWith(".svg"));
+  expect(names.length).toBeGreaterThan(0);
+  for (const name of names) {
+    // The served SVG, drawn as an <img> draws it: on a document of its own, without the page's
+    // CSP (which, opened directly, refuses the SVG's own <style>; an image is not subject to it).
+    const served = await page.request.get(new URL(`diagrams/${name}`, env("SITE_URL")).href);
+    expect(served.status(), name).toBe(200);
+    const body = await served.body();
+    await page.route("https://diagram.test/*", (route) => route.fulfill({ body, contentType: "image/svg+xml" }));
+    await page.goto(`https://diagram.test/${name}`);
+    await page.unroute("https://diagram.test/*");
+    await page.evaluate(() => document.fonts.ready);
+    expect(await diagramProblems(page), name).toEqual([]);
+  }
+  // Drawn with 14px text, a diagram shown at its column's width keeps at least 12px of it.
+  for (const path of ["docs/overview", "docs/integration"]) {
+    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      const image = page.locator(".docs-prose figure.diagram img:visible");
+      await image.scrollIntoViewIfNeeded();
+      const [shown, natural] = await image.evaluate(async (element: HTMLImageElement) => {
+        await element.decode();
+        return [element.getBoundingClientRect().width, element.naturalWidth];
+      });
+      expect((shown / natural) * 14, `${path} at ${width}px: the diagram's text size`).toBeGreaterThanOrEqual(12);
+    }
+  }
+});
+
+test("the docs and the API reference are rendered from the repository, linked within the site, and work without script", async ({ browser, page }) => {
+  const problems = await watchConsole(page);
+  // Every doc, prerendered from its markdown: its own title and canonical URL, in the sitemap.
+  const sitemap = await (await page.request.get(new URL("sitemap.xml", env("SITE_URL")).href)).text();
+  const docs = [
+    ["docs", "Phala Pay documentation"],
+    ["docs/overview", "How Phala Pay works"],
+    ["docs/integration", "Integration guide"],
+    ["docs/self-hosting", "Self-hosting Phala Pay"],
+    ["docs/sdk/react", "@phala/pay-react"],
+  ] as const;
+  for (const [path, title] of docs) {
+    const response = await page.goto(new URL(path, env("SITE_URL")).href);
+    expect(response?.status(), path).toBe(200);
+    expect(await response?.text(), path).not.toContain('style="');
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `https://pay.phala.com/${path}`);
+    expect(sitemap).toContain(`<loc>https://pay.phala.com/${path}</loc>`);
+  }
+  // Only the left navigation scrolls on its own, on every doc and the reference, wide and narrow.
+  for (const path of [...DOCS.map(({ slug }) => docPath(slug)), "/reference"]) {
+    await page.goto(new URL(path, env("SITE_URL")).href);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectOnlyNavScrolls(page, `${path} at ${width}px`);
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Links between docs stay on the site with GitHub's anchors; other repository files open on
+  // GitHub; the old API reference's address is /reference.
+  await page.goto(new URL("docs/integration", env("SITE_URL")).href);
+  const prose = page.locator(".docs-prose");
+  await expect(prose.locator('a[href^="/docs/self-hosting"]').first()).toBeVisible();
+  await expect(prose.locator('a[href*=".md"]:not([href^="https://github.com/"])')).toHaveCount(0);
+  await expect(prose.locator('a[href^="https://phala-network.github.io"]')).toHaveCount(0);
+  // A code block is highlighted at build time, and its copy button works once the page hydrates.
+  const block = prose.locator(".code-block").first();
+  await expect(block.locator("pre .line").first()).toBeVisible();
+  await expect(block.getByRole("button", { name: "Copy" })).toBeVisible();
+  // The reference: Redoc's anchors (each error's doc_url, each operation) resolve.
+  await page.goto(new URL("reference#section/Errors/deposit_not_final", env("SITE_URL")).href);
+  await expect(page.locator('[id="section/Errors/deposit_not_final"]')).toBeInViewport();
+  await expect(page.locator('[id="tag/quotes/operation/create_quote"]')).toContainText("POST");
+  await expect(page.locator('[id="schema/Quote"]')).toContainText("client_secret");
+  expect(problems).toEqual([]);
+  // A Mermaid diagram is its committed SVG for the page's theme (`npm run diagrams`), described by
+  // what it draws, and opens at full size.
+  await page.goto(new URL("docs/overview", env("SITE_URL")).href);
+  const diagram = page.locator(".docs-prose figure.diagram img:visible");
+  await expect(diagram).toHaveCount(1);
+  await expect(diagram).toHaveAttribute("src", /^\/diagrams\/docs-overview-1-(light|dark)\.svg$/);
+  await expect(diagram).toHaveAttribute("alt", /^Flowchart\. .*Payer to Deposit address: pays/);
+  expect(await diagram.evaluate((image: HTMLImageElement) => image.decode().then(() => image.naturalWidth))).toBeGreaterThan(0);
+  await expect(page.locator(".docs-prose figure.diagram figcaption a:visible")).toHaveText("Open the diagram full size");
+  // The header marks the part of the site a page is in.
+  for (const [path, current] of [["docs/overview", "Docs"], ["reference", "API reference"], ["compare", "Compare"], ["", null]] as const) {
+    await page.goto(new URL(path, env("SITE_URL")).href);
+    const marked = page.getByRole("navigation", { name: "Site" }).locator('[aria-current="page"]');
+    if (current === null) await expect(marked).toHaveCount(0);
+    else await expect(marked).toHaveText(current);
+  }
+  // Without script, the docs' menu still opens: it is a native disclosure.
+  const staticContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  try {
+    const staticPage = await staticContext.newPage();
+    await staticPage.goto(new URL("docs/overview", env("SITE_URL")).href);
+    await staticPage.getByText("Documentation menu").click();
+    await expect(staticPage.getByRole("navigation", { name: "Documentation" }).getByRole("link", { name: "Integration guide" })).toBeVisible();
+    // The copy button, which needs script, stays hidden.
+    await expect(staticPage.getByRole("button", { name: "Copy" })).toHaveCount(0);
+  } finally {
+    await staticContext.close();
+  }
+});
+
+test("every link in the site resolves: its pages, their anchors, and the repository files it opens on GitHub", async ({ page }) => {
+  test.setTimeout(300_000);
+  const origin = new URL(env("SITE_URL")).origin;
+  const repo = "https://github.com/Phala-Network/phala-pay/";
+  const root = new URL("../../../../", import.meta.url);
+  const pages = ["/", "/compare", "/reference", ...DOCS.map(({ slug }) => docPath(slug))];
+  // Every page's links, as written (the prerendered page: the docs and the reference need no script).
+  const links = new Map<string, string>();
+  for (const path of pages) {
+    await page.goto(new URL(path, origin).href);
+    for (const href of await page.locator("a[href]").evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute("href") ?? ""))) {
+      links.set(new URL(href, new URL(path, origin)).href, path);
+    }
+  }
+  const ids = new Map<string, Set<string>>();
+  const idsOf = async (path: string) => {
+    const known = ids.get(path);
+    if (known !== undefined) return known;
+    const response = await page.request.get(new URL(path, origin).href);
+    expect(response.status(), path).toBe(200);
+    const found = new Set([...(await response.text()).matchAll(/\sid="([^"]+)"/g)].map(([, id = ""]) => id.replaceAll("&amp;", "&")));
+    ids.set(path, found);
+    return found;
+  };
+  const broken: string[] = [];
+  for (const [url, from] of links) {
+    const target = new URL(url);
+    if (target.origin === origin) {
+      const found = await idsOf(target.pathname);
+      const id = decodeURIComponent(target.hash.slice(1));
+      if (id !== "" && !found.has(id)) broken.push(`${from}: ${target.pathname}${target.hash} (no such anchor)`);
+    } else if (url.startsWith(repo)) {
+      // A repository file the docs link to: it exists in this checkout (its anchors are checked
+      // in the markdown, by CI's lychee).
+      const file = /^(?:blob|tree)\/main\/([^#?]+)/.exec(url.slice(repo.length))?.[1];
+      if (file !== undefined && !existsSync(new URL(decodeURIComponent(file), root))) broken.push(`${from}: ${url} (no such file)`);
+    }
+  }
+  expect(broken).toEqual([]);
+});

@@ -1169,11 +1169,11 @@ export interface components {
          *       "object": "balance",
          *       "unswept": [
          *         {
-         *           "amount_atomic": "202510000000000000000",
-         *           "asset": "PHA",
+         *           "amount_atomic": "25000000",
+         *           "asset": "usdc",
          *           "chain_id": 1,
-         *           "final_amount_atomic": "202510000000000000000",
-         *           "token": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e"
+         *           "final_amount_atomic": "25000000",
+         *           "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
          *         }
          *       ]
          *     }
@@ -1322,19 +1322,19 @@ export interface components {
          * @example {
          *       "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
          *       "amount": 2500,
-         *       "amount_atomic": "202510000000000000000",
+         *       "amount_atomic": "25000000",
          *       "amount_credited": null,
-         *       "asset": "PHA",
+         *       "asset": "usdc",
          *       "chain_id": 1,
          *       "confirmations": 1,
          *       "currency": "usd",
-         *       "decimals": 18,
+         *       "decimals": 6,
          *       "expires_at": 1790554500,
          *       "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
          *       "livemode": false,
          *       "object": "quote",
          *       "payment_status": "seen",
-         *       "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=202510000000000000000",
+         *       "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
          *       "status": "open",
          *       "typical_credit_seconds": 30
          *     }
@@ -1422,18 +1422,18 @@ export interface components {
          * @example {
          *       "assets": [
          *         {
-         *           "asset": "PHA",
+         *           "asset": "usdc",
          *           "chain_id": 1,
          *           "confirmations": "12",
-         *           "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-         *           "decimals": 18,
-         *           "max_deposit_atomic": "1000000000000000000000000",
+         *           "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+         *           "decimals": 6,
+         *           "max_deposit_atomic": "10000000000",
          *           "min_amount": 100,
          *           "min_deposit_atomic": "0",
-         *           "min_refund_atomic": "1000000000000000000",
-         *           "pricing": "spot",
+         *           "min_refund_atomic": "1000000",
+         *           "pricing": "stablecoin",
          *           "quote_amount_decimals": 4,
-         *           "quote_spread_bps": 100,
+         *           "quote_spread_bps": 0,
          *           "quote_tolerance_bps": 100,
          *           "quote_ttl_seconds": 900,
          *           "typical_credit_seconds": 150,
@@ -1613,7 +1613,7 @@ export interface components {
          * @description `POST /v1/quotes` body.
          * @example {
          *       "amount": 2500,
-         *       "asset": "PHA",
+         *       "asset": "usdc",
          *       "chain_id": 1,
          *       "client_reference_id": "team-42",
          *       "currency": "usd",
@@ -1628,7 +1628,7 @@ export interface components {
              * @description The credit to quote, a positive integer in the currency's minor unit (US cents).
              */
             readonly amount: number;
-            /** @description Asset code of the payment on that chain, such as `pha`. */
+            /** @description Asset code of the payment on that chain, such as `usdc`. */
             readonly asset: string;
             /**
              * Format: int64
@@ -1654,7 +1654,7 @@ export interface components {
         /**
          * @description `POST /v1/refunds` body.
          * @example {
-         *       "amount_atomic": "202510000000000000000",
+         *       "amount_atomic": "25000000",
          *       "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
          *       "destination_address": "0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a",
          *       "metadata": {
@@ -1796,12 +1796,12 @@ export interface components {
          * @example {
          *       "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
          *       "amount": 2500,
-         *       "amount_atomic": "202510000000000000000",
+         *       "amount_atomic": "25000000",
          *       "amount_refunded": 0,
          *       "amount_refunded_atomic": "0",
          *       "amount_reversed": 0,
-         *       "asset": "PHA",
-         *       "asset_contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
+         *       "asset": "usdc",
+         *       "asset_contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
          *       "block_hash": "0x9a1c3e5b7d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c",
          *       "block_number": 21000000,
          *       "block_time": 1790553612,
@@ -1810,7 +1810,7 @@ export interface components {
          *       "created": 1790553624,
          *       "currency": "usd",
          *       "deposit_address": null,
-         *       "exchange_rate": "0.12345679",
+         *       "exchange_rate": "1.00000000",
          *       "final": true,
          *       "final_at": 1790554572,
          *       "from_address": "0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a",
@@ -2018,10 +2018,10 @@ export interface components {
          *           "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
          *           "assets": [
          *             {
-         *               "asset": "PHA",
-         *               "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-         *               "decimals": 18,
-         *               "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
+         *               "asset": "usdc",
+         *               "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+         *               "decimals": 6,
+         *               "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
          *             }
          *           ],
          *           "chain_id": 1,
@@ -2106,7 +2106,7 @@ export interface components {
         };
         /** @description A token a deposit address takes on one network. */
         readonly DepositAddressAsset: {
-            /** @description Asset code, such as `pha`. */
+            /** @description Asset code, such as `usdc`. */
             readonly asset: string;
             /** @description ERC-20 contract address. */
             readonly contract: string;
@@ -2140,10 +2140,10 @@ export interface components {
          *               "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
          *               "assets": [
          *                 {
-         *                   "asset": "PHA",
-         *                   "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-         *                   "decimals": 18,
-         *                   "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
+         *                   "asset": "usdc",
+         *                   "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+         *                   "decimals": 6,
+         *                   "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
          *                 }
          *               ],
          *               "chain_id": 1,
@@ -2214,10 +2214,10 @@ export interface components {
          *           "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
          *           "assets": [
          *             {
-         *               "asset": "PHA",
-         *               "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-         *               "decimals": 18,
-         *               "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
+         *               "asset": "usdc",
+         *               "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+         *               "decimals": 6,
+         *               "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
          *             }
          *           ],
          *           "chain_id": 1,
@@ -2316,12 +2316,12 @@ export interface components {
          *         {
          *           "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
          *           "amount": 2500,
-         *           "amount_atomic": "202510000000000000000",
+         *           "amount_atomic": "25000000",
          *           "amount_refunded": 0,
          *           "amount_refunded_atomic": "0",
          *           "amount_reversed": 0,
-         *           "asset": "PHA",
-         *           "asset_contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
+         *           "asset": "usdc",
+         *           "asset_contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
          *           "block_hash": "0x9a1c3e5b7d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c",
          *           "block_number": 21000000,
          *           "block_time": 1790553612,
@@ -2330,7 +2330,7 @@ export interface components {
          *           "created": 1790553624,
          *           "currency": "usd",
          *           "deposit_address": null,
-         *           "exchange_rate": "0.12345679",
+         *           "exchange_rate": "1.00000000",
          *           "final": true,
          *           "final_at": 1790554572,
          *           "from_address": "0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a",
@@ -2464,12 +2464,12 @@ export interface components {
          *             "object": {
          *               "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
          *               "amount": 2500,
-         *               "amount_atomic": "202510000000000000000",
+         *               "amount_atomic": "25000000",
          *               "amount_refunded": 0,
          *               "amount_refunded_atomic": "0",
          *               "amount_reversed": 0,
-         *               "asset": "PHA",
-         *               "asset_contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
+         *               "asset": "usdc",
+         *               "asset_contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
          *               "block_hash": "0x9a1c3e5b7d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c",
          *               "block_number": 21000000,
          *               "block_time": 1790553612,
@@ -2478,7 +2478,7 @@ export interface components {
          *               "created": 1790553624,
          *               "currency": "usd",
          *               "deposit_address": null,
-         *               "exchange_rate": "0.12345679",
+         *               "exchange_rate": "1.00000000",
          *               "final": false,
          *               "final_at": 1790554572,
          *               "from_address": "0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a",
@@ -2541,12 +2541,12 @@ export interface components {
          *         "object": {
          *           "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
          *           "amount": 2500,
-         *           "amount_atomic": "202510000000000000000",
+         *           "amount_atomic": "25000000",
          *           "amount_refunded": 0,
          *           "amount_refunded_atomic": "0",
          *           "amount_reversed": 0,
-         *           "asset": "PHA",
-         *           "asset_contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
+         *           "asset": "usdc",
+         *           "asset_contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
          *           "block_hash": "0x9a1c3e5b7d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c",
          *           "block_number": 21000000,
          *           "block_time": 1790553612,
@@ -2555,7 +2555,7 @@ export interface components {
          *           "created": 1790553624,
          *           "currency": "usd",
          *           "deposit_address": null,
-         *           "exchange_rate": "0.12345679",
+         *           "exchange_rate": "1.00000000",
          *           "final": false,
          *           "final_at": 1790554572,
          *           "from_address": "0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a",
@@ -2839,13 +2839,13 @@ export interface components {
          *           "assets": [
          *             {
          *               "accepted": true,
-         *               "asset": "PHA",
-         *               "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-         *               "decimals": 18,
+         *               "asset": "usdc",
+         *               "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+         *               "decimals": 6,
          *               "enabled": true,
          *               "max_deposit_atomic": {
-         *                 "default": "1000000000000000000000000",
-         *                 "max": "1000000000000000000000000",
+         *                 "default": "10000000000",
+         *                 "max": "10000000000",
          *                 "min": "0"
          *               },
          *               "min_amount": {
@@ -2859,14 +2859,14 @@ export interface components {
          *                 "min": "0"
          *               },
          *               "min_refund_atomic": {
-         *                 "default": "1000000000000000000",
-         *                 "max": "1000000000000000000",
-         *                 "min": "1000000000000000000"
+         *                 "default": "1000000",
+         *                 "max": "1000000",
+         *                 "min": "1000000"
          *               },
-         *               "pricing": "spot",
+         *               "pricing": "stablecoin",
          *               "quote_amount_decimals": 4,
          *               "quote_spread_bps": {
-         *                 "default": 50,
+         *                 "default": 0,
          *                 "max": 500,
          *                 "min": 0
          *               },
@@ -2883,13 +2883,13 @@ export interface components {
          *             },
          *             {
          *               "accepted": true,
-         *               "asset": "USDT",
+         *               "asset": "usdt",
          *               "contract": "0xdac17f958d2ee523a2206206994597c13d831ec7",
          *               "decimals": 6,
          *               "enabled": true,
          *               "max_deposit_atomic": {
-         *                 "default": "1000000000000000000000000",
-         *                 "max": "1000000000000000000000000",
+         *                 "default": "10000000000",
+         *                 "max": "10000000000",
          *                 "min": "0"
          *               },
          *               "min_amount": {
@@ -2903,14 +2903,14 @@ export interface components {
          *                 "min": "0"
          *               },
          *               "min_refund_atomic": {
-         *                 "default": "1000000000000000000",
-         *                 "max": "1000000000000000000",
-         *                 "min": "1000000000000000000"
+         *                 "default": "1000000",
+         *                 "max": "1000000",
+         *                 "min": "1000000"
          *               },
          *               "pricing": "stablecoin",
          *               "quote_amount_decimals": 4,
          *               "quote_spread_bps": {
-         *                 "default": 50,
+         *                 "default": 0,
          *                 "max": 500,
          *                 "min": 0
          *               },
@@ -2938,11 +2938,11 @@ export interface components {
          *         {
          *           "assets": [
          *             {
-         *               "asset": "PHA",
-         *               "quote_spread_bps": 100
+         *               "asset": "usdc",
+         *               "quote_spread_bps": 0
          *             },
          *             {
-         *               "asset": "USDT"
+         *               "asset": "usdt"
          *             }
          *           ],
          *           "chain_id": 1,
@@ -2999,15 +2999,15 @@ export interface components {
          * @example {
          *       "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
          *       "amount": 2500,
-         *       "amount_atomic": "202510000000000000000",
-         *       "asset": "PHA",
+         *       "amount_atomic": "25000000",
+         *       "asset": "usdc",
          *       "chain_id": 1,
          *       "client_reference_id": "team-42",
          *       "client_secret": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10_secret_9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0a",
          *       "created": 1790553600,
          *       "currency": "usd",
          *       "deposit": null,
-         *       "exchange_rate": "0.12345679",
+         *       "exchange_rate": "1.00000000",
          *       "expires_at": 1790554500,
          *       "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
          *       "livemode": false,
@@ -3016,8 +3016,8 @@ export interface components {
          *       },
          *       "object": "quote",
          *       "payment": {
-         *         "amount_atomic": "202510000000000000000",
-         *         "asset": "PHA",
+         *         "amount_atomic": "25000000",
+         *         "asset": "usdc",
          *         "chain_id": 1,
          *         "confirmations": 1,
          *         "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
@@ -3026,16 +3026,16 @@ export interface components {
          *         "status": "seen",
          *         "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
          *       },
-         *       "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=202510000000000000000",
+         *       "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
          *       "status": "open",
          *       "terms": {
          *         "confirmations": "12",
-         *         "max_deposit_atomic": "1000000000000000000000000",
+         *         "max_deposit_atomic": "10000000000",
          *         "min_amount": 100,
          *         "min_deposit_atomic": "0",
-         *         "min_refund_atomic": "1000000000000000000",
+         *         "min_refund_atomic": "1000000",
          *         "quote_amount_decimals": 4,
-         *         "quote_spread_bps": 100,
+         *         "quote_spread_bps": 0,
          *         "quote_tolerance_bps": 100,
          *         "quote_ttl_seconds": 900
          *       },
@@ -3133,15 +3133,15 @@ export interface components {
          *         {
          *           "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
          *           "amount": 2500,
-         *           "amount_atomic": "202510000000000000000",
-         *           "asset": "PHA",
+         *           "amount_atomic": "25000000",
+         *           "asset": "usdc",
          *           "chain_id": 1,
          *           "client_reference_id": "team-42",
          *           "client_secret": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10_secret_9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0a",
          *           "created": 1790553600,
          *           "currency": "usd",
          *           "deposit": null,
-         *           "exchange_rate": "0.12345679",
+         *           "exchange_rate": "1.00000000",
          *           "expires_at": 1790554500,
          *           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
          *           "livemode": false,
@@ -3150,8 +3150,8 @@ export interface components {
          *           },
          *           "object": "quote",
          *           "payment": {
-         *             "amount_atomic": "202510000000000000000",
-         *             "asset": "PHA",
+         *             "amount_atomic": "25000000",
+         *             "asset": "usdc",
          *             "chain_id": 1,
          *             "confirmations": 1,
          *             "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
@@ -3160,16 +3160,16 @@ export interface components {
          *             "status": "seen",
          *             "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
          *           },
-         *           "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=202510000000000000000",
+         *           "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
          *           "status": "open",
          *           "terms": {
          *             "confirmations": "12",
-         *             "max_deposit_atomic": "1000000000000000000000000",
+         *             "max_deposit_atomic": "10000000000",
          *             "min_amount": 100,
          *             "min_deposit_atomic": "0",
-         *             "min_refund_atomic": "1000000000000000000",
+         *             "min_refund_atomic": "1000000",
          *             "quote_amount_decimals": 4,
-         *             "quote_spread_bps": 100,
+         *             "quote_spread_bps": 0,
          *             "quote_tolerance_bps": 100,
          *             "quote_ttl_seconds": 900
          *           },
@@ -3240,15 +3240,15 @@ export interface components {
          * @example {
          *       "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
          *       "amount": 2500,
-         *       "amount_atomic": "202510000000000000000",
-         *       "asset": "PHA",
+         *       "amount_atomic": "25000000",
+         *       "asset": "usdc",
          *       "chain_id": 1,
          *       "client_reference_id": "team-42",
          *       "client_secret": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10_secret_9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0a",
          *       "created": 1790553600,
          *       "currency": "usd",
          *       "deposit": null,
-         *       "exchange_rate": "0.12345679",
+         *       "exchange_rate": "1.00000000",
          *       "expires_at": 1790554500,
          *       "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
          *       "livemode": false,
@@ -3257,8 +3257,8 @@ export interface components {
          *       },
          *       "object": "quote",
          *       "payment": {
-         *         "amount_atomic": "202510000000000000000",
-         *         "asset": "PHA",
+         *         "amount_atomic": "25000000",
+         *         "asset": "usdc",
          *         "chain_id": 1,
          *         "confirmations": 1,
          *         "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
@@ -3267,16 +3267,16 @@ export interface components {
          *         "status": "seen",
          *         "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
          *       },
-         *       "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=202510000000000000000",
+         *       "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
          *       "status": "open",
          *       "terms": {
          *         "confirmations": "12",
-         *         "max_deposit_atomic": "1000000000000000000000000",
+         *         "max_deposit_atomic": "10000000000",
          *         "min_amount": 100,
          *         "min_deposit_atomic": "0",
-         *         "min_refund_atomic": "1000000000000000000",
+         *         "min_refund_atomic": "1000000",
          *         "quote_amount_decimals": 4,
-         *         "quote_spread_bps": 100,
+         *         "quote_spread_bps": 0,
          *         "quote_tolerance_bps": 100,
          *         "quote_ttl_seconds": 900
          *       },
@@ -3288,7 +3288,7 @@ export interface components {
          * @description A refund of (part of) a deposit to the customer, which the merchant pays from the treasury of
          *     the deposit's address and attaches with `mark_paid` (design D5).
          * @example {
-         *       "amount_atomic": "202510000000000000000",
+         *       "amount_atomic": "25000000",
          *       "created": 1790557200,
          *       "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
          *       "destination_address": "0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a",
@@ -3365,7 +3365,7 @@ export interface components {
          * @example {
          *       "data": [
          *         {
-         *           "amount_atomic": "202510000000000000000",
+         *           "amount_atomic": "25000000",
          *           "created": 1790557200,
          *           "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
          *           "destination_address": "0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a",
@@ -3521,8 +3521,8 @@ export interface components {
          *       "data": [
          *         {
          *           "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
-         *           "amount_atomic": "202510000000000000000",
-         *           "asset": "PHA",
+         *           "amount_atomic": "25000000",
+         *           "asset": "usdc",
          *           "block_number": 21000420,
          *           "chain_id": 1,
          *           "created": 1790560800,
@@ -3531,7 +3531,7 @@ export interface components {
          *           "livemode": false,
          *           "log_index": 7,
          *           "object": "sweep",
-         *           "token": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
+         *           "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
          *           "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
          *           "tx_hash": "0x4b6d8f0a2c4e6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c"
          *         }
@@ -3777,11 +3777,11 @@ export interface components {
          *         {
          *           "assets": [
          *             {
-         *               "asset": "PHA",
-         *               "quote_spread_bps": 100
+         *               "asset": "usdc",
+         *               "quote_spread_bps": 0
          *             },
          *             {
-         *               "asset": "USDT"
+         *               "asset": "usdt"
          *             }
          *           ],
          *           "chain_id": 1,
