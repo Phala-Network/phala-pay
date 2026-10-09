@@ -113,9 +113,13 @@ ruleset restricting creation, update, and deletion to admins, and immutable rele
 published `v<version>` always names the same commit and assets.
 
 CI runs the real-service `make cvm-rehearsal` on every pull request and push to main, and again
-before Release builds anything. It asserts a credited payment and an acknowledged, signed event
-redelivery with the receiver's credit unchanged. No live deployment or production credentials
-are involved; the existing rehearsal uses public HTTPS price sources.
+before Release builds anything. The payer submits a tx-hash hint through the reference product
+after broadcasting; hint failure retains scanner discovery. It asserts a credited payment and
+an acknowledged, signed event redelivery with the receiver's credit unchanged. Prices use local
+Chainlink, Uniswap V2 and sequencer fixtures plus hermetic exchange responses. The Ethereum
+mainnet price Anvil resumes twelve-second mining after seeding the thirty-minute TWAP window,
+keeping its baseline within EVM BLOCKHASH history. No live deployment, public price RPC or
+production credentials are involved.
 
 The tag runs [Release](../.github/workflows/release.yml). It runs the whole CI workflow on the
 commit first, then builds each image on its own GitHub-hosted runner with
@@ -557,8 +561,9 @@ environment is `topup.yaml`'s `environment`, both attested.
 
   | Monitor | Checks in | Margin |
   |---|---|---|
-  | `topup-fast-scanner-<chain_id>` | after fast discovery (every minute); three failures alert | 2 min |
-  | `topup-coverage-scanner-<chain_id>` | after each dual coverage round (every ten minutes), `error` while coverage fails | 2 min |
+  | `topup-fast-scanner-<chain_id>` | after fast discovery (every five minutes); three failures alert | 2 min |
+  | `topup-checkpoint-scanner-<chain_id>` | after each independent dual checkpoint check (every ten minutes); one failure alerts | 2 min |
+  | `topup-coverage-scanner-<chain_id>` | after each dual coverage round (hourly), `error` while coverage fails | 2 min |
   | `topup-pump-<n>`, `topup-outbox-test`, `topup-outbox-live` | each iteration or poll, every minute | 5 min |
   | `topup-lock-expiry` | after each successful expiry scan, every minute | 5 min |
   | `topup-finality-watch` | after each `finalized` advance's passes, and every minute | 5 min |
@@ -566,6 +571,9 @@ environment is `topup.yaml`'s `environment`, both attested.
   | `topup-backup` | `ok` while the WAL-G success marker is at most 120 s old, else `error`; 3 errors open an issue | 2 min |
 
   After upgrading, delete or mute the old `topup-scanner-<chain>` monitors.
+  Independent dual checkpoint checks publish every ten minutes for finality, reversal and
+  refund completion; hourly coverage does not set their cadence. Custody remains hourly.
+  The coverage-lag warning is two hours; see [scanner lag](runbooks/scanner-lag.md).
 
 - **Uptime**: `/healthz` of each Environment ([One-time setup](#one-time-setup-human-only-repository-owner)).
 - **Egress**: `topup` sends HTTPS to the DSN's ingest host.
@@ -607,12 +615,22 @@ cost per month = 30 × cost per day
 ```
 
 [Chain reads §5.2](../docs/design/chain-reads.md#52-worst-case-daily-budget-staging--production-combined)
-accounts for the fixed 60-second discovery and ten-minute coverage cadences, bounded backfill,
-and hourly catch-up. Compare measured call counters with each provider's dashboard. Both
-environments share keys and upstream quotas. Each fresh quote snapshot costs one read call and
+accounts for fixed 300-second discovery, independent 600-second checkpoints, 3,600-second
+coverage, bounded backfill and six-hour catch-up. Compare measured call counters with each
+provider's dashboard. Both environments share keys and upstream quotas. Each fresh quote snapshot costs one read call and
 240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
-[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all twelve
-chain/token routes and the reduced combined deposit pilot bound of 100/day.
+[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all nine
+chain/token routes (three production, six staging), refunds, unresolved finality stock, slow
+confirmation lane L and proof work. Parallel-mode caps are production D=46/day and staging
+D=20/day, with H=80 hint tasks per environment/UTC day and Q=60 fresh snapshots per price
+chain/environment/UTC day.
+D, factory and Safe counts are operational caps with monitoring and stop actions.
+L accepts normal-window exhaustion solely from height lag, credits without a checkpoint wait
+and does not count toward S. Current L stock and rolling-24-hour entries are each ≤1 per
+environment across payment chains. Monitor `topup_confirmation_slow` and
+`topup_confirmation_slow_entries_24h`: L remaining non-empty for ten minutes alerts on provider lag; either sum
+above one triggers its capacity alert and affected-chain quote pause. See the
+[confirmation budget and retry caveat](RPC.md#worst-case-pilot-budget).
 
 ## Attestation, ingress, and egress
 
@@ -877,7 +895,9 @@ its payment settings are held until it sends its complete configuration again wi
 - `make cvm-rehearsal`: a staging-shaped artifact against Anvil, Garage, and the simulator, from
   the unsealed boot through sealing, a configuration upgrade (topup recreated, PostgreSQL not),
   operator onboarding of the product's account, its treasury proof and webhook endpoint, and one
-  credited deposit and a signed event redelivery without a second credit.
+  credited deposit submitted with a tx-hash hint and a signed event redelivery without a second
+  credit. Mainnet prices use local fixtures; the Ethereum price Anvil mines every twelve seconds
+  after TWAP seeding, while the Base price Anvil mines every second.
 - `make restore-drill`: [RESTORE.md](RESTORE.md#local-and-ci-drills).
 - `make sandbox-local`: the integrator sandbox ([sandbox/README.md](sandbox/README.md)).
 - `deploy/validate-compose.sh`: every committed environment rendered and checked against

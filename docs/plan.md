@@ -59,7 +59,7 @@ decisions are the [design](design/multi-tenant.md) (§16 is its PR plan), and th
 | Sentry DSN and production alert/Uptime monitors | Ops | open; required Environment secret `SENTRY_DSN` remains operator-only |
 | DNS for Phala's production domain, `pay-api.phala.com` (CNAME and `_dstack-app-address` TXT) | Ops | open; operator-only after provision |
 | Route amounts and Phala Cloud's `max_unfinalized_credit` pilot value | Finance | hard gate before upgrade and before enabling charges; template-copied defaults are illustrative until confirmed |
-| Combined pilot caps and monitoring: `D=100` deposits/day (stop above a 7-day average of 80), `Q=60` fresh quote snapshots per price chain/environment/day, at most 12 custody routes, and `ISSUED_ADDRESS_CAP=1000` per chain | Ops | provided by current [RPC budget](../deploy/RPC.md#worst-case-pilot-budget); production contributes 3 routes and staging contributes 6, with shared monitoring and stop-adding-load actions |
+| Parallel pilot caps and monitoring: production `D=46`/day, staging `D=20`/day, `H=80` hint tasks/environment/UTC day, `Q=60` fresh quote snapshots/price chain/environment/UTC day, and `ISSUED_ADDRESS_CAP=1000` per chain | Ops | [RPC budget and stop actions](../deploy/RPC.md#worst-case-pilot-budget); nine hourly custody routes (3 production, 6 staging), pending refunds, unresolved finality stock, slow lane L and proof work. L stock and rolling entries are each ≤1 per environment. D, factory and Safe counts are operational caps |
 | Phala Cloud PHA production pricing | Engineering | disabled: the on-chain Uniswap TWAP has no second Allowed independent source; the Kraken check is staging-only |
 
 ### Before mainnet

@@ -32,7 +32,7 @@ Carrying real client IPs via PROXY protocol is future work: it requires the dsta
 `port_policy` option `pp` and a corresponding ingress change.
 
 Transaction-hash hints have no per-IP limit. Their controls are credential-gated per-object
-limits of 3/minute and 10/day, a hard cap of 150 tasks per environment per UTC day, and at most
+limits of 3/minute and 10/day, a hard cap of 80 tasks per environment per UTC day, and at most
 four tasks in flight. Request bodies are read only after the shared 256-request concurrency gate
 admits the hint; overload returns `503 unavailable` with `Retry-After: 1`. Admitted hints retain
 quiet `202 received` responses. Merchant-key hints share the database authentication gate above.

@@ -1,13 +1,15 @@
 # Chain reads: final design
 
-Status: accepted 2026-10-07; not yet implemented. Supersedes
+Status: implemented in v0.10.0 (unreleased). This describes the adopted pilot design, not a
+verification of a live deployment. Supersedes
 [the RPC failover design](https://github.com/Phala-Network/phala-pay/blob/5f585cca2073b81fd7d016192940e906fef8c13e/docs/design/rpc-failover.md). Provider capabilities measured with the real keys on
 2026-10-07 (§5.1).
 
 Binding requirements: $0 for staging and the production pilot; simplest standard design, exactly
 two endpoints per chain, no in-process failover, the custom RPC framework deleted; no downgrade in
-money safety (every money decision, prices included, dual-source; every negative conclusion needs
-dual-source complete coverage); checkout credit speed does not regress; a real
+money safety (chain money evidence and prices dual-source; negative payment conclusions need
+dual-source complete coverage; sanctions use verified local OFAC SDN/manual lists); checkout
+credit uses the independent hint fast path; a real
 N-1 → N → N-1 → N rollback passes.
 
 ## 1. Model
@@ -15,10 +17,10 @@ N-1 → N → N-1 → N rollback passes.
 Every chain has two endpoints from independent companies: **read** (Ankr Freemium) and
 **verify** (Infura Free). Assumption: at least one is correct and synced.
 
-- **R1 Dual evidence.** A fact that moves money or is permanently recorded is accepted only when
+- **R1 Dual evidence.** A chain fact that moves money or is permanently recorded is accepted only when
   both endpoints derive the same decoded fields independently. Disagreement = wait + alert.
 - **R2 Pinning.** State reads use EIP-1898 `{blockHash, requireCanonical: true}`. Current-state
-  pins (prices, sanctions) come from verify (`eth_blockNumber`, then the header at `latest − 2`);
+  price pins come from verify (`eth_blockNumber`, then the header at `latest − 2`);
   finalized pins use the checkpoint. "Not found / not canonical" on either side = wait, re-pin.
 - **R3 Errors are never results.** A range is covered only if every request for it succeeded.
 - **R4 Negative conclusions** ("no payment to address A up to block B") come only from dual
@@ -29,7 +31,7 @@ Every chain has two endpoints from independent companies: **read** (Ankr Freemiu
 
 ## 2. Read paths
 
-### 2.1 Fast discovery (read only, every 60 s per chain)
+### 2.1 Fast discovery (read only, every 300 s per payment chain)
 
 `eth_getBlockByNumber(latest)`, then one `eth_getLogs` per 1 000 issued addresses over
 `(fast cursor, latest]` with `topics: [[Transfer], null, [≤1000 recipients]]` (no `address`;
@@ -37,7 +39,7 @@ ERC-20 layout decoded locally; routed tokens only). Transfers at or below the ro
 horizon are inserted as `detected` as today (`Evidence::Confirmed`, key
 `(chain, tx, receipt log index)`, `dual_verified_at` NULL); `cursors.confirmed_block` advances.
 
-### 2.2 Finalized dual coverage (both endpoints, every 10 min per chain)
+### 2.2 Finalized dual coverage (both endpoints, hourly per payment chain)
 
 State: chain cursor `c = chain_coverage.through_block`; per address
 `addresses.dual_covered_through` (NULL = nothing covered). An address is **caught up** when
@@ -49,8 +51,9 @@ without a row starts at `min(created_block) − 1`, so the first range includes 
 
 Each round, staggered per chain:
 
-1. Advance the checkpoint to `t`. Range end `e = min(t, c + L)`, `L` = 3 000 blocks, or 19 200 on
-   every sixth round (hourly catch-up; §5.2 budgets it). Read the header of `e` on both
+1. Read the published checkpoint `t` from the independent ten-minute loop (§2.5), without
+   repeating its RPC checks. Range end `e = min(t, c + L)`, `L` = 3 000 blocks, or 19 200 on
+   every sixth round (six-hour catch-up; §5.2 budgets it). Read the header of `e` on both
    endpoints (hash and time must agree).
 2. Snapshot address sets after step 1: caught-up set C; lagging set G = at most 1 000 addresses
    with `dual_covered_through IS NULL OR < c`, oldest progress first (new addresses, reissued
@@ -77,11 +80,12 @@ Each round, staggered per chain:
      its quote);
    - existing factory-event rows in range (insert-only tables, rare) → always re-verified;
    - any disagreement → no commit, alert.
-5. One transaction: records and markers; `chain_coverage` → `(e, hash(e), time(e))`;
-   `cursors.scanned_block/time` → the same `e` (N-1 compatibility); C's
+5. One transaction: records and markers; `chain_coverage` → `(e, hash(e), time(e))`; C's
    `dual_covered_through = e`; G's `dual_covered_through = g_end` for addresses whose start
    ≤ `g_end`; `backfilled = true, backfilled_through = e` only for addresses now caught up;
-   pending-view rows ≤ `e` deleted.
+   pending-view rows ≤ `e` deleted. The N-1 compatibility cursor advances only to the common
+   complete boundary across addresses. When it lags `e`, both endpoints supply an extra agreed
+   header for that boundary; it never jumps to the checkpoint ahead of coverage.
 
 This replaces the single-source finalized backstop and the reconciler's missing-deposit pass.
 
@@ -95,27 +99,30 @@ POST /v1/deposit_addresses/{id}/transactions?client_secret=…  {"transaction_ha
 Authenticated by the object's `client_secret` (the Stripe browser pattern the read routes already
 use; it grants nothing beyond this object) or a merchant key with `quotes:write` /
 `deposit_addresses:write` (server forwarding). `chain_id` is required for deposit addresses and
-must be one of the object's networks; the recipient is always derived server-side. Response is
-always `202 {"object":"transaction_submission","transaction_hash":…,"status":"received"}`
-(no oracle). Only the hash and that chain id are used.
+must be one of the object's networks; the recipient is always derived server-side. Admitted
+requests return `202 {"object":"transaction_submission","transaction_hash":…,"status":"received"}`
+(no oracle). Global API overload returns retryable `503 unavailable` before reading the body.
+Only the hash and that chain id are used.
 
 Task (in process; deduplicated by `(chain, tx, object)`; insertion dedupes by receipt position):
 
 1. Claim one unit of today's hint budget (§2.3 caps); none left → stop (scanning covers it).
 2. Poll the receipt on read (1, 2, 4, then every 4 s on Ethereum chains; every 1 s on Base).
-3. Quiet stop unless `status = 1` and an ERC-20 `Transfer` of a routed token of that chain pays
-   the object's address on it.
-4. Read receipt, transaction and header on verify; compare every decision field (§2.4); poll
-   both heads until the route's confirmation is reached; insert through the scanner's insert
-   function (`Evidence::Confirmed`, `dual_verified_at` set). The normal pipeline follows.
+3. Poll confirmation heads independently; only once both have reached the route's depth, refresh
+   receipts on both endpoints, allowing for receipt lag or a confirmation-time reorg. Complete
+   receipt, transaction and header evidence independently and compare every decision field (§2.4).
+4. Quiet stop unless successful evidence contains a routed transfer paying the object's address.
+   Insert through the scanner's insert function (`Evidence::Confirmed`, `dual_verified_at` set).
+   The normal pipeline follows.
 5. The whole task, head polls included, is bounded by **12 read calls, 8 verify calls and a
    deadline** (90 s Ethereum chains, 30 s Base chains); hitting either ends the task (scanning
    covers it).
 
-Caps: per object 3/min and 10/day, per source IP 20/min (keyed limiters of `api/rate_limit.rs`);
-at most 4 tasks in flight; **150 tasks per environment per UTC day**, enforced by an atomic
+Caps: per object 3/min and 10/day (`api/rate_limit.rs`); no per-IP limit because TCP ingress shares
+one peer across clients. The shared API concurrency gate admits at most 256 requests; hint workers
+run at most 4 tasks in flight. **80 tasks per environment per UTC day**, enforced by an atomic
 `daily_budgets` row (`UPDATE … SET used = used + 1 WHERE day = $today AND name = 'hints' AND
-used < 150`), because the governor buckets refill. Endpoint not ready → park in a bounded
+used < 80`), because the governor buckets refill. Endpoint not ready → park in a bounded
 in-memory queue (256 entries, 15 min TTL); overflow dropped.
 
 SDK: `@phala/pay` gains `submitTransaction(...)`; `payWithWallet` (`sdk/js/src/wallet.ts`) calls
@@ -129,15 +136,18 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
 
 ### 2.4 Money evidence (both endpoints)
 
-- **Confirm**: each endpoint independently reads receipt, transaction, header and its own head;
+- **Confirm**: probe each endpoint's required head first; once both meet the requirement, read
+  full receipt, transaction and canonical header evidence once per endpoint in the same claim;
   equal fields required: chain, tx hash, receipt status, block number and hash, receipt log
   index, token, from, to, amount, block time, sender nonce (OP-stack `0x7e`: receipt `from` and
   `depositNonce`), confirmation reached on each. Read's detection values are never passed to
   verify (removes `KnownTransfer` reuse in `evm/mod.rs` `receipt_lookup` and
   `steps/confirm.rs` `confirmed_evidence`). Success sets `dual_verified_at`.
-- **Sanctions**: `isSanctioned(from)` on both at one pinned block S (R2); the step checks
-  `S.number ≥ payment block` explicitly, else waits. List version = at screening time; evidence
-  records S. Refund destinations: same.
+- **Sanctions**: verified local OFAC SDN snapshots and audited manual supplements at decision
+  time, with no RPC call. An active-list hit denies even when stale or another list read fails;
+  a negative answer clears only with a fresh snapshot and successful list reads. Evidence
+  records snapshot provenance and screening time. Refund destinations use the same rules;
+  hourly publication checks and destination re-screening are independent of scan cadence.
 - **Prices**: one Multicall3 `aggregate3` per snapshot per endpoint at one pin: all Chainlink
   feeds of the chain (`latestRoundData`, `decimals`), Base sequencer uptime, or the Uniswap V2
   pair state with `getCurrentBlockTimestamp`. Bytes must match; existing freshness, heartbeat,
@@ -146,22 +156,106 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
   `(price chain)`; when exhausted, quotes needing that chain fail closed with a retryable
   `price_unavailable`. Staging PHA TWAP sampling: `uniswap_v2.rs` `SAMPLE_INTERVAL_S` 60 → 300
   (staging-only, production-ineligible route; continuity and jump limits re-derived for 300 s).
-- **Refunds** (`refunds.rs`) and **treasury EIP-1271** (`treasuries/proof.rs`): dual as today,
-  pinned to the checkpoint hash.
+- **Refunds** (`refunds.rs`): independent dual receipt, persisted-checkpoint header and receipt-height
+  header evidence, completed only under the agreed checkpoint, without finalized-tag RPC.
+  The receipt reader uses one method per endpoint for missing receipts, two for included but
+  not finalized receipts, and three for finalized receipts. Pending/missing worker branches
+  also read the transaction's origin until sender/nonce is persisted, so asymmetric evidence
+  costs at most four methods per endpoint; a never-seen transaction costs two. Checks run every 60 s
+  for 30 min, every 10 min until 24 h, then hourly; a never-seen transaction remains pending
+  with its reservation. The budget includes the complete four-method worker bound.
+  Atomic environment-wide concurrent and rolling-24-hour attachment caps are in §5.2.
+- **Treasury EIP-1271** (`treasuries/proof.rs`): dual calls at the same canonical pin.
 - **Flush records**: only from §2.2 step 4.
+
+#### Confirmation waits and slow lane L
+
+Normal head probes are bounded and persisted independently of the one full evidence read.
+For Depth, with block time T=12 s on Ethereum and 2 s on Base:
+
+```text
+B = deposit.block_number + required_depth − 1
+t0 = completion time of the first dual head probe
+h_i, s_i = each endpoint's returned height and timestamp
+e_i = t0 if h_i >= B, otherwise s_i + (B − h_i) × T
+a = max(t0, min(e_read, e_verify))
+```
+
+Probe immediately, then at `a + 4, 12, 28, 60, 124 s`: six probes total. Estimation schedules
+wake-ups only; both actual heads must satisfy the actual receipt's applicable policy. Anchor
+and deadline never extend. Skip missed slots instead of replaying them; recovery executes at
+most one current probe. Safe probes immediately and every 384 s, at most three probes in
+768 s; Finalized allows seven probes in 2,304 s. Head differences alone do not prove disagreement.
+
+If the normal window expires solely because the required height is still missing, enter L.
+Do not wait for the checkpoint or set `first_unresolved_at`. L uses `first_slow_at`, set once
+and never cleared, with 60 s checks until ten minutes, ten-minute checks until six hours, then
+hourly. The last normal probe already paid for entry; the first L probe is 60 s later. Each
+probe reads just one corresponding head per endpoint. Once both satisfy the requirement, read
+the full evidence set in that claim and continue credit immediately, without a checkpoint wait.
+Discovery/hint evidence cannot replace this full read.
+
+Normal and L together allow only one full confirmation-evidence read per endpoint. A missing
+transfer, disagreement, changed receipt evidence, or an RPC failure that prevents proving
+height-only lag enters S; it never reopens the normal window. A persisted checkpoint conflict
+still freezes the chain. L does not count toward S.
+
+Current L stock and rolling-24-hour first entries are each ≤1 per environment, summed across
+payment chains. `topup_confirmation_slow{chain_id}` counts current L; moving to S, confirming or
+terminating removes its stock slot. `topup_confirmation_slow_entries_24h{chain_id}` is the exact
+DB-derived first-entry count, including deposits that left L. L remaining non-empty for ten minutes
+raises a provider-lag alert. Either environment-scoped sum above one raises the L capacity
+alert: pause new quotes on the affected chain and coordinate merchant intake. Keep funded work,
+verification and reservations; never drop excess entries to fit the allowance.
+
+Normal/L pump reads and S/first-finality watcher reads use one atomic claim, lease and shared
+chain-read due time. Consume counts and advance due time in the atomic claim before RPC.
+Run RPC outside the database transaction and chain lock; commit evidence only with the valid
+lease token and record version. Failure/crash does not refund counts;
+restarts, handoffs and price retries cannot reset them. S follows re-inclusion until finality
+without handing back to a fresh normal window. Finalized watcher evidence goes to common
+confirmation/valuation in the same claim without a second receipt read. A deposit that has not
+entered S may reuse its complete persisted terminal proof for price retries. Entering S
+invalidates pre-entry proof: only fresh watcher terminal evidence created at or after
+`first_unresolved_at` can establish finality, even if an old `final_at` exists. The transfer
+identity (`to`, `token`, `from`, `amount`, `tx_from`, `tx_nonce`) must match the deposit;
+otherwise follow the S or reversal path. `confirmation_terminal_transition_id` links the exact
+transition that established the current final marker; its versioned, complete dual proof may
+then serve price-only retries. Provisional reappearance stays in S. Non-final evidence retains
+watcher eligibility and cannot prove credit forever. N-1 migrations preserve fields/history,
+but its binary needs its own operating budget.
+Normal probe slots use `confirm_head_checks` (default 0), the single complete read uses
+`confirm_receipt_checks` (default 0), and the fixed window uses nullable `confirm_deadline_at`;
+`first_slow_at` is nullable. The shared chain-read
+due time is `finality_check_at`. `first_slow_at` remains separate from `first_unresolved_at`.
 
 ### 2.5 Checkpoint, reorgs, reversal
 
-Per route chain, `chain_checkpoints(number, hash)` advances when read's `finalized` hash at
+An independent ten-minute loop per payment chain checks and publishes
+`chain_checkpoints(number, hash)`. It advances when read's `finalized` hash at
 `number` equals verify's header at `number`, `number ≤` verify's `finalized`, and the previous
 checkpoint height still has the stored hash on both. A conflict inserts a chain-scope
 `reconciliation_blocks` row (`'finalized_checkpoint_conflict'`); the existing freeze gate halts
-the chain until the audited admin lift.
+the chain until the audited admin lift. Finality, reversal and refund consumers use these
+published advances independently of hourly log coverage. A deposit enters S at its first
+unresolved check, persisted as `first_unresolved_at`. This includes a `detected` deposit whose
+transfer both endpoints agree is absent during confirmation, without waiting for the checkpoint.
+The pump and finality watcher share one persisted backoff anchored to `first_unresolved_at`:
+every 60 s until ten minutes, every ten minutes until six hours, then hourly, with exactly one
+reader per due time. Ordinary height lag uses normal confirmation/L rather than S. The separate
+one-hour pending-after-reorg alert remains; verification and
+reservations continue. The operational stock allowance is S=1 summed across payment chains per
+environment, with at most one new unresolved entry per environment in any rolling 24 hours.
+Resolved entries still count in that window. Quote pause and escalation apply above either
+limit (§5.2).
 
 Reversal requires positive evidence on both at or below the checkpoint: (a) the deposit's
 receipt without its transfer at its position (successor recorded as today), or (b) a directly
-evident replacement: a transaction already known to the service with the same sender and nonce
-and another hash, finalized and agreed on both. Otherwise wait and alert
+evident replacement: exactly one transaction already known to the service with the same chain,
+sender and nonce and another hash, finalized and agreed on both. When both original receipts
+are missing, read only that one candidate (K=1). With multiple candidates, read none, raise an
+anomaly alert and keep the deposit unresolved in S for operator resolution; make no reversal.
+Otherwise wait and alert
 (`TopupDepositPendingAfterReorg`, new `TopupDepositReversalUnproven`). No nonce search (EIP-7702
 authorizations also increment nonces). Refunds' nonce-based "dropped" verdict is removed.
 
@@ -182,16 +276,17 @@ coverage-driven flow (§2.6) then expires or cancels it.
   `cancel_requested_at = now()`, `expires_at = now()`, audit row; returns the quote still `open`.
   An in-window payment found later consumes it normally. API docs and SDK types gain
   `cancel_requested_at`.
-- **Custody balance** (reconciler): at `B = min(checkpoint, chain_coverage.through_block)`, only
-  for forwarders whose address is caught up, pinned to B's hash; a mismatch is re-read on verify
-  before freezing.
+- **Custody balance** (reconciler): on startup and hourly, at
+  `B = min(checkpoint, chain_coverage.through_block)`, only for caught-up forwarders. Both endpoints
+  independently read the full balance vector at B's canonical hash before accepting equality or
+  freezing on mismatch. An hourly wake-up keeps custody due when checkpoint progress stalls.
 
 ## 3. Endpoints, retries, readiness, deploy
 
 - Per endpoint: Alloy HTTP provider, redirects disabled, request timeout, CountingLayer,
   redaction, and one `RetryBackoffLayer::new_with_policy` that retries HTTP 429/503 and JSON-RPC
   throughput errors with backoff and **never retries Infura HTTP 402** (daily credit limit);
-  402 marks verify not-ready until 00:00 UTC (5:00 PM PDT). No `FallbackLayer`; callers' loops
+  402 marks verify not-ready until 00:00 UTC (5:00 PM PDT, 4:00 PM PST). No `FallbackLayer`; callers' loops
   are the only outer retry.
 - A failing endpoint makes only its chain (or the price feature of routes observing it)
   not-ready (`topup_rpc_endpoint_ready`); `/healthz`, the API and other chains keep running;
@@ -200,7 +295,7 @@ coverage-driven flow (§2.6) then expires or cancels it.
   `eth_chainId`; `latest`/`finalized` headers; typed transaction and receipt from the finalized
   block; `eth_getLogs({blockHash})` returning a log of that receipt; the coverage query shape
   (1 000 recipients, `max_log_blocks`); EIP-1898 `requireCanonical` calls (token `decimals`,
-  sanctions oracle, factory and Multicall3 code, price feeds) at the checkpoint; state at
+  factory and Multicall3 code, price feeds) at the checkpoint; state at
   2 × the observed finalized lag.
 - Deploy preflight runs that check through the real compose env path
   (`docker compose --env-file <candidate sealed env> -f <rendered compose> run --rm --no-deps
@@ -211,6 +306,7 @@ coverage-driven flow (§2.6) then expires or cancels it.
 ## 4. Config schema
 
 ```yaml
+max_attached_pending_refunds: 1           # required positive deployment cap; production uses 2
 rpc:                                    # one entry per chain used by a route or a price source
   - chain_id: 11155111                  # u64, unique
     read:                               # required
@@ -228,7 +324,10 @@ rpc:                                    # one entry per chain used by a route or
 Same for `84532` (`rpc.ankr.com/base_sepolia/{key}`, `base-sepolia.infura.io`), `1`
 (`rpc.ankr.com/eth/{key}`, `mainnet.infura.io`), `8453` (`rpc.ankr.com/base/{key}`,
 `base-mainnet.infura.io`) in both environments (staging uses `1` and `8453` for prices only).
-Cadences, caps and budgets of §2 and §5.2 are code constants. Removed: `rpc_companies`,
+Cadences, hint/price budgets, the address cap and new-refund attachment cap are code constants;
+concurrent attached-pending refunds use the required positive deployment setting above.
+Deposit, factory and Safe limits are
+operational caps with monitoring and stop actions in §5.2. Removed: `rpc_companies`,
 `rpc_budgets`, `rpc_groups`, route `chain.rpc_groups`, price `rpc_group`/`rpc_group_b`,
 `asset.backstop`, `--head-poll-interval-s`, `--finalized-poll-interval-s`,
 `TOPUP_RPC_PROBE_DEBUG`. `topup config check` rejects missing or unknown fields, duplicate ids,
@@ -260,75 +359,73 @@ exhaustion response, address-less logs over 3 000 blocks (self-test covers it).
 
 ### 5.2 Worst-case daily budget (staging + production combined)
 
-Stop lines: Ankr 75 % of monthly/30 = 0.75 × 1 000 000 / 30 = **25 000 calls/day**; Infura 50 % =
-**1 500 000 credits/day** (a 402 halts both environments). Retries: ×1.1 on everything, so the
-pre-retry budgets are **22 727** and **1 363 636**.
+[RPC operations](../../deploy/RPC.md#worst-case-pilot-budget) is the authoritative budget:
+five-minute read discovery, ten-minute dual checkpoints, hourly dual coverage, six-hour
+19,200-block catch-up, all nine hourly custody routes, prices, deposits, hints, factory proofs,
+Safe proofs, attached refunds, unresolved finality stock and extra operations. It assumes every
+payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and all 1,000
+historical addresses.
 
-Per route chain, worst day (k = 1 caught-up chunk, one lagging chunk, every round behind):
+The approved [parallel operating mode and limits](../../deploy/RPC.md#pilot-limits-and-operating-modes)
+run staging tests, including refunds, alongside production on the shared free quotas. D, factory
+and Safe caps have no code enforcement; operators must tally work and stop new load at the limits.
+Refund attachments have atomic concurrent and rolling-24-hour admission caps. Hint and price
+daily budgets and the permanent address cap are hard limits.
 
-- Fast discovery: 1 440 × (1 head + 1 logs) = 2 880 Ankr.
-- Coverage logs per endpoint: 120 normal rounds × 2 chunks × 1 window + 24 hourly rounds × 2
-  chunks × ⌈19 200 / 3 000⌉ = 240 + 336 = 576 calls.
-- Coverage headers: Ankr 3 per round (finalized, previous checkpoint, `e`) = 432; Infura 4 per
-  round (adds the header at `t`) = 576 calls.
-- Custody: 144 Ankr.
-- Ankr 2 880 + 576 + 432 + 144 = **4 032**; Infura 576 × 255 + 576 × 80 = **192 960**.
-- Four route chains: Ankr **16 128**, Infura **771 840**.
+Per endpoint, Depth's normal allocation is 6 head methods + 3 complete-evidence methods + 4
+first-finality methods = 13. Safe uses 3 + 3 + 4 = 10; Finalized uses 7 + 3 + 0 = 10 and records
+finality without a duplicate first watcher check. Each deposit budgets 3 cold-discovery + 13
+confirmation/finality + 6 coverage + 2 price methods = **24 Ankr / 2,000 Infura**.
 
-Variable costs:
+With K=1, S rechecks cost `max(3, 1 + 3×K) = 4` methods per endpoint. S=1 plus at most one new
+entry per environment per rolling 24 h gives `2×(62 + 24) = 172` daily rechecks: 688 Ankr /
+55,040 Infura before retries. L has its own one-stock/one-entry limits, giving 172 head methods
+per endpoint: **172 Ankr / 13,760 Infura**. Its final full evidence read is already in D.
 
-- Deposit (Base worst): Ankr detect 3 + confirm 4 × 1.25 + sanctions 1 + finality 1 + prices 2 +
-  coverage re-verify 3 = **15**; Infura confirm 400 + sanctions 240 + finality 80 + prices 480 +
-  re-verify 240 = **1 440**.
-- Hint task: ≤ 12 Ankr, ≤ 8 × 80 = 640 Infura.
-- Price snapshot: 1 Ankr, 240 Infura (`eth_blockNumber` + pin header + multicall).
-  Snapshots/day = staging TWAP 288 + fresh quote snapshots, capped at Q per price instance
-  (4 instances: staging Ethereum, staging Base, production Ethereum, production Base).
-
-Constraints with D deposits/day (both environments), H hint tasks/day per environment, Q:
+Production D=46 and staging D=20 give 66 deposits/day; other existing caps remain unchanged.
+The approved arithmetic, including all existing proof/reserve allocations, is:
 
 ```text
-Ankr:   16 128 + (288 + 4Q)      + 15 D + 2 × 12 H  ≤ 22 727
-Infura: 771 840 + 240 (288 + 4Q) + 1 440 D + 2 × 640 H ≤ 1 363 636
+Non-refund Ankr:   10,424 − 20×80 + 24×66 + 172 = 10,580
+Non-refund Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 = 865,460
+Combined Ankr:     10,580×1.1 + 4,968 = 16,606 calls/day
+Combined Infura:   865,460×1.1 + 397,440 = 1,349,446 credits/day
 ```
 
-Choosing Q = 100, D = 150, H = 150:
+Headroom is **33.58% Ankr / 10.04% Infura**. Non-refund reads use ×1.1; refunds reserve all
+three transport attempts. Logical method counts have hard bounds; each method can still make
+up to three physical sends. These totals do not guarantee ten-percent headroom if all
+non-refund requests exhaust retries. See the
+[approved retry caveat](../../deploy/RPC.md#worst-case-pilot-budget) and monitoring/stop actions.
 
-- Ankr: 16 128 + 688 + 2 250 + 3 600 = **22 666 ≤ 22 727** → ×1.1 = 24 933 ≤ 25 000.
-- Infura: 771 840 + 165 120 + 216 000 + 192 000 = **1 344 960 ≤ 1 363 636** → ×1.1 = 1 479 456 ≤ 1 500 000.
+### 5.3 Latency and recovery targets
 
-The binding term is the quote rate; a lower price cadence was rejected because it would lengthen
-quote staleness beyond today's 12 s. Typical days (no catch-up, no lagging chunk, few quotes)
-use about half of these figures.
+[RPC latency and recovery targets](../../deploy/RPC.md#latency-and-recovery-targets) define the
+healthy-operation SLOs and backlog exceptions:
 
-**Pilot limits (all hard or stop-adding-load):**
+| Path | Scheduling target |
+|---|---|
+| Manual transfer | Discovery in 0–5 min, then confirmation and processing |
+| Admitted checkout hint | Instant processing path; seconds at route confirmation |
+| Depth confirmation | About 4 s after expected depth when healthy; lag waits up to the current normal probe interval, at most 64 s, then L |
+| Safe / Finalized confirmation | One 384 s epoch interval after the corresponding head meets the requirement, within the normal window |
+| L confirmation after heads recover | Current 60 s / ten-minute / hourly interval by age, then processing; no checkpoint wait |
+| Quote expiry / cancel / unpaid reservation release | ≤ about 70 min after qualifying finality |
+| Known-deposit reversal / checkpoint conflict | ≤10 min, plus watch/RPC processing |
+| Custody discrepancy | ≤ about 130 min after finality |
+| Recovery from ≤24 h equivalent backlog | ≤12 h continuous healthy operation, within work allowances |
 
-- ≤ 1 000 issued addresses per chain (one caught-up chunk) — stop issuing on that chain beyond it;
-- ≤ 150 deposits/day across both environments — stop adding merchants when the 7-day average
-  exceeds 120;
-- ≤ 150 hint tasks per environment per UTC day — hard (`daily_budgets`);
-- ≤ 100 fresh quote price snapshots per price chain per environment per UTC day — hard;
-- backfill one lagging chunk (≤ 1 000 addresses) per chain at a time — by construction;
-- stop adding load whenever Ankr's 7-day run-rate exceeds 25 000/day or Infura's daily use
-  exceeds 50 % (Infura emails at 75/85/100 %).
-
-At a quota: Ankr exhausted → read not-ready on every chain until the monthly reset; Infura 402 →
-verify not-ready until 00:00 UTC. Hints park, quotes needing prices fail closed, coverage and
-credit pause. Never wrong data.
-
-### 5.3 Credit latency after inclusion (estimates)
-
-| Path | Ethereum (depth 2) p50 / p95 | Base (depth 3) p50 / p95 |
-|---|---|---|
-| Today (block-time head loop) | ~15 s / ~25 s | ~6 s / ~8 s |
-| Checkout with hint | ~16 s / ~28 s | ~6 s / ~9 s |
-| Manual transfer, 60 s scan only | ~45 s / ~75 s | ~37 s / ~65 s |
-| Missed by fast path, found by coverage | finality + ≤ 10 min | finality + ≤ 10 min |
-| Quote expiry / cancel completion | finality + ≤ 10 min after `expires_at` | same |
+Hint readiness, task budgets and confirmations still apply. Already unresolved deposits follow
+the age-dependent recheck cadence; later-day evidence can wait up to an hour for the next check.
+The ten-minute reversal target concerns newly due deposits. Conflicts visible only in full logs
+may wait for hourly coverage. Payment windows and negative-evidence gates are unchanged:
+in-window qualifying payments retain quote terms; late, partial and persistent-address payments
+use fresh processing-time prices and screening uses the verified local lists at decision time.
 
 ## 6. DB changes and N-1
 
-One expand-only migration, compatibility floor = N-1's maximum migration:
+Schema additions are expand-only with safe defaults/nullable confirmation fields and preserve
+N-1 reads and writes; compatibility floor = N-1's maximum migration. The chain-read schema is:
 
 ```sql
 CREATE TABLE chain_checkpoints (
@@ -359,7 +456,8 @@ N-1 safety:
 - N-1 never reads the new tables or columns. Rows N-1 inserts get NULL markers, so N re-covers
   their addresses and re-verifies their deposits. A cancel-requested quote is `open` with a past
   `expires_at`; N-1 expires it as `expired` (no money effect).
-- N writes no `rpc_*` table and keeps `cursors.scanned_block/time` = coverage end,
+- N writes no `rpc_*` table and keeps `cursors.scanned_block/time` at the common complete
+  boundary across addresses, never ahead of coverage,
   `confirmed_block` = fast cursor, `backfilled`/`backfilled_through` only for caught-up addresses,
   deposits, `flushed`, `flush_failures` with today's semantics; N-1's own sweeps, reconciliation
   cursors, watermarks, reviews and reorg ranges are untouched and stay valid for it.
@@ -399,10 +497,23 @@ lift, pending view, URL template and sealed-key rules, redaction, CountingLayer,
 Added: `ChainRpc {read, verify}`, coverage rounds, checkpoint, hint endpoints and task, daily
 budgets; metrics `topup_rpc_errors_total{provider,chain_id,method,class}`,
 `topup_rpc_endpoint_ready`, `topup_coverage_lag_seconds{chain_id}` (now − `through_time`),
-`topup_addresses_lagging{chain_id}`, `topup_hint_total{result}`, `topup_daily_budget_used{name}`;
-alerts: endpoint not ready 5 min, any disagreement, coverage lag > 45 min, reversal unproven,
+`topup_addresses_lagging{chain_id}`, `topup_hint_total{result}`, `topup_daily_budget_used{name}`,
+`topup_finality_unresolved{chain_id}` (current-stock gauge),
+`topup_finality_unresolved_entries_24h{chain_id}` (DB-derived rolling-entry gauge: deposits
+whose persisted `first_unresolved_at` is within the last 24 hours, including resolved ones).
+L adds `topup_confirmation_slow{chain_id}` and `topup_confirmation_slow_entries_24h{chain_id}`,
+both DB-derived gauges, using persistent `first_slow_at` for first entries.
+Alerts: endpoint not ready 5 min, any disagreement, coverage lag > 2 h, reversal unproven,
 quota run-rate (recording rules over `topup_rpc_calls_total` × provider cost tables, both
-environments summed).
+environments summed). Finality alerts separately sum each environment's chains: current stock
+above one, `sum(topup_finality_unresolved_entries_24h) > 1` new entries, and
+the existing one-hour age alert. Current stock uses `sum(topup_finality_unresolved) > 1`.
+Scope selectors to one environment using scrape labels; either stock or rolling-entry alert
+requires the quote-pause stop action (§5.2). Use the rolling-entry gauge directly for the exact
+DB count; rechecks do not add entries, and resolution does not remove deposits from the window.
+L has an independent ten-minute provider-lag alert and capacity alert when either environment's
+current-stock or rolling-entry sum exceeds one; pause that chain's new quotes. It never uses
+the S anomaly stop rule merely for height lag (§2.4).
 
 Docs: architecture §0, §2 rule 7, §7, §8, §9 (cancel, snapshot cap), §13;
 `docs/configuration.md`; `docs/integration.md` (hints, cancel, latency); `deploy/RPC.md`;
@@ -428,8 +539,10 @@ Automated:
 - Each R1 field forged on either endpoint (including `block_time` and nonce) → no credit;
   agreement → credit and `dual_verified_at`.
 - Coverage: one endpoint omits a log → union records it; any request error → no commit;
-  disagreement → no commit; cursor, compat cursor, markers and pending cleanup all end at `e`,
-  never `t`; first range includes `min(created_block)`; empty chain initialised before issuance.
+  disagreement → no commit; coverage, markers and pending cleanup end at the scanned boundary,
+  never the checkpoint ahead of it; the compat cursor uses the common complete boundary, with
+  dual header evidence if it lags. First range includes `min(created_block)`; empty chain
+  initialised before issuance.
 - Unverified existing deposit in range (fast-path or N-1 row with forged `block_time`) →
   re-verified; mismatch after `detected` freezes the chain; marked rows are skipped.
 - Reissued address with lowered `created_block` → dual backfill from it; only completed addresses
@@ -438,7 +551,8 @@ Automated:
   `expires_at`; reversal reopens the quote and reservation, then coverage closes it.
 - Hints: deposit-address `chain_id` outside its networks → quiet 202; unmined, unrelated, other
   address, reverted → quiet, no record; duplicates and scanner-seen → one deposit; task call cap
-  and deadline end the task; 151st task of a UTC day refused by `daily_budgets`; not-ready parks.
+  and deadline end the task; 81st task of a UTC day refused by `daily_budgets`; not-ready parks;
+  shared API overload returns retryable 503 without reading the hint body.
 - Quote snapshot cap → `price_unavailable` (retryable); never a stale price beyond 12 s.
 - Retry policy: 429 retried; Infura 402 not retried, not-ready until 00:00 UTC; other chains
   and `/healthz` unaffected. Config check and compose-path preflight reject missing keys.
@@ -446,14 +560,15 @@ Automated:
 
 Staging (48 h, real USDC/USDT/PHA payments on Sepolia and Base Sepolia, checkout and manual):
 
-- Checkout credit after inclusion: Sepolia p50 ≤ 20 s, p95 ≤ 30 s; Base Sepolia p50 ≤ 8 s,
-  p95 ≤ 12 s. Manual: Sepolia p50 ≤ 50 s, p95 ≤ 80 s; Base Sepolia p50 ≤ 40 s, p95 ≤ 70 s.
-- Coverage lag ≤ 45 min; no lagging addresses older than one day; zero disagreements;
+- Checkout hints use the independent fast path and credit in seconds at route confirmation;
+  unhinted transfers are discovered in 0–5 min plus confirmation/processing. Verify the §5.3
+  release, reversal and custody targets with healthy endpoints and caught-up addresses.
+- Coverage lag ≤ 2 h in healthy steady state; no lagging addresses older than one day; zero disagreements;
   reconciler clean; every deposit final and `dual_verified_at` set.
-- Ankr and Infura usage within ±30 % of the typical case and below both stop lines; provider
-  dashboards agree with the recording rules.
+- Ankr and Infura usage below both stop lines under §5.2 caps and retry assumptions; provider
+  dashboards agree with the recording rules and operational tallies include recovery work.
 - Fault drill: wrong verify key → that chain not-ready, credit pauses, service up; restored →
-  resumes.
+  resumes. Recover ≤24 h equivalent backlog within the twelve-hour target in §5.3.
 
 ## 10. Operator accounts and keys
 

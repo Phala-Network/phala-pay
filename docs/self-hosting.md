@@ -488,7 +488,8 @@ read the old app's backups, so never delete the app, and give a new app a new pr
   incidents of your instance are yours to handle and disclose.
 - **Local rehearsal**, from a clone of Phala Pay. `make up`, `make cvm-rehearsal` (a
   staging-shaped artifact against Anvil and the dstack simulator, through sealing, onboarding, and
-  one credited deposit) and `make sandbox-local` run the same compose without Phala Cloud
+  one credited deposit with a tx-hash hint and hermetic price fixtures) and `make sandbox-local`
+  run the same compose without Phala Cloud
   ([Local verification](../deploy/README.md#local-verification)).
 
 ## Verify a release

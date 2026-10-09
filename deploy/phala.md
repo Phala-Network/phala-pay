@@ -388,7 +388,10 @@ Setup, in order, during the [staging reset](#staging-reset-human-only)'s steps 7
    merchant [sweeps](README.md#sweeping) the forwarder and the sweep is finalized. The deposit address is
    exercised from the demo page: pay any amount of test PHA to it.
 
-`make cvm-rehearsal` runs this product CVM locally, with one deposit.
+`make cvm-rehearsal` runs this product CVM locally, with one deposit and a tx-hash hint submitted
+after broadcasting. Hint failure falls back to scanner discovery. Prices use hermetic fixtures;
+the Ethereum mainnet price Anvil resumes twelve-second mining after TWAP seeding so the
+thirty-minute baseline stays within EVM BLOCKHASH history.
 
 ### Abnormal paths
 

@@ -59,9 +59,11 @@ staging instance ([staging reference product](deploy/phala.md#staging-reference-
   window. Late, partial, or extra payments are still credited, at spot.
 - **Deposit addresses**: one persistent, rotatable address per customer for every supported token
   on every chain, credited at spot for any amount.
-- **Fast credit, watched to finality**: a deposit is credited at the route's confirmation (about
-  30 seconds after paying on Ethereum, about 7 seconds on Base), confirmed by a second RPC
-  provider, and watched to finality: reversed with `deposit.reversed` if a reorganization proves
+- **Fast credit, watched to finality**: checkout transaction hints take the instant processing
+  path, with credit in seconds at route confirmation (about 30 seconds after paying on Ethereum,
+  about 7 seconds on Base). Unhinted transfers are discovered by a five-minute scan. Every credit
+  is independently verified by a second RPC provider and watched to finality: reversed with
+  `deposit.reversed` if a reorganization proves
   the payment replaced; one whose transaction leaves the chain with its nonce unspent stays
   credited and not final, within the account's cap on such credit, and raises an operator alert.
 - **Signed webhooks**: Standard Webhooks with ed25519 keys per account and mode, derived in the
@@ -70,8 +72,9 @@ staging instance ([staging reference product](deploy/phala.md#staging-reference-
   wallet or Safe; the service verifies refunds at finality.
 - **Stripe-style API**: test and live modes, secret and restricted keys, idempotency keys, events,
   cursor pagination, and Stripe's error object.
-- **Screening and pricing**: sanctions screening against verified OFAC SDN snapshots and audited operator supplements, and Coin
-  Metrics reference-rate prices with a deviation check.
+- **Screening and pricing**: sanctions screening against verified OFAC SDN snapshots and audited
+  operator supplements; dual-source Chainlink feed prices and Uniswap V2 TWAP prices with
+  freshness and deviation checks.
 - **Operable in a CVM**: reproducible images, an attested compose, encrypted WAL-G backups,
   restore mode, Sentry alerts linked to [runbooks](deploy/runbooks/README.md).
 

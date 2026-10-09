@@ -339,10 +339,16 @@ verbatim:
 | `paused`, `chain_frozen` (400) | Crypto top-ups are temporarily unavailable. |
 | `price_unavailable`, `unavailable`, `service_restoring` (503), `rate_limit`, `customer_rate_limit` (429) | Try again in a minute (`Retry-After` says how long). |
 
-Fresh quote snapshots have a hard daily cap of 100 per price chain and environment. Exhaustion
+Fresh quote snapshots have a hard daily cap of 60 per price chain and environment. Exhaustion
 returns retryable `503 price_unavailable`; the service never substitutes a stale price. Manual
-transfers are discovered every five minutes; hourly dual coverage catches omissions and completes quote
-expiry or cancellation within finality plus up to 10 minutes.
+transfers are discovered every 300 seconds; admitted checkout hints use the independent instant
+processing path at route confirmation. Separate dual checkpoints run every 600 seconds, and
+full dual coverage runs every 3,600 seconds with six-hour catch-up. With healthy endpoints,
+caught-up addresses and work within pilot allowances, expiry/cancellation and unpaid reservation
+release target about 70 minutes after qualifying finality. Backlog and outages can extend this;
+closure still requires complete dual coverage past the window and no pending in-window payment.
+Hourly custody checks and the two-hour coverage-lag warning are described in
+[RPC operations](../deploy/RPC.md#latency-and-recovery-targets).
 
 Confirmation first probes only the required heads. Healthy Depth confirmation normally finishes
 about four seconds after the estimated depth, plus processing; temporary provider lag can wait

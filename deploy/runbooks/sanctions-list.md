@@ -107,8 +107,10 @@ retained. There is no clear-result cache; every decision uses local database rea
 The expand-only tables remain in place and N-1 ignores them. N-1 resumes the deprecated
 Chainalysis oracle, whose list is known to be stale, and may re-screen held deposits with that
 oracle. A successful rollback drill proves binary/schema compatibility, not current sanctions
-coverage. **If active manual entries exist, pause settlement for affected routes before rollback**:
-N-1 cannot see them. Retain the pause until N is restored and verified screening is healthy.
+coverage. **Before a production rollback, pause all fund processing that depends on screening
+(settlement pause), regardless of active manual entries.** N-1 cannot see the supplements and
+uses the stale oracle. Retain the pause until N is restored and verified screening is healthy;
+a passing database/binary rollback drill does not authorize resuming settlement.
 Keep the previous configuration with the parsed `chain.sanctions_oracle`; N+1 removes it.
 N-1's strict configuration schema cannot parse the new top-level `sanctions` section, so use the
 retained previous configuration when rolling back.

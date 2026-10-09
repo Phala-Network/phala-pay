@@ -24,8 +24,8 @@ rare one means the chain, or a provider, is misbehaving.
    ```
 
    In `admin.transitions`, the transition to `reversed` has `evidence.result`
-   `known_finalized_replacement` (another transaction already known to the service with the same
-   sender and nonce, independently agreed at or below the checkpoint),
+   `known_finalized_replacement` (exactly one other transaction already known to the service with
+   the same chain, sender and nonce, independently agreed at or below the checkpoint),
    `transfer_absent_at_finality` (with the block both providers showed), or
    `transfer_changed_at_finality`: another transfer is final at the deposit's receipt position (a
    contract-mediated payment re-executed against other state), and `successor_deposit_id`, when
@@ -41,8 +41,9 @@ rare one means the chain, or a provider, is misbehaving.
 
 ## Decide
 
-- `TopupDepositReversed`, one deposit, both providers agree the transaction is gone (or the
-  transfer is missing from its final receipt): a real reorg or a replaced transaction. Confirm the
+- `TopupDepositReversed`, one deposit, both providers positively prove a finalized replacement
+  under the single-candidate rule or a transfer missing from its final receipt: a real reorg or
+  a replaced transaction. Missing receipts alone do not prove reversal. Confirm the
   merchant received `deposit.reversed` (the view's `events` shows `delivered_at`); if the payer
   still wants to top up, they pay a new quote. With `transfer_changed_at_finality` and a
   `successor_deposit_id`, the payer's payment is the successor instead (the reversed deposit's
@@ -67,6 +68,119 @@ rare one means the chain, or a provider, is misbehaving.
   (for example stuck in a mempool at a low fee). Wait for positive evidence. A changed account nonce, including an EIP-7702 authorization,
   does not prove replacement. `TopupDepositReversalUnproven` records this wait. If the providers disagree about the receipt, follow
   [Provider disagreement](provider-disagreement.md).
+
+## Replacement-candidate anomaly
+
+When both providers return no receipt for the original transaction, replacement lookup considers
+only service-known transactions with the same chain, sender and nonce and a different hash.
+K=1 bounds candidate reads:
+
+- Exactly one candidate: independently read its evidence on both endpoints. Reverse only when
+  both agree it is finalized at or below the published checkpoint.
+- More than one candidate: read none of the candidates and raise an anomaly alert. Make no
+  reversal; the deposit stays unresolved, retains its reservations and counts toward stock S
+  until an operator resolves the anomaly.
+- No candidates: make no candidate reads and wait for positive evidence.
+
+Do not choose among multiple candidates, infer replacement from an account nonce, delete
+candidate history or release reservations to bypass the gate. Preserve the deposit timeline,
+original and candidate hashes, and existing canonical evidence for operator review. Resolve
+the anomaly through reviewed, audited action backed by independent canonical evidence; this
+runbook does not authorize a forced reversal. Manual investigation consumes the
+[extra-operation reserve](../RPC.md#worst-case-pilot-budget).
+
+## Confirmation delay and slow lane L
+
+Ordinary height lag stays outside S. Normal confirmation reads only the corresponding head on
+each endpoint until both meet the requirement, then reads complete receipt/header/transaction
+evidence once in that claim. Depth allows six normal probes, targeting about four seconds after
+expected depth when healthy; under lag, delay is bounded by the current interval, up to
+64 seconds. Safe/Finalized target one 384-second epoch interval within their bounded windows.
+
+L receives only a normal window exhausted solely by height lag. Its persisted `first_slow_at`
+anchors 60-second probes until ten minutes, ten-minute probes until six hours, then hourly;
+the first L probe is 60 seconds after entry. Each due reads heads only. When both satisfy the
+actual policy, read the single allowed complete evidence set and continue credit immediately,
+without waiting for the checkpoint. Normal and L share that one full read allowance; a failure
+or anomaly goes to S, never a fresh normal window. Existing hint/discovery evidence cannot
+replace the independent complete read at credit.
+
+Monitor `topup_confirmation_slow` and `topup_confirmation_slow_entries_24h`. Current L stock
+and rolling-24-hour first entries are each limited to one per environment, summed across payment
+chains. `first_slow_at` stays set, so entries still count after confirmation, termination or
+transition to S; those transitions remove the current L stock slot. L does not count toward S.
+L remaining non-empty for ten minutes raises the provider-lag alert; either environment's sum above
+one raises the independent L capacity alert. Pause new quotes on all affected-chain routes
+using the quote-pause command below and coordinate merchant intake. Keep funded verification,
+reservations and excess records. See [provider lag](rpc-health.md#confirmation-provider-lag).
+
+Normal/L pump reads and S/watcher reads share one atomic lease claim and chain-read due time.
+Counts and the next due are consumed before RPC; failure/crash does not return them. Exactly
+one logical reader owns a due time. Missed slots are skipped. Restarts, handoffs and valuation
+retries cannot reopen windows or evidence allowances. S follows re-inclusion until finality
+and passes usable final evidence to confirmation/valuation in the same claim, without a second
+receipt read. A deposit that has not entered S may reuse its complete persisted terminal proof
+for price retries. Entering S invalidates pre-entry proof: only fresh watcher terminal evidence
+created at or after `first_unresolved_at` can establish finality, even with an old `final_at`.
+The transfer identity (`to`, `token`, `from`, `amount`, `tx_from`, `tx_nonce`) must match the
+deposit; otherwise follow the S or reversal path. The exact terminal transition is linked by
+`confirmation_terminal_transition_id`; its versioned, complete dual proof may then serve
+price-only retries. Provisional reappearance stays in S on the watcher schedule. Non-final
+evidence retains watcher eligibility. Never clear due fields or infer proof from
+`dual_verified_at` alone.
+
+L budgets `2×(62 + 24) = 172` head methods per endpoint across both environments daily:
+172 Ankr calls / 13,760 Infura credits before retries. The complete read is already in D's
+24 Ankr / 2,000 Infura allocation. Production D=46 and staging D=20 remain operational caps;
+follow the [full arithmetic and retry caveat](../RPC.md#worst-case-pilot-budget).
+Resume new quotes only when L stock/entries, S and daily work fit. N-1 preserves compatible
+rows, but its binary does not obey the new scheduler budget; use the prior operating budget.
+
+## Unresolved finality stock and recovery
+
+At its first unresolved check, a deposit enters S and persists `first_unresolved_at`. This
+includes a `detected` deposit whose transfer both endpoints agree is absent during confirmation;
+do not wait for the checkpoint. The pump and finality watcher share one persisted backoff
+anchored to `first_unresolved_at`: every 60 seconds until ten minutes, every ten minutes until
+six hours, then hourly. Exactly one reader runs per due time. The first day budgets
+`10 + 34 + 18 = 62` rechecks; each later day budgets 24. The existing one-hour
+`TopupDepositPendingAfterReorg` alert remains, including while a replacement anomaly waits
+for operator resolution.
+Missing or conflicting/changed evidence and RPC failures that cannot establish height-only lag
+enter S. Normal head waiting or L alone does not set `first_unresolved_at` or count toward S.
+
+Count a deposit in S from that first unresolved check, not after one hour. Monitor S=1 as the
+sum across all payment chains per environment, two combined.
+Also allow at most one new unresolved entry per environment in any rolling 24 hours; resolved
+entries still count in that window. Each day's budget includes first-day cost for one arrival
+plus later-day cost for one carried deposit in each environment. A recheck
+costs at most four methods per endpoint: `max(3, 1 + 3×K) = 4` at K=1. See the
+[complete stock/turnover arithmetic](../RPC.md#worst-case-pilot-budget).
+
+Use `topup_finality_unresolved` (per-chain gauge) for current stock and
+`topup_finality_unresolved_entries_24h` (per-chain DB-derived gauge) for new entries. The latter
+counts deposits whose persisted `first_unresolved_at` is within the last 24 hours, including
+resolved ones. Evaluate the alerts separately for each environment and sum across its chains:
+
+- Current stock: `sum(topup_finality_unresolved) > 1`.
+- New entries: `sum(topup_finality_unresolved_entries_24h) > 1`; use this exact DB count
+  directly. Resolution does not remove deposits from the rolling count; they leave when their
+  `first_unresolved_at` falls outside the last 24 hours. Rechecks do not add entries.
+- Age: retain the separate one-hour `TopupDepositPendingAfterReorg` alert.
+
+Restrict selectors to one environment using deployment scrape labels when both environments
+share a Prometheus. Above either S or the rolling-24-hour entry allowance, pause new quotes on
+all routes of the affected chain and escalate:
+
+```sh
+admin POST "/v1/admin/routes/$ROUTE/pause" '{"scopes":["quotes"]}'
+```
+
+The one-hour age alert is not permission to delay the stock stop action. Verification, existing
+credit and reservations continue. Never force a verdict to reduce the stock. Resume new quotes
+only after the incident has been reviewed, positive evidence has resolved the affected deposits,
+and pending inventory and the next budget window fit the operating limits. Keep the timeline
+and resolution audit intact.
 
 ## Fix
 

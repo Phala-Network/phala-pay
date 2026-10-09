@@ -2,6 +2,9 @@
 
 **Trigger:** `TopupRpcDisagreement`, `TopupSanctionsHold` (held past its confirmation window), or `TopupDepositStateAgeExceeded` with `state:detected` (the confirm step: finality and
 valuation) or `state:confirmed` (the sanctions screen).
+For height-only delays, the separate provider-lag alert fires after L remains non-empty for
+ten minutes; either environment-wide L stock or rolling-entry count above one raises its
+capacity alert. These are distinct from evidence disagreement and S alerts.
 
 **Impact:** affected deposits keep retrying in their state; nothing is rejected or credited on
 one provider's word. Sanctions decisions also require agreement at the same canonical pin, at or after the payment block. A single hit waits and alerts.
@@ -31,6 +34,9 @@ one provider's word. Sanctions decisions also require agreement at the same cano
    admin POST "/v1/admin/routes/$ROUTE/pause" '{"scopes":["settlement"]}'
    ```
 
+   Height differences alone do not call for this settlement pause. Use the L capacity
+   quote-pause action in [RPC provider lag](rpc-health.md#confirmation-provider-lag).
+
 ## Decide
 
 - Same finalized height, different hash or log: keep settlement paused; never pick a provider's
@@ -38,7 +44,14 @@ one provider's word. Sanctions decisions also require agreement at the same cano
 - `log_absent_at_finality`: both providers are final past the block and neither has the log the
   scanner recorded as final. That is a finality violation or a scanner-provider fault: keep
   settlement paused, open incidents with both providers, and escalate.
-- One provider behind but consistent: wait within its SLA, then replace it.
+- One provider behind but consistent: normal confirmation probes heads without rereading
+  receipts. If its bounded window expires only because of height lag, use L with 60-second,
+  ten-minute and hourly probes anchored to `first_slow_at`. Once both heads meet the actual
+  policy, the same claim reads the one allowed full evidence set and continues credit without
+  waiting for a checkpoint. L does not consume S. Inspect `topup_confirmation_slow` and
+  `topup_confirmation_slow_entries_24h`; each environment's stock and rolling entries must
+  stay ≤1. Follow the ten-minute provider-lag alert and capacity quote-pause action; never pick
+  one provider or reset the schedule. See [confirmation recovery](deposit-reversed.md#confirmation-delay-and-slow-lane-l).
 - Sanctions: a fresh verified snapshot and successful manual-list read with no hit permit new credit.
   A hit in either active source rejects even when stale; page Compliance and follow
   [rejected funds at treasury](rejected-funds-at-treasury.md). A missing or stale negative answer, or failed database read,

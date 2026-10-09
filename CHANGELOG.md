@@ -34,8 +34,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Replace the deprecated Chainalysis oracle with verified OFAC SDN snapshots and audited manual
   supplements. Allow outbound HTTPS to the SLS and its published S3 host. The service verifies
   the publication hourly; without a fresh snapshot, negative answers hold (default limit 24h).
-  `chain.sanctions_oracle` remains parsed for N-1 rollback and is removed in N+1. Pause settlement
-  for routes affected by active manual entries before rolling back to N-1, which cannot read them.
+  `chain.sanctions_oracle` remains parsed for N-1 rollback and is removed in N+1. Before a
+  production rollback, pause all screening-dependent fund processing, regardless of manual
+  entries, until N is restored and verified screening is healthy. A passing database/binary
+  rollback drill does not authorize settlement with N-1's stale oracle.
 - The pilot permanently caps issued addresses at 1,000 per chain, counting all historical
   addresses. Quotes and deposit addresses return non-retryable `422 address_capacity_reached`
   at the cap. Operators must run the pre-upgrade count check; alerts warn at 70% and 90%.

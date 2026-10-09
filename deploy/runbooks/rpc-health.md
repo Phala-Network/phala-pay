@@ -4,6 +4,33 @@ Use this procedure for an endpoint unavailable for five minutes, dual evidence d
 coverage lag over two hours, or provider quota pressure. [RPC operations](../RPC.md) lists the
 fixed cadences and shared quotas.
 
+## Confirmation provider lag
+
+Compare each endpoint's corresponding latest, safe or finalized head with the deposit's
+applicable requirement; unequal heights alone are not conflicting evidence. Depth normally
+confirms about four seconds after expected depth, with lag bounded by the current normal
+probe interval (up to 64 seconds). Safe/Finalized target one 384-second epoch interval.
+If the fixed normal window expires only because of height lag, use
+[slow lane L](../RPC.md#slow-confirmation-lane-l), not S. L probes heads every 60 seconds until
+ten minutes, every ten minutes until six hours, then hourly, anchored to `first_slow_at`.
+Both heads meeting the requirement permits the one full dual evidence read and credit in that
+claim without waiting for the checkpoint.
+
+L remaining non-empty for ten minutes raises the provider-lag alert. The DB-derived gauges
+`topup_confirmation_slow{chain_id}` and `topup_confirmation_slow_entries_24h{chain_id}` measure
+stock and exact rolling-24-hour first entries. Sum chains separately per environment. Either
+sum above one raises the independent L capacity alert: pause new quotes on all routes of the
+affected chain and coordinate merchant intake. Continue existing funded verification, retain
+reservations and records, and count entries even after they leave L. Do not clear timestamps,
+replay missed slots or restart normal/evidence allowances.
+
+A failed or anomalous full read, changed evidence or an RPC failure that prevents proving
+height-only lag enters S; checkpoint hash conflicts still freeze the chain. Follow
+[confirmation/finality recovery](deposit-reversed.md#confirmation-delay-and-slow-lane-l).
+Resume new quotes only after the provider incident is reviewed and both L limits, S and daily
+work fit the [pilot caps](../RPC.md#pilot-limits-and-operating-modes). L does not count toward S
+and has its own capacity stop action.
+
 ## First steps
 
 1. Check `topup_rpc_endpoint_ready` by provider and chain and sanitized error classes in
@@ -55,5 +82,8 @@ Production deposits/day is 46 and staging 20; include both in shared quota check
 Receipt absence, disagreement, evidence changes and RPC failures instead enter S, which has
 its own stock/entry alerts and one-hour age alert. Follow the existing
 [deposit incident procedure](deposit-reversed.md). An old `final_at` on a detected S row is not
-credit or reversal proof; the watcher must acquire fresh dual terminal evidence. Price retries
-reuse only full terminal evidence and never restart normal confirmation quotas.
+credit or reversal proof; the watcher must acquire fresh dual terminal evidence created at or
+after `first_unresolved_at`, matching `(to, token, from, amount, tx_from, tx_nonce)`. A mismatch
+follows S or reversal. Price retries may reuse only the complete versioned proof linked to the
+current final marker by `confirmation_terminal_transition_id`, never a pre-S proof. They never
+restart normal confirmation quotas. See the [proof recovery rules](deposit-reversed.md#confirmation-delay-and-slow-lane-l).

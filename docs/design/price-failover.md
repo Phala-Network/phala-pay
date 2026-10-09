@@ -140,14 +140,16 @@ Default guard rails (under source `twap`) are:
 | Field | Default | Reason |
 |---|---|---|
 | `window_s` | 1800 s; window + sample age ≤2880 s | prevents using a spot-sized window; at least thirty minutes |
-| `max_sample_age_s` | 180 s, configurable 60–600 s | tolerates two missed one-minute samples; also bounds every gap and anchor slack |
+| `max_sample_age_s` | 180 s; configurable 60–900 s, at most 600 s on live routes | staging explicitly uses 900 s to tolerate two missed five-minute samples; bounds every gap and anchor slack |
 | `min_weth_reserve_usd` | $100,000 | about 100× the default $1,000 unfinalized exposure cap, on the WETH side alone |
 | `max_spot_deviation_bps` | 300 (3%) | pauses fast markets and rejects spikes/ramps inconsistent with the averaging window |
 | `max_sample_jump_bps` | 500 (5%) | rejects abrupt sample-to-sample reserve-ratio changes before insertion |
 
-The service sampler runs every **60 s** even without quote traffic. Quote/credit workers share
-PostgreSQL history and an atomic per-policy lock, append no more than once a minute, and refuse
-storage failure. Between persisted samples, the quote's counterfactual endpoint still uses the same
+The staging-only PHA sampler runs every **300 s** even without quote traffic. Staging explicitly
+sets `max_sample_age_s: 900` and `max_sample_jump_bps: 1100`; the defaults remain 180 s and
+500 bps. Quote/credit workers share PostgreSQL history and an atomic per-policy lock, append
+no more than once every 300 s, and refuse storage failure. Between persisted samples, the
+quote's counterfactual endpoint still uses the same
 current pinned block as ETH/USD without writing an extra database row. Each policy has its own history so changing limits cannot reuse samples accepted
 under weaker settings. Tightening the default deviation from 10% to 3% likewise starts a new
 policy window. A restart with a gap exceeding the age limit needs a new continuous window;
