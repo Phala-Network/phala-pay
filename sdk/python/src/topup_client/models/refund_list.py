@@ -24,7 +24,7 @@ class RefundList:
     """A page of refunds, newest first (<https://docs.stripe.com/api/pagination>).
 
     Example:
-        {'data': [{'amount_atomic': '202510000000000000000', 'created': 1790557200, 'deposit':
+        {'data': [{'amount_atomic': '25000000', 'created': 1790557200, 'deposit':
             'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516', 'destination_address': '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a',
             'failure_reason': None, 'id': 're_3c9e7a1b5d2f4a6c8e0b1d3f5a7c9e02', 'livemode': False, 'metadata': {'ticket':
             'support-311'}, 'object': 'refund', 'receipt_log_index': 0, 'status': 'pending', 'transaction_hash':

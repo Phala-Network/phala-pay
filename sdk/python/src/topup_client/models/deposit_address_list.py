@@ -28,9 +28,9 @@ class DepositAddressList:
             'client_secret':
             'da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3_secret_0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9',
             'created': 1790553600, 'id': 'da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3', 'livemode': False, 'metadata': {'plan':
-            'pro'}, 'networks': [{'address': '0x0f45147a02e4c9d91aff20024e22095536fd5053', 'assets': [{'asset': 'PHA',
-            'contract': '0x6c5ba91642f10282b576d91922ae6448c9d52f4e', 'decimals': 18, 'payment_uri': 'ethereum:0x6c5ba91642f
-            10282b576d91922ae6448c9d52f4e@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053'}], 'chain_id': 1,
+            'pro'}, 'networks': [{'address': '0x0f45147a02e4c9d91aff20024e22095536fd5053', 'assets': [{'asset': 'usdc',
+            'contract': '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', 'decimals': 6, 'payment_uri': 'ethereum:0xa0b86991c621
+            8b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053'}], 'chain_id': 1,
             'treasury': '0x936c1991f8da9a919fa11b557a3514719f5a4504'}], 'object': 'deposit_address', 'payments': [],
             'retired_at': None, 'salt': '0x4e9767dd0c2ab5b953a305c3f10dc1e0d1f7c9d3cbab8463509d2edb06ca4b52', 'status':
             'active', 'version': 1}], 'has_more': False, 'object': 'list', 'url': '/v1/deposit_addresses'}

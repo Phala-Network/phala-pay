@@ -24,7 +24,7 @@ class UpdatePaymentSettingsRequest:
     replaces the whole list. Writes are last-write-wins.
 
         Example:
-            {'chains': [{'assets': [{'asset': 'PHA', 'quote_spread_bps': 100}, {'asset': 'USDT'}], 'chain_id': 1,
+            {'chains': [{'assets': [{'asset': 'usdc', 'quote_spread_bps': 0}, {'asset': 'usdt'}], 'chain_id': 1,
                 'confirmations': '12'}]}
 
         Attributes:

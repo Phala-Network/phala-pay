@@ -24,10 +24,10 @@ class SweepList:
     """A page of sweeps, newest first (<https://docs.stripe.com/api/pagination>).
 
     Example:
-        {'data': [{'address': '0x2f3e91325b2288bce392711f85f5359661062a91', 'amount_atomic': '202510000000000000000',
-            'asset': 'PHA', 'block_number': 21000420, 'chain_id': 1, 'created': 1790560800, 'forwarder':
+        {'data': [{'address': '0x2f3e91325b2288bce392711f85f5359661062a91', 'amount_atomic': '25000000', 'asset':
+            'usdc', 'block_number': 21000420, 'chain_id': 1, 'created': 1790560800, 'forwarder':
             'fwd_5c7e9a1b3d2f44c6e8a0b2d4f6c8e0a2', 'id': 'sw_1e3c5a7b9d0f42e4c6a8b0d2f4e6a8c0', 'livemode': False,
-            'log_index': 7, 'object': 'sweep', 'token': '0x6c5ba91642f10282b576d91922ae6448c9d52f4e', 'treasury':
+            'log_index': 7, 'object': 'sweep', 'token': '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', 'treasury':
             '0x936c1991f8da9a919fa11b557a3514719f5a4504', 'tx_hash':
             '0x4b6d8f0a2c4e6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c'}], 'has_more': False, 'object': 'list',
             'url': '/v1/sweeps'}

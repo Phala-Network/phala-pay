@@ -122,13 +122,13 @@
                   "assets": [
                     {
                       "accepted": false,
-                      "asset": "PHA",
-                      "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-                      "decimals": 18,
+                      "asset": "usdc",
+                      "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                      "decimals": 6,
                       "enabled": false,
                       "max_deposit_atomic": {
-                        "default": "1000000000000000000000000",
-                        "max": "1000000000000000000000000",
+                        "default": "10000000000",
+                        "max": "10000000000",
                         "min": "0"
                       },
                       "min_amount": {
@@ -142,14 +142,14 @@
                         "min": "0"
                       },
                       "min_refund_atomic": {
-                        "default": "1000000000000000000",
-                        "max": "1000000000000000000",
-                        "min": "1000000000000000000"
+                        "default": "1000000",
+                        "max": "1000000",
+                        "min": "1000000"
                       },
-                      "pricing": "spot",
+                      "pricing": "stablecoin",
                       "quote_amount_decimals": 4,
                       "quote_spread_bps": {
-                        "default": 50,
+                        "default": 0,
                         "max": 500,
                         "min": 0
                       },
@@ -166,13 +166,13 @@
                     },
                     {
                       "accepted": false,
-                      "asset": "USDT",
+                      "asset": "usdt",
                       "contract": "0xdac17f958d2ee523a2206206994597c13d831ec7",
                       "decimals": 6,
                       "enabled": false,
                       "max_deposit_atomic": {
-                        "default": "1000000000000000000000000",
-                        "max": "1000000000000000000000000",
+                        "default": "10000000000",
+                        "max": "10000000000",
                         "min": "0"
                       },
                       "min_amount": {
@@ -186,14 +186,14 @@
                         "min": "0"
                       },
                       "min_refund_atomic": {
-                        "default": "1000000000000000000",
-                        "max": "1000000000000000000",
-                        "min": "1000000000000000000"
+                        "default": "1000000",
+                        "max": "1000000",
+                        "min": "1000000"
                       },
                       "pricing": "stablecoin",
                       "quote_amount_decimals": 4,
                       "quote_spread_bps": {
-                        "default": 50,
+                        "default": 0,
                         "max": 500,
                         "min": 0
                       },
@@ -231,13 +231,13 @@
                   "assets": [
                     {
                       "accepted": true,
-                      "asset": "PHA",
-                      "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-                      "decimals": 18,
+                      "asset": "usdc",
+                      "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                      "decimals": 6,
                       "enabled": true,
                       "max_deposit_atomic": {
-                        "default": "1000000000000000000000000",
-                        "max": "1000000000000000000000000",
+                        "default": "10000000000",
+                        "max": "10000000000",
                         "min": "0"
                       },
                       "min_amount": {
@@ -251,14 +251,14 @@
                         "min": "0"
                       },
                       "min_refund_atomic": {
-                        "default": "1000000000000000000",
-                        "max": "1000000000000000000",
-                        "min": "1000000000000000000"
+                        "default": "1000000",
+                        "max": "1000000",
+                        "min": "1000000"
                       },
-                      "pricing": "spot",
+                      "pricing": "stablecoin",
                       "quote_amount_decimals": 4,
                       "quote_spread_bps": {
-                        "default": 50,
+                        "default": 0,
                         "max": 500,
                         "min": 0
                       },
@@ -275,13 +275,13 @@
                     },
                     {
                       "accepted": true,
-                      "asset": "USDT",
+                      "asset": "usdt",
                       "contract": "0xdac17f958d2ee523a2206206994597c13d831ec7",
                       "decimals": 6,
                       "enabled": true,
                       "max_deposit_atomic": {
-                        "default": "1000000000000000000000000",
-                        "max": "1000000000000000000000000",
+                        "default": "10000000000",
+                        "max": "10000000000",
                         "min": "0"
                       },
                       "min_amount": {
@@ -295,14 +295,14 @@
                         "min": "0"
                       },
                       "min_refund_atomic": {
-                        "default": "1000000000000000000",
-                        "max": "1000000000000000000",
-                        "min": "1000000000000000000"
+                        "default": "1000000",
+                        "max": "1000000",
+                        "min": "1000000"
                       },
                       "pricing": "stablecoin",
                       "quote_amount_decimals": 4,
                       "quote_spread_bps": {
-                        "default": 50,
+                        "default": 0,
                         "max": 500,
                         "min": 0
                       },
@@ -330,11 +330,11 @@
                 {
                   "assets": [
                     {
-                      "asset": "PHA",
-                      "quote_spread_bps": 100
+                      "asset": "usdc",
+                      "quote_spread_bps": 0
                     },
                     {
-                      "asset": "USDT"
+                      "asset": "usdt"
                     }
                   ],
                   "chain_id": 1,
@@ -992,7 +992,7 @@
               "age_in_state_max_seconds": {
                 "credited": 3600
               },
-              "asset_contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
+              "asset_contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
               "chain_id": 1,
               "credited_undelivered": 0,
               "credited_undelivered_max_age_seconds": 0,
@@ -1001,13 +1001,13 @@
                 "rejected": 2,
                 "swept": 1204
               },
-              "open_rate_lock_exposure_atomic": "101255000000000000000",
+              "open_rate_lock_exposure_atomic": "125000000",
               "refunds_by_status": {
                 "succeeded": 3
               },
               "rejected_holds_atomic": "0",
-              "route": "phala-cloud-ethereum-pha-usd",
-              "unflushed_balance_atomic": "8303010000000000000000"
+              "route": "phala-cloud-ethereum-usdc-usd",
+              "unflushed_balance_atomic": "1025000000"
             }
           ],
           "sanctions_manual_entries": 0,
@@ -1232,12 +1232,12 @@
         "example": {
           "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
           "amount": 2500,
-          "amount_atomic": "202510000000000000000",
+          "amount_atomic": "25000000",
           "amount_refunded": 0,
           "amount_refunded_atomic": "0",
           "amount_reversed": 0,
-          "asset": "PHA",
-          "asset_contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
+          "asset": "usdc",
+          "asset_contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
           "block_hash": "0x9a1c3e5b7d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c",
           "block_number": 21000000,
           "block_time": 1790553612,
@@ -1246,7 +1246,7 @@
           "created": 1790553624,
           "currency": "usd",
           "deposit_address": null,
-          "exchange_rate": "0.12345679",
+          "exchange_rate": "1.00000000",
           "final": true,
           "final_at": 1790554572,
           "from_address": "0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a",
@@ -1544,10 +1544,10 @@
               "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
               "assets": [
                 {
-                  "asset": "PHA",
-                  "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-                  "decimals": 18,
-                  "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
+                  "asset": "usdc",
+                  "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                  "decimals": 6,
+                  "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
                 }
               ],
               "chain_id": 1,
@@ -1666,7 +1666,7 @@
         "description": "A token a deposit address takes on one network.",
         "properties": {
           "asset": {
-            "description": "Asset code, such as `pha`.",
+            "description": "Asset code, such as `usdc`.",
             "type": "string"
           },
           "contract": {
@@ -2660,13 +2660,13 @@
               "assets": [
                 {
                   "accepted": true,
-                  "asset": "PHA",
-                  "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-                  "decimals": 18,
+                  "asset": "usdc",
+                  "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                  "decimals": 6,
                   "enabled": true,
                   "max_deposit_atomic": {
-                    "default": "1000000000000000000000000",
-                    "max": "1000000000000000000000000",
+                    "default": "10000000000",
+                    "max": "10000000000",
                     "min": "0"
                   },
                   "min_amount": {
@@ -2680,14 +2680,14 @@
                     "min": "0"
                   },
                   "min_refund_atomic": {
-                    "default": "1000000000000000000",
-                    "max": "1000000000000000000",
-                    "min": "1000000000000000000"
+                    "default": "1000000",
+                    "max": "1000000",
+                    "min": "1000000"
                   },
-                  "pricing": "spot",
+                  "pricing": "stablecoin",
                   "quote_amount_decimals": 4,
                   "quote_spread_bps": {
-                    "default": 50,
+                    "default": 0,
                     "max": 500,
                     "min": 0
                   },
@@ -2704,13 +2704,13 @@
                 },
                 {
                   "accepted": true,
-                  "asset": "USDT",
+                  "asset": "usdt",
                   "contract": "0xdac17f958d2ee523a2206206994597c13d831ec7",
                   "decimals": 6,
                   "enabled": true,
                   "max_deposit_atomic": {
-                    "default": "1000000000000000000000000",
-                    "max": "1000000000000000000000000",
+                    "default": "10000000000",
+                    "max": "10000000000",
                     "min": "0"
                   },
                   "min_amount": {
@@ -2724,14 +2724,14 @@
                     "min": "0"
                   },
                   "min_refund_atomic": {
-                    "default": "1000000000000000000",
-                    "max": "1000000000000000000",
-                    "min": "1000000000000000000"
+                    "default": "1000000",
+                    "max": "1000000",
+                    "min": "1000000"
                   },
                   "pricing": "stablecoin",
                   "quote_amount_decimals": 4,
                   "quote_spread_bps": {
-                    "default": 50,
+                    "default": 0,
                     "max": 500,
                     "min": 0
                   },
@@ -2759,11 +2759,11 @@
             {
               "assets": [
                 {
-                  "asset": "PHA",
-                  "quote_spread_bps": 100
+                  "asset": "usdc",
+                  "quote_spread_bps": 0
                 },
                 {
-                  "asset": "USDT"
+                  "asset": "usdt"
                 }
               ],
               "chain_id": 1,
@@ -2843,15 +2843,15 @@
         "example": {
           "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
           "amount": 2500,
-          "amount_atomic": "202510000000000000000",
-          "asset": "PHA",
+          "amount_atomic": "25000000",
+          "asset": "usdc",
           "chain_id": 1,
           "client_reference_id": "team-42",
           "client_secret": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10_secret_9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0a",
           "created": 1790553600,
           "currency": "usd",
           "deposit": null,
-          "exchange_rate": "0.12345679",
+          "exchange_rate": "1.00000000",
           "expires_at": 1790554500,
           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
           "livemode": false,
@@ -2860,8 +2860,8 @@
           },
           "object": "quote",
           "payment": {
-            "amount_atomic": "202510000000000000000",
-            "asset": "PHA",
+            "amount_atomic": "25000000",
+            "asset": "usdc",
             "chain_id": 1,
             "confirmations": 1,
             "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
@@ -2870,16 +2870,16 @@
             "status": "seen",
             "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
           },
-          "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=202510000000000000000",
+          "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
           "status": "open",
           "terms": {
             "confirmations": "12",
-            "max_deposit_atomic": "1000000000000000000000000",
+            "max_deposit_atomic": "10000000000",
             "min_amount": 100,
             "min_deposit_atomic": "0",
-            "min_refund_atomic": "1000000000000000000",
+            "min_refund_atomic": "1000000",
             "quote_amount_decimals": 4,
-            "quote_spread_bps": 100,
+            "quote_spread_bps": 0,
             "quote_tolerance_bps": 100,
             "quote_ttl_seconds": 900
           },
@@ -3406,10 +3406,10 @@
                 "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
                 "assets": [
                   {
-                    "asset": "PHA",
-                    "contract": "0x6c5ba91642f10282b576d91922ae6448c9d52f4e",
-                    "decimals": 18,
-                    "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
+                    "asset": "usdc",
+                    "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                    "decimals": 6,
+                    "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x0f45147a02e4c9d91aff20024e22095536fd5053"
                   }
                 ],
                 "chain_id": 1,
@@ -3447,7 +3447,7 @@
         "example": {
           "deliveries": [
             {
-              "body": "{\"account\":\"acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10\",\"actor\":\"system\",\"created\":1790553600,\"data\":{\"object\":{\"address\":\"0x2f3e91325b2288bce392711f85f5359661062a91\",\"amount\":2500,\"amount_atomic\":\"202510000000000000000\",\"amount_refunded\":0,\"amount_refunded_atomic\":\"0\",\"amount_reversed\":0,\"asset\":\"PHA\",\"asset_contract\":\"0x6c5ba91642f10282b576d91922ae6448c9d52f4e\",\"block_hash\":\"0x9a1c3e5b7d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c\",\"block_number\":21000000,\"block_time\":1790553612,\"chain_id\":1,\"client_reference_id\":\"team-42\",\"created\":1790553624,\"currency\":\"usd\",\"deposit_address\":null,\"exchange_rate\":\"0.12345679\",\"final\":true,\"final_at\":1790554572,\"from_address\":\"0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a\",\"id\":\"dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516\",\"livemode\":false,\"log_index\":212,\"metadata\":{\"order_id\":\"ord_1001\"},\"object\":\"deposit\",\"price_source\":\"quote\",\"quote\":\"qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10\",\"receipt_log_index\":0,\"refunded\":false,\"rejection_reason\":null,\"replaced_by\":null,\"replaces\":null,\"revision\":0,\"status\":\"credited\",\"swept\":false,\"tx_hash\":\"0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e\",\"valued_at\":1790553630}},\"id\":\"evt_2b4d6f8a0c1e43b5d7f9a1c3e5b7d9f0\",\"livemode\":false,\"object\":\"event\",\"request\":null,\"type\":\"deposit.credited\"}",
+              "body": "{\"account\":\"acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10\",\"actor\":\"system\",\"created\":1790553600,\"data\":{\"object\":{\"address\":\"0x2f3e91325b2288bce392711f85f5359661062a91\",\"amount\":2500,\"amount_atomic\":\"25000000\",\"amount_refunded\":0,\"amount_refunded_atomic\":\"0\",\"amount_reversed\":0,\"asset\":\"usdc\",\"asset_contract\":\"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48\",\"block_hash\":\"0x9a1c3e5b7d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c\",\"block_number\":21000000,\"block_time\":1790553612,\"chain_id\":1,\"client_reference_id\":\"team-42\",\"created\":1790553624,\"currency\":\"usd\",\"deposit_address\":null,\"exchange_rate\":\"1.00000000\",\"final\":true,\"final_at\":1790554572,\"from_address\":\"0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a\",\"id\":\"dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516\",\"livemode\":false,\"log_index\":212,\"metadata\":{\"order_id\":\"ord_1001\"},\"object\":\"deposit\",\"price_source\":\"quote\",\"quote\":\"qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10\",\"receipt_log_index\":0,\"refunded\":false,\"rejection_reason\":null,\"replaced_by\":null,\"replaces\":null,\"revision\":0,\"status\":\"credited\",\"swept\":false,\"tx_hash\":\"0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e\",\"valued_at\":1790553630}},\"id\":\"evt_2b4d6f8a0c1e43b5d7f9a1c3e5b7d9f0\",\"livemode\":false,\"object\":\"event\",\"request\":null,\"type\":\"deposit.credited\"}",
               "webhook_id": "evt_2b4d6f8a0c1e43b5d7f9a1c3e5b7d9f0",
               "webhook_signature": "v1a,0thypM6abf9ly803QGttAKGQfPFKHiwgpxF+b4zWDUCycKswAoJ848WmI7VKQBw8NIWO74zYeRvd7vw/cGOZBw==",
               "webhook_timestamp": "1790553631"
@@ -3610,13 +3610,13 @@
           "account": "acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10",
           "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
           "amount": 2500,
-          "amount_atomic": "202510000000000000000",
-          "asset": "PHA",
+          "amount_atomic": "25000000",
+          "asset": "usdc",
           "chain_id": 1,
           "client_reference_id": "team-42",
           "client_secret": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10_secret_9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0a",
           "created": 1790553600,
-          "exchange_rate": "0.12345679",
+          "exchange_rate": "1.00000000",
           "expires_at": 1790554500,
           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
           "livemode": false,
@@ -3722,15 +3722,15 @@
           "quote": {
             "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
             "amount": 2500,
-            "amount_atomic": "202510000000000000000",
-            "asset": "PHA",
+            "amount_atomic": "25000000",
+            "asset": "usdc",
             "chain_id": 1,
             "client_reference_id": "team-42",
             "client_secret": null,
             "created": 1790553600,
             "currency": "usd",
             "deposit": null,
-            "exchange_rate": "0.12345679",
+            "exchange_rate": "1.00000000",
             "expires_at": 1790555400,
             "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
             "livemode": false,
@@ -3739,16 +3739,16 @@
             },
             "object": "quote",
             "payment": null,
-            "payment_uri": "ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=202510000000000000000",
+            "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
             "status": "open",
             "terms": {
               "confirmations": "12",
-              "max_deposit_atomic": "1000000000000000000000000",
+              "max_deposit_atomic": "10000000000",
               "min_amount": 100,
               "min_deposit_atomic": "0",
-              "min_refund_atomic": "1000000000000000000",
+              "min_refund_atomic": "1000000",
               "quote_amount_decimals": 4,
-              "quote_spread_bps": 100,
+              "quote_spread_bps": 0,
               "quote_tolerance_bps": 100,
               "quote_ttl_seconds": 900
             },
@@ -3779,7 +3779,7 @@
             "findings": [
               {
                 "delivered_amount": "2500",
-                "delivered_amount_atomic": "202510000000000000000",
+                "delivered_amount_atomic": "25000000",
                 "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
                 "event": "evt_2b4d6f8a0c1e43b5d7f9a1c3e5b7d9f0",
                 "ledger_amount": null,
@@ -4188,7 +4188,7 @@
           "paused_scopes": [
             "quotes"
           ],
-          "route": "phala-cloud-ethereum-pha-usd"
+          "route": "phala-cloud-ethereum-usdc-usd"
         },
         "properties": {
           "paused_scopes": {

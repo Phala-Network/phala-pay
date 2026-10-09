@@ -107,9 +107,8 @@ def sync_detailed(
     Args:
         idempotency_key (None | str | Unset):
         body (CreateRefundRequest): `POST /v1/refunds` body. Example: {'amount_atomic':
-            '202510000000000000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516',
-            'destination_address': '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata':
-            {'ticket': 'support-311'}}.
+            '25000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516', 'destination_address':
+            '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata': {'ticket': 'support-311'}}.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -146,9 +145,8 @@ def sync(
     Args:
         idempotency_key (None | str | Unset):
         body (CreateRefundRequest): `POST /v1/refunds` body. Example: {'amount_atomic':
-            '202510000000000000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516',
-            'destination_address': '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata':
-            {'ticket': 'support-311'}}.
+            '25000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516', 'destination_address':
+            '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata': {'ticket': 'support-311'}}.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -180,9 +178,8 @@ async def asyncio_detailed(
     Args:
         idempotency_key (None | str | Unset):
         body (CreateRefundRequest): `POST /v1/refunds` body. Example: {'amount_atomic':
-            '202510000000000000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516',
-            'destination_address': '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata':
-            {'ticket': 'support-311'}}.
+            '25000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516', 'destination_address':
+            '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata': {'ticket': 'support-311'}}.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -217,9 +214,8 @@ async def asyncio(
     Args:
         idempotency_key (None | str | Unset):
         body (CreateRefundRequest): `POST /v1/refunds` body. Example: {'amount_atomic':
-            '202510000000000000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516',
-            'destination_address': '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata':
-            {'ticket': 'support-311'}}.
+            '25000000', 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516', 'destination_address':
+            '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'metadata': {'ticket': 'support-311'}}.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

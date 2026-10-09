@@ -27,10 +27,10 @@ class Refund:
     the deposit's address and attaches with `mark_paid` (design D5).
 
         Example:
-            {'amount_atomic': '202510000000000000000', 'created': 1790557200, 'deposit':
-                'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516', 'destination_address': '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a',
-                'failure_reason': None, 'id': 're_3c9e7a1b5d2f4a6c8e0b1d3f5a7c9e02', 'livemode': False, 'metadata': {'ticket':
-                'support-311'}, 'object': 'refund', 'receipt_log_index': 0, 'status': 'pending', 'transaction_hash':
+            {'amount_atomic': '25000000', 'created': 1790557200, 'deposit': 'dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516',
+                'destination_address': '0x1775c1326aa633546b0b5634ae2bef0ba7cbfc9a', 'failure_reason': None, 'id':
+                're_3c9e7a1b5d2f4a6c8e0b1d3f5a7c9e02', 'livemode': False, 'metadata': {'ticket': 'support-311'}, 'object':
+                'refund', 'receipt_log_index': 0, 'status': 'pending', 'transaction_hash':
                 '0x4b6d8f0a2c4e6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c', 'treasury':
                 '0x936c1991f8da9a919fa11b557a3514719f5a4504'}
 

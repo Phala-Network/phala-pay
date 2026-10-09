@@ -23,12 +23,11 @@ class ClientQuote:
     payer's checkout page. It has no account or internal fields.
 
         Example:
-            {'address': '0x2f3e91325b2288bce392711f85f5359661062a91', 'amount': 2500, 'amount_atomic':
-                '202510000000000000000', 'amount_credited': None, 'asset': 'PHA', 'chain_id': 1, 'confirmations': 1, 'currency':
-                'usd', 'decimals': 18, 'expires_at': 1790554500, 'id': 'qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10', 'livemode': False,
-                'object': 'quote', 'payment_status': 'seen', 'payment_uri': 'ethereum:0x6c5ba91642f10282b576d91922ae6448c9d52f4e
-                @1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=202510000000000000000', 'status': 'open',
-                'typical_credit_seconds': 30}
+            {'address': '0x2f3e91325b2288bce392711f85f5359661062a91', 'amount': 2500, 'amount_atomic': '25000000',
+                'amount_credited': None, 'asset': 'usdc', 'chain_id': 1, 'confirmations': 1, 'currency': 'usd', 'decimals': 6,
+                'expires_at': 1790554500, 'id': 'qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10', 'livemode': False, 'object': 'quote',
+                'payment_status': 'seen', 'payment_uri': 'ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address
+                =0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000', 'status': 'open', 'typical_credit_seconds': 30}
 
         Attributes:
             address (str): Single-use forwarder address to pay.

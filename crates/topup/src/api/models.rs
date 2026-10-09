@@ -659,7 +659,7 @@ pub struct DepositAddressNetwork {
 /// A token a deposit address takes on one network.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct DepositAddressAsset {
-    /// Asset code, such as `pha`.
+    /// Asset code, such as `usdc`.
     pub asset: String,
     /// ERC-20 contract address.
     pub contract: String,

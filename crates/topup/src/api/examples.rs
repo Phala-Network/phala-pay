@@ -1,5 +1,5 @@
 //! Examples of the API's objects and request bodies for the OpenAPI documents: one account's test
-//! of a $25.00 PHA payment on Ethereum, from its quote to its refund. The tests of
+//! of a $25.00 USDC payment on Ethereum, from its quote to its refund. The tests of
 //! [`super::openapi`] check each against its schema.
 
 use serde_json::{Value, json};
@@ -18,7 +18,7 @@ const REQUEST: &str = "req_4f2a9c1e7b3d45a6c8e0b2d4f6a8c1e3";
 const SWEEP: &str = "sw_1e3c5a7b9d0f42e4c6a8b0d2f4e6a8c0";
 const FORWARDER: &str = "fwd_5c7e9a1b3d2f44c6e8a0b2d4f6c8e0a2";
 
-const PHA: &str = "0x6c5ba91642f10282b576d91922ae6448c9d52f4e";
+const USDC: &str = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const FACTORY: &str = "0x9e5f1d3c7a2b4e6f8a0c1d3e5f7a9b2c4d6e8f01";
 const TREASURY_ADDRESS: &str = "0x936c1991f8da9a919fa11b557a3514719f5a4504";
 const QUOTE_ADDRESS: &str = "0x2f3e91325b2288bce392711f85f5359661062a91";
@@ -86,7 +86,7 @@ pub(super) fn schema(name: &str) -> Option<Value> {
         "RefundList" => list("/v1/refunds", refund()),
         "CreateRefundRequest" => json!({
             "deposit": DEPOSIT,
-            "amount_atomic": "202510000000000000000",
+            "amount_atomic": "25000000",
             "destination_address": PAYER,
             "metadata": {"ticket": "support-311"},
         }),
@@ -97,10 +97,10 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "livemode": false,
             "unswept": [{
                 "chain_id": 1,
-                "token": PHA,
-                "asset": "PHA",
-                "amount_atomic": "202510000000000000000",
-                "final_amount_atomic": "202510000000000000000",
+                "token": USDC,
+                "asset": "usdc",
+                "amount_atomic": "25000000",
+                "final_amount_atomic": "25000000",
             }],
         }),
         "SweepList" => list(
@@ -113,9 +113,9 @@ pub(super) fn schema(name: &str) -> Option<Value> {
                 "forwarder": FORWARDER,
                 "address": QUOTE_ADDRESS,
                 "treasury": TREASURY_ADDRESS,
-                "token": PHA,
-                "asset": "PHA",
-                "amount_atomic": "202510000000000000000",
+                "token": USDC,
+                "asset": "usdc",
+                "amount_atomic": "25000000",
                 "tx_hash": REFUND_TX,
                 "block_number": 21_000_420,
                 "log_index": 7,
@@ -199,7 +199,7 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "chains": [{
                 "chain_id": 1,
                 "confirmations": "12",
-                "assets": [{"asset": "PHA", "quote_spread_bps": 100}, {"asset": "USDT"}],
+                "assets": [{"asset": "usdc", "quote_spread_bps": 0}, {"asset": "usdt"}],
             }],
         }),
         "AccountSelfPauseRequest" => json!({"scopes": ["quotes"]}),
@@ -226,19 +226,19 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "quote_creations_per_customer_per_minute": 10,
             "assets": [{
                 "chain_id": 1,
-                "asset": "PHA",
-                "contract": PHA,
-                "decimals": 18,
-                "pricing": "spot",
+                "asset": "usdc",
+                "contract": USDC,
+                "decimals": 6,
+                "pricing": "stablecoin",
                 "confirmations": "12",
                 "typical_credit_seconds": 150,
                 "typical_finality_seconds": 900,
                 "min_amount": 100,
                 "min_deposit_atomic": "0",
-                "max_deposit_atomic": "1000000000000000000000000",
-                "min_refund_atomic": "1000000000000000000",
+                "max_deposit_atomic": "10000000000",
+                "min_refund_atomic": "1000000",
                 "quote_ttl_seconds": 900,
-                "quote_spread_bps": 100,
+                "quote_spread_bps": 0,
                 "quote_tolerance_bps": 100,
                 "quote_amount_decimals": 4,
             }],
@@ -316,7 +316,7 @@ pub(super) fn schema(name: &str) -> Option<Value> {
         "PauseRequest" => json!({"scopes": ["quotes"]}),
         "PauseResponse" => json!({"paused_scopes": ["quotes", "settlement"]}),
         "RoutePauseResponse" => json!({
-            "route": "phala-cloud-ethereum-pha-usd",
+            "route": "phala-cloud-ethereum-usdc-usd",
             "paused_scopes": ["quotes"],
         }),
         "AdminReasonRequest" => json!({"reason": "providers agree again; verified OPS-93"}),
@@ -343,17 +343,17 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "generated_at": "2026-09-28T12:00:00Z",
             "exposure_minor": "12500",
             "routes": [{
-                "route": "phala-cloud-ethereum-pha-usd",
+                "route": "phala-cloud-ethereum-usdc-usd",
                 "chain_id": 1,
-                "asset_contract": PHA,
+                "asset_contract": USDC,
                 "deposits_by_state": {"credited": 41, "swept": 1204, "rejected": 2},
                 "refunds_by_status": {"succeeded": 3},
                 "age_in_state_max_seconds": {"credited": 3_600},
                 "credited_undelivered": 0,
                 "credited_undelivered_max_age_seconds": 0,
-                "open_rate_lock_exposure_atomic": "101255000000000000000",
+                "open_rate_lock_exposure_atomic": "125000000",
                 "rejected_holds_atomic": "0",
-                "unflushed_balance_atomic": "8303010000000000000000",
+                "unflushed_balance_atomic": "1025000000",
             }],
             "reconciliation": null,
             "reconciliation_blocks": [],
@@ -390,7 +390,7 @@ pub(super) fn schema(name: &str) -> Option<Value> {
                     "type": "deposit.credited",
                     "deposit": DEPOSIT,
                     "status": "pending",
-                    "delivered_amount_atomic": "202510000000000000000",
+                    "delivered_amount_atomic": "25000000",
                     "delivered_amount": "2500",
                     "ledger_amount_atomic": null,
                     "ledger_amount": null,
@@ -477,10 +477,10 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "id": QUOTE,
             "client_reference_id": "team-42",
             "chain_id": 1,
-            "asset": "PHA",
+            "asset": "usdc",
             "amount": 2500,
-            "amount_atomic": "202510000000000000000",
-            "exchange_rate": "0.12345679",
+            "amount_atomic": "25000000",
+            "exchange_rate": "1.00000000",
             "address": QUOTE_ADDRESS,
             "created": CREATED,
             "expires_at": CREATED + 900,
@@ -568,21 +568,21 @@ fn quote() -> Value {
         "amount": 2500,
         "currency": "usd",
         "chain_id": 1,
-        "asset": "PHA",
-        "amount_atomic": "202510000000000000000",
-        "exchange_rate": "0.12345679",
+        "asset": "usdc",
+        "amount_atomic": "25000000",
+        "exchange_rate": "1.00000000",
         "address": QUOTE_ADDRESS,
         "treasury": TREASURY_ADDRESS,
-        "payment_uri": format!("ethereum:{PHA}@1/transfer?address={QUOTE_ADDRESS}&uint256=202510000000000000000"),
+        "payment_uri": format!("ethereum:{USDC}@1/transfer?address={QUOTE_ADDRESS}&uint256=25000000"),
         "status": "open",
         "expires_at": CREATED + 900,
         "created": CREATED,
         "payment": {
             "status": "seen",
             "chain_id": 1,
-            "asset": "PHA",
+            "asset": "usdc",
             "tx_hash": TX,
-            "amount_atomic": "202510000000000000000",
+            "amount_atomic": "25000000",
             "confirmations": 1,
             "estimated_final_at": CREATED + 972,
             "matches_quote": true,
@@ -592,20 +592,20 @@ fn quote() -> Value {
         "client_secret": format!("{QUOTE}_secret_9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0a"),
         "terms": {
             "quote_ttl_seconds": 900,
-            "quote_spread_bps": 100,
+            "quote_spread_bps": 0,
             "quote_tolerance_bps": 100,
             "quote_amount_decimals": 4,
             "min_amount": 100,
             "min_deposit_atomic": "0",
-            "max_deposit_atomic": "1000000000000000000000000",
-            "min_refund_atomic": "1000000000000000000",
+            "max_deposit_atomic": "10000000000",
+            "min_refund_atomic": "1000000",
             "confirmations": "12",
         },
         "metadata": {"order_id": "ord_1001"},
     })
 }
 
-/// The catalog of the example's test mode: PHA and USDT on Ethereum, with their bounds.
+/// The catalog of the example's test mode: USDC and USDT on Ethereum, with their bounds.
 fn available(accepted: bool) -> Value {
     let asset = |asset: &str, contract: &str, decimals: u8, pricing: &str| {
         json!({
@@ -617,19 +617,19 @@ fn available(accepted: bool) -> Value {
             "accepted": accepted,
             "enabled": accepted,
             "quote_ttl_seconds": {"default": 900, "min": 30, "max": 3600},
-            "quote_spread_bps": {"default": 50, "min": 0, "max": 500},
+            "quote_spread_bps": {"default": 0, "min": 0, "max": 500},
             "quote_tolerance_bps": {"default": 100, "min": 0, "max": 500},
             "min_amount": {"default": 100, "min": 100, "max": u64::MAX},
             "min_deposit_atomic": {"default": "0", "min": "0", "max": U256_MAX},
             "max_deposit_atomic": {
-                "default": "1000000000000000000000000",
+                "default": "10000000000",
                 "min": "0",
-                "max": "1000000000000000000000000",
+                "max": "10000000000",
             },
             "min_refund_atomic": {
-                "default": "1000000000000000000",
-                "min": "1000000000000000000",
-                "max": "1000000000000000000",
+                "default": "1000000",
+                "min": "1000000",
+                "max": "1000000",
             },
         })
     };
@@ -638,8 +638,8 @@ fn available(accepted: bool) -> Value {
         "status": if accepted { "active" } else { "not_configured" },
         "confirmations": {"floor": "2", "default": "2"},
         "assets": [
-            asset("PHA", PHA, 18, "spot"),
-            asset("USDT", "0xdac17f958d2ee523a2206206994597c13d831ec7", 6, "stablecoin"),
+            asset("usdc", USDC, 6, "stablecoin"),
+            asset("usdt", "0xdac17f958d2ee523a2206206994597c13d831ec7", 6, "stablecoin"),
         ],
     }])
 }
@@ -660,8 +660,8 @@ fn payment_settings() -> Value {
             "chain_id": 1,
             "confirmations": "12",
             "assets": [
-                {"asset": "PHA", "quote_spread_bps": 100},
-                {"asset": "USDT"},
+                {"asset": "usdc", "quote_spread_bps": 0},
+                {"asset": "usdt"},
             ],
         }],
         "available": available(true),
@@ -689,12 +689,12 @@ fn client_quote() -> Value {
         "status": "open",
         "amount": 2500,
         "currency": "usd",
-        "asset": "PHA",
-        "decimals": 18,
+        "asset": "usdc",
+        "decimals": 6,
         "chain_id": 1,
-        "amount_atomic": "202510000000000000000",
+        "amount_atomic": "25000000",
         "address": QUOTE_ADDRESS,
-        "payment_uri": format!("ethereum:{PHA}@1/transfer?address={QUOTE_ADDRESS}&uint256=202510000000000000000"),
+        "payment_uri": format!("ethereum:{USDC}@1/transfer?address={QUOTE_ADDRESS}&uint256=25000000"),
         "expires_at": CREATED + 900,
         "payment_status": "seen",
         "confirmations": 1,
@@ -717,12 +717,12 @@ fn deposit() -> Value {
         "swept": false,
         "rejection_reason": null,
         "chain_id": 1,
-        "asset": "PHA",
-        "asset_contract": PHA,
-        "amount_atomic": "202510000000000000000",
+        "asset": "usdc",
+        "asset_contract": USDC,
+        "amount_atomic": "25000000",
         "amount": 2500,
         "currency": "usd",
-        "exchange_rate": "0.12345679",
+        "exchange_rate": "1.00000000",
         "price_source": "quote",
         "valued_at": CREATED + 30,
         "address": QUOTE_ADDRESS,
@@ -760,10 +760,10 @@ fn deposit_address() -> Value {
             "address": CUSTOMER_ADDRESS,
             "treasury": TREASURY_ADDRESS,
             "assets": [{
-                "asset": "PHA",
-                "contract": PHA,
-                "decimals": 18,
-                "payment_uri": format!("ethereum:{PHA}@1/transfer?address={CUSTOMER_ADDRESS}"),
+                "asset": "usdc",
+                "contract": USDC,
+                "decimals": 6,
+                "payment_uri": format!("ethereum:{USDC}@1/transfer?address={CUSTOMER_ADDRESS}"),
             }],
         }],
         "payments": [],
@@ -780,7 +780,7 @@ fn refund() -> Value {
         "object": "refund",
         "livemode": false,
         "deposit": DEPOSIT,
-        "amount_atomic": "202510000000000000000",
+        "amount_atomic": "25000000",
         "destination_address": PAYER,
         "treasury": TREASURY_ADDRESS,
         "status": "pending",
