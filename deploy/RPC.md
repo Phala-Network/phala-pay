@@ -58,6 +58,8 @@ Read-only discovery runs every five minutes on every payment chain. Independent 
 checks run every ten minutes and publish agreed advances for finality, reversal and refunds.
 Full dual log coverage runs hourly: at most 3,000 blocks normally and 19,200 every sixth round,
 now every six hours. Address history is backfilled separately in chunks of at most 1,000 addresses.
+Observation-only price chains retain a separate 60-second contract-recovery loop; it skips
+RPC when both endpoints' contracts are ready and does not perform payment discovery or coverage.
 Candidates remain provisional until both endpoints agree on receipt, transaction, inclusion,
 log contents and position, block time, sender and nonce.
 
@@ -235,10 +237,20 @@ Ankr:          172 calls
 Infura:        172 × 80 = 13,760 credits
 ```
 
-Refund checks run every 60 s for the first 30 min after attachment, every ten minutes until 24 h,
-then hourly. Asymmetric evidence can cost four methods per endpoint per check. Before retries,
-each first refund-day costs at most 684 Ankr / 54,720 Infura, and each later day 96 / 7,680.
-Reserve first-day costs for N new attachments plus later-day costs for all R pending attachments,
+The refund receipt reader uses `eth_getTransactionReceipt`, the persisted-checkpoint header and
+the receipt-height header independently on both endpoints: at most three methods per endpoint.
+Missing receipts use one method; included receipts above the checkpoint use two; finalized
+receipts use three. The checkpoint is loaded from the DB; there is no finalized-tag RPC.
+The worker's pending/missing branches additionally call `eth_getTransactionByHash` on both
+endpoints until an agreed sender/nonce is persisted. Asymmetric evidence can therefore cost
+four methods per endpoint per check; a never-seen transaction costs two.
+
+Checks run every 60 s for the first 30 min after attachment, every ten minutes until 24 h, then
+hourly indefinitely. Before transport retries, the first half-open refund-day has at most
+`30 + 141 = 171` checks: `171×4 = 684` Ankr / 54,720 Infura. A full ten-minute-phase day costs
+`144×4 = 576` / 46,080; an hourly-phase day costs `24×4 = 96` / 7,680. A never-seen transaction
+uses `171×2 = 342` / 27,360 on its first day and `24×2 = 48` / 3,840 per hourly-phase day.
+Reserve first-day cost for N new attachments plus later-day cost for all R pending attachments,
 including carry-over. Combined N=2, R=3. Refunds reserve all three allowed transport attempts;
 non-refund work uses the approved ten-percent allowance:
 
@@ -298,7 +310,7 @@ after leaving L. The DB-derived gauges are `topup_confirmation_slow{chain_id}` a
 `topup_confirmation_slow_entries_24h{chain_id}`. Current stock excludes deposits that entered S,
 confirmed or terminated. Scope selectors to one environment before summing:
 
-- A deposit in L for ten minutes triggers the provider-lag alert.
+- L remaining non-empty for ten minutes triggers the provider-lag alert.
 - `sum(topup_confirmation_slow) > 1` or `sum(topup_confirmation_slow_entries_24h) > 1`
   triggers the independent L capacity alert. Pause new quotes on all routes of the affected
   chain and coordinate merchant intake. Existing funded work continues verification; keep its
@@ -310,12 +322,15 @@ Normal, L and S share the persisted chain-read due time and atomic lease claim. 
 probe/evidence allowance and advance due time before RPC; failed or crashed reads do not refund
 it. RPC runs outside the transaction and chain lock; evidence commits check the lease token
 and record version. One logical reader owns each due time. Restarts, missed ticks, pump/watcher
-handoffs and price retries never reopen the normal window or evidence allowance. Persisted finalized
-evidence may serve valuation/price retries only for deposits that have not entered S. Once a
-deposit enters S, use only fresh watcher evidence created after `first_unresolved_at`. The
-transfer identity (`to`, `token`, `from`, `amount`, `tx_from`, `tx_nonce`) must match the deposit;
-otherwise follow the S or reversal path. Non-final evidence retains watcher eligibility for
-finality verification.
+handoffs and price retries never reopen the normal window or evidence allowance. A deposit that
+has not entered S may reuse its complete persisted terminal proof for valuation/price retries.
+Entering S invalidates pre-entry proof: the watcher must acquire fresh dual terminal evidence
+created at or after `first_unresolved_at`, even if an old `final_at` exists. The transfer identity
+(`to`, `token`, `from`, `amount`, `tx_from`, `tx_nonce`) must match the deposit; otherwise follow
+the S or reversal path. The exact terminal transition establishing the current final marker is
+linked by `confirmation_terminal_transition_id`; only its versioned, complete dual proof may
+then serve price-only retries. Provisional reappearance stays in S on the watcher schedule.
+Non-final evidence retains watcher eligibility for finality verification.
 N-1 data compatibility preserves history but does not make its binary obey these new budgets.
 
 ### Monitoring and stop actions
@@ -330,7 +345,7 @@ the operator reconciles the evidence.
 Monitor stock from the first unresolved check, including a `detected` deposit whose transfer
 both endpoints agree is absent during confirmation, before the checkpoint. The pump and watcher
 share `first_unresolved_at` and the persisted backoff, with exactly one reader per due time.
-Sum all payment chains per environment, independently of the one-hour age alert. #425 exposes
+Sum all payment chains per environment, independently of the one-hour age alert. The service exposes
 `topup_finality_unresolved` (gauge, per chain) and
 `topup_finality_unresolved_entries_24h` (DB-derived gauge, per chain). The latter counts
 deposits whose persisted `first_unresolved_at` is within the last 24 hours, including resolved
@@ -449,7 +464,9 @@ No account nonce query is proof; EIP-7702 authorizations can increment it.
 
 The migration is expand-only. N keeps N-1's cursor/address compatibility fields and writes no
 legacy RPC table. N-1's frozen/anchor/recovery state must be resolved before starting N.
-Preserve its verified image and config. The local rollback drill covers N-1 → N → N-1 → N.
+Preserve its verified image and config. The published-image rollback drill covers N-1 → N → N-1 → N,
+preserving money state, confirmation counters, deadlines and entry history. Data compatibility
+does not make the old binary obey the new RPC bounds; use its own operating allocation.
 A production rollback pauses all screening-dependent processing until N's verified screening
 is restored; database compatibility does not authorize settlement. See
 [sanctions rollback](runbooks/sanctions-list.md#n-1-rollback).

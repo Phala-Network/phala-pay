@@ -1,6 +1,7 @@
 # Scanner lag
 
-**Trigger:** `topup-fast-scanner-<chain_id>` or `topup-coverage-scanner-<chain_id>` Sentry Crons,
+**Trigger:** `topup-fast-scanner-<chain_id>`, `topup-checkpoint-scanner-<chain_id>` or
+`topup-coverage-scanner-<chain_id>` Sentry Crons,
 `RpcCoverageLag` (>2 hours), or persistent `RpcAddressBackfillLag`.
 
 **Impact:** fast discovery runs every 300 seconds on read. A separate dual checkpoint check
@@ -32,11 +33,12 @@ cast block finalized --json --rpc-url "$RPC_PROVIDER_B_URL" | jq '(.data // .) |
 ```
 
 The fast monitor expects a five-minute interval, two-minute margin and three failures before
-alerting. Coverage expects a one-hour interval and two-minute margin. Both have per-chain
+alerting. Checkpoint checks expect a ten-minute interval; coverage expects one hour. Both have
+a two-minute margin and alert on one failed round. All three monitors have per-chain
 slugs; success on another chain cannot hide this chain's failure. Check independent ten-minute
 checkpoint progress and finality/refund progress even while hourly coverage is waiting.
 Inspect `topup_confirmation_slow` and `topup_confirmation_slow_entries_24h` across all payment
-chains, summed separately per environment. A deposit in L for ten minutes raises the provider-lag
+chains, summed separately per environment. L remaining non-empty for ten minutes raises the provider-lag
 alert. Current L stock or rolling-24-hour entries above one raises the independent capacity
 alert: pause new quotes on the affected chain, coordinate merchant intake, and preserve funded
 work and reservations. Entries still count after leaving L.
@@ -72,7 +74,7 @@ When lag is material, pause quotes:
 
 ## Done when
 
-Both per-chain scanner monitors check in at their new periods, independent checkpoints advance,
+All three per-chain scanner monitors check in at their periods, independent checkpoints advance,
 coverage lag drains below two hours, address backfill completes, and payments appear once.
 Resume quotes only when pending inventory and daily work fit the
 [pilot limits](../RPC.md#pilot-limits-and-operating-modes), including production D=46, staging

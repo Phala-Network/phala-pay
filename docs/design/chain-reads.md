@@ -156,9 +156,14 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
   `(price chain)`; when exhausted, quotes needing that chain fail closed with a retryable
   `price_unavailable`. Staging PHA TWAP sampling: `uniswap_v2.rs` `SAMPLE_INTERVAL_S` 60 → 300
   (staging-only, production-ineligible route; continuity and jump limits re-derived for 300 s).
-- **Refunds** (`refunds.rs`): independent dual receipt, transaction and header evidence, completed
-  only under the agreed checkpoint. Attachment checks run every 60 s for 30 min, every 10 min
-  until 24 h, then hourly; a never-seen transaction remains pending with its reservation.
+- **Refunds** (`refunds.rs`): independent dual receipt, persisted-checkpoint header and receipt-height
+  header evidence, completed only under the agreed checkpoint, without finalized-tag RPC.
+  The receipt reader uses one method per endpoint for missing receipts, two for included but
+  not finalized receipts, and three for finalized receipts. Pending/missing worker branches
+  also read the transaction's origin until sender/nonce is persisted, so asymmetric evidence
+  costs at most four methods per endpoint; a never-seen transaction costs two. Checks run every 60 s
+  for 30 min, every 10 min until 24 h, then hourly; a never-seen transaction remains pending
+  with its reservation. The budget includes the complete four-method worker bound.
   Atomic environment-wide concurrent and rolling-24-hour attachment caps are in §5.2.
 - **Treasury EIP-1271** (`treasuries/proof.rs`): dual calls at the same canonical pin.
 - **Flush records**: only from §2.2 step 4.
@@ -198,7 +203,7 @@ still freezes the chain. L does not count toward S.
 Current L stock and rolling-24-hour first entries are each ≤1 per environment, summed across
 payment chains. `topup_confirmation_slow{chain_id}` counts current L; moving to S, confirming or
 terminating removes its stock slot. `topup_confirmation_slow_entries_24h{chain_id}` is the exact
-DB-derived first-entry count, including deposits that left L. A deposit in L for ten minutes
+DB-derived first-entry count, including deposits that left L. L remaining non-empty for ten minutes
 raises a provider-lag alert. Either environment-scoped sum above one raises the L capacity
 alert: pause new quotes on the affected chain and coordinate merchant intake. Keep funded work,
 verification and reservations; never drop excess entries to fit the allowance.
@@ -209,12 +214,16 @@ Run RPC outside the database transaction and chain lock; commit evidence only wi
 lease token and record version. Failure/crash does not refund counts;
 restarts, handoffs and price retries cannot reset them. S follows re-inclusion until finality
 without handing back to a fresh normal window. Finalized watcher evidence goes to common
-confirmation/valuation in the same claim without a second receipt read. Persisted final evidence
-can serve price retries only for deposits that have not entered S. Once a deposit enters S,
-use only fresh watcher evidence created after `first_unresolved_at`. The transfer identity
-(`to`, `token`, `from`, `amount`, `tx_from`, `tx_nonce`) must match the deposit; otherwise follow
-the S or reversal path. Non-final evidence retains watcher eligibility and cannot prove credit
-forever. N-1 migrations preserve fields/history, but its binary needs its own operating budget.
+confirmation/valuation in the same claim without a second receipt read. A deposit that has not
+entered S may reuse its complete persisted terminal proof for price retries. Entering S
+invalidates pre-entry proof: only fresh watcher terminal evidence created at or after
+`first_unresolved_at` can establish finality, even if an old `final_at` exists. The transfer
+identity (`to`, `token`, `from`, `amount`, `tx_from`, `tx_nonce`) must match the deposit;
+otherwise follow the S or reversal path. `confirmation_terminal_transition_id` links the exact
+transition that established the current final marker; its versioned, complete dual proof may
+then serve price-only retries. Provisional reappearance stays in S. Non-final evidence retains
+watcher eligibility and cannot prove credit forever. N-1 migrations preserve fields/history,
+but its binary needs its own operating budget.
 Normal probe slots use `confirm_head_checks` (default 0), the single complete read uses
 `confirm_receipt_checks` (default 0), and the fixed window uses nullable `confirm_deadline_at`;
 `first_slow_at` is nullable. The shared chain-read
@@ -297,6 +306,7 @@ coverage-driven flow (§2.6) then expires or cancels it.
 ## 4. Config schema
 
 ```yaml
+max_attached_pending_refunds: 1           # required positive deployment cap; production uses 2
 rpc:                                    # one entry per chain used by a route or a price source
   - chain_id: 11155111                  # u64, unique
     read:                               # required
@@ -314,7 +324,9 @@ rpc:                                    # one entry per chain used by a route or
 Same for `84532` (`rpc.ankr.com/base_sepolia/{key}`, `base-sepolia.infura.io`), `1`
 (`rpc.ankr.com/eth/{key}`, `mainnet.infura.io`), `8453` (`rpc.ankr.com/base/{key}`,
 `base-mainnet.infura.io`) in both environments (staging uses `1` and `8453` for prices only).
-Cadences and hard admission caps are code constants. Deposit, factory and Safe limits are
+Cadences, hint/price budgets, the address cap and new-refund attachment cap are code constants;
+concurrent attached-pending refunds use the required positive deployment setting above.
+Deposit, factory and Safe limits are
 operational caps with monitoring and stop actions in §5.2. Removed: `rpc_companies`,
 `rpc_budgets`, `rpc_groups`, route `chain.rpc_groups`, price `rpc_group`/`rpc_group_b`,
 `asset.backstop`, `--head-poll-interval-s`, `--finalized-poll-interval-s`,
@@ -444,7 +456,8 @@ N-1 safety:
 - N-1 never reads the new tables or columns. Rows N-1 inserts get NULL markers, so N re-covers
   their addresses and re-verifies their deposits. A cancel-requested quote is `open` with a past
   `expires_at`; N-1 expires it as `expired` (no money effect).
-- N writes no `rpc_*` table and keeps `cursors.scanned_block/time` = coverage end,
+- N writes no `rpc_*` table and keeps `cursors.scanned_block/time` at the common complete
+  boundary across addresses, never ahead of coverage,
   `confirmed_block` = fast cursor, `backfilled`/`backfilled_through` only for caught-up addresses,
   deposits, `flushed`, `flush_failures` with today's semantics; N-1's own sweeps, reconciliation
   cursors, watermarks, reviews and reorg ranges are untouched and stay valid for it.

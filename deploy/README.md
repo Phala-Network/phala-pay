@@ -113,9 +113,13 @@ ruleset restricting creation, update, and deletion to admins, and immutable rele
 published `v<version>` always names the same commit and assets.
 
 CI runs the real-service `make cvm-rehearsal` on every pull request and push to main, and again
-before Release builds anything. It asserts a credited payment and an acknowledged, signed event
-redelivery with the receiver's credit unchanged. No live deployment or production credentials
-are involved; the existing rehearsal uses public HTTPS price sources.
+before Release builds anything. The payer submits a tx-hash hint through the reference product
+after broadcasting; hint failure retains scanner discovery. It asserts a credited payment and
+an acknowledged, signed event redelivery with the receiver's credit unchanged. Prices use local
+Chainlink, Uniswap V2 and sequencer fixtures plus hermetic exchange responses. The Ethereum
+mainnet price Anvil resumes twelve-second mining after seeding the thirty-minute TWAP window,
+keeping its baseline within EVM BLOCKHASH history. No live deployment, public price RPC or
+production credentials are involved.
 
 The tag runs [Release](../.github/workflows/release.yml). It runs the whole CI workflow on the
 commit first, then builds each image on its own GitHub-hosted runner with
@@ -558,6 +562,7 @@ environment is `topup.yaml`'s `environment`, both attested.
   | Monitor | Checks in | Margin |
   |---|---|---|
   | `topup-fast-scanner-<chain_id>` | after fast discovery (every five minutes); three failures alert | 2 min |
+  | `topup-checkpoint-scanner-<chain_id>` | after each independent dual checkpoint check (every ten minutes); one failure alerts | 2 min |
   | `topup-coverage-scanner-<chain_id>` | after each dual coverage round (hourly), `error` while coverage fails | 2 min |
   | `topup-pump-<n>`, `topup-outbox-test`, `topup-outbox-live` | each iteration or poll, every minute | 5 min |
   | `topup-lock-expiry` | after each successful expiry scan, every minute | 5 min |
@@ -623,7 +628,7 @@ D, factory and Safe counts are operational caps with monitoring and stop actions
 L accepts normal-window exhaustion solely from height lag, credits without a checkpoint wait
 and does not count toward S. Current L stock and rolling-24-hour entries are each ≤1 per
 environment across payment chains. Monitor `topup_confirmation_slow` and
-`topup_confirmation_slow_entries_24h`: L lasting ten minutes alerts on provider lag; either sum
+`topup_confirmation_slow_entries_24h`: L remaining non-empty for ten minutes alerts on provider lag; either sum
 above one triggers its capacity alert and affected-chain quote pause. See the
 [confirmation budget and retry caveat](RPC.md#worst-case-pilot-budget).
 
@@ -890,7 +895,9 @@ its payment settings are held until it sends its complete configuration again wi
 - `make cvm-rehearsal`: a staging-shaped artifact against Anvil, Garage, and the simulator, from
   the unsealed boot through sealing, a configuration upgrade (topup recreated, PostgreSQL not),
   operator onboarding of the product's account, its treasury proof and webhook endpoint, and one
-  credited deposit and a signed event redelivery without a second credit.
+  credited deposit submitted with a tx-hash hint and a signed event redelivery without a second
+  credit. Mainnet prices use local fixtures; the Ethereum price Anvil mines every twelve seconds
+  after TWAP seeding, while the Base price Anvil mines every second.
 - `make restore-drill`: [RESTORE.md](RESTORE.md#local-and-ci-drills).
 - `make sandbox-local`: the integrator sandbox ([sandbox/README.md](sandbox/README.md)).
 - `deploy/validate-compose.sh`: every committed environment rendered and checked against

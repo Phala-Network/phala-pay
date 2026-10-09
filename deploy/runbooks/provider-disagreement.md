@@ -2,7 +2,7 @@
 
 **Trigger:** `TopupRpcDisagreement`, `TopupSanctionsHold` (held past its confirmation window), or `TopupDepositStateAgeExceeded` with `state:detected` (the confirm step: finality and
 valuation) or `state:confirmed` (the sanctions screen).
-For height-only delays, the separate provider-lag alert fires after a deposit stays in L for
+For height-only delays, the separate provider-lag alert fires after L remains non-empty for
 ten minutes; either environment-wide L stock or rolling-entry count above one raises its
 capacity alert. These are distinct from evidence disagreement and S alerts.
 

@@ -160,10 +160,11 @@ tightened with standard mechanisms; nothing was live, so the API changed without
    `credited` = `rejected` < `reversed`; the larger cumulative amounts win), so the result does not
    depend on the order, and a `deposit.reversed` before `deposit.credited` nets to zero.
 2. *A refund marked paid is not canceled* (the double-payment risk): it stays reserved and
-   tracked until verified, or `failed` as `transaction_dropped` (no receipt on either provider
-   while the sender's nonce, kept when a provider first returned the transaction, is consumed at
-   `finalized` on both, the rule D1 uses for deposits) or `transaction_not_found` (never returned
-   by a provider within 24 hours of `mark_paid`); then the merchant requests a new refund.
+   tracked until independently verified at finality. The v0.10.0
+   [chain-read rules](chain-reads.md#24-money-evidence-both-endpoints) supersede the original nonce/24-hour
+   failure rules: absence and nonce changes do not release a reservation; a never-seen
+   transaction alerts after 24 hours and stays pending. Only agreed finalized payout evidence
+   resolves it. There is no API to release a claimed replaced payout.
 3. *Refund logs by receipt position.* `mark_paid` names the paying log by its position in the
    receipt (`receipt_log_index`), not the block-wide `log_index`, which changes when the
    transaction is re-included; a deposit's identity uses the same position (D1).

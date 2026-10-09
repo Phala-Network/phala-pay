@@ -305,7 +305,7 @@ addresses     id, account_id, livemode, chain_id, quote_id UNIQUE | deposit_addr
               deployed_block                      -- finalized ForwarderCreated for the pair
               UNIQUE (chain_id, address)          -- treasury: the forwarder's clone argument
 cursors       chain_id PK, scanned_block, scanned_block_time,       -- dual finalized coverage
-              confirmed_block                                       -- per-block scan (§8)
+              confirmed_block                                       -- read discovery cursor (§8)
 pending_transfers  chain_id, tx_hash, log_index, receipt_log_index, block_number, block_hash,
               block_time, head_block, address_id, asset_contract, from_address, amount_atomic,
               first_seen_at
@@ -338,8 +338,8 @@ refunds       id, account_id, livemode, chain_id, deposit_id, amount_atomic, des
               metadata jsonb, created_at   -- paid by the merchant from the address's treasury
               UNIQUE (chain_id, tx_hash, receipt_log_index) among pending and succeeded refunds
               -- receipt_log_index: the log's position in its receipt, which survives
-              -- re-inclusion; tx_from, tx_nonce: kept when a provider first returns the
-              -- transaction, to prove it dropped
+              -- re-inclusion; legacy tx_from, tx_nonce are retained when both providers
+              -- agree, for investigation; origin alone never proves replacement
 webhook_endpoints  id (we_…), account_id, livemode, url, enabled_events text[], status
               (enabled|disabled), disabled_reason (gone), description, metadata jsonb,
               created_at, deleted_at, last_attempt_at, last_attempt_status
@@ -439,12 +439,13 @@ later; nothing is rejected. A merchant selling what it cannot take back requires
 confirmations in its payment settings instead (§9), which credits nothing before finality.
 
 **Finality watch.** Whenever the independent ten-minute loop publishes an agreed checkpoint (§8),
-and every minute besides, the deposits of the chain that are neither final nor reversed, whose
-recorded block is at or below it, and whose recheck time (`finality_check_at`) has come are
-re-read independently on both endpoints by receipt, transaction and block header, with the
-agreed checkpoint as the finality boundary; nothing is read while
-no deposit is due. A pass claims deposits in pages of 500, oldest block first, at most 10 pages,
-with `FOR UPDATE SKIP LOCKED`. The pump and watcher share one persisted backoff anchored to
+and every minute besides, watcher-eligible deposits whose recheck time (`finality_check_at`) has
+come are read independently on both endpoints by receipt, transaction and block header, with
+the agreed checkpoint as the finality boundary. Ordinary unfinal deposits become eligible at
+the checkpoint; S remains eligible above it and even with an old `final_at`. Nothing is read
+while no deposit is due. A pass selects pages of 500, oldest block first, at most 10 pages;
+each row uses the shared atomic lease/due claim with `FOR UPDATE SKIP LOCKED`.
+The pump and watcher share one persisted backoff anchored to
 `first_unresolved_at`, the first unresolved check: every 60 seconds until ten minutes, every
 ten minutes until six hours, then hourly. Exactly one reader runs per due time; an active pump
 lease excludes the watcher from reading the same deposit. The one-hour pending-after-reorg
@@ -460,7 +461,7 @@ new block's:
 |---|---|
 | The receipt at or below `finalized`, with the same transfer at the deposit's receipt position | `final_at` is set, the evidence follows the block, and a credited deposit is swept by a finalized `Flushed` event after it. |
 | The receipt in a newer block that is not final, with the same transfer | The transaction was re-included: the evidence (block, hash, block-wide `log_index`) is followed; nothing is reversed. |
-| The receipt at or below `finalized` without the transfer at that position | `reversed` (a `detected` deposit with other agreed evidence to its address is left to its confirm step). If another transfer is at that position (the re-included transaction ran against other state: a router or swap paying another amount or recipient), it is recorded in the same transaction as a new deposit, as the scanner records one, when it pays an issued address: evidence `transfer_changed_at_finality` with `successor_deposit_id`. |
+| The receipt at or below the checkpoint without the same transfer identity at that position | `reversed`, including a `detected` deposit. If another transfer is at that position (the re-included transaction ran against other state: a router or swap paying another amount or recipient), it is recorded in the same transaction as a new deposit, as the scanner records one, when it pays an issued address: evidence `transfer_changed_at_finality` with `successor_deposit_id`. |
 | No receipt, and exactly one service-known same-chain/same-sender/same-nonce different transaction is agreed finalized by both at or below the checkpoint | Positively proven replacement: `reversed`; read only that candidate (K=1). |
 | No receipt, and more than one service-known replacement candidate | Read no candidates; raise an anomaly alert. No reversal: stay unresolved in stock S for operator resolution. |
 | No receipt without positive replacement evidence | Wait; `TopupDepositReversalUnproven`, and `TopupDepositPendingAfterReorg` after an hour. Account nonce changes alone prove nothing. |
@@ -481,6 +482,15 @@ verification and reservations continue. Follow the
 [finality recovery runbook](../deploy/runbooks/deposit-reversed.md#replacement-candidate-anomaly)
 and [RPC stock/turnover budget](../deploy/RPC.md#worst-case-pilot-budget).
 
+S follows provisional re-inclusion on the watcher schedule rather than restarting normal
+confirmation. Only fresh matching dual terminal evidence can resolve it and feed valuation
+within the same lease, without a second receipt read. A deposit outside S may reuse its complete
+persisted terminal proof for price retries. Entering S invalidates pre-entry proof: new watcher
+evidence must be created at or after `first_unresolved_at` and match `(to, token, from, amount,
+tx_from, tx_nonce)`, or follow S/reversal. `confirmation_terminal_transition_id` links the exact
+versioned proof establishing the current final marker; that proof can then serve price-only
+retries. Counters and deadlines never reset; a final marker alone is insufficient.
+
 A reversal is one transaction: the `reversed` transition with its evidence; `deposit.reversed`
 (event id `uuid_v5(NS, "deposit.reversed:" + deposit UUID)`) when the merchant was told of the
 deposit (`credited` or `rejected`); and a quote the deposit consumed always opens again with
@@ -495,7 +505,7 @@ holds at most one deposit that is not reversed (a partial unique index); every d
 there has a `revision`, the number recorded before it, and its id is `uuid_v5(NS,
 "{chain_id}:{tx_hash}:{receipt_log_index}")` at revision 0, so every earlier id is unchanged, and
 `uuid_v5(NS, "{chain_id}:{tx_hash}:{receipt_log_index}:{revision}")` after. A transfer re-included
-unchanged keeps its deposit, and the fast and dual coverage scanners record nothing for a position a deposit still holds, whatever its content; the per-block scan
+unchanged keeps its deposit, and the fast and dual coverage scanners record nothing for a position a deposit still holds, whatever its content; fast discovery
 never takes a position whose deposits were all reversed either, since that position is final and a
 read of it before finality may be of a log a reorganization removed, so only finalized evidence (the
 watch, dual coverage, restore rescans) records a revision above 0. So the watch,
@@ -1283,12 +1293,19 @@ pays the refund from and attaches with `mark_paid`. At `finalized`, both provide
 `Transfer` of the deposit's token from that treasury to the destination for exactly the amount, in
 a log no other refund holds, named by its position in the receipt (`receipt_log_index`, which
 survives the transaction's re-inclusion, as a deposit's identity does); then `succeeded` and
-`deposit.refunded`, otherwise `failed` with `failure_reason` and the reservation released. Once
-`mark_paid` attaches a transaction the refund cannot be canceled, since the transaction may still
-be mined: it stays `pending` and reserved until verified, or `failed` as `transaction_dropped`
-(no receipt on either provider while, at `finalized` on both, the sender's nonce, kept when a
-provider first returned the transaction, is used by another) or `transaction_not_found` (no
-provider returned it within 24 hours of `mark_paid`); the merchant then requests a new refund. An ineligible deposit is
+`deposit.refunded`. Agreed finalized evidence of a failed transaction or mismatched payout
+instead marks it `failed` with `failure_reason` and releases the reservation. Once `mark_paid`
+attaches a transaction, the refund cannot be canceled: it may still be mined and remains pending
+and reserved while missing, provisional or disputed. Twenty-four hours without an observed
+transaction raises `TopupRefundProgressAge`; it does not fail the refund. Nonce changes alone
+cannot prove replacement, and this version has no release API for a claimed replacement.
+Historical failed refunds may still carry `transaction_dropped` or `transaction_not_found`.
+Checks run every 60 seconds for 30 minutes after attachment, every ten minutes until 24 hours,
+then hourly indefinitely, using both endpoints and the published checkpoint. Atomic
+environment-wide admission limits concurrent attached-pending refunds (production 2, staging 1)
+and new attachments (one per rolling 24 hours); idempotent retries do not consume quota.
+Exhaustion is non-retryable `422 refund_attachment_limit_exceeded`; contact the operator before
+sending another payout. An ineligible deposit is
 `400 deposit_not_refundable`; one that is not final yet, and so could still be reversed, is
 `400 deposit_not_final`; an amount above the remainder is `400 amount_too_large`; a sanctioned
 destination is `400 destination_sanctioned`. A reversed deposit is not refundable.
@@ -1305,6 +1322,7 @@ destination is `400 destination_sanctioned`. A reversed deposit is not refundabl
 | 400 | `invalid_request_error` | the business-state failures: `api_key_inactive`, `last_api_key`, `exposure_cap_exceeded`, `quote_payment_received`, `quote_window_closed`, `quote_unexpected_state`, `deposit_address_cap_exceeded`, `deposit_address_retired`, `deposit_not_refundable`, `deposit_not_final`, `refund_unexpected_state`, `transfer_already_used`, `paused`, `chain_frozen`, `treasury_not_set`, `treasury_*`, `webhook_endpoint_cap_exceeded`, `webhook_endpoint_disabled` |
 | 401 | `invalid_request_error` | `signature_replayed` (admin: the signature was already used) |
 | 409 | `idempotency_error` | `idempotency_key_in_use` (a request with the key still runs; retry); the only `409` |
+| 422 | `invalid_request_error` | `address_capacity_reached`, `refund_attachment_limit_exceeded` (non-retryable pilot admission limits) |
 | 429 | `invalid_request_error` | `rate_limit` (requests per account and mode; reads of a public view by `client_secret`), `customer_rate_limit` (quote creations per minute and deposit address rotations per hour of one customer); each with `Retry-After` |
 | 503 | `api_error` | `unavailable` (no fresh price, database unavailable, including API-key authentication slots exhausted), `service_maintenance` (planned upgrades pause new mutations; reads continue while the process is up; retry after `Retry-After` with the same `Idempotency-Key`, since the request has not executed), `service_restoring` (every merchant request with an API key, reads included, while the service is frozen after a restore, §14; with `Retry-After`) |
 | 400 | `invalid_request_error` | admin only: `restore_not_frozen`, `restore_rescan_incomplete` (§14) |
@@ -1509,7 +1527,7 @@ defaulted addresses from it. The defaults and why:
 | `rpc` | required read/verify endpoint pair for each route and price chain, with independent hosts and explicit sealed keys ([RPC configuration](configuration.md#the-configuration-file), [runbook](../deploy/RPC.md)) |
 | `price.mode`, role lists | explicit `volatile` or `stablecoin`; no implicit providers |
 | `price.max_age_s`, `peg_band_bps`, `max_deviation_bps`, `max_fx_deviation_bps` | 90, 100, 100, 100; Chainlink uses its pinned heartbeat + 600 s |
-| `price.primary[].twap` | 1800 s window, 180 s sample age/gap, $100,000 WETH reserve, 300 bps spot divergence, 500 bps sample jump; samples every 60 s |
+| `price.primary[].twap` | Defaults: 1800 s window, 180 s sample age/gap, $100,000 WETH reserve, 300 bps spot divergence, 500 bps sample jump. Staging samples every 300 s and explicitly uses 900 s sample age/gap and 1100 bps jump. |
 | `merchant.min_amount`, `max_deposit_atomic`, `min_refund_atomic` | the default is required; an account may raise the minimum credit and lower the maximum deposit, and keeps the refund floor unless the operator sets `min` and `max` |
 | `merchant.min_deposit_atomic` | 0, which an account may raise: `min_amount` rejects dust *(policy: finance confirms before production)* |
 | `merchant.quote_ttl_seconds`, `quote_spread_bps`, `quote_tolerance_bps` | defaults 900, 50, 100; bounds 30 to 3 600 seconds and 0 to 500 basis points. The code refuses an operator bound above 86 400 seconds, a spread above 5 000, or a tolerance above 1 000 basis points |

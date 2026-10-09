@@ -16,7 +16,7 @@ ten minutes, every ten minutes until six hours, then hourly, anchored to `first_
 Both heads meeting the requirement permits the one full dual evidence read and credit in that
 claim without waiting for the checkpoint.
 
-A deposit in L for ten minutes raises the provider-lag alert. The DB-derived gauges
+L remaining non-empty for ten minutes raises the provider-lag alert. The DB-derived gauges
 `topup_confirmation_slow{chain_id}` and `topup_confirmation_slow_entries_24h{chain_id}` measure
 stock and exact rolling-24-hour first entries. Sum chains separately per environment. Either
 sum above one raises the independent L capacity alert: pause new quotes on all routes of the
@@ -82,5 +82,8 @@ Production deposits/day is 46 and staging 20; include both in shared quota check
 Receipt absence, disagreement, evidence changes and RPC failures instead enter S, which has
 its own stock/entry alerts and one-hour age alert. Follow the existing
 [deposit incident procedure](deposit-reversed.md). An old `final_at` on a detected S row is not
-credit or reversal proof; the watcher must acquire fresh dual terminal evidence. Price retries
-reuse only full terminal evidence and never restart normal confirmation quotas.
+credit or reversal proof; the watcher must acquire fresh dual terminal evidence created at or
+after `first_unresolved_at`, matching `(to, token, from, amount, tx_from, tx_nonce)`. A mismatch
+follows S or reversal. Price retries may reuse only the complete versioned proof linked to the
+current final marker by `confirmation_terminal_transition_id`, never a pre-S proof. They never
+restart normal confirmation quotas. See the [proof recovery rules](deposit-reversed.md#confirmation-delay-and-slow-lane-l).
