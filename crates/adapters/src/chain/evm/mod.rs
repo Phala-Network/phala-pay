@@ -11,9 +11,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::chain::flush::{
-    ContractAddressGetter, FactoryEvent, addressOfCall, balanceOfCall,
-    decode_contract_address_getter, encode_address_of, encode_balance_of,
-    encode_contract_address_getter, factory_event_signatures,
+    ContractAddressGetter, FactoryEvent, balanceOfCall, decode_contract_address_getter,
+    encode_balance_of, encode_contract_address_getter, factory_event_signatures,
 };
 use crate::redaction::{Redacted, RedactedTransportError};
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -57,7 +56,7 @@ pub const EIP1271_MAGIC_VALUE: [u8; 4] = [0x16, 0x26, 0xba, 0x7e];
 ///
 /// Its identity is `(tx_hash, receipt_log_index)`, which survives the transaction's re-inclusion in
 /// another block; the block fields and the block-wide `log_index` are evidence that may change.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TransferLog {
     /// Transaction hash containing the event.
     pub tx_hash: B256,
@@ -86,7 +85,7 @@ pub struct TransferLog {
 }
 
 /// A transaction's receipt as one provider reports it, with the transfer at one receipt position.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ReceiptLookup {
     /// The provider has no receipt: the transaction is not in its canonical chain.
     Missing,
@@ -295,6 +294,25 @@ pub trait ChainReader: Send + Sync {
         confirmations: Confirmations,
     ) -> impl Future<Output = Result<ChainHeads, ChainError>> + Send;
 
+    /// Returns the required tagged head and timestamp without reading a receipt. Production
+    /// readers use exactly one eth_getBlockByNumber call, including the header hash.
+    fn confirmation_probe(
+        &self,
+        confirmations: Confirmations,
+    ) -> impl Future<Output = Result<(FinalizedHead, B256), ChainError>> + Send {
+        async move {
+            let heads = self.confirmation_heads(confirmations).await?;
+            let number = match confirmations {
+                Confirmations::Depth(_) => heads.latest,
+                Confirmations::Safe => heads.safe,
+                Confirmations::Finalized => Some(heads.finalized),
+            }
+            .ok_or(ChainError::MissingField("confirmation head"))?;
+            let (hash, time) = self.header(number).await?;
+            Ok((FinalizedHead { number, time }, hash))
+        }
+    }
+
     /// Returns the factory's `ForwarderCreated`, `Flushed`, and `FlushFailed` events about any
     /// supplied forwarder in the inclusive block range. Anyone can call the factory, so the caller
     /// decides which of them concern its own `(forwarder, treasury)` pairs.
@@ -446,7 +464,7 @@ type BlockTimes = FifoCache<B256, DateTime<Utc>>;
 
 /// Timeout for one bounded RPC request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// Canonical Multicall3 deployment, through which every balance and `addressOf` read is
+/// Canonical Multicall3 deployment, through which every batched balance read is
 /// aggregated; `topup run` refuses a chain where it is missing or differs.
 pub const MULTICALL3: Address = MULTICALL3_ADDRESS;
 /// Calls aggregated into one Multicall3 `eth_call`, bounding its calldata (about 200 bytes per
@@ -827,22 +845,6 @@ impl EvmClient {
             .map(|address| CallItem::<balanceOfCall>::new(token, encode_balance_of(*address)))
             .collect();
         self.aggregate("balanceOf multicall", calls, block.into())
-            .await
-    }
-
-    /// Reads the deterministic forwarder addresses of `treasury` at the latest block through
-    /// Multicall3.
-    pub async fn factory_addresses(
-        &self,
-        factory: Address,
-        treasury: Address,
-        salts: &[B256],
-    ) -> Result<Vec<Address>, ChainError> {
-        let calls = salts
-            .iter()
-            .map(|salt| CallItem::<addressOfCall>::new(factory, encode_address_of(treasury, *salt)))
-            .collect();
-        self.aggregate("addressOf multicall", calls, BlockId::latest())
             .await
     }
 
@@ -1660,6 +1662,28 @@ impl ChainReader for FinalizedReader {
                 time,
             },
             block.header.hash,
+        ))
+    }
+
+    async fn confirmation_probe(
+        &self,
+        confirmations: Confirmations,
+    ) -> Result<(FinalizedHead, B256), ChainError> {
+        if confirmations == Confirmations::Finalized {
+            return self.finalized_header().await;
+        }
+        let tag = if confirmations.needs_safe() {
+            BlockNumberOrTag::Safe
+        } else {
+            BlockNumberOrTag::Latest
+        };
+        let (number, hash, timestamp) = self.client.price_block(tag).await?;
+        Ok((
+            FinalizedHead {
+                number,
+                time: utc_timestamp(timestamp)?,
+            },
+            hash,
         ))
     }
 
@@ -2538,27 +2562,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn balance_and_address_reads_never_depend_on_provider_batch_limits() {
+    async fn balance_reads_never_depend_on_provider_batch_limits() {
         let (client, observed, server) = batch_capped_node().await;
         let count = MULTICALL_CHUNK + 1;
         let addresses = (0..count)
             .map(|index| Address::with_last_byte(u8::try_from(index % 256).expect("byte")))
             .collect::<Vec<_>>();
-        let salts = vec![B256::repeat_byte(1); 6];
 
         let tokens = client
             .token_balances(Address::ZERO, &addresses, BlockNumberOrTag::Number(7))
             .await;
-        let derived = client
-            .factory_addresses(Address::ZERO, Address::ZERO, &salts)
-            .await;
         server.abort();
 
         assert_eq!(tokens.expect("token balances"), vec![U256::from(1); count]);
-        assert_eq!(
-            derived.expect("derived addresses"),
-            vec![Address::with_last_byte(1); 6]
-        );
         // One aggregate3 `eth_call` per chunk, at the read's block, where no call may fail.
         let observed = observed.lock().expect("observed calls").clone();
         let shape = observed
@@ -2570,7 +2586,6 @@ mod tests {
             vec![
                 (Value::from("0x7"), MULTICALL_CHUNK),
                 (Value::from("0x7"), 1),
-                (Value::from("latest"), 6),
             ]
         );
         assert!(

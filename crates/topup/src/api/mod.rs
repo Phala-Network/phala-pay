@@ -75,6 +75,8 @@ pub struct AppState {
     pub pool: PgPool,
     /// Attested route configurations.
     pub routes: Arc<RouteSet>,
+    /// Positive deployment-wide admission cap; staging uses 1 and production 2.
+    pub max_attached_pending_refunds: std::num::NonZeroU32,
     /// Separately configured administrative verification key.
     pub admin_key: VerificationKey,
     /// Least-privilege signing keys for POST instance pause/resume only.
@@ -429,6 +431,15 @@ fn hint_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(transactions::submit_quote_transaction))
         .routes(routes!(transactions::submit_deposit_address_transaction))
+        // Mount preflight routes inside the same global admission and acknowledgement layers.
+        .route(
+            "/v1/quotes/{id}/transactions",
+            axum::routing::options(|| async { StatusCode::NO_CONTENT }),
+        )
+        .route(
+            "/v1/deposit_addresses/{id}/transactions",
+            axum::routing::options(|| async { StatusCode::NO_CONTENT }),
+        )
 }
 
 /// The operator's routes, authenticated by RFC 9421 signatures.
@@ -580,6 +591,8 @@ fn router_from_routes(
                 }))
                 .layer(LoadShedLayer::new())
                 .layer(GlobalConcurrencyLimitLayer::new(256))
+                .layer(middleware::from_fn(transactions::read_body))
+                .layer(middleware::from_fn(transactions::received))
                 .layer(middleware::from_fn(deadlines::request_deadline)),
         )
         .route("/healthz", get(healthz))
@@ -588,7 +601,6 @@ fn router_from_routes(
         // Stripe's error object for any other path or method too, never an empty body.
         .fallback(unrecognized_request)
         .method_not_allowed_fallback(unrecognized_request)
-        .layer(middleware::from_fn(transactions::received))
         .layer(Extension(Arc::new(docs.clone())))
         .layer(Extension(pause))
         .with_state(state);
@@ -620,7 +632,6 @@ pub fn read_only_router(state: AppState, restore_report: Option<PathBuf>) -> Rou
     let (router, _) = router_inner(state, Arc::new(crate::pause::InstancePause::default()));
     router
         .layer(middleware::from_fn(reject_writes))
-        .layer(middleware::from_fn(transactions::received))
         .layer(middleware::from_fn(cache::no_store))
         .layer(Extension(ReadOnly {
             restore_report: restore_report.map(Arc::from),
@@ -638,9 +649,10 @@ async fn reject_writes(request: Request, next: Next) -> Response {
     let merchant_key = request
         .headers()
         .contains_key(axum::http::header::AUTHORIZATION);
-    if !merchant_key
-        && (matches!(*request.method(), Method::GET | Method::HEAD)
-            || request.uri().path().starts_with("/v1/admin/restore/"))
+    if transactions::is_submission(&request)
+        || (!merchant_key
+            && (matches!(*request.method(), Method::GET | Method::HEAD)
+                || request.uri().path().starts_with("/v1/admin/restore/")))
     {
         next.run(request).await
     } else {
@@ -821,6 +833,8 @@ mod tests {
         let admin_key = SigningKey::from_bytes(&[1; 32]);
         AppState {
             pool,
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::default(),
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
@@ -1016,6 +1030,70 @@ mod tests {
                 crate::observability::metrics::http_observations("/v1/treasuries", "GET", "5xx"),
                 before + 1,
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_hint_bodies_are_bounded_by_global_admission() {
+        for read_only in [false, true] {
+            for path in [
+                "/v1/quotes/qt_test/transactions",
+                "/v1/deposit_addresses/da_test/transactions",
+            ] {
+                let state = offline_state();
+                let pool = state.pool.clone();
+                let router = if read_only {
+                    super::read_only_router(state, None)
+                } else {
+                    super::router(state).0
+                };
+                let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let request = || {
+                    let reads = Arc::clone(&reads);
+                    Request::post(path)
+                        .body(Body::from_stream(futures_util::stream::poll_fn(
+                            move |_| {
+                                reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                std::task::Poll::Pending::<
+                                    Option<Result<axum::body::Bytes, std::io::Error>>,
+                                >
+                            },
+                        )))
+                        .unwrap()
+                };
+                let mut admitted = Vec::new();
+                for _ in 0..256 {
+                    let mut response = Box::pin(router.clone().oneshot(request()));
+                    assert!(futures_util::poll!(&mut response).is_pending());
+                    admitted.push(response);
+                }
+                assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 256);
+                let mut rejected = Box::pin(router.clone().oneshot(request()));
+                let response = match futures_util::poll!(&mut rejected) {
+                    std::task::Poll::Ready(Ok(response)) => response,
+                    _ => panic!("overloaded hint must be rejected before reading its body"),
+                };
+                assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 256);
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert_eq!(response.headers()["retry-after"], "1");
+                let body = to_bytes(response.into_body(), 4096).await.unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["error"]["code"], "unavailable");
+                drop(admitted);
+                let response = router
+                    .oneshot(
+                        Request::post(path)
+                            .body(Body::from(r#"{"transaction_hash":"after-release"}"#))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::ACCEPTED);
+                let body = to_bytes(response.into_body(), 4096).await.unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["transaction_hash"], "after-release");
+                pool.close().await;
+            }
         }
     }
 

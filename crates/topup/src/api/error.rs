@@ -1,7 +1,7 @@
 //! Stable API error responses, Stripe's error object (<https://docs.stripe.com/api/errors>): the
 //! HTTP status says what kind of failure it is (`400` the request cannot succeed in the objects'
 //! current state, `401` authentication, `403` permission, `404` a missing object, `409` only an
-//! `Idempotency-Key` still in use, `422` permanent chain address capacity, `429` too many requests, with `Retry-After`, `5xx` the
+//! `Idempotency-Key` still in use, `422` non-retryable pilot capacity limits, `429` too many requests, with `Retry-After`, `5xx` the
 //! service), and `code` which one.
 
 use axum::Json;
@@ -17,6 +17,11 @@ pub const DOCS_URL: &str = "https://phala-network.github.io/phala-pay/#section/E
 /// Every error code the merchant API returns, with its HTTP status and what to do about it: the
 /// `Errors` section of the API reference, which each error's `doc_url` points into.
 pub const ERROR_CODES: &[(&str, u16, &str)] = &[
+    (
+        "refund_attachment_limit_exceeded",
+        422,
+        "The environment has a configured attached-pending refund limit (production 2, staging 1), and permits one new attachment per rolling 24 hours, across all merchants and modes. This is not retryable; contact the operator before sending or attaching another payout. The refund stays pending and reserved. Repeating the same attachment does not consume quota; existing attachments continue verification.",
+    ),
     (
         "address_capacity_reached",
         422,
@@ -863,6 +868,15 @@ impl ApiError {
             "the chain's permanent issued-address capacity is reached; contact the operator",
         )
     }
+    /// Admission refused without releasing the refund reservation or suggesting an automatic retry.
+    #[must_use]
+    pub fn refund_attachment_limit_exceeded(message: &'static str) -> Self {
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "refund_attachment_limit_exceeded",
+            message,
+        )
+    }
     /// Temporarily unavailable chain, independently of current price availability.
     #[must_use]
     pub fn chain_unavailable() -> Self {
@@ -1128,6 +1142,7 @@ mod tests {
             ApiError::paused(""),
             ApiError::chain_frozen(),
             ApiError::address_capacity_reached(),
+            ApiError::refund_attachment_limit_exceeded("limit reached"),
             ApiError::chain_unavailable(),
             ApiError::price_unavailable(),
             ApiError::service_unavailable(""),

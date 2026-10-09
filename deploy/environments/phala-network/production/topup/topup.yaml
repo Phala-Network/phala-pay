@@ -2,6 +2,7 @@
 # (docs/configuration.md), attested as an inline config of the rendered compose. A change is a pull
 # request and a Deploy `upgrade`.
 environment: production
+max_attached_pending_refunds: 2
 public_origin: https://pay-api.phala.com
 admin_key:
   id: admin/production-v1

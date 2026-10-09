@@ -83,6 +83,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let product_key = seed_account(pool).await?;
     let app = topup::api::router(AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         routes: Arc::clone(&route_set),
         maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(
@@ -108,6 +109,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         quotes: std::sync::Mutex::default(),
     };
     let reader = FinalizedReader::new(Arc::new(EvmClient::new(&anvil.rpc_url)?));
+    topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
     coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
 
     let lock_address = api.lock("checkout-1").await?;
@@ -201,6 +203,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         "the head scan wrote an event"
     );
     anvil.mine(FINALITY_LAG)?;
+    topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
     let finalized = coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
     ensure!(
         finalized.inserted == 1,
@@ -225,6 +228,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let underpaid = api.lock("checkout-2").await?;
     transfer(&anvil.rpc_url, token, underpaid, 50)?;
     anvil.mine(FINALITY_LAG)?;
+    topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
     coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
     transfer(&anvil.rpc_url, token, underpaid, 100)?;
     // Dust first, then the exact amount, both still pending.
@@ -247,6 +251,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     // with the exact payment) used only to show the consuming deposit wins over the first
     // qualifying one.
     anvil.mine(FINALITY_LAG)?;
+    topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
     coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
     let underpayment: Uuid =
         sqlx::query_scalar("SELECT id FROM deposits WHERE address_id = $1 AND amount_atomic = 50")
@@ -307,6 +312,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     rpc(anvil, "evm_increaseTime", &["2"])?;
     transfer(&anvil.rpc_url, token, cancelled, 100)?;
     anvil.mine(FINALITY_LAG)?;
+    topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
     coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
     topup::locks::expire_once(pool, &route_set).await?;
     let lock = api.quote("checkout-4").await?;

@@ -4,7 +4,10 @@ mod support;
 use alloy_primitives::{Address, B256, U256};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use support::{
     TestDatabase,
     seed::{self, NewAccount, NewAddress},
@@ -29,9 +32,12 @@ fn hash(number: u64) -> B256 {
 }
 struct Reader {
     head: u64,
+    live_head: Option<Arc<AtomicU64>>,
+    finalized_reads: Mutex<usize>,
     logs: Vec<TransferLog>,
     receipt: Option<TransferLog>,
     error: bool,
+    header_error: bool,
     forged_header: bool,
     forged_at: Option<u64>,
     requests: Mutex<Vec<(Vec<Address>, u64, u64)>>,
@@ -47,9 +53,12 @@ impl Reader {
     fn new(head: u64) -> Self {
         Self {
             head,
+            live_head: None,
+            finalized_reads: Mutex::new(0),
             logs: Vec::new(),
             receipt: None,
             error: false,
+            header_error: false,
             forged_header: false,
             forged_at: None,
             requests: Mutex::new(Vec::new()),
@@ -65,13 +74,19 @@ impl Reader {
 }
 impl ChainReader for Reader {
     async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
+        *self.finalized_reads.lock().unwrap() += 1;
+        let head = self
+            .live_head
+            .as_ref()
+            .map_or(self.head, |head| head.load(Ordering::SeqCst));
         Ok(FinalizedHead {
-            number: self.head,
-            time: time(self.head),
+            number: head,
+            time: time(head),
         })
     }
     async fn finalized_header(&self) -> Result<(FinalizedHead, B256), ChainError> {
-        Ok((self.finalized_head().await?, hash(self.head)))
+        let head = self.finalized_head().await?;
+        Ok((head, hash(head.number)))
     }
     async fn latest_header(&self) -> Result<FinalizedHead, ChainError> {
         self.finalized_head().await
@@ -84,6 +99,9 @@ impl ChainReader for Reader {
             resume.notified().await;
         }
         self.header_reads.lock().unwrap().push(number);
+        if self.header_error {
+            return Err(ChainError::Rpc("header"));
+        }
         Ok((
             if self.forged_header || self.forged_at == Some(number) {
                 B256::ZERO
@@ -369,6 +387,198 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
 }
 
 #[tokio::test]
+async fn checkpoint_loop_advances_independently_of_failed_hourly_coverage() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            use std::time::Duration;
+            use tokio_util::sync::CancellationToken;
+            let address = address(d, 100).await?;
+            let head = Arc::new(AtomicU64::new(40_000));
+            let mut read = Reader::new(40_000);
+            read.live_head = Some(head.clone());
+            let mut verify = Reader::new(40_000);
+            verify.live_head = Some(head.clone());
+            verify.error = true;
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let read = Arc::new(read);
+            let verify = Arc::new(verify);
+            let heads = scanner::FinalizedHeads::default();
+            let cancel = CancellationToken::new();
+            // Keep the paused runtime runnable while PostgreSQL completes real I/O; only explicit
+            // advance calls below move the controlled clock.
+            tokio::time::pause();
+            let guard_cancel = cancel.clone();
+            let guard = tokio::spawn(async move {
+                while !guard_cancel.is_cancelled() {
+                    tokio::task::yield_now().await;
+                }
+            });
+            let checkpoint = {
+                let (pool, read, verify, heads, cancel) = (
+                    d.app_pool.clone(),
+                    read.clone(),
+                    verify.clone(),
+                    heads.clone(),
+                    cancel.clone(),
+                );
+                tokio::spawn(async move {
+                    scanner::checkpoint_loop(
+                        &pool,
+                        1,
+                        (&*read, &*verify),
+                        &heads,
+                        || true,
+                        &cancel,
+                    )
+                    .await;
+                })
+            };
+            let coverage = {
+                let (pool, read, verify, cancel) = (
+                    d.app_pool.clone(),
+                    read.clone(),
+                    verify.clone(),
+                    cancel.clone(),
+                );
+                tokio::spawn(async move {
+                    scanner::coverage_loop(
+                        &pool,
+                        &chain(),
+                        (&*read, &*verify),
+                        Duration::ZERO,
+                        || true,
+                        &cancel,
+                    )
+                    .await;
+                })
+            };
+            let result = async {
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+                tokio::time::advance(Duration::from_millis(1)).await;
+                wait_for_condition(|| {
+                    heads.get(1).is_some_and(|h| h.number == 40_000)
+                        && !read.requests.lock().unwrap().is_empty()
+                })
+                .await
+                .with_context(|| {
+                    format!(
+                        "initial tick: head {:?}, requests {}, finalized reads {}",
+                        heads.get(1),
+                        read.requests.lock().unwrap().len(),
+                        *read.finalized_reads.lock().unwrap()
+                    )
+                })?;
+                for tick in 1..=36_u64 {
+                    tokio::time::advance(Duration::from_secs(599)).await;
+                    // Every prior checkpoint completed, so neither loop may run early.
+                    for _ in 0..20 {
+                        tokio::task::yield_now().await;
+                    }
+                    ensure!(heads.get(1).context("published head")?.number == 40_000 + tick - 1);
+                    ensure!(
+                        read.requests.lock().unwrap().len() == usize::try_from(1 + (tick - 1) / 6)?
+                    );
+                    head.store(40_000 + tick, Ordering::SeqCst);
+                    tokio::time::advance(Duration::from_secs(1)).await;
+                    wait_for_condition(|| heads.get(1).is_some_and(|h| h.number == 40_000 + tick))
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "checkpoint tick {tick}: published {:?}, finalized reads {}",
+                                heads.get(1),
+                                *read.finalized_reads.lock().unwrap()
+                            )
+                        })?;
+                    if tick.is_multiple_of(6) {
+                        wait_for_condition(|| {
+                            read.requests.lock().unwrap().len()
+                                == usize::try_from(1 + tick / 6).unwrap()
+                        })
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "coverage tick {tick}: {} requests",
+                                read.requests.lock().unwrap().len()
+                            )
+                        })?;
+                    }
+                }
+                ensure!(
+                    marker(d, address.id).await?.is_none(),
+                    "failed coverage published negative evidence"
+                );
+                ensure!(
+                    db::chain_reads::coverage(&d.app_pool, 1)
+                        .await?
+                        .context("coverage")?
+                        .number
+                        == 99
+                );
+                ensure!(
+                    compat(d).await?.0 == 99,
+                    "checkpoint alone advanced the N-1 cursor"
+                );
+                Ok(())
+            }
+            .await;
+            cancel.cancel();
+            checkpoint.await?;
+            coverage.await?;
+            guard.await?;
+            tokio::time::resume();
+            result
+        })
+    })
+    .await
+}
+
+async fn wait_for_condition(condition: impl Fn() -> bool) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !condition() {
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "scheduled round did not finish"
+        );
+        tokio::task::yield_now().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordinary_coverage_uses_the_published_checkpoint_without_advancing_it() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            address(d, 100).await?;
+            let mut read = Reader::new(4_000);
+            let mut verify = Reader::new(4_000);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            read.head = 10_000;
+            verify.head = 10_000;
+            let reads = (
+                *read.finalized_reads.lock().unwrap(),
+                *verify.finalized_reads.lock().unwrap(),
+            );
+            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 6).await?;
+            ensure!(stats.finalized == 4_000 && stats.cursor == 4_000);
+            ensure!(
+                reads
+                    == (
+                        *read.finalized_reads.lock().unwrap(),
+                        *verify.finalized_reads.lock().unwrap()
+                    )
+            );
+            topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
+            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 12).await?;
+            ensure!(stats.finalized == 10_000 && stats.cursor == 10_000);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn first_round_caps_future_creation_at_the_agreed_checkpoint() -> Result<()> {
     with_database(|d| {
         Box::pin(async move {
@@ -385,6 +595,7 @@ async fn first_round_caps_future_creation_at_the_agreed_checkpoint() -> Result<(
             ensure!(marker(d, address.id).await?.is_none());
             read.head = 10100;
             verify.head = 10100;
+            topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 6).await?;
             ensure!(
                 marker(d, address.id).await? == Some(10100),
@@ -494,6 +705,11 @@ async fn reversal_during_coverage_rpc_discards_the_snapshot_without_reinserting(
                 100,
             )
             .await?;
+            // The unresolved confirmation is owned by the watcher while coverage is in flight.
+            sqlx::query("UPDATE deposits SET first_unresolved_at=now() WHERE id=$1")
+                .bind(id)
+                .execute(&d.app_pool)
+                .await?;
             let before = db::chain_reads::coverage(&d.app_pool, 1).await?;
             let compat_before: (i64, Option<DateTime<Utc>>) = sqlx::query_as(
                 "SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1",
@@ -677,6 +893,9 @@ async fn coverage_with_transient_reversed_history(changed: Option<&'static str>)
                 let result = async {
                     let fast = scanner::fast_once(&d.app_pool, &fast_read, &fast_chain).await?;
                     ensure!(fast.inserted == 1, "fast scanner did not insert during RPC");
+                    // A confirmation anomaly makes this transient detected row watcher-owned S.
+                    sqlx::query("UPDATE deposits SET first_unresolved_at=now() WHERE id=$1")
+                        .bind(id).execute(&d.app_pool).await?;
                     ensure!(watch.watch_once(1).await?.reversed == 1,
                         "finality did not reverse the transient fast insert");
                     Ok::<_, anyhow::Error>(())
@@ -1410,6 +1629,79 @@ async fn lowered_creation_clears_marker_and_backfills_before_quote_expiry() -> R
     })).await
 }
 
+async fn assert_coverage_boundary_conflict(
+    stored_coverage_conflict: bool,
+    forged_read: bool,
+    forged_verify: bool,
+    peer_error: bool,
+) -> Result<()> {
+    with_database(|d| Box::pin(async move {
+        let mut read = Reader::new(100);
+        let mut verify = Reader::new(100);
+        scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+        let address = address(d, 100).await?;
+        if stored_coverage_conflict {
+            // Keep distinct checkpoint and coverage hashes at the same height. When both
+            // endpoints return the forged hash, only the coverage guard can catch it.
+            sqlx::query("UPDATE chain_coverage SET through_block=100,through_hash=$1,through_time=$2 WHERE chain_id=1")
+                .bind(format!("{:#x}", hash(100))).bind(time(100)).execute(&d.app_pool).await?;
+            sqlx::query("UPDATE chain_checkpoints SET block_hash=$1 WHERE chain_id=1")
+                .bind(format!("{:#x}", B256::ZERO)).execute(&d.app_pool).await?;
+        }
+        if !stored_coverage_conflict {
+            // Keep coverage below the checkpoint, so this fixture independently proves
+            // the checkpoint guard rather than also triggering the coverage guard.
+            sqlx::query("UPDATE chain_coverage SET through_block=99,through_hash=$1,through_time=$2 WHERE chain_id=1")
+                .bind(format!("{:#x}", hash(99))).bind(time(99)).execute(&d.app_pool).await?;
+            sqlx::query("UPDATE cursors SET scanned_block=99,scanned_block_time=$1 WHERE chain_id=1")
+                .bind(time(99)).execute(&d.app_pool).await?;
+        }
+        let before = db::chain_reads::coverage(&d.app_pool, 1).await?;
+        let cursor: (i64, Option<DateTime<Utc>>) = sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1").fetch_one(&d.app_pool).await?;
+        let marker_before = marker(d, address.id).await?;
+        sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,expires_at=to_timestamp(100) WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).execute(&d.app_pool).await?;
+        read.forged_at = forged_read.then_some(100);
+        verify.forged_at = forged_verify.then_some(100);
+        read.header_error = peer_error && !forged_read;
+        verify.header_error = peer_error && !forged_verify;
+        ensure!(matches!(scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await, Err(scanner::ScannerError::Disagreement)));
+        let reason: String = sqlx::query_scalar("SELECT check_name FROM reconciliation_blocks WHERE chain_id=1").fetch_one(&d.app_pool).await?;
+        ensure!(reason == "finalized_checkpoint_conflict");
+        ensure!(db::chain_reads::coverage(&d.app_pool, 1).await? == before);
+        let after: (i64, Option<DateTime<Utc>>) = sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1").fetch_one(&d.app_pool).await?;
+        ensure!(after == cursor && marker(d, address.id).await? == marker_before);
+        ensure!(read.requests.lock().unwrap().is_empty() && verify.requests.lock().unwrap().is_empty(), "conflict must freeze before reading logs");
+        ensure!(topup::locks::expire_once(&d.app_pool, &routes()).await? == 0);
+        let reservation: (String, bool) = sqlx::query_as("SELECT status,exposure_reserved FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).fetch_one(&d.app_pool).await?;
+        ensure!(reservation == ("open".to_owned(), true));
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn dual_agreed_coverage_boundary_conflict_freezes_before_any_publication() -> Result<()> {
+    for stored_coverage_conflict in [false, true] {
+        assert_coverage_boundary_conflict(stored_coverage_conflict, true, true, false).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn single_endpoint_coverage_boundary_conflict_freezes_before_disagreement() -> Result<()> {
+    for stored_coverage_conflict in [false, true] {
+        for (forged_read, forged_verify) in [(true, false), (false, true)] {
+            assert_coverage_boundary_conflict(
+                stored_coverage_conflict,
+                forged_read,
+                forged_verify,
+                false,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn checkpoint_conflict_freezes_instead_of_replacing_durable_hash() -> Result<()> {
     with_database(|d| {
@@ -1580,6 +1872,57 @@ async fn previous_checkpoint_is_rechecked_on_each_endpoint_before_a_new_checkpoi
                 .fetch_one(&d.app_pool)
                 .await?;
                 ensure!(check == "finalized_checkpoint_conflict");
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn coverage_boundary_conflict_freezes_even_when_peer_errors() -> Result<()> {
+    for coverage in [false, true] {
+        for (read, verify) in [(true, false), (false, true)] {
+            assert_coverage_boundary_conflict(coverage, read, verify, true).await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn previous_checkpoint_conflict_freezes_even_when_peer_errors() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            for (chain, conflict_read) in [(1, true), (8453, false)] {
+                let initial = Reader::new(100);
+                topup::checkpoint::advance(&d.app_pool, chain, &initial, &initial).await?;
+                let mut read = Reader::new(200);
+                let mut verify = Reader::new(200);
+                read.forged_at = conflict_read.then_some(100);
+                verify.forged_at = (!conflict_read).then_some(100);
+                read.header_error = !conflict_read;
+                verify.header_error = conflict_read;
+                ensure!(matches!(
+                    topup::checkpoint::advance(&d.app_pool, chain, &read, &verify).await,
+                    Err(scanner::ScannerError::Disagreement)
+                ));
+                let previous = db::chain_reads::checkpoint(&d.app_pool, chain)
+                    .await?
+                    .context("checkpoint")?;
+                ensure!(previous.number == 100 && previous.hash == hash(100));
+                let reason: String = sqlx::query_scalar(
+                    "SELECT check_name FROM reconciliation_blocks WHERE chain_id=$1",
+                )
+                .bind(i64::try_from(chain)?)
+                .fetch_one(&d.app_pool)
+                .await?;
+                ensure!(reason == "finalized_checkpoint_conflict");
+                ensure!(*read.header_reads.lock().unwrap() == [100]);
+                ensure!(*verify.header_reads.lock().unwrap() == [100]);
+                ensure!(
+                    *read.finalized_reads.lock().unwrap() == 0
+                        && *verify.finalized_reads.lock().unwrap() == 0
+                );
             }
             Ok(())
         })

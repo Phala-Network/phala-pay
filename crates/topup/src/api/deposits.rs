@@ -627,6 +627,7 @@ pub(crate) async fn update_refund(
         ),
         (status = 401, description = "Unauthorized", body = ErrorResponse),
         (status = 404, description = "Not Found", body = ErrorResponse),
+        (status = 422, description = "Non-retryable `refund_attachment_limit_exceeded`; contact the operator. The reservation is preserved.", body = ErrorResponse),
     ),
     security(("api_key" = [])),
     tag = "refunds"
@@ -638,6 +639,10 @@ pub(crate) async fn update_refund(
 /// `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
 /// transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
 /// only when its transaction is proven not to pay it.
+/// Each environment has a configured attached-pending refund limit (production 2, staging 1),
+/// and permits one new attachment per
+/// rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+/// quota. A limit refusal preserves the reservation; contact the operator before another payout.
 pub(crate) async fn mark_refund_paid(
     State(state): State<AppState>,
     Extension(merchant): Extension<Merchant>,
@@ -659,6 +664,7 @@ pub(crate) async fn mark_refund_paid(
     repository::mark_refund_paid(
         &mut *transaction,
         &state.routes,
+        state.max_attached_pending_refunds,
         merchant.scope,
         id,
         tx_hash,
@@ -700,9 +706,9 @@ pub(crate) async fn mark_refund_paid(
 /// Cancels a pending refund that has no transaction attached and releases its reservation of the
 /// deposit; canceling a canceled refund returns it. Once `mark_paid` attached a transaction, the
 /// refund cannot be canceled, so that the deposit is never paid back twice: it stays reserved
-/// until verification ends it, `succeeded`, or `failed` when the transaction does not pay it,
-/// was dropped (its nonce consumed by another transaction at finality), or was never seen by the
-/// service's providers within 24 hours. Then request a new refund.
+/// until dual-source finalized verification ends it, `succeeded`, or `failed` when the transaction
+/// does not pay it. A transaction never seen for 24 hours raises an alert and remains pending;
+/// contact the operator before taking any further refund action.
 pub(crate) async fn cancel_refund(
     State(state): State<AppState>,
     Extension(merchant): Extension<Merchant>,

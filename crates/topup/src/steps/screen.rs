@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
-use topup_adapters::risk::oracle::SanctionsSource;
+use topup_adapters::risk::SanctionsSource;
 use topup_core::deposit::{DepositState, RejectReason, RetryError, StepOutcome};
 use topup_core::identity::{credited_event_id, event_id};
 use topup_core::money::AtomicAmount;

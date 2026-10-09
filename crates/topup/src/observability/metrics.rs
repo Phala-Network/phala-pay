@@ -120,6 +120,34 @@ pub(crate) fn pool_acquire_timed_out() {
     }
 }
 
+static REPLACEMENT_AMBIGUOUS: OnceLock<Result<IntCounterVec, prometheus::Error>> = OnceLock::new();
+fn replacement_ambiguities() -> Result<&'static IntCounterVec, prometheus::Error> {
+    REPLACEMENT_AMBIGUOUS
+        .get_or_init(|| {
+            IntCounterVec::new(
+                Opts::new(
+                    "topup_finality_replacement_ambiguous_total",
+                    "Finality checks with multiple service-known replacement candidates.",
+                ),
+                &["chain_id"],
+            )
+        })
+        .as_ref()
+        .map_err(|_| prometheus::Error::Msg("finality metrics unavailable".into()))
+}
+
+/// Records fail-closed replacement ambiguity with only a bounded chain label.
+pub(crate) fn replacement_ambiguous(chain_id: u64) {
+    let chain = chain_id.to_string();
+    match replacement_ambiguities() {
+        Ok(counter) => counter.with_label_values(&[&chain]).inc(),
+        Err(_) => tracing::error!("finality metrics initialization failed"),
+    }
+    sentry::metrics::counter("topup_finality_replacement_ambiguous_total", 1)
+        .attribute("chain_id", chain)
+        .capture();
+}
+
 /// Renders counters, histograms and current pool gauges without database or network I/O.
 pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     let http = http().map_err(|_| prometheus::Error::Msg("HTTP metrics unavailable".into()))?;
@@ -204,6 +232,7 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     families.extend(super::capacity::collect()?);
     families.extend(super::price_metrics::collect()?);
     families.extend(super::sanctions_metrics::collect()?);
+    families.extend(replacement_ambiguities()?.collect());
     families.extend(http.requests.collect());
     families.extend(http.latency.collect());
     families.extend(http.deadlines.collect());
@@ -215,6 +244,21 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
 /// Durable coverage and daily budget gauges are reloaded on authenticated scrapes, including
 /// after restart; no RPC request or address-wide backfill is issued here.
 pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> {
+    render_chain_reads_with_clock(pool, None).await
+}
+
+/// Reloads durable gauges with a supplied clock for the rolling unresolved-entry window.
+pub async fn render_chain_reads_at(
+    pool: &PgPool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<String, anyhow::Error> {
+    render_chain_reads_with_clock(pool, Some(now)).await
+}
+
+async fn render_chain_reads_with_clock(
+    pool: &PgPool,
+    now: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<String, anyhow::Error> {
     if let Some(snapshot) = crate::sanctions::active(pool)
         .await
         .map_err(|_| prometheus::Error::Msg("sanctions snapshot unavailable".into()))?
@@ -225,10 +269,12 @@ pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> 
             .max(0);
         super::sanctions_metrics::snapshot(&snapshot, age, pool).await;
     }
-    let (coverage,budgets,issued)=tokio::try_join!(
+    let (coverage,budgets,issued,unresolved,slow)=tokio::try_join!(
         sqlx::query_as::<_,(i64,i64,i64)>("SELECT c.chain_id,GREATEST(0,extract(epoch FROM now()-c.through_time)::bigint),(SELECT count(*) FROM addresses a WHERE a.chain_id=c.chain_id AND (a.dual_covered_through IS NULL OR a.dual_covered_through < c.through_block)) FROM chain_coverage c").fetch_all(pool),
         sqlx::query_as::<_,(String,i32)>("SELECT name,used FROM daily_budgets WHERE day=(now() AT TIME ZONE 'UTC')::date").fetch_all(pool),
-        sqlx::query_as::<_,(i64,i64)>("SELECT chain_id,count(*) FROM addresses GROUP BY chain_id UNION ALL SELECT chain_id,0 FROM chain_coverage c WHERE NOT EXISTS(SELECT 1 FROM addresses a WHERE a.chain_id=c.chain_id)").fetch_all(pool)
+        sqlx::query_as::<_,(i64,i64)>("SELECT chain_id,count(*) FROM addresses GROUP BY chain_id UNION ALL SELECT chain_id,0 FROM chain_coverage c WHERE NOT EXISTS(SELECT 1 FROM addresses a WHERE a.chain_id=c.chain_id)").fetch_all(pool),
+        sqlx::query_as::<_,(i64,i64,i64)>("SELECT chain_id,count(*) FILTER (WHERE first_unresolved_at IS NOT NULL AND deposit_finality_pending(deposits)),count(*) FILTER (WHERE first_unresolved_at > COALESCE($1::timestamptz, now()) - interval '24 hours') FROM deposits GROUP BY chain_id UNION ALL SELECT chain_id,0,0 FROM chain_checkpoints c WHERE NOT EXISTS(SELECT 1 FROM deposits d WHERE d.chain_id=c.chain_id)").bind(now).fetch_all(pool),
+        sqlx::query_as::<_,(i64,i64,i64)>("SELECT chain_id,count(*) FILTER (WHERE first_slow_at IS NOT NULL AND first_unresolved_at IS NULL AND state='detected' AND final_at IS NULL AND confirm_receipt_checks=0),count(*) FILTER (WHERE first_slow_at > COALESCE($1::timestamptz,now()) - interval '24 hours') FROM deposits GROUP BY chain_id UNION ALL SELECT chain_id,0,0 FROM chain_checkpoints c WHERE NOT EXISTS(SELECT 1 FROM deposits d WHERE d.chain_id=c.chain_id)").bind(now).fetch_all(pool)
     )?;
     let lag = IntGaugeVec::new(
         Opts::new(
@@ -280,7 +326,49 @@ pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> 
             .with_label_values(&[&chain])
             .set(crate::db::chain_reads::ISSUED_ADDRESS_CAP);
     }
+    let unresolved_gauge = IntGaugeVec::new(
+        Opts::new(
+            "topup_finality_unresolved",
+            "Deposits currently unresolved after their first due finality check.",
+        ),
+        &["chain_id"],
+    )?;
+    let entries_gauge = IntGaugeVec::new(
+        Opts::new(
+            "topup_finality_unresolved_entries_24h",
+            "Deposits first left unresolved in the last 24 hours, including resolved entries.",
+        ),
+        &["chain_id"],
+    )?;
+    for (chain, stock, entries) in unresolved {
+        let chain = chain.to_string();
+        unresolved_gauge.with_label_values(&[&chain]).set(stock);
+        entries_gauge.with_label_values(&[&chain]).set(entries);
+    }
+    let slow_gauge = IntGaugeVec::new(
+        Opts::new(
+            "topup_confirmation_slow",
+            "Deposits waiting only for confirmation height after the normal window.",
+        ),
+        &["chain_id"],
+    )?;
+    let slow_entries = IntGaugeVec::new(
+        Opts::new(
+            "topup_confirmation_slow_entries_24h",
+            "Deposits first entering the slow lane in the last 24 hours, including resolved entries.",
+        ),
+        &["chain_id"],
+    )?;
+    for (chain, stock, entries) in slow {
+        let chain = chain.to_string();
+        slow_gauge.with_label_values(&[&chain]).set(stock);
+        slow_entries.with_label_values(&[&chain]).set(entries);
+    }
     let mut families = lag.collect();
+    families.extend(slow_gauge.collect());
+    families.extend(slow_entries.collect());
+    families.extend(unresolved_gauge.collect());
+    families.extend(entries_gauge.collect());
     families.extend(issued_gauge.collect());
     families.extend(cap_gauge.collect());
     families.extend(addresses.collect());

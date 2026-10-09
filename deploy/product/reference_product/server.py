@@ -49,7 +49,7 @@ from topup_sdk import (
 )
 from topup_sdk.addresses import forwarder_address, quote_salt
 from topup_sdk.errors import ResponseValidationError, TransportError
-from topup_sdk.ids import DEPOSIT, object_id, parse_id
+from topup_sdk.ids import DEPOSIT, QUOTE, object_id, parse_id
 
 from .config import (
     DRIVER_KEYID,
@@ -74,6 +74,7 @@ LISTEN_BACKLOG = 128
 SHUTDOWN_TIMEOUT_SECONDS = 35
 # Workspace ids and lock references in the account API: URL path segments without escaping.
 ACCOUNT_REF = re.compile(r"[A-Za-z0-9._-]{1,64}")
+TRANSACTION_HASH = re.compile(r"0x[0-9a-fA-F]{64}")
 # The account API's path of the restore records, reserved among workspace ids.
 RESTORE_RECORDS = "restore-records"
 
@@ -308,6 +309,8 @@ class AccountApi:
     - `POST /accounts/{id}/quotes` `{"amount_minor", "chain_id"?, "asset"?}` creates a quote
       (`create_quote`) on a configured chain (the first by default) in an asset (that chain's
       first test token by default) and returns the service's quote;
+    - `POST /accounts/{id}/quotes/{quote_id}/transactions` `{"transaction_hash"}` submits a
+      detection hint for one of the workspace's quotes (`submit_quote_transaction`);
     - `POST /accounts/{id}/deposits/{deposit_id}/refunds` `{"destination_address",
       "amount_atomic"}` requests a refund of one of the workspace's deposits (`create_refund`);
     - `GET /accounts/{id}` returns the workspace's deposits (from the service), its credits
@@ -394,6 +397,29 @@ class AccountApi:
                     idempotency_key=verified.idempotency_key,
                 )
                 return Answer(HTTPStatus.OK, quote.to_dict())
+            if (
+                len(parts) == 4
+                and parts[1] == "quotes"
+                and parts[3] == "transactions"
+                and method == "POST"
+            ):
+                team = _account_ref(parts[0])
+                quote_id = object_id(QUOTE, parse_id(QUOTE, parts[2]))
+                tx_hash = _json_object(body).get("transaction_hash")
+                if not isinstance(tx_hash, str) or not TRANSACTION_HASH.fullmatch(tx_hash):
+                    raise ValueError("transaction_hash must be a 0x-prefixed 32-byte hash")
+                if self.ledger.team_suspended(team) is None:
+                    return Answer(HTTPStatus.NOT_FOUND)
+                try:
+                    quote = self._service().get_quote(quote_id)
+                except ApiError as error:
+                    if error.status_code == HTTPStatus.NOT_FOUND:
+                        return Answer(HTTPStatus.NOT_FOUND)
+                    raise
+                if quote.client_reference_id != team:
+                    return Answer(HTTPStatus.NOT_FOUND)
+                submission = self._service().submit_quote_transaction(quote_id, tx_hash)
+                return Answer(HTTPStatus.OK, submission.to_dict())
             if (
                 len(parts) == 4
                 and parts[1] == "deposits"

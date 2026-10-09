@@ -667,6 +667,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         check_payment_settings_cutover(&pool).await?;
         let state = topup::api::AppState {
             pool,
+            max_attached_pending_refunds: config.max_attached_pending_refunds,
             routes: Arc::new(routes),
             admin_key,
             maintenance_keys: config.maintenance_keys.clone(),
@@ -780,17 +781,19 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let screen_step = ScreenStep::from_source(
         pool.clone(),
         &routes,
-        Arc::clone(&screening) as Arc<dyn topup_adapters::risk::oracle::SanctionsSource>,
+        Arc::clone(&screening) as Arc<dyn topup_adapters::risk::SanctionsSource>,
     )
     .context("failed to configure screening step")?;
     let steps = Arc::new(StepSet::new(Box::new(confirm_step), Box::new(screen_step)));
-    let pump = Pump::new(
-        pool.clone(),
-        Arc::clone(&routes),
-        Arc::<StepSet>::clone(&steps),
-        pump_config,
-    )
-    .context("invalid pump configuration")?;
+    let pump = Arc::new(
+        Pump::new(
+            pool.clone(),
+            Arc::clone(&routes),
+            Arc::<StepSet>::clone(&steps),
+            pump_config,
+        )
+        .context("invalid pump configuration")?,
+    );
     let refund_reader = |index| {
         topup::refunds::EvmRefundChainReader::from_routes(pool.clone(), &routes, index)
             .context("failed to configure refund verification chain reader")
@@ -805,10 +808,12 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let finality_watch =
         topup::finality::FinalityWatch::from_routes(pool.clone(), Arc::clone(&routes))
             .map_err(anyhow::Error::msg)
-            .context("failed to configure the finality watch")?;
+            .context("failed to configure the finality watch")?
+            .with_pump(Arc::clone(&pump));
     let mut tasks = ServiceTasks::new();
     let state = topup::api::AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds: config.max_attached_pending_refunds,
         routes: Arc::clone(&routes),
         admin_key,
         maintenance_keys: config.maintenance_keys.clone(),

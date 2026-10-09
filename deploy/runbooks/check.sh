@@ -299,7 +299,7 @@ declare -A script_flags=(
 )
 declare -A script_positionals=(
     [render.sh]=1 [preflight.sh]=0 [product/preflight.sh]=0 [pinned-compose.sh]=0
-    [verify-attestation.sh]=5 [verify-ingress-evidence.sh]=2 [check-route-modes.sh]=2
+    [verify-attestation.sh]=6 [verify-ingress-evidence.sh]=2 [check-route-modes.sh]=2
     [validate-compose.sh]=0 [runbooks/sign-admin-request.sh]=5
 )
 
@@ -410,7 +410,7 @@ expected=(
     'unknown API operation: GET /v1/admin/routes/r/pause'
     'unknown API operation: DELETE /v1/admin/reports/daily'
     'unknown API operation: PUT /v1/admin/products'
-    'deploy/verify-attestation.sh takes 5 arguments, not 4'
+    'deploy/verify-attestation.sh takes 6 arguments, not 4'
     'unknown flag --bogus for deploy/render.sh'
     'deploy/render.sh takes 1 arguments, not 2'
 )

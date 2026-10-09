@@ -431,8 +431,10 @@ jobs:
           # The guest agent's public info (port 8090, public tcbinfo) carries the vm_config.
           curl -fsS --max-time 30 --retry 5 --retry-all-errors \
             "$("$KIT/deploy/phala-cvm.sh" url "$WORK/cvm.json" 8090)/prpc/Info" >"$WORK/info.json"
+          # Apply the reviewed OS pin on provision and upgrade, including existing CVMs.
+          expected_os_hash=$(cat "$ENVIRONMENT_DIR/os-image-hash")
           "$KIT/deploy/verify-attestation.sh" "$WORK/attestation.json" "$WORK/info.json" "$APP_ID" \
-            "$COMPOSE" "$VARIANT" 2>&1 | tee "$WORK/verification.txt"
+            "$COMPOSE" "$VARIANT" "$expected_os_hash" 2>&1 | tee "$WORK/verification.txt"
           {
             echo "| | |"
             echo "|---|---|"

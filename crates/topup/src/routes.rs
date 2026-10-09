@@ -7,7 +7,7 @@ use alloy_primitives::Address;
 use topup_adapters::chain::evm::EvmClient;
 use topup_core::route::{ChainConfig, RouteFile};
 
-use crate::rpc_provider::{ProviderUrl, environment_key, provider_label};
+use crate::rpc_provider::{ProviderUrl, provider_label};
 
 /// Every loaded route version with one shared RPC client per chain provider.
 ///
@@ -73,24 +73,6 @@ impl RouteSet {
     /// resolves ids through its configuration ([`RouteSet::with_providers`]).
     pub fn new(routes: Vec<RouteFile>) -> Result<Self, String> {
         Self::from_resolver(routes, |_| None)
-    }
-
-    /// Validates the loaded routes and creates one client per chain provider, each id resolved
-    /// through `providers` (the configuration's `rpc_providers`) and its sealed key from the
-    /// environment (`TOPUP_RPC_<ID>_KEY`).
-    ///
-    /// A provider whose URL or key is missing or invalid does not fail construction; the consumer
-    /// that needs it fails instead, so commands that use only provider A do not require provider B.
-    /// `topup run` checks every provider at startup ([`crate::contracts::check_pair`]).
-    pub fn with_providers(
-        routes: Vec<RouteFile>,
-        providers: &BTreeMap<String, ProviderUrl>,
-    ) -> Result<Self, String> {
-        Self::from_resolver(routes, |id| {
-            providers
-                .get(id)
-                .map(|url| (url.clone(), environment_key(id)))
-        })
     }
 
     /// Uses the validated read/verify clients, including observation-only price chains.

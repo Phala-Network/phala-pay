@@ -73,9 +73,10 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 | `TopupLockExposureNearCap`, `400 exposure_cap_exceeded` | [Lock exposure near cap](lock-exposure-near-cap.md) |
 | `TopupLockExpiryFailing`, `topup-lock-expiry` | [Lock expiry worker failure](lock-expiry-worker-failure.md) |
 | `topup-fast-scanner-<chain_id>`, `topup-coverage-scanner-<chain_id>` | [Scanner lag](scanner-lag.md) |
-| `TopupHeartbeatStale`, `TopupTreasuryProgressAge`, `TopupRefundProgressAge`, `TopupCertificateExpiry`, `TopupCertificateProbeFailed`, `TopupBusinessProbeFailed` | [Business health](business-health.md) |
+| `TopupHeartbeatStale`, `TopupTreasuryProgressAge`, `TopupCertificateExpiry`, `TopupCertificateProbeFailed`, `TopupBusinessProbeFailed` | [Business health](business-health.md) |
 | `topup-backup` | [Backup age](backup-age.md) |
 | `TopupOutboxBacklog`, `TopupOutboxStalled`, `TopupOutboxInternalFailure`, `topup-outbox-test`, `topup-outbox-live`, `outbox delivery claim failed` or `outbox delivery failed`, daily report `credited_undelivered` or `failing_webhook_endpoints`, a merchant reports missing webhooks or credits | [Outbox backlog](outbox-backlog.md) |
+| `TopupRefundProgressAge`, refund transaction unseen for 24 hours | [Pending refund transaction](rejected-funds-at-treasury.md#pending-refund-transaction-alert) |
 | `TopupUnsupportedInflows`, rejected funds at the treasury | [Rejected funds at treasury](rejected-funds-at-treasury.md) |
 | `TopupTreasurySanctioned`, a treasury on a sanctions list | [Treasury change, "Sanctioned treasury"](treasury-change.md#sanctioned-treasury) |
 | `TopupDeliveredCreditSanctioned`, a credit delivered before a restore whose sender is now listed | [Reconciliation after a restore, "Sanctioned delivered credit"](restore.md#sanctioned-delivered-credit) |

@@ -344,3 +344,15 @@ snapshot evidence is retained. The down migration is a no-op; the compatibility 
 persisted `sanctioned` / `sanctions_inconclusive` values stay unchanged. N-1 ignores the tables
 and resumes the deprecated oracle, with its known stale-list defect. Pause settlement for routes
 affected by active manual entries before rollback; see the sanctions runbook.
+
+`20261103000000_confirmation_bounds` adds default-zero normal head/receipt counters and nullable,
+immutable confirmation deadlines and slow-lane entry history. The shared read claim reserves
+counters, due time and the existing five-minute lease before RPC; normal/L and unresolved S never
+restart a budget. `confirmation_terminal_transition_id` links the current final marker to the
+complete terminal proof written in the same transaction by the new evidence path. Price-only
+retries retain that exact reference and marker. Reuse requires full transfer identity and a proof
+created at or after the first unresolved entry, if any. An N-1 final-marker rewrite invalidates
+the reference; an unlinked legacy marker or stale S proof remains watcher-owned.
+Additive SQL functions share watcher eligibility and terminal-proof lookup with the pump and DB
+metrics, including detected S rows with an older final marker. Its down migration keeps all
+history and money state. N-1 can read/write the expanded schema but uses its old RPC allocation.

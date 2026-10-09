@@ -15,7 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import create_autospec
+from unittest.mock import Mock, call, create_autospec
 
 import httpx
 import pytest
@@ -24,7 +24,7 @@ from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from reference_product import server
+from reference_product import driver, server
 from reference_product.__main__ import write_records
 from reference_product.config import (
     DRIVER_KEYID,
@@ -43,8 +43,11 @@ from reference_product.server import (
     _make_product,
     pin_webhook_keys,
 )
+from topup_client.models import Quote, TransactionSubmission
 from topup_sdk import (
+    ApiError,
     RequestSigner,
+    SigningAuth,
     TopupClient,
     credited_event_id,
     load_public_key,
@@ -633,6 +636,143 @@ def test_refund_requests_only_name_the_workspaces_own_deposits() -> None:
     for _ in range(2):
         assert api.handle("POST", target, headers, payload).status == 200
     assert keys[1] == keys[2] != keys[0]
+
+
+def test_transaction_hints_only_name_the_workspaces_own_quotes() -> None:
+    ledger = ProductLedger()
+    ledger.add_team(TEAM)
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    client.get_quote.return_value = Quote.from_dict(_quote())
+    tx_hash = "0x" + "aB" * 32
+    submission = {
+        "object": "transaction_submission",
+        "status": "received",
+        "transaction_hash": tx_hash,
+    }
+    client.submit_quote_transaction.return_value = TransactionSubmission.from_dict(submission)
+    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()), client=client)
+    body = json.dumps({"transaction_hash": tx_hash}).encode()
+
+    missing = _account_call(api, "POST", f"/accounts/missing/quotes/{QUOTE_ID}/transactions", body)
+    assert missing.status == 404
+    client.get_quote.assert_not_called()
+    client.submit_quote_transaction.assert_not_called()
+
+    ledger.add_team("other")
+    other = _account_call(api, "POST", f"/accounts/other/quotes/{QUOTE_ID}/transactions", body)
+    assert other.status == 404
+    client.submit_quote_transaction.assert_not_called()
+
+    answer = _account_call(api, "POST", f"/accounts/{TEAM}/quotes/{QUOTE_ID}/transactions", body)
+    assert (answer.status, answer.body) == (200, submission)
+    client.get_quote.assert_called_with(QUOTE_ID)
+    client.submit_quote_transaction.assert_called_once_with(QUOTE_ID, tx_hash)
+
+
+@pytest.mark.parametrize(("service_status", "product_status"), [(404, 404), (500, 502)])
+def test_transaction_hint_preserves_quote_not_found(
+    service_status: int, product_status: int
+) -> None:
+    ledger = ProductLedger()
+    ledger.add_team(TEAM)
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    client.get_quote.side_effect = ApiError(service_status, "not_found", "quote unavailable")
+    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()), client=client)
+    answer = _account_call(
+        api,
+        "POST",
+        f"/accounts/{TEAM}/quotes/{QUOTE_ID}/transactions",
+        json.dumps({"transaction_hash": "0x" + "ab" * 32}).encode(),
+    )
+    assert answer.status == product_status
+    client.get_quote.assert_called_once_with(QUOTE_ID)
+    client.submit_quote_transaction.assert_not_called()
+
+
+@pytest.mark.parametrize("tx_hash", [None, 1, "0x12", "0x" + "gg" * 32, "0x" + "ab" * 32 + "\n"])
+def test_transaction_hint_rejects_malformed_hashes(tx_hash: object) -> None:
+    ledger = ProductLedger()
+    ledger.add_team(TEAM)
+    client = create_autospec(TopupClient, instance=True, spec_set=True)
+    api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()), client=client)
+    answer = _account_call(
+        api,
+        "POST",
+        f"/accounts/{TEAM}/quotes/{QUOTE_ID}/transactions",
+        json.dumps({"transaction_hash": tx_hash}).encode(),
+    )
+    assert answer.status == 400
+    client.get_quote.assert_not_called()
+    client.submit_quote_transaction.assert_not_called()
+
+
+def test_product_api_submits_a_signed_transaction_hint() -> None:
+    tx_hash = "0x" + "ab" * 32
+    submission = {
+        "object": "transaction_submission",
+        "status": "received",
+        "transaction_hash": tx_hash,
+    }
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == f"/topup/accounts/{TEAM}/quotes/{QUOTE_ID}/transactions"
+        assert json.loads(request.content) == {"transaction_hash": tx_hash}
+        assert "signature" in request.headers
+        assert "idempotency-key" in request.headers
+        return httpx.Response(200, json=submission)
+
+    with driver.ProductApi(CONFIG.public_url, DRIVER) as api:
+        api._http.close()
+        api._http = httpx.Client(transport=httpx.MockTransport(handle), auth=SigningAuth(DRIVER))
+        assert api.submit_transaction(TEAM, QUOTE_ID, tx_hash) == submission
+
+
+@pytest.mark.parametrize(
+    "hint_error",
+    [None, driver.ProductApiError(503, "unavailable"), httpx.ConnectError("connection refused")],
+    ids=["received", "api_error", "connect_error"],
+)
+def test_deposit_driver_submits_after_payment_and_keeps_scanner_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    hint_error: driver.ProductApiError | httpx.HTTPError | None,
+) -> None:
+    api = create_autospec(driver.ProductApi, instance=True, spec_set=True)
+    api.__enter__.return_value = api
+    api.quote.return_value = Quote.from_dict(_quote())
+    payer = create_autospec(driver.Payer, instance=True)
+    payer.address = CONFIG.payer
+    tx_hash = "0x" + "ab" * 32
+    payer.mint_and_transfer.return_value = tx_hash
+    if hint_error is not None:
+        api.submit_transaction.side_effect = hint_error
+
+    def account(team: str) -> dict[str, Any]:
+        _, payload = _credited(client_reference_id=team)
+        event = json.loads(payload)
+        deposit = event["data"]["object"]
+        return {
+            "deposits": [deposit],
+            "events": [event],
+            "credits": [{"provider_order_id": deposit["id"], "amount_minor": 2500}],
+        }
+
+    api.account.side_effect = account
+    monkeypatch.setattr(driver, "ProductApi", lambda *_: api)
+    monkeypatch.setattr(driver, "Payer", lambda *_: payer)
+    monkeypatch.setattr(driver, "quote_address", lambda *_: "0x" + "66" * 20)
+    actions = Mock()
+    actions.attach_mock(payer.mint_and_transfer, "pay")
+    actions.attach_mock(api.submit_transaction, "submit")
+    driver.run_deposit(CONFIG, DRIVER, amount_minor=2500, timeout=1)
+    team = api.register.call_args.args[0]
+    assert actions.mock_calls == [
+        call.pay(TOKEN, "0x" + "66" * 20, 25_000_000_000_000_000_000),
+        call.submit(team, QUOTE_ID, tx_hash),
+    ]
+    api.account.assert_called_once_with(team)
+    assert ("scanner discovery will continue" in caplog.text) == (hint_error is not None)
 
 
 # Service restores: the product exports what the operator asks merchants for, as the admin

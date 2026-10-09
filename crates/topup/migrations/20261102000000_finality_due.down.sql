@@ -1,0 +1,2 @@
+-- Binary rollback retains the additive timestamps and compatibility ledger entry.
+-- N-1 ignores the nullable columns; no schema contraction is required.

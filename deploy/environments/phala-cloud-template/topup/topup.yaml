@@ -4,6 +4,7 @@
 # DSTACK_APP_DOMAIN and TOPUP_ADMIN_PUBLIC_KEY (deploy/compose.template.yaml), parses them strictly
 # at startup, and they are not attested. A production instance attests them (docs/self-hosting.md).
 environment: testnet
+max_attached_pending_refunds: 2
 admin_key:
   id: admin/v1
 # Independent Ankr read and Infura verify endpoints, with both sealed keys.

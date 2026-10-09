@@ -457,8 +457,12 @@ echo "== seeding the hermetic thirty-minute TWAP window"
 dc stop --timeout 10 topup >/dev/null
 # The staging sampler persists one sample per five minutes. Rehearsal time is compressed by mining
 # those timestamps on the local production-chain-id Anvil; every row still carries a real local
-# block hash, so the reader's restart/reorg checks remain exercised.
+# block hash, so the reader's restart/reorg checks remain exercised. EVM BLOCKHASH reaches only
+# 256 blocks back: the window plus sampling margin is about 2100 seconds, or 175 blocks at the
+# mainnet price chain's 12-second interval. One-second mining would put that history out of reach.
 twap_policy=$(jq -c '[.routes[].price | (.primary // [])[] | select(.source == "uniswap_v2_twap") | .twap] | unique | if length == 1 then .[0] else error("inconsistent rehearsal TWAP policies") end' "$environment/topup.yaml")
+jq -e '(.window_s + 300) / 12 < 256' <<<"$twap_policy" >/dev/null ||
+    die "rehearsal TWAP window plus sampling margin exceeds BLOCKHASH reach at 12 seconds per block"
 twap_sql="$tmp/twap.sql"
 : >"$twap_sql"
 pair_timestamp_last=$((ANVIL_PRICE_PAIR_TIMESTAMP - 1800))
@@ -511,11 +515,12 @@ done
 dc exec -T postgres psql -U postgres -d topup -X -v ON_ERROR_STOP=1 <"$twap_sql" >/dev/null
 # Price readers pin two blocks below head; make the final sample available at that height.
 for i in 1 2; do
+    cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setNextBlockTimestamp "$((sample_timestamp + 12 * i))" >/dev/null
     cast rpc --rpc-url "$mainnet_price_rpc_url" evm_mine >/dev/null
 done
 cast rpc --rpc-url "$base_mainnet_price_rpc_url" evm_mine >/dev/null
 cast rpc --rpc-url "$base_mainnet_price_rpc_url" evm_mine >/dev/null
-cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setIntervalMining 1 >/dev/null
+cast rpc --rpc-url "$mainnet_price_rpc_url" anvil_setIntervalMining 12 >/dev/null
 cast rpc --rpc-url "$base_mainnet_price_rpc_url" anvil_setIntervalMining 1 >/dev/null
 dc start topup >/dev/null
 echo "ok: persisted seven 300-second samples covering the minimum TWAP window"

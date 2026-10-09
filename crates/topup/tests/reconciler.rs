@@ -36,14 +36,11 @@ const CHAIN_ID: u64 = 31_337;
 #[derive(Default)]
 struct MockChain {
     finalized: AtomicU64,
-    derivation_delay: StdDuration,
-    derivation_started: Notify,
-    fail_derivation: AtomicBool,
+    balance_delay: StdDuration,
+    balance_started: Notify,
     fail_balances: AtomicBool,
     balances: Mutex<BTreeMap<Address, U256>>,
     balance_reads: Mutex<Vec<(u64, Vec<Address>)>>,
-    derived: Mutex<BTreeMap<B256, Address>>,
-    derivation_reads: Mutex<Vec<Vec<B256>>>,
 }
 
 impl MockChain {
@@ -51,13 +48,6 @@ impl MockChain {
         Self {
             finalized: AtomicU64::new(finalized),
             ..Self::default()
-        }
-    }
-
-    fn derive(&self, seeds: &[&Seed]) {
-        let mut derived = self.derived.lock().unwrap();
-        for seed in seeds {
-            derived.insert(seed.salt, seed.address);
         }
     }
 }
@@ -70,6 +60,8 @@ impl ReconciliationChain for MockChain {
         addresses: &[Address],
         hash: B256,
     ) -> Result<Vec<U256>, ReconciliationError> {
+        self.balance_started.notify_one();
+        tokio::time::sleep(self.balance_delay).await;
         if hash != B256::repeat_byte(24) {
             return Err(ReconciliationError::Invariant(
                 "fixture custody pin changed",
@@ -91,30 +83,10 @@ impl ReconciliationChain for MockChain {
             .map(|address| balances.get(address).copied().unwrap_or(U256::ZERO))
             .collect())
     }
-
-    async fn factory_addresses(
-        &self,
-        _factory: Address,
-        _treasury: Address,
-        salts: &[B256],
-    ) -> Result<Vec<Address>, ReconciliationError> {
-        self.derivation_started.notify_one();
-        tokio::time::sleep(self.derivation_delay).await;
-        if self.fail_derivation.load(Ordering::SeqCst) {
-            return Err(ReconciliationError::Chain("addressOf timed out".to_owned()));
-        }
-        self.derivation_reads.lock().unwrap().push(salts.to_vec());
-        let derived = self.derived.lock().unwrap();
-        Ok(salts
-            .iter()
-            .map(|salt| derived.get(salt).copied().unwrap_or(Address::ZERO))
-            .collect())
-    }
 }
 
 struct Seed {
     address_id: Uuid,
-    salt: B256,
     address: Address,
 }
 
@@ -139,7 +111,6 @@ async fn post_restore_refuses_to_preempt_a_running_lease_owner() -> Result<()> {
         .execute(&pool)
         .await?;
         let chain = Arc::new(MockChain::at(150));
-        chain.derive(&[&seed]);
         let reconciler = reconciler(&pool, route, chain)?;
 
         let service = hold_lease_owner_lock(&pool).await?;
@@ -252,8 +223,7 @@ async fn checks_are_independent_and_a_failed_round_recovers() -> Result<()> {
             .await?;
         scanned_through(&pool, 150).await?;
         let chain = Arc::new(MockChain::at(150));
-        chain.derive(&[&seed]);
-        chain.fail_derivation.store(true, Ordering::SeqCst);
+        chain.fail_balances.store(true, Ordering::SeqCst);
         let reconciler = Reconciler::with_dependencies(
             pool.clone(),
             route_set(route)?,
@@ -261,7 +231,7 @@ async fn checks_are_independent_and_a_failed_round_recovers() -> Result<()> {
         );
 
         let failed = reconciler.run_once().await?;
-        ensure!(failed.failed_checks == [CheckName::AddressDerivation]);
+        ensure!(failed.failed_checks == [CheckName::CustodyBalance]);
         ensure!(failed.findings.iter().any(|finding| {
             finding.subjects.get("deposit_id") == Some(&mispriced_id.to_string())
                 && finding.expected["credit_minor"] == json!("100")
@@ -270,9 +240,9 @@ async fn checks_are_independent_and_a_failed_round_recovers() -> Result<()> {
             finding.subjects.get("deposit_id") == Some(&historical_id.to_string())
                 && finding.observed["error"] == json!("route_version_unavailable")
         }));
-        ensure!(has_check(&failed, CheckName::CustodyBalance));
+        ensure!(!has_check(&failed, CheckName::AddressDerivation));
 
-        chain.fail_derivation.store(false, Ordering::SeqCst);
+        chain.fail_balances.store(false, Ordering::SeqCst);
         let recovered = reconciler.run_once().await?;
         ensure!(recovered.succeeded());
         Ok(())
@@ -287,7 +257,7 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
         let token = route.asset.contract;
         let swept = seed_identity(&pool, &route, 71).await?;
         let unsettled = seed_identity(&pool, &route, 72).await?;
-        let idle = seed_identity(&pool, &route, 73).await?;
+        let _idle = seed_identity(&pool, &route, 73).await?;
         // Swept to zero by its ledger: its balance is not read.
         let emptied = seed_identity(&pool, &route, 74).await?;
         seed_deposit(
@@ -350,7 +320,6 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
             .await?;
 
         let chain = Arc::new(MockChain::at(150));
-        chain.derive(&[&swept, &unsettled, &idle, &emptied]);
         chain
             .balances
             .lock()
@@ -518,15 +487,15 @@ async fn custody_requires_full_dual_balance_agreement_even_when_read_matches() -
     .await
 }
 
-/// Derivation reads are cached only while the stored derivation inputs remain unchanged.
+/// Local derivations are cached only while the stored inputs remain unchanged.
 #[tokio::test]
-async fn each_stored_derivation_is_read_once_until_its_row_changes() -> Result<()> {
+async fn local_derivation_detects_a_changed_database_address_and_freezes() -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
         let seed = seed_identity(&pool, &route, 92).await?;
-        let chain = Arc::new(MockChain::at(0));
-        chain.derive(&[&seed]);
-        let reconciler = reconciler(&pool, route.clone(), chain.clone())?;
+        // No RPC adapter is available: this check must depend only on reviewed contract data.
+        let reconciler =
+            Reconciler::with_dependencies(pool.clone(), route_set(route.clone())?, BTreeMap::new());
         ensure!(
             reconciler
                 .check(CheckName::AddressDerivation)
@@ -539,9 +508,8 @@ async fn each_stored_derivation_is_read_once_until_its_row_changes() -> Result<(
                 .await?
                 .is_empty()
         );
-        ensure!(chain.derivation_reads.lock().unwrap().as_slice() == [vec![seed.salt]]);
 
-        // A changed row is read again, and a mismatch still freezes the chain.
+        // A changed row is locally derived again; the DB mismatch still freezes the chain.
         sqlx::query("UPDATE addresses SET address = $2 WHERE id = $1")
             .bind(seed.address_id)
             .bind(format!("{:#x}", Address::repeat_byte(0x93)))
@@ -549,7 +517,6 @@ async fn each_stored_derivation_is_read_once_until_its_row_changes() -> Result<(
             .await?;
         let findings = reconciler.check(CheckName::AddressDerivation).await?;
         ensure!(findings.len() == 1, "unexpected findings: {findings:?}");
-        ensure!(chain.derivation_reads.lock().unwrap().len() == 2);
         ensure!(frozen_chains(&pool, &*route_set(route)?).await? == BTreeSet::from([CHAIN_ID]));
         Ok(())
     })
@@ -569,11 +536,11 @@ async fn only_chain_checks_freeze_and_findings_are_idempotent() -> Result<()> {
         )
         .await?;
         let chain = Arc::new(MockChain::at(0));
-        chain
-            .derived
-            .lock()
-            .unwrap()
-            .insert(seed.salt, Address::from([99; 20]));
+        sqlx::query("UPDATE addresses SET address=$2 WHERE id=$1")
+            .bind(seed.address_id)
+            .bind(format!("{:#x}", Address::repeat_byte(99)))
+            .execute(&pool)
+            .await?;
         let reconciler = Reconciler::with_dependencies(
             pool.clone(),
             route_set(route)?,
@@ -695,6 +662,11 @@ async fn frozen_chain_gates_startup_pumps_and_scanner() -> Result<()> {
             DepositSeed::new(101, DepositState::Detected),
         )
         .await?;
+        // An unfinalized detected row is pump-owned; legacy final markers are watcher-owned.
+        sqlx::query("UPDATE deposits SET final_at=NULL WHERE id=$1")
+            .bind(deposit_id)
+            .execute(&pool)
+            .await?;
         ensure!(frozen_chains(&pool, &*route_set(route.clone())?).await?.is_empty());
         sqlx::query(
             r#"
@@ -806,11 +778,20 @@ async fn loop_respects_cancellation() -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
         let seed = seed_identity(&pool, &route, 82).await?;
+        seed_deposit(
+            &pool,
+            &route,
+            &seed,
+            DepositSeed::new(82, DepositState::Credited)
+                .block(100)
+                .amount(250),
+        )
+        .await?;
+        scanned_through(&pool, 140).await?;
         let chain = Arc::new(MockChain {
-            derivation_delay: StdDuration::from_secs(10),
+            balance_delay: StdDuration::from_secs(10),
             ..MockChain::default()
         });
-        chain.derive(&[&seed]);
         let reconciler = Arc::new(Reconciler::with_dependencies(
             pool.clone(),
             route_set(route)?,
@@ -830,87 +811,10 @@ async fn loop_respects_cancellation() -> Result<()> {
                     .await;
             }
         });
-        tokio::time::timeout(
-            StdDuration::from_secs(1),
-            chain.derivation_started.notified(),
-        )
-        .await?;
+        tokio::time::timeout(StdDuration::from_secs(1), chain.balance_started.notified()).await?;
         cancellation.cancel();
         tokio::time::timeout(StdDuration::from_secs(1), task).await??;
         Ok(())
-    })
-    .await
-}
-
-#[tokio::test]
-async fn scheduled_custody_reads_both_sources_hourly() -> Result<()> {
-    with_database(|pool| async move {
-        let route = route()?;
-        let seed = seed_identity(&pool, &route, 85).await?;
-        seed_deposit(
-            &pool,
-            &route,
-            &seed,
-            DepositSeed::new(85, DepositState::Credited)
-                .block(100)
-                .amount(250),
-        )
-        .await?;
-        scanned_through(&pool, 140).await?;
-        let chain = Arc::new(MockChain::at(150));
-        chain.derive(&[&seed]);
-        chain
-            .balances
-            .lock()
-            .unwrap()
-            .insert(seed.address, U256::from(250));
-        // A due derivation reports each round; failed checks do not suspend custody's schedule.
-        chain.fail_derivation.store(true, Ordering::SeqCst);
-        let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?);
-        let cancellation = CancellationToken::new();
-        tokio::time::pause();
-        // Keep the runtime runnable while PostgreSQL responds, so paused time advances
-        // only at the explicit boundaries below, rather than automatically during DB I/O.
-        let clock_guard = tokio::spawn({
-            let cancellation = cancellation.clone();
-            async move { while !cancellation.is_cancelled() { tokio::task::yield_now().await; } }
-        });
-        let task = tokio::spawn({
-            let reconciler = reconciler.clone(); let cancellation = cancellation.clone();
-            async move { reconciler.run_loop(StdDuration::from_secs(300),topup::scanner::FinalizedHeads::default(),cancellation).await; }
-        });
-        tokio::time::advance(StdDuration::from_millis(1)).await;
-        let result = async {
-            for tick in 1..=14 {
-                let deadline = std::time::Instant::now() + StdDuration::from_secs(10);
-                let mut timer_poll = std::time::Instant::now();
-                loop {
-                    tokio::select! {
-                        () = chain.derivation_started.notified() => break,
-                        () = tokio::task::yield_now() => {
-                            ensure!(std::time::Instant::now() < deadline,"reconciliation did not reach tick {tick}");
-                            if timer_poll.elapsed() >= StdDuration::from_millis(10) {
-                                tokio::time::advance(StdDuration::from_millis(1)).await;
-                                timer_poll = std::time::Instant::now();
-                            }
-                        },
-                    }
-                }
-                // A five-minute regular cadence still has only one dual snapshot before
-                // the hour, and a second one at the hour. Each notification starts a round.
-                if (2..=13).contains(&tick) {
-                    ensure!(chain.balance_reads.lock().unwrap().len()==2,
-                        "custody ran more often than hourly at tick {tick}");
-                } else if tick==14 {
-                    ensure!(chain.balance_reads.lock().unwrap().len()==4,
-                        "hourly dual custody did not resume");
-                }
-                tokio::time::advance(StdDuration::from_secs(300)).await;
-            }
-            Ok::<_,anyhow::Error>(())
-        }.await;
-        cancellation.cancel(); tokio::time::resume(); task.await?; clock_guard.await?;
-        result
     })
     .await
 }
@@ -924,7 +828,6 @@ async fn stalled_checkpoint_still_runs_dual_custody_every_hour() -> Result<()> {
             DepositSeed::new(86, DepositState::Credited).block(100).amount(250)).await?;
         scanned_through(&pool, 140).await?;
         let chain = Arc::new(MockChain::at(150));
-        chain.derive(&[&seed]);
         chain.balances.lock().unwrap().insert(seed.address, U256::from(250));
         let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?);
         let heads = topup::scanner::FinalizedHeads::default();
@@ -981,8 +884,10 @@ async fn loop_publishes_failed_checks_for_the_daily_report() -> Result<()> {
         let route = route()?;
         let seed = seed_identity(&pool, &route, 81).await?;
         let chain = Arc::new(MockChain::at(150));
-        chain.derive(&[&seed]);
-        chain.fail_derivation.store(true, Ordering::SeqCst);
+        seed_deposit(&pool, &route, &seed,
+            DepositSeed::new(81, DepositState::Credited).block(100).amount(250)).await?;
+        scanned_through(&pool, 140).await?;
+        chain.fail_balances.store(true, Ordering::SeqCst);
         let reconciler = Reconciler::with_dependencies(
             pool.clone(),
             route_set(route)?,
@@ -991,7 +896,7 @@ async fn loop_publishes_failed_checks_for_the_daily_report() -> Result<()> {
         let cancellation = CancellationToken::new();
         // The first tick is immediate; no other test completes a loop round in this binary.
         let round = async {
-            while !topup::observability::reconciliation().is_some_and(|status| status.failed_checks.iter().any(|(check, _)| check == "address_derivation")) {
+            while !topup::observability::reconciliation().is_some_and(|status| status.failed_checks.iter().any(|(check, _)| check == "custody_balance")) {
                 tokio::time::sleep(StdDuration::from_millis(20)).await;
             }
         };
@@ -1004,8 +909,8 @@ async fn loop_publishes_failed_checks_for_the_daily_report() -> Result<()> {
         ensure!(
             status.failed_checks
                 == [(
-                    "address_derivation".to_owned(),
-                    "addressOf timed out".to_owned()
+                    "custody_balance".to_owned(),
+                    "balance endpoint unavailable".to_owned()
                 )],
             "{status:?}"
         );
@@ -1124,7 +1029,12 @@ async fn seed_identity(pool: &PgPool, route: &RouteFile, number: u8) -> Result<S
     .await?;
     let address_id = Uuid::new_v4();
     let salt = B256::from([number; 32]);
-    let address = Address::from([number; 20]);
+    let address = topup_core::address::forwarder_address(
+        route.chain.contracts.forwarder_factory,
+        route.chain.contracts.implementation,
+        support::seed::FIXTURE_TREASURY,
+        salt,
+    );
     seed::insert_address(
         pool,
         &NewAddress {
@@ -1139,7 +1049,6 @@ async fn seed_identity(pool: &PgPool, route: &RouteFile, number: u8) -> Result<S
     .await?;
     Ok(Seed {
         address_id,
-        salt,
         address,
     })
 }
@@ -1346,7 +1255,6 @@ async fn post_restore_ignores_a_completed_sweeps_stale_page_cursor() -> Result<(
         let seed=seed_identity(&pool,&route,1).await?;
         scanned_through(&pool,5).await?;
         let chain=Arc::new(MockChain::at(5));
-        chain.derive(&[&seed]);
         sqlx::query("INSERT INTO reconciliation_deposit_cursors(chain_id,next_block) VALUES($1,6)").bind(i64::try_from(CHAIN_ID)?).execute(&pool).await?;
         // Crash after advancing the block cursor but before clearing the previous sweep.
         sqlx::query("INSERT INTO scan_address_sweeps(chain_id,lane,epoch,anchor,from_block,through_block,last_id) VALUES($1,'missing',0,0,0,5,$2)").bind(i64::try_from(CHAIN_ID)?).bind(seed.address_id).execute(&pool).await?;

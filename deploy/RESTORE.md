@@ -240,8 +240,9 @@ live_isolated() {
      attestation.json)"
    curl -fsS "https://$INSTANCE_ID-8090.$(jq -er '.gateway.base_domain' restore-cvm.json)/prpc/Info" \
      >info.json
+   EXPECTED_OS_IMAGE_HASH="$(cat production/topup/os-image-hash)"
    kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" restore-check.yml \
-     restore-check
+     restore-check "$EXPECTED_OS_IMAGE_HASH"
    ```
 
 3. **Wait for the report** (at most the RTO) and require `.restore_check.status == "ok"`,

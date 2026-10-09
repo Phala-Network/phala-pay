@@ -18,14 +18,6 @@ pub trait ReconciliationChain: Send + Sync {
             "canonical balance pin unavailable",
         ))
     }
-
-    /// Returns factory-derived forwarder addresses of `treasury` in bounded batches.
-    async fn factory_addresses(
-        &self,
-        factory: Address,
-        treasury: Address,
-        salts: &[B256],
-    ) -> Result<Vec<Address>, ReconciliationError>;
 }
 
 /// Endpoint transport retries remain inside Alloy; a failed check waits for the next round.
@@ -40,18 +32,6 @@ impl ReconciliationChain for FinalizedReader {
         Ok(self
             .client()
             .token_balances(token, addresses, alloy::eips::BlockId::hash_canonical(hash))
-            .await?)
-    }
-
-    async fn factory_addresses(
-        &self,
-        factory: Address,
-        treasury: Address,
-        salts: &[B256],
-    ) -> Result<Vec<Address>, ReconciliationError> {
-        Ok(self
-            .client()
-            .factory_addresses(factory, treasury, salts)
             .await?)
     }
 }

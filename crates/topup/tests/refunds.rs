@@ -103,6 +103,241 @@ async fn wait_for_deposit_lock<T>(
     Ok(())
 }
 
+/// Model a prior day's real attachment without waiting or bypassing admission.
+async fn age_attachment(pool: &sqlx::PgPool, id: &str) -> Result<()> {
+    let id = topup::ids::parse(topup::ids::REFUND, id).context("refund id")?;
+    sqlx::query("UPDATE refunds SET paid_at = now() - interval '25 hours' WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn refund_attachment_daily_cap_is_atomic_across_merchants_and_keeps_reservations()
+-> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool = &database.app_pool;
+        seed::initialize_dual_chain(pool, 1).await?;
+        let app = test_router(pool, &SigningKey::from_bytes(&[43; 32]));
+        let barrier = Arc::new(tokio::sync::Barrier::new(5));
+        let mut tasks = tokio::task::JoinSet::new();
+        for index in 0..4 {
+            let merchant = Merchant::seed(pool, &app, &format!("cap-{index}")).await?;
+            let deposit = seed_rejected_deposit(pool, merchant.account.id, "cap", 100).await?;
+            let id = merchant.refund(deposit, "100").await?;
+            let barrier = barrier.clone();
+            tasks.spawn(async move {
+                barrier.wait().await;
+                let response = merchant.app.clone().oneshot(merchant_request(
+                    Method::POST, &format!("/v1/refunds/{id}/mark_paid"),
+                    mark_paid_body(REFUND_TX)?, &merchant.key,
+                )).await?;
+                let status = response.status();
+                ensure!(!response.headers().contains_key("retry-after"));
+                let body = response_json(response).await?;
+                anyhow::Ok((merchant, deposit, id, status, body))
+            });
+        }
+        barrier.wait().await;
+        let mut admitted = None;
+        let mut refusals = 0;
+        while let Some(task) = tasks.join_next().await {
+            let (merchant, deposit, id, status, body) = task??;
+            if status == StatusCode::OK {
+                ensure!(admitted.is_none(), "daily attachment quota was oversubscribed");
+                admitted = Some((merchant, id));
+            } else {
+                ensure!(status == StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+                ensure!(body["error"]["code"] == "refund_attachment_limit_exceeded", "{body}");
+                let (_, refund) = merchant.call(Method::GET, &format!("/v1/refunds/{id}"), Vec::new()).await?;
+                ensure!(refund["status"] == "pending" && refund["transaction_hash"].is_null(), "{refund}");
+                let (status, error) = merchant.post("/v1/refunds", refund_body(deposit, REFUND_DESTINATION, "1")?).await?;
+                ensure!(status == StatusCode::BAD_REQUEST && error["error"]["code"] == "amount_too_large", "reservation released: {error}");
+                refusals += 1;
+            }
+        }
+        ensure!(refusals == 3);
+        let (merchant, id) = admitted.context("one admission")?;
+        let original: (chrono::DateTime<Utc>, i64) = sqlx::query_as(
+            "SELECT paid_at, (SELECT count(*) FROM audit WHERE action = 'refund.mark_paid') FROM refunds WHERE tx_hash IS NOT NULL",
+        ).fetch_one(pool).await?;
+        merchant.mark_paid(&id, REFUND_TX).await?;
+        ensure!(original == sqlx::query_as::<_, (chrono::DateTime<Utc>, i64)>(
+            "SELECT paid_at, (SELECT count(*) FROM audit WHERE action = 'refund.mark_paid') FROM refunds WHERE tx_hash IS NOT NULL",
+        ).fetch_one(pool).await?, "idempotent retry consumed quota or changed attachment time");
+        // Terminal refunds still consume the rolling daily allowance.
+        let receipt = finalized(vec![transfer(FIXTURE_TREASURY, REFUND_DESTINATION, 100, 7)?]);
+        ensure!(test_worker(pool, vec![receipt.clone()], vec![receipt]).check_once().await? == Verification::Succeeded);
+        let deposit = seed_rejected_deposit(pool, merchant.account.id, "after-resolution", 100).await?;
+        let next = merchant.refund(deposit, "100").await?;
+        let (status, error) = merchant.post(&format!("/v1/refunds/{next}/mark_paid"), mark_paid_body(OTHER_TX)?).await?;
+        ensure!(status == StatusCode::UNPROCESSABLE_ENTITY && error["error"]["code"] == "refund_attachment_limit_exceeded", "{error}");
+        age_attachment(pool, &id).await?;
+        merchant.mark_paid(&next, OTHER_TX).await?;
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn refund_attachment_pending_cap_keeps_existing_checks_and_reservations() -> Result<()> {
+    for limit in [1_usize, 2] {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                seed::initialize_dual_chain(pool, 1).await?;
+                let app = test_router_on_with_limit(
+                    pool,
+                    &SigningKey::from_bytes(&[43; 32]),
+                    Arc::new(StaticScreener::Listing),
+                    Arc::default(),
+                    vec![route_fixture()],
+                    std::num::NonZeroU32::new(u32::try_from(limit)?).context("positive cap")?,
+                );
+                let mut refunds = Vec::new();
+                for index in 0..=limit {
+                    let merchant =
+                        Merchant::seed(pool, &app, &format!("pending-cap-{index}")).await?;
+                    let deposit =
+                        seed_rejected_deposit(pool, merchant.account.id, "pending-cap", 100)
+                            .await?;
+                    let id = merchant.refund(deposit, "100").await?;
+                    refunds.push((merchant, deposit, id));
+                }
+                for (merchant, _, id) in &refunds[..limit] {
+                    merchant.mark_paid(id, REFUND_TX).await?;
+                    age_attachment(pool, id).await?;
+                }
+                let (merchant, deposit, id) = &refunds[limit];
+                let (status, error) = merchant
+                    .post(
+                        &format!("/v1/refunds/{id}/mark_paid"),
+                        mark_paid_body(OTHER_TX)?,
+                    )
+                    .await?;
+                ensure!(
+                    status == StatusCode::UNPROCESSABLE_ENTITY
+                        && error["error"]["code"] == "refund_attachment_limit_exceeded",
+                    "{error}"
+                );
+                let (status, error) = merchant
+                    .post(
+                        "/v1/refunds",
+                        refund_body(*deposit, REFUND_DESTINATION, "1")?,
+                    )
+                    .await?;
+                ensure!(
+                    status == StatusCode::BAD_REQUEST
+                        && error["error"]["code"] == "amount_too_large",
+                    "reservation released: {error}"
+                );
+                // Admission refusal cannot stop existing verification or invalidate idempotent retries.
+                for (merchant, _, id) in &refunds[..limit] {
+                    merchant.mark_paid(id, REFUND_TX).await?;
+                }
+                ensure!(
+                    test_worker(
+                        pool,
+                        vec![RefundReceipt::Missing; 2],
+                        vec![RefundReceipt::Missing; 2]
+                    )
+                    .check_once()
+                    .await?
+                        == Verification::Waiting
+                );
+                let receipt = finalized(vec![transfer(
+                    FIXTURE_TREASURY,
+                    REFUND_DESTINATION,
+                    100,
+                    7,
+                )?]);
+                ensure!(
+                    test_worker(pool, vec![receipt.clone()], vec![receipt])
+                        .check_once()
+                        .await?
+                        == Verification::Succeeded
+                );
+                merchant.mark_paid(id, OTHER_TX).await?;
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn refund_attachment_caps_are_shared_by_live_and_test_modes() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
+            let admin = SigningKey::from_bytes(&[43; 32]);
+            let live_app = test_router(pool, &admin);
+            let live = Merchant::seed(pool, &live_app, "live-cap").await?;
+            let mut test_route = route_fixture();
+            test_route.livemode = false;
+            test_route.chain.chain_id = 11155111;
+            seed::initialize_dual_chain(pool, 11155111).await?;
+            let test_app = test_router_on(
+                pool,
+                &admin,
+                Arc::new(StaticScreener::Listing),
+                Arc::default(),
+                vec![test_route],
+            );
+            let (account, key) = seed_product_in_mode(pool, "test-cap", false).await?;
+            let test = Merchant {
+                app: test_app,
+                account,
+                key,
+            };
+            let deposit = seed_deposit_in_mode(
+                pool,
+                test.account.id,
+                ("test-cap", false),
+                100,
+                DepositState::Rejected,
+                Some(RejectReason::OutOfBounds),
+            )
+            .await?;
+            let first = test.refund(deposit, "100").await?;
+            test.mark_paid(&first, REFUND_TX).await?;
+            let deposit = seed_rejected_deposit(pool, live.account.id, "live-cap", 100).await?;
+            let second = live.refund(deposit, "100").await?;
+            let (status, error) = live
+                .post(
+                    &format!("/v1/refunds/{second}/mark_paid"),
+                    mark_paid_body(OTHER_TX)?,
+                )
+                .await?;
+            ensure!(
+                status == StatusCode::UNPROCESSABLE_ENTITY
+                    && error["error"]["code"] == "refund_attachment_limit_exceeded",
+                "mode bypassed daily cap: {error}"
+            );
+            age_attachment(pool, &first).await?;
+            live.mark_paid(&second, OTHER_TX).await?;
+            age_attachment(pool, &second).await?;
+            let deposit = seed_rejected_deposit(pool, live.account.id, "live-third", 100).await?;
+            let third = live.refund(deposit, "100").await?;
+            let (status, error) = live
+                .post(
+                    &format!("/v1/refunds/{third}/mark_paid"),
+                    mark_paid_body(REFUND_TX)?,
+                )
+                .await?;
+            ensure!(
+                status == StatusCode::UNPROCESSABLE_ENTITY
+                    && error["error"]["code"] == "refund_attachment_limit_exceeded",
+                "mode bypassed pending cap: {error}"
+            );
+            Ok(())
+        })
+    })
+    .await
+}
+
 #[tokio::test]
 async fn a_pending_refund_cannot_be_marked_paid_after_a_sanctions_hit() -> Result<()> {
     support::with_database(|database| {
@@ -708,6 +943,7 @@ async fn transfers_that_do_not_pay_the_refund_fail_it_and_release_the_reservatio
             ensure!(refund["status"] == "failed", "{name}: {refund}");
             ensure!(refund["failure_reason"] == reason, "{name}: {refund}");
             failed.push((id.clone(), reason));
+            age_attachment(pool, &id).await?;
             // The failed refund no longer holds the deposit: the whole amount can be refunded.
             merchant.refund(deposit, "100").await?;
         }
@@ -831,6 +1067,7 @@ async fn a_deposit_address_refund_is_paid_from_that_networks_own_treasury() -> R
             .call(Method::GET, &format!("/v1/refunds/{id}"), Vec::new())
             .await?;
         ensure!(failed["failure_reason"] == "sender_mismatch", "{failed}");
+        age_attachment(pool, &id).await?;
 
         let id = merchant.refund(to_old, "100").await?;
         let receipt = finalized(vec![transfer(
@@ -842,6 +1079,8 @@ async fn a_deposit_address_refund_is_paid_from_that_networks_own_treasury() -> R
         merchant.mark_paid(&id, REFUND_TX).await?;
         let worker = test_worker(pool, vec![receipt.clone()], vec![receipt]);
         ensure!(worker.check_once().await? == Verification::Succeeded);
+
+        age_attachment(pool, &id).await?;
 
         // A deposit to the current network is refunded from the current treasury, and the old
         // treasury does not pay it.
@@ -867,6 +1106,7 @@ async fn a_deposit_address_refund_is_paid_from_that_networks_own_treasury() -> R
         merchant.mark_paid(&id, REFUND_TX).await?;
         let worker = test_worker(pool, vec![receipt.clone()], vec![receipt]);
         ensure!(worker.check_once().await? == Verification::Failed);
+        age_attachment(pool, &id).await?;
         let id = merchant.refund(to_current, "100").await?;
         let receipt = finalized(vec![transfer(
             current_treasury,
@@ -910,6 +1150,7 @@ async fn a_transfer_log_pays_only_one_refund() -> Result<()> {
             )
             .await?;
         ensure!(status == StatusCode::OK);
+        age_attachment(pool, &first).await?;
         // Naming a log another refund holds is refused at once.
         let (status, error) = merchant
             .post(
@@ -1136,7 +1377,8 @@ async fn only_an_unpaid_refund_is_canceled_and_missing_receipts_keep_the_reserva
 }
 
 #[tokio::test]
-async fn a_refund_transaction_no_provider_ever_returned_fails_after_a_day() -> Result<()> {
+#[tracing_test::traced_test]
+async fn an_unseen_refund_alerts_after_a_day_and_cannot_be_refunded_twice() -> Result<()> {
     let Some(database) = TestDatabase::create().await? else {
         return Ok(());
     };
@@ -1157,26 +1399,161 @@ async fn a_refund_transaction_no_provider_ever_returned_fails_after_a_day() -> R
         ensure!(worker.check_once().await? == Verification::Waiting);
         ensure!(refund_status(pool, refund_id).await? == "pending");
 
-        // A day after `mark_paid`, still never seen, it fails and releases the deposit.
+        // A day after `mark_paid`, absence still cannot prove it will never pay.
         sqlx::query("UPDATE refunds SET paid_at = now() - interval '25 hours' WHERE id = $1")
             .bind(refund_id)
             .execute(pool)
             .await?;
         let worker = test_worker(pool, missing(), missing());
-        ensure!(worker.check_once().await? == Verification::Failed);
+        ensure!(worker.check_once().await? == Verification::Waiting);
         let (_, refund) = merchant
             .call(Method::GET, &format!("/v1/refunds/{id}"), Vec::new())
             .await?;
         ensure!(
-            refund["status"] == "failed" && refund["failure_reason"] == "transaction_not_found",
+            refund["status"] == "pending" && refund["failure_reason"].is_null(),
             "{refund}"
         );
-        merchant.refund(deposit, "100").await?;
+        let evidence: Value =
+            sqlx::query_scalar("SELECT confirmation_evidence FROM refunds WHERE id=$1")
+                .bind(refund_id)
+                .fetch_one(pool)
+                .await?;
+        ensure!(evidence["result"] == "not_found_overdue", "{evidence}");
+        ensure!(
+            logs_contain("TopupRefundProgressAge"),
+            "missing timeout alert"
+        );
+        let events: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM events WHERE type = 'refund.failed'")
+                .fetch_one(pool)
+                .await?;
+        ensure!(events == 0, "absence emitted a failure event");
+        let (status, error) = merchant
+            .post(
+                "/v1/refunds",
+                refund_body(deposit, REFUND_DESTINATION, "100")?,
+            )
+            .await?;
+        ensure!(status == StatusCode::BAD_REQUEST, "{error}");
+        let (status, _) = merchant
+            .post(&format!("/v1/refunds/{id}/cancel"), Vec::new())
+            .await?;
+        ensure!(status == StatusCode::BAD_REQUEST);
+        // The original payout can still arrive later and must resolve the same reservation.
+        let paying = finalized(vec![transfer(
+            FIXTURE_TREASURY,
+            REFUND_DESTINATION,
+            100,
+            0,
+        )?]);
+        let worker = test_worker(pool, vec![paying.clone()], vec![paying]);
+        ensure!(worker.check_once().await? == Verification::Succeeded);
+        ensure!(refund_status(pool, refund_id).await? == "succeeded");
         Ok(())
     }
     .await;
     let cleanup = database.cleanup().await;
     result.and(cleanup)
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn pending_refund_cadence_uses_attachment_age_without_catching_up() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            #[derive(Clone, Default)]
+            struct MissingReader(Arc<AtomicUsize>);
+            #[async_trait]
+            impl RefundChainReader for MissingReader {
+                async fn receipt(&self, _: u64, _: B256) -> Result<RefundReceipt, RefundReadError> {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    Ok(RefundReceipt::Missing)
+                }
+                async fn origin(
+                    &self,
+                    _: u64,
+                    _: B256,
+                ) -> Result<Option<(Address, u64)>, RefundReadError> {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    Ok(None)
+                }
+            }
+            let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
+            let admin_key = SigningKey::from_bytes(&[49; 32]);
+            let app = test_router(pool, &admin_key);
+            let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
+            let deposit = seed_rejected_deposit(pool, merchant.account.id, "cadence", 100).await?;
+            let id = merchant.refund(deposit, "100").await?;
+            merchant.mark_paid(&id, REFUND_TX).await?;
+            let id = topup::ids::parse(topup::ids::REFUND, &id).context("refund id")?;
+            let attached = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+                .context("attachment time")?;
+            sqlx::query("UPDATE refunds SET paid_at=$2,next_check_at=$2 WHERE id=$1")
+                .bind(id)
+                .bind(attached)
+                .execute(pool)
+                .await?;
+            let read = MissingReader::default();
+            let verify = MissingReader::default();
+            let worker = RefundVerificationWorker::new(
+                pool.clone(),
+                Arc::new(
+                    topup::routes::RouteSet::new(vec![route_fixture()])
+                        .map_err(anyhow::Error::msg)?,
+                ),
+                read.clone(),
+                verify.clone(),
+                RefundVerificationConfig::default(),
+            );
+            let mut checks = 0;
+            // Half-open phase intervals: [0, 30 min), [30 min, 24 h), then hourly forever.
+            for (start, count, interval) in
+                [(0_i64, 30, 60_i64), (1800, 141, 600), (86400, 24, 3600)]
+            {
+                for index in 0..count {
+                    let now = attached + Duration::seconds(start + i64::from(index) * interval);
+                    if checks > 0 {
+                        ensure!(
+                            worker.check_once_at(now - Duration::seconds(1)).await?
+                                == Verification::Idle
+                        );
+                        ensure!(read.0.load(Ordering::SeqCst) == checks * 2);
+                        ensure!(verify.0.load(Ordering::SeqCst) == checks * 2);
+                    }
+                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                    checks += 1;
+                    ensure!(read.0.load(Ordering::SeqCst) == checks * 2);
+                    ensure!(verify.0.load(Ordering::SeqCst) == checks * 2);
+                    let next: chrono::DateTime<Utc> =
+                        sqlx::query_scalar("SELECT next_check_at FROM refunds WHERE id=$1")
+                            .bind(id)
+                            .fetch_one(pool)
+                            .await?;
+                    ensure!(
+                        next == now + Duration::seconds(interval),
+                        "phase at {now}: next {next}"
+                    );
+                    ensure!(worker.check_once_at(now).await? == Verification::Idle);
+                }
+            }
+            ensure!(checks == 195);
+            // A restart long after the last check performs one observation, with no catch-up burst.
+            let later = attached + Duration::days(365);
+            ensure!(worker.check_once_at(later).await? == Verification::Waiting);
+            ensure!(
+                worker.check_once_at(later + Duration::minutes(59)).await? == Verification::Idle
+            );
+            ensure!(
+                worker.check_once_at(later + Duration::hours(1)).await? == Verification::Waiting
+            );
+            ensure!(read.0.load(Ordering::SeqCst) == 394 && verify.0.load(Ordering::SeqCst) == 394);
+            ensure!(refund_status(pool, id).await? == "pending");
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[tokio::test]
@@ -1236,6 +1613,7 @@ async fn refunds_take_back_the_credit_pro_rata_in_each_deposit_snapshot() -> Res
             view["payment_status"] == "credited" && view["amount_credited"] == 1000,
             "{view}"
         );
+        age_attachment(pool, &first).await?;
         // The rest, paid by a second log of the same transaction, takes back all of it.
         let second = merchant.refund(deposit, "200").await?;
         merchant.mark_paid(&second, REFUND_TX).await?;
@@ -2417,33 +2795,53 @@ fn test_worker(
     pool: &sqlx::PgPool,
     primary: Vec<RefundReceipt>,
     secondary: Vec<RefundReceipt>,
-) -> RefundVerificationWorker<ScriptedReader, ScriptedReader> {
+) -> TestWorker {
     test_worker_with(pool, primary, secondary, None)
 }
 
-/// [`test_worker`] whose providers both return the transaction as sent by `origin`, and the
-/// sender's nonce at `finalized` as `finalized_nonce`.
+/// [`test_worker`] whose providers both return the transaction as sent by `origin`.
 fn test_worker_with(
     pool: &sqlx::PgPool,
     primary: Vec<RefundReceipt>,
     secondary: Vec<RefundReceipt>,
     origin: Option<(Address, u64)>,
-) -> RefundVerificationWorker<ScriptedReader, ScriptedReader> {
+) -> TestWorker {
     let reader = |receipts: Vec<RefundReceipt>| ScriptedReader {
         receipts: Mutex::new(receipts.into()),
         origin,
     };
-    RefundVerificationWorker::new(
-        pool.clone(),
-        Arc::new(topup::routes::RouteSet::new(vec![route_fixture()]).expect("route fixture loads")),
-        reader(primary),
-        reader(secondary),
-        RefundVerificationConfig {
-            poll_interval: StdDuration::ZERO,
-            retry_interval: StdDuration::ZERO,
-            observe_timeout: StdDuration::from_secs(1),
-        },
-    )
+    TestWorker {
+        pool: pool.clone(),
+        inner: RefundVerificationWorker::new(
+            pool.clone(),
+            Arc::new(
+                topup::routes::RouteSet::new(vec![route_fixture()]).expect("route fixture loads"),
+            ),
+            reader(primary),
+            reader(secondary),
+            RefundVerificationConfig {
+                poll_interval: StdDuration::ZERO,
+                retry_interval: StdDuration::ZERO,
+                observe_timeout: StdDuration::from_secs(1),
+            },
+        ),
+    }
+}
+
+/// Monetary behavior fixtures explicitly make pending rows due between scripted observations.
+/// Cadence is exercised separately with the real worker and a controlled clock.
+struct TestWorker {
+    pool: sqlx::PgPool,
+    inner: RefundVerificationWorker<ScriptedReader, ScriptedReader>,
+}
+
+impl TestWorker {
+    async fn check_once(&self) -> Result<Verification> {
+        sqlx::query("UPDATE refunds SET next_check_at=now() WHERE status='pending'")
+            .execute(&self.pool)
+            .await?;
+        Ok(self.inner.check_once().await?)
+    }
 }
 
 /// Screening that lists [`SANCTIONED`], or that cannot answer.
@@ -2455,7 +2853,10 @@ enum StaticScreener {
 #[async_trait]
 impl DestinationScreener for StaticScreener {
     async fn screen(&self, route: &RouteFile, destination: Address) -> DestinationScreening {
-        assert_eq!(route.chain.chain_id, 1);
+        assert_eq!(
+            route.chain.chain_id,
+            if route.livemode { 1 } else { 11155111 }
+        );
         match self {
             Self::Unavailable => DestinationScreening::Unavailable,
             Self::Listing if destination == Address::from_str(SANCTIONED).expect("address") => {
@@ -2497,8 +2898,27 @@ fn test_router_on(
     client_reads: Arc<ClientReadLimiter>,
     routes: Vec<RouteFile>,
 ) -> Router {
+    test_router_on_with_limit(
+        pool,
+        admin_key,
+        screening,
+        client_reads,
+        routes,
+        std::num::NonZeroU32::new(2).expect("positive refund limit"),
+    )
+}
+
+fn test_router_on_with_limit(
+    pool: &sqlx::PgPool,
+    admin_key: &SigningKey,
+    screening: Arc<dyn DestinationScreener>,
+    client_reads: Arc<ClientReadLimiter>,
+    routes: Vec<RouteFile>,
+    max_attached_pending_refunds: std::num::NonZeroU32,
+) -> Router {
     let state = AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds,
         routes: Arc::new(topup::routes::RouteSet::new(routes).expect("routes load")),
         maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(
@@ -2621,6 +3041,14 @@ fn route_fixture() -> RouteFile {
 /// A live account signing with `key`, with a webhook endpoint.
 /// A live account and its live secret key.
 async fn seed_product(pool: &sqlx::PgPool, name: &str) -> Result<(Account, String)> {
+    seed_product_in_mode(pool, name, true).await
+}
+
+async fn seed_product_in_mode(
+    pool: &sqlx::PgPool,
+    name: &str,
+    livemode: bool,
+) -> Result<(Account, String)> {
     let account = seed::create_account(
         pool,
         &NewAccount {
@@ -2629,8 +3057,15 @@ async fn seed_product(pool: &sqlx::PgPool, name: &str) -> Result<(Account, Strin
         },
     )
     .await?;
-    let key = seed::create_api_key(pool, account.id, true).await?;
-    seed::set_treasury(pool, account.id, true, 1, FIXTURE_TREASURY).await?;
+    let key = seed::create_api_key(pool, account.id, livemode).await?;
+    seed::set_treasury(
+        pool,
+        account.id,
+        livemode,
+        if livemode { 1 } else { 11155111 },
+        FIXTURE_TREASURY,
+    )
+    .await?;
     Ok((account, key))
 }
 
@@ -2677,14 +3112,36 @@ async fn seed_deposit(
     state: DepositState,
     reason: Option<RejectReason>,
 ) -> Result<Uuid> {
-    let customer = seed_customer(pool, product_id, external_id).await?;
+    seed_deposit_in_mode(pool, product_id, (external_id, true), amount, state, reason).await
+}
+
+async fn seed_deposit_in_mode(
+    pool: &sqlx::PgPool,
+    product_id: Uuid,
+    external: (&str, bool),
+    amount: u64,
+    state: DepositState,
+    reason: Option<RejectReason>,
+) -> Result<Uuid> {
+    let chain = if external.1 { 1 } else { 11155111 };
+    let customer = seed::create_customer(
+        pool,
+        &NewCustomer {
+            id: Uuid::new_v4(),
+            account_id: product_id,
+            livemode: external.1,
+            client_reference_id: external.0.to_owned(),
+            paused_scopes: Vec::new(),
+        },
+    )
+    .await?;
     let index = Uuid::new_v4().as_u128();
     let address = seed::insert_address(
         pool,
         &NewAddress {
             id: Uuid::new_v4(),
             customer_id: customer.id,
-            chain_id: 1,
+            chain_id: chain,
             route: "phala-cloud-ethereum-pha-usd".to_owned(),
             salt: B256::from(U256::from(index)),
             address: Address::from_word(B256::from(U256::from(index))),
@@ -2697,7 +3154,7 @@ async fn seed_deposit(
     topup::db::insert_deposit(
         pool,
         &NewDeposit {
-            chain_id: 1,
+            chain_id: chain,
             tx_hash,
             log_index: 0,
             receipt_log_index: 0,
@@ -2721,7 +3178,7 @@ async fn seed_deposit(
         },
     )
     .await?;
-    Ok(deposit_id(1, tx_hash, 0))
+    Ok(deposit_id(chain, tx_hash, 0))
 }
 
 /// A final, rejected deposit of the route fixture's token to the forwarder row `address_id`.

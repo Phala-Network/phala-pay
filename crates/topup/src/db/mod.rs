@@ -3,6 +3,7 @@
 mod accounts;
 mod addresses;
 pub mod chain_reads;
+pub mod confirmation;
 pub mod daily_budgets;
 mod deposits;
 pub(crate) mod migrations;
@@ -25,7 +26,8 @@ pub use deposits::{
     ApplyTransitionError, ApplyTransitionResult, CanonicalEvidence, ClaimedDeposit, Deposit,
     Evidence, LockConsumption, NewDeposit, OutboxEvent, StoredValuation, TransitionEffects,
     TransitionUpdate, TransitionWrites, UnfinalizedCredit, apply_transition, claim_deposit,
-    get_deposit, insert_deposit, insert_deposit_in, release_deposit_lease, unfinalized_credit,
+    claim_deposit_at, get_deposit, insert_deposit, insert_deposit_in, release_deposit_lease,
+    unfinalized_credit,
 };
 pub use outbox::{
     EventObject, NewOutboxEvent, Notice, SYSTEM_ACTOR, enqueue_in, enqueue_rendered_in, event_data,

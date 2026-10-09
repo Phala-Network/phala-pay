@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::time::{Instant, sleep, timeout_at};
@@ -39,7 +39,7 @@ const LEASE_DURATION: Duration = Duration::from_secs(5 * 60);
 const FINALITY_WAIT_INTERVAL: Duration = Duration::from_secs(12);
 /// Wait while a provider has not reached the route's depth or `safe` confirmation: the head
 /// poll interval, so a lagging provider delays a fast credit by seconds, not a slot.
-const CONFIRMATION_WAIT_INTERVAL: Duration = Duration::from_secs(2);
+pub(crate) const CONFIRMATION_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// One asynchronous operation for a non-terminal deposit state.
 #[async_trait]
@@ -49,6 +49,30 @@ pub trait Step: Send + Sync {
     /// Runs with the pump's absolute step deadline.
     async fn run_with_deadline(&self, deposit: &Deposit, _deadline: Instant) -> StepResult {
         self.run(deposit).await
+    }
+    /// Runs using the supplied scheduling clock; a production clock remains fresh per claim.
+    async fn run_with_clock(
+        &self,
+        deposit: &Deposit,
+        deadline: Instant,
+        _clock: Option<DateTime<Utc>>,
+    ) -> StepResult {
+        self.run_with_deadline(deposit, deadline).await
+    }
+    /// Uses already-read final dual evidence for valuation, without another receipt RPC.
+    async fn run_with_final_evidence(
+        &self,
+        _deposit: &Deposit,
+        _evidence: crate::steps::confirm::ConfirmationEvidence,
+        _deadline: Instant,
+        _now: DateTime<Utc>,
+    ) -> StepResult {
+        StepResult::new(
+            StepOutcome::Retry {
+                error: RetryError::InvariantViolation,
+            },
+            json!({"error":"missing_confirmation_handler"}),
+        )
     }
 }
 
@@ -80,6 +104,8 @@ impl StepResult {
                 lock_consumption: None,
                 mark_final: false,
                 sanctions_hit: false,
+                first_unresolved: false,
+                confirmation_evidence: None,
             },
         }
     }
@@ -291,8 +317,22 @@ impl Pump {
 
     /// Claims at most one due deposit, runs one step, and persists one transition.
     pub async fn run_once(&self) -> Result<RunOnceResult, PumpError> {
+        self.run_once_with_clock(None).await
+    }
+
+    /// Runs one claim and persistence with a supplied scheduling clock.
+    pub async fn run_once_at(&self, now: DateTime<Utc>) -> Result<RunOnceResult, PumpError> {
+        self.run_once_with_clock(Some(now)).await
+    }
+
+    async fn run_once_with_clock(
+        &self,
+        clock: Option<DateTime<Utc>>,
+    ) -> Result<RunOnceResult, PumpError> {
         let lease_token = Uuid::new_v4();
-        let Some(deposit) = db::claim_deposit(&self.pool, lease_token).await? else {
+        let Some(deposit) =
+            db::claim_deposit_at(&self.pool, lease_token, clock.unwrap_or_else(Utc::now)).await?
+        else {
             return Ok(RunOnceResult::Idle);
         };
         let result = if crate::reconciler::chain_is_blocked(&self.pool, deposit.chain_id).await? {
@@ -315,11 +355,20 @@ impl Pump {
                 json!({"outcome":"wait","reason":"chain_not_ready"}),
             )
         } else {
-            self.run_step(&deposit).await
+            self.run_step(&deposit, clock).await
         };
         let mut result = result;
         loop {
-            match self.persist(&deposit, lease_token, result).await? {
+            match self
+                .persist(
+                    &deposit,
+                    lease_token,
+                    result,
+                    clock.unwrap_or_else(Utc::now),
+                    false,
+                )
+                .await?
+            {
                 Persisted::Done(outcome) => return Ok(outcome),
                 // Another credit won the cap since the step checked it: the deposit waits for
                 // finality instead.
@@ -331,12 +380,47 @@ impl Pump {
         }
     }
 
+    /// Confirms and values final evidence within the watcher's existing read lease.
+    pub(crate) async fn confirm_final_evidence(
+        &self,
+        deposit: &Deposit,
+        evidence: crate::steps::confirm::ConfirmationEvidence,
+        now: DateTime<Utc>,
+    ) -> Result<RunOnceResult, PumpError> {
+        let token = deposit
+            .lease_token
+            .ok_or(PumpError::MissingStep(deposit.state))?;
+        let deadline = Instant::now() + self.config.step_timeout;
+        let result = match timeout_at(
+            deadline,
+            self.steps
+                .detected
+                .run_with_final_evidence(deposit, evidence, deadline, now),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => StepResult::new(
+                StepOutcome::Retry {
+                    error: RetryError::Transient,
+                },
+                json!({"error":"step_timeout"}),
+            ),
+        };
+        match self.persist(deposit, token, result, now, true).await? {
+            Persisted::Done(result) => Ok(result),
+            Persisted::Capped(_) => Err(PumpError::MissingStep(deposit.state)),
+        }
+    }
+
     /// Validates the step's outcome and persists it in one transaction.
     async fn persist(
         &self,
         deposit: &Deposit,
         lease_token: Uuid,
         result: StepResult,
+        now: DateTime<Utc>,
+        watcher_handoff: bool,
     ) -> Result<Persisted, PumpError> {
         let deposit_id = deposit.id;
         let result = match next(deposit.state, &result.outcome) {
@@ -363,7 +447,6 @@ impl Pump {
             }
         };
         let (result, transition) = result;
-        let now = Utc::now();
         let attempt = match transition.kind {
             TransitionKind::Advanced => 0,
             TransitionKind::Retry => deposit.attempt.saturating_add(1),
@@ -396,6 +479,13 @@ impl Pump {
             next_attempt_at,
         };
         let mut transaction = self.pool.begin().await?;
+        let current: Option<Uuid> = sqlx::query_scalar("SELECT id FROM deposits WHERE id=$1 AND lease_token=$2 AND updated_at=$3 AND state=$4 FOR UPDATE")
+            .bind(deposit.id).bind(lease_token).bind(deposit.updated_at).bind(db::state_code(deposit.state))
+            .fetch_optional(&mut *transaction).await?;
+        if current.is_none() {
+            transaction.rollback().await?;
+            return Ok(Persisted::Done(RunOnceResult::Stale { deposit_id }));
+        }
         let applied = db::apply_transition(
             &mut transaction,
             &self.routes,
@@ -407,12 +497,21 @@ impl Pump {
                 evidence: &result.evidence,
                 effects: &result.effects,
                 outbox_events: &result.events,
+                checked_at: now,
             },
         )
         .await?;
 
         match applied {
             ApplyTransitionResult::Applied => {
+                if watcher_handoff {
+                    db::confirmation::schedule_unresolved_handoff(
+                        &mut transaction,
+                        deposit.id,
+                        now,
+                    )
+                    .await?;
+                }
                 transaction.commit().await?;
                 tracing::info!(
                     deposit_id = %crate::ids::format(crate::ids::DEPOSIT, deposit.id),
@@ -448,7 +547,7 @@ impl Pump {
         }
     }
 
-    async fn run_step(&self, deposit: &Deposit) -> StepResult {
+    async fn run_step(&self, deposit: &Deposit, clock: Option<DateTime<Utc>>) -> StepResult {
         let state = deposit.state;
         let Some(step) = self.steps.get(state) else {
             tracing::error!(state = ?state, "no step registered for claimed state");
@@ -462,7 +561,7 @@ impl Pump {
 
         let span = crate::observability::deposit_step_span(deposit);
         let deadline = Instant::now() + self.config.step_timeout;
-        match timeout_at(deadline, step.run_with_deadline(deposit, deadline))
+        match timeout_at(deadline, step.run_with_clock(deposit, deadline, clock))
             .instrument(span)
             .await
         {

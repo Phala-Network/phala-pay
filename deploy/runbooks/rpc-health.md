@@ -1,7 +1,7 @@
 # RPC endpoint health
 
 Use this procedure for an endpoint unavailable for five minutes, dual evidence disagreement,
-coverage lag over 45 minutes, or provider quota pressure. [RPC operations](../RPC.md) lists the
+coverage lag over two hours, or provider quota pressure. [RPC operations](../RPC.md) lists the
 fixed cadences and shared quotas.
 
 ## First steps
@@ -16,6 +16,13 @@ fixed cadences and shared quotas.
 4. HTTP 402 waits until UTC midnight. Do not create extra free accounts, switch endpoints or
    enlarge budgets. Fresh quote snapshots also have a hard 60/day/price-chain cap; exhaustion
    returns retryable `price_unavailable`, and the UTC day resets that budget.
+   `RpcPriceSnapshotBudgetExhausted` fires at `topup_daily_budget_used{name=~"price:.*"} >= 60`,
+   including exactly the hard cap. This repository has no Prometheus rule-test harness; when
+   importing the rules, verify with the operator's rule evaluator that a sample of 59 does not
+   fire and a sample of 60 does. Admitted hint tasks have a hard 80/day/environment cap;
+   `RpcHintBudgetExhausted` fires at `topup_daily_budget_used{name="hints"} >= 80`.
+   Verify that 79 does not fire and 80 does. Exhausted hints keep their quiet acknowledgement
+   and fall back to scanning; they cannot establish negative coverage.
 5. On disagreement, preserve decoded evidence and wait. Never pick one source or manually
    advance coverage. A checkpoint conflict or progressed evidence mismatch uses the existing
    [chain freeze gate](chain-frozen.md) and audited lift.
@@ -27,3 +34,26 @@ fixed cadences and shared quotas.
 Coverage and daily budget gauges are read from durable tables on authenticated metrics scrapes.
 An encoding or database failure fails the scrape; inspect database availability and capacity.
 Do not replace an unavailable sample with zero or infer negative payment evidence from metrics.
+
+## Confirmation slow lane
+
+`RpcConfirmationProviderLag` means height-only confirmation lag has kept L non-empty for ten
+minutes. Read `topup_confirmation_slow{chain_id}` and the DB-derived
+`topup_confirmation_slow_entries_24h{chain_id}`. Ordinary differing heights are not S anomalies.
+L uses one head method per endpoint on the 60-second/ten-minute/hourly schedule. When both
+qualify, it confirms and values within the same lease without waiting for checkpoint.
+
+If `sum(topup_confirmation_slow) > 1` or `sum(topup_confirmation_slow_entries_24h) > 1`, pause
+new quotes on affected chains using the existing route pause procedure and coordinate with
+merchants to stop new payment load. Each environment has one stock and one rolling-entry
+allocation. Continue verifying received funds, keep reservations, and retain every excess row.
+Do not reset history/counters or speed polling up. Resolved entries stay in the rolling window
+until 24 hours after first entry. Resume new load only after stock and rolling entries both
+return to at most one, both endpoints recover, and existing payments resume confirmation.
+Production deposits/day is 46 and staging 20; include both in shared quota checks.
+
+Receipt absence, disagreement, evidence changes and RPC failures instead enter S, which has
+its own stock/entry alerts and one-hour age alert. Follow the existing
+[deposit incident procedure](deposit-reversed.md). An old `final_at` on a detected S row is not
+credit or reversal proof; the watcher must acquire fresh dual terminal evidence. Price retries
+reuse only full terminal evidence and never restart normal confirmation quotas.

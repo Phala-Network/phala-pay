@@ -33,7 +33,9 @@ Carrying real client IPs via PROXY protocol is future work: it requires the dsta
 
 Transaction-hash hints have no per-IP limit. Their controls are credential-gated per-object
 limits of 3/minute and 10/day, a hard cap of 150 tasks per environment per UTC day, and at most
-four tasks in flight. Merchant-key hints share the database authentication gate above.
+four tasks in flight. Request bodies are read only after the shared 256-request concurrency gate
+admits the hint; overload returns `503 unavailable` with `Retry-After: 1`. Admitted hints retain
+quiet `202 received` responses. Merchant-key hints share the database authentication gate above.
 dstack-ingress uses HAProxy in TCP mode and forwards to `topup:8080` without PROXY protocol;
 client-supplied forwarding headers are not trusted.
 
@@ -61,6 +63,7 @@ One YAML file, parsed with unknown fields refused, holds every public setting of
 
 ```yaml
 environment: staging                       # the Sentry environment: also gates staging-only price licensing opt-in
+max_attached_pending_refunds: 1             # required positive deployment cap; production uses 2
 public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1                     # the key id admin requests sign with
@@ -82,6 +85,13 @@ routes:                                    # every enabled route version, as rou
     version: 3
     ...
 ```
+
+`max_attached_pending_refunds` is required and must be a positive integer. The shipped production
+configuration sets it to 2 and staging to 1. It applies atomically across all accounts and modes
+in the deployment; one new refund attachment per rolling 24 hours remains a fixed limit.
+Exhaustion returns non-retryable `422 refund_attachment_limit_exceeded`, preserving the refund
+reservation. Idempotent attachment retries do not consume quota; attached refunds keep being
+verified. Restore N-1 with its verified release configuration, which predates this required field.
 
 - **`public_origin`** is the public scheme and authority clients call (no path). The admin API's
   RFC 9421 signatures are verified against it plus the request path and query, and treasury

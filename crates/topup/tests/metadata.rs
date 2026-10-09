@@ -468,6 +468,7 @@ fn router(pool: &sqlx::PgPool, route: &RouteFile) -> Result<axum::Router> {
     let admin_key = SigningKey::from_bytes(&[89; 32]);
     Ok(topup::api::router(AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         routes: Arc::new(
             topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
         ),

@@ -15,9 +15,13 @@ use topup_core::deposit::{DepositState, RejectReason};
 use topup_core::route::{ChainConfig, Confirmations};
 
 /// Read discovery cadence; coverage is independent of fast cursor advances.
-pub const FAST_INTERVAL: Duration = Duration::from_secs(60);
+pub const FAST_INTERVAL: Duration = Duration::from_secs(300);
+/// Validate and publish finalized checkpoints independently of log coverage.
+pub const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(600);
 /// Complete negative evidence cadence, staggered across configured chains.
-pub const COVERAGE_INTERVAL: Duration = Duration::from_secs(600);
+pub const COVERAGE_INTERVAL: Duration = Duration::from_secs(3_600);
+/// Observation-only chains retain their contract recovery cadence.
+pub const CONTRACT_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 /// Inclusive normal round limit.
 pub const COVERAGE_LIMIT: u64 = 3_000;
 /// Every sixth round catches up at this inclusive limit.
@@ -332,7 +336,7 @@ fn same_transfer_evidence(existing: &db::Deposit, deposit: &db::NewDeposit) -> b
         && existing.tx_nonce == Some(deposit.tx_nonce)
 }
 
-/// One bounded coverage round. Every sixth round uses the approved hourly catch-up bound.
+/// One bounded coverage round. Every sixth hourly round uses the approved six-hour catch-up bound.
 pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     pool: &PgPool,
     read: &R,
@@ -341,11 +345,13 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     round: u64,
 ) -> Result<ScanStats, ScannerError> {
     let chain = routes.chain.chain_id;
-    let checkpoint = crate::checkpoint::advance(pool, chain, read, verify).await?;
     let cursor = match chain_reads::coverage(pool, chain).await? {
         Some(cursor) => cursor,
         None => initialize_chain(pool, chain, read, verify).await?,
     };
+    let checkpoint = chain_reads::checkpoint(pool, chain)
+        .await?
+        .ok_or(ScannerError::Disagreement)?;
     let limit = if round.is_multiple_of(6) {
         CATCHUP_LIMIT
     } else {
@@ -355,7 +361,21 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     if end < cursor.number {
         return Err(ScannerError::Disagreement);
     }
-    let (a, b) = tokio::try_join!(read.header(end), verify.header(end))?;
+    let (a, b) = tokio::join!(read.header(end), verify.header(end));
+    let successful = [a.as_ref().ok(), b.as_ref().ok()];
+    let contradicts = |hash| successful.iter().flatten().any(|header| header.0 != hash);
+    if (end == checkpoint.number && contradicts(checkpoint.hash))
+        || (end == cursor.number && contradicts(cursor.hash))
+    {
+        chain_reads::freeze(pool, chain, "finalized_checkpoint_conflict").await?;
+        tracing::error!(
+            tags.alert = "TopupFinalizedCheckpointConflict",
+            chain_id = chain,
+            "stored coverage boundary hash changed; chain frozen"
+        );
+        return Err(ScannerError::Disagreement);
+    }
+    let (a, b) = (a?, b?);
     if a != b {
         return Err(ScannerError::Disagreement);
     }
@@ -780,6 +800,90 @@ pub async fn coverage_round<R: ChainReader, V: ChainReader>(
     }
 }
 
+/// Validate and publish checkpoints even while coverage fails or has not yet run.
+pub async fn checkpoint_loop<R: ChainReader, V: ChainReader>(
+    pool: &PgPool,
+    chain: u64,
+    readers: (&R, &V),
+    heads: &FinalizedHeads,
+    ready: impl Fn() -> bool,
+    cancellation: &CancellationToken,
+) {
+    let monitor = crate::observability::CronMonitor::checkpoint_scanner(chain);
+    let mut interval = tokio::time::interval(CHECKPOINT_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! { _ = cancellation.cancelled() => break, _ = interval.tick() => {} }
+        if !ready() {
+            monitor.check_in(false);
+            continue;
+        }
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => break,
+            result = crate::checkpoint::advance(pool, chain, readers.0, readers.1) => result,
+        };
+        monitor.check_in(result.is_ok());
+        match result {
+            Ok(checkpoint) => {
+                heads.publish(
+                    chain,
+                    FinalizedHead {
+                        number: checkpoint.number,
+                        time: checkpoint.time,
+                    },
+                );
+            }
+            Err(error) => {
+                tracing::warn!(chain_id=chain,%error,"checkpoint waits; no advance published")
+            }
+        }
+    }
+}
+
+/// Hourly dual coverage uses only published DB checkpoints; failures do not stop checkpoint checks.
+pub async fn coverage_loop<R: ChainReader, V: ChainReader>(
+    pool: &PgPool,
+    chain: &ChainRoutes,
+    readers: (&R, &V),
+    stagger: Duration,
+    ready: impl Fn() -> bool,
+    cancellation: &CancellationToken,
+) {
+    let monitor = crate::observability::CronMonitor::coverage_scanner(chain.chain.chain_id);
+    let mut interval =
+        tokio::time::interval_at(tokio::time::Instant::now() + stagger, COVERAGE_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut round = 0_u64;
+    loop {
+        tokio::select! { _ = cancellation.cancelled() => break, _ = interval.tick() => {} }
+        if !ready() {
+            monitor.check_in(false);
+            continue;
+        }
+        round = round.saturating_add(1);
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => break,
+            result = coverage_round(pool,readers.0,readers.1,chain,round) => result,
+        };
+        monitor.check_in(result.is_ok());
+        match result {
+            Ok(stats) => tracing::debug!(
+                chain_id = chain.chain.chain_id,
+                ?stats,
+                "dual coverage committed"
+            ),
+            Err(ScannerError::Disagreement) => tracing::warn!(
+                tags.alert = "TopupRpcDisagreement",
+                chain_id = chain.chain.chain_id,
+                "coverage evidence disagreed; no range committed"
+            ),
+            Err(error) => {
+                tracing::warn!(chain_id=chain.chain.chain_id,%error,"coverage waits; no range committed")
+            }
+        }
+    }
+}
+
 /// Supervise independent per-chain cadences without stopping the API on an endpoint error.
 pub async fn run(
     pool: PgPool,
@@ -857,35 +961,40 @@ pub async fn run(
             .provider(chain.chain.chain_id, 1)
             .map_err(|e| ScannerError::Configuration(e.to_string()))?
             .clone();
+        let checkpoint_pool = pool.clone();
+        let checkpoint_read = FinalizedReader::new(coverage_read.clone());
+        let checkpoint_verify = FinalizedReader::new(coverage_verify.clone());
+        let checkpoint_ready_read = coverage_read.clone();
+        let checkpoint_ready_verify = coverage_verify.clone();
+        let checkpoint_heads = heads.clone();
+        let checkpoint_token = cancellation.clone();
+        let chain_id = chain.chain.chain_id;
+        tasks.spawn(async move {
+            checkpoint_loop(
+                &checkpoint_pool,
+                chain_id,
+                (&checkpoint_read, &checkpoint_verify),
+                &checkpoint_heads,
+                || {
+                    checkpoint_ready_read.contract_ready()
+                        && checkpoint_ready_verify.contract_ready()
+                },
+                &checkpoint_token,
+            )
+            .await;
+        });
         let pool = pool.clone();
-        let heads = heads.clone();
         let token = cancellation.clone();
         tasks.spawn(async move {
-            let monitor = crate::observability::CronMonitor::coverage_scanner(chain.chain.chain_id);
-            let mut interval = tokio::time::interval_at(tokio::time::Instant::now()+Duration::from_secs(u64::try_from(offset).unwrap_or(0).saturating_mul(30)),COVERAGE_INTERVAL);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut round = 0_u64;
-            loop {
-                tokio::select! { _ = token.cancelled() => break, _ = interval.tick() => {} }
-                if !coverage_read.contract_ready() || !coverage_verify.contract_ready() {monitor.check_in(false); continue;}
-                round = round.saturating_add(1);
-                let result = tokio::select! {
-                    _ = token.cancelled() => break,
-                    result = async {
-                        if chain_reads::coverage(&pool,chain.chain.chain_id).await?.is_none() { initialize_chain(&pool,chain.chain.chain_id,&read,&verify).await?; }
-                        coverage_round(&pool,&read,&verify,&chain,round).await
-                    } => result,
-                };
-                monitor.check_in(result.is_ok());
-                match result {
-                    Ok(stats) => {
-                        if let Ok(Some(checkpoint)) = chain_reads::checkpoint(&pool,chain.chain.chain_id).await { heads.publish(chain.chain.chain_id,FinalizedHead {number:checkpoint.number,time:checkpoint.time}); }
-                        tracing::debug!(chain_id=chain.chain.chain_id,?stats,"dual coverage committed");
-                    }
-                    Err(ScannerError::Disagreement) => tracing::warn!(tags.alert="TopupRpcDisagreement",chain_id=chain.chain.chain_id,"coverage evidence disagreed; no range committed"),
-                    Err(error) => tracing::warn!(chain_id=chain.chain.chain_id,%error,"coverage waits; no range committed"),
-                }
-            }
+            coverage_loop(
+                &pool,
+                &chain,
+                (&read, &verify),
+                Duration::from_secs(u64::try_from(offset).unwrap_or(0).saturating_mul(30)),
+                || coverage_read.contract_ready() && coverage_verify.contract_ready(),
+                &token,
+            )
+            .await;
         });
     }
     for (chain, pair) in routes
@@ -899,7 +1008,7 @@ pub async fn run(
         let token = cancellation.clone();
         let contracts = routes.routes().to_vec();
         tasks.spawn(async move {
-            let mut interval=tokio::time::interval(FAST_INTERVAL);
+            let mut interval=tokio::time::interval(CONTRACT_RECOVERY_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {_=token.cancelled()=>break,_=interval.tick()=>{}}

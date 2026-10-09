@@ -14,6 +14,21 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed (operators)
+
+- Confirmation uses bounded head-only probes: Depth six probes at the fixed estimated-depth
+  anchor plus 4/12/28/60/124 seconds, Safe three and Finalized seven at 384-second intervals.
+  Height-only exhaustion enters slow lane L and rechecks after 60 seconds, ten minutes, then
+  hourly; it confirms when both heads qualify without waiting for checkpoint. DB gauges alert
+  on ten-minute L occupancy and current/rolling-entry totals above one per environment.
+  Missing/conflicting evidence stays in S under one shared atomic read lease and backoff;
+  terminal evidence flows directly to valuation. Re-inclusion can change position but cannot
+  change transfer identity. Price retries reuse the exact new-path proof linked atomically to the
+  current final marker; legacy markers and proofs predating S require fresh watcher evidence.
+  Finalized price failures retain the ten-method per-endpoint ceiling. Expand-only
+  counters/history survive rollback, but N-1 keeps its old RPC allocation. Production's operational
+  deposit allocation is 46/day (staging 20) to retain 10.04% shared Infura budget headroom.
+
 ### Breaking (operators)
 
 - Replace the deprecated Chainalysis oracle with verified OFAC SDN snapshots and audited manual
@@ -34,9 +49,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `cancel_requested_at`; completion emits `quote.canceled`. Expiry uses the same evidence gate.
 - Fresh quote price snapshots are capped at 60 per price chain/environment/UTC day. Exhaustion
   returns retryable `503 price_unavailable`; the twelve-second reuse limit is unchanged.
-  The combined deposit pilot bound is 100/day; stop adding merchants above an 80/day seven-day
-  average. These bounds include hourly dual custody on every routed chain/token pair and keep
-  worst-case usage below both provider stop lines, including the ten-percent retry allowance.
+  Production and staging share provider free quotas: their operational deposit allocations are
+  46/day and 20/day respectively. Keep hourly dual custody on every routed chain/token pair;
+  the required positive `max_attached_pending_refunds` deployment setting enforces production's
+  limit of two attached-pending refunds and staging's limit of one per environment.
 - Remove RPC recovery/resume commands, member pools, review sweeps, single-source backstops and
   custom head-poll flags. The expand-only migration preserves rollback to the prior stable
   release, whose RPC frozen/anchor/recovery state must be resolved before starting this version.
@@ -52,8 +68,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `Retry-After: 1`; the request has not executed. Malformed or checksum-invalid keys still return
   `401` without taking a slot. Payer reads, health checks, and admin authentication use their
   existing admission paths.
-- Object-scoped transaction-hash hint endpoints for quotes and deposit addresses always
-  acknowledge with `202 received`, use client-secret or merchant write authentication, and only
+- Object-scoped transaction-hash hint endpoints for quotes and deposit addresses acknowledge
+  admitted requests with `202 received`, use client-secret or merchant write authentication, and only
   record dual-verified successful routed transfers at confirmation. Hard call, time, concurrency
   and UTC daily task limits fall back to scanning; hints never establish negative coverage.
   Complete evidence is fetched independently after both endpoints reach confirmation depth;
@@ -67,6 +83,54 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   require a fresh passing dual-source check.
 
 ### Changed
+
+- Confirm and finality-watch checks of absent transfers share durable once-only unresolved entry
+  timestamps and the one-minute/ten-minute/hourly schedule. Due unresolved deposits at the
+  persisted finality checkpoint are checked only by the watcher; agreed positive transfer evidence
+  returns provisional correction and valuation to confirm, retaining unresolved entry history.
+  Coverage freezes immediately when dual-agreed boundary hashes contradict persisted checkpoint
+  or coverage evidence. Refund concurrency is a required positive deployment setting (production
+  2, staging 1); the one-new-attachment rolling-24-hour limit and reservation safety are unchanged.
+
+- Unresolved deposit finality checks back off from every minute for the first ten minutes unresolved,
+  to every ten minutes until six hours, then hourly; normal newly due finalization and the
+  one-hour pending-after-reorg alert are unchanged. Only one service-known replacement candidate
+  may be read on both endpoints; multiple candidates alert and keep the deposit unresolved.
+  DB-derived per-chain gauges track current unresolved stock immediately and distinct first
+  unresolved entries over the rolling 24 hours, retaining resolved entries in that window.
+  Either environment total above one alerts; operators must pause new quotes until both
+  counts return to at most one. The first unresolved timestamp survives rechecks and rollback.
+- Payment discovery runs every five minutes, dual finalized checkpoints are independently
+  verified and published every ten minutes, and complete dual log coverage runs hourly.
+  Observation-chain contract recovery remains every minute and admitted hint processing keeps
+  its seconds-scale fast path. Without hints, discovery adds up to five minutes (mean 2.5), plus
+  confirmation and processing. Newly due deposit finality/reversal and checkpoint-conflict detection
+  add up to ten minutes plus processing; log-only conflicts still wait for coverage. Expiry,
+  cancellation completion and reservation release still require dual coverage: allow chain
+  finality plus ten minutes for the checkpoint, one hour for coverage and five seconds for expiry.
+  Coverage lag now warns after two hours; Sentry monitors track all three independent cadences.
+  Every sixth coverage round scans up to 19,200 blocks (every six hours); normal rounds retain
+  3,000 blocks. Healthy continuous recovery can clear a 24-hour-equivalent backlog within twelve
+  hours, subject to the recovery-day deposit/factory operational caps. Failures, restarts and
+  address backfill extend these bounds. Custody remains hourly and coverage-pinned, so a newly
+  finalized discrepancy can take about 130 minutes plus RPC time to freeze the chain. Chain-time
+  quote eligibility is unchanged; later processing can change fresh valuation and sanctions results.
+- **Breaking:** Each environment enforces its configured attached-pending refund cap (production
+  two, staging one) and admits one new refund transaction attachment per rolling 24 hours across all merchants and modes. `mark_paid` returns
+  non-retryable `422 refund_attachment_limit_exceeded` when either limit would be exceeded; contact
+  the operator before sending or attaching another payout. Refusals keep the pending reservation,
+  idempotent repeats consume no quota, and existing attachments continue dual-source verification.
+  Admitted transaction hint tasks are capped at 80 per environment/UTC day; fresh quote snapshots
+  remain capped at 60 per price chain/environment/UTC day, with alerts at both caps.
+- **Breaking:** Refund transactions never seen by either endpoint after 24 hours remain `pending`
+  and keep their reservation, with `TopupRefundProgressAge` alerting the operator. They no longer
+  become `failed` with `transaction_not_found` or emit `refund.failed`; merchants cannot refund
+  the reserved amount again or cancel after `mark_paid`. Attached refunds are checked every 60 s
+  for the first 30 min, every 10 min until 24 h, then hourly until finalized verification resolves
+  them. Historical failure values remain readable.
+- **Breaking:** Global API overload on transaction-hint endpoints returns the standard retryable
+  `503 unavailable` instead of `202 received`, before reading the request body. Admitted hints
+  retain their quiet acknowledgement behavior.
 
 - Removed the per-source pre-authentication budget: Phala's TCP ingress exposes only the shared
   gateway's WireGuard address, so one client could exhaust it and cause every merchant to receive
@@ -95,6 +159,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   new metrics report cache outcomes and pricing budget expirations.
 
 ### Fixed
+
+- Freeze persisted boundary conflicts from either successful RPC endpoint even when its peer
+  errors. Preserve terminal proofs and final markers across held-settings waits, so subsequent
+  business retries reuse the same evidence without chain reads; watcher completion reflects
+  the actual handoff persistence result. Handoffs without a reusable terminal proof enter S
+  and persist its backoff atomically with the version-checked transition.
 
 - Reference-product sweep groups retain their last successful balances and sweep history for up to
   ten minutes when a refresh fails, while disabling stale signable calls.

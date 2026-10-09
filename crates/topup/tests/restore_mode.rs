@@ -121,6 +121,8 @@ impl Harness {
         let screening = Arc::new(SwitchScreener::default());
         let state = AppState {
             pool: pool.clone(),
+            max_attached_pending_refunds: std::num::NonZeroU32::new(2)
+                .expect("positive refund limit"),
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?,
             ),
@@ -377,7 +379,7 @@ impl Receiver {
 struct ClearSanctions;
 
 #[async_trait]
-impl topup_adapters::risk::oracle::SanctionsSource for ClearSanctions {
+impl topup_adapters::risk::SanctionsSource for ClearSanctions {
     async fn sanctions(
         &self,
         _address: Address,
@@ -607,8 +609,8 @@ async fn confirm_step(
         block_number: recorded.block_number,
         block_hash: recorded.block_hash,
         block_time: recorded.block_time,
-        tx_from: Address::repeat_byte(0x74),
-        tx_nonce: 0,
+        tx_from: recorded.tx_from.unwrap_or(Address::repeat_byte(0x74)),
+        tx_nonce: recorded.tx_nonce.unwrap_or(0),
         token: recorded.asset_contract,
         from: recorded.from_address,
         to: recipient,
@@ -623,9 +625,12 @@ async fn confirm_step(
             ),
         })) as Arc<dyn PriceSource>
     };
+    // This fixture proves terminal restore evidence, rather than a provisional head.
+    let mut terminal_route = harness.route.clone();
+    terminal_route.chain.confirmations = Confirmations::Finalized;
     Ok(ConfirmStep::single(
         harness.pool.clone(),
-        harness.route.clone(),
+        terminal_route,
         chain.clone(),
         chain,
         price("primary", spot),
@@ -663,6 +668,19 @@ async fn run_pump(harness: &Harness, deposit: Uuid, steps: StepSet) -> Result<()
 struct FinalChain(TransferLog);
 
 impl ChainReader for FinalChain {
+    async fn confirmation_probe(
+        &self,
+        _confirmations: Confirmations,
+    ) -> Result<(FinalizedHead, B256), ChainError> {
+        Ok((
+            FinalizedHead {
+                number: 1_000_000,
+                time: DateTime::UNIX_EPOCH,
+            },
+            B256::ZERO,
+        ))
+    }
+
     async fn factory_logs(
         &self,
         _factory: Address,
@@ -2699,7 +2717,9 @@ fn router_transfer(
         log_index: 3,
         block_number,
         block_hash: B256::repeat_byte(block_byte),
-        block_time: Utc::now(),
+        // Match PostgreSQL's persisted timestamp precision in this scripted chain.
+        block_time: DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+            .expect("fixture timestamp"),
         tx_from: Address::repeat_byte(0x77),
         tx_nonce: 7,
         token,
@@ -2712,6 +2732,7 @@ fn router_transfer(
 /// The service's pipeline on a [`ScriptedChain`], crediting at depth 2 as fast credit does, so a
 /// credited deposit can still be reversed.
 struct Pipeline {
+    pool: PgPool,
     chain: ScriptedChain,
     routes: Arc<topup::routes::RouteSet>,
     pump: Pump,
@@ -2731,7 +2752,10 @@ impl Pipeline {
             },
         )
         .await?;
-        Ok(self.watch.watch_once(1).await?)
+        let clock: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT GREATEST(now(),COALESCE(max(finality_check_at),now())) FROM deposits WHERE deposit_finality_pending(deposits)",
+        ).fetch_one(&harness.pool).await?;
+        Ok(self.watch.watch_once_at(1, clock).await?)
     }
 
     fn new(harness: &Harness) -> Result<Self> {
@@ -2778,8 +2802,10 @@ impl Pipeline {
             1,
             chain.clone(),
             chain.clone(),
-        );
+        )
+        .with_pump(Arc::new(pump.clone()));
         Ok(Self {
+            pool: harness.pool.clone(),
             chain,
             routes,
             pump,
@@ -2830,6 +2856,7 @@ impl Pipeline {
     /// The finalized scanner's pass, as the rescan after a restore runs it; returns the deposits it
     /// recorded.
     async fn finalized_scan(&self, harness: &Harness) -> Result<u64> {
+        topup::checkpoint::advance(&harness.pool, 1, &self.chain, &self.chain).await?;
         let routes = chain_routes(&self.routes)
             .into_iter()
             .next()
@@ -2844,7 +2871,12 @@ impl Pipeline {
     /// Runs the pump until nothing is due.
     async fn settle(&self) -> Result<()> {
         for _ in 0..10 {
-            if self.pump.run_once().await? == RunOnceResult::Idle {
+            let clock: DateTime<Utc> = sqlx::query_scalar(
+                "SELECT GREATEST(now(),COALESCE(max(next_attempt_at),now())) FROM deposits",
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            if self.pump.run_once_at(clock).await? == RunOnceResult::Idle {
                 return Ok(());
             }
         }
@@ -2964,13 +2996,15 @@ async fn a_restored_unverified_reversed_record_preserves_its_canonical_successor
             pipeline.fast_scan(&harness, &first, address_id).await?;
             pipeline.settle().await?;
             let old = deposit_id(1, ROUTER_TX, 0);
-            ensure!(valuation(&harness, old).await?.0 == "credited");
+            let initial: Value = sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1").bind(old).fetch_one(&harness.pool).await?;
+            ensure!(db::get_deposit(&harness.pool,old).await?.context("original")?.state==topup_core::deposit::DepositState::Credited,"original did not credit: {initial}");
+            ensure!(valuation(&harness, old).await.context("original valuation")?.0 == "credited");
             let second = router_transfer(harness.route.asset.contract, forwarder, 11, 0xbb, 90);
             pipeline.chain.set(30, 20, Some(second));
             ensure!(pipeline.watch_once(&harness).await?.reversed == 1);
             pipeline.settle().await?;
             let new = topup_core::identity::deposit_revision_id(1, ROUTER_TX, 0, 1);
-            let credited = valuation(&harness, new).await?;
+            let credited = valuation(&harness, new).await.context("successor valuation")?;
             ensure!(
                 credited.0 == "credited" && credited.3 == "2250",
                 "{credited:?}"
@@ -3059,7 +3093,7 @@ async fn a_restored_unverified_reversed_record_preserves_its_canonical_successor
             // The second deposit is valued at its delivered credit, not at today's spot; nothing
             // is sent again.
             confirm(&harness, new, forwarder, 20_000_000).await?;
-            let restored = valuation(&harness, new).await?;
+            let restored = valuation(&harness, new).await.context("successor valuation")?;
             ensure!(
                 (restored.2.as_str(), restored.3.as_str()) == ("25000000", "2250"),
                 "{restored:?}"
@@ -4723,7 +4757,7 @@ async fn delivered_outcomes_stand_whatever_the_reconfirmed_settings_accept() -> 
 struct NamesSender(Address);
 
 #[async_trait]
-impl topup_adapters::risk::oracle::SanctionsSource for NamesSender {
+impl topup_adapters::risk::SanctionsSource for NamesSender {
     async fn sanctions(
         &self,
         address: Address,
@@ -4782,7 +4816,7 @@ async fn a_sanctions_hit_keeps_a_delivered_credit_and_blocks_its_sweep() -> Resu
             // A disagreement on replay cannot undo delivered value or create a sanctions hit.
             struct SplitSanctions;
             #[async_trait]
-            impl topup_adapters::risk::oracle::SanctionsSource for SplitSanctions {
+            impl topup_adapters::risk::SanctionsSource for SplitSanctions {
                 async fn sanctions(&self,_:Address,_block_number:u64)->topup_core::screening::SanctionsResult {
                     topup_core::screening::SanctionsResult::new(topup_core::screening::SanctionsVerdict::Uncertain)
                 }

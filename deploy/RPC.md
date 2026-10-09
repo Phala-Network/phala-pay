@@ -39,8 +39,10 @@ answer. Restore the endpoint and let the ordinary bounded loops retry with a fre
 Alloy's single retry layer retries HTTP 429/503 and JSON-RPC throughput errors; Infura HTTP 402
 halts that endpoint until the next UTC midnight (5:00 PM PDT, 4:00 PM PST).
 
-Fast discovery runs every 60 seconds. Dual finalized coverage runs every ten minutes, at most
-3,000 blocks normally and 19,200 every sixth round. Address history is backfilled separately in
+Fast discovery runs every 300 seconds. Checkpoints advance independently every 600 seconds.
+Dual finalized coverage reads the published checkpoint every hour, at most
+3,000 blocks normally and 19,200 every sixth round (six hours). Observation-chain contract recovery keeps its separate
+60-second interval. Address history is backfilled separately in
 chunks of at most 1,000 addresses. A candidate is provisional until both endpoints agree on
 receipt status, transaction, inclusion, log position and contents, block time, sender and nonce.
 Scheduled custody checks each chain/token route on the first reconciliation tick and every
@@ -51,45 +53,93 @@ and process restarts run custody immediately.
 
 ### Worst-case pilot budget
 
-The approved §5.2 figure of **1,344,960 Infura credits/day is a worst-case figure**, before the
-×1.1 retry allowance. The following replaces its custody term and lowers the operational pilot
-caps to include every routed chain/token pair; it does not change the approved design document.
+Confirmation waits read only the required tag's head, once per endpoint. Both must qualify before
+one full receipt set (receipt, canonical header, transaction: at most three methods per endpoint)
+is reserved. Normal confirmation and slow lane L share that one receipt allowance. Receipt
+absence, disagreement, changed actual evidence, or RPC failure enters unresolved lane S.
+Persisted checkpoint/hash conflicts freeze immediately. Height differences alone are ordinary lag.
 
-Four payment chains (Sepolia, Base Sepolia, Ethereum and Base), each with PHA, USDC and USDT,
-mean **12 custody routes** across staging and production. Each route can have balances on all
-1,000 historical addresses. The 200-address multicall batch needs five calls per endpoint per
-hour: `12 × 24 × ceil(1000 / 200) = 1,440` Ankr calls and `1,440 × 80 = 115,200` Infura
-credits/day. Empty ledgers use no balance RPC, but the bound assumes every route is full.
+| Mode | Normal head probes per endpoint | Fixed wake-up positions | Normal plus first terminal verification |
+|---|---:|---|---:|
+| Depth | 6 | First immediately, then a+4/12/28/60/124 seconds | 13 methods |
+| Safe | 3 | First immediately, then every 384 seconds | 10 methods |
+| Finalized | 7 | First immediately, then every 384 seconds | 10 methods |
 
-The original fixed Ankr term includes `4 × 144 = 576` single-source custody calls. Replace,
-rather than add to, that term. Infura's original term has no custody reads:
+For Depth, B=discovered block+depth-1. For each endpoint estimate e=t0 when its head meets B,
+otherwise e=head timestamp+(B-head height)×chain block seconds (Ethereum 12, Base 2).
+The fixed anchor a=max(t0,min(e_read,e_verify)); estimates schedule checks and never prove depth.
+Safe/Finalized deadlines are t0+768/t0+2,304 seconds. Restart skips missed positions, consumes
+at most one current position and cannot restart the window or refund a reserved read.
+Healthy Depth confirmation normally completes about four seconds after estimated depth, plus
+processing; a lagging endpoint can wait up to the current interval (last normal interval 64 seconds).
+
+Only valid height lag exhausting the normal window enters L, setting immutable `first_slow_at`.
+It does not enter S. L first rechecks after 60 seconds, then uses the shared backoff:
+60 seconds before ten minutes, ten minutes until six hours, hourly thereafter. Each check is
+one tagged head method per endpoint. As soon as both qualify, the same claim reads its sole
+receipt set and confirms/values **without waiting for the published checkpoint**. Recovery latency
+is bounded by the current 60-second, ten-minute, or hourly interval plus RPC/processing time.
+The first half-open 24 hours has at most 62 L head rechecks; an hourly-phase rolling day has 24.
+Depth plus the first L day uses at most 71 methods/endpoint (75 with first terminal verification),
+Safe 68 (72 with terminal verification), Finalized 72. There is no finite lifetime bound for a
+permanently lagging deposit.
+
+L stock and rolling 24-hour entries each have an operational allocation of one per environment,
+summed across chains. DB gauges `topup_confirmation_slow` and
+`topup_confirmation_slow_entries_24h` survive restart and include resolved entries in the entry
+window. Non-empty L for ten minutes warns; either sum exceeding one stops new quote/payment
+load. Continue verifying existing funds and retain reservations. See [recovery](runbooks/rpc-health.md).
+S remains separately allocated: one current unresolved deposit and one rolling entry per environment.
+Its immutable anchor is `first_unresolved_at`; it shares the same segmented backoff. Each S check
+uses at most four methods per endpoint, including a single service-known replacement when needed.
+The watcher owns S even when an earlier `final_at` exists; only fresh terminal proof resolves it.
+Positive provisional reappearance stays S. Terminal dual evidence is passed to valuation within
+the same lease, without a receipt reread. Terminal price retries reuse full persisted proof;
+nonterminal price failures retain watcher ownership. The existing one-hour pending alert remains.
+
+Staging and production run concurrently on shared free quotas. Keep production **46 deposits/day**,
+staging **20/day**, H=80 hints/environment/day and Q=60 fresh quote snapshots/price-chain/environment/day.
+D is an operational allocation, not a new code cap. Maintain twelve hourly custody routes, 1,000
+historical addresses/chain, and the existing factory, Safe and price allocations. Refund concurrent
+attached-pending stock is configured as production R=2 and staging R=1; each environment's rolling
+24-hour new attachment cap N=1 is constant. Idempotent attachment retries do not consume N.
+
+| Per deposit | Ankr calls | Infura credits |
+|---|---:|---:|
+| Cold discovery | 3 | 0 |
+| Confirmation and first terminal verification | 13 | 1,040 |
+| Coverage completion/reverification | 6 | 480 |
+| Price snapshot allocation | 2 | 480 |
+| Total | 24 | 2,000 |
+
+Two environments reserve L separately: 2×(62 new+24 carried)=172 head methods/endpoint/day,
+172 Ankr calls and 13,760 Infura credits. S retains its separate 688 calls/55,040 credits.
 
 ```text
-Fixed Ankr:   16,128 - 576 + 1,440 = 16,992 calls/day
-Fixed Infura: 771,840 + 115,200    = 887,040 credits/day
+Non-refund Ankr:   10,580 calls/day
+Non-refund Infura: 865,460 credits/day
+Combined Ankr:    10,580 × 1.1 + 4,968 = 16,606 calls/day
+Combined Infura:  865,460 × 1.1 + 397,440 = 1,349,446 credits/day
+Headroom:         Ankr 33.58%; Infura 10.04%
 ```
 
-Keep the 1,000-address cap and reserve the original PR 3 hint bound `H = 150` per environment.
-Reduce the combined deposit pilot bound to `D = 100` per day (stop adding merchants at a
-seven-day average above 80), and enforce `Q = 60` fresh quote snapshots per price chain per
-environment per UTC day. There are four price-chain/environment instances. Staging's two PHA
-routes share one TWAP pool, policy and snapshot; the sampler coalesces them at each tick,
-so five-minute sampling adds `86,400 / 300 = 288` snapshots/day. Production in this pilot has
-no additional periodic TWAP sampler; adding a pool or sampler requires a new budget review.
+The approved budget applies ×1.1 to non-refund traffic and reserves all three transport attempts
+for refunds. Logical methods have hard bounds; each method has at most three physical attempts.
+This total does not cover every non-refund method exhausting all retries while preserving 10%
+headroom. Production D=47 would leave only 9.89% Infura headroom; 46 is the maximum integer here.
+Refund checks read both endpoints: `eth_getTransactionReceipt`, the persisted-checkpoint
+`eth_getBlockByNumber`, and receipt-height `eth_getBlockByNumber` (at most three/endpoint).
+Missing receipts use one method; included but not finalized receipts use two; finalized receipts
+use three. The checkpoint height is read from the DB; refund checks issue no transaction or
+finalized-tag RPC. Cadence is 60 seconds for 30 minutes, ten minutes until 24 hours, then hourly
+indefinitely. Per-refund phase-day ceilings at three logical methods/check (excluding transport
+retries): first half-open day 171 checks=513 Ankr calls/41,040 Infura credits; ten-minute phase
+144 checks=432/34,560 per full day; hourly phase 24 checks=72/5,760. The approved combined
+refund reserve is conservative and includes all three transport attempts for both environments'
+permitted stock and inflow.
 
-```text
-Ankr:   16,992 + (288 + 4 × 60) + 15 × 100 + 2 × 12 × 150 = 22,620
-        22,620 × 1.1 = 24,882 calls/day ≤ 25,000
-Infura: 887,040 + 240 × (288 + 4 × 60) + 1,440 × 100 + 2 × 640 × 150 = 1,349,760
-        1,349,760 × 1.1 = 1,484,736 credits/day ≤ 1,500,000
-```
-
-Reducing only the quote cap cannot fit Ankr: even `Q = 0` with `D = H = 150` costs
-`16,992 + 288 + 2,250 + 3,600 = 23,130`, or 25,443 calls after retries. Both reduced caps
-are necessary for this allocation. The retry allowance covers bounded snapshot retries and
-ordinary endpoint retries. Additional routes, manual reconciliation runs, repeated restarts or
-provider preflights need quota headroom or a paid-provider upgrade before adding that load.
-Alerts report unexpected usage; they do not authorize exceeding either stop line.
+Manual reconciliation, repeated restarts, preflights and additional chains/routes need budget
+headroom or a reviewed paid-provider allocation. Alerts do not authorize exceeding stop lines.
 
 An address or unverified-id snapshot change abandons all cached evidence and retries once
 immediately with a full fresh RPC round. A second change waits for the next tick. Coverage
@@ -100,8 +150,8 @@ Observe `topup_rpc_endpoint_ready`, `topup_rpc_errors_total`, `topup_coverage_la
 `topup_addresses_lagging`, and `topup_daily_budget_used`. Import [rpc-alerts.yaml](rpc-alerts.yaml).
 Both environments share provider quotas: stop adding load at Ankr's 25,000 calls/day seven-day
 run rate or Infura's 50% daily credit usage. Compare provider dashboards with the recording rules.
-Keep at most 1,000 issued addresses per chain and stop adding merchants when the seven-day
-average exceeds 80 deposits/day (the combined pilot bound is 100).
+Keep at most 1,000 issued addresses per chain. Stop adding payment load before either environment
+exceeds its deposit allocation or either L/S operational capacity rule.
 
 Each fresh quote snapshot consumes one unit of its environment's UTC price-chain budget, capped
 at 60. Quotes return retryable `price_unavailable` when exhausted. A cached snapshot is usable
@@ -126,5 +176,6 @@ No account nonce query is proof; EIP-7702 authorizations can increment it.
 The migration is expand-only. N keeps N-1's cursor and address compatibility fields, writes no
 legacy RPC table, and refuses to start if N-1 left frozen, awaiting-anchor or recovery-pending
 state. Resolve that state with N-1 before upgrading. Preserve N-1's verified image and config.
-The real `deploy/local/rollback-drill.sh` gate covers N-1 → N → N-1 → N. PR 3 extends its named
-hint extension point; PR 2 implements no transaction-submission endpoint or task.
+The local published-image rollback drill covers N-1 → N → N-1 → N, preserving money state and
+new confirmation counters, deadlines and entry history. N-1 data compatibility does not promise
+the new RPC bounds: rollback must use the old binary's operating allocation.

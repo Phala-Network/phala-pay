@@ -10,12 +10,10 @@
 //! not pay it makes it `failed` with a `failure_reason`, which releases its reservation of the
 //! deposit, and sends `refund.updated` and `refund.failed`.
 //!
-//! A refund with a transaction attached cannot be canceled: the merchant might pay twice. It stays
-//! reserved until verified, or until the transaction is proven never to pay it: `failed` with
-//! `transaction_dropped` once neither provider has a receipt and, at `finalized` on both, the
-//! sender's nonce (kept when a provider first returns the transaction) was consumed by another
-//! transaction; or with `transaction_not_found` when neither provider has returned the transaction
-//! for [`NOT_FOUND_AFTER`] since it was attached. The merchant then requests a new refund.
+//! A refund with a transaction attached cannot be canceled: the merchant might pay twice. It
+//! stays reserved until both providers agree on a finalized receipt that resolves it. A payout
+//! never seen by either provider for 24 hours raises an alert and remains pending. Missing
+//! receipts and sender nonce changes alone cannot prove that the payout will never pay it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
@@ -30,7 +28,7 @@ use serde_json::{Value, json};
 use sqlx::{FromRow, PgConnection, PgPool};
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::EvmClient;
-use topup_core::refund::{ExpectedRefund, RefundFailure, RefundTransfer, match_refund_transfer};
+use topup_core::refund::{ExpectedRefund, RefundTransfer, match_refund_transfer};
 use topup_core::route::RouteFile;
 use uuid::Uuid;
 
@@ -42,7 +40,7 @@ sol! {
     event Transfer(address indexed from, address indexed to, uint256 amount);
 }
 
-/// A refund transaction neither provider has ever returned fails this long after it was attached.
+/// Alert age for an attached refund transaction neither provider has ever returned.
 pub const NOT_FOUND_AFTER: TimeDelta = TimeDelta::hours(24);
 
 /// One provider's view of an attached refund transaction.
@@ -244,7 +242,8 @@ impl DestinationScreener for UnavailableDestinationScreener {
 pub struct RefundVerificationConfig {
     /// Delay between empty polls.
     pub poll_interval: Duration,
-    /// Delay before an attached transaction is read again.
+    /// Minimum retry delay. Checks wait at least 60 s for the first 30 min after attachment,
+    /// 10 min until 24 h, then 1 h indefinitely.
     pub retry_interval: Duration,
     /// Maximum duration of both providers' reads.
     pub observe_timeout: Duration,
@@ -307,8 +306,18 @@ where
 
     /// Verifies at most one due refund.
     pub async fn check_once(&self) -> Result<Verification, sqlx::Error> {
+        self.check_at(Utc::now()).await
+    }
+
+    /// Verifies using an explicit clock for deterministic integration fixtures.
+    #[cfg(feature = "test-support")]
+    pub async fn check_once_at(&self, now: DateTime<Utc>) -> Result<Verification, sqlx::Error> {
+        self.check_at(now).await
+    }
+
+    async fn check_at(&self, now: DateTime<Utc>) -> Result<Verification, sqlx::Error> {
         let retry_seconds = i32::try_from(self.config.retry_interval.as_secs()).unwrap_or(i32::MAX);
-        let Some(row) = claim_due_refund(&self.pool, retry_seconds).await? else {
+        let Some(row) = claim_due_refund(&self.pool, retry_seconds, now).await? else {
             return Ok(Verification::Idle);
         };
         let mut check = row.into_check()?;
@@ -343,7 +352,7 @@ where
                 _,
             ) if primary == secondary => (*block_number, *block_hash, *succeeded, transfers),
             (RefundReceipt::Missing, RefundReceipt::Missing) => {
-                return self.not_included(&mut check).await;
+                return self.not_included(&mut check, now).await;
             }
             (RefundReceipt::Pending | RefundReceipt::Missing, _)
             | (_, RefundReceipt::Pending | RefundReceipt::Missing) => {
@@ -418,29 +427,32 @@ where
         }
     }
 
-    /// Neither provider has a receipt: the transaction is pending, dropped, or unknown. It fails
-    /// as `transaction_dropped` once its sender's nonce is consumed at `finalized` on both
-    /// providers, or as `transaction_not_found` when no provider has returned it for
-    /// [`NOT_FOUND_AFTER`] since it was attached; otherwise it waits.
-    async fn not_included(&self, check: &mut RefundCheck) -> Result<Verification, sqlx::Error> {
+    /// Missing receipts keep the reservation. Neither absence nor elapsed time proves that a
+    /// transaction cannot pay; alert after 24 hours without ever observing its origin.
+    async fn not_included(
+        &self,
+        check: &mut RefundCheck,
+        now: DateTime<Utc>,
+    ) -> Result<Verification, sqlx::Error> {
         if !self.remember_origin(check).await? {
             return Ok(Verification::Waiting);
         }
         if check.origin.is_none() {
-            if Utc::now().signed_duration_since(check.paid_at) < NOT_FOUND_AFTER {
-                persist_evidence(&self.pool, check, &json!({"result": "not_found"})).await?;
-                return Ok(Verification::Waiting);
+            let overdue = now.signed_duration_since(check.paid_at) >= NOT_FOUND_AFTER;
+            persist_evidence(
+                &self.pool,
+                check,
+                &json!({
+                    "result": if overdue { "not_found_overdue" } else { "not_found" },
+                    "paid_at": check.paid_at.timestamp(),
+                    "reversal": "unproven",
+                }),
+            )
+            .await?;
+            if overdue {
+                tracing::warn!(tags.alert="TopupRefundProgressAge",chain_id=check.chain_id,refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "no provider has returned the refund transaction for 24 hours; reservation remains pending");
             }
-            let reason = RefundFailure::TransactionNotFound;
-            let evidence = json!({
-                "result": reason.code(),
-                "paid_at": check.paid_at.timestamp(),
-            });
-            if !fail(&self.pool, &self.routes, check, reason.code(), &evidence).await? {
-                return Ok(Verification::Waiting);
-            }
-            tracing::warn!(refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "no provider ever returned the refund transaction");
-            return Ok(Verification::Failed);
+            return Ok(Verification::Waiting);
         }
         persist_evidence(
             &self.pool,
@@ -451,8 +463,8 @@ where
         Ok(Verification::Waiting)
     }
 
-    /// Keeps the transaction's sender and nonce the first time a provider returns it, so that a
-    /// transaction dropped later can be proven dropped. A failed read leaves it unknown.
+    /// Keeps the sender and nonce when both providers agree, for operator investigation.
+    /// These fields alone do not prove a replacement; a failed read leaves them unknown.
     async fn remember_origin(&self, check: &mut RefundCheck) -> Result<bool, sqlx::Error> {
         if check.origin.is_some() {
             return Ok(true);
@@ -601,11 +613,12 @@ pub(crate) async fn lock_refund_deposit(
     .await
 }
 
-/// Claims the refund due first and pushes its next check back by `retry_seconds`. The expected
+/// Claims the refund due first and schedules the next check from its attachment age. The expected
 /// sender is the treasury of the deposit's own address, fixed when the address was issued.
 async fn claim_due_refund(
     pool: &PgPool,
     retry_seconds: i32,
+    now: DateTime<Utc>,
 ) -> Result<Option<RefundCheckRow>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     // Lock the deposit first, as mark-paid and the final verification transaction do. A locked
@@ -614,10 +627,11 @@ async fn claim_due_refund(
         "SELECT refund.id FROM refunds AS refund \
          JOIN deposits AS deposit ON deposit.id = refund.deposit_id \
          WHERE refund.status = 'pending' AND refund.tx_hash IS NOT NULL \
-           AND refund.next_check_at <= now() AND deposit.sanctions_hit_at IS NULL \
+           AND refund.next_check_at <= $1 AND deposit.sanctions_hit_at IS NULL \
          ORDER BY refund.next_check_at, refund.id \
          FOR UPDATE OF deposit SKIP LOCKED LIMIT 1",
     )
+    .bind(now)
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(candidate) = candidate else {
@@ -626,10 +640,14 @@ async fn claim_due_refund(
     let claimed = sqlx::query_as::<_, RefundCheckRow>(
         r#"
         UPDATE refunds AS refund
-        SET next_check_at = now() + make_interval(secs => $1), updated_at = now()
+        SET next_check_at = $3 + make_interval(secs => GREATEST($1, CASE
+                WHEN $3 < refund.paid_at + interval '30 minutes' THEN 60
+                WHEN $3 < refund.paid_at + interval '24 hours' THEN 600
+                ELSE 3600
+            END)), updated_at = now()
         FROM deposits AS deposit, addresses AS address
         WHERE refund.id = $2 AND refund.status = 'pending' AND refund.tx_hash IS NOT NULL
-          AND refund.next_check_at <= now()
+          AND refund.next_check_at <= $3
           AND deposit.id = refund.deposit_id AND deposit.sanctions_hit_at IS NULL
           AND address.id = deposit.address_id
         RETURNING refund.id AS refund_id, refund.account_id, refund.livemode, refund.deposit_id,
@@ -641,6 +659,7 @@ async fn claim_due_refund(
     )
     .bind(retry_seconds)
     .bind(candidate)
+    .bind(now)
     .fetch_optional(&mut *transaction)
     .await?;
     transaction.commit().await?;

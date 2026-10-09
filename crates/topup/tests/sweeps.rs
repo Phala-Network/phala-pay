@@ -342,6 +342,9 @@ async fn a_forwarder_mismatch_freezes_crediting_on_the_chain() -> Result<()> {
             ensure!(chain_is_blocked(chain.pool(), CHAIN_ID).await?);
 
             // Crediting stops: the pump runs no step for the chain's deposits...
+            sqlx::query("UPDATE deposits SET state='confirmed'")
+                .execute(chain.pool())
+                .await?;
             let calls = Arc::new(AtomicUsize::new(0));
             let step = || Box::new(CountingStep(Arc::clone(&calls))) as Box<dyn Step>;
             let pump = Pump::new(
@@ -546,6 +549,13 @@ impl<'a> Chain<'a> {
     }
 
     async fn scan(&self) -> Result<topup::scanner::ScanStats> {
+        topup::checkpoint::advance(
+            self.pool(),
+            self.routes.chain.chain_id,
+            &self.reader,
+            &self.reader,
+        )
+        .await?;
         Ok(coverage_once(self.pool(), &self.reader, &self.reader, &self.routes, 1).await?)
     }
 

@@ -167,7 +167,7 @@ The provision proves nothing about the instance's health. It is accepted once
   - $answers, and
   - you have verified its attestation with the release's verified kit
     ($docs#5-verify-the-attestation):
-      kit/deploy/verify-attestation.sh attestation.json info.json $app_id $record $variant
+      kit/deploy/verify-attestation.sh attestation.json info.json $app_id $record $variant $os_image_hash
 
 Next, create a merchant account with the admin key (BASE_URL=$url):
 $docs#6-onboard-your-first-account
@@ -195,6 +195,7 @@ main() {
     exec 3>&1
     # What finish and summary read: the temporary directories, and what is known of the new CVM.
     work="" sealed="" env_dir="" cvm_id="" app_id="" url="" gateway="" instance_id="" record="" answers=""
+    os_image_hash=""
     [[ "${PHALA_PAY_REQUIRE_ATTESTATION:-}" != 1 ]] || strict=1
     local argument
     for argument in "$@"; do
@@ -389,6 +390,7 @@ main() {
                 echo "# Written by deploy.sh $release: the kit's phala-cloud-template routes and sealed RPC"
                 echo "# providers (Phala's staging), served at this domain (docs/configuration.md)."
                 echo "environment: testnet"
+                sed -n '/^max_attached_pending_refunds:/p' "$kit/deploy/environments/phala-cloud-template/topup/topup.yaml"
                 echo "public_origin: https://$DOMAIN"
                 echo "admin_key:"
                 echo "  id: admin/v1"
@@ -414,9 +416,14 @@ services:
     environment:
       DOMAIN: $DOMAIN
 YAML
+            cp "$kit/deploy/environments/phala-cloud-template/topup/os-image-hash" "$env_dir/os-image-hash"
             say "wrote $env_dir: this instance's settings, no secret"
         fi
     fi
+    # The quick start's environment is in the temporary kit; retain its pin for the summary
+    # printed after finish removes that kit.
+    os_image_hash=$(cat "$env_dir/os-image-hash") || die "could not read $env_dir/os-image-hash"
+    check os_image_hash '^[0-9a-f]{64}$' "64 lowercase hexadecimal characters"
     local compose=$work/docker-compose.yml pinned_compose
     "$kit/deploy/render.sh" "${render[@]}" --images "$images" "$env_dir" >"$compose"
     pinned_compose=$("$kit/deploy/pinned-compose.sh")

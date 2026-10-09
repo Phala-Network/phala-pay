@@ -1,0 +1,1 @@
+-- Binary rollback preserves the additive confirmation quota and slow-lane history.

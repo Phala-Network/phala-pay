@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        WITH candidate AS (\n            SELECT id\n            FROM deposits\n            WHERE state IN ('detected', 'confirmed')\n              AND next_attempt_at <= now()\n              AND (lease_until IS NULL OR lease_until <= now())\n            ORDER BY next_attempt_at, created_at, id\n            FOR UPDATE SKIP LOCKED\n            LIMIT 1\n        )\n        UPDATE deposits AS deposit\n        SET lease_token = $1,\n            lease_until = now() + interval '5 minutes',\n            updated_at = now()\n        FROM candidate\n        WHERE deposit.id = candidate.id\n        RETURNING\n            deposit.id, deposit.chain_id, deposit.tx_hash, deposit.receipt_log_index,\n            deposit.log_index, deposit.block_number, deposit.block_hash, deposit.block_time,\n            deposit.address_id, deposit.account_id, deposit.livemode, deposit.customer_id,\n            deposit.route, deposit.route_version,\n            deposit.asset_contract, deposit.from_address,\n            deposit.amount_atomic::text AS \"amount_atomic!\", deposit.tx_from,\n            deposit.tx_nonce::text AS tx_nonce, deposit.final_at, deposit.state, deposit.reason, deposit.attempt, deposit.next_attempt_at,\n            deposit.lease_token, deposit.lease_until, deposit.valuation_at,\n            deposit.price_scaled::text AS price_scaled, deposit.price_source,\n            deposit.credit_minor::text AS credit_minor, deposit.quote,\n            deposit.created_at, deposit.updated_at\n        ",
+  "query": "\n        WITH candidate AS (\n            SELECT id\n            FROM deposits\n            WHERE state IN ('detected', 'confirmed')\n              AND next_attempt_at <= $2\n              AND (lease_until IS NULL OR lease_until <= $2)\n              AND (state = 'confirmed' OR\n                  (state = 'detected' AND\n                    (confirmation_terminal_evidence(id) IS NOT NULL OR\n                     (first_unresolved_at IS NULL AND confirm_receipt_checks=0 AND final_at IS NULL\n                      AND (finality_check_at IS NULL OR finality_check_at <= $2)))))\n            ORDER BY next_attempt_at, created_at, id\n            FOR UPDATE SKIP LOCKED\n            LIMIT 1\n        )\n        UPDATE deposits AS deposit\n        SET lease_token = $1,\n            lease_until = $2 + interval '5 minutes',\n            updated_at = $2\n        FROM candidate\n        WHERE deposit.id = candidate.id\n        RETURNING\n            deposit.id, deposit.chain_id, deposit.tx_hash, deposit.receipt_log_index,\n            deposit.log_index, deposit.block_number, deposit.block_hash, deposit.block_time,\n            deposit.address_id, deposit.account_id, deposit.livemode, deposit.customer_id,\n            deposit.route, deposit.route_version,\n            deposit.asset_contract, deposit.from_address,\n            deposit.amount_atomic::text AS \"amount_atomic!\", deposit.tx_from,\n            deposit.tx_nonce::text AS tx_nonce, deposit.final_at, deposit.state, deposit.reason, deposit.attempt, deposit.next_attempt_at,\n            deposit.lease_token, deposit.lease_until, deposit.valuation_at,\n            deposit.price_scaled::text AS price_scaled, deposit.price_source,\n            deposit.credit_minor::text AS credit_minor, deposit.quote,\n            deposit.created_at, deposit.updated_at\n        ",
   "describe": {
     "columns": [
       {
@@ -349,7 +349,8 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -388,5 +389,5 @@
       false
     ]
   },
-  "hash": "1cb785b8da051be93962d387ed8e3926dfdbd7bee2e3bd9642e216bd775b240c"
+  "hash": "308c444dcd515a3ce1138384c4f372b4e2e4d5495a5e166d978df53874ee9f31"
 }

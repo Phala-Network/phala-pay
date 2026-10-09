@@ -341,8 +341,16 @@ verbatim:
 
 Fresh quote snapshots have a hard daily cap of 100 per price chain and environment. Exhaustion
 returns retryable `503 price_unavailable`; the service never substitutes a stale price. Manual
-transfers are discovered every 60 seconds; dual coverage catches omissions and completes quote
+transfers are discovered every five minutes; hourly dual coverage catches omissions and completes quote
 expiry or cancellation within finality plus up to 10 minutes.
+
+Confirmation first probes only the required heads. Healthy Depth confirmation normally finishes
+about four seconds after the estimated depth, plus processing; temporary provider lag can wait
+up to the current normal interval (64 seconds at the end of the window). If only height remains
+insufficient after that window, a slow lane checks every minute for ten minutes, every ten minutes
+until six hours, then hourly. Recovery can take that interval plus processing; confirmation resumes
+as soon as both providers qualify, without waiting for the published checkpoint. Existing typical
+credit times describe healthy hinted payments and are not guarantees during provider lag.
 
 Semantics (spread, tolerance, expiry by dual coverage time, exposure caps) are
 [architecture §9](architecture.md#9-quotes).
@@ -901,7 +909,7 @@ receipt visibility keeps polling within the task budget; only confirmed evidence
 raises an alert. They do not advance coverage or cause expiry, cancellation, rejection or
 credit by themselves. Each task is limited to 12 read calls and 8 verify calls including retries
 and head polling, and 90 seconds on Ethereum chains or 30 seconds on Base chains. Limits are
-3/minute and 10/day per authenticated object, four active tasks and a hard 150 tasks
+3/minute and 10/day per authenticated object, four active tasks and a hard 80 tasks
 per environment per UTC day. Hint endpoints have no per-IP limit; see the operator
 [API admission limits](configuration.md#api-admission-limits) for the ingress protection model.
 Transfers before the address's `created_block` are ignored, as in coverage scanning.
@@ -1252,6 +1260,14 @@ Idempotency-Key: "…"
   a payment that could still be reversed: retry after finality. A paused `refunds` scope is
   `400 paused`. The same `Idempotency-Key` with the same request returns the same response.
 
+Coordinate payout capacity with your operator first. The deployment-configured
+`max_attached_pending_refunds` limit allows at most two attached-pending refunds in production
+and one in staging. Each environment allows one new attachment per rolling 24 hours, across
+all merchants and modes. A refused attachment returns non-retryable
+`422 refund_attachment_limit_exceeded` and keeps the reservation; contact the operator and do
+not send another payout. Repeating the same attachment consumes no quota, and already attached
+payouts continue verification.
+
 Then pay it: transfer exactly `amount_atomic` of the deposit's token from `treasury` to
 `destination_address`, from your wallet or Safe, and attach the transaction:
 
@@ -1280,11 +1296,16 @@ POST /v1/refunds/re_…/mark_paid
   `400 refund_unexpected_state`.
 - **Once marked paid, a refund cannot be canceled** (`400 refund_unexpected_state`): the attached
   transaction may still be mined, and a second refund would pay the customer twice. It stays
-  `pending`, holding its reservation, until it `succeeded`, or `failed` because the transaction is
-  proven not to pay it: final without the transfer (above); or `transaction_not_found`, when
-  neither provider has ever returned the transaction within 24 hours of `mark_paid` (a mistyped
-  hash, or one never broadcast; do not broadcast it afterwards). An observed transaction that
-  disappears stays pending with its reservation. Sender nonce changes cannot prove it dropped.
+  `pending`, holding its reservation, until dual-source finalized receipt verification resolves
+  it as `succeeded` or `failed` (above). Neither elapsed time nor a sender nonce change proves the
+  transaction cannot pay it. If neither provider has ever returned it after 24 hours, the service
+  alerts the operator and keeps it pending. **Do not create or pay a replacement refund** in this
+  state; contact your operator to investigate the attached transaction. There is currently no
+  API to release this reservation based on a claimed replacement or dropped transaction.
+  Historical failed refunds may still carry `transaction_not_found` or `transaction_dropped`.
+- Pending attached refunds are checked every 60 seconds for the first 30 minutes after
+  `mark_paid`, every 10 minutes until 24 hours, then every hour indefinitely until resolved.
+  Each check uses both endpoints. This cadence can delay the success event for an older payout.
 - `POST /v1/refunds/{id}/cancel` cancels a pending refund that has no transaction attached and
   releases its reservation. `GET /v1/refunds/{id}` reads a refund.
 - When `deposit.refunded` arrives, apply its snapshot by the balance rule (§2.3): its
