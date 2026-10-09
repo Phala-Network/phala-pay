@@ -1150,7 +1150,7 @@
         "description": "`POST /v1/quotes` body.",
         "example": {
           "amount": 2500,
-          "asset": "PHA",
+          "asset": "usdc",
           "chain_id": 1,
           "client_reference_id": "team-42",
           "currency": "usd",
@@ -1166,7 +1166,7 @@
             "type": "integer"
           },
           "asset": {
-            "description": "Asset code of the payment on that chain, such as `pha`.",
+            "description": "Asset code of the payment on that chain, such as `usdc`.",
             "type": "string"
           },
           "chain_id": {
@@ -17546,7 +17546,7 @@
   },
   "servers": [
     {
-      "description": "Production: Ethereum Mainnet, live and test mode",
+      "description": "Production: USDC and USDT on Ethereum, USDC on Base; live and test mode",
       "url": "https://pay-api.phala.com"
     },
     {

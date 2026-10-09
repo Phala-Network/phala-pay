@@ -10329,7 +10329,7 @@
   },
   "servers": [
     {
-      "description": "Production: Ethereum Mainnet, live and test mode",
+      "description": "Production: USDC and USDT on Ethereum, USDC on Base; live and test mode",
       "url": "https://pay-api.phala.com"
     },
     {

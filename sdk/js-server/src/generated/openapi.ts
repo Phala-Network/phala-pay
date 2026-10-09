@@ -1613,7 +1613,7 @@ export interface components {
          * @description `POST /v1/quotes` body.
          * @example {
          *       "amount": 2500,
-         *       "asset": "PHA",
+         *       "asset": "usdc",
          *       "chain_id": 1,
          *       "client_reference_id": "team-42",
          *       "currency": "usd",
@@ -1628,7 +1628,7 @@ export interface components {
              * @description The credit to quote, a positive integer in the currency's minor unit (US cents).
              */
             readonly amount: number;
-            /** @description Asset code of the payment on that chain, such as `pha`. */
+            /** @description Asset code of the payment on that chain, such as `usdc`. */
             readonly asset: string;
             /**
              * Format: int64

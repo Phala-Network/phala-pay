@@ -70,7 +70,7 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "amount": 2500,
             "currency": "usd",
             "chain_id": 1,
-            "asset": "PHA",
+            "asset": "usdc",
             "metadata": {"order_id": "ord_1001"},
         }),
         "Deposit" => deposit(),

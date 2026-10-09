@@ -25,12 +25,12 @@ class CreateQuoteRequest:
     """`POST /v1/quotes` body.
 
     Example:
-        {'amount': 2500, 'asset': 'PHA', 'chain_id': 1, 'client_reference_id': 'team-42', 'currency': 'usd', 'metadata':
-            {'order_id': 'ord_1001'}}
+        {'amount': 2500, 'asset': 'usdc', 'chain_id': 1, 'client_reference_id': 'team-42', 'currency': 'usd',
+            'metadata': {'order_id': 'ord_1001'}}
 
     Attributes:
         amount (int): The credit to quote, a positive integer in the currency's minor unit (US cents).
-        asset (str): Asset code of the payment on that chain, such as `pha`.
+        asset (str): Asset code of the payment on that chain, such as `usdc`.
         chain_id (int): EVM chain of the payment, one of `GET /v1/config` `assets[].chain_id`.
         client_reference_id (str): Your identifier of the customer to credit, 1 to 200 characters (Stripe Checkout's
             `client_reference_id`); the customer is created on first use.
