@@ -130,6 +130,13 @@ class ProductApi:
     def account(self, team: str) -> dict[str, Any]:
         return self._call("GET", f"/accounts/{quote(team)}")
 
+    def submit_transaction(self, team: str, quote_id: str, tx_hash: str) -> dict[str, Any]:
+        return self._call(
+            "POST",
+            f"/accounts/{quote(team)}/quotes/{quote(quote_id)}/transactions",
+            {"transaction_hash": tx_hash},
+        )
+
     def restore_records(self, *, since: int | None = None) -> dict[str, Any]:
         """The product's records for a service restore (`GET /accounts/restore-records`)."""
         query = "" if since is None else f"?since={since}"
@@ -216,6 +223,11 @@ def run_deposit(
             time.sleep(max(wait_s, 0))
 
         tx_hash = payer.mint_and_transfer(token or chain.test_token.address, address, amount_atomic)
+        try:
+            api.submit_transaction(team, quote.id, tx_hash)
+            LOG.info("transaction hint received for %s", tx_hash)
+        except ProductApiError as error:
+            LOG.warning("transaction hint unavailable: %s; scanner discovery will continue", error)
         LOG.info("paid %s atomic in %s from %s", amount_atomic, tx_hash, payer.address)
         if until in {"rejected", "refunded"}:
             _check_rejection(api, team, address, refund_to, timeout)
