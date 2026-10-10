@@ -2065,11 +2065,14 @@ test("the docs and the API reference are rendered from the repository, linked wi
     ["docs/self-hosting", "Self-hosting Phala Pay"],
     ["docs/sdk/react", "@phala/pay-react"],
   ] as const;
+  // A doc title that already names the product is the page title as is; others get the suffix.
+  const titles = { "docs": "Phala Pay documentation", "docs/integration": "Integration guide | Phala Pay docs" } as const;
   for (const [path, title] of docs) {
     const response = await page.goto(new URL(path, env("SITE_URL")).href);
     expect(response?.status(), path).toBe(200);
     expect(await response?.text(), path).not.toContain('style="');
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
+    if (path in titles) await expect(page).toHaveTitle(titles[path as keyof typeof titles]);
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `https://pay.phala.com/${path}`);
     expect(sitemap).toContain(`<loc>https://pay.phala.com/${path}</loc>`);
   }
