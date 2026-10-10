@@ -197,6 +197,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - **Breaking:** the reusable Deploy workflow no longer accepts bootstrap_maintenance; upgrades from 0.8.x are unsupported.
 - **Breaking:** route files no longer accept the legacy pricing section; use price. Coin Metrics is no longer a recognized source.
 
+### Security
+
+- The service image's smokescreen and the PostgreSQL image's WAL-G and gosu are rebuilt with Go
+  1.27.2 and `golang.org/x/net` 0.60.0 (with `golang.org/x/crypto` 0.57.0 for WAL-G), fixing
+  CVE-2026-78667, CVE-2026-78669 and CVE-2026-97031.
+
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Added
