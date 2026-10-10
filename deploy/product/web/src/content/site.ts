@@ -3,14 +3,16 @@ export const TAGLINE = "Crypto payments, without a custodian";
 export const HERO_SUBHEAD = "Self-host an open-source payments API. Customers pay in USDC, USDT, or other ERC-20 tokens on Ethereum or Base; deposits can only reach your treasury.";
 // README.md: pre-1.0, no third-party security audit.
 export const HERO_META = "Pre-1.0 · Not yet audited";
-// Three facts under the hero's actions. The time is the hinted path's (README.md, "Fast credit";
-// docs/integration.md, `typical_credit_seconds`): a payment from the wallet checkout, whose
-// transaction hash reaches the service; a manual transfer waits for the five-minute scan.
+// Three facts under the hero's actions, and the note under them. The time is the hinted path's
+// (README.md, "Fast credit"; docs/integration.md, `typical_credit_seconds`): a payment from the
+// wallet checkout, whose transaction hash reaches the service; a manual transfer waits for the
+// five-minute scan.
 export const HERO_FACTS = [
-  { value: "~7 s", label: "to credit on Base (wallet checkout)" },
+  { value: "~7 s", label: "to credit on Base" },
   { value: "0%", label: "fee per payment" },
   { value: "Apache-2.0", label: "open source" },
 ];
+export const HERO_FACTS_NOTE = "~7 s with the wallet checkout; a manual transfer waits for the five-minute scan.";
 export const HOME_TITLE = "Phala Pay: self-hosted, non-custodial crypto payments";
 export const NOT_FOUND_TITLE = "Page not found | Phala Pay";
 export const HOME_DESCRIPTION = "Open-source payments API for ERC-20 tokens on Ethereum and Base. Deposits can only reach your treasury. No per-payment fee.";
@@ -20,16 +22,17 @@ export const DEMO_STATUS = "Live on Sepolia and Base Sepolia";
 export const DEMO_LEAD = "Pay with test tokens and watch the backend follow the payment.";
 
 // Each section's label above its heading.
-export const EYEBROWS = { demo: "Live demo", custody: "Custody", features: "Why Phala Pay", compare: "Compare", faq: "FAQ" };
+export const EYEBROWS = { custody: "Custody", features: "Why Phala Pay", compare: "Compare", faq: "FAQ" };
 export const FEATURES_TITLE = "For platforms that sell credits";
 export const PROPERTIES_LEAD = "Top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute.";
 // Where a payment goes, as docs/overview.md and docs/integration.md §1.6 describe it: the headline
 // of the section that follows the demo.
 export const MONEY_TITLE = "Where the money goes";
-export const CUSTODY_PATH = [
-  { role: "Payer", name: "Your customer's wallet", detail: "Pays the quote, or any amount to their deposit address." },
-  { role: "Contract", name: "A deposit address", detail: "A contract whose only destination is fixed in its address." },
-  { role: "You", name: "Your treasury", detail: "An address or Safe you prove you control with a signed message." },
+export type Station = "wallet" | "contract" | "treasury";
+export const CUSTODY_PATH: { station: Station; role: string; name: string; detail: string }[] = [
+  { station: "wallet", role: "Payer", name: "Your customer's wallet", detail: "Pays the quote, or any amount to their deposit address." },
+  { station: "contract", role: "Contract", name: "A deposit address", detail: "A contract whose only destination is fixed in its address." },
+  { station: "treasury", role: "You", name: "Your treasury", detail: "An address or Safe you prove you control with a signed message." },
 ];
 export const CUSTODY_LINKS = ["pays", "sweeps only to"];
 export const CUSTODY_NOTE = "Phala Pay holds no key to the funds and sends no transactions; the operator cannot change your treasury.";
@@ -46,12 +49,13 @@ export const PROPERTIES = [
 // What each feature card shows above its text, from the same sources as PROPERTIES.
 export const FEE_FIGURE = { value: "0%", label: "Taken by the software, per payment" };
 export const CREDIT_TIMES = {
-  caption: "Wallet checkout: time to credit after paying",
-  rows: [{ chain: "Base", value: "~7 s" }, { chain: "Ethereum", value: "~30 s" }],
+  caption: "Time to credit, wallet checkout",
+  rows: [{ chain: "Base", seconds: 7, value: "~7 s" }, { chain: "Ethereum", seconds: 30, value: "~30 s" }],
   note: "A manual transfer is found by the five-minute scan.",
 };
-export const SDK_PACKAGES = ["@phala/pay-react", "@phala/pay-server", "phala-pay"];
-export const WEBHOOK_EVENTS = ["deposit.credited", "deposit.reversed", "deposit.refunded"];
+export const SDK_PACKAGES = ["@phala/pay-react", "@phala/pay", "@phala/pay-server", "phala-pay"];
+// Events of crates/topup/openapi.json and docs/integration.md.
+export const WEBHOOK_EVENTS = ["deposit.credited", "deposit.reversed", "deposit.refunded", "refund.failed"];
 export const VERIFY_CHECKS = ["Intel TDX confidential VM", "Attestation you can check", "Webhook signing key pinned from it"];
 
 export const CLOSING_TITLE = "Run your own payment rail";

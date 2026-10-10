@@ -115,7 +115,7 @@ export function Product({
           <CardDescription className="mt-0.5">Acme Cloud · Billing</CardDescription>
         </div>
         <div className="text-right">
-          <p id="balance-title" className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
+          <p id="balance-title" className="mono-label text-muted-foreground">
             Balance
           </p>
           <div

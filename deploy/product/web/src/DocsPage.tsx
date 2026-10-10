@@ -16,8 +16,8 @@ export const SIDEBAR_LAYOUT = cn(CONTAINER, GRID, "flex-1");
 export const NAV_COLUMN = "hidden lg:col-span-3 lg:block";
 export const NAV_SCROLL = "sticky top-16 max-h-[calc(100svh-4rem)] overflow-y-auto py-10 pr-2";
 export const PAGE_COLUMN = "min-w-0 pt-10 pb-24 lg:col-span-9 lg:col-start-4";
-/** A small label, in the eyebrow's type (Geist Mono, uppercase): the one kind of text under 14px. */
-export const LABEL = "font-mono text-eyebrow font-medium text-muted-foreground uppercase";
+/** A small label (src/index.css, `mono-label`), muted: the one kind of text under 14px. */
+export const LABEL = "mono-label text-muted-foreground";
 /**
  * A link in a sidebar: the current page marked by the brand's rule at its edge, on the muted fill.
  */
@@ -146,21 +146,21 @@ export function DocsPage({ doc }: { doc: DocContent }) {
         <DocsMobileNav label="Documentation menu"><DocsNav current={doc.slug} toc={doc.toc} /></DocsMobileNav>
         {/* From xl, the page's nine columns again: the text in seven, its outline in two beside it. */}
         <div className="xl:grid xl:grid-cols-9 xl:gap-x-8">
-        <article className="max-w-3xl min-w-0 xl:col-span-7">
-          {section !== undefined && <Eyebrow>{section.title}</Eyebrow>}
-          <h1 className="mt-3 text-title-sm font-semibold text-balance sm:text-title">{doc.title}</h1>
-          <div className={cn(PROSE, "mt-8")} dangerouslySetInnerHTML={{ __html: doc.html }} />
-          <footer className="mt-16 border-t pt-8">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Neighbour entry={DOCS[index - 1]} direction="previous" />
-              <Neighbour entry={DOCS[index + 1]} direction="next" />
-            </div>
-            <p className="mt-8 text-sm text-muted-foreground">
-              This page is <a className="font-medium text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground" href={`${REPO}/blob/main/${doc.file}`}>{doc.file}</a> in the repository, rendered at build time.
-            </p>
-          </footer>
-        </article>
-        <Outline toc={doc.toc} />
+          <article className="max-w-3xl min-w-0 xl:col-span-7">
+            {section !== undefined && <Eyebrow>{section.title}</Eyebrow>}
+            <h1 className="mt-4 text-title-sm font-semibold text-balance sm:text-title">{doc.title}</h1>
+            <div className={cn(PROSE, "mt-8")} dangerouslySetInnerHTML={{ __html: doc.html }} />
+            <footer className="mt-16 border-t pt-8">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Neighbour entry={DOCS[index - 1]} direction="previous" />
+                <Neighbour entry={DOCS[index + 1]} direction="next" />
+              </div>
+              <p className="mt-8 text-sm text-muted-foreground">
+                This page is <a className="font-medium text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground" href={`${REPO}/blob/main/${doc.file}`}>{doc.file}</a> in the repository, rendered at build time.
+              </p>
+            </footer>
+          </article>
+          <Outline toc={doc.toc} />
         </div>
       </main>
     </div>

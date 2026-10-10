@@ -3,7 +3,7 @@ import type { Field, OperationModel, ReferenceModel, TypeNode } from "../scripts
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
 import { Eyebrow } from "./Site.js";
-import { DocsMobileNav, LABEL, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEBAR_LAYOUT } from "./DocsPage.js";
+import { DocsMobileNav, LABEL, NAV_LINK, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEBAR_LAYOUT } from "./DocsPage.js";
 
 /**
  * An operation's or an object's two parts, on the page's grid: the page's nine columns again
@@ -67,7 +67,7 @@ function Fields({ fields, nested = false }: { fields: Field[]; nested?: boolean 
           <dt className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <code className="font-mono text-mono font-semibold text-foreground">{field.name}</code>
             <span className="font-mono text-xs text-muted-foreground"><TypeLabel type={field.type} /></span>
-            {field.required && <span className="text-xs font-medium tracking-wider text-foreground uppercase">required</span>}
+            {field.required && <span className="mono-label text-foreground">required</span>}
           </dt>
           <dd>
             {field.html !== "" && <div className={cn(PROSE, "mt-1 text-sm")} dangerouslySetInnerHTML={{ __html: field.html }} />}
@@ -157,19 +157,19 @@ function OperationSection({ operation }: { operation: OperationModel }) {
 function ReferenceNav({ model }: { model: ReferenceModel }) {
   return (
     <nav aria-label="API reference" className="text-sm">
-      <p className={cn(LABEL, "px-2 pb-1.5")}>Introduction</p>
+      <p className={cn(LABEL, "pr-2 pb-1.5 pl-2.5")}>Introduction</p>
       <ul>
         {model.intro.map(({ id, title }) => (
-          <li key={id}><a href={`#${id}`} className="flex min-h-8 items-center rounded-md px-2 text-body-foreground hover:bg-muted hover:text-foreground">{title}</a></li>
+          <li key={id}><a href={`#${id}`} className={NAV_LINK}>{title}</a></li>
         ))}
       </ul>
       {model.tags.map(({ name, title, anchor, operations }) => (
         <div key={name} className="mt-5">
-          <a href={`#${anchor}`} className={cn(LABEL, "block px-2 pb-1 hover:text-foreground")}>{title}</a>
+          <a href={`#${anchor}`} className={cn(LABEL, "block pr-2 pb-1 pl-2.5 hover:text-foreground")}>{title}</a>
           <ul>
             {operations.map((operation) => (
               <li key={operation.id}>
-                <a href={`#${operation.anchor}`} className="flex min-h-11 items-start gap-2.5 rounded-md px-2 py-1.5 text-body-foreground hover:bg-muted hover:text-foreground lg:min-h-8">
+                <a href={`#${operation.anchor}`} className={cn(NAV_LINK, "items-start gap-2.5 py-1.5")}>
                   <Method method={operation.method} />
                   <span className="min-w-0">{operation.summary}</span>
                 </a>
@@ -178,7 +178,7 @@ function ReferenceNav({ model }: { model: ReferenceModel }) {
           </ul>
         </div>
       ))}
-      <a href="#objects" className={cn(LABEL, "mt-5 block px-2 hover:text-foreground")}>Objects</a>
+      <a href="#objects" className={cn(LABEL, "mt-5 block pr-2 pl-2.5 hover:text-foreground")}>Objects</a>
     </nav>
   );
 }
@@ -195,7 +195,7 @@ export function ReferencePage({ model }: { model: ReferenceModel }) {
       <main id="top" data-column="right" className={PAGE_COLUMN}>
         <DocsMobileNav label="API reference menu"><ReferenceNav model={model} /></DocsMobileNav>
         <Eyebrow>API reference · v{model.version}</Eyebrow>
-        <h1 className="mt-3 text-title-sm font-semibold sm:text-title">{model.title}</h1>
+        <h1 className="mt-4 text-title-sm font-semibold sm:text-title">{model.title}</h1>
         <div className={cn(PROSE, "mt-4 max-w-3xl")} dangerouslySetInnerHTML={{ __html: model.lead }} />
         <dl className="mt-6 grid gap-2 text-sm sm:grid-cols-2">
           {model.servers.map(({ url, description }) => (

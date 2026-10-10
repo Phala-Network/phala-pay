@@ -18,11 +18,11 @@ export const INTEGRATION_GUIDE = "https://github.com/Phala-Network/phala-pay/blo
 export const TOUCH = "max-sm:h-11";
 
 /**
- * Every table of the backend: 44px rows under muted 12px headings, its first and last columns on
+ * Every table of the backend: 44px rows under the site's muted mono labels, its first and last columns on
  * the panel's content edges.
  */
 export const TABLE =
-  "text-sm [&_th]:h-10 [&_th]:px-2 [&_th]:text-xs [&_th]:font-medium [&_th]:tracking-wider [&_th]:text-muted-foreground [&_th]:uppercase [&_td]:h-11 [&_td]:px-2 [&_td]:py-2 [&_tr>*:first-child]:pl-0 [&_tr>*:last-child]:pr-0";
+  "text-sm [&_th]:h-10 [&_th]:px-2 [&_th]:mono-label [&_th]:text-muted-foreground [&_td]:h-11 [&_td]:px-2 [&_td]:py-2 [&_tr>*:first-child]:pl-0 [&_tr>*:last-child]:pr-0";
 
 /**
  * The visitor's wallet helpers (./testTokens), loaded on first use: they carry the chain and wallet

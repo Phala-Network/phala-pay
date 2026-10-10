@@ -1,4 +1,4 @@
-import { ArrowRight, Check, ChevronRight, FileCode2, Landmark, Menu, MoveDown, Plus, ShieldCheck, Wallet, X } from "lucide-react";
+import { ArrowRight, Check, ChevronRight, FileCode2, Landmark, Menu, MoveDown, Plus, ShieldCheck, Wallet, X, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -12,8 +12,8 @@ import { TEASER, TEASER_OTHERS } from "./content/compare.js";
 import { HERO_CODE, HERO_CODE_NOTE } from "./content/hero-code.js";
 import {
   CLOSING_LEAD, CLOSING_TITLE, CREDIT_TIMES, CUSTODY_LINKS, CUSTODY_NOTE, CUSTODY_PATH, DEMO_LEAD, DEMO_STATUS, DEMO_TITLE,
-  DEPLOY_COMMAND, EYEBROWS, FAQ, FEATURES_TITLE, FEE_FIGURE, HERO_FACTS, HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES,
-  PROPERTIES_LEAD, SDK_PACKAGES, TAGLINE, VERIFY_CHECKS, WEBHOOK_EVENTS,
+  DEPLOY_COMMAND, EYEBROWS, FAQ, FEATURES_TITLE, FEE_FIGURE, HERO_FACTS, HERO_FACTS_NOTE, HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES,
+  PROPERTIES_LEAD, SDK_PACKAGES, TAGLINE, VERIFY_CHECKS, WEBHOOK_EVENTS, type Station,
 } from "./content/site.js";
 import { unbroken } from "./text.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
@@ -47,8 +47,12 @@ export const H2 = "text-title-sm font-semibold text-balance sm:text-title";
 export const LEAD = "text-lead text-pretty text-body-foreground";
 /** One rhythm for every section: 80px above and below on phones, 112px from lg. */
 export const SECTION = "py-20 lg:py-28";
-/** A band set apart in near-black in either theme; it takes the dark theme's tokens inside it. */
-export const INK = "dark border-ink-border bg-ink text-foreground";
+/**
+ * A band set apart in the theme's own tone: a faint lime-tinted neutral in the light theme, a step
+ * above the page in the dark. Every section stays in its theme; variety comes from the layout, the
+ * surface, and the rails.
+ */
+export const BAND = "border-b bg-band";
 const ICON = { "aria-hidden": true, strokeWidth: 1.75 } as const;
 /** An inline text link, in the text's colour. */
 export const TEXT_LINK = "font-medium text-foreground underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground";
@@ -62,8 +66,8 @@ const NUDGE = "motion-safe:transition-transform motion-safe:group-hover:translat
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
   return (
     // In the line, not a flex row: the label's baseline is its text's, as the grid's alignment reads it.
-    <p className={cn("font-mono text-eyebrow font-medium text-muted-foreground uppercase", className)}>
-      <span aria-hidden="true" className="mr-2 inline-block size-1.5 rounded-[2px] bg-brand-ink align-middle" />
+    <p className={cn("mono-label text-muted-foreground", className)}>
+      <span aria-hidden="true" className="mr-2 inline-block size-1.5 bg-brand-ink align-middle" />
       {children}
     </p>
   );
@@ -76,7 +80,7 @@ function Intro({ id, eyebrow, title, lead, align = "start", className }: {
   return (
     <div className={cn("max-w-2xl", align === "center" && "mx-auto text-center", className)}>
       <Eyebrow>{eyebrow}</Eyebrow>
-      <h2 id={id} className={cn(H2, "mt-4")}>{title}</h2>
+      <h2 id={id} className={cn(H2, "mt-4")}>{unbroken(title)}</h2>
       {lead !== undefined && <p className={cn(LEAD, "mt-5")}>{lead}</p>}
     </div>
   );
@@ -218,21 +222,34 @@ function DeployButton({ variant = "primary" }: { variant?: "primary" | "brand" }
   );
 }
 
-// The headline, the way to run it (self-hosting on Phala Cloud), three facts, and beside them what
-// integrating it takes. The release's status leads, as a link to the changelog.
-export function Hero({ code }: { code: ReactNode }) {
+/**
+ * The release's status, a neutral badge (a status, not the brand's accent) in the hero and the
+ * footer, linked to the security policy that says what pre-1.0 covers.
+ */
+export function ReleaseBadge({ className }: { className?: string }) {
   const [stage, ...status] = HERO_META.split(" · ");
+  return (
+    <a href={LINKS.security} className={cn("group inline-flex min-h-8 items-center gap-2.5 rounded-full border bg-card py-0.5 pr-3 pl-1 text-sm text-body-foreground shadow-card transition-colors hover:text-foreground", className)}>
+      <span className="inline-flex h-6 items-center rounded-full bg-muted px-2.5 mono-label text-foreground">{stage}</span>
+      <span className="sr-only"> · </span>
+      {status.join(" · ")}
+      <span className="sr-only">: the security policy</span>
+      <ChevronRight {...ICON} className={cn("size-4 text-muted-foreground", NUDGE)} />
+    </a>
+  );
+}
+
+// The headline, the way to run it (self-hosting on Phala Cloud), three facts, and beside them what
+// integrating it takes. The release's status leads.
+export function Hero({ code }: { code: ReactNode }) {
   return (
     // The two columns centred on each other: the pitch, and the code window with its caption inside.
     <section aria-labelledby="hero-title" className="border-b">
       <div data-layout="split" data-align="center" className={cn(CONTAINER, GRID, "gap-y-14 pt-14 pb-16 sm:pt-20 lg:items-center lg:py-24")}>
         <div data-column="left" className={LEFT}>
-          <a href={LINKS.changelog} className="group inline-flex min-h-8 items-center gap-2.5 rounded-full border bg-card py-0.5 pr-3 pl-1 text-sm text-body-foreground shadow-card transition-colors hover:text-foreground">
-            <span className="inline-flex h-6 items-center rounded-full bg-brand px-2.5 font-mono text-eyebrow font-medium text-brand-foreground uppercase">{stage}</span>
-            {status.join(" · ")}
-            <ChevronRight {...ICON} className={cn("size-4 text-muted-foreground", NUDGE)} />
-          </a>
-          <h1 id="hero-title" className="mt-7 max-w-xl text-display-sm font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display">
+          <ReleaseBadge />
+          {/* On a phone a step smaller, so the claim's second line ("without a custodian") stays whole. */}
+          <h1 id="hero-title" className="mt-7 max-w-xl text-display-xs font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display">
             {TAGLINE}
           </h1>
           <p className="mt-6 max-w-xl text-lead-lg text-pretty text-body-foreground">{unbroken(HERO_SUBHEAD)}</p>
@@ -240,15 +257,20 @@ export function Hero({ code }: { code: ReactNode }) {
             <DeployButton />
             <Button asChild size="lg" variant="secondary"><a href={LINKS.docs}>Read the docs</a></Button>
           </div>
-          {/* Three facts under a rule, each value over its meaning; on a phone, a row each. */}
-          <dl className="mt-12 grid max-w-xl border-t pt-6 max-sm:gap-y-4 sm:grid-cols-3 sm:divide-x">
-            {HERO_FACTS.map(({ value, label }) => (
-              <div key={label} className="flex flex-col-reverse justify-end gap-1 max-sm:flex-row-reverse max-sm:items-baseline max-sm:justify-end max-sm:gap-3 sm:px-5 sm:first:pl-0">
-                <dt className="text-sm text-pretty text-muted-foreground">{label}</dt>
-                <dd className="text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl">{value}</dd>
-              </div>
-            ))}
-          </dl>
+          {/* Three facts under a rule, each value over its meaning, and the note that qualifies the
+              first under them; on a phone, a row each, the values in one column and the meanings in
+              the next. */}
+          <div className="mt-12 max-w-xl border-t pt-6">
+            <dl data-facts className="grid gap-y-3 sm:grid-cols-3 sm:divide-x">
+              {HERO_FACTS.map(({ value, label }) => (
+                <div key={label} className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-baseline gap-x-4 sm:grid-cols-1 sm:gap-y-1 sm:px-5 sm:first:pl-0">
+                  <dt className="text-sm text-pretty text-muted-foreground">{label}</dt>
+                  <dd className="order-first text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <p data-facts-note className="mt-4 text-sm text-pretty text-muted-foreground">{HERO_FACTS_NOTE}</p>
+          </div>
         </div>
         <div data-column="right" className={RIGHT}>{code}</div>
       </div>
@@ -279,8 +301,9 @@ export function HeroCode() {
       <CodeWindow
         footer={
           // The outcome the code leads to, as the webhook it waits for: the brand's dot is the money.
-          <figcaption className="flex items-baseline gap-2.5">
-            <span aria-hidden="true" className="size-2 shrink-0 translate-y-px rounded-full bg-brand" />
+          // Its dot is centred in a box one line tall, so it sits on the first line however the text wraps.
+          <figcaption className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5">
+            <span aria-hidden="true" className="flex h-[1lh] items-center"><span className="size-2 rounded-full bg-brand" /></span>
             <span>{HERO_CODE_NOTE.before}<code className="font-mono text-mono text-code-foreground">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}</span>
           </figcaption>
         }
@@ -330,7 +353,9 @@ export function HeroCode() {
 /**
  * The demo, directly below the hero, on a band of its own: the product itself, sized so that its
  * heading and both panels fit one 1440×900 screen. Its heading and introduction sit on one
- * baseline, over the two panels' columns.
+ * baseline, over the two panels' columns. The one section without an eyebrow: its live status, the
+ * pill beside the heading, labels it, and an eyebrow's line would take the screen's last 30px
+ * (specs/site-v2/design.md).
  */
 export function DemoSection({ children }: { children?: ReactNode }) {
   return (
@@ -338,7 +363,7 @@ export function DemoSection({ children }: { children?: ReactNode }) {
       <div className={cn(CONTAINER, "py-6")}>
         <div data-layout="split" className={cn(GRID, "gap-y-3 lg:items-baseline")}>
           <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-2")}>
-            <h2 id="demo-title" className="text-title-sm font-semibold">{DEMO_TITLE}</h2>
+            <h2 id="demo-title" className={H2}>{DEMO_TITLE}</h2>
             <p className="inline-flex h-7 items-center gap-2 self-center rounded-full border bg-card px-3 text-sm font-medium text-body-foreground shadow-card">
               <span aria-hidden="true" className="relative flex size-2">
                 <span className="absolute inline-flex size-full rounded-full bg-brand opacity-75 motion-safe:animate-ping" />
@@ -349,7 +374,7 @@ export function DemoSection({ children }: { children?: ReactNode }) {
           </div>
           <p data-column="right" className={cn(RIGHT, LEAD)}>{DEMO_LEAD}</p>
         </div>
-        <div id="demo-root" className="mt-5">{children ?? <DemoPlaceholder />}</div>
+        <div id="demo-root" className="mt-4">{children ?? <DemoPlaceholder />}</div>
       </div>
     </section>
   );
@@ -372,22 +397,22 @@ export function DemoLoading() {
   return <p role="status" className="text-sm text-muted-foreground">Loading the demo…</p>;
 }
 
-const STATION_ICONS = [Wallet, FileCode2, Landmark];
+const STATION_ICONS: Record<Station, LucideIcon> = { wallet: Wallet, contract: FileCode2, treasury: Landmark };
 
 /**
  * The path a payment takes, as the page's one diagram: three stations, each joined to the next by a
  * rail in the brand's colour with what passes along it; in a row from xl (narrower, the stations'
- * names would wrap), a column below it. A
- * segment runs along each rail, the way the money goes, where motion is welcome. The last station,
- * the merchant's own, is the destination: marked in the brand's colour.
+ * names would wrap), a column below it. A segment runs along each rail, the way the money goes,
+ * where motion is welcome. The treasury, the merchant's own, is the destination: marked in the
+ * brand's colour.
  */
 function CustodyPath() {
   return (
     <figure>
       <ol className="flex flex-col xl:grid xl:grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_9rem_minmax(0,1fr)]">
-        {CUSTODY_PATH.map(({ role, name, detail }, index) => {
-          const Icon = STATION_ICONS[index] ?? Wallet;
-          const last = index === CUSTODY_PATH.length - 1;
+        {CUSTODY_PATH.map(({ station, role, name, detail }, index) => {
+          const Icon = STATION_ICONS[station];
+          const last = station === "treasury";
           return (
             <li key={name} className="contents">
               {index > 0 && (
@@ -396,7 +421,7 @@ function CustodyPath() {
                   <span className="font-mono text-sm text-muted-foreground">{CUSTODY_LINKS[index - 1]}</span>
                   <span aria-hidden="true" className="hidden w-full items-center text-brand-ink xl:flex">
                     <span className="relative h-px flex-1 overflow-hidden bg-current/40">
-                      <span className="absolute inset-y-0 w-1/3 bg-current motion-safe:animate-rail" />
+                      <span data-rail-segment className="absolute inset-y-0 w-1/3 bg-current motion-safe:animate-rail" />
                     </span>
                     <svg viewBox="0 0 8 10" className="h-2.5 w-2 fill-current"><path d="M0 0L8 5L0 10Z" /></svg>
                   </span>
@@ -407,7 +432,7 @@ function CustodyPath() {
                   <span className={cn("flex size-10 items-center justify-center rounded-lg border bg-muted", last && "border-transparent bg-brand text-brand-foreground")}>
                     <Icon {...ICON} className="size-5" />
                   </span>
-                  <span className="font-mono text-eyebrow text-muted-foreground uppercase">0{index + 1} · {role}</span>
+                  <span className="mono-label text-muted-foreground">0{index + 1} · {role}</span>
                 </div>
                 <p className="mt-8 text-heading font-semibold">{name}</p>
                 <p className="mt-2 text-sm/6 text-pretty text-body-foreground">{detail}</p>
@@ -424,12 +449,12 @@ function CustodyPath() {
   );
 }
 
-/** Where the money goes, told once, on the ink band: the claim, centred, and the path under it. */
+/** Where the money goes, told once, on the band: the claim, centred, and the path under it. */
 export function WhereTheMoneyGoes() {
   const [custody] = PROPERTIES;
   return (
-    <section aria-labelledby="money-title" className={cn(INK, "border-b")}>
-      <div className={cn(CONTAINER, SECTION, "border-ink-border")}>
+    <section aria-labelledby="money-title" className={BAND}>
+      <div className={cn(CONTAINER, SECTION)}>
         <Intro id="money-title" align="center" eyebrow={EYEBROWS.custody} title={MONEY_TITLE}
           lead={custody === undefined ? undefined : unbroken(custody.text)} />
         <div className="mt-14 lg:mt-16"><CustodyPath /></div>
@@ -440,12 +465,13 @@ export function WhereTheMoneyGoes() {
 
 /**
  * A feature: what it shows (a figure, a meter, a list) in the card's top half, over a rule, and
- * its title and line under it. Every card shares that two-part grid.
+ * its title and line under it. From lg the card takes two of the grid's rows as a subgrid, so the
+ * cards side by side share their rules and their titles' lines.
  */
 function FeatureCard({ title, text, className, children }: { title: string; text: string; className?: string; children: ReactNode }) {
   return (
-    <div className={cn("flex min-w-0 flex-col rounded-xl border bg-card shadow-card", className)}>
-      <div className="flex min-h-44 flex-col justify-center border-b px-6 py-7 sm:px-8">{children}</div>
+    <div data-feature className={cn("flex min-w-0 flex-col rounded-xl border bg-card shadow-card lg:row-span-2 lg:grid lg:grid-rows-subgrid lg:gap-y-0", className)}>
+      <div data-feature-well className="flex flex-col justify-center border-b px-6 py-7 sm:px-8">{children}</div>
       <div className="px-6 py-7 sm:px-8">
         <h3 className="text-heading font-semibold">{title}</h3>
         <p className="mt-2 text-pretty text-body-foreground">{unbroken(text)}</p>
@@ -454,40 +480,46 @@ function FeatureCard({ title, text, className, children }: { title: string; text
   );
 }
 
-/** A small label inside a card, in the eyebrow's type. */
-const CARD_LABEL = "font-mono text-eyebrow text-muted-foreground uppercase";
+/** A small label inside a card. */
+const CARD_LABEL = "mono-label text-muted-foreground";
 
 /**
- * The time to credit as a meter: one bar per chain on one scale (Ethereum's ~30 s is the whole
- * track), one colour, each value printed at its end. Static widths: the page carries no style
- * attributes (the CSP).
+ * The time to credit as a meter: one bar per chain on one scale (the slowest is the whole track),
+ * one colour, each value printed at its end. Each bar is an SVG rect whose width comes from its
+ * seconds: an attribute, not a style (the CSP).
  */
 function CreditTimes() {
-  const widths = ["w-[23%]", "w-full"];
+  const longest = Math.max(...CREDIT_TIMES.rows.map(({ seconds }) => seconds));
   return (
     <figure>
-      <figcaption className={CARD_LABEL}>{CREDIT_TIMES.caption}</figcaption>
+      <figcaption className={cn(CARD_LABEL, "text-pretty")}>{CREDIT_TIMES.caption}</figcaption>
       <dl className="mt-5 grid grid-cols-[5.5rem_minmax(0,1fr)_3.5rem] items-center gap-x-4 gap-y-3.5">
-        {CREDIT_TIMES.rows.map(({ chain, value }, index) => (
+        {CREDIT_TIMES.rows.map(({ chain, seconds, value }) => (
           <div key={chain} className="contents">
             <dt className="text-sm font-medium">{chain}</dt>
-            <dd aria-hidden="true" className="h-2 rounded-full bg-muted"><span className={cn("block h-full rounded-full bg-brand-ink", widths[index])} /></dd>
+            <dd aria-hidden="true">
+              <svg className="block h-2 w-full">
+                <rect width="100%" height="100%" rx="4" className="fill-muted" />
+                <rect width={`${(seconds / longest) * 100}%`} height="100%" rx="4" className="fill-brand-ink" />
+              </svg>
+            </dd>
             <dd className="text-right font-mono text-sm tabular-nums">{value}</dd>
           </div>
         ))}
       </dl>
-      <p className="mt-4 text-sm text-muted-foreground">{CREDIT_TIMES.note}</p>
+      <p className="mt-4 text-sm text-pretty text-muted-foreground">{CREDIT_TIMES.note}</p>
     </figure>
   );
 }
 
+/** Names as chips, two to a row from sm (none left alone on a row: each list has four), one below. */
 function Chips({ label, items }: { label: string; items: string[] }) {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
       <p className={cn(CARD_LABEL, "sm:w-24 sm:shrink-0")}>{label}</p>
-      <ul className="flex flex-wrap gap-2">
+      <ul className="grid gap-2 sm:grid-cols-2">
         {items.map((item) => (
-          <li key={item} className="inline-flex h-7 items-center rounded-md border bg-muted/50 px-2 font-mono text-mono">{item}</li>
+          <li key={item} className="inline-flex h-7 items-center justify-self-start rounded-md border bg-muted/50 px-2 font-mono text-mono">{item}</li>
         ))}
       </ul>
     </div>
@@ -503,6 +535,8 @@ export function Features() {
       <div className={cn(CONTAINER, SECTION)}>
         <Intro id="features-title" eyebrow={EYEBROWS.features} title={FEATURES_TITLE} lead={PROPERTIES_LEAD} />
         <div className="mt-12 grid gap-4 lg:mt-14 lg:grid-cols-12 lg:gap-6">
+          {/* Two rows of two cards, wide and narrow, then narrow and wide; each card two of the
+              grid's rows (its figure, its text), shared with the card beside it. */}
           <FeatureCard className="lg:col-span-5" title={fee.title} text={fee.text}>
             <p className="text-display-sm font-semibold tabular-nums sm:text-display">{FEE_FIGURE.value}</p>
             <p className={cn(CARD_LABEL, "mt-2")}>{FEE_FIGURE.label}</p>
@@ -617,7 +651,7 @@ export function Faq() {
       <div className={cn(CONTAINER, SECTION)}>
         <Eyebrow>{EYEBROWS.faq}</Eyebrow>
         <div data-layout="aside" className={cn(GRID, "mt-4 gap-y-10 lg:items-baseline")}>
-          <div data-column="left" className={cn(ASIDE, "lg:sticky lg:top-28 lg:self-start")}>
+          <div data-column="left" className={cn(ASIDE, "lg:sticky lg:top-28")}>
             <h2 id="faq-title" className={H2}>Frequently asked questions</h2>
             <p className={cn(LEAD, "mt-5")}>
               Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.
@@ -627,7 +661,7 @@ export function Faq() {
             {FAQ.map(({ question, answer }) => (
               <details key={question} className="group border-b">
                 <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-5 text-base font-medium sm:text-lg [&::-webkit-details-marker]:hidden">
-                  {question}
+                  <span>{question}</span>
                   <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-card">
                     <Plus strokeWidth={1.75} className="size-4 group-open:rotate-45 motion-safe:transition-transform" />
                   </span>
@@ -643,13 +677,13 @@ export function Faq() {
 }
 
 /**
- * The close, on the ink band: the mark, the call to deploy in the brand's colour (its one filled
- * button on the page), and under it the one command that does.
+ * The close, on the band: the mark, the call to deploy in the brand's colour (its one lime button,
+ * dark text on the fill), and under it the one command that does.
  */
 export function ClosingCta({ command }: { command: ReactNode }) {
   return (
-    <section aria-labelledby="closing-title" className={INK}>
-      <div className={cn(CONTAINER, "border-ink-border py-24 lg:py-32")}>
+    <section aria-labelledby="closing-title" className={BAND}>
+      <div className={cn(CONTAINER, "py-24 lg:py-32")}>
         <div className="mx-auto flex max-w-2xl flex-col items-center text-center">
           <Mark className="size-12" />
           <h2 id="closing-title" className={cn(H2, "mt-8")}>{CLOSING_TITLE}</h2>
@@ -739,15 +773,13 @@ export function SiteFooter() {
         <div data-column="left" className={ASIDE}>
           <Lockup />
           <p className="mt-4 max-w-xs text-pretty text-body-foreground">{TAGLINE}. Open source, self-hosted, on Ethereum and Base.</p>
-          <p className="mt-6 inline-flex h-7 items-center gap-2 rounded-full border px-3 text-muted-foreground">
-            <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />{HERO_META}
-          </p>
+          <ReleaseBadge className="mt-6" />
         </div>
         {/* Four columns of links where they fit (from sm), two by two on a phone. */}
         <div data-column="right" className={cn(MAIN, "grid grid-cols-2 gap-x-8 gap-y-10 sm:grid-cols-4")}>
           {FOOTER.map((column) => (
             <nav key={column.title} aria-label={column.title}>
-              <p className="font-mono text-eyebrow font-medium text-muted-foreground uppercase">{column.title}</p>
+              <p className="mono-label text-muted-foreground">{column.title}</p>
               {/* Rows 44px tall for touch, 32px from md. */}
               <ul className="mt-3">
                 {column.links.map(({ href, label }) => (
@@ -761,10 +793,7 @@ export function SiteFooter() {
             </nav>
           ))}
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-4 border-t pt-8 text-muted-foreground lg:col-span-12">
-          <p>© 2026 Phala Network</p>
-          <a href={LINKS.license} className="transition-colors hover:text-foreground">Apache-2.0</a>
-        </div>
+        <p className="border-t pt-8 text-muted-foreground lg:col-span-12">© 2026 Phala Network</p>
       </div>
     </footer>
   );
