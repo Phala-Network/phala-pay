@@ -182,7 +182,7 @@ for (const width of [390, 1280]) {
       await check(page, `manual-${suffix}`);
 
       await page.getByRole("tab", { name: "Browser wallet" }).click();
-      await page.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+      await page.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
       await expect(page.getByText(/^Transaction sent:/)).toBeVisible();
       served = waiting({ payment_status: "seen", confirmations: 1 });
       await expect(page.getByRole("status")).toHaveText(/^Received, 1 confirmation/);

@@ -153,7 +153,7 @@ describe("Checkout", () => {
       }));
     });
     expect(screen.getByRole("tab", { name: "Browser wallet" }).getAttribute("aria-selected")).toBe("true");
-    expect(await screen.findByRole("button", { name: "Pay with crypto (Late wallet)" })).toBeDefined();
+    expect(await screen.findByRole("button", { name: "Pay with crypto Late wallet" })).toBeDefined();
   });
 
   it("copies the address and the exact amount", async () => {
@@ -268,7 +268,7 @@ describe("Checkout", () => {
     vi.stubGlobal("ethereum", browserWallet(hash).provider);
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     await renderCheckout();
-    await user.click(await screen.findByRole("button", { name: "Pay with crypto (Browser wallet)" }));
+    await user.click(await screen.findByRole("button", { name: "Pay with crypto Browser wallet" }));
     const link = await screen.findByRole("link", { name: hash });
     expect(link.getAttribute("href")).toBe(`https://sepolia.etherscan.io/tx/${hash}`);
   });
@@ -281,7 +281,7 @@ describe("Checkout", () => {
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     await renderCheckout({ walletClient });
     const panel = screen.getByRole("tabpanel");
-    expect(within(panel).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+    expect(within(panel).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Pay with crypto",
     ]);
     await user.click(within(panel).getByRole("button", { name: "Pay with crypto" }));
@@ -295,7 +295,7 @@ describe("Checkout", () => {
     const errors: [WalletError, unknown][] = [];
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     await renderCheckout({ onWalletError: (error, wallet) => errors.push([error, wallet]) });
-    await user.click(await screen.findByRole("button", { name: "Pay with crypto (Browser wallet)" }));
+    await user.click(await screen.findByRole("button", { name: "Pay with crypto Browser wallet" }));
     await screen.findByText(
       "Your wallet holds 1 PHA, less than the 100.502512562814070352 PHA to pay. Nothing was sent.",
     );

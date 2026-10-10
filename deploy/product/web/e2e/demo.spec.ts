@@ -847,7 +847,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(product).not.toContainText("order_");
   await page.screenshot({ path: testInfo.outputPath("checkout.png"), fullPage: true });
 
-  await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByText(/^Transaction sent:/)).toBeVisible();
   await expectComplete(timeline, ["sent", "received", "credited", "webhook_received"]);
   // One confirmation: the credit, the demo merchant's bonus, the total, and the transaction.
@@ -1137,7 +1137,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   await expect(product.getByRole("tabpanel", { name: "Exact amount", exact: true }).getByText(/bonus/)).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.screenshot({ path: testInfo.outputPath("usdc-quote.png") });
-  await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$5.00", { timeout: 60_000 });
   await expect(product.getByTestId("balance")).toHaveText("$5.00", { timeout: 10_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
@@ -1176,7 +1176,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
     "1 PHA = $0.06041",
   );
   await expect(product.getByTestId("testnet-notice")).toBeVisible();
-  await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$20.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toContainText("+$2.00", { timeout: 10_000 });
   await expect(product.getByTestId("balance")).toHaveText("$27.00", { timeout: 10_000 });
@@ -1199,7 +1199,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
     "1 USDT = $1.00",
   );
-  await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$5.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
   await expect(product.getByTestId("balance")).toHaveText("$32.00", { timeout: 10_000 });
@@ -1221,7 +1221,7 @@ test("a quote a wallet cannot cover sends nothing; the mint beside it funds that
   await page.goto(env("SITE_URL"));
   const product = page.getByRole("region", { name: "Customer view" });
   const helper = page.getByRole("note", { name: "Test tokens" });
-  const pay = product.getByRole("button", { name: "Pay with crypto (Empty Wallet)" });
+  const pay = product.getByRole("button", { name: "Pay with crypto Empty Wallet" });
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
 
   // $20 in test USDC from a wallet holding a millionth less, in USDC's 6 decimals: the checkout
@@ -1750,7 +1750,7 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   await expect(product.locator(".pp-summary")).toContainText("80 PHA");
   await fits("paying");
-  await product.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
   await fits("credited");

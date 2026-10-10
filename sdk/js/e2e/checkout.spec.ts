@@ -229,7 +229,7 @@ test("pays a quote from a browser wallet, end to end on Anvil", async ({ page })
   await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
   await expect(page.getByText("12.345678901234567891 PHA").first()).toBeVisible();
 
-  await page.getByRole("button", { name: "Pay with crypto (Test Wallet)" }).click();
+  await page.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(page.getByText(/^Transaction sent:/)).toBeVisible();
   await expect(page.getByRole("status")).toHaveText("Payment credited: $25.00");
   await expect(page.getByTestId("events")).toHaveText("success");
