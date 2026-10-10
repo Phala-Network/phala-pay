@@ -19,8 +19,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 #### Fixed
 
 - `<Checkout>`'s browser wallet button's accessible name now matches its visible text
-  ("Pay with crypto <wallet>", for example "Pay with crypto MetaMask") instead of
-  "Pay with crypto (<wallet>)" (WCAG 2.5.3, axe `label-content-name-mismatch`). Integrations and
+  (`Pay with crypto <wallet>`, for example "Pay with crypto MetaMask") instead of
+  `Pay with crypto (<wallet>)` (WCAG 2.5.3, axe `label-content-name-mismatch`). Integrations and
   tests that select the button by its accessible name must update the name.
 
 ## [0.10.0] - 2026-10-10
