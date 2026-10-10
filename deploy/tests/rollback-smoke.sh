@@ -83,16 +83,15 @@ psql_owner -c "UPDATE _sqlx_migrations SET checksum=decode('$checksum','hex') WH
 # This fixture is removed before the real N-1 smoke; it must not mask a real new migration.
 if [[ ${NO_ROLLBACK:-0} == 1 ]]; then
     if stage_call 60 docker run --rm --network "$name" -e DATABASE_URL=postgres://postgres:smoke@db:5432/topup \
-        -v "$tmp/previous.yaml:/etc/topup.yaml:ro" \
-        "$previous" topup migrate --config /etc/topup.yaml; then
+        "$previous" topup migrate; then
         echo 'restore-only release did not reject N-1 migration startup' >&2; exit 1
     fi
     echo 'Explicit CHANGELOG exception: no rollback; restore required. N-1 failed closed.'
     exit 0
 fi
+# N-1 is v0.10.0 or later, whose `topup migrate` takes no configuration.
 stage_call 60 docker run --rm --network "$name" -e DATABASE_URL=postgres://postgres:smoke@db:5432/topup \
-    -v "$tmp/previous.yaml:/etc/topup.yaml:ro" \
-    "$previous" topup migrate --config /etc/topup.yaml
+    "$previous" topup migrate
 # Test-only KMS boundary: the official SDK GetKey contract, with a fixed non-production key.
 cat >"$tmp/kms.py" <<'PY'
 import json
@@ -124,7 +123,7 @@ done
 # A read-only startup smoke avoids external chains and webhook effects while loading real N-1 SQL/API.
 docker run -d --name "$name-api" --network "$name" -p 127.0.0.1::8080 \
     -e DATABASE_URL=postgres://postgres:smoke@db:5432/topup \
-    -e TOPUP_RPC_ALCHEMY_SEPOLIA_KEY=smoke-placeholder \
+    -e TOPUP_RPC_ANKR_KEY=smoke-placeholder -e TOPUP_RPC_INFURA_KEY=smoke-placeholder \
     -e DSTACK_SIMULATOR_ENDPOINT=http://kms:8080 \
     -v "$tmp/previous.yaml:/etc/topup.yaml:ro" \
     "$previous" topup run --config /etc/topup.yaml --read-only >/dev/null
