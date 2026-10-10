@@ -18,7 +18,7 @@ export function HighlightedLines({ lines }: { lines: Token[][] }): ReactNode {
  */
 export function CodeWindow({ header, footer, children, className }: { header: ReactNode; footer?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <div className={cn("dark overflow-hidden rounded-xl border border-code-border bg-code text-code-foreground shadow-[0_1px_2px_rgb(0_0_0/0.06),0_12px_32px_-12px_rgb(0_0_0/0.25)]", className)}>
+    <div className={cn("dark overflow-hidden rounded-xl border border-code-border bg-code text-code-foreground shadow-frame", className)}>
       <div className="flex h-12 items-center gap-3 border-b border-code-border pr-2 pl-4">{header}</div>
       {children}
       {footer !== undefined && (

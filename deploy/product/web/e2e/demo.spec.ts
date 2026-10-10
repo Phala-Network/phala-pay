@@ -1426,7 +1426,8 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     const home = await staticPage.goto(env("SITE_URL"));
     expect(home?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("Crypto payments, without a custodian");
-    await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(5);
+    // The demo, where the money goes, what it is for, the comparison, the questions, and the close.
+    await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(6);
     // The answers fold natively, without script.
     const question = staticPage.locator("summary", { hasText: "Which chains and tokens are supported?" });
     const answer = staticPage.getByText("The live demo uses test tokens on Sepolia and Base Sepolia.", { exact: false });
@@ -1868,30 +1869,38 @@ async function columnLayout(page: Page) {
 }
 
 test("one layout grid: every right column starts on one line, and each part's columns line up", async ({ page }) => {
-  // On the home page: the hero, each section's header, the demo's cards, the spec list, the FAQ,
-  // the close, and the footer; on /compare, its header, its sources, and the footer; on the docs
-  // and the reference, the navigation beside the page, each operation's and object's fields beside
-  // their example, and the footer. Within a page, every right column of one layout (the 6/6 split,
-  // the docs' sidebar layout, the reference's parts) starts on one line; the sidebar layout's page
-  // starts on one line across the docs and the reference.
-  const pages = [["", 9], ["compare", 3], ["docs", 2], ["docs/integration", 2], ["docs/configuration", 2], ["docs/sdk/react", 2], ["reference", 40]] as const;
+  // On the home page: the hero, the demo's header and its two cards (the split), and the questions
+  // and the footer (the aside); on /compare, its header and its sources (the split) and the footer;
+  // on the docs and the reference, the navigation beside the page, each operation's and object's
+  // fields beside their example, and the footer. Within a page, every right column of one layout
+  // (the 6/6 split, the 4/8 aside, the docs' sidebar layout, the reference's parts) starts on one
+  // line; the sidebar layout's page starts on one line across the docs and the reference. A part
+  // is named by its section's heading, else by its landmark.
+  const docs = ["main", "footer"];
+  const pages: [string, string[] | number][] = [
+    ["", ["hero-title", "demo-title", "demo-title", "faq-title", "footer"]],
+    ["compare", ["main", "sources-title", "footer"]],
+    ["docs", docs], ["docs/integration", docs], ["docs/configuration", docs], ["docs/sdk/react", docs],
+    ["reference", 40],
+  ];
   for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
     const sidebar = new Set<number>();
-    for (const [path, least] of pages) {
+    for (const [path, expected] of pages) {
       await page.setViewportSize({ width, height });
       await page.goto(new URL(path, env("SITE_URL")).href);
       if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
       const parts = await columnLayout(page);
       const where = `/${path} at ${width}px`;
-      expect(parts.length, `${where}: two-column parts`).toBeGreaterThanOrEqual(least);
+      if (typeof expected === "number") expect(parts.length, `${where}: two-column parts`).toBeGreaterThanOrEqual(expected);
+      else expect(parts.map(({ name }) => name), `${where}: two-column parts`).toEqual(expected);
       for (const layout of new Set(parts.map((part) => part.layout))) {
         const group = parts.filter((part) => part.layout === layout);
         const line = group[0]?.x ?? 0;
         expect(group.filter(({ x }) => Math.abs(x - line) > 1).map(({ name, x }) => `${name} starts at ${x.toFixed(1)}, not ${line.toFixed(1)}`), `${where}, ${layout}`).toEqual([]);
         if (layout === "sidebar") sidebar.add(Math.round(line));
       }
-      // A right column with no left one beside it (the FAQ's questions, under its header) is
-      // measured by its left edge only.
+      // A right column with no left one beside it (an object without an example in the reference)
+      // is measured by its left edge only.
       expect(parts.filter(({ left, right }) => left !== null && (right === null || Math.abs(left - right) > 1))
         .map(({ name, how, left, right }) => `${name}: ${how} at ${left?.toFixed(1) ?? "none"} and ${right?.toFixed(1) ?? "none"}`), where).toEqual([]);
     }
@@ -1899,6 +1908,62 @@ test("one layout grid: every right column starts on one line, and each part's co
   }
 });
 
+
+test("the hero's facts wrap alike, and the note under them qualifies the time", async ({ page }) => {
+  // The owner's regression: one fact's meaning on two lines beside its siblings' one. At every
+  // width the three sit side by side, their meanings take as many lines each.
+  await page.goto(env("SITE_URL"));
+  for (const width of [1440, 1280, 1024, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    const lines = await page.locator("[data-facts] dt").evaluateAll((terms) => terms.map((term) => {
+      const range = document.createRange();
+      range.selectNodeContents(term);
+      return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+    }));
+    expect(lines, `${width}px`).toHaveLength(3);
+    expect(new Set(lines).size, `${width}px: lines per fact ${lines.join(", ")}`).toBe(1);
+  }
+  // The ~7 s is the wallet checkout's (its transaction hash reaches the service), said under the row.
+  await expect(page.locator("[data-facts-note]")).toContainText("wallet checkout");
+});
+
+test("the feature cards side by side share their rules and their titles' lines", async ({ page }) => {
+  // Each card's figure over a rule, its title under it: in a row of cards, every rule and every
+  // title on one line, whatever each figure's height (the cards are subgrids of the row).
+  await page.goto(env("SITE_URL"));
+  for (const width of [1440, 1280, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    const cards = await page.locator("[data-feature]").evaluateAll((elements) => elements.map((card) => ({
+      top: Math.round(card.getBoundingClientRect().top),
+      rule: card.querySelector("[data-feature-well]")?.getBoundingClientRect().bottom ?? 0,
+      title: card.querySelector("h3")?.getBoundingClientRect().top ?? 0,
+    })));
+    expect(cards, `${width}px`).toHaveLength(4);
+    const tops = [...new Set(cards.map(({ top }) => top))];
+    expect(tops, `${width}px: rows of cards`).toHaveLength(2);
+    for (const row of tops.map((top) => cards.filter((card) => card.top === top))) {
+      expect(row, `${width}px: cards in a row`).toHaveLength(2);
+      const [first, second] = row;
+      expect(Math.abs((first?.rule ?? 0) - (second?.rule ?? 0)), `${width}px: rules`).toBeLessThanOrEqual(1);
+      expect(Math.abs((first?.title ?? 0) - (second?.title ?? 0)), `${width}px: titles`).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
+test("the custody rail moves only where motion is welcome", async ({ browser }) => {
+  for (const reducedMotion of ["no-preference", "reduce"] as const) {
+    const context = await browser.newContext({ reducedMotion, viewport: { width: 1440, height: 900 } });
+    try {
+      const page = await context.newPage();
+      await page.goto(env("SITE_URL"));
+      const running = await page.locator("[data-rail-segment]").evaluateAll((segments) =>
+        segments.map((segment) => segment.getAnimations().length));
+      expect(running, reducedMotion).toEqual(reducedMotion === "reduce" ? [0, 0] : [1, 1]);
+    } finally {
+      await context.close();
+    }
+  }
+});
 
 /**
  * The text in `scope` smaller than 14px, save what may be: code and ids (monospace), footnote

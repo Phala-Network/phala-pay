@@ -6,28 +6,40 @@
 
 /*
  * The type scale: Tailwind's defaults for text (xs 12, sm 14, base 16, lg 18, xl 20, 2xl 24), and
- * five steps for headings and the hero, each with its own line height and tracking. Pages use only
- * these: display (the one H1 of the home page), title (every H2 and every other page's H1),
- * heading (H3), lead (a section's introduction), and the defaults below.
+ * named steps for headings, each with its own line height and tracking. Pages use only these:
+ * display (the home page's H1; display-xs on a phone, where its second line would break), title
+ * (every H2 and every other page's H1), heading (H3), lead (a section's introduction), eyebrow (the
+ * size of the one small label, `mono-label` below), and the defaults below.
  */
 @theme {
-    --text-display: 3.5rem;
-    --text-display--line-height: 1.04;
-    --text-display--letter-spacing: -0.04em;
-    --text-display-sm: 2.5rem;
-    --text-display-sm--line-height: 1.08;
-    --text-display-sm--letter-spacing: -0.035em;
-    --text-title: 2.25rem;
+    --text-display: 4rem;
+    --text-display--line-height: 1.02;
+    --text-display--letter-spacing: -0.035em;
+    --text-display-sm: 2.75rem;
+    --text-display-sm--line-height: 1.06;
+    --text-display-sm--letter-spacing: -0.03em;
+    --text-display-xs: 2.25rem;
+    --text-display-xs--line-height: 1.08;
+    --text-display-xs--letter-spacing: -0.03em;
+    --text-title: 2.5rem;
     --text-title--line-height: 1.1;
-    --text-title--letter-spacing: -0.03em;
-    --text-title-sm: 1.75rem;
+    --text-title--letter-spacing: -0.028em;
+    --text-title-sm: 2rem;
     --text-title-sm--line-height: 1.15;
     --text-title-sm--letter-spacing: -0.025em;
-    --text-heading: 1.125rem;
-    --text-heading--line-height: 1.45;
-    --text-heading--letter-spacing: -0.01em;
+    --text-heading: 1.25rem;
+    --text-heading--line-height: 1.4;
+    --text-heading--letter-spacing: -0.015em;
     --text-lead: 1.125rem;
-    --text-lead--line-height: 1.65;
+    --text-lead--line-height: 1.6;
+    --text-lead-lg: 1.25rem;
+    --text-lead-lg--line-height: 1.55;
+    --text-lead-lg--letter-spacing: -0.005em;
+    /* The one small label (above a heading, over a column, beside a value): Geist Mono, uppercase
+       and tracked; `mono-label` below sets it. */
+    --text-eyebrow: 0.75rem;
+    --text-eyebrow--line-height: 1rem;
+    --text-eyebrow--letter-spacing: 0.06em;
     /* Code, hashes, and ids in Geist Mono, a step under the text they sit in. */
     --text-mono: 0.8125rem;
     --text-mono--line-height: 1.7;
@@ -38,6 +50,12 @@
     --text-wordmark: 1.0625rem;
     --text-wordmark--line-height: 1.5;
     --text-wordmark--letter-spacing: -0.02em;
+    /* A segment running along the custody diagram's rail, the way the money goes (motion-safe only). */
+    --animate-rail: rail 2.4s linear infinite;
+    @keyframes rail {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(300%); }
+    }
 }
 
 @theme inline {
@@ -75,10 +93,16 @@
     --color-code-foreground: var(--code-foreground);
     --color-code-muted: var(--code-muted);
     --color-code-border: var(--code-border);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
+    --color-band: var(--band);
+    --color-brand-ink: var(--brand-ink);
+    --shadow-card: var(--elevation-card);
+    --shadow-frame: var(--elevation-frame);
+    /* Radii: 6px for controls, 10px for cards, 14px for windows (code and product frames); 4px only
+       for a mark inside a control or a line (a segmented item, a method badge, inline code). */
+    --radius-sm: 0.25rem;
+    --radius-md: 0.375rem;
     --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.5);
+    --radius-xl: 0.875rem;
 }
 
 /*
@@ -87,7 +111,7 @@
  */
 :root {
     --background: oklch(1 0 0);
-    /* A full-width band set apart from the page (the demo's stage). */
+    /* A full-width band set apart from the page (the demo's stage, the comparison's summary). */
     --surface: oklch(0.982 0 0);
     --foreground: oklch(0.17 0 0);
     --body-foreground: oklch(0.38 0 0);
@@ -120,8 +144,10 @@
        muted surfaces. Always opaque. */
     --focus: oklch(0.45 0.13 128);
     --ring: var(--focus);
-    /* Phala's lime: an accent only (the logo, the live dot, the current step, highlights), never
-       focus and never a fill behind text. */
+    /* Phala's lime, the one accent, for the money and its path: the mark, the live dot, the current
+       step, the custody rail. As a fill, only behind dark text (--brand-foreground, about 15:1):
+       the release chip, a check, the close's one button. Lime text never sits on a light surface;
+       on one, the brand's lines and icons take --brand-ink. Never focus. */
     --brand: oklch(0.93 0.19 124);
     --brand-foreground: oklch(0.2 0.02 125);
     /* Code: one dark window in either theme, so the page has one syntax palette. */
@@ -129,23 +155,39 @@
     --code-foreground: oklch(0.93 0 0);
     --code-muted: oklch(0.7 0 0);
     --code-border: oklch(1 0 0 / 8%);
-    --radius: 0.5rem;
+    /* A band set apart in the theme's own tone (where the money goes, the close): the page's
+       neutral with a trace of the brand's lime. The light theme's three section tones, page (white),
+       surface (neutral), and band (lime-tinted), each differ from the others in lightness or hue. */
+    --band: oklch(0.972 0.014 118);
+    /* The brand as a line or an icon on the page: the lime darkened to an olive (6:1 on white). */
+    --brand-ink: oklch(0.45 0.13 128);
+    /* Elevation: a card sits on the page; a window (code, the demo) floats above it. */
+    --elevation-card: 0 1px 2px oklch(0 0 0 / 4%);
+    --elevation-frame: 0 1px 2px oklch(0 0 0 / 5%), 0 8px 24px -8px oklch(0 0 0 / 10%), 0 28px 56px -28px oklch(0 0 0 / 18%);
+    --radius: 0.625rem;
 }
 
+/*
+ * The dark theme's layers, each a clear step lighter than the one under it: the page (0.145), the
+ * surface band (0.18), the lime-tinted band (0.215, with the lime's hue), a card (0.24), a muted
+ * fill inside a card (0.29). The two bands meet once on the home page (the demo, then the custody
+ * path), and differ there by 0.035 and the band's hue. Code windows sit under the bands (0.17), so
+ * they read on the page and on a band.
+ */
 .dark {
     --background: oklch(0.145 0 0);
-    --surface: oklch(0.168 0 0);
+    --surface: oklch(0.18 0 0);
     --foreground: oklch(0.97 0 0);
     --body-foreground: oklch(0.82 0 0);
-    --card: oklch(0.195 0 0);
+    --card: oklch(0.24 0 0);
     --card-foreground: oklch(0.97 0 0);
-    --popover: oklch(0.205 0 0);
+    --popover: oklch(0.25 0 0);
     --popover-foreground: oklch(0.97 0 0);
     --primary: oklch(0.96 0 0);
     --primary-foreground: oklch(0.17 0 0);
-    --muted: oklch(0.255 0 0);
+    --muted: oklch(0.29 0 0);
     --muted-foreground: oklch(0.7 0 0);
-    --accent: oklch(0.255 0 0);
+    --accent: oklch(0.29 0 0);
     --destructive: oklch(0.704 0.191 22.216);
     --success: oklch(0.792 0.209 151.711);
     --warning: oklch(0.828 0.189 84.429);
@@ -154,13 +196,18 @@
     --destructive-muted: oklch(0.258 0.04 26.042);
     --border: oklch(1 0 0 / 9%);
     --border-strong: oklch(1 0 0 / 14%);
-    /* 3.14:1 against the page and muted surfaces, 3.23:1 against cards. */
-    --input: oklch(1 0 0 / 35%);
+    /* Over 3:1 against the page, the bands, cards, and muted fills. */
+    --input: oklch(1 0 0 / 38%);
     /* Phala's lime itself: over 12:1 against the dark page and its surfaces. */
     --focus: oklch(0.93 0.19 124);
     --ring: var(--focus);
-    --code: oklch(0.19 0 0);
+    --code: oklch(0.17 0 0);
     --code-border: oklch(1 0 0 / 10%);
+    --brand-ink: oklch(0.93 0.19 124);
+    --band: oklch(0.215 0.014 118);
+    /* On a dark page, elevation is a lighter edge on top rather than a shadow. */
+    --elevation-card: inset 0 1px 0 oklch(1 0 0 / 4%);
+    --elevation-frame: inset 0 1px 0 oklch(1 0 0 / 6%), 0 24px 48px -24px oklch(0 0 0 / 60%);
 }
 
 /*
@@ -175,6 +222,16 @@
 .tok-parameter { color: oklch(0.87 0.05 30); }
 .tok-punctuation { color: oklch(0.78 0 0); }
 .tok-link { color: oklch(0.82 0.09 235); text-decoration: underline; }
+
+/* The one small label: the eyebrow's size, Geist Mono, medium, uppercase. Its colour is its place's. */
+@utility mono-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  line-height: var(--text-eyebrow--line-height);
+  letter-spacing: var(--text-eyebrow--letter-spacing);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+}
 
 @layer base {
   * {
@@ -239,10 +296,13 @@
   .docs-prose :where(strong) { @apply font-semibold text-foreground; }
   .docs-prose :where(a:not(.heading-anchor)) { @apply font-medium text-foreground underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground; }
   .docs-prose :where(hr) { @apply my-10; }
-  .docs-prose :where(blockquote) { @apply border-l-2 pl-4 text-muted-foreground; }
+  /* A note set apart: a callout with the brand's rule at its edge. */
+  .docs-prose :where(blockquote) { @apply rounded-r-lg border-l-2 border-l-brand-ink bg-muted/50 py-3 pr-4 pl-4 text-body-foreground; }
+  .docs-prose :where(blockquote > :first-child) { margin-top: 0; }
+  .docs-prose :where(blockquote > :last-child) { margin-bottom: 0; }
   .docs-prose :where(:not(pre) > code) { @apply rounded-sm bg-muted px-1 py-0.5 font-mono text-[0.875em] text-foreground; overflow-wrap: anywhere; }
   /* A code block (scripts/markdown.ts): a dark frame with its language and copy button above. */
-  .docs-prose :where(.code-block) { @apply my-6 overflow-hidden rounded-lg border border-code-border bg-code; }
+  .docs-prose :where(.code-block) { @apply my-6 overflow-hidden rounded-xl border border-code-border bg-code shadow-card; }
   .docs-prose :where(.code-block-header) { @apply flex h-9 items-center justify-between border-b border-code-border pr-1.5 pl-4 font-mono text-xs text-code-muted; }
   .docs-prose :where(.code-block-copy) { @apply inline-flex h-7 items-center rounded-md px-2 font-sans text-sm font-medium text-code-muted transition-colors hover:bg-white/10 hover:text-code-foreground; }
   .docs-prose :where(.code-block pre) { @apply m-0 overflow-x-auto px-4 py-3.5 font-mono text-mono text-code-foreground; }
@@ -251,7 +311,7 @@
   .docs-prose :where(pre .line) { @apply block min-h-[1lh]; }
   /* Tables take the column's width and wrap their cells; only code blocks scroll sideways. */
   .docs-prose :where(table) { @apply w-full text-sm; }
-  .docs-prose :where(th) { @apply border-b px-3 py-2 text-left align-bottom text-xs font-medium tracking-wider text-muted-foreground uppercase first:pl-0; }
+  .docs-prose :where(th) { @apply border-b px-3 py-2 text-left align-bottom mono-label text-muted-foreground first:pl-0; }
   .docs-prose :where(td) { @apply border-b px-3 py-2.5 align-top first:pl-0; }
   /* In a table, code wraps only where its identifiers divide (<wbr>, scripts/markdown.ts), and an
      index's first column (short links, package names) not at all. */
@@ -267,7 +327,7 @@
     .docs-prose :where(tr) { @apply border-b py-2; }
     .docs-prose :where(td) { @apply border-0 px-0 py-1; }
     /* The label is the column's name, already read out by the cell's role: hidden from speech. */
-    .docs-prose :where(td[data-label])::before { @apply block text-xs font-medium tracking-wider text-muted-foreground uppercase; content: attr(data-label) / ""; }
+    .docs-prose :where(td[data-label])::before { @apply block mono-label text-muted-foreground; content: attr(data-label) / ""; }
   }
   /* A diagram (scripts/markdown.ts): its committed SVG for the page's theme, scaled to the text. */
   .docs-prose :where(.diagram) { @apply my-8; }

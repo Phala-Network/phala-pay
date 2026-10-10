@@ -170,9 +170,9 @@ function StepDot({ state }: { state: Step["state"] }) {
     <span
       className={cn(
         "relative z-10 flex size-4 items-center justify-center rounded-full bg-card transition-colors motion-reduce:transition-none",
-        state === "complete" && "bg-foreground text-background",
+        state === "complete" && "bg-brand-ink text-background",
         state === "failed" && "bg-destructive text-background",
-        state === "upcoming" && "border border-dashed border-muted-foreground",
+        state === "upcoming" && "border border-input",
       )}
       aria-hidden="true"
     >
@@ -197,7 +197,8 @@ function elapsedOf(step: Step, sent: number | null): number | null {
 }
 
 /**
- * A step's button. Its rail runs to the next step's dot through the dots' centres: down the list on
+ * A step's button. Its rail (in the brand's colour once the step is complete, as the money has
+ * passed it) runs to the next step's dot through the dots' centres: down the list on
  * a phone (from below this dot to above the next, each line 44px with its dot centred), across the
  * row from lg (from half a dot and a gap past this column's centre to as far before the next's).
  */
@@ -224,7 +225,7 @@ function StreamStep({
   const elapsed = elapsedOf(step, sent);
   return (
     <li
-      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden @lg:before:top-4 @lg:before:right-[calc(-50%+0.75rem)] @lg:before:bottom-auto @lg:before:left-[calc(50%+0.75rem)] @lg:before:h-px @lg:before:w-auto @lg:before:translate-x-0"
+      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden @lg:before:top-4 @lg:before:right-[calc(-50%+0.75rem)] @lg:before:bottom-auto @lg:before:left-[calc(50%+0.75rem)] @lg:before:h-px @lg:before:w-auto @lg:before:translate-x-0 data-[state=complete]:before:bg-brand-ink"
       data-step={step.key}
       data-state={step.state}
       aria-current={step.state === "current" ? "step" : undefined}

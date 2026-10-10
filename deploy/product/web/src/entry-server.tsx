@@ -10,7 +10,7 @@ import { DocsPage } from "./DocsPage.js";
 import { ReferencePage } from "./ReferencePage.js";
 import docs from "virtual:docs";
 import reference from "virtual:reference";
-import { ClosingCta, CompareTeaser, DemoSection, DeployCommand, Faq, Hero, HeroCode, SiteFooter, WhereTheMoneyGoes, type Section } from "./Site.js";
+import { ClosingCta, CompareTeaser, DemoSection, DeployCommand, Faq, Features, Hero, HeroCode, SiteFooter, WhereTheMoneyGoes, type Section } from "./Site.js";
 
 /**
  * An island: rendered on its own, with the identifier prefix its client root hydrates with, so the
@@ -36,6 +36,7 @@ function Main({ page }: { page: Page }) {
           <Hero code={<Island id="hero-code" prefix={ISLAND_PREFIXES.heroCode}><HeroCode /></Island>} />
           <DemoSection />
           <WhereTheMoneyGoes />
+          <Features />
           <CompareTeaser />
           <Faq />
           <ClosingCta command={<Island id="deploy-command" prefix={ISLAND_PREFIXES.deployCommand}><DeployCommand /></Island>} />

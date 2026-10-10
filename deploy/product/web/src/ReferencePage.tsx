@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import type { Field, OperationModel, ReferenceModel, TypeNode } from "../scripts/reference.ts";
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
-import { DocsMobileNav, LABEL, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEBAR_LAYOUT } from "./DocsPage.js";
+import { Eyebrow } from "./Site.js";
+import { DocsMobileNav, LABEL, NAV_LINK, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEBAR_LAYOUT } from "./DocsPage.js";
 
 /**
  * An operation's or an object's two parts, on the page's grid: the page's nine columns again
@@ -11,12 +12,16 @@ import { DocsMobileNav, LABEL, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEB
  */
 const PART = "grid gap-y-8 xl:grid-cols-9 xl:items-baseline xl:gap-x-8";
 
-/** A method as a small mono label, its colour from the method's family (read or write). */
-function Method({ method }: { method: string }) {
+/**
+ * A method as a small mono badge, tinted by its family (a read, a write, a removal); its text stays
+ * in the foreground colour, so it keeps its contrast whatever the tint.
+ */
+function Method({ method, className }: { method: string; className?: string }) {
   return (
     <span className={cn(
-      "inline-flex h-5 min-w-12 items-center justify-center rounded-sm px-1.5 font-mono text-xs font-semibold uppercase",
-      method === "get" ? "bg-muted text-foreground" : method === "delete" ? "bg-destructive-muted text-foreground" : "bg-foreground text-background",
+      "inline-flex h-5 min-w-12 shrink-0 items-center justify-center rounded-sm border px-1.5 font-mono text-xs font-semibold text-foreground uppercase",
+      method === "get" ? "border-success/30 bg-success-muted" : method === "delete" ? "border-destructive/30 bg-destructive-muted" : "border-brand-ink/30 bg-brand/15",
+      className,
     )}>
       {method}
     </span>
@@ -62,7 +67,7 @@ function Fields({ fields, nested = false }: { fields: Field[]; nested?: boolean 
           <dt className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <code className="font-mono text-mono font-semibold text-foreground">{field.name}</code>
             <span className="font-mono text-xs text-muted-foreground"><TypeLabel type={field.type} /></span>
-            {field.required && <span className="text-xs font-medium tracking-wider text-foreground uppercase">required</span>}
+            {field.required && <span className="mono-label text-foreground">required</span>}
           </dt>
           <dd>
             {field.html !== "" && <div className={cn(PROSE, "mt-1 text-sm")} dangerouslySetInnerHTML={{ __html: field.html }} />}
@@ -152,20 +157,20 @@ function OperationSection({ operation }: { operation: OperationModel }) {
 function ReferenceNav({ model }: { model: ReferenceModel }) {
   return (
     <nav aria-label="API reference" className="text-sm">
-      <p className={cn(LABEL, "px-2 pb-1.5")}>Introduction</p>
+      <p className={cn(LABEL, "pr-2 pb-1.5 pl-2.5")}>Introduction</p>
       <ul>
         {model.intro.map(({ id, title }) => (
-          <li key={id}><a href={`#${id}`} className="flex min-h-8 items-center rounded-md px-2 text-body-foreground hover:bg-muted hover:text-foreground">{title}</a></li>
+          <li key={id}><a href={`#${id}`} className={NAV_LINK}>{title}</a></li>
         ))}
       </ul>
       {model.tags.map(({ name, title, anchor, operations }) => (
         <div key={name} className="mt-5">
-          <a href={`#${anchor}`} className={cn(LABEL, "block px-2 pb-1 hover:text-foreground")}>{title}</a>
+          <a href={`#${anchor}`} className={cn(LABEL, "block pr-2 pb-1 pl-2.5 hover:text-foreground")}>{title}</a>
           <ul>
             {operations.map((operation) => (
               <li key={operation.id}>
-                <a href={`#${operation.anchor}`} className="flex min-h-11 items-baseline gap-2 rounded-md px-2 py-1.5 text-body-foreground hover:bg-muted hover:text-foreground lg:min-h-8">
-                  <span className="w-12 shrink-0 font-mono text-xs font-semibold text-muted-foreground uppercase">{operation.method}</span>
+                <a href={`#${operation.anchor}`} className={cn(NAV_LINK, "items-start gap-2.5 py-1.5")}>
+                  <Method method={operation.method} />
                   <span className="min-w-0">{operation.summary}</span>
                 </a>
               </li>
@@ -173,7 +178,7 @@ function ReferenceNav({ model }: { model: ReferenceModel }) {
           </ul>
         </div>
       ))}
-      <a href="#objects" className={cn(LABEL, "mt-5 block px-2 hover:text-foreground")}>Objects</a>
+      <a href="#objects" className={cn(LABEL, "mt-5 block pr-2 pl-2.5 hover:text-foreground")}>Objects</a>
     </nav>
   );
 }
@@ -189,12 +194,12 @@ export function ReferencePage({ model }: { model: ReferenceModel }) {
       </aside>
       <main id="top" data-column="right" className={PAGE_COLUMN}>
         <DocsMobileNav label="API reference menu"><ReferenceNav model={model} /></DocsMobileNav>
-        <p className={LABEL}>API reference · v{model.version}</p>
-        <h1 className="mt-2 text-title-sm font-semibold sm:text-title">{model.title}</h1>
+        <Eyebrow>API reference · v{model.version}</Eyebrow>
+        <h1 className="mt-4 text-title-sm font-semibold sm:text-title">{model.title}</h1>
         <div className={cn(PROSE, "mt-4 max-w-3xl")} dangerouslySetInnerHTML={{ __html: model.lead }} />
         <dl className="mt-6 grid gap-2 text-sm sm:grid-cols-2">
           {model.servers.map(({ url, description }) => (
-            <div key={url} className="rounded-lg border px-4 py-3">
+            <div key={url} className="rounded-xl border bg-card px-5 py-4 shadow-card">
               <dt className="text-muted-foreground">{description}</dt>
               <dd className="mt-1 font-mono text-mono break-all">{url}</dd>
             </div>
