@@ -446,11 +446,15 @@ function WalletPanel({
           className="pp-button"
           disabled={step.kind === "pending"}
           onClick={() => void pay(choice)}
-          aria-label={walletClient === undefined ? `${buttonText} (${choice.name})` : buttonText}
         >
           {choice.icon !== "" && <img className="pp-button__icon" src={choice.icon} alt="" />}
           <span>{buttonText}</span>
-          {walletClient === undefined && <span className="pp-button__detail">{choice.name}</span>}
+          {walletClient === undefined && (
+            <>
+              {" "}
+              <span className="pp-button__detail">{choice.name}</span>
+            </>
+          )}
         </button>
       ))}
       <p

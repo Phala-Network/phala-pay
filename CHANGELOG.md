@@ -14,6 +14,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Fixed
+
+- `<Checkout>`'s browser wallet button's accessible name now matches its visible text
+  ("Pay with crypto <wallet>", for example "Pay with crypto MetaMask") instead of
+  "Pay with crypto (<wallet>)" (WCAG 2.5.3, axe `label-content-name-mismatch`). Integrations and
+  tests that select the button by its accessible name must update the name.
+
 ## [0.10.0] - 2026-10-10
 
 ### Changed (operators)
