@@ -26,7 +26,11 @@ export function pageMetadata(page: Page, doc?: DocSummary): PageMetadata {
       return { title: REFERENCE_TITLE, description: REFERENCE_DESCRIPTION, keywords: null, url: `${origin}${PAGES.reference.path}` };
     default:
       if (doc === undefined) throw new Error(`No content for ${page}`);
-      return { title: `${doc.title} | Phala Pay docs`, description: doc.description, keywords: null, url: `${origin}${route(page).path ?? ""}` };
+      // A title that already names the product needs no suffix ("Phala Pay documentation").
+      return {
+        title: doc.title.includes("Phala Pay") ? doc.title : `${doc.title} | Phala Pay docs`,
+        description: doc.description, keywords: null, url: `${origin}${route(page).path ?? ""}`,
+      };
   }
 }
 
