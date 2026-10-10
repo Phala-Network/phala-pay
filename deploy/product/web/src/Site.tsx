@@ -269,7 +269,7 @@ export function Hero({ code }: { code: ReactNode }) {
                 </div>
               ))}
             </dl>
-            <p data-facts-note className="mt-4 text-sm text-pretty text-muted-foreground">{HERO_FACTS_NOTE}</p>
+            <p data-facts-note className="mt-4 text-sm text-pretty text-muted-foreground">{unbroken(HERO_FACTS_NOTE)}</p>
           </div>
         </div>
         <div data-column="right" className={RIGHT}>{code}</div>
@@ -507,7 +507,7 @@ function CreditTimes() {
           </div>
         ))}
       </dl>
-      <p className="mt-4 text-sm text-pretty text-muted-foreground">{CREDIT_TIMES.note}</p>
+      <p className="mt-4 text-sm text-pretty text-muted-foreground">{unbroken(CREDIT_TIMES.note)}</p>
     </figure>
   );
 }
@@ -592,7 +592,9 @@ export function CompareTeaser() {
     </Button>
   );
   return (
-    <section aria-labelledby="compare-title" className="border-b">
+    // On the surface band: between the features and the questions (both on the page), never beside
+    // the lime band, so the two bands meet only once (the demo and the custody path).
+    <section aria-labelledby="compare-title" className="border-b bg-surface">
       <div className={cn(CONTAINER, SECTION)}>
         <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-6">
           <Intro id="compare-title" eyebrow={EYEBROWS.compare} title="How Phala Pay compares"
@@ -647,11 +649,11 @@ export function CompareTeaser() {
  */
 export function Faq() {
   return (
-    <section aria-labelledby="faq-title" className="border-b bg-surface">
+    <section aria-labelledby="faq-title" className="border-b">
       <div className={cn(CONTAINER, SECTION)}>
         <Eyebrow>{EYEBROWS.faq}</Eyebrow>
         <div data-layout="aside" className={cn(GRID, "mt-4 gap-y-10 lg:items-baseline")}>
-          <div data-column="left" className={cn(ASIDE, "lg:sticky lg:top-28")}>
+          <div data-column="left" className={cn(ASIDE, "lg:sticky lg:top-24")}>
             <h2 id="faq-title" className={H2}>Frequently asked questions</h2>
             <p className={cn(LEAD, "mt-5")}>
               Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.
@@ -707,10 +709,11 @@ export function DeployCommand() {
   const hydrated = useHydrated();
   return (
     <CodeWindow
-      footer={<>
+      // Two lines of a length, so the link never sits alone on a short last line.
+      footer={<p className="text-balance">
         Deploys the latest release. To verify the release's provenance first, follow
         the <a className={cn(TEXT_LINK, "whitespace-nowrap text-code-foreground decoration-code-foreground/40 hover:decoration-code-foreground")} href={LINKS.deploy}>high-assurance path</a>.
-      </>}
+      </p>}
       header={<>
       <span className="text-sm text-code-muted">Terminal</span>
       {hydrated

@@ -111,7 +111,7 @@
  */
 :root {
     --background: oklch(1 0 0);
-    /* A full-width band set apart from the page (the demo's stage). */
+    /* A full-width band set apart from the page (the demo's stage, the comparison's summary). */
     --surface: oklch(0.982 0 0);
     --foreground: oklch(0.17 0 0);
     --body-foreground: oklch(0.38 0 0);
@@ -169,23 +169,25 @@
 
 /*
  * The dark theme's layers, each a clear step lighter than the one under it: the page (0.145), the
- * surface band (0.18), the lime-tinted band (0.195), a card (0.215), a muted fill inside a card
- * (0.27). Code windows sit a step under the bands (0.17), so they read on the page and on a band.
+ * surface band (0.18), the lime-tinted band (0.215, with the lime's hue), a card (0.24), a muted
+ * fill inside a card (0.29). The two bands meet once on the home page (the demo, then the custody
+ * path), and differ there by 0.035 and the band's hue. Code windows sit under the bands (0.17), so
+ * they read on the page and on a band.
  */
 .dark {
     --background: oklch(0.145 0 0);
     --surface: oklch(0.18 0 0);
     --foreground: oklch(0.97 0 0);
     --body-foreground: oklch(0.82 0 0);
-    --card: oklch(0.215 0 0);
+    --card: oklch(0.24 0 0);
     --card-foreground: oklch(0.97 0 0);
-    --popover: oklch(0.225 0 0);
+    --popover: oklch(0.25 0 0);
     --popover-foreground: oklch(0.97 0 0);
     --primary: oklch(0.96 0 0);
     --primary-foreground: oklch(0.17 0 0);
-    --muted: oklch(0.27 0 0);
+    --muted: oklch(0.29 0 0);
     --muted-foreground: oklch(0.7 0 0);
-    --accent: oklch(0.27 0 0);
+    --accent: oklch(0.29 0 0);
     --destructive: oklch(0.704 0.191 22.216);
     --success: oklch(0.792 0.209 151.711);
     --warning: oklch(0.828 0.189 84.429);
@@ -195,14 +197,14 @@
     --border: oklch(1 0 0 / 9%);
     --border-strong: oklch(1 0 0 / 14%);
     /* Over 3:1 against the page, the bands, cards, and muted fills. */
-    --input: oklch(1 0 0 / 35%);
+    --input: oklch(1 0 0 / 38%);
     /* Phala's lime itself: over 12:1 against the dark page and its surfaces. */
     --focus: oklch(0.93 0.19 124);
     --ring: var(--focus);
     --code: oklch(0.17 0 0);
     --code-border: oklch(1 0 0 / 10%);
     --brand-ink: oklch(0.93 0.19 124);
-    --band: oklch(0.195 0.008 118);
+    --band: oklch(0.215 0.014 118);
     /* On a dark page, elevation is a lighter edge on top rather than a shadow. */
     --elevation-card: inset 0 1px 0 oklch(1 0 0 / 4%);
     --elevation-frame: inset 0 1px 0 oklch(1 0 0 / 6%), 0 24px 48px -24px oklch(0 0 0 / 60%);
