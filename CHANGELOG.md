@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-10
+
 ### Changed (operators)
 
 - Confirmation uses bounded head-only probes: Depth six probes at the fixed estimated-depth
@@ -1833,7 +1835,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.9.2...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.0
 [0.9.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.9.2
 [0.9.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.9.1
 [0.9.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.9.0
