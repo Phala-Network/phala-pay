@@ -1598,7 +1598,7 @@ wheels = [
 
 [[package]]
 name = "phala-pay"
-version = "0.10.0rc6"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "attrs" },
