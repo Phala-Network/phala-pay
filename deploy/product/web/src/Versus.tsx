@@ -35,7 +35,7 @@ export function Versus({ phala, others, dimensions, linkSource, name, className 
         <div className="mt-3 flex flex-wrap gap-2">
           {others.map(({ id, name: label }, index) => (
             <label key={id}
-              className="inline-flex min-h-11 cursor-pointer items-center rounded-md border px-3 text-sm font-medium text-body-foreground transition-colors has-checked:border-foreground has-checked:bg-foreground has-checked:text-background has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring">
+              className="inline-flex min-h-11 cursor-pointer items-center rounded-md border px-3 text-sm font-medium text-body-foreground transition-colors has-checked:border-foreground has-checked:bg-muted has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring">
               <input type="radio" name={name} value={id} data-vendor={id} defaultChecked={index === 0} className="sr-only" />
               {label}
             </label>
@@ -46,7 +46,7 @@ export function Versus({ phala, others, dimensions, linkSource, name, className 
         <caption className="sr-only">Phala Pay beside the provider chosen above, a row per dimension.</caption>
         <thead>
           <tr>
-            <th scope="col" className="w-1/2 border-b-2 border-foreground pr-3 pb-2 font-semibold">{phala.name}</th>
+            <th scope="col" className="w-1/2 border-b-2 border-brand-ink pr-3 pb-2 font-semibold">{phala.name}</th>
             {others.map(({ id, name: label }) => (
               <th key={id} scope="col" className={cn(shown(id), "border-b-2 pb-2 pl-3 font-semibold text-body-foreground")}>{label}</th>
             ))}
@@ -55,7 +55,7 @@ export function Versus({ phala, others, dimensions, linkSource, name, className 
         {dimensions.map(({ key, label }) => (
           <tbody key={key}>
             <tr>
-              <th scope="rowgroup" colSpan={2} className="pt-5 pb-1.5 text-xs font-medium tracking-wider text-muted-foreground uppercase">{label}</th>
+              <th scope="rowgroup" colSpan={2} className="pt-5 pb-1.5 font-mono text-eyebrow font-medium text-muted-foreground uppercase">{label}</th>
             </tr>
             <tr className="border-b">
               <td className="pr-3 pb-3 align-top leading-6 text-foreground"><ComparisonCell cell={phala[key]} linkSource={linkSource} /></td>

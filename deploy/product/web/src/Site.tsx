@@ -1,18 +1,19 @@
-import { Menu, MoveDown, MoveRight, Plus, X } from "lucide-react";
+import { ArrowRight, Check, ChevronRight, FileCode2, Landmark, Menu, MoveDown, Plus, ShieldCheck, Wallet, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
-import { GRID, LEFT, RIGHT } from "./layout.js";
+import { ASIDE, GRID, LEFT, MAIN, RIGHT } from "./layout.js";
 import { useHydrated } from "./islands.js";
 import { ComparisonCell } from "./ComparisonCell.js";
 import { Versus } from "./Versus.js";
 import { TEASER, TEASER_OTHERS } from "./content/compare.js";
 import { HERO_CODE, HERO_CODE_NOTE } from "./content/hero-code.js";
 import {
-  CLOSING_LEAD, CLOSING_TITLE, CUSTODY_LINKS, CUSTODY_NOTE, CUSTODY_PATH, DEMO_LEAD, DEMO_STATUS, DEMO_TITLE, DEPLOY_COMMAND, FAQ,
-  HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES, PROPERTIES_LEAD, TAGLINE,
+  CLOSING_LEAD, CLOSING_TITLE, CREDIT_TIMES, CUSTODY_LINKS, CUSTODY_NOTE, CUSTODY_PATH, DEMO_LEAD, DEMO_STATUS, DEMO_TITLE,
+  DEPLOY_COMMAND, EYEBROWS, FAQ, FEATURES_TITLE, FEE_FIGURE, HERO_FACTS, HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES,
+  PROPERTIES_LEAD, SDK_PACKAGES, TAGLINE, VERIFY_CHECKS, WEBHOOK_EVENTS,
 } from "./content/site.js";
 import { unbroken } from "./text.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
@@ -36,18 +37,50 @@ export const LINKS = {
 
 /**
  * The page's width: one for every section and the header and footer, so all share a left edge
- * (1280px, 16 to 32px gutters); the 12-column grid inside it is src/layout.ts.
+ * (1280px, 16 to 32px gutters); the 12-column grid inside it is src/layout.ts. From xl its two
+ * edges are drawn as rules down the whole page, so every block visibly sits in one frame.
  */
-export const CONTAINER = "mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8";
+export const CONTAINER = "mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 xl:border-x";
 /** Every H2, and every other page's H1. */
 export const H2 = "text-title-sm font-semibold text-balance sm:text-title";
 /** A section's introduction under its heading. */
 export const LEAD = "text-lead text-pretty text-body-foreground";
-/** One rhythm for every section: 64px above and below on phones, 80px from lg; below the 64px header when scrolled to. */
-export const SECTION = "scroll-mt-16 py-16 lg:py-20";
+/** One rhythm for every section: 80px above and below on phones, 112px from lg. */
+export const SECTION = "py-20 lg:py-28";
+/** A band set apart in near-black in either theme; it takes the dark theme's tokens inside it. */
+export const INK = "dark border-ink-border bg-ink text-foreground";
 const ICON = { "aria-hidden": true, strokeWidth: 1.75 } as const;
 /** An inline text link, in the text's colour. */
 export const TEXT_LINK = "font-medium text-foreground underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground";
+/** An arrow that leads a link or button on, nudged on hover where motion is welcome. */
+const NUDGE = "motion-safe:transition-transform motion-safe:group-hover:translate-x-0.5";
+
+/**
+ * The label above a heading: Geist Mono, uppercase, after a small square in the brand's colour (the
+ * mark's inner square).
+ */
+export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    // In the line, not a flex row: the label's baseline is its text's, as the grid's alignment reads it.
+    <p className={cn("font-mono text-eyebrow font-medium text-muted-foreground uppercase", className)}>
+      <span aria-hidden="true" className="mr-2 inline-block size-1.5 rounded-[2px] bg-brand-ink align-middle" />
+      {children}
+    </p>
+  );
+}
+
+/** A section's label, heading, and introduction, stacked; centred in a band that centres its content. */
+function Intro({ id, eyebrow, title, lead, align = "start", className }: {
+  id: string; eyebrow: string; title: string; lead?: ReactNode; align?: "start" | "center"; className?: string;
+}) {
+  return (
+    <div className={cn("max-w-2xl", align === "center" && "mx-auto text-center", className)}>
+      <Eyebrow>{eyebrow}</Eyebrow>
+      <h2 id={id} className={cn(H2, "mt-4")}>{title}</h2>
+      {lead !== undefined && <p className={cn(LEAD, "mt-5")}>{lead}</p>}
+    </div>
+  );
+}
 
 /** The part of the site a page belongs to, which the header marks as current. */
 export type Section = "compare" | "docs" | "reference";
@@ -92,13 +125,14 @@ export function SiteHeader({ theme, onThemeChange, current }: { theme: Theme; on
   }, [menuOpen]);
 
   return (
-    <header ref={header} className="sticky top-0 z-50 border-b bg-background/90 backdrop-blur-md">
+    // The site's links beside the mark, the utilities and the one action at the other end.
+    <header ref={header} className="sticky top-0 z-50 border-b bg-background/85 backdrop-blur-md">
       <div className={`${CONTAINER} flex h-16 items-center`}>
-        <a href="/" className="mr-auto flex rounded-md" aria-label="Phala Pay home">
+        <a href="/" className="flex rounded-md" aria-label="Phala Pay home">
           <Lockup />
         </a>
-        <nav aria-label="Site" className="hidden md:block">
-          <ul className="flex items-center">
+        <nav aria-label="Site" className="ml-10 hidden md:block">
+          <ul className="flex items-center gap-1">
             {NAV.map(({ href, label, section }) => (
               <li key={label}>
                 <a href={href} aria-current={section !== undefined && section === current ? "page" : undefined}
@@ -109,13 +143,13 @@ export function SiteHeader({ theme, onThemeChange, current }: { theme: Theme; on
             ))}
           </ul>
         </nav>
-        <span aria-hidden="true" className="mx-3 hidden h-5 w-px bg-border md:block" />
-        <div className="flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1">
           <a href={LINKS.repo} aria-label="GitHub" className={ICON_BUTTON}>
             <span aria-hidden="true" className="github-icon inline-block size-4 shrink-0 bg-current" />
           </a>
           <ThemeToggle theme={theme} onChange={onThemeChange} />
-          <Button asChild size="sm" className="ml-3 hidden h-9 md:inline-flex">
+          <span aria-hidden="true" className="mx-2 hidden h-5 w-px bg-border md:block" />
+          <Button asChild size="sm" className="hidden h-9 md:inline-flex">
             <a href={LINKS.selfHosting}>Self-host</a>
           </Button>
           {hydrated && (
@@ -147,45 +181,74 @@ export function SiteHeader({ theme, onThemeChange, current }: { theme: Theme; on
 }
 
 /**
- * The logo: the mark (brand/README.md: a lime dot in a near-black tile, with its edge on the dark
+ * The logo: the mark (brand/README.md: a lime square in a near-black tile, with its edge on the dark
  * theme) at 24px, beside the name set in the page's typeface, as a product's name sits beside its
  * mark in an interface; the brand's lettered lockup stays for the link preview and the brand files.
  */
 export function Lockup({ className }: { className?: string }) {
   return (
     <span className={cn("flex items-center gap-2.5", className)}>
-      <svg viewBox="0 0 32 32" aria-hidden="true" className="size-6 shrink-0">
-        <rect width="32" height="32" rx="8" className="fill-neutral-950" />
-        <path
-          fillRule="evenodd"
-          d="M8 0H24A8 8 0 0 1 32 8V24A8 8 0 0 1 24 32H8A8 8 0 0 1 0 24V8A8 8 0 0 1 8 0ZM8 1.33A6.67 6.67 0 0 0 1.33 8V24A6.67 6.67 0 0 0 8 30.67H24A6.67 6.67 0 0 0 30.67 24V8A6.67 6.67 0 0 0 24 1.33Z"
-          className="hidden fill-white/15 dark:block"
-        />
-        <rect x="10" y="10" width="12" height="12" rx="3" className="fill-brand" />
-      </svg>
+      <Mark className="size-6" />
       {/* The lockup's baseline is the name's (where a row aligns it on baselines, as the footer's). */}
       <span className="self-baseline text-wordmark font-semibold text-foreground">Phala Pay</span>
     </span>
   );
 }
 
-// The headline, the way to run it (self-hosting on Phala Cloud), and beside them, what integrating it
-// takes. The facts behind it (fees, speed, custody) follow the demo, once each.
+function Mark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true" className={cn("shrink-0", className)}>
+      <rect width="32" height="32" rx="8" className="fill-neutral-950" />
+      <path
+        fillRule="evenodd"
+        d="M8 0H24A8 8 0 0 1 32 8V24A8 8 0 0 1 24 32H8A8 8 0 0 1 0 24V8A8 8 0 0 1 8 0ZM8 1.33A6.67 6.67 0 0 0 1.33 8V24A6.67 6.67 0 0 0 8 30.67H24A6.67 6.67 0 0 0 30.67 24V8A6.67 6.67 0 0 0 24 1.33Z"
+        className="hidden fill-white/15 dark:block"
+      />
+      <rect x="10" y="10" width="12" height="12" rx="3" className="fill-brand" />
+    </svg>
+  );
+}
+
+/** The arrowed primary action: deploying a testnet instance. */
+function DeployButton({ variant = "primary" }: { variant?: "primary" | "brand" }) {
+  return (
+    <Button asChild size="lg" variant={variant} className="group">
+      <a href={LINKS.deploy}>Start a testnet instance<ArrowRight {...ICON} className={NUDGE} /></a>
+    </Button>
+  );
+}
+
+// The headline, the way to run it (self-hosting on Phala Cloud), three facts, and beside them what
+// integrating it takes. The release's status leads, as a link to the changelog.
 export function Hero({ code }: { code: ReactNode }) {
+  const [stage, ...status] = HERO_META.split(" · ");
   return (
     // The two columns centred on each other: the pitch, and the code window with its caption inside.
     <section aria-labelledby="hero-title" className="border-b">
-      <div data-align="center" className={cn(CONTAINER, GRID, "gap-y-12 pt-14 pb-16 sm:pt-20 lg:items-center lg:py-20")}>
+      <div data-layout="split" data-align="center" className={cn(CONTAINER, GRID, "gap-y-14 pt-14 pb-16 sm:pt-20 lg:items-center lg:py-24")}>
         <div data-column="left" className={LEFT}>
-          <h1 id="hero-title" className="max-w-xl text-display-sm font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display">
+          <a href={LINKS.changelog} className="group inline-flex min-h-8 items-center gap-2.5 rounded-full border bg-card py-0.5 pr-3 pl-1 text-sm text-body-foreground shadow-card transition-colors hover:text-foreground">
+            <span className="inline-flex h-6 items-center rounded-full bg-brand px-2.5 font-mono text-eyebrow font-medium text-brand-foreground uppercase">{stage}</span>
+            {status.join(" · ")}
+            <ChevronRight {...ICON} className={cn("size-4 text-muted-foreground", NUDGE)} />
+          </a>
+          <h1 id="hero-title" className="mt-7 max-w-xl text-display-sm font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display">
             {TAGLINE}
           </h1>
-          <p className="mt-6 max-w-xl text-lead text-pretty text-body-foreground">{unbroken(HERO_SUBHEAD)}</p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
+          <p className="mt-6 max-w-xl text-lead-lg text-pretty text-body-foreground">{unbroken(HERO_SUBHEAD)}</p>
+          <div className="mt-10 flex flex-col gap-3 sm:flex-row">
+            <DeployButton />
             <Button asChild size="lg" variant="secondary"><a href={LINKS.docs}>Read the docs</a></Button>
           </div>
-          <p className="mt-4 text-sm text-muted-foreground">{HERO_META}</p>
+          {/* Three facts under a rule, each value over its meaning; on a phone, a row each. */}
+          <dl className="mt-12 grid max-w-xl border-t pt-6 max-sm:gap-y-4 sm:grid-cols-3 sm:divide-x">
+            {HERO_FACTS.map(({ value, label }) => (
+              <div key={label} className="flex flex-col-reverse justify-end gap-1 max-sm:flex-row-reverse max-sm:items-baseline max-sm:justify-end max-sm:gap-3 sm:px-5 sm:first:pl-0">
+                <dt className="text-sm text-pretty text-muted-foreground">{label}</dt>
+                <dd className="text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl">{value}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
         <div data-column="right" className={RIGHT}>{code}</div>
       </div>
@@ -215,8 +278,10 @@ export function HeroCode() {
     <figure className="min-w-0">
       <CodeWindow
         footer={
-          <figcaption>
-            {HERO_CODE_NOTE.before}<code className="font-mono text-mono text-code-foreground">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}
+          // The outcome the code leads to, as the webhook it waits for: the brand's dot is the money.
+          <figcaption className="flex items-baseline gap-2.5">
+            <span aria-hidden="true" className="size-2 shrink-0 translate-y-px rounded-full bg-brand" />
+            <span>{HERO_CODE_NOTE.before}<code className="font-mono text-mono text-code-foreground">{HERO_CODE_NOTE.code}</code>{HERO_CODE_NOTE.after}</span>
           </figcaption>
         }
         header={
@@ -263,40 +328,27 @@ export function HeroCode() {
 }
 
 /**
- * Every section's heading and introduction, one way: the heading in the left half, the
- * introduction in the right, their first lines on one baseline; stacked below lg.
- */
-function SectionHeader({ id, title, aside, lead }: { id: string; title: string; aside?: ReactNode; lead?: ReactNode }) {
-  return (
-    <div className={cn(GRID, "gap-y-3 lg:items-baseline")}>
-      <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-1")}>
-        <h2 id={id} className={H2}>{title}</h2>
-        {aside}
-      </div>
-      {lead !== undefined && <p data-column="right" className={cn(LEAD, RIGHT)}>{lead}</p>}
-    </div>
-  );
-}
-
-/**
  * The demo, directly below the hero, on a band of its own: the product itself, sized so that its
- * heading and both panels fit one 1440×900 screen.
+ * heading and both panels fit one 1440×900 screen. Its heading and introduction sit on one
+ * baseline, over the two panels' columns.
  */
 export function DemoSection({ children }: { children?: ReactNode }) {
   return (
-    <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface py-6">
-      <div className={CONTAINER}>
-        <SectionHeader
-          id="demo-title"
-          title={DEMO_TITLE}
-          aside={
-            <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <span aria-hidden="true" className="size-2 rounded-full bg-brand ring-1 ring-foreground/25" />
+    <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface">
+      <div className={cn(CONTAINER, "py-6")}>
+        <div data-layout="split" className={cn(GRID, "gap-y-3 lg:items-baseline")}>
+          <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-2")}>
+            <h2 id="demo-title" className="text-title-sm font-semibold">{DEMO_TITLE}</h2>
+            <p className="inline-flex h-7 items-center gap-2 self-center rounded-full border bg-card px-3 text-sm font-medium text-body-foreground shadow-card">
+              <span aria-hidden="true" className="relative flex size-2">
+                <span className="absolute inline-flex size-full rounded-full bg-brand opacity-75 motion-safe:animate-ping" />
+                <span className="relative inline-flex size-2 rounded-full bg-brand ring-1 ring-foreground/25" />
+              </span>
               {DEMO_STATUS}
             </p>
-          }
-          lead={DEMO_LEAD}
-        />
+          </div>
+          <p data-column="right" className={cn(RIGHT, LEAD)}>{DEMO_LEAD}</p>
+        </div>
         <div id="demo-root" className="mt-5">{children ?? <DemoPlaceholder />}</div>
       </div>
     </section>
@@ -320,64 +372,160 @@ export function DemoLoading() {
   return <p role="status" className="text-sm text-muted-foreground">Loading the demo…</p>;
 }
 
+const STATION_ICONS = [Wallet, FileCode2, Landmark];
+
 /**
- * The path a payment takes, drawn as the page's one diagram: three stations in a row from xl (a
- * column below it, where a row would wrap the stations' names), each joined to the next by an
- * arrow under its label, with room around it. The last station, the merchant's own, is set apart.
+ * The path a payment takes, as the page's one diagram: three stations, each joined to the next by a
+ * rail in the brand's colour with what passes along it; in a row from xl (narrower, the stations'
+ * names would wrap), a column below it. A
+ * segment runs along each rail, the way the money goes, where motion is welcome. The last station,
+ * the merchant's own, is the destination: marked in the brand's colour.
  */
 function CustodyPath() {
   return (
     <figure>
-      <ol className="flex flex-col gap-2 xl:flex-row xl:items-stretch">
-        {CUSTODY_PATH.map(({ role, name, detail }, index) => (
-          <li key={name} className="contents">
-            {index > 0 && (
-              <span className="flex items-center gap-2 py-1 pl-6 text-sm text-muted-foreground xl:w-36 xl:shrink-0 xl:flex-col xl:justify-center xl:gap-1 xl:px-4 xl:py-0">
-                <MoveDown {...ICON} className="size-5 xl:hidden" />
-                <span>{CUSTODY_LINKS[index - 1]}</span>
-                <MoveRight {...ICON} className="hidden size-6 xl:block" />
-              </span>
-            )}
-            <div className={cn("flex-1 rounded-lg border bg-card p-6", index === CUSTODY_PATH.length - 1 && "border-foreground")}>
-              <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">{role}</p>
-              <p className="mt-2 font-semibold">{name}</p>
-              <p className="mt-1.5 text-sm/6 text-pretty text-body-foreground">{detail}</p>
-            </div>
-          </li>
-        ))}
+      <ol className="flex flex-col xl:grid xl:grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_9rem_minmax(0,1fr)]">
+        {CUSTODY_PATH.map(({ role, name, detail }, index) => {
+          const Icon = STATION_ICONS[index] ?? Wallet;
+          const last = index === CUSTODY_PATH.length - 1;
+          return (
+            <li key={name} className="contents">
+              {index > 0 && (
+                <span className="flex items-center gap-3 py-2 pl-8 xl:flex-col xl:justify-center xl:gap-2 xl:px-3 xl:py-0">
+                  <MoveDown {...ICON} className="size-5 text-brand-ink xl:hidden" />
+                  <span className="font-mono text-sm text-muted-foreground">{CUSTODY_LINKS[index - 1]}</span>
+                  <span aria-hidden="true" className="hidden w-full items-center text-brand-ink xl:flex">
+                    <span className="relative h-px flex-1 overflow-hidden bg-current/40">
+                      <span className="absolute inset-y-0 w-1/3 bg-current motion-safe:animate-rail" />
+                    </span>
+                    <svg viewBox="0 0 8 10" className="h-2.5 w-2 fill-current"><path d="M0 0L8 5L0 10Z" /></svg>
+                  </span>
+                </span>
+              )}
+              <div className={cn("flex flex-col rounded-xl border bg-card p-6 shadow-card", last && "border-brand-ink/70 ring-1 ring-brand-ink/30")}>
+                <div className="flex items-center justify-between gap-4">
+                  <span className={cn("flex size-10 items-center justify-center rounded-lg border bg-muted", last && "border-transparent bg-brand text-brand-foreground")}>
+                    <Icon {...ICON} className="size-5" />
+                  </span>
+                  <span className="font-mono text-eyebrow text-muted-foreground uppercase">0{index + 1} · {role}</span>
+                </div>
+                <p className="mt-8 text-heading font-semibold">{name}</p>
+                <p className="mt-2 text-sm/6 text-pretty text-body-foreground">{detail}</p>
+              </div>
+            </li>
+          );
+        })}
       </ol>
-      <figcaption className="mt-5 text-sm text-muted-foreground">{CUSTODY_NOTE}</figcaption>
+      <figcaption className="mx-auto mt-10 flex max-w-2xl items-start justify-center gap-2 text-sm text-pretty text-body-foreground xl:items-center">
+        <ShieldCheck {...ICON} className="mt-0.5 size-4 shrink-0 text-brand-ink xl:mt-0" />
+        <span>{CUSTODY_NOTE}</span>
+      </figcaption>
     </figure>
   );
 }
 
-/**
- * What the demo just showed, told once: where the money goes, as a diagram under the claim, then the
- * other facts as a ruled spec list (a term and its line) in the right half, its heading in the left.
- */
+/** Where the money goes, told once, on the ink band: the claim, centred, and the path under it. */
 export function WhereTheMoneyGoes() {
-  const [custody, ...rest] = PROPERTIES;
+  const [custody] = PROPERTIES;
   return (
-    <section aria-labelledby="money-title" className={SECTION}>
-      <div className={CONTAINER}>
-        <SectionHeader id="money-title" title={MONEY_TITLE} lead={custody === undefined ? undefined : unbroken(custody.text)} />
-        <div className="mt-10 lg:mt-12">
-          <CustodyPath />
-        </div>
-        {/* The heading's first line on the list's first term's baseline, as every header's is. */}
-        <div className={cn(GRID, "mt-16 gap-y-6 lg:items-baseline")}>
-          <div data-column="left" className={LEFT}>
-            <h3 className="text-heading font-semibold">For platforms that sell credits</h3>
-            <p className="mt-2 max-w-sm text-pretty text-body-foreground">{PROPERTIES_LEAD}</p>
+    <section aria-labelledby="money-title" className={cn(INK, "border-b")}>
+      <div className={cn(CONTAINER, SECTION, "border-ink-border")}>
+        <Intro id="money-title" align="center" eyebrow={EYEBROWS.custody} title={MONEY_TITLE}
+          lead={custody === undefined ? undefined : unbroken(custody.text)} />
+        <div className="mt-14 lg:mt-16"><CustodyPath /></div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * A feature: what it shows (a figure, a meter, a list) in the card's top half, over a rule, and
+ * its title and line under it. Every card shares that two-part grid.
+ */
+function FeatureCard({ title, text, className, children }: { title: string; text: string; className?: string; children: ReactNode }) {
+  return (
+    <div className={cn("flex min-w-0 flex-col rounded-xl border bg-card shadow-card", className)}>
+      <div className="flex min-h-44 flex-col justify-center border-b px-6 py-7 sm:px-8">{children}</div>
+      <div className="px-6 py-7 sm:px-8">
+        <h3 className="text-heading font-semibold">{title}</h3>
+        <p className="mt-2 text-pretty text-body-foreground">{unbroken(text)}</p>
+      </div>
+    </div>
+  );
+}
+
+/** A small label inside a card, in the eyebrow's type. */
+const CARD_LABEL = "font-mono text-eyebrow text-muted-foreground uppercase";
+
+/**
+ * The time to credit as a meter: one bar per chain on one scale (Ethereum's ~30 s is the whole
+ * track), one colour, each value printed at its end. Static widths: the page carries no style
+ * attributes (the CSP).
+ */
+function CreditTimes() {
+  const widths = ["w-[23%]", "w-full"];
+  return (
+    <figure>
+      <figcaption className={CARD_LABEL}>{CREDIT_TIMES.caption}</figcaption>
+      <dl className="mt-5 grid grid-cols-[5.5rem_minmax(0,1fr)_3.5rem] items-center gap-x-4 gap-y-3.5">
+        {CREDIT_TIMES.rows.map(({ chain, value }, index) => (
+          <div key={chain} className="contents">
+            <dt className="text-sm font-medium">{chain}</dt>
+            <dd aria-hidden="true" className="h-2 rounded-full bg-muted"><span className={cn("block h-full rounded-full bg-brand-ink", widths[index])} /></dd>
+            <dd className="text-right font-mono text-sm tabular-nums">{value}</dd>
           </div>
-          <dl data-column="right" className={cn(RIGHT, "border-t")}>
-            {rest.map(({ title, text }) => (
-              <div key={title} className="grid gap-1.5 border-b py-5 xl:grid-cols-[10rem_minmax(0,1fr)] xl:gap-6">
-                <dt className="font-semibold">{title}</dt>
-                <dd className="leading-7 text-pretty text-body-foreground">{unbroken(text)}</dd>
-              </div>
-            ))}
-          </dl>
+        ))}
+      </dl>
+      <p className="mt-4 text-sm text-muted-foreground">{CREDIT_TIMES.note}</p>
+    </figure>
+  );
+}
+
+function Chips({ label, items }: { label: string; items: string[] }) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <p className={cn(CARD_LABEL, "sm:w-24 sm:shrink-0")}>{label}</p>
+      <ul className="flex flex-wrap gap-2">
+        {items.map((item) => (
+          <li key={item} className="inline-flex h-7 items-center rounded-md border bg-muted/50 px-2 font-mono text-mono">{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** What it is for, and four facts as a grid of cards: wide and narrow, then narrow and wide. */
+export function Features() {
+  const [, fee, speed, verify, api] = PROPERTIES;
+  if (fee === undefined || speed === undefined || verify === undefined || api === undefined) return null;
+  return (
+    <section aria-labelledby="features-title" className="border-b">
+      <div className={cn(CONTAINER, SECTION)}>
+        <Intro id="features-title" eyebrow={EYEBROWS.features} title={FEATURES_TITLE} lead={PROPERTIES_LEAD} />
+        <div className="mt-12 grid gap-4 lg:mt-14 lg:grid-cols-12 lg:gap-6">
+          <FeatureCard className="lg:col-span-5" title={fee.title} text={fee.text}>
+            <p className="text-display-sm font-semibold tabular-nums sm:text-display">{FEE_FIGURE.value}</p>
+            <p className={cn(CARD_LABEL, "mt-2")}>{FEE_FIGURE.label}</p>
+          </FeatureCard>
+          <FeatureCard className="lg:col-span-7" title={speed.title} text={speed.text}><CreditTimes /></FeatureCard>
+          <FeatureCard className="lg:col-span-7" title={api.title} text={api.text}>
+            <div className="flex flex-col gap-4">
+              <Chips label="SDKs" items={SDK_PACKAGES} />
+              <Chips label="Webhooks" items={WEBHOOK_EVENTS} />
+            </div>
+          </FeatureCard>
+          <FeatureCard className="lg:col-span-5" title={verify.title} text={verify.text}>
+            <ul className="flex flex-col gap-3 text-sm">
+              {VERIFY_CHECKS.map((item) => (
+                <li key={item} className="flex items-center gap-2.5">
+                  <span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center rounded-full bg-brand text-brand-foreground">
+                    <Check strokeWidth={2.5} className="size-3" />
+                  </span>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </FeatureCard>
         </div>
       </div>
     </section>
@@ -388,20 +536,36 @@ export function WhereTheMoneyGoes() {
 const list = new Intl.ListFormat("en", { type: "conjunction" });
 
 /**
- * The comparison's summary: from md a table, Phala Pay's column set apart by a tint and a rule above
- * it; on a phone, Phala Pay beside one provider at a time.
+ * Phala Pay's column in a comparison table: a rule in the brand's colour above its heading and a
+ * faint lime tint down it, a highlight rather than a fill, in either theme. Its text stays in the
+ * foreground colour.
+ */
+export const PHALA_COLUMN = "border-t-2 border-t-brand-ink bg-brand/10 text-foreground";
+/** A cell of Phala Pay's column. */
+export const PHALA_CELL = "bg-brand/10 text-foreground";
+/** A comparison table in its frame: the window's radius, the card's edge and shadow. */
+export const TABLE_FRAME = "overflow-hidden rounded-xl border bg-card shadow-card";
+
+/**
+ * The comparison's summary: from lg a framed table, Phala Pay's column set apart; below lg, Phala Pay
+ * beside one provider at a time.
  */
 export function CompareTeaser() {
   const [phala, ...others] = TEASER.vendors;
+  const more = (
+    <Button asChild variant="secondary" className="group">
+      <a href="/compare">See the full comparison<ArrowRight {...ICON} className={NUDGE} /></a>
+    </Button>
+  );
   return (
-    <section aria-labelledby="compare-title" className={cn(SECTION, "border-t")}>
-      <div className={CONTAINER}>
-        <SectionHeader
-          id="compare-title"
-          title="How Phala Pay compares"
-          lead={<>Beside {list.format(others.map(({ name }) => name))}, as each states it. The full comparison adds {list.format(TEASER_OTHERS)}, with a source for every value.</>}
-        />
-        <div className="mt-10 hidden lg:block">
+    <section aria-labelledby="compare-title" className="border-b">
+      <div className={cn(CONTAINER, SECTION)}>
+        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-6">
+          <Intro id="compare-title" eyebrow={EYEBROWS.compare} title="How Phala Pay compares"
+            lead={<>Beside {list.format(others.map(({ name }) => name))}, as each states it. The full comparison adds {list.format(TEASER_OTHERS)}, with a source for every value.</>} />
+          <div className="hidden lg:block">{more}</div>
+        </div>
+        <div className={cn(TABLE_FRAME, "mt-12 hidden lg:block")}>
           {/* Four equal columns, on the grid's quarters: the dimension, then each provider. */}
           <table className="w-full table-fixed border-collapse text-left">
             <caption className="sr-only">{list.format(TEASER.vendors.map(({ name }) => name))} on {TEASER.dimensions.length} dimensions.</caption>
@@ -410,10 +574,10 @@ export function CompareTeaser() {
               {TEASER.vendors.map(({ id }) => <col key={id} className="w-1/4" />)}
             </colgroup>
             <thead>
-              <tr>
+              <tr className="border-b bg-surface">
                 <td />
                 {TEASER.vendors.map(({ id, name }) => (
-                  <th key={id} scope="col" className={cn("border-t-2 px-6 pt-4 pb-4 align-bottom text-base font-semibold", id === phala?.id ? PHALA_COLUMN : "border-transparent text-body-foreground")}>
+                  <th key={id} scope="col" className={cn("px-6 py-4 align-bottom text-base font-semibold", id === phala?.id ? PHALA_COLUMN : "text-body-foreground")}>
                     {name}
                   </th>
                 ))}
@@ -421,65 +585,54 @@ export function CompareTeaser() {
             </thead>
             <tbody>
               {TEASER.dimensions.map(({ key, label }) => (
-                <tr key={key} className="border-t">
-                  <th scope="row" className="py-6 pr-6 align-top text-sm/7 font-medium text-muted-foreground">{label}</th>
+                <tr key={key} className="border-b last:border-b-0">
+                  <th scope="row" className="px-6 py-5 align-top text-sm/7 font-medium">{label}</th>
                   {TEASER.vendors.map((vendor) => (
-                    <td key={vendor.id} className={cn("px-6 py-6 align-top text-base/7 text-pretty", vendor.id === phala?.id ? PHALA_CELL : "text-body-foreground")}>
+                    <td key={vendor.id} className={cn("px-6 py-5 align-top text-base/7 text-pretty", vendor.id === phala?.id ? PHALA_CELL : "text-body-foreground")}>
                       <ComparisonCell cell={vendor[key]} linkSource={false} />
                     </td>
                   ))}
                 </tr>
               ))}
             </tbody>
-            {/* The table's footer: the way to the full comparison, at its right edge. */}
-            <tfoot>
-              <tr className="border-t">
-                <td colSpan={TEASER.vendors.length + 1} className="pt-4 text-right">
-                  <a href="/compare" className={cn(TEXT_LINK, "inline-flex min-h-11 items-center text-sm")}>See the full comparison</a>
-                </td>
-              </tr>
-            </tfoot>
           </table>
         </div>
         {phala !== undefined && (
-          <Versus phala={phala} others={others} dimensions={TEASER.dimensions} linkSource={false} name="teaser-versus" className="mt-8 lg:hidden" />
+          <Versus phala={phala} others={others} dimensions={TEASER.dimensions} linkSource={false} name="teaser-versus" className="mt-10 lg:hidden" />
         )}
-        <a href="/compare" className={cn(TEXT_LINK, "mt-6 inline-flex min-h-11 items-center text-sm lg:hidden")}>
-          See the full comparison
-        </a>
+        <div className="mt-8 lg:hidden">{more}</div>
       </div>
     </section>
   );
 }
 
 /**
- * Phala Pay's column in a comparison table: a rule above its heading and a faint tint down it, a
- * highlight rather than a fill, in either theme.
+ * The questions, each answer folded under it natively (no script, so it works before and without
+ * hydration), in two thirds of the grid; their heading in the first third, its first line on the
+ * first question's baseline, staying in view beside them from lg.
  */
-export const PHALA_COLUMN = "border-foreground bg-foreground/3 text-foreground";
-/** A cell of Phala Pay's column. */
-export const PHALA_CELL = "bg-foreground/3 text-foreground";
-
-/** Each answer folds under its question, natively: no script, so it works before and without hydration. */
 export function Faq() {
   return (
-    <section aria-labelledby="faq-title" className={cn(SECTION, "border-t")}>
-      {/* The section's header, as every section's; the questions under its introduction. */}
-      <div className={CONTAINER}>
-        <SectionHeader
-          id="faq-title"
-          title="Frequently asked questions"
-          lead={<>Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.</>}
-        />
-        <div className={cn(GRID, "mt-8")}>
-          <div data-column="right" className={cn(RIGHT, "border-t")}>
+    <section aria-labelledby="faq-title" className="border-b bg-surface">
+      <div className={cn(CONTAINER, SECTION)}>
+        <Eyebrow>{EYEBROWS.faq}</Eyebrow>
+        <div data-layout="aside" className={cn(GRID, "mt-4 gap-y-10 lg:items-baseline")}>
+          <div data-column="left" className={cn(ASIDE, "lg:sticky lg:top-28 lg:self-start")}>
+            <h2 id="faq-title" className={H2}>Frequently asked questions</h2>
+            <p className={cn(LEAD, "mt-5")}>
+              Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.
+            </p>
+          </div>
+          <div data-column="right" className={cn(MAIN, "border-t")}>
             {FAQ.map(({ question, answer }) => (
               <details key={question} className="group border-b">
-                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-4 text-base font-medium sm:text-lg [&::-webkit-details-marker]:hidden">
+                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-5 text-base font-medium sm:text-lg [&::-webkit-details-marker]:hidden">
                   {question}
-                  <Plus {...ICON} className="size-5 shrink-0 text-muted-foreground group-open:rotate-45 motion-safe:transition-transform" />
+                  <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-card">
+                    <Plus strokeWidth={1.75} className="size-4 group-open:rotate-45 motion-safe:transition-transform" />
+                  </span>
                 </summary>
-                <p className="pr-10 pb-6 leading-7 text-pretty text-body-foreground">{unbroken(answer)}</p>
+                <p className="max-w-2xl pb-7 leading-7 text-pretty text-body-foreground sm:pr-14">{unbroken(answer)}</p>
               </details>
             ))}
           </div>
@@ -490,22 +643,23 @@ export function Faq() {
 }
 
 /**
- * The close: a band of its own, as the demo's is, with the call to deploy, and beside it the one
- * command that does.
+ * The close, on the ink band: the mark, the call to deploy in the brand's colour (its one filled
+ * button on the page), and under it the one command that does.
  */
 export function ClosingCta({ command }: { command: ReactNode }) {
   return (
-    <section aria-labelledby="closing-title" className="border-t bg-surface py-16 lg:py-20">
-      <div data-align="center" className={cn(CONTAINER, GRID, "gap-y-10 lg:items-center")}>
-        <div data-column="left" className={LEFT}>
-          <h2 id="closing-title" className={H2}>{CLOSING_TITLE}</h2>
-          <p className={cn(LEAD, "mt-4 max-w-md")}>{CLOSING_LEAD}</p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <Button asChild size="lg"><a href={LINKS.deploy}>Start a testnet instance</a></Button>
+    <section aria-labelledby="closing-title" className={INK}>
+      <div className={cn(CONTAINER, "border-ink-border py-24 lg:py-32")}>
+        <div className="mx-auto flex max-w-2xl flex-col items-center text-center">
+          <Mark className="size-12" />
+          <h2 id="closing-title" className={cn(H2, "mt-8")}>{CLOSING_TITLE}</h2>
+          <p className={cn(LEAD, "mt-5")}>{CLOSING_LEAD}</p>
+          <div className="mt-10 flex w-full flex-col justify-center gap-3 sm:w-auto sm:flex-row">
+            <DeployButton variant="brand" />
             <Button asChild size="lg" variant="secondary"><a href={LINKS.repo}>View on GitHub</a></Button>
           </div>
         </div>
-        <div data-column="right" className={RIGHT}>{command}</div>
+        <div className="mx-auto mt-14 max-w-2xl">{command}</div>
       </div>
     </section>
   );
@@ -574,25 +728,31 @@ const FOOTER: { title: string; links: { href: string; label: string }[] }[] = [
   },
 ];
 
+/**
+ * The brand in the first third (the name, the line, the release's status), the links in the other
+ * two: the brand's name and the columns' titles on one baseline.
+ */
 export function SiteFooter() {
   return (
     <footer className="border-t">
-      <div className={cn(CONTAINER, GRID, "gap-y-12 pt-14 pb-10 text-sm lg:items-baseline lg:pt-16")}>
-        <div data-column="left" className={LEFT}>
+      <div data-layout="aside" className={cn(CONTAINER, GRID, "gap-y-12 pt-16 pb-10 text-sm lg:items-baseline")}>
+        <div data-column="left" className={ASIDE}>
           <Lockup />
-          <p className="mt-4 max-w-xs text-pretty text-muted-foreground">{TAGLINE}. Open source, self-hosted, on Ethereum and Base.</p>
+          <p className="mt-4 max-w-xs text-pretty text-body-foreground">{TAGLINE}. Open source, self-hosted, on Ethereum and Base.</p>
+          <p className="mt-6 inline-flex h-7 items-center gap-2 rounded-full border px-3 text-muted-foreground">
+            <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />{HERO_META}
+          </p>
         </div>
-        {/* Four columns of links where they fit (from sm, and from xl beside the brand); two by two
-            in the right half between lg and xl, where four would break their names. */}
-        <div data-column="right" className={cn(RIGHT, "grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4")}>
+        {/* Four columns of links where they fit (from sm), two by two on a phone. */}
+        <div data-column="right" className={cn(MAIN, "grid grid-cols-2 gap-x-8 gap-y-10 sm:grid-cols-4")}>
           {FOOTER.map((column) => (
             <nav key={column.title} aria-label={column.title}>
-              <p className="font-medium text-foreground">{column.title}</p>
+              <p className="font-mono text-eyebrow font-medium text-muted-foreground uppercase">{column.title}</p>
               {/* Rows 44px tall for touch, 32px from md. */}
               <ul className="mt-3">
                 {column.links.map(({ href, label }) => (
                   <li key={label}>
-                    <a className="inline-flex min-h-11 items-center text-muted-foreground transition-colors hover:text-foreground md:min-h-8" href={href}>
+                    <a className="inline-flex min-h-11 items-center text-body-foreground transition-colors hover:text-foreground md:min-h-8" href={href}>
                       {label}
                     </a>
                   </li>
@@ -601,7 +761,10 @@ export function SiteFooter() {
             </nav>
           ))}
         </div>
-        <p className="border-t pt-8 text-muted-foreground lg:col-span-12">© 2026 Phala Network</p>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t pt-8 text-muted-foreground lg:col-span-12">
+          <p>© 2026 Phala Network</p>
+          <a href={LINKS.license} className="transition-colors hover:text-foreground">Apache-2.0</a>
+        </div>
       </div>
     </footer>
   );

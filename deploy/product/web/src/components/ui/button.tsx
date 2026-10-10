@@ -5,7 +5,8 @@ import { Slot } from "radix-ui"
 
 /**
  * Three sizes: sm (32px) for rows and toolbars, md (40px, the default) for forms, lg (44px) for a
- * form's main action. One primary per form; secondary is the outlined button.
+ * form's main action. One primary per form; secondary is the outlined button; brand, Phala's lime
+ * behind dark text, is the one call to action on an ink band.
  */
 const buttonVariants = cva(
   "group/button inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-colors select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -14,7 +15,8 @@ const buttonVariants = cva(
       variant: {
         primary: "bg-primary text-primary-foreground hover:bg-primary/90",
         secondary:
-          "border-border bg-background text-foreground hover:bg-muted aria-expanded:bg-muted dark:border-input dark:bg-input/20 dark:hover:bg-input/40",
+          "border-border bg-background text-foreground shadow-card hover:bg-muted aria-expanded:bg-muted dark:border-input dark:bg-input/20 dark:hover:bg-input/40",
+        brand: "bg-brand text-brand-foreground hover:bg-brand/90",
         ghost:
           "text-foreground hover:bg-muted aria-expanded:bg-muted dark:hover:bg-muted/50",
         destructive:

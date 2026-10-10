@@ -99,10 +99,10 @@ export function Product({
     />
   );
   return (
-    <Card role="region" aria-labelledby="product-title">
+    <Card role="region" aria-labelledby="product-title" className="flex-1 rounded-xl shadow-frame">
       {/* One row: whose page this is (with the testnet mark while the network is a testnet), and
           the balance the payment moves. */}
-      <CardHeader className="items-center py-3 sm:py-3">
+      <CardHeader className="items-center rounded-t-xl bg-muted/40 py-3 sm:py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <CardTitle id="product-title">Customer view</CardTitle>

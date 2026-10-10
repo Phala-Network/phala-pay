@@ -2,29 +2,30 @@ import { cn } from "@/lib/utils";
 import { ComparisonCell } from "./ComparisonCell.js";
 import { COMPARE_ACCESSED, competitors, dimensions, phalaPay, sources } from "./content/compare.js";
 import { GRID, LEFT, RIGHT } from "./layout.js";
-import { CONTAINER, H2, LEAD, LINKS, PHALA_CELL, PHALA_COLUMN, TEXT_LINK } from "./Site.js";
+import { CONTAINER, Eyebrow, H2, LEAD, LINKS, PHALA_CELL, PHALA_COLUMN, TABLE_FRAME, TEXT_LINK } from "./Site.js";
 import { Versus } from "./Versus.js";
 
 const vendors = [phalaPay, ...competitors];
 const SECTION = "scroll-mt-20 border-t pt-12 lg:pt-16";
 
 /**
- * From xl, the whole table: six vendors, ten dimensions, no scrolling. Phala Pay's column is marked
- * by a rule above it and a tint. Below xl, where six columns would crowd, one provider at a time
- * beside Phala Pay (Versus).
+ * From xl, the whole table in its frame: six vendors, ten dimensions, no scrolling. Phala Pay's
+ * column is marked by a rule above it and a tint. Below xl, where six columns would crowd, one
+ * provider at a time beside Phala Pay (Versus).
  */
 function ComparisonTable() {
   return (
-    <table className="mt-8 hidden w-full table-fixed border-collapse text-left text-sm xl:table">
+    <div className={cn(TABLE_FRAME, "mt-10 hidden xl:block")}>
+    <table className="w-full table-fixed border-collapse text-left text-sm">
       <caption className="sr-only">Phala Pay and five crypto payment services, compared across ten dimensions.</caption>
       <thead>
-        <tr>
-          <th scope="col" className="w-40 pr-4 pb-4 align-bottom text-xs font-medium tracking-wider text-muted-foreground uppercase">
+        <tr className="border-b bg-surface">
+          <th scope="col" className="w-44 py-4 pr-4 pl-5 align-bottom font-mono text-eyebrow font-medium text-muted-foreground uppercase">
             Dimension
           </th>
           {vendors.map(({ id, name }) => (
             <th key={id} scope="col"
-              className={cn("border-t-2 px-4 pt-4 pb-4 align-bottom text-table font-semibold", id === phalaPay.id ? PHALA_COLUMN : "border-transparent text-body-foreground")}>
+              className={cn("px-4 pt-4 pb-4 align-bottom text-table font-semibold", id === phalaPay.id ? PHALA_COLUMN : "text-body-foreground")}>
               {name}
             </th>
           ))}
@@ -32,8 +33,8 @@ function ComparisonTable() {
       </thead>
       <tbody>
         {dimensions.map(({ key, label }) => (
-          <tr key={key} className="border-t">
-            <th scope="row" className="py-4 pr-4 align-top font-medium">
+          <tr key={key} className="border-b last:border-b-0">
+            <th scope="row" className="py-4 pr-4 pl-5 align-top font-medium">
               {label}
             </th>
             {vendors.map((vendor) => (
@@ -45,6 +46,7 @@ function ComparisonTable() {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 
@@ -63,10 +65,10 @@ const FIT = [
 export function ComparePage() {
   return (
     <main id="top" className={`${CONTAINER} flex-1 pt-14 pb-20 sm:pt-20 lg:pb-28`}>
-      <p className="text-sm font-medium text-muted-foreground">Compare</p>
-      {/* The site's one header pattern (src/Site.tsx): the title in the left half, the
-          introduction in the right, their first lines on one baseline. */}
-      <div className={cn(GRID, "mt-3 gap-y-4 lg:items-baseline")}>
+      <Eyebrow>Compare</Eyebrow>
+      {/* The split header (src/layout.ts): the title in the left half, the introduction in the
+          right, their first lines on one baseline. */}
+      <div data-layout="split" className={cn(GRID, "mt-4 gap-y-4 lg:items-baseline")}>
         <h1 data-column="left" className={cn(H2, LEFT)}>How Phala Pay compares</h1>
         <div data-column="right" className={RIGHT}>
           <p className={LEAD}>Custody, fees, chains, speed, and refunds across six ways to accept crypto, each as its vendor states it, with a source for every value.</p>
@@ -75,11 +77,12 @@ export function ComparePage() {
           </p>
         </div>
       </div>
-      <nav aria-label="On this page" className="mt-10 border-y">
+      <nav aria-label="On this page" className="mt-12 border-y">
         <ul className="flex flex-wrap gap-x-8 text-sm">
-          {CONTENTS.map(({ href, label }) => (
+          {CONTENTS.map(({ href, label }, index) => (
             <li key={href}>
-              <a href={href} className="inline-flex min-h-12 items-center font-medium text-muted-foreground transition-colors hover:text-foreground">
+              <a href={href} className="inline-flex min-h-12 items-center gap-2.5 font-medium text-muted-foreground transition-colors hover:text-foreground">
+                <span aria-hidden="true" className="font-mono text-eyebrow text-muted-foreground">0{index + 1}</span>
                 {label}
               </a>
             </li>
@@ -100,13 +103,13 @@ export function ComparePage() {
       <section id="fit" aria-labelledby="fit-title" className={cn(SECTION, "mt-16 lg:mt-24")}>
         <h2 id="fit-title" className={H2}>Where each fits</h2>
         {/* Three columns of the page's grid, four of its twelve each. */}
-        <div className={cn(GRID, "mt-10 gap-y-10")}>
+        <div className={cn(GRID, "mt-10 gap-y-4")}>
           {FIT.map(({ title, text }, index) => (
-            <div key={title} className={cn("border-t-2 pt-5 lg:col-span-4", index === FIT.length - 1 ? "border-foreground" : "border-border")}>
+            <div key={title} className={cn("flex flex-col rounded-xl border bg-card p-6 shadow-card lg:col-span-4", index === FIT.length - 1 && "border-brand-ink/70 ring-1 ring-brand-ink/30")}>
               <h3 className="text-heading font-semibold">{title}</h3>
               <p className="mt-2 text-pretty text-body-foreground">{text}</p>
               {index === FIT.length - 1 && (
-                <a href={LINKS.deploy} className={cn(TEXT_LINK, "mt-3 inline-flex min-h-11 items-center text-sm")}>Start a testnet instance</a>
+                <a href={LINKS.deploy} className={cn(TEXT_LINK, "mt-auto inline-flex min-h-11 items-center self-start pt-3 text-sm")}>Start a testnet instance</a>
               )}
             </div>
           ))}
@@ -114,7 +117,7 @@ export function ComparePage() {
       </section>
 
       <section id="sources" aria-labelledby="sources-title" className={cn(SECTION, "mt-16 lg:mt-24")}>
-        <div className={cn(GRID, "gap-y-6 lg:items-baseline")}>
+        <div data-layout="split" className={cn(GRID, "gap-y-6 lg:items-baseline")}>
           <div data-column="left" className={LEFT}>
             <h2 id="sources-title" className={H2}>Sources</h2>
             <p className="mt-3 text-sm text-muted-foreground">All accessed {COMPARE_ACCESSED}.</p>
