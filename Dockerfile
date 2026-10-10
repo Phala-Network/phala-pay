@@ -22,15 +22,15 @@ RUN SQLX_OFFLINE=true SOURCE_COMMIT="$SOURCE_COMMIT" \
 # Stripe's smokescreen, the webhook egress proxy (docs/design/multi-tenant.md §8), which the
 # compose runs from this image as the `smokescreen` sidecar, so it is pinned and attested with
 # the service's digest (deploy/README.md, "Webhook egress"). Stripe publishes no image: this builds
-# tag v0.1.0's commit with a pinned Logrus security update and the local toolchain.
-FROM golang:1.27.1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5 AS smokescreen
+# tag v0.1.0's commit with pinned Logrus and x/net security updates and the local toolchain.
+FROM golang:1.27.2-trixie@sha256:e58d6f83b3416618d8bcac2b3dde1b7f7e3c4a77d25e88637f8bbae81536c48d AS smokescreen
 
 WORKDIR /src
 RUN git init -q . \
     && git fetch -q --depth 1 https://github.com/stripe/smokescreen.git \
         609eb8931420453daf5893509be0b25b21bd9edb \
     && git checkout -q FETCH_HEAD \
-    && GOTOOLCHAIN=local go get github.com/sirupsen/logrus@v1.9.3 \
+    && GOTOOLCHAIN=local go get github.com/sirupsen/logrus@v1.9.3 golang.org/x/net@v0.60.0 \
     && GOTOOLCHAIN=local go mod vendor \
     && CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=vendor \
         go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o /out/smokescreen .
