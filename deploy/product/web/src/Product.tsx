@@ -554,7 +554,8 @@ function QuoteCheckout({
  */
 function Credited({ session, account, bps }: { session: CreatedQuote; account: Account; bps: number }) {
   const row = account.payments.find((each) => each.quote === session.quote && each.id.startsWith("dep_"));
-  const bonus = row === undefined ? undefined : (row.bonus ?? 0);
+  // The bonus once the ledger has credited it: `null` on a row polled before then, as no row.
+  const bonus = row?.bonus ?? undefined;
   const symbol = session.asset.toUpperCase();
   const pending = <Skeleton className="h-[1lh] w-16" />;
   return (

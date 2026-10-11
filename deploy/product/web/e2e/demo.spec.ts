@@ -1828,6 +1828,54 @@ test("the demo is a section like the others: their padding, label, heading, and 
   await expect(page.getByRole("heading", { level: 2, name: "Try it on testnet" })).toBeInViewport();
 });
 
+test("a credit whose bonus the ledger has not applied yet shows the bonus pending, never as $0.00", async ({ page }) => {
+  test.setTimeout(180_000);
+  await installWallet(page);
+  // The race: the checkout reports the quote credited while the account, polled a moment before
+  // the ledger applied the webhook, still lists its deposit with no bonus (`bonus: null`). Served
+  // so until released.
+  let held = true;
+  await page.route(`${env("API_URL")}/api/account`, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { payments: { id: string; bonus: number | null }[] };
+    if (held) body.payments = body.payments.map((row) => (row.id.startsWith("dep_") ? { ...row, bonus: null } : row));
+    await route.fulfill({ response, json: body });
+  });
+  const product = page.getByRole("region", { name: "Customer view" });
+  await page.goto(env("SITE_URL"));
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  const testTokens = page.getByRole("note", { name: "Test tokens" });
+  await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
+  await expect(testTokens).toContainText("Minted:");
+  // Every text the confirmation shows, from its first frame.
+  await product.evaluate((card) => {
+    const seen = new Set<string>();
+    Object.assign(window, { confirmations: seen });
+    new MutationObserver(() => {
+      const confirmation = card.querySelector("[data-testid=payment-credited]");
+      if (confirmation !== null) seen.add(confirmation.textContent);
+    }).observe(card, { subtree: true, childList: true, characterData: true });
+  });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await expect(product.locator(".pp-summary")).toContainText("80 PHA");
+  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  const confirmation = product.getByTestId("payment-credited");
+  await expect(confirmation).toBeVisible({ timeout: 60_000 });
+  // The deposit's row, credited but without its bonus, has arrived: the bonus and the total wait
+  // in their places.
+  await page.waitForResponse(async (response) => response.url() === `${env("API_URL")}/api/account` &&
+    ((await response.json()) as { payments: { id: string }[] }).payments.some((row) => row.id.startsWith("dep_")));
+  await expect(confirmation).toContainText("PHA bonus +10%");
+  await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
+  // Released, the next poll brings the bonus: $2.00 on the $20.00 credit.
+  held = false;
+  await expect(product.getByTestId("bonus-credited")).toContainText("+$2.00", { timeout: 30_000 });
+  await expect(confirmation).toContainText("Total$22.00");
+  const shown = await page.evaluate(() => [...(window as unknown as { confirmations: Set<string> }).confirmations]);
+  expect(shown.length, "the confirmation's texts").toBeGreaterThan(0);
+  expect(shown.filter((text) => text.includes("+$0.00") || /Total\$(?!22\.00)/.test(text)), "a bonus of $0.00 or a wrong total").toEqual([]);
+});
+
 test("the demo's states move nothing on the page: one height in each state and on each tab, no layout shift, nothing clipped", async ({ page }) => {
   test.setTimeout(600_000);
   await installWallet(page);
@@ -1855,9 +1903,11 @@ test("the demo's states move nothing on the page: one height in each state and o
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const section = page.locator(DEMO_SECTION);
   // From lg, where the two panels sit side by side, the section is one height in every state and
-  // on every tab (its first measure at each width), so nothing under it moves; on a phone, where
-  // they stack, the customer's view, which changes with the payment, is one height in every state.
+  // on every tab (its first measure at each width), so nothing under it moves; where they stack,
+  // the customer's view, which changes with the payment, is one height in every state the payment
+  // brings, and no taller than the form it starts from (src/index.css, --spacing-demo-view).
   const fixed = new Map<string, number>();
+  const idle = new Map<string, number>();
   const same = (key: string, value: number, where: string) => {
     if (!fixed.has(key)) fixed.set(key, value);
     expect(Math.abs(value - (fixed.get(key) ?? value)), `${where}: ${value} against ${fixed.get(key)}`).toBeLessThanOrEqual(1);
@@ -1876,7 +1926,14 @@ test("the demo's states move nothing on the page: one height in each state and o
         await openTab(scenes, tab);
         const where = `${state}, ${tab} tab, at ${width}×${height}`;
         if (width >= 1024) same(`${width}`, await section.evaluate((element) => element.getBoundingClientRect().height), where);
-        else same(`${width}`, await product.evaluate((element) => element.getBoundingClientRect().height), where);
+        else {
+          const view = await product.evaluate((element) => element.getBoundingClientRect().height);
+          if (state === "idle") idle.set(`${width}`, view);
+          else {
+            same(`${width}`, view, where);
+            expect(view, `${where}: against the form's ${idle.get(`${width}`)}`).toBeLessThanOrEqual((idle.get(`${width}`) ?? 0) + 1);
+          }
+        }
         // Its text at least 14px too, in every state and on every tab.
         expect(await smallText(page, DEMO_SECTION), `${where}: text under 14px`).toEqual([]);
       }

@@ -75,8 +75,11 @@
        payment goes through (e2e/demo.spec.ts measures every state and asserts the height holds):
        where the panels stack (a phone, a tablet), the customer's view, which the payment changes;
        from lg, where they sit side by side, their row. Each is measured at its layout's narrowest
-       width (390px for a phone, then sm, lg, xl; 2xl is no taller than xl), with 1rem to spare. */
-    --spacing-demo-view: 72rem;
+       width (390px for a phone, then sm, lg, xl; 2xl is no taller than xl), with 1rem to spare. On
+       a phone, the states a payment brings (paying, credited); the form it starts from is taller
+       only with a network of three tokens, and then as tall as its content: a payment never
+       grows the view. */
+    --spacing-demo-view: 68rem;
     --spacing-demo-view-sm: 56.5rem;
     --spacing-demo-lg: 69rem;
     --spacing-demo-xl: 54rem;

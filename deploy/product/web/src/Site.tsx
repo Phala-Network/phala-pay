@@ -1,6 +1,7 @@
 import { ArrowRight, Check, ChevronRight, FileCode2, Landmark, Menu, MoveDown, Plus, ShieldCheck, Wallet, X, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { CARD_INSET } from "@/components/ui/card";
 import { CopyButton } from "@/components/ui/copy-button";
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
@@ -471,8 +472,8 @@ export function WhereTheMoneyGoes() {
 function FeatureCard({ title, text, className, children }: { title: string; text: string; className?: string; children: ReactNode }) {
   return (
     <div data-feature className={cn("flex min-w-0 flex-col rounded-xl border bg-card shadow-card lg:row-span-2 lg:grid lg:grid-rows-subgrid lg:gap-y-0", className)}>
-      <div data-feature-well className="flex flex-col justify-center border-b px-7 py-9 sm:px-10 sm:py-10 2xl:px-12 2xl:py-12">{children}</div>
-      <div className="px-7 py-8 sm:px-10 sm:py-9 2xl:px-12 2xl:py-10">
+      <div data-feature-well className={cn("flex flex-col justify-center border-b py-9 sm:py-10 2xl:py-12", CARD_INSET)}>{children}</div>
+      <div className={cn("py-8 sm:py-9 2xl:py-10", CARD_INSET)}>
         <h3 className="text-heading font-semibold">{title}</h3>
         <p className="mt-3 max-w-measure text-pretty text-body-foreground lg:text-lg/7">{unbroken(text)}</p>
       </div>

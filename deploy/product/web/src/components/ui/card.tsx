@@ -19,9 +19,9 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 /**
- * A card's inset from its edges, the site's other cards' (src/Site.tsx, FeatureCard): 28px on a
- * phone, 40px from sm, 48px from 2xl. A part of the card outside its header, content, and footer
- * takes it too.
+ * A card's inset from its edges, the same for every card on the site (the demo's panels, the
+ * features in src/Site.tsx): 28px on a phone, 40px from sm, 48px from 2xl. A part of a card
+ * outside its header, content, and footer takes it too.
  */
 export const CARD_INSET = "px-7 sm:px-10 2xl:px-12"
 
