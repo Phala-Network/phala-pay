@@ -2151,20 +2151,27 @@ test("moving between pages keeps their server HTML: no hydration error, and noth
 
 test("a link to a part of a page opens the page at that part from its first frame", async ({ browser }) => {
   // The header's Demo link (/#demo) and the hero's call to deploy (a docs section): the new page's
-  // first frame is already at the part, not at the page's top for a frame before it, the browser's
-  // own scroll waiting for the page's scripts. Without motion, so no cross-fade covers a frame.
+  // first frame is already at the part, not at the page's top for a frame before it. The browser
+  // paints as it parses, and scrolls to the part only once the page's scripts have run. Measured
+  // where that shows: without motion (no cross-fade covers a frame), and on a slow device (the CPU
+  // throttled sixfold, as the CI runner's is slow), where the parser yields to the renderer before
+  // the page is parsed. The first frame is the page's first animation frame: rendering runs none
+  // before it.
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
   try {
     await context.addInitScript(() => {
       requestAnimationFrame(() => Object.assign(window, { firstFrameScroll: scrollY }));
     });
     const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
     const cases: [string, string, Locator, string][] = [
       ["/compare", "/#demo", page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Demo" }), "#demo"],
       ["/", "/docs/self-hosting#one-command-deploy", page.getByRole("link", { name: "Start a testnet instance" }).first(), "#one-command-deploy"],
     ];
     for (const [from, to, link, target] of cases) {
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
       await page.goto(new URL(from, env("SITE_URL")).href);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 6 });
       await Promise.all([page.waitForURL(new URL(to, env("SITE_URL")).href), link.click()]);
       await expect(page.locator(target)).toBeInViewport();
       const { first, now, top } = await page.evaluate((selector) => ({
@@ -2176,6 +2183,7 @@ test("a link to a part of a page opens the page at that part from its first fram
       expect(Math.abs(first - now), `${to}: the first frame at the part (${first}, then ${now})`).toBeLessThanOrEqual(1);
       expect(top, `${to}: the part under the header`).toBeGreaterThanOrEqual(0);
     }
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
   } finally {
     await context.close();
   }
