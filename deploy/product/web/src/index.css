@@ -71,10 +71,15 @@
     /* The page's side margins, outside its content: 24px on a phone and a tablet, 32px at 1280,
        40px at 1440, and growing with the viewport until the content reaches its full width. */
     --spacing-gutter: clamp(1.5rem, 5vw - 2rem, 6rem);
-    /* The demo's one height from xl, whatever its state or tab: the smallest screen it must
-       fit in one view (1280×800) less the 64px header. Every state fits inside it
-       (e2e/demo.spec.ts), so nothing under the demo moves as it changes. */
-    --spacing-demo: 46rem;
+    /* The demo's panels at the height of their tallest state and tab, so that nothing moves as a
+       payment goes through (e2e/demo.spec.ts measures every state and asserts the height holds):
+       where the panels stack (a phone, a tablet), the customer's view, which the payment changes;
+       from lg, where they sit side by side, their row. Each is measured at its layout's narrowest
+       width (390px for a phone, then sm, lg, xl; 2xl is no taller than xl), with 1rem to spare. */
+    --spacing-demo-view: 72rem;
+    --spacing-demo-view-sm: 56.5rem;
+    --spacing-demo-lg: 69rem;
+    --spacing-demo-xl: 54rem;
     /* Running text's measure: 36em, about 75 characters of Geist at any size (a lead's line is as
        long, in words, as a paragraph's), however wide its column. */
     --container-measure: 36em;

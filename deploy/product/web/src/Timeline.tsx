@@ -85,7 +85,7 @@ const STEP_COPY: Record<StepKey, { title: string; short: string; hint: string; f
 const PREVIEW: StepKey[] = ["quote_created", "sent", "received", "credited", "webhook_received", "final", "swept"];
 
 /**
- * The payment's steps as a stepper: a row of steps where its container is 32rem wide or more (a
+ * The payment's steps as a stepper: a row of steps where its container is 28rem wide or more (a
  * column each: its dot, its name, its time), else a list, so the names never crowd. Each step opens to what it waits for and its data, shown under the row,
  * so the row stays one line high and the backend's tabs keep their room. Times are real: the time
  * since sending for the steps after it, else the time it happened; for a step yet to happen, how
@@ -114,9 +114,9 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
     return (
       <ol className={STEPPER} aria-label={`Loading ${loading}`} aria-busy="true">
         {PREVIEW.map((key) => (
-          <li key={key} className="flex h-11 items-center gap-3 px-2 @lg:h-auto @lg:flex-col @lg:gap-2 @lg:py-2">
+          <li key={key} className="flex h-11 items-center gap-3 px-2 @md:h-auto @md:flex-col @md:gap-2 @md:py-2">
             <span className="size-3 rounded-full bg-muted motion-safe:animate-pulse" />
-            <span className="h-2.5 w-24 rounded-full bg-muted motion-safe:animate-pulse @lg:w-12" />
+            <span className="h-2.5 w-24 rounded-full bg-muted motion-safe:animate-pulse @md:w-12" />
           </li>
         ))}
       </ol>
@@ -155,8 +155,8 @@ export function EventStream({ timeline: timelineView, loading }: { timeline: Que
   );
 }
 
-/** The steps: a list in a narrow container, from 32rem a row of equal columns, however many steps there are. */
-const STEPPER = "flex flex-col @lg:grid @lg:auto-cols-fr @lg:grid-flow-col";
+/** The steps: a list in a narrow container, from 28rem a row of equal columns, however many steps there are. */
+const STEPPER = "flex flex-col @md:grid @md:auto-cols-fr @md:grid-flow-col";
 
 function StepDot({ state }: { state: Step["state"] }) {
   if (state === "current") {
@@ -225,7 +225,7 @@ function StreamStep({
   const elapsed = elapsedOf(step, sent);
   return (
     <li
-      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden @lg:before:top-4 @lg:before:right-[calc(-50%+0.75rem)] @lg:before:bottom-auto @lg:before:left-[calc(50%+0.75rem)] @lg:before:h-px @lg:before:w-auto @lg:before:translate-x-0 data-[state=complete]:before:bg-brand-ink"
+      className="relative before:absolute before:top-7.5 before:-bottom-3.5 before:left-4 before:w-px before:-translate-x-1/2 before:bg-border last:before:hidden @md:before:top-4 @md:before:right-[calc(-50%+0.75rem)] @md:before:bottom-auto @md:before:left-[calc(50%+0.75rem)] @md:before:h-px @md:before:w-auto @md:before:translate-x-0 data-[state=complete]:before:bg-brand-ink"
       data-step={step.key}
       data-state={step.state}
       aria-current={step.state === "current" ? "step" : undefined}
@@ -235,7 +235,7 @@ function StreamStep({
         aria-expanded={open}
         aria-controls={open ? details : undefined}
         onClick={onToggle}
-        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none @lg:flex @lg:flex-col @lg:items-center @lg:gap-1 @lg:px-1 @lg:py-2 @lg:text-center"
+        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none @md:flex @md:flex-col @md:items-center @md:gap-1 @md:px-1 @md:py-2 @md:text-center"
       >
         <StepDot state={step.state} />
         <span className="flex min-w-0 items-center gap-1.5">
@@ -247,24 +247,24 @@ function StreamStep({
               step.state === "failed" && "text-destructive",
             )}
           >
-            <span className="@lg:hidden">{copy.title}</span>
-            <span className="hidden @lg:inline">{copy.short}</span>
+            <span className="@md:hidden">{copy.title}</span>
+            <span className="hidden @md:inline">{copy.short}</span>
             <span className="sr-only">, {stateLabel(step.state)}</span>
           </span>
           <ChevronDown
-            className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded/trigger:rotate-180 motion-reduce:transition-none @lg:hidden"
+            className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded/trigger:rotate-180 motion-reduce:transition-none @md:hidden"
             aria-hidden="true"
           />
         </span>
-        <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums @lg:text-center @lg:text-sm/4">
+        <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums @md:text-center @md:text-sm/4">
           {elapsed !== null ? (
             `+${duration(elapsed)}`
           ) : step.at !== null ? (
             <time dateTime={new Date(step.at * 1000).toISOString()}>{clock(step.at)}</time>
           ) : (step.state === "upcoming" || step.state === "current") && usually !== undefined ? (
-            <><span className="@lg:hidden">usually </span>{usually}</>
+            <><span className="@md:hidden">usually </span>{usually}</>
           ) : since !== null ? (
-            <time dateTime={new Date(since * 1000).toISOString()}><span className="@lg:hidden">since </span>{clock(since)}</time>
+            <time dateTime={new Date(since * 1000).toISOString()}><span className="@md:hidden">since </span>{clock(since)}</time>
           ) : null}
         </span>
       </button>

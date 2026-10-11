@@ -28,7 +28,7 @@ export const DEMO_STATUS = "Live on Sepolia and Base Sepolia";
 export const DEMO_LEAD = "Pay with test tokens and watch the backend follow the payment.";
 
 // Each section's label above its heading.
-export const EYEBROWS = { custody: "Custody", features: "Why Phala Pay", compare: "Compare", faq: "FAQ" };
+export const EYEBROWS = { demo: "Live demo", custody: "Custody", features: "Why Phala Pay", compare: "Compare", faq: "FAQ" };
 export const FEATURES_TITLE = "For platforms that sell credits";
 export const PROPERTIES_LEAD = "Top-ups and credits for apps and platforms, such as AI APIs, cloud, and compute.";
 // Where a payment goes, as docs/overview.md and docs/integration.md §1.6 describe it: the headline

@@ -1,7 +1,7 @@
 import { ExternalLink, ReceiptText, Undo2, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { CARD_INSET, Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Hash } from "@/components/ui/hash";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -52,9 +52,9 @@ export function Backend({
   const status = selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done";
   return (
     <Card role="complementary" aria-label="Your backend" className="flex-1 rounded-xl shadow-frame">
-      {/* The ids follow the title rather than the card's far edge: where an id arrives, or grows,
+      {/* The title and the stream's status, and under them the ids: where an id arrives, or grows,
           nothing before it moves. */}
-      <CardHeader className="items-center justify-start gap-y-1 rounded-t-xl bg-muted/40 py-3 sm:py-3">
+      <CardHeader className="flex-col gap-y-1 rounded-t-xl bg-muted/40">
         <div className="flex min-w-0 items-baseline gap-x-3">
           <CardTitle>Your backend</CardTitle>
           <p className="text-sm text-muted-foreground">
@@ -68,10 +68,8 @@ export function Backend({
             <span className="text-foreground" data-testid="stream-status">
               {status}
             </span>
-            {selected === null ? "" : ` · ${selected.kind === "quote" ? "quote" : "deposit"}`}
           </p>
         </div>
-        {/* The ids beside the title where they fit, else on a line of their own under it. */}
         <dl className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
           {account !== null && selected === null && <MetaItem label="Workspace" value={account.account_id} testId="meta-workspace" />}
           {/* The workspace's line kept while the account loads (as the page is prerendered), so the
@@ -89,7 +87,7 @@ export function Backend({
         </dl>
       </CardHeader>
       {/* The stepper, one row high; opened steps add their details under it. */}
-      <div className="@container px-4 py-2 sm:px-6 2xl:px-8" aria-live="off">
+      <div className={cn("@container py-4", CARD_INSET)} aria-live="off">
         <EventStream timeline={timelineView} loading={selected?.id ?? null} />
         {timelineView.data !== undefined && <QueryState view={timelineView} />}
       </div>
@@ -98,7 +96,8 @@ export function Backend({
           variant="line"
           aria-label="Backend"
           // Five short names that fit a phone's width; should they not, the row wraps.
-          className="h-auto w-full flex-wrap justify-start gap-x-2 px-2 sm:px-4 2xl:px-6"
+          // Its tabs' labels on the card's inset (each trigger pads its label by 8px).
+          className="h-auto w-full flex-wrap justify-start gap-x-2 px-5 sm:px-8 2xl:px-10"
         >
           <Tab value="credits" count={account?.payments.length}>
             Credits
@@ -112,14 +111,14 @@ export function Backend({
           </Tab>
           <Tab value="trust">Trust</Tab>
         </TabsList>
-        <TabsContent value="credits" className="flex flex-col gap-3 px-4 py-4 sm:px-6 2xl:px-8">
+        <TabsContent value="credits" className={cn("flex flex-col gap-3 py-8", CARD_INSET)}>
           {addressView.data === undefined && <QueryState view={addressView} />}
           {accountView.error === null && (
             <CreditsTab account={account} selected={selected} address={addressView} networks={networks} onSelect={onSelect} />
           )}
           <QueryState view={accountView} />
         </TabsContent>
-        <TabsContent value="refunds" className="flex flex-col px-4 py-4 sm:px-6 2xl:px-8">
+        <TabsContent value="refunds" className={cn("flex flex-col py-8", CARD_INSET)}>
           {timeline === null || deposit === null || account === null ? (
             <EmptyState icon={Undo2} title="No deposit to refund">
               A credited payment can be refunded from the treasury once final.
@@ -131,10 +130,10 @@ export function Backend({
             </div>
           )}
         </TabsContent>
-        <TabsContent value="sweeps" className="flex flex-col px-4 py-4 sm:px-6 2xl:px-8">
+        <TabsContent value="sweeps" className={cn("flex flex-col py-8", CARD_INSET)}>
           <Sweeps ready={account !== null} />
         </TabsContent>
-        <TabsContent value="api" className="flex flex-col px-4 py-4 sm:px-6 2xl:px-8">
+        <TabsContent value="api" className={cn("flex flex-col py-8", CARD_INSET)}>
           {timeline === null ? (
             <EmptyState icon={Webhook} title="No requests yet">
               The signed webhooks and the API calls of a payment show here.
@@ -146,7 +145,7 @@ export function Backend({
             </div>
           )}
         </TabsContent>
-        <TabsContent value="trust" className="px-4 py-4 sm:px-6 2xl:px-8">
+        <TabsContent value="trust" className={cn("py-8", CARD_INSET)}>
           <TrustDetails trust={trustView} networks={networksView} />
         </TabsContent>
       </Tabs>
@@ -212,8 +211,10 @@ function CreditsTab({
   onSelect: (selection: Selection) => void;
 }) {
   const address = addressView.data ?? null;
-  // A table where there is room for its columns; on a phone each payment as a list item.
-  const wide = useMediaQuery("(min-width: 48rem)");
+  // A table where the panel has room for its columns: on a tablet, where it takes the page's width,
+  // and from xl; on a phone, and in the narrower panel beside the customer's view at lg, each
+  // payment as a list item.
+  const wide = useMediaQuery("(48rem <= width < 64rem), (width >= 80rem)");
   // The most recent payments and balance lines (both newest first); the rest on request.
   const recentPayments = useShowAll(account?.payments ?? [], 3);
   const recentLines = useShowAll(account?.ledger ?? [], 2);

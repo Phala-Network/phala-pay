@@ -1439,7 +1439,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     // The theme button cannot know the visitor's theme, so it states none; and the demo, prerendered
     // but unable to work without script, is not shown: only its note.
     await expect(staticPage.getByRole("button", { name: "Dark theme" })).not.toHaveAttribute("aria-pressed");
-    const note = staticPage.locator("#demo noscript > p");
+    const note = staticPage.locator(`${DEMO_SECTION} noscript > p`);
     await expect(note).toHaveText("The demo needs JavaScript.");
     await expect(note).toBeVisible();
     await expect(staticPage.locator("#demo-root")).toBeHidden();
@@ -1734,6 +1734,8 @@ test("every page fits every width in either theme, with no serious accessibility
  * holds content wider than itself (scrolling regions, which show theirs, are exempt).
  */
 const DEMO_TABS = ["Credits", "Refunds", "Sweeps", "API", "Trust"];
+/** The demo's section (its anchor, #demo, is its introduction, which a link to it opens at). */
+const DEMO_SECTION = 'section[aria-labelledby="demo-title"]';
 
 async function expectNothingClipped(page: Page, state: string): Promise<void> {
   const scenes = page.getByRole("complementary", { name: "Your backend" });
@@ -1793,53 +1795,120 @@ async function withLiveNetworkShape(page: Page): Promise<void> {
   });
 }
 
-test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each state, and clips nothing", async ({ page }) => {
-  test.setTimeout(420_000);
+test("the demo is a section like the others: their padding, label, heading, and introduction; a link to it opens at its heading", async ({ page }) => {
+  await page.goto(env("SITE_URL"));
+  for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800], [1024, 768], [390, 844]] as const) {
+    await page.setViewportSize({ width, height });
+    const [demo, features] = await page.evaluate(() => ["demo-title", "features-title"].map((id) => {
+      const section = document.querySelector(`section[aria-labelledby="${id}"]`);
+      const container = section?.firstElementChild;
+      const heading = document.getElementById(id);
+      const eyebrow = heading?.previousElementSibling;
+      const lead = heading?.nextElementSibling;
+      if (container == null || heading === null || eyebrow == null || lead == null) return null;
+      const style = getComputedStyle(container);
+      return {
+        padding: [style.paddingTop, style.paddingBottom],
+        label: getComputedStyle(eyebrow).fontSize,
+        heading: getComputedStyle(heading).fontSize,
+        lead: getComputedStyle(lead).fontSize,
+        gaps: [heading.getBoundingClientRect().top - eyebrow.getBoundingClientRect().bottom, lead.getBoundingClientRect().top - heading.getBoundingClientRect().bottom],
+        eyebrow: eyebrow.textContent,
+      };
+    }));
+    expect(demo, `the demo's introduction at ${width}px`).not.toBeNull();
+    expect({ ...demo, eyebrow: undefined }, `at ${width}px`).toEqual({ ...features, eyebrow: undefined });
+    expect(demo?.eyebrow).toBe("Live demo");
+  }
+  // The header's Demo link lands on the demo's label and heading, under the header.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Demo" }).click();
+  await expect(page).toHaveURL(/#demo$/);
+  await expect.poll(() => page.locator("#demo").evaluate((intro) => intro.getBoundingClientRect().top)).toBeCloseTo(96, 0);
+  await expect(page.getByRole("heading", { level: 2, name: "Try it on testnet" })).toBeInViewport();
+});
+
+test("the demo's states move nothing on the page: one height in each state and on each tab, no layout shift, nothing clipped", async ({ page }) => {
+  test.setTimeout(600_000);
   await installWallet(page);
   // Measured in the live demo's largest shape (three tokens, two mints, two faucets), which the
   // stand-in service's two tokens per network would understate.
   await withLiveNetworkShape(page);
+  // Every layout shift as the browser reports it, but one within half a second of a click (the
+  // click's), by what moved: anything but an entry of the backend's live logs (its open tab, its
+  // stepper), where an entry arriving moves the entries after it, as a log grows.
+  await page.addInitScript(() => {
+    const live = '[aria-label="Your backend"] [role="tabpanel"], [aria-label="Your backend"] [aria-label="Payment timeline"]';
+    Object.assign(window, { shifted: [] });
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (!("hadRecentInput" in entry) || entry.hadRecentInput === true || !("sources" in entry) || !Array.isArray(entry.sources)) continue;
+        for (const { node, previousRect, currentRect } of entry.sources as { node?: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }[]) {
+          const element = node instanceof Element ? node : node?.parentElement;
+          if (element?.closest(live) != null) continue;
+          (window as unknown as { shifted: string[] }).shifted.push(element == null ? "?" : `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")}: ${element.textContent.slice(0, 40)} ${JSON.stringify([previousRect.x, previousRect.y, previousRect.width, currentRect.x, currentRect.y, currentRect.width])}`);
+        }
+      }
+    }).observe({ type: "layout-shift", buffered: true });
+  });
   const product = page.getByRole("region", { name: "Customer view" });
   const scenes = page.getByRole("complementary", { name: "Your backend" });
-  // The section, scrolled to as the nav's Demo link lands, is no taller than the screen under the
-  // 64px header, whichever tab is open, before anything in it is expanded; and it is one height in
-  // every state and on every tab (its first measure at each width), so nothing under it moves.
-  const fixed = new Map<number, number>();
-  const fits = async (state: string) => {
-    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+  const section = page.locator(DEMO_SECTION);
+  // From lg, where the two panels sit side by side, the section is one height in every state and
+  // on every tab (its first measure at each width), so nothing under it moves; on a phone, where
+  // they stack, the customer's view, which changes with the payment, is one height in every state.
+  const fixed = new Map<string, number>();
+  const same = (key: string, value: number, where: string) => {
+    if (!fixed.has(key)) fixed.set(key, value);
+    expect(Math.abs(value - (fixed.get(key) ?? value)), `${where}: ${value} against ${fixed.get(key)}`).toBeLessThanOrEqual(1);
+  };
+  // Each layout's narrowest width, where its content is tallest (2xl, xl, lg, sm, a phone), and two wider.
+  const sizes = [[1920, 1080], [1536, 864], [1440, 900], [1280, 800], [1024, 768], [640, 900], [390, 844]] as const;
+  const settle = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const steady = async (state: string) => {
+    // Nothing shifted since the last state, at 1440×900 with the panels in view, while this state
+    // arrived (a shift within half a second of a click is the click's, and not counted).
+    await settle();
+    expect(await page.evaluate(() => (window as unknown as { shifted: string[] }).shifted), `${state}: what moved as it arrived`).toEqual([]);
+    for (const [width, height] of sizes) {
       await page.setViewportSize({ width, height });
       for (const tab of DEMO_TABS) {
         await openTab(scenes, tab);
-        const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
-        expect(demo, `${state}, ${tab} tab, at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
-        if (!fixed.has(width)) fixed.set(width, demo);
-        expect(Math.abs(demo - (fixed.get(width) ?? demo)), `${state}, ${tab} tab, at ${width}×${height}: ${demo} against ${fixed.get(width)}`).toBeLessThanOrEqual(1);
+        const where = `${state}, ${tab} tab, at ${width}×${height}`;
+        if (width >= 1024) same(`${width}`, await section.evaluate((element) => element.getBoundingClientRect().height), where);
+        else same(`${width}`, await product.evaluate((element) => element.getBoundingClientRect().height), where);
         // Its text at least 14px too, in every state and on every tab.
-        expect(await smallText(page, "#demo"), `${state}, ${tab} tab: text under 14px`).toEqual([]);
+        expect(await smallText(page, DEMO_SECTION), `${where}: text under 14px`).toEqual([]);
       }
       await expectNothingClipped(page, `${state} at ${width}×${height}`);
     }
-    await page.setViewportSize({ width: 390, height: 844 });
-    await expectNothingClipped(page, `${state} at 390px`);
     await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator("#demo-root").evaluate((root) => root.scrollIntoView({ block: "start" }));
+    await settle();
+    await page.evaluate(() => Object.assign(window, { shifted: [] }));
   };
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(env("SITE_URL"));
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  // From here on, with the panels in view: the page's arrival is the next test's.
+  await page.locator("#demo-root").evaluate((root) => root.scrollIntoView({ block: "start" }));
+  await settle();
+  await page.evaluate(() => Object.assign(window, { shifted: [] }));
   const testTokens = page.getByRole("note", { name: "Test tokens" });
   await expect(product.getByTestId("token-option").filter({ visible: true })).toHaveCount(3);
   await expect(testTokens.getByRole("button", { name: /^Mint 1,000 test / })).toHaveCount(2);
   await expect(testTokens.getByRole("link", { name: /^Circle USDC faucet/ })).toBeVisible();
   await expect(testTokens.getByRole("link", { name: /ETH faucets/ })).toBeVisible();
-  await fits("idle");
+  await steady("idle");
   await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
   await expect(testTokens).toContainText("Minted:");
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   await expect(product.locator(".pp-summary")).toContainText("80 PHA");
-  await fits("paying");
+  await steady("paying");
   await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
-  await fits("credited");
+  await steady("credited");
   // After the merchant's actions: the payment swept, and a refund requested (its row closed).
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
   await expectComplete(timeline, ["final"]);
@@ -1866,7 +1935,7 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
   // Measured once the request's own webhook has arrived, the API tab's tallest case.
   await openTab(scenes, "API");
   await expect(scenes.getByTestId("webhook-event").filter({ hasText: "refund.created" })).toBeVisible({ timeout: 30_000 });
-  await fits("after a sweep and a refund request");
+  await steady("after a sweep and a refund request");
 });
 
 test("the demo arrives without shifting what is in view, from the top and at /#demo", async ({ page }) => {
@@ -1963,7 +2032,7 @@ test("one layout grid: every right column starts on one line, and each part's co
   // is named by its section's heading, else by its landmark.
   const docs = ["main", "footer"];
   const pages: [string, string[] | number][] = [
-    ["", ["hero-title", "demo-title", "demo-title", "faq-title", "closing-title", "footer"]],
+    ["", ["hero-title", "demo-title", "faq-title", "closing-title", "footer"]],
     ["compare", ["main", "sources-title", "footer"]],
     ["docs", docs], ["docs/integration", docs], ["docs/configuration", docs], ["docs/sdk/react", docs],
     ["reference", 40],
@@ -2092,7 +2161,7 @@ test("the page's content is the viewport less its gutters, up to 1600px and cent
         }
       }
       // Running text: no paragraph of more than a line or two wider than its measure.
-      const measures = await page.locator("main").evaluate((main) => [...main.querySelectorAll<HTMLElement>(".docs-prose > p, #demo p, section p, details p")]
+      const measures = await page.locator("main").evaluate((main) => [...main.querySelectorAll<HTMLElement>(".docs-prose > p, section p, details p")]
         .filter((element) => element.checkVisibility() && element.textContent.length > 120)
         .map((element) => element.getBoundingClientRect().width / parseFloat(getComputedStyle(element).fontSize)));
       expect(measures.length, `${where}: paragraphs`).toBeGreaterThan(0);

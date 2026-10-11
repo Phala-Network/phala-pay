@@ -359,45 +359,37 @@ export function HeroCode() {
 }
 
 /**
- * The demo, directly below the hero, on a band of its own: the product itself, sized so that its
- * heading and both panels fit one 1440×900 screen. Its heading and introduction sit on one
- * baseline, over the two panels' columns. The one section without an eyebrow: its live status, the
- * pill beside the heading, labels it, and an eyebrow's line would take the screen's last 30px
- * (specs/site-v2/design.md).
+ * The demo, directly below the hero, on a band of its own, a section like the others: its label,
+ * heading, and introduction, its live status beside them, and the product itself under them. A
+ * link to the demo (/#demo) opens at its heading.
  */
 export function DemoSection({ island }: { island: ReactNode }) {
   return (
-    // From xl one height in every state (`--spacing-demo`), the panels filling it.
-    <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface xl:flex xl:min-h-demo xl:flex-col">
-      <div className={cn(CONTAINER, "py-6 xl:flex xl:flex-1 xl:flex-col")}>
-        {/* The split, the heading over the customer's column, the lead over the backend's; its
-            heading a step under the others' on a wide screen, beside its status. */}
-        <div data-layout="split" className={cn(GRID, "gap-y-3 lg:items-baseline")}>
-          <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-2")}>
-            <h2 id="demo-title" className={cn(H2, "2xl:text-title")}>{DEMO_TITLE}</h2>
-            <p className="inline-flex h-7 items-center gap-2 self-center rounded-full border bg-card px-3 text-sm font-medium text-body-foreground shadow-card">
-              <span aria-hidden="true" className="relative flex size-2">
-                <span className="absolute inline-flex size-full rounded-full bg-brand opacity-75 motion-safe:animate-ping" />
-                <span className="relative inline-flex size-2 rounded-full bg-brand ring-1 ring-foreground/25" />
-              </span>
-              {DEMO_STATUS}
-            </p>
-          </div>
-          {/* The lead a step under the other sections' (one line, within the screen's budget). */}
-          <p data-column="right" className={cn(RIGHT, LEAD, "lg:text-lead")}>{DEMO_LEAD}</p>
+    <section aria-labelledby="demo-title" className="border-b bg-surface">
+      <div className={cn(CONTAINER, SECTION)}>
+        {/* The introduction, and its status at the row's far end, as the comparison's way on. */}
+        <div id="demo" className="flex scroll-mt-24 flex-wrap items-end justify-between gap-x-8 gap-y-6">
+          <Intro id="demo-title" eyebrow={EYEBROWS.demo} title={DEMO_TITLE} lead={DEMO_LEAD} />
+          <p className="inline-flex h-8 items-center gap-2 rounded-full border bg-card px-3 text-sm font-medium text-body-foreground shadow-card">
+            <span aria-hidden="true" className="relative flex size-2">
+              <span className="absolute inline-flex size-full rounded-full bg-brand opacity-75 motion-safe:animate-ping" />
+              <span className="relative inline-flex size-2 rounded-full bg-brand ring-1 ring-foreground/25" />
+            </span>
+            {DEMO_STATUS}
+          </p>
         </div>
         {/* The demo, prerendered (its island, src/DemoIsland.tsx): both panels are in the page as it
             arrives, so nothing moves when the demo hydrates. Without script it cannot work, so it
             is not shown; a note says why. */}
-        <noscript><p className="mt-4 text-sm text-muted-foreground">The demo needs JavaScript.</p></noscript>
+        <noscript><p className="mt-14 text-sm text-muted-foreground lg:mt-20">The demo needs JavaScript.</p></noscript>
         {island}
       </div>
     </section>
   );
 }
 
-/** The demo's island root: under the heading, and not shown where script cannot run it. */
-export const DEMO_ROOT = "mt-4 noscript:hidden xl:flex xl:flex-1 xl:flex-col";
+/** The demo's island root: under the introduction, as a section's content is, and not shown where script cannot run it. */
+export const DEMO_ROOT = "mt-14 noscript:hidden lg:mt-20";
 
 /** The demo's place while its chunk loads. */
 export function DemoLoading() {

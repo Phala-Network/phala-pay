@@ -19,15 +19,20 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 /**
- * The card's title row, its action (if any) on the right; a divider below it. One row of at least
- * 56px where it fits, so two cards side by side keep their dividers on one line.
+ * A card's inset from its edges, the site's other cards' (src/Site.tsx, FeatureCard): 28px on a
+ * phone, 40px from sm, 48px from 2xl. A part of the card outside its header, content, and footer
+ * takes it too.
  */
+export const CARD_INSET = "px-7 sm:px-10 2xl:px-12"
+
+/** The card's title row, its action (if any) on the right; a divider below it. */
 function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-header"
       className={cn(
-        "flex min-h-14 flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b px-4 py-4 sm:px-6 2xl:px-8",
+        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b py-6",
+        CARD_INSET,
         className
       )}
       {...props}
@@ -59,7 +64,7 @@ function CardContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-content"
-      className={cn("px-4 py-6 sm:px-6 2xl:px-8", className)}
+      className={cn("py-8", CARD_INSET, className)}
       {...props}
     />
   )
@@ -70,7 +75,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-footer"
-      className={cn("border-t px-4 py-6 sm:px-6 2xl:px-8", className)}
+      className={cn("border-t py-6", CARD_INSET, className)}
       {...props}
     />
   )
