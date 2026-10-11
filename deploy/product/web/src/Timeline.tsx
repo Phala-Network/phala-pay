@@ -257,15 +257,16 @@ function StreamStep({
             aria-hidden="true"
           />
         </span>
+        {/* Under 384px, "usually" and "since" over their value, leaving the step's name its line. */}
         <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums @md:text-center @md:text-sm/4">
           {elapsed !== null ? (
             `+${duration(elapsed)}`
           ) : step.at !== null ? (
             <time dateTime={new Date(step.at * 1000).toISOString()}>{clock(step.at)}</time>
           ) : (step.state === "upcoming" || step.state === "current") && usually !== undefined ? (
-            <><span className="@md:hidden">usually </span>{usually}</>
+            <><span className="max-[24rem]:block @md:hidden">usually </span>{usually}</>
           ) : since !== null ? (
-            <time dateTime={new Date(since * 1000).toISOString()}><span className="@md:hidden">since </span>{clock(since)}</time>
+            <time dateTime={new Date(since * 1000).toISOString()}><span className="max-[24rem]:block @md:hidden">since </span>{clock(since)}</time>
           ) : null}
         </span>
       </button>
@@ -277,14 +278,17 @@ function StreamStep({
  * A request's path, breaking only after a `/`, each part (an id: `qt_3e9e…`) kept whole. In a
  * request's one-line summary, a last part longer than the row ends in an ellipsis (the opened
  * request shows it in full); opened, a part longer than a whole line (on a phone) breaks anywhere.
+ * `query` marks that the summary leaves a query out (` ?…`), kept with the last part.
  */
-function RequestPath({ path, summary = false }: { path: string; summary?: boolean }) {
+function RequestPath({ path, summary = false, query = false }: { path: string; summary?: boolean; query?: boolean }) {
   const parts = path.split(/(?<=\/)(?=[^/])/);
   return parts.map((part, index) => (
     <Fragment key={index}>
       {index > 0 && <wbr />}
       {index === parts.length - 1
-        ? <span title={summary ? part : undefined} className={cn("inline-block max-w-full align-bottom", summary ? "truncate" : "wrap-anywhere")}>{part}</span>
+        ? <span title={summary ? part : undefined} className={cn("inline-block max-w-full align-bottom", summary ? "truncate" : "wrap-anywhere")}>
+          {part}{query && <span className="text-muted-foreground"> ?…</span>}
+        </span>
         : <span className="whitespace-nowrap">{part}</span>}
     </Fragment>
   ));
@@ -448,8 +452,8 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
                     />
                     {/* The method and path; the query, with the request and response, once opened. */}
                     <code className="min-w-0 flex-1 font-mono text-mono">
-                      <span className="text-muted-foreground">{exchange.method}</span> <RequestPath path={url.pathname} summary />
-                      {url.search !== "" && <span className="text-muted-foreground"> ?…</span>}
+                      <span className="text-muted-foreground">{exchange.method}</span>{" "}
+                      <RequestPath path={url.pathname} summary query={url.search !== ""} />
                     </code>
                     <StatusBadge tone={exchange.status < 400 ? "success" : "danger"} className="tabular-nums">
                       {exchange.status}
