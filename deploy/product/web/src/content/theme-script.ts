@@ -35,5 +35,7 @@ export const THEME_SCRIPT = `(() => {
       document.getElementById(id)?.scrollIntoView();
     });
     parsed.observe(document.documentElement, { childList: true, subtree: true });
+    // A page without the footer: watch no longer than its parsing.
+    document.addEventListener("DOMContentLoaded", () => parsed.disconnect(), { once: true });
   }
 })();`;
