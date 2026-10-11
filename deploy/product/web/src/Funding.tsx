@@ -98,12 +98,12 @@ export function TestTokens({ network, need }: { network: Network; need: Need | n
   // wrap onto a line of their own. On a phone, the name heads the group, the mints are full-width
   // rows, and the faucets a list of 44px rows: one column, nothing left ragged.
   return (
-    <div role="note" aria-labelledby={id} className="flex flex-col gap-2">
+    <div role="note" aria-labelledby={id} className="flex flex-col gap-3">
       {/* From lg the row speaks for itself: its name is for screen readers. */}
       <h4 id={id} className="text-sm font-medium text-muted-foreground lg:sr-only">
         Test tokens
       </h4>
-      <div className="flex flex-col gap-x-6 gap-y-2 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="flex flex-col gap-x-6 gap-y-3 sm:flex-row sm:flex-wrap sm:items-center">
         <div className="grid gap-2 sm:flex sm:flex-wrap sm:items-center">
           {mintable.map((each) => (
             <MintButton key={each.asset} token={each} mint={mint} label={label} />

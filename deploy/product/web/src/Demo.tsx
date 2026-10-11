@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CreatedQuote, DepositAddressResponse, Selection } from "./api.js";
 import { Backend } from "./Backend.js";
 import { queryView } from "./queryView.js";
-import { DEMO_GRID, DEMO_LEFT, DEMO_RIGHT } from "./layout.js";
+import { GRID, LEFT, RIGHT } from "./layout.js";
 import { cn } from "@/lib/utils";
 import { Product, type Method } from "./Product.js";
 import { queryClient, keys, useAccount, useDepositAddress, useNetworks, useTimeline, useTrust } from "./queries.js";
@@ -90,9 +90,11 @@ function DemoContent() {
   return (
     <>
       {/* Two sibling cards on the page's grid, the customer's view and (beside it from lg) what the
-          backend sees: product windows of one height, the shorter one's tab panel taking the rest. */}
-      <div data-layout="demo" className={cn(DEMO_GRID, "gap-y-6 lg:items-stretch xl:flex-1")}>
-        <div data-column="left" className={cn(DEMO_LEFT, "flex flex-col")}>
+          backend sees: product windows of one height, the shorter one's tab panel taking the rest.
+          Each layout keeps the height of the demo's tallest state (src/index.css), so nothing on
+          the page moves as a payment goes through. */}
+      <div data-layout="split" className={cn(GRID, "gap-y-6 lg:min-h-demo-lg lg:items-stretch xl:min-h-demo-xl")}>
+        <div data-column="left" className={cn(LEFT, "flex min-h-demo-view flex-col sm:min-h-demo-view-sm lg:min-h-0")}>
           <Product
             account={views.account}
             networks={views.networks}
@@ -110,7 +112,7 @@ function DemoContent() {
             appearance={appearance}
           />
         </div>
-        <div data-column="right" className={cn(DEMO_RIGHT, "flex flex-col")}>
+        <div data-column="right" className={cn(RIGHT, "flex flex-col")}>
           <Backend
             account={views.account}
             selected={selected}

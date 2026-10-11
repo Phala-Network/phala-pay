@@ -101,10 +101,10 @@ export function Product({
   );
   return (
     <Card role="region" aria-labelledby="product-title" className="flex-1 rounded-xl shadow-frame">
-      {/* One row where it fits: whose page this is (with the testnet mark while the network is a
-          testnet), and the balance the payment moves, its label beside it. */}
-      <CardHeader className="items-center rounded-t-xl bg-muted/40 py-3 sm:py-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+      {/* Whose page this is (with the testnet mark while the network is a testnet) over the
+          merchant's name, and the balance the payment moves, its label beside it. */}
+      <CardHeader className="items-center rounded-t-xl bg-muted/40">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <CardTitle id="product-title">Customer view</CardTitle>
             {(network?.testnet ?? DEMO_TESTNET) && (
@@ -113,10 +113,11 @@ export function Product({
               </StatusBadge>
             )}
           </div>
-          <CardDescription>Acme Cloud · Billing</CardDescription>
+          <CardDescription className="mt-1">Acme Cloud · Billing</CardDescription>
         </div>
-        {/* The label centred on the figure: its line is the same whether the figure has arrived. */}
-        <div className="flex items-center gap-2.5">
+        {/* The label over the figure, both from one left edge in a box as wide as most balances, so
+            a figure that grows grows away from them and moves nothing. */}
+        <div className="min-w-28">
           <p id="balance-title" className="mono-label text-muted-foreground">
             Balance
           </p>
@@ -126,14 +127,13 @@ export function Product({
             aria-labelledby="balance-title"
             data-testid="balance"
           >
-            {/* While the account loads, a new visitor's balance's size ($0.00): the column, aligned
-                right, keeps its edge when the figure arrives. */}
+            {/* While the account loads, a new visitor's balance's size ($0.00). */}
             {account !== null ? dollars(account.balance) : unavailable ? "—" : <Skeleton className="h-8 w-16" />}
           </div>
         </div>
       </CardHeader>
       {/* The content takes the card's spare height, so the test tokens stay at its foot. */}
-      <CardContent className="flex flex-1 flex-col gap-4 py-4 lg:py-3">
+      <CardContent className="flex flex-1 flex-col gap-4">
         {accountView.data !== undefined && <QueryState view={accountView} />}
         {unavailable ? (
           <Alert variant="destructive">
@@ -142,9 +142,7 @@ export function Product({
             <AlertDescription>{accountView.error}</AlertDescription>
           </Alert>
         ) : (
-          // The form's width decides its layout (a container query): from 32rem, the amount and the
-          // network share a row and each token takes one line, so the demo fits one screen.
-          <section aria-labelledby="pay-title" className="@container flex flex-col">
+          <section aria-labelledby="pay-title" className="flex flex-col">
             <h4 id="pay-title" className="sr-only">
               Add credits
             </h4>
@@ -156,7 +154,7 @@ export function Product({
                   </TabsTrigger>
                 ))}
               </TabsList>
-              <TabsContent value="quote" className="pt-3">
+              <TabsContent value="quote" className="pt-6">
                 {session === null || account === null ? (
                   <AmountPicker
                     account={account}
@@ -178,7 +176,7 @@ export function Product({
                   />
                 )}
               </TabsContent>
-              <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-3">
+              <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-6">
                 {account === null ? (
                   <CheckoutSkeleton />
                 ) : (
@@ -200,7 +198,7 @@ export function Product({
         )}
       </CardContent>
       {network?.testnet === true && (
-        <CardFooter className="py-3 sm:py-3">
+        <CardFooter>
           <TestTokens key={network.chain_id} network={network} need={need} />
         </CardFooter>
       )}
@@ -208,7 +206,7 @@ export function Product({
           tokens' row keeps its place: its name (on a phone) and its first button, so the card does
           not grow when they arrive. */}
       {network === undefined && networksView.error === null && DEMO_TESTNET && (
-        <CardFooter aria-hidden="true" className="py-3 sm:py-3">
+        <CardFooter aria-hidden="true">
           <div className="flex w-full flex-col gap-3">
             <p className="text-sm font-medium text-muted-foreground lg:hidden">Test tokens</p>
             <Skeleton className={cn("h-8 w-full sm:w-48", TOUCH)} />
@@ -291,17 +289,17 @@ function PaymentOptions({
           </div>
         )}
       </Field>
-      <Field className="@lg:col-span-2">
+      <Field>
         <FieldLabel id={`${id}-token`} asChild>
           <span>Token</span>
         </FieldLabel>
         {network === undefined || asset === undefined ? (
-          // Two tokens' places, each a card's box around its lines of text (TokenOption's: two, or
-          // one where the form is wide), so the list is as tall as it will be when the networks arrive.
+          // Two tokens' places, each a card's box around TokenOption's two lines of text, so the list
+          // is as tall as it will be when the networks arrive.
           <div className="grid gap-2" aria-hidden="true">
             {[0, 1].map((index) => (
-              <div key={index} className="flex min-h-13 items-center rounded-lg border px-3 py-2 text-sm leading-5 @lg:min-h-11">
-                <Skeleton className="h-[2lh] flex-1 @lg:h-[1lh]" />
+              <div key={index} className="flex min-h-13 items-center rounded-lg border px-3 py-2 text-sm leading-5">
+                <Skeleton className="h-[2lh] flex-1" />
               </div>
             ))}
           </div>
@@ -320,39 +318,36 @@ function PaymentOptions({
           </RadioGroup>
         )}
       </Field>
-      <QueryState view={networksView} className="@lg:col-span-2" />
+      <QueryState view={networksView} />
     </>
   );
 }
 
 /**
- * A token: its symbol and name on the left, its price terms and the demo merchant's bonus on the
- * right, its mark before them and its radio after. Each pair is two lines; where the form is wide
- * (from 32rem), one, so a network's three tokens take three 44px rows.
+ * A token, in two lines that every token shares: its symbol and its price terms, then its name and
+ * the demo merchant's bonus; its mark before them and its radio after.
  */
 function TokenOption({ id, asset, testnet }: { id: string; asset: Asset; testnet: boolean }) {
   return (
-    <ChoiceCard htmlFor={id} data-testid="token-option" className="min-h-13 py-2 leading-5 @lg:min-h-11">
+    <ChoiceCard htmlFor={id} data-testid="token-option" className="min-h-13 py-2 leading-5">
       <TokenIcon asset={asset.asset} className="size-5" />
-      <span className="flex min-w-0 flex-1 items-center justify-between gap-x-3">
-        <span className="flex min-w-0 flex-col @lg:flex-row @lg:flex-wrap @lg:items-baseline @lg:gap-x-2">
-          <span className="font-medium">{asset.symbol}</span>
-          <span className="text-muted-foreground">
-            {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
-          </span>
+      <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] gap-x-3">
+        <span className="font-medium">{asset.symbol}</span>
+        {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
+            locks (the locked-rate line). */}
+        <span className="text-right tabular-nums" data-testid="token-price">
+          {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
         </span>
-        <span className="flex shrink-0 flex-col items-end text-right @lg:flex-row @lg:items-baseline @lg:gap-x-2">
-          {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
-              locks (the locked-rate line). */}
-          <span className="tabular-nums" data-testid="token-price">
-            {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
-          </span>
-          {asset.bonus_bps > 0 && (
-            <span className="text-success" data-testid="token-bonus">
-              +{percent(asset.bonus_bps)} bonus
-            </span>
-          )}
+        <span className="text-muted-foreground">
+          {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
         </span>
+        {asset.bonus_bps > 0 ? (
+          <span className="text-right text-success" data-testid="token-bonus">
+            +{percent(asset.bonus_bps)} bonus
+          </span>
+        ) : (
+          <span />
+        )}
       </span>
       <RadioGroupItem value={asset.asset} id={id} aria-label={tokenName(asset.symbol, testnet)} />
     </ChoiceCard>
@@ -407,51 +402,47 @@ function AmountPicker({
   const minutes = Math.round((asset?.quote_ttl_seconds ?? 900) / 60);
 
   return (
-    // From 32rem, two columns: the amount (and a custom one under it) beside the network, then the
-    // tokens and the button across both.
-    <form onSubmit={submit} className="grid gap-3 @lg:grid-cols-2 @lg:items-start @lg:gap-x-4">
-      <div className="flex min-w-0 flex-col gap-3">
+    <form onSubmit={submit} className="flex flex-col gap-5">
+      <Field>
+        <FieldLabel id={`${id}-amount-label`} asChild>
+          <span>Amount</span>
+        </FieldLabel>
+        <SegmentedControl
+          value={String(preset)}
+          onValueChange={(value) => setPreset(value === "custom" ? "custom" : Number(value))}
+          aria-labelledby={`${id}-amount-label`}
+          disabled={!ready}
+        >
+          {options.map((option) => (
+            <SegmentedControlItem key={option.value} value={option.value} className="tabular-nums">
+              {option.label}
+            </SegmentedControlItem>
+          ))}
+        </SegmentedControl>
+      </Field>
+      {preset === "custom" && (
         <Field>
-          <FieldLabel id={`${id}-amount-label`} asChild>
-            <span>Amount</span>
+          <FieldLabel htmlFor={`${id}-amount`}>
+            Custom<span className="sr-only"> amount (USD)</span>
           </FieldLabel>
-          <SegmentedControl
-            value={String(preset)}
-            onValueChange={(value) => setPreset(value === "custom" ? "custom" : Number(value))}
-            aria-labelledby={`${id}-amount-label`}
-            disabled={!ready}
-          >
-            {options.map((option) => (
-              <SegmentedControlItem key={option.value} value={option.value} className="tabular-nums">
-                {option.label}
-              </SegmentedControlItem>
-            ))}
-          </SegmentedControl>
+          <InputGroup className={TOUCH}>
+            <InputGroupAddon>
+              <InputGroupText>$</InputGroupText>
+            </InputGroupAddon>
+            <InputGroupInput
+              id={`${id}-amount`}
+              inputMode="decimal"
+              placeholder="25.00"
+              className="h-full tabular-nums"
+              aria-invalid={invalid !== null}
+              value={custom}
+              onChange={(event) => setCustom(event.target.value)}
+            />
+          </InputGroup>
         </Field>
-        {preset === "custom" && (
-          <Field>
-            <FieldLabel htmlFor={`${id}-amount`}>
-              Custom<span className="sr-only"> amount (USD)</span>
-            </FieldLabel>
-            <InputGroup className={TOUCH}>
-              <InputGroupAddon>
-                <InputGroupText>$</InputGroupText>
-              </InputGroupAddon>
-              <InputGroupInput
-                id={`${id}-amount`}
-                inputMode="decimal"
-                placeholder="25.00"
-                className="h-full tabular-nums"
-                aria-invalid={invalid !== null}
-                value={custom}
-                onChange={(event) => setCustom(event.target.value)}
-              />
-            </InputGroup>
-          </Field>
-        )}
-      </div>
+      )}
       {picker}
-      <div className="flex flex-col gap-2 pt-1 @lg:col-span-2">
+      <div className="flex flex-col gap-2 pt-1">
         <Button type="submit" size="lg" className="w-full" disabled={quote.isPending || !ready || asset === undefined}>
           {quote.isPending ? "Creating quote…" : "Pay with crypto"}
         </Button>
@@ -460,7 +451,7 @@ function AmountPicker({
         </p>
       </div>
       {error !== null && (
-        <Alert variant="destructive" className="@lg:col-span-2">
+        <Alert variant="destructive">
           <CircleAlert aria-hidden="true" />
           <AlertDescription>{error}</AlertDescription>
         </Alert>
@@ -559,12 +550,14 @@ function QuoteCheckout({
 /**
  * The credited payment: the credit, the demo merchant's bonus on it, and the new total, side by
  * side, with the paying transaction. The amounts come from the product's own ledger as it applies
- * the webhook.
+ * the webhook; until its row arrives, each keeps its place, so the confirmation does not grow.
  */
 function Credited({ session, account, bps }: { session: CreatedQuote; account: Account; bps: number }) {
   const row = account.payments.find((each) => each.quote === session.quote && each.id.startsWith("dep_"));
-  const bonus = row?.bonus ?? 0;
+  // The bonus once the ledger has credited it: `null` on a row polled before then, as no row.
+  const bonus = row?.bonus ?? undefined;
   const symbol = session.asset.toUpperCase();
+  const pending = <Skeleton className="h-[1lh] w-16" />;
   return (
     <Alert variant="success" data-testid="payment-credited">
       <CircleCheck aria-hidden="true" />
@@ -576,27 +569,29 @@ function Credited({ session, account, bps }: { session: CreatedQuote; account: A
             <dt className="text-muted-foreground">Credit</dt>
             <dd className="font-medium">{dollars(session.amount)}</dd>
           </div>
-          {bonus > 0 && (
-            <div data-testid="bonus-credited">
+          {/* The bonus and the total where the token earns one: the token's terms say so at once. */}
+          {bps > 0 && (
+            <div data-testid={bonus === undefined ? undefined : "bonus-credited"}>
               <dt className="text-muted-foreground">
-                {symbol} bonus{bps > 0 ? ` +${percent(bps)}` : ""}
+                {symbol} bonus +{percent(bps)}
               </dt>
-              <dd className="font-medium">{signedDollars(bonus)}</dd>
+              <dd className="font-medium">{bonus === undefined ? pending : signedDollars(bonus)}</dd>
             </div>
           )}
-          {bonus > 0 && (
+          {bps > 0 && (
             <div>
               <dt className="text-muted-foreground">Total</dt>
-              <dd className="font-medium">{dollars(session.amount + bonus)}</dd>
+              <dd className="font-medium">{bonus === undefined ? pending : dollars(session.amount + bonus)}</dd>
             </div>
           )}
         </dl>
-        {row?.tx_hash != null && (
-          <p className="mt-3 flex flex-wrap items-center gap-x-3">
-            <span className="text-muted-foreground">Transaction</span>
-            <ExplorerLink chainId={session.chain_id} kind="tx" value={row.tx_hash} copy />
-          </p>
-        )}
+        {/* Until the transaction's hash arrives, its place: an unseen hash, as long and as wrapped. */}
+        <p className="mt-3 flex flex-wrap items-center gap-x-3">
+          <span className="text-muted-foreground">Transaction</span>
+          {row?.tx_hash == null
+            ? <span aria-hidden="true" className="invisible"><ExplorerLink chainId={session.chain_id} kind="tx" value={`0x${"0".repeat(64)}`} copy /></span>
+            : <ExplorerLink chainId={session.chain_id} kind="tx" value={row.tx_hash} copy />}
+        </p>
       </AlertDescription>
     </Alert>
   );

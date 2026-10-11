@@ -1439,7 +1439,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     // The theme button cannot know the visitor's theme, so it states none; and the demo, prerendered
     // but unable to work without script, is not shown: only its note.
     await expect(staticPage.getByRole("button", { name: "Dark theme" })).not.toHaveAttribute("aria-pressed");
-    const note = staticPage.locator("#demo noscript > p");
+    const note = staticPage.locator(`${DEMO_SECTION} noscript > p`);
     await expect(note).toHaveText("The demo needs JavaScript.");
     await expect(note).toBeVisible();
     await expect(staticPage.locator("#demo-root")).toBeHidden();
@@ -1734,6 +1734,8 @@ test("every page fits every width in either theme, with no serious accessibility
  * holds content wider than itself (scrolling regions, which show theirs, are exempt).
  */
 const DEMO_TABS = ["Credits", "Refunds", "Sweeps", "API", "Trust"];
+/** The demo's section (its anchor, #demo, is its introduction, which a link to it opens at). */
+const DEMO_SECTION = 'section[aria-labelledby="demo-title"]';
 
 async function expectNothingClipped(page: Page, state: string): Promise<void> {
   const scenes = page.getByRole("complementary", { name: "Your backend" });
@@ -1793,53 +1795,177 @@ async function withLiveNetworkShape(page: Page): Promise<void> {
   });
 }
 
-test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each state, and clips nothing", async ({ page }) => {
-  test.setTimeout(420_000);
+test("the demo is a section like the others: their padding, label, heading, and introduction; a link to it opens at its heading", async ({ page }) => {
+  await page.goto(env("SITE_URL"));
+  for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800], [1024, 768], [390, 844]] as const) {
+    await page.setViewportSize({ width, height });
+    const [demo, features] = await page.evaluate(() => ["demo-title", "features-title"].map((id) => {
+      const section = document.querySelector(`section[aria-labelledby="${id}"]`);
+      const container = section?.firstElementChild;
+      const heading = document.getElementById(id);
+      const eyebrow = heading?.previousElementSibling;
+      const lead = heading?.nextElementSibling;
+      if (container == null || heading === null || eyebrow == null || lead == null) return null;
+      const style = getComputedStyle(container);
+      return {
+        padding: [style.paddingTop, style.paddingBottom],
+        label: getComputedStyle(eyebrow).fontSize,
+        heading: getComputedStyle(heading).fontSize,
+        lead: getComputedStyle(lead).fontSize,
+        gaps: [heading.getBoundingClientRect().top - eyebrow.getBoundingClientRect().bottom, lead.getBoundingClientRect().top - heading.getBoundingClientRect().bottom],
+        eyebrow: eyebrow.textContent,
+      };
+    }));
+    expect(demo, `the demo's introduction at ${width}px`).not.toBeNull();
+    expect({ ...demo, eyebrow: undefined }, `at ${width}px`).toEqual({ ...features, eyebrow: undefined });
+    expect(demo?.eyebrow).toBe("Live demo");
+  }
+  // The header's Demo link lands on the demo's label and heading, under the header.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Demo" }).click();
+  await expect(page).toHaveURL(/#demo$/);
+  await expect.poll(() => page.locator("#demo").evaluate((intro) => intro.getBoundingClientRect().top)).toBeCloseTo(96, 0);
+  await expect(page.getByRole("heading", { level: 2, name: "Try it on testnet" })).toBeInViewport();
+});
+
+test("a credit whose bonus the ledger has not applied yet shows the bonus pending, never as $0.00", async ({ page }) => {
+  test.setTimeout(180_000);
+  await installWallet(page);
+  // The race: the checkout reports the quote credited while the account, polled a moment before
+  // the ledger applied the webhook, still lists its deposit with no bonus (`bonus: null`). Served
+  // so until released.
+  let held = true;
+  await page.route(`${env("API_URL")}/api/account`, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { payments: { id: string; bonus: number | null }[] };
+    if (held) body.payments = body.payments.map((row) => (row.id.startsWith("dep_") ? { ...row, bonus: null } : row));
+    await route.fulfill({ response, json: body });
+  });
+  const product = page.getByRole("region", { name: "Customer view" });
+  await page.goto(env("SITE_URL"));
+  await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  const testTokens = page.getByRole("note", { name: "Test tokens" });
+  await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
+  await expect(testTokens).toContainText("Minted:");
+  // Every text the confirmation shows, from its first frame.
+  await product.evaluate((card) => {
+    const seen = new Set<string>();
+    Object.assign(window, { confirmations: seen });
+    new MutationObserver(() => {
+      const confirmation = card.querySelector("[data-testid=payment-credited]");
+      if (confirmation !== null) seen.add(confirmation.textContent);
+    }).observe(card, { subtree: true, childList: true, characterData: true });
+  });
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await expect(product.locator(".pp-summary")).toContainText("80 PHA");
+  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  const confirmation = product.getByTestId("payment-credited");
+  await expect(confirmation).toBeVisible({ timeout: 60_000 });
+  // The deposit's row, credited but without its bonus, has arrived: the bonus and the total wait
+  // in their places.
+  await page.waitForResponse(async (response) => response.url() === `${env("API_URL")}/api/account` &&
+    ((await response.json()) as { payments: { id: string }[] }).payments.some((row) => row.id.startsWith("dep_")));
+  await expect(confirmation).toContainText("PHA bonus +10%");
+  await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
+  // Released, the next poll brings the bonus: $2.00 on the $20.00 credit.
+  held = false;
+  await expect(product.getByTestId("bonus-credited")).toContainText("+$2.00", { timeout: 30_000 });
+  await expect(confirmation).toContainText("Total$22.00");
+  const shown = await page.evaluate(() => [...(window as unknown as { confirmations: Set<string> }).confirmations]);
+  expect(shown.length, "the confirmation's texts").toBeGreaterThan(0);
+  expect(shown.filter((text) => text.includes("+$0.00") || /Total\$(?!22\.00)/.test(text)), "a bonus of $0.00 or a wrong total").toEqual([]);
+});
+
+test("the demo's states move nothing on the page: one height in each state and on each tab, no layout shift, nothing clipped", async ({ page }) => {
+  test.setTimeout(600_000);
   await installWallet(page);
   // Measured in the live demo's largest shape (three tokens, two mints, two faucets), which the
   // stand-in service's two tokens per network would understate.
   await withLiveNetworkShape(page);
+  // Every layout shift as the browser reports it, but one within half a second of a click (the
+  // click's), by what moved: anything but an entry of the backend's live logs (its open tab, its
+  // stepper), where an entry arriving moves the entries after it, as a log grows.
+  await page.addInitScript(() => {
+    const live = '[aria-label="Your backend"] [role="tabpanel"], [aria-label="Your backend"] [aria-label="Payment timeline"]';
+    Object.assign(window, { shifted: [] });
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (!("hadRecentInput" in entry) || entry.hadRecentInput === true || !("sources" in entry) || !Array.isArray(entry.sources)) continue;
+        for (const { node, previousRect, currentRect } of entry.sources as { node?: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }[]) {
+          const element = node instanceof Element ? node : node?.parentElement;
+          if (element?.closest(live) != null) continue;
+          (window as unknown as { shifted: string[] }).shifted.push(element == null ? "?" : `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")}: ${element.textContent.slice(0, 40)} ${JSON.stringify([previousRect.x, previousRect.y, previousRect.width, currentRect.x, currentRect.y, currentRect.width])}`);
+        }
+      }
+    }).observe({ type: "layout-shift", buffered: true });
+  });
   const product = page.getByRole("region", { name: "Customer view" });
   const scenes = page.getByRole("complementary", { name: "Your backend" });
-  // The section, scrolled to as the nav's Demo link lands, is no taller than the screen under the
-  // 64px header, whichever tab is open, before anything in it is expanded; and it is one height in
-  // every state and on every tab (its first measure at each width), so nothing under it moves.
-  const fixed = new Map<number, number>();
-  const fits = async (state: string) => {
-    for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
+  const section = page.locator(DEMO_SECTION);
+  // From lg, where the two panels sit side by side, the section is one height in every state and
+  // on every tab (its first measure at each width), so nothing under it moves; where they stack,
+  // the customer's view, which changes with the payment, is one height in every state the payment
+  // brings, and no taller than the form it starts from (src/index.css, --spacing-demo-view).
+  const fixed = new Map<string, number>();
+  const idle = new Map<string, number>();
+  const same = (key: string, value: number, where: string) => {
+    if (!fixed.has(key)) fixed.set(key, value);
+    expect(Math.abs(value - (fixed.get(key) ?? value)), `${where}: ${value} against ${fixed.get(key)}`).toBeLessThanOrEqual(1);
+  };
+  // Each layout's narrowest width, where its content is tallest (2xl, xl, lg, sm, a phone), and two wider.
+  const sizes = [[1920, 1080], [1536, 864], [1440, 900], [1280, 800], [1024, 768], [640, 900], [390, 844]] as const;
+  const settle = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const steady = async (state: string) => {
+    // Nothing shifted since the last state, at 1440×900 with the panels in view, while this state
+    // arrived (a shift within half a second of a click is the click's, and not counted).
+    await settle();
+    expect(await page.evaluate(() => (window as unknown as { shifted: string[] }).shifted), `${state}: what moved as it arrived`).toEqual([]);
+    for (const [width, height] of sizes) {
       await page.setViewportSize({ width, height });
       for (const tab of DEMO_TABS) {
         await openTab(scenes, tab);
-        const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
-        expect(demo, `${state}, ${tab} tab, at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
-        if (!fixed.has(width)) fixed.set(width, demo);
-        expect(Math.abs(demo - (fixed.get(width) ?? demo)), `${state}, ${tab} tab, at ${width}×${height}: ${demo} against ${fixed.get(width)}`).toBeLessThanOrEqual(1);
+        const where = `${state}, ${tab} tab, at ${width}×${height}`;
+        if (width >= 1024) same(`${width}`, await section.evaluate((element) => element.getBoundingClientRect().height), where);
+        else {
+          const view = await product.evaluate((element) => element.getBoundingClientRect().height);
+          if (state === "idle") idle.set(`${width}`, view);
+          else {
+            same(`${width}`, view, where);
+            expect(view, `${where}: against the form's ${idle.get(`${width}`)}`).toBeLessThanOrEqual((idle.get(`${width}`) ?? 0) + 1);
+          }
+        }
         // Its text at least 14px too, in every state and on every tab.
-        expect(await smallText(page, "#demo"), `${state}, ${tab} tab: text under 14px`).toEqual([]);
+        expect(await smallText(page, DEMO_SECTION), `${where}: text under 14px`).toEqual([]);
       }
       await expectNothingClipped(page, `${state} at ${width}×${height}`);
     }
-    await page.setViewportSize({ width: 390, height: 844 });
-    await expectNothingClipped(page, `${state} at 390px`);
     await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator("#demo-root").evaluate((root) => root.scrollIntoView({ block: "start" }));
+    await settle();
+    await page.evaluate(() => Object.assign(window, { shifted: [] }));
   };
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(env("SITE_URL"));
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
+  // From here on, with the panels in view: the page's arrival is the next test's.
+  await page.locator("#demo-root").evaluate((root) => root.scrollIntoView({ block: "start" }));
+  await settle();
+  await page.evaluate(() => Object.assign(window, { shifted: [] }));
   const testTokens = page.getByRole("note", { name: "Test tokens" });
   await expect(product.getByTestId("token-option").filter({ visible: true })).toHaveCount(3);
   await expect(testTokens.getByRole("button", { name: /^Mint 1,000 test / })).toHaveCount(2);
   await expect(testTokens.getByRole("link", { name: /^Circle USDC faucet/ })).toBeVisible();
   await expect(testTokens.getByRole("link", { name: /ETH faucets/ })).toBeVisible();
-  await fits("idle");
+  await steady("idle");
   await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
   await expect(testTokens).toContainText("Minted:");
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   await expect(product.locator(".pp-summary")).toContainText("80 PHA");
-  await fits("paying");
+  await steady("paying");
   await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
-  await fits("credited");
+  await steady("credited");
   // After the merchant's actions: the payment swept, and a refund requested (its row closed).
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
   await expectComplete(timeline, ["final"]);
@@ -1866,7 +1992,7 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
   // Measured once the request's own webhook has arrived, the API tab's tallest case.
   await openTab(scenes, "API");
   await expect(scenes.getByTestId("webhook-event").filter({ hasText: "refund.created" })).toBeVisible({ timeout: 30_000 });
-  await fits("after a sweep and a refund request");
+  await steady("after a sweep and a refund request");
 });
 
 test("the demo arrives without shifting what is in view, from the top and at /#demo", async ({ page }) => {
@@ -1963,7 +2089,7 @@ test("one layout grid: every right column starts on one line, and each part's co
   // is named by its section's heading, else by its landmark.
   const docs = ["main", "footer"];
   const pages: [string, string[] | number][] = [
-    ["", ["hero-title", "demo-title", "demo-title", "faq-title", "closing-title", "footer"]],
+    ["", ["hero-title", "demo-title", "faq-title", "closing-title", "footer"]],
     ["compare", ["main", "sources-title", "footer"]],
     ["docs", docs], ["docs/integration", docs], ["docs/configuration", docs], ["docs/sdk/react", docs],
     ["reference", 40],
@@ -1994,82 +2120,105 @@ test("one layout grid: every right column starts on one line, and each part's co
 });
 
 
-test("the page takes the viewport's width, less its gutters; running text keeps its measure", async ({ page }) => {
-  // No centred container: on a wide screen every page's header, content, and footer reach from one
-  // gutter (at most 96px) to the other: its header's mark and footer at the left one, its header's
-  // last action and its rightmost content (the hero's code window, the full comparison, the docs'
-  // outline, the reference's examples) at the right one, and every section of the home page and the
-  // comparison at both. Only running text (leads, answers, the docs' paragraphs) stops at its
-  // measure, 36em, and the demo's form at its column's width.
-  const rightmost: Record<string, string> = {
-    "": "#hero-code",
-    compare: "main table",
-    "docs/integration": 'aside nav[aria-label="On this page"]',
-    reference: 'main [data-layout="operation"] [data-column="right"]',
+test("the page's content is the viewport less its gutters, up to 1600px and centred; backgrounds span the viewport", async ({ page }) => {
+  // Every page's header, sections, and footer hold their content in one box: the viewport less its
+  // gutters (32px at 1280, 40px at 1440), and on a wider screen 1600px, centred. Measured by that
+  // box (each container's content box), and by what it holds: the header's mark and footer's brand
+  // at its left edge, the header's last action, the footer's links, and the rightmost content (the
+  // hero's code window, the full comparison, the docs' outline, the reference's examples) at its
+  // right, and every section of the home page and the comparison from one edge to the other. The
+  // sections' backgrounds and rules still span the viewport. Only running text (leads, answers, the
+  // docs' paragraphs) stops at its measure, 36em.
+  // Each page's rightmost content, its containers between the header's and the footer's, and the
+  // parts with a background or a rule besides the header and the footer.
+  const pages: Record<string, { rightmost: string; containers: string; bleeds?: string }> = {
+    "": { rightmost: "#hero-code", containers: "main > section > div:first-child", bleeds: "main > section" },
+    compare: { rightmost: "main table", containers: "main" },
+    "docs/integration": { rightmost: 'aside nav[aria-label="On this page"]', containers: '[data-layout="sidebar"]' },
+    reference: { rightmost: 'main [data-layout="operation"] [data-column="right"]', containers: '[data-layout="sidebar"]' },
   };
+  // The content box's distance from each edge of the viewport.
+  const insets: [number, number][] = [[1280, 32], [1440, 40], [1920, 160], [2560, 480]];
+  // A page's height at 1920: the same at 2560, where its content is as wide.
+  const heights = new Map<string, number>();
   // Still: the custody rail's moving segment would otherwise be measured mid-run.
   await page.emulateMedia({ reducedMotion: "reduce" });
-  for (const width of [1920, 2560]) {
-    for (const [path, content] of Object.entries(rightmost)) {
+  for (const [width, inset] of insets) {
+    for (const [path, { rightmost: content, containers, bleeds }] of Object.entries(pages)) {
       await page.setViewportSize({ width, height: 1000 });
       await page.goto(new URL(path, env("SITE_URL")).href);
+      if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
       const where = `/${path} at ${width}px`;
-      const { gutter, insets } = await page.evaluate((content) => {
-        const right = document.documentElement.clientWidth;
-        const box = (selector: string) => [...document.querySelectorAll(selector)].find((element) => element.checkVisibility())?.getBoundingClientRect();
-        const logo = box('header a[aria-label="Phala Pay home"]');
-        // Each of the insets as far from its edge of the viewport as the header's mark is from its own.
+      const measured = await page.evaluate(({ content, containers, bleeds }) => {
+        const viewport = document.documentElement.clientWidth;
+        const shown = (selector: string) => [...document.querySelectorAll(selector)].find((element) => element.checkVisibility());
+        const box = (selector: string) => shown(selector)?.getBoundingClientRect();
+        // Each container's content box: the header's, the page's (each section's on the home page),
+        // and the footer's.
+        const boxes = [...document.querySelectorAll<HTMLElement>(`#site-header > header > div:first-child, ${containers}, #site-footer > footer > div`)].map((element) => {
+          const { left, right } = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          const name = element.closest("[aria-labelledby]")?.getAttribute("aria-labelledby") ?? element.parentElement?.tagName.toLowerCase() ?? "?";
+          return { name, left: left + parseFloat(style.paddingLeft), right: viewport - (right - parseFloat(style.paddingRight)) };
+        });
+        // The parts with a background or a rule: from one edge of the viewport to the other.
+        const edgeToEdge = [...document.querySelectorAll<HTMLElement>(["#site-header > header", bleeds, "#site-footer > footer"].filter(Boolean).join(", "))].map((element) => {
+          const { left, right } = element.getBoundingClientRect();
+          return { name: element.getAttribute("aria-labelledby") ?? element.tagName.toLowerCase(), left, right: viewport - right };
+        });
         return {
-          gutter: logo?.left ?? 0,
-          insets: {
+          viewport,
+          height: document.documentElement.scrollHeight,
+          containers: boxes,
+          bleeds: edgeToEdge,
+          edges: {
+            "header's mark": box('header a[aria-label="Phala Pay home"]')?.left ?? 0,
             "footer's brand": box('footer [data-column="left"]')?.left ?? 0,
-            "header's last action": right - (box('header a[href="/docs/self-hosting"]')?.right ?? 0),
-            "footer's links": right - (box('footer [data-column="right"]')?.right ?? 0),
-            [content]: right - (box(content)?.right ?? 0),
+            "header's last action": viewport - (box('header a[href="/docs/self-hosting"]')?.right ?? 0),
+            "footer's links": viewport - (box('footer [data-column="right"]')?.right ?? 0),
+            [content]: viewport - (box(content)?.right ?? 0),
           },
         };
-      }, content);
-      expect(gutter, `${where}: gutter`).toBeGreaterThanOrEqual(24);
-      expect(gutter, `${where}: gutter`).toBeLessThanOrEqual(96);
-      for (const [name, inset] of Object.entries(insets)) expect(Math.abs(inset - gutter), `${where}: ${name}`).toBeLessThanOrEqual(1);
-      // Every section of the home page and the comparison fills the page from gutter to gutter: its
-      // content (anything shown, short of a full-bleed box) starts at one and ends at the other.
+      }, { content, containers, bleeds });
+      expect(measured.viewport, where).toBe(width);
+      expect(measured.containers.length, `${where}: containers`).toBeGreaterThanOrEqual(3);
+      for (const { name, left, right } of measured.containers) {
+        expect(Math.abs(left - inset), `${where}, ${name}'s content: left edge`).toBeLessThanOrEqual(1);
+        expect(Math.abs(right - inset), `${where}, ${name}'s content: right edge`).toBeLessThanOrEqual(1);
+      }
+      for (const { name, left, right } of measured.bleeds) {
+        expect([left, right], `${where}, ${name}: from edge to edge`).toEqual([0, 0]);
+      }
+      for (const [name, edge] of Object.entries(measured.edges)) expect(Math.abs(edge - inset), `${where}: ${name}`).toBeLessThanOrEqual(1);
+      if (width === 1920) heights.set(path, measured.height);
+      if (width === 2560) expect(measured.height, `${where}: the page's height, as at 1920`).toBe(heights.get(path));
+      // Every section of the home page and the comparison fills its content box: its content
+      // (anything shown, short of a container or a full-bleed box) starts at one edge and ends at
+      // the other.
       if (path === "" || path === "compare") {
-        const sections = await page.locator("main").evaluate((main) => {
-          const right = document.documentElement.clientWidth;
+        const sections = await page.locator("main").evaluate((main, inset) => {
+          const viewport = document.documentElement.clientWidth;
           return [...main.querySelectorAll<HTMLElement>(":scope > section, :scope section[id]")].map((section) => {
             const boxes = [...section.querySelectorAll<HTMLElement>("*")]
               // Shown: not transparent (a form control Radix keeps for the form) nor hidden.
               .filter((element) => element.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && element.closest(".sr-only") === null)
               .map((element) => element.getBoundingClientRect())
-              .filter((box) => box.width > 0 && box.width < right - 1);
+              .filter((box) => box.width > 0 && box.width <= viewport - 2 * inset + 1);
             return {
               name: section.getAttribute("aria-labelledby") ?? section.id,
               left: Math.min(...boxes.map((box) => box.left)),
-              right: right - Math.max(...boxes.map((box) => box.right)),
+              right: viewport - Math.max(...boxes.map((box) => box.right)),
             };
           });
-        });
+        }, inset);
         expect(sections.length, `${where}: sections`).toBeGreaterThan(2);
         for (const { name, left, right } of sections) {
-          expect(Math.abs(left - gutter), `${where}, ${name}: left edge`).toBeLessThanOrEqual(1);
-          expect(Math.abs(right - gutter), `${where}, ${name}: right edge`).toBeLessThanOrEqual(1);
-        }
-      }
-      // The demo's form keeps its column's width (38rem from 3xl): no token row and no button wider.
-      if (path === "") {
-        const product = page.getByRole("region", { name: "Customer view" });
-        await expect(product.getByTestId("balance")).toHaveText("$0.00");
-        const rows = [
-          ...await product.getByTestId("token-option").filter({ visible: true }).all(),
-          product.getByRole("button", { name: "Pay with crypto", exact: true }),
-        ];
-        for (const row of rows) {
-          expect((await row.boundingBox())?.width ?? 0, `${where}: ${await row.textContent()}`).toBeLessThanOrEqual(38 * 16);
+          expect(Math.abs(left - inset), `${where}, ${name}: left edge`).toBeLessThanOrEqual(1);
+          expect(Math.abs(right - inset), `${where}, ${name}: right edge`).toBeLessThanOrEqual(1);
         }
       }
       // Running text: no paragraph of more than a line or two wider than its measure.
-      const measures = await page.locator("main").evaluate((main) => [...main.querySelectorAll<HTMLElement>(".docs-prose > p, #demo p, section p, details p")]
+      const measures = await page.locator("main").evaluate((main) => [...main.querySelectorAll<HTMLElement>(".docs-prose > p, section p, details p")]
         .filter((element) => element.checkVisibility() && element.textContent.length > 120)
         .map((element) => element.getBoundingClientRect().width / parseFloat(getComputedStyle(element).fontSize)));
       expect(measures.length, `${where}: paragraphs`).toBeGreaterThan(0);
