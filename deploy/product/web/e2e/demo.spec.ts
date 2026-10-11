@@ -18,7 +18,7 @@ import {
   type Hash,
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
-import type { Timeline } from "../src/api.js";
+import type { Network, Timeline } from "../src/api.js";
 import { DOCS, docPath } from "../src/content/docs.js";
 import { tokens } from "../src/format.js";
 import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
@@ -1732,13 +1732,47 @@ async function expectNothingClipped(page: Page, state: string): Promise<void> {
   await openTab(scenes, "Credits");
 }
 
+/**
+ * The demo's networks in the live demo's largest shape: the network listing the most tokens (here
+ * Sepolia, with test PHA and USDC) also lists a test USDT that mints from the wallet, as live
+ * Sepolia does. Its token list then has three rows, and its test tokens two mint buttons beside
+ * both faucets. Only the layout is measured in this shape: nothing pays with the added token.
+ */
+async function withLiveNetworkShape(page: Page): Promise<void> {
+  await page.route(/\/api\/assets$/, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { networks: Network[] };
+    const largest = body.networks.reduce((most, each) => (each.assets.length > most.assets.length ? each : most));
+    const stablecoin = largest.assets.find((each) => each.pricing === "stablecoin");
+    if (stablecoin === undefined || largest.assets.some((each) => each.asset === "usdt")) {
+      throw new Error(`${largest.name} has no stablecoin to model a test USDT on, or has one already`);
+    }
+    largest.assets.push({
+      ...stablecoin,
+      asset: "usdt",
+      symbol: "USDT",
+      contract: getAddress(`0x${"7".repeat(40)}`),
+      mintable: true,
+      minter: getAddress(`0x${"8".repeat(40)}`),
+      faucet: null,
+      bonus_bps: 0,
+    });
+    await route.fulfill({ response, json: body });
+  });
+}
+
 test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each state, and clips nothing", async ({ page }) => {
   test.setTimeout(420_000);
   await installWallet(page);
+  // Measured in the live demo's largest shape (three tokens, two mints, two faucets), which the
+  // stand-in service's two tokens per network would understate.
+  await withLiveNetworkShape(page);
   const product = page.getByRole("region", { name: "Customer view" });
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   // The section, scrolled to as the nav's Demo link lands, is no taller than the screen under the
-  // 64px header, whichever tab is open, before anything in it is expanded.
+  // 64px header, whichever tab is open, before anything in it is expanded; and it is one height in
+  // every state and on every tab (its first measure at each width), so nothing under it moves.
+  const fixed = new Map<number, number>();
   const fits = async (state: string) => {
     for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
       await page.setViewportSize({ width, height });
@@ -1746,6 +1780,8 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
         await openTab(scenes, tab);
         const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
         expect(demo, `${state}, ${tab} tab, at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
+        if (!fixed.has(width)) fixed.set(width, demo);
+        expect(Math.abs(demo - (fixed.get(width) ?? demo)), `${state}, ${tab} tab, at ${width}×${height}: ${demo} against ${fixed.get(width)}`).toBeLessThanOrEqual(1);
         // Its text at least 14px too, in every state and on every tab.
         expect(await smallText(page, "#demo"), `${state}, ${tab} tab: text under 14px`).toEqual([]);
       }
@@ -1757,8 +1793,12 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
   };
   await page.goto(env("SITE_URL"));
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
-  await fits("idle");
   const testTokens = page.getByRole("note", { name: "Test tokens" });
+  await expect(product.getByTestId("token-option").filter({ visible: true })).toHaveCount(3);
+  await expect(testTokens.getByRole("button", { name: /^Mint 1,000 test / })).toHaveCount(2);
+  await expect(testTokens.getByRole("link", { name: /^Circle USDC faucet/ })).toBeVisible();
+  await expect(testTokens.getByRole("link", { name: /ETH faucets/ })).toBeVisible();
+  await fits("idle");
   await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
   await expect(testTokens).toContainText("Minted:");
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();

@@ -18,13 +18,16 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-/** The card's title row, its action (if any) on the right; a divider below it. */
+/**
+ * The card's title row, its action (if any) on the right; a divider below it. One row of at least
+ * 56px where it fits, so two cards side by side keep their dividers on one line.
+ */
 function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-header"
       className={cn(
-        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b px-4 py-4 sm:px-6 2xl:px-8",
+        "flex min-h-14 flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b px-4 py-4 sm:px-6 2xl:px-8",
         className
       )}
       {...props}

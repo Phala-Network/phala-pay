@@ -367,8 +367,9 @@ export function HeroCode() {
  */
 export function DemoSection({ island }: { island: ReactNode }) {
   return (
-    <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface">
-      <div className={cn(CONTAINER, "py-6")}>
+    // From xl one height in every state (`--spacing-demo`), the panels filling it.
+    <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface xl:flex xl:min-h-demo xl:flex-col">
+      <div className={cn(CONTAINER, "py-6 xl:flex xl:flex-1 xl:flex-col")}>
         <div data-layout="split" className={cn(GRID, "gap-y-3 lg:items-baseline")}>
           <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-2")}>
             <h2 id="demo-title" className={H2}>{DEMO_TITLE}</h2>
@@ -394,7 +395,7 @@ export function DemoSection({ island }: { island: ReactNode }) {
 }
 
 /** The demo's island root: under the heading, and not shown where script cannot run it. */
-export const DEMO_ROOT = "mt-4 noscript:hidden";
+export const DEMO_ROOT = "mt-4 noscript:hidden xl:flex xl:flex-1 xl:flex-col";
 
 /** The demo's place while its chunk loads. */
 export function DemoLoading() {

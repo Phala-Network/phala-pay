@@ -52,7 +52,9 @@ export function Backend({
   const status = selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done";
   return (
     <Card role="complementary" aria-label="Your backend" className="flex-1 rounded-xl shadow-frame">
-      <CardHeader className="items-center gap-y-1 rounded-t-xl bg-muted/40 py-3 sm:py-3">
+      {/* The ids follow the title rather than the card's far edge: where an id arrives, or grows,
+          nothing before it moves. */}
+      <CardHeader className="items-center justify-start gap-y-1 rounded-t-xl bg-muted/40 py-3 sm:py-3">
         <div className="flex min-w-0 items-baseline gap-x-3">
           <CardTitle>Your backend</CardTitle>
           <p className="text-sm text-muted-foreground">
@@ -69,8 +71,8 @@ export function Backend({
             {selected === null ? "" : ` · ${selected.kind === "quote" ? "quote" : "deposit"}`}
           </p>
         </div>
-        {/* The ids on a line of their own, under the title. */}
-        <dl className="flex basis-full flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+        {/* The ids beside the title where they fit, else on a line of their own under it. */}
+        <dl className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
           {account !== null && selected === null && <MetaItem label="Workspace" value={account.account_id} testId="meta-workspace" />}
           {/* The workspace's line kept while the account loads (as the page is prerendered), so the
               panel under it does not move when it arrives. */}
