@@ -18,7 +18,7 @@ import {
   type Hash,
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
-import type { Timeline } from "../src/api.js";
+import type { Network, Timeline } from "../src/api.js";
 import { DOCS, docPath } from "../src/content/docs.js";
 import { tokens } from "../src/format.js";
 import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
@@ -1436,15 +1436,20 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     await expect(answer).toBeVisible();
     await expectMetadata(staticPage);
     await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
-    // The theme button cannot know the visitor's theme, so it states none; and the demo, which never
-    // arrives without script, reserves no space: only its note shows.
+    // The theme button cannot know the visitor's theme, so it states none; and the demo, prerendered
+    // but unable to work without script, is not shown: only its note.
     await expect(staticPage.getByRole("button", { name: "Dark theme" })).not.toHaveAttribute("aria-pressed");
-    await expect(staticPage.locator("#demo-root p")).toHaveText("The demo needs JavaScript.");
-    expect((await staticPage.locator("#demo-root").boundingBox())?.height).toBeLessThan(48);
+    const note = staticPage.locator("#demo noscript > p");
+    await expect(note).toHaveText("The demo needs JavaScript.");
+    await expect(note).toBeVisible();
+    await expect(staticPage.locator("#demo-root")).toBeHidden();
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Demo", exact: true })).toHaveAttribute("href", "/#demo");
+    // The page arrives complete: the demo's two panels are in its HTML, not added by script. (Their
+    // style attributes, Radix's, are each permitted by the CSP's hashes: scripts/prerender.ts.)
     const homeHtml = await home?.text();
-    expect(homeHtml).not.toContain('style="');
+    expect(homeHtml).toContain('aria-label="Your backend"');
+    expect(homeHtml).toContain('aria-labelledby="product-title"');
     const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
@@ -1498,7 +1503,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
 });
 
 
-test("loading home islands preserves the original prerendered hero", async ({ page }) => {
+test("loading home islands preserves the original prerendered hero and demo", async ({ page }) => {
   let releaseEntry: (() => void) | undefined;
   const entryReady = new Promise<void>((resolve) => { releaseEntry = resolve; });
   await page.route("**/assets/home-*.js", async (route) => {
@@ -1512,11 +1517,19 @@ test("loading home islands preserves the original prerendered hero", async ({ pa
     const original = await hero.elementHandle();
     const originalHeader = await page.getByRole("banner").elementHandle();
     const originalFooter = await page.getByRole("contentinfo").elementHandle();
+    // The demo's panels are prerendered too: in view before any script, and the same elements once
+    // the demo has hydrated and loaded its data.
+    const product = page.getByRole("region", { name: "Customer view" });
+    await expect(product).toBeVisible();
+    const originalProduct = await product.elementHandle();
+    const originalBackend = await page.getByRole("complementary", { name: "Your backend" }).elementHandle();
     releaseEntry?.();
-    await expect(page.getByRole("region", { name: "Customer view" })).toBeVisible();
+    await expect(product.getByTestId("balance")).toHaveText("$0.00");
     expect(await original.evaluate((node) => node.isConnected)).toBe(true);
     expect(await originalHeader.evaluate((node) => node.isConnected)).toBe(true);
     expect(await originalFooter.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalProduct.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalBackend.evaluate((node) => node.isConnected)).toBe(true);
     await page.getByRole("button", { name: "Dark theme" }).click();
     await expect(page.locator("html")).toHaveClass(/dark/);
     await expect(page.getByRole("region", { name: "Customer view" })).toBeVisible();
@@ -1607,6 +1620,38 @@ test("home and comparison hydrate in either theme without CSP violations or Reac
   }
 });
 
+test("the checkout takes the site's theme in either theme, over the SDK's defaults", async ({ browser }) => {
+  // The SDK's stylesheet comes before the site's (src/index.css), whose `.pp-root[data-theme]` sets
+  // the components' tokens from the page's: the checkout's surface and primary are the site's muted
+  // fill and primary, not the SDK's own (its dark surface is #18181b).
+  for (const colorScheme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ colorScheme });
+    try {
+      const page = await context.newPage();
+      await page.goto(env("SITE_URL"));
+      const product = page.getByRole("region", { name: "Customer view" });
+      await expect(product.getByTestId("balance")).toHaveText("$0.00");
+      await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+      const checkout = product.locator(".pp-root").first();
+      await expect(checkout).toHaveAttribute("data-theme", colorScheme);
+      const tokens = await checkout.evaluate((root) => {
+        const style = getComputedStyle(root);
+        const value = (name: string) => style.getPropertyValue(name).trim();
+        return {
+          surface: [value("--pp-color-surface"), value("--muted")],
+          primary: [value("--pp-color-primary"), value("--primary")],
+        };
+      });
+      for (const [name, [checkoutValue, siteValue]] of Object.entries(tokens)) {
+        expect(siteValue, `${colorScheme}: the site's ${name}`).not.toBe("");
+        expect(checkoutValue, `${colorScheme}: the checkout's ${name}`).toBe(siteValue);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
+
 test("sweeps from the last good data show their balances and age, without sweep actions; an unavailable group says so", async ({ page }) => {
   const problems = await watchConsole(page);
   const asOf = Math.floor(Date.now() / 1000) - 12;
@@ -1651,11 +1696,11 @@ test("every page fits every width in either theme, with no serious accessibility
   // layout changes the content: every width for the marketing pages, a desktop and a phone for the
   // long docs, and the desktop for the API reference, whose markup is the same at every width (axe
   // takes most of a minute over its 15,000 elements).
-  test.setTimeout(600_000);
-  const all = [1440, 1280, 1024, 768, 390];
+  test.setTimeout(900_000);
+  const all = [2560, 1920, 1440, 1280, 1024, 768, 390];
   const pages: [string, number[]][] = [
     ["", all], ["compare", all], ["no-such-page/deeper", all], ["docs", all], ["docs/sdk/react", all],
-    ["docs/integration", [1440, 390]], ["reference", [1440]],
+    ["docs/integration", [1920, 1440, 390]], ["reference", [1440]],
   ];
   for (const colorScheme of ["light", "dark"] as const) {
     const context = await browser.newContext({ colorScheme });
@@ -1719,13 +1764,47 @@ async function expectNothingClipped(page: Page, state: string): Promise<void> {
   await openTab(scenes, "Credits");
 }
 
+/**
+ * The demo's networks in the live demo's largest shape: the network listing the most tokens (here
+ * Sepolia, with test PHA and USDC) also lists a test USDT that mints from the wallet, as live
+ * Sepolia does. Its token list then has three rows, and its test tokens two mint buttons beside
+ * both faucets. Only the layout is measured in this shape: nothing pays with the added token.
+ */
+async function withLiveNetworkShape(page: Page): Promise<void> {
+  await page.route(/\/api\/assets$/, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { networks: Network[] };
+    const largest = body.networks.reduce((most, each) => (each.assets.length > most.assets.length ? each : most));
+    const stablecoin = largest.assets.find((each) => each.pricing === "stablecoin");
+    if (stablecoin === undefined || largest.assets.some((each) => each.asset === "usdt")) {
+      throw new Error(`${largest.name} has no stablecoin to model a test USDT on, or has one already`);
+    }
+    largest.assets.push({
+      ...stablecoin,
+      asset: "usdt",
+      symbol: "USDT",
+      contract: getAddress(`0x${"7".repeat(40)}`),
+      mintable: true,
+      minter: getAddress(`0x${"8".repeat(40)}`),
+      faucet: null,
+      bonus_bps: 0,
+    });
+    await route.fulfill({ response, json: body });
+  });
+}
+
 test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each state, and clips nothing", async ({ page }) => {
   test.setTimeout(420_000);
   await installWallet(page);
+  // Measured in the live demo's largest shape (three tokens, two mints, two faucets), which the
+  // stand-in service's two tokens per network would understate.
+  await withLiveNetworkShape(page);
   const product = page.getByRole("region", { name: "Customer view" });
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   // The section, scrolled to as the nav's Demo link lands, is no taller than the screen under the
-  // 64px header, whichever tab is open, before anything in it is expanded.
+  // 64px header, whichever tab is open, before anything in it is expanded; and it is one height in
+  // every state and on every tab (its first measure at each width), so nothing under it moves.
+  const fixed = new Map<number, number>();
   const fits = async (state: string) => {
     for (const [width, height] of [[1440, 900], [1280, 800]] as const) {
       await page.setViewportSize({ width, height });
@@ -1733,6 +1812,8 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
         await openTab(scenes, tab);
         const demo = await page.locator("#demo").evaluate((section) => section.getBoundingClientRect().height);
         expect(demo, `${state}, ${tab} tab, at ${width}×${height}`).toBeLessThanOrEqual(height - 64);
+        if (!fixed.has(width)) fixed.set(width, demo);
+        expect(Math.abs(demo - (fixed.get(width) ?? demo)), `${state}, ${tab} tab, at ${width}×${height}: ${demo} against ${fixed.get(width)}`).toBeLessThanOrEqual(1);
         // Its text at least 14px too, in every state and on every tab.
         expect(await smallText(page, "#demo"), `${state}, ${tab} tab: text under 14px`).toEqual([]);
       }
@@ -1744,8 +1825,12 @@ test("every tab of the demo fits one screen at 1440×900 and 1280×800, in each 
   };
   await page.goto(env("SITE_URL"));
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
-  await fits("idle");
   const testTokens = page.getByRole("note", { name: "Test tokens" });
+  await expect(product.getByTestId("token-option").filter({ visible: true })).toHaveCount(3);
+  await expect(testTokens.getByRole("button", { name: /^Mint 1,000 test / })).toHaveCount(2);
+  await expect(testTokens.getByRole("link", { name: /^Circle USDC faucet/ })).toBeVisible();
+  await expect(testTokens.getByRole("link", { name: /ETH faucets/ })).toBeVisible();
+  await fits("idle");
   await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
   await expect(testTokens).toContainText("Minted:");
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
@@ -1878,7 +1963,7 @@ test("one layout grid: every right column starts on one line, and each part's co
   // is named by its section's heading, else by its landmark.
   const docs = ["main", "footer"];
   const pages: [string, string[] | number][] = [
-    ["", ["hero-title", "demo-title", "demo-title", "faq-title", "footer"]],
+    ["", ["hero-title", "demo-title", "demo-title", "faq-title", "closing-title", "footer"]],
     ["compare", ["main", "sources-title", "footer"]],
     ["docs", docs], ["docs/integration", docs], ["docs/configuration", docs], ["docs/sdk/react", docs],
     ["reference", 40],
@@ -1908,6 +1993,232 @@ test("one layout grid: every right column starts on one line, and each part's co
   }
 });
 
+
+test("the page takes the viewport's width, less its gutters; running text keeps its measure", async ({ page }) => {
+  // No centred container: on a wide screen every page's header, content, and footer reach from one
+  // gutter (at most 96px) to the other: its header's mark and footer at the left one, its header's
+  // last action and its rightmost content (the hero's code window, the full comparison, the docs'
+  // outline, the reference's examples) at the right one, and every section of the home page and the
+  // comparison at both. Only running text (leads, answers, the docs' paragraphs) stops at its
+  // measure, 36em, and the demo's form at its column's width.
+  const rightmost: Record<string, string> = {
+    "": "#hero-code",
+    compare: "main table",
+    "docs/integration": 'aside nav[aria-label="On this page"]',
+    reference: 'main [data-layout="operation"] [data-column="right"]',
+  };
+  // Still: the custody rail's moving segment would otherwise be measured mid-run.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const width of [1920, 2560]) {
+    for (const [path, content] of Object.entries(rightmost)) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      const where = `/${path} at ${width}px`;
+      const { gutter, insets } = await page.evaluate((content) => {
+        const right = document.documentElement.clientWidth;
+        const box = (selector: string) => [...document.querySelectorAll(selector)].find((element) => element.checkVisibility())?.getBoundingClientRect();
+        const logo = box('header a[aria-label="Phala Pay home"]');
+        // Each of the insets as far from its edge of the viewport as the header's mark is from its own.
+        return {
+          gutter: logo?.left ?? 0,
+          insets: {
+            "footer's brand": box('footer [data-column="left"]')?.left ?? 0,
+            "header's last action": right - (box('header a[href="/docs/self-hosting"]')?.right ?? 0),
+            "footer's links": right - (box('footer [data-column="right"]')?.right ?? 0),
+            [content]: right - (box(content)?.right ?? 0),
+          },
+        };
+      }, content);
+      expect(gutter, `${where}: gutter`).toBeGreaterThanOrEqual(24);
+      expect(gutter, `${where}: gutter`).toBeLessThanOrEqual(96);
+      for (const [name, inset] of Object.entries(insets)) expect(Math.abs(inset - gutter), `${where}: ${name}`).toBeLessThanOrEqual(1);
+      // Every section of the home page and the comparison fills the page from gutter to gutter: its
+      // content (anything shown, short of a full-bleed box) starts at one and ends at the other.
+      if (path === "" || path === "compare") {
+        const sections = await page.locator("main").evaluate((main) => {
+          const right = document.documentElement.clientWidth;
+          return [...main.querySelectorAll<HTMLElement>(":scope > section, :scope section[id]")].map((section) => {
+            const boxes = [...section.querySelectorAll<HTMLElement>("*")]
+              // Shown: not transparent (a form control Radix keeps for the form) nor hidden.
+              .filter((element) => element.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && element.closest(".sr-only") === null)
+              .map((element) => element.getBoundingClientRect())
+              .filter((box) => box.width > 0 && box.width < right - 1);
+            return {
+              name: section.getAttribute("aria-labelledby") ?? section.id,
+              left: Math.min(...boxes.map((box) => box.left)),
+              right: right - Math.max(...boxes.map((box) => box.right)),
+            };
+          });
+        });
+        expect(sections.length, `${where}: sections`).toBeGreaterThan(2);
+        for (const { name, left, right } of sections) {
+          expect(Math.abs(left - gutter), `${where}, ${name}: left edge`).toBeLessThanOrEqual(1);
+          expect(Math.abs(right - gutter), `${where}, ${name}: right edge`).toBeLessThanOrEqual(1);
+        }
+      }
+      // The demo's form keeps its column's width (38rem from 3xl): no token row and no button wider.
+      if (path === "") {
+        const product = page.getByRole("region", { name: "Customer view" });
+        await expect(product.getByTestId("balance")).toHaveText("$0.00");
+        const rows = [
+          ...await product.getByTestId("token-option").filter({ visible: true }).all(),
+          product.getByRole("button", { name: "Pay with crypto", exact: true }),
+        ];
+        for (const row of rows) {
+          expect((await row.boundingBox())?.width ?? 0, `${where}: ${await row.textContent()}`).toBeLessThanOrEqual(38 * 16);
+        }
+      }
+      // Running text: no paragraph of more than a line or two wider than its measure.
+      const measures = await page.locator("main").evaluate((main) => [...main.querySelectorAll<HTMLElement>(".docs-prose > p, #demo p, section p, details p")]
+        .filter((element) => element.checkVisibility() && element.textContent.length > 120)
+        .map((element) => element.getBoundingClientRect().width / parseFloat(getComputedStyle(element).fontSize)));
+      expect(measures.length, `${where}: paragraphs`).toBeGreaterThan(0);
+      expect(Math.max(...measures), `${where}: the widest paragraph, in em`).toBeLessThanOrEqual(36.01);
+    }
+  }
+});
+
+/**
+ * The site's pages in a visitor's order, each reached by its link (a full page load, as the site
+ * serves them), with what shows it has hydrated: the header's theme button states its state once
+ * it has, and the home page's demo shows the balance once its data is in.
+ */
+const JOURNEY: { path: string; link: (page: Page) => Locator }[] = [
+  { path: "/compare", link: (page) => page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Compare" }) },
+  { path: "/docs", link: (page) => page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Docs" }) },
+  { path: "/docs/integration", link: (page) => page.getByRole("navigation", { name: "Documentation" }).getByRole("link", { name: "Integration guide" }) },
+  { path: "/reference", link: (page) => page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "API reference" }) },
+  { path: "/#demo", link: (page) => page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Demo" }) },
+  { path: "/", link: (page) => page.getByRole("link", { name: "Phala Pay home" }) },
+];
+
+test("moving between pages keeps their server HTML: no hydration error, and nothing shifts", async ({ browser }) => {
+  // Each page is complete as it arrives, and hydrating it changes nothing in view: React reports no
+  // hydration error (a mismatch logs one and replaces the server's HTML), each island's server-
+  // rendered element is still the one in the page once hydrated, and the browser records no layout
+  // shift, in either theme, at a desktop and a phone.
+  test.setTimeout(240_000);
+  for (const colorScheme of ["light", "dark"] as const) {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const context = await browser.newContext({ colorScheme, viewport });
+      try {
+        await context.addInitScript(() => {
+          window.layoutShifts = [];
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              if ("value" in entry && typeof entry.value === "number" && "hadRecentInput" in entry && entry.hadRecentInput === false) window.layoutShifts.push(entry.value);
+            }
+          }).observe({ type: "layout-shift", buffered: true });
+          // Each island's first element as the server rendered it, before any script of the page's ran.
+          document.addEventListener("readystatechange", () => {
+            if (document.readyState !== "interactive") return;
+            const islands = [...document.querySelectorAll("#site-header, #site-footer, #hero-code, #deploy-command, #demo-root")];
+            Object.assign(window, { serverIslands: islands.map((island) => island.firstElementChild) });
+          });
+        });
+        const page = await context.newPage();
+        const problems = await watchConsole(page);
+        const hydrated = async (path: string) => {
+          await expect(page.getByRole("button", { name: "Dark theme" })).toHaveAttribute("aria-pressed", String(colorScheme === "dark"));
+          if (path.startsWith("/#") || path === "/") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+          await page.evaluate(() => document.fonts.ready);
+          const { shifts, replaced } = await page.evaluate(() => ({
+            shifts: window.layoutShifts,
+            replaced: ((window as unknown as { serverIslands?: (Element | null)[] }).serverIslands ?? [null]).filter((node) => node === null || !node.isConnected).length,
+          }));
+          const where = `${path}, ${colorScheme}, ${viewport.width}px`;
+          expect(replaced, `${where}: islands replaced on hydration`).toBe(0);
+          expect(shifts, `${where}: layout shifts`).toEqual([]);
+        };
+        await page.goto(env("SITE_URL"));
+        await hydrated("/");
+        for (const { path, link } of JOURNEY) {
+          // On a phone the site's links are in the menu, and the docs' in the page's own.
+          if (viewport.width < 768) {
+            await page.goto(new URL(path, env("SITE_URL")).href);
+          } else {
+            await Promise.all([page.waitForURL(new URL(path, env("SITE_URL")).href), link(page).click()]);
+          }
+          await hydrated(path);
+        }
+        expect(problems, `${colorScheme}, ${viewport.width}px`).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+});
+
+test("a link to a part of a page opens the page at that part from its first frame", async ({ browser }) => {
+  // The header's Demo link (/#demo) and the hero's call to deploy (a docs section): the new page's
+  // first frame is already at the part, not at the page's top for a frame before it. The browser
+  // paints as it parses, and scrolls to the part only once the page's scripts have run. Measured
+  // where that shows: without motion (no cross-fade covers a frame), and on a slow device (the CPU
+  // throttled sixfold, as the CI runner's is slow), where the parser yields to the renderer before
+  // the page is parsed. The first frame is the page's first animation frame: rendering runs none
+  // before it.
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+  try {
+    await context.addInitScript(() => {
+      requestAnimationFrame(() => Object.assign(window, { firstFrameScroll: scrollY }));
+    });
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    const cases: [string, string, Locator, string][] = [
+      ["/compare", "/#demo", page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Demo" }), "#demo"],
+      ["/", "/docs/self-hosting#one-command-deploy", page.getByRole("link", { name: "Start a testnet instance" }).first(), "#one-command-deploy"],
+    ];
+    for (const [from, to, link, target] of cases) {
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+      await page.goto(new URL(from, env("SITE_URL")).href);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 6 });
+      await Promise.all([page.waitForURL(new URL(to, env("SITE_URL")).href), link.click()]);
+      await expect(page.locator(target)).toBeInViewport();
+      const { first, now, top } = await page.evaluate((selector) => ({
+        first: (window as unknown as { firstFrameScroll: number }).firstFrameScroll,
+        now: scrollY,
+        top: document.querySelector(selector)?.getBoundingClientRect().top ?? -1,
+      }), target);
+      expect(first, `${to}: the first frame's scroll`).toBeGreaterThan(0);
+      expect(Math.abs(first - now), `${to}: the first frame at the part (${first}, then ${now})`).toBeLessThanOrEqual(1);
+      expect(top, `${to}: the part under the header`).toBeGreaterThanOrEqual(0);
+    }
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+  } finally {
+    await context.close();
+  }
+});
+
+test("the head's theme bootstrap alone sets the visitor's theme, with every module script refused", async ({ browser }) => {
+  // Only the head's inline theme script may run: every module script is refused, so nothing else of
+  // the page's can set the theme. The page's class and background are then the visitor's theme: the
+  // system's dark preference, or a choice stored earlier over it.
+  const dark = "oklch(0.145 0 0)";
+  const light = "oklch(1 0 0)";
+  const cases = [
+    { colorScheme: "dark" as const, stored: null, background: dark },
+    { colorScheme: "light" as const, stored: "dark", background: dark },
+    { colorScheme: "dark" as const, stored: "light", background: light },
+  ];
+  for (const { colorScheme, stored, background } of cases) {
+    const context = await browser.newContext({ colorScheme });
+    try {
+      await context.route("**/assets/*.js", (route) => route.abort());
+      if (stored !== null) await context.addInitScript((theme) => localStorage.setItem("demo-theme", theme), stored);
+      const page = await context.newPage();
+      for (const path of ["", "compare", "docs/integration", "reference"]) {
+        await page.goto(new URL(path, env("SITE_URL")).href);
+        const painted = await page.evaluate(() => ({
+          dark: document.documentElement.classList.contains("dark"),
+          background: getComputedStyle(document.body).backgroundColor,
+        }));
+        expect(painted, `/${path}, ${colorScheme} system, ${stored ?? "nothing"} stored`).toEqual({ dark: background === dark, background });
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
 
 test("the hero's facts wrap alike, and the note under them qualifies the time", async ({ page }) => {
   // The owner's regression: one fact's meaning on two lines beside its siblings' one. At every

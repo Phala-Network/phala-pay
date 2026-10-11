@@ -4,10 +4,13 @@
 # The page reads the demo API (pay-demo-api.phala.com) and the service's public quote and deposit
 # address views (pay-api-staging.phala.com), and sends the visitor's wallet requests through the
 # wallet's provider (no network access). Its typeface is bundled with its assets; its web app
-# manifest is its own. Radix ScrollArea injects a fixed scrollbar rule; the sole style hash
-# permits that exact dependency stylesheet. The script hash permits only the theme bootstrap. SDK and application CSS are static assets.
+# manifest is its own. Radix ScrollArea injects a fixed scrollbar rule; style-src's hash permits
+# that exact dependency stylesheet. The prerendered demo carries the style attributes Radix renders
+# (a tab list's and a tab panel's, a radio group's form input); style-src-attr permits those values
+# by their exact hashes ('unsafe-hashes') and no others (scripts/prerender.ts checks every page's).
+# The script hash permits only the theme bootstrap. SDK and application CSS are static assets.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self' 'sha256-mVtueoQ5GQcZDX7xIyJPGoyXjAeMO5ZvH1gjKzMcCLU='; style-src 'self' 'sha256-vGQdhYJbTuF+M8iCn1IZCHpdkiICocWHDq4qnQF4Rjw='; font-src 'self'; img-src 'self' data:; connect-src 'self' https://pay-demo-api.phala.com https://pay-api-staging.phala.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'sha256-jL+r/wyn21X9/1x5JDr0VxnGQROJD5W7MmAaQIYsJRQ='; style-src 'self' 'sha256-vGQdhYJbTuF+M8iCn1IZCHpdkiICocWHDq4qnQF4Rjw='; style-src-attr 'unsafe-hashes' 'sha256-MtxTLcyxVEJFNLEIqbVTaqR4WWr0+lYSZ78AzGmNsuA=' 'sha256-PhrR5O1xWiklTp5YfH8xWeig83Y/rhbrdb5whLn1pSg=' 'sha256-2cnE1GtP/E924RqY1dke4GjgMTwo242VoJSnZn4Jdcw='; font-src 'self'; img-src 'self' data:; connect-src 'self' https://pay-demo-api.phala.com https://pay-api-staging.phala.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
 

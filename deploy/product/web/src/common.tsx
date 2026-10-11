@@ -37,7 +37,10 @@ export function loadSdk() {
   return import("@phala/pay-react");
 }
 
-/** Whether the media query matches, following it as it changes. The demo renders on the client only. */
+/**
+ * Whether the media query matches, following it as it changes. The prerendered demo, and its first
+ * render on the client (which must match it), take the phone's layout: false.
+ */
 export function useMediaQuery(query: string): boolean {
   return useSyncExternalStore(
     (onChange) => {
@@ -46,6 +49,7 @@ export function useMediaQuery(query: string): boolean {
       return () => list.removeEventListener("change", onChange);
     },
     () => window.matchMedia(query).matches,
+    () => false,
   );
 }
 

@@ -1,21 +1,23 @@
 import type { Appearance } from "@phala/pay-react";
-import "@phala/pay-react/styles.css";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { CreatedQuote, DepositAddressResponse, Selection } from "./api.js";
 import { Backend } from "./Backend.js";
 import { queryView } from "./queryView.js";
-import { GRID, LEFT, RIGHT } from "./layout.js";
+import { DEMO_GRID, DEMO_LEFT, DEMO_RIGHT } from "./layout.js";
 import { cn } from "@/lib/utils";
 import { Product, type Method } from "./Product.js";
 import { queryClient, keys, useAccount, useDepositAddress, useNetworks, useTimeline, useTrust } from "./queries.js";
-import type { Theme } from "./theme.js";
+import { useTheme } from "./theme.js";
 
-export default function Demo({ theme }: { theme: Theme }) {
-  return <QueryClientProvider client={queryClient}><DemoContent theme={theme} /></QueryClientProvider>;
+export default function Demo() {
+  return <QueryClientProvider client={queryClient}><DemoContent /></QueryClientProvider>;
 }
 
-function DemoContent({ theme }: { theme: Theme }) {
+function DemoContent() {
+  // Inside the island's boundary: the prerendered panels take the light theme (the server cannot know
+  // the visitor's), and so does the first render that hydrates them; then the page's theme.
+  const [theme] = useTheme();
   const queryClient = useQueryClient();
   const account = useAccount();
   const networks = useNetworks();
@@ -89,8 +91,8 @@ function DemoContent({ theme }: { theme: Theme }) {
     <>
       {/* Two sibling cards on the page's grid, the customer's view and (beside it from lg) what the
           backend sees: product windows of one height, the shorter one's tab panel taking the rest. */}
-      <div className={cn(GRID, "gap-y-6 lg:items-stretch")}>
-        <div data-column="left" className={cn(LEFT, "flex flex-col")}>
+      <div data-layout="demo" className={cn(DEMO_GRID, "gap-y-6 lg:items-stretch xl:flex-1")}>
+        <div data-column="left" className={cn(DEMO_LEFT, "flex flex-col")}>
           <Product
             account={views.account}
             networks={views.networks}
@@ -108,7 +110,7 @@ function DemoContent({ theme }: { theme: Theme }) {
             appearance={appearance}
           />
         </div>
-        <div data-column="right" className={cn(RIGHT, "flex flex-col")}>
+        <div data-column="right" className={cn(DEMO_RIGHT, "flex flex-col")}>
           <Backend
             account={views.account}
             selected={selected}

@@ -10,7 +10,9 @@ import { DocsPage } from "./DocsPage.js";
 import { ReferencePage } from "./ReferencePage.js";
 import docs from "virtual:docs";
 import reference from "virtual:reference";
-import { ClosingCta, CompareTeaser, DemoSection, DeployCommand, Faq, Features, Hero, HeroCode, SiteFooter, WhereTheMoneyGoes, type Section } from "./Site.js";
+import Demo from "./Demo.js";
+import { DemoIsland } from "./DemoIsland.js";
+import { ClosingCta, CompareTeaser, DEMO_ROOT, DemoSection, DeployCommand, Faq, Features, Hero, HeroCode, SiteFooter, WhereTheMoneyGoes, type Section } from "./Site.js";
 
 /**
  * An island: rendered on its own, with the identifier prefix its client root hydrates with, so the
@@ -34,7 +36,7 @@ function Main({ page }: { page: Page }) {
       return (
         <main id="top" className="flex-1">
           <Hero code={<Island id="hero-code" prefix={ISLAND_PREFIXES.heroCode}><HeroCode /></Island>} />
-          <DemoSection />
+          <DemoSection island={<Island id="demo-root" prefix={ISLAND_PREFIXES.demo} className={DEMO_ROOT}><DemoIsland demo={Demo} /></Island>} />
           <WhereTheMoneyGoes />
           <Features />
           <CompareTeaser />
@@ -65,7 +67,7 @@ function docOf(page: Page) {
 export function render(page: Page): { head: string; html: string } {
   const html = renderToString(
     <div className="flex min-h-svh flex-col">
-      <Island id="site-header" prefix={ISLAND_PREFIXES.header} className="sticky top-0 z-50" current={sectionOf(page)}><Header current={sectionOf(page)} /></Island>
+      <Island id="site-header" prefix={ISLAND_PREFIXES.header} className="sticky top-0 z-50 [view-transition-name:site-header]" current={sectionOf(page)}><Header current={sectionOf(page)} /></Island>
       <Main page={page} />
       <Island id="site-footer" prefix={ISLAND_PREFIXES.footer}><SiteFooter /></Island>
     </div>,

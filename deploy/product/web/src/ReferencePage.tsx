@@ -6,11 +6,11 @@ import { Eyebrow } from "./Site.js";
 import { DocsMobileNav, LABEL, NAV_LINK, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEBAR_LAYOUT } from "./DocsPage.js";
 
 /**
- * An operation's or an object's two parts, on the page's grid: the page's nine columns again
- * (same gutter, so the same lines), the fields in four, the example in five (a request's command,
- * URL, and key each fit their line), their first lines on one baseline; stacked below xl.
+ * An operation's or an object's two parts, across the page column: the fields in four ninths, the
+ * example in five (a request's command, URL, and key each fit their line), their first lines on one
+ * baseline; stacked below xl.
  */
-const PART = "grid gap-y-8 xl:grid-cols-9 xl:items-baseline xl:gap-x-8";
+const PART = "grid gap-y-10 xl:grid-cols-9 xl:items-baseline xl:gap-x-12 2xl:gap-x-16";
 
 /**
  * A method as a small mono badge, tinted by its family (a read, a write, a removal); its text stays
@@ -63,7 +63,7 @@ function Fields({ fields, nested = false }: { fields: Field[]; nested?: boolean 
   return (
     <dl className={cn("divide-y border-y", nested && "mt-3 border-b-0 pl-4")}>
       {fields.map((field) => (
-        <div key={field.name} className="py-3">
+        <div key={field.name} className="py-4">
           <dt className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <code className="font-mono text-mono font-semibold text-foreground">{field.name}</code>
             <span className="font-mono text-xs text-muted-foreground"><TypeLabel type={field.type} /></span>
@@ -99,7 +99,7 @@ function Example({ title, label, lines }: { title: string; label: string; lines:
 function OperationSection({ operation }: { operation: OperationModel }) {
   const success = operation.responses.find(({ status }) => status.startsWith("2"));
   return (
-    <section id={operation.anchor} aria-labelledby={`${operation.anchor}-title`} className="scroll-mt-20 border-t py-12">
+    <section id={operation.anchor} aria-labelledby={`${operation.anchor}-title`} className="scroll-mt-20 border-t py-14 2xl:py-16">
       <div data-layout="operation" className={PART}>
         <div data-column="left" className="min-w-0 xl:col-span-4">
           <h3 id={`${operation.anchor}-title`} className="text-heading font-semibold">{operation.summary}</h3>
@@ -107,7 +107,7 @@ function OperationSection({ operation }: { operation: OperationModel }) {
             <Method method={operation.method} />
             <span className="break-all">{operation.path}</span>
           </p>
-          {operation.html !== "" && <div className={cn(PROSE, "mt-4")} dangerouslySetInnerHTML={{ __html: operation.html }} />}
+          {operation.html !== "" && <div className={cn(PROSE, "mt-5")} dangerouslySetInnerHTML={{ __html: operation.html }} />}
           {operation.parameters.map(({ in: place, fields }) => (
             <div key={place} className="mt-8">
               <h4 className="mb-2 text-sm font-semibold">{place === "path" ? "Path parameters" : place === "query" ? "Query parameters" : "Headers"}</h4>
@@ -124,7 +124,7 @@ function OperationSection({ operation }: { operation: OperationModel }) {
             <h4 className="mb-2 text-sm font-semibold">Responses</h4>
             <dl className="divide-y border-y">
               {operation.responses.map(({ status, html, type }) => (
-                <div key={status} className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-3 py-2.5 text-sm">
+                <div key={status} className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-3 py-3.5 text-sm">
                   <dt className={cn("font-mono font-semibold", status.startsWith("2") ? "text-success" : "text-foreground")}>{status}</dt>
                   <dd className="min-w-0">
                     <div className={cn(PROSE, "text-sm [&_p]:m-0")} dangerouslySetInnerHTML={{ __html: html }} />
@@ -196,34 +196,34 @@ export function ReferencePage({ model }: { model: ReferenceModel }) {
         <DocsMobileNav label="API reference menu"><ReferenceNav model={model} /></DocsMobileNav>
         <Eyebrow>API reference · v{model.version}</Eyebrow>
         <h1 className="mt-4 text-title-sm font-semibold sm:text-title">{model.title}</h1>
-        <div className={cn(PROSE, "mt-4 max-w-3xl")} dangerouslySetInnerHTML={{ __html: model.lead }} />
-        <dl className="mt-6 grid gap-2 text-sm sm:grid-cols-2">
+        <div className={cn(PROSE, "mt-6 text-lead")} dangerouslySetInnerHTML={{ __html: model.lead }} />
+        <dl className="mt-8 grid max-w-5xl gap-4 text-sm sm:grid-cols-2">
           {model.servers.map(({ url, description }) => (
-            <div key={url} className="rounded-xl border bg-card px-5 py-4 shadow-card">
+            <div key={url} className="rounded-xl border bg-card px-6 py-5 shadow-card">
               <dt className="text-muted-foreground">{description}</dt>
               <dd className="mt-1 font-mono text-mono break-all">{url}</dd>
             </div>
           ))}
         </dl>
         {model.intro.map(({ id, title, html }) => (
-          <section key={id} id={id} aria-labelledby={`${id}-title`} className="scroll-mt-20 border-t py-10 first-of-type:mt-10">
+          <section key={id} id={id} aria-labelledby={`${id}-title`} className="scroll-mt-20 border-t py-12 first-of-type:mt-12">
             <h2 id={`${id}-title`} className="text-title-sm font-semibold">{title}</h2>
-            <div className={cn(PROSE, "mt-4 max-w-3xl")} dangerouslySetInnerHTML={{ __html: html }} />
+            <div className={cn(PROSE, "mt-5")} dangerouslySetInnerHTML={{ __html: html }} />
           </section>
         ))}
         {model.tags.map(({ name, title, anchor, html, operations }) => (
-          <section key={name} id={anchor} aria-labelledby={`${anchor}-title`} className="scroll-mt-20 pt-16">
+          <section key={name} id={anchor} aria-labelledby={`${anchor}-title`} className="scroll-mt-20 pt-20">
             <h2 id={`${anchor}-title`} className="text-title-sm font-semibold">{title}</h2>
-            {html !== "" && <div className={cn(PROSE, "mt-3 max-w-3xl")} dangerouslySetInnerHTML={{ __html: html }} />}
-            <div className="mt-6">
+            {html !== "" && <div className={cn(PROSE, "mt-4")} dangerouslySetInnerHTML={{ __html: html }} />}
+            <div className="mt-8">
               {operations.map((operation) => <OperationSection key={operation.id} operation={operation} />)}
             </div>
           </section>
         ))}
-        <section id="objects" aria-labelledby="objects-title" className="scroll-mt-20 pt-16">
+        <section id="objects" aria-labelledby="objects-title" className="scroll-mt-20 pt-20">
           <h2 id="objects-title" className="text-title-sm font-semibold">Objects</h2>
           {model.schemas.map(({ name, anchor, html, fields, example }) => (
-            <section key={name} id={anchor} aria-labelledby={`${anchor}-title`} className="scroll-mt-20 border-t py-10">
+            <section key={name} id={anchor} aria-labelledby={`${anchor}-title`} className="scroll-mt-20 border-t py-12">
               <div data-layout="operation" className={PART}>
                 <div data-column={example === undefined ? undefined : "left"} className={cn("min-w-0", example === undefined ? "xl:col-span-9" : "xl:col-span-4")}>
                   <h3 id={`${anchor}-title`} className="font-mono text-base font-semibold"><SchemaName name={name} /></h3>
