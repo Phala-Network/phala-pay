@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
-import { ASIDE, DEMO_GRID, DEMO_LEFT, DEMO_RIGHT, GRID, LEFT, MAIN, RIGHT } from "./layout.js";
+import { ASIDE, GRID, LEFT, MAIN, RIGHT } from "./layout.js";
 import { useHydrated } from "./islands.js";
 import { ComparisonCell } from "./ComparisonCell.js";
 import { Versus } from "./Versus.js";
@@ -36,14 +36,14 @@ export const LINKS = {
 };
 
 /**
- * The page's width: the whole viewport less a gutter on each side that grows with it (24px on a
- * phone to 96px on a wide screen, `--spacing-gutter`), for every section and the header and footer,
- * so all share a left edge; the 12-column grid inside it is src/layout.ts. No section is held to a
- * maximum width: every one reaches from gutter to gutter, its content spread through the grid's
- * columns (more of them on a wider screen) rather than through empty space. Only running text keeps
- * a measure (LEAD, `max-w-measure`), and a form its width (the demo's customer column).
+ * The page's content, for every section and the header and footer, so all share both edges: the
+ * viewport less a gutter on each side (`--spacing-gutter`: 24px on a phone, 32px at 1280, 40px at
+ * 1440), up to 1600px (`--container-page`), centred on a wider screen. A section's background and
+ * its rules stay on the section, from one edge of the viewport to the other; only its content is
+ * held. Inside it, the 12-column grid of src/layout.ts; running text keeps a measure (LEAD,
+ * `max-w-measure`).
  */
-export const CONTAINER = "w-full px-gutter";
+export const CONTAINER = "mx-auto w-full max-w-[calc(var(--container-page)+2*var(--spacing-gutter))] px-gutter";
 /** Every H2, and every other page's H1: a step larger on a wide screen. */
 export const H2 = "text-title-sm font-semibold text-balance sm:text-title 2xl:text-title-lg";
 /** A section's introduction under its heading, at a reading measure; a step larger from lg. */
@@ -346,8 +346,8 @@ export function HeroCode() {
             <div key={key} role="tabpanel" id={`${id}-panel-${key}`} aria-labelledby={`${id}-tab-${key}`}
               className={cn("col-start-1 row-start-1 min-w-0", index !== shown && "invisible")}>
               {/* On a phone, 12px code in a 16px margin: the snippets' 45-character lines fit 390px;
-                  on a wide screen, 14px, and 16px from 3xl, in its wider window. */}
-              <CodeBody label={file} className="px-4 text-xs/relaxed sm:px-5 sm:text-mono 2xl:px-7 2xl:text-sm/7 3xl:px-8 3xl:text-base/8">
+                  on a wide screen, 14px, in its wider window. */}
+              <CodeBody label={file} className="px-4 text-xs/relaxed sm:px-5 sm:text-mono 2xl:px-7 2xl:text-sm/7">
                 <HighlightedLines lines={lines} />
               </CodeBody>
             </div>
@@ -370,10 +370,10 @@ export function DemoSection({ island }: { island: ReactNode }) {
     // From xl one height in every state (`--spacing-demo`), the panels filling it.
     <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface xl:flex xl:min-h-demo xl:flex-col">
       <div className={cn(CONTAINER, "py-6 xl:flex xl:flex-1 xl:flex-col")}>
-        {/* The demo's own columns (src/layout.ts), the heading over the customer's, the lead over the
-            backend's; its heading a step under the others' on a wide screen, beside its status. */}
-        <div data-layout="demo" className={cn(DEMO_GRID, "gap-y-3 lg:items-baseline")}>
-          <div data-column="left" className={cn(DEMO_LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-2")}>
+        {/* The split, the heading over the customer's column, the lead over the backend's; its
+            heading a step under the others' on a wide screen, beside its status. */}
+        <div data-layout="split" className={cn(GRID, "gap-y-3 lg:items-baseline")}>
+          <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-2")}>
             <h2 id="demo-title" className={cn(H2, "2xl:text-title")}>{DEMO_TITLE}</h2>
             <p className="inline-flex h-7 items-center gap-2 self-center rounded-full border bg-card px-3 text-sm font-medium text-body-foreground shadow-card">
               <span aria-hidden="true" className="relative flex size-2">
@@ -384,7 +384,7 @@ export function DemoSection({ island }: { island: ReactNode }) {
             </p>
           </div>
           {/* The lead a step under the other sections' (one line, within the screen's budget). */}
-          <p data-column="right" className={cn(DEMO_RIGHT, LEAD, "lg:text-lead")}>{DEMO_LEAD}</p>
+          <p data-column="right" className={cn(RIGHT, LEAD, "lg:text-lead")}>{DEMO_LEAD}</p>
         </div>
         {/* The demo, prerendered (its island, src/DemoIsland.tsx): both panels are in the page as it
             arrives, so nothing moves when the demo hydrates. Without script it cannot work, so it
@@ -479,8 +479,8 @@ export function WhereTheMoneyGoes() {
 function FeatureCard({ title, text, className, children }: { title: string; text: string; className?: string; children: ReactNode }) {
   return (
     <div data-feature className={cn("flex min-w-0 flex-col rounded-xl border bg-card shadow-card lg:row-span-2 lg:grid lg:grid-rows-subgrid lg:gap-y-0", className)}>
-      <div data-feature-well className="flex flex-col justify-center border-b px-7 py-9 sm:px-10 sm:py-10 2xl:px-12 2xl:py-12 3xl:px-10">{children}</div>
-      <div className="px-7 py-8 sm:px-10 sm:py-9 2xl:px-12 2xl:py-10 3xl:px-10">
+      <div data-feature-well className="flex flex-col justify-center border-b px-7 py-9 sm:px-10 sm:py-10 2xl:px-12 2xl:py-12">{children}</div>
+      <div className="px-7 py-8 sm:px-10 sm:py-9 2xl:px-12 2xl:py-10">
         <h3 className="text-heading font-semibold">{title}</h3>
         <p className="mt-3 max-w-measure text-pretty text-body-foreground lg:text-lg/7">{unbroken(text)}</p>
       </div>
@@ -522,12 +522,12 @@ function CreditTimes() {
 
 /**
  * Names as chips, two to a row from sm (none left alone on a row: each list has four), one below;
- * their label beside them, or above them in a card of four to a row (3xl).
+ * their label beside them.
  */
 function Chips({ label, items }: { label: string; items: string[] }) {
   return (
-    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center 3xl:flex-col 3xl:items-start">
-      <p className={cn(CARD_LABEL, "sm:w-24 sm:shrink-0 3xl:w-auto")}>{label}</p>
+    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+      <p className={cn(CARD_LABEL, "sm:w-24 sm:shrink-0")}>{label}</p>
       {/* Two columns as wide as their names (a name never breaks inside its chip). */}
       <ul className="grid gap-2.5 sm:grid-cols-[repeat(2,max-content)] 2xl:gap-3">
         {items.map((item) => (
@@ -547,21 +547,20 @@ export function Features() {
       <div className={cn(CONTAINER, SECTION)}>
         <Intro id="features-title" eyebrow={EYEBROWS.features} title={FEATURES_TITLE} lead={PROPERTIES_LEAD} />
         <div className="mt-14 grid gap-6 lg:mt-20 lg:grid-cols-12 lg:gap-8">
-          {/* Two rows of two cards, wide and narrow, then narrow and wide; from 3xl one row of four.
-              Each card is two of the grid's rows (its figure, its text), shared with the cards
-              beside it. */}
-          <FeatureCard className="lg:col-span-5 3xl:col-span-3" title={fee.title} text={fee.text}>
+          {/* Two rows of two cards, wide and narrow, then narrow and wide. Each card is two of the
+              grid's rows (its figure, its text), shared with the card beside it. */}
+          <FeatureCard className="lg:col-span-5" title={fee.title} text={fee.text}>
             <p className="text-display-sm font-semibold tabular-nums sm:text-display 2xl:text-display-lg">{FEE_FIGURE.value}</p>
             <p className={cn(CARD_LABEL, "mt-2")}>{FEE_FIGURE.label}</p>
           </FeatureCard>
-          <FeatureCard className="lg:col-span-7 3xl:col-span-3" title={speed.title} text={speed.text}><CreditTimes /></FeatureCard>
-          <FeatureCard className="lg:col-span-7 3xl:col-span-3" title={api.title} text={api.text}>
+          <FeatureCard className="lg:col-span-7" title={speed.title} text={speed.text}><CreditTimes /></FeatureCard>
+          <FeatureCard className="lg:col-span-7" title={api.title} text={api.text}>
             <div className="flex flex-col gap-5 2xl:gap-6">
               <Chips label="SDKs" items={SDK_PACKAGES} />
               <Chips label="Webhooks" items={WEBHOOK_EVENTS} />
             </div>
           </FeatureCard>
-          <FeatureCard className="lg:col-span-5 3xl:col-span-3" title={verify.title} text={verify.text}>
+          <FeatureCard className="lg:col-span-5" title={verify.title} text={verify.text}>
             <ul className="flex flex-col gap-3.5 text-sm 2xl:gap-4 2xl:text-base">
               {VERIFY_CHECKS.map((item) => (
                 <li key={item} className="flex items-center gap-2.5">
@@ -673,23 +672,17 @@ export function Faq() {
               Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.
             </p>
           </div>
-          {/* The questions across the two thirds; from 3xl in two stacks side by side (the first half,
-              then the second), each opening on its own. */}
-          <div data-column="right" className={cn(MAIN, "grid 3xl:grid-cols-2 3xl:items-start 3xl:gap-x-16")}>
-            {[FAQ.slice(0, Math.ceil(FAQ.length / 2)), FAQ.slice(Math.ceil(FAQ.length / 2))].map((stack, index) => (
-              <div key={index} className={index === 0 ? "border-y" : "border-b 3xl:border-t"}>
-                {stack.map(({ question, answer }) => (
-                  <details key={question} className="group border-b last:border-b-0">
-                    <summary className="flex min-h-18 cursor-pointer list-none items-center justify-between gap-8 py-6 text-base font-medium sm:text-lg 2xl:text-xl [&::-webkit-details-marker]:hidden">
-                      <span>{question}</span>
-                      <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-card">
-                        <Plus strokeWidth={1.75} className="size-4 group-open:rotate-45 motion-safe:transition-transform" />
-                      </span>
-                    </summary>
-                    <p className="max-w-measure pb-8 text-base/7 text-pretty text-body-foreground sm:pr-14 lg:text-lg/8">{unbroken(answer)}</p>
-                  </details>
-                ))}
-              </div>
+          <div data-column="right" className={cn(MAIN, "border-y")}>
+            {FAQ.map(({ question, answer }) => (
+              <details key={question} className="group border-b last:border-b-0">
+                <summary className="flex min-h-18 cursor-pointer list-none items-center justify-between gap-8 py-6 text-base font-medium sm:text-lg 2xl:text-xl [&::-webkit-details-marker]:hidden">
+                  <span>{question}</span>
+                  <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-card">
+                    <Plus strokeWidth={1.75} className="size-4 group-open:rotate-45 motion-safe:transition-transform" />
+                  </span>
+                </summary>
+                <p className="max-w-measure pb-8 text-base/7 text-pretty text-body-foreground sm:pr-14 lg:text-lg/8">{unbroken(answer)}</p>
+              </details>
             ))}
           </div>
         </div>

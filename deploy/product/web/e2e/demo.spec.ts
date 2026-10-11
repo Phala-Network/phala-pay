@@ -1994,78 +1994,101 @@ test("one layout grid: every right column starts on one line, and each part's co
 });
 
 
-test("the page takes the viewport's width, less its gutters; running text keeps its measure", async ({ page }) => {
-  // No centred container: on a wide screen every page's header, content, and footer reach from one
-  // gutter (at most 96px) to the other: its header's mark and footer at the left one, its header's
-  // last action and its rightmost content (the hero's code window, the full comparison, the docs'
-  // outline, the reference's examples) at the right one, and every section of the home page and the
-  // comparison at both. Only running text (leads, answers, the docs' paragraphs) stops at its
-  // measure, 36em, and the demo's form at its column's width.
-  const rightmost: Record<string, string> = {
-    "": "#hero-code",
-    compare: "main table",
-    "docs/integration": 'aside nav[aria-label="On this page"]',
-    reference: 'main [data-layout="operation"] [data-column="right"]',
+test("the page's content is the viewport less its gutters, up to 1600px and centred; backgrounds span the viewport", async ({ page }) => {
+  // Every page's header, sections, and footer hold their content in one box: the viewport less its
+  // gutters (32px at 1280, 40px at 1440), and on a wider screen 1600px, centred. Measured by that
+  // box (each container's content box), and by what it holds: the header's mark and footer's brand
+  // at its left edge, the header's last action, the footer's links, and the rightmost content (the
+  // hero's code window, the full comparison, the docs' outline, the reference's examples) at its
+  // right, and every section of the home page and the comparison from one edge to the other. The
+  // sections' backgrounds and rules still span the viewport. Only running text (leads, answers, the
+  // docs' paragraphs) stops at its measure, 36em.
+  // Each page's rightmost content, its containers between the header's and the footer's, and the
+  // parts with a background or a rule besides the header and the footer.
+  const pages: Record<string, { rightmost: string; containers: string; bleeds?: string }> = {
+    "": { rightmost: "#hero-code", containers: "main > section > div:first-child", bleeds: "main > section" },
+    compare: { rightmost: "main table", containers: "main" },
+    "docs/integration": { rightmost: 'aside nav[aria-label="On this page"]', containers: '[data-layout="sidebar"]' },
+    reference: { rightmost: 'main [data-layout="operation"] [data-column="right"]', containers: '[data-layout="sidebar"]' },
   };
+  // The content box's distance from each edge of the viewport.
+  const insets: [number, number][] = [[1280, 32], [1440, 40], [1920, 160], [2560, 480]];
+  // A page's height at 1920: the same at 2560, where its content is as wide.
+  const heights = new Map<string, number>();
   // Still: the custody rail's moving segment would otherwise be measured mid-run.
   await page.emulateMedia({ reducedMotion: "reduce" });
-  for (const width of [1920, 2560]) {
-    for (const [path, content] of Object.entries(rightmost)) {
+  for (const [width, inset] of insets) {
+    for (const [path, { rightmost: content, containers, bleeds }] of Object.entries(pages)) {
       await page.setViewportSize({ width, height: 1000 });
       await page.goto(new URL(path, env("SITE_URL")).href);
+      if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
       const where = `/${path} at ${width}px`;
-      const { gutter, insets } = await page.evaluate((content) => {
-        const right = document.documentElement.clientWidth;
-        const box = (selector: string) => [...document.querySelectorAll(selector)].find((element) => element.checkVisibility())?.getBoundingClientRect();
-        const logo = box('header a[aria-label="Phala Pay home"]');
-        // Each of the insets as far from its edge of the viewport as the header's mark is from its own.
+      const measured = await page.evaluate(({ content, containers, bleeds }) => {
+        const viewport = document.documentElement.clientWidth;
+        const shown = (selector: string) => [...document.querySelectorAll(selector)].find((element) => element.checkVisibility());
+        const box = (selector: string) => shown(selector)?.getBoundingClientRect();
+        // Each container's content box: the header's, the page's (each section's on the home page),
+        // and the footer's.
+        const boxes = [...document.querySelectorAll<HTMLElement>(`#site-header > header > div:first-child, ${containers}, #site-footer > footer > div`)].map((element) => {
+          const { left, right } = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          const name = element.closest("[aria-labelledby]")?.getAttribute("aria-labelledby") ?? element.parentElement?.tagName.toLowerCase() ?? "?";
+          return { name, left: left + parseFloat(style.paddingLeft), right: viewport - (right - parseFloat(style.paddingRight)) };
+        });
+        // The parts with a background or a rule: from one edge of the viewport to the other.
+        const edgeToEdge = [...document.querySelectorAll<HTMLElement>(["#site-header > header", bleeds, "#site-footer > footer"].filter(Boolean).join(", "))].map((element) => {
+          const { left, right } = element.getBoundingClientRect();
+          return { name: element.getAttribute("aria-labelledby") ?? element.tagName.toLowerCase(), left, right: viewport - right };
+        });
         return {
-          gutter: logo?.left ?? 0,
-          insets: {
+          viewport,
+          height: document.documentElement.scrollHeight,
+          containers: boxes,
+          bleeds: edgeToEdge,
+          edges: {
+            "header's mark": box('header a[aria-label="Phala Pay home"]')?.left ?? 0,
             "footer's brand": box('footer [data-column="left"]')?.left ?? 0,
-            "header's last action": right - (box('header a[href="/docs/self-hosting"]')?.right ?? 0),
-            "footer's links": right - (box('footer [data-column="right"]')?.right ?? 0),
-            [content]: right - (box(content)?.right ?? 0),
+            "header's last action": viewport - (box('header a[href="/docs/self-hosting"]')?.right ?? 0),
+            "footer's links": viewport - (box('footer [data-column="right"]')?.right ?? 0),
+            [content]: viewport - (box(content)?.right ?? 0),
           },
         };
-      }, content);
-      expect(gutter, `${where}: gutter`).toBeGreaterThanOrEqual(24);
-      expect(gutter, `${where}: gutter`).toBeLessThanOrEqual(96);
-      for (const [name, inset] of Object.entries(insets)) expect(Math.abs(inset - gutter), `${where}: ${name}`).toBeLessThanOrEqual(1);
-      // Every section of the home page and the comparison fills the page from gutter to gutter: its
-      // content (anything shown, short of a full-bleed box) starts at one and ends at the other.
+      }, { content, containers, bleeds });
+      expect(measured.viewport, where).toBe(width);
+      expect(measured.containers.length, `${where}: containers`).toBeGreaterThanOrEqual(3);
+      for (const { name, left, right } of measured.containers) {
+        expect(Math.abs(left - inset), `${where}, ${name}'s content: left edge`).toBeLessThanOrEqual(1);
+        expect(Math.abs(right - inset), `${where}, ${name}'s content: right edge`).toBeLessThanOrEqual(1);
+      }
+      for (const { name, left, right } of measured.bleeds) {
+        expect([left, right], `${where}, ${name}: from edge to edge`).toEqual([0, 0]);
+      }
+      for (const [name, edge] of Object.entries(measured.edges)) expect(Math.abs(edge - inset), `${where}: ${name}`).toBeLessThanOrEqual(1);
+      if (width === 1920) heights.set(path, measured.height);
+      if (width === 2560) expect(measured.height, `${where}: the page's height, as at 1920`).toBe(heights.get(path));
+      // Every section of the home page and the comparison fills its content box: its content
+      // (anything shown, short of a container or a full-bleed box) starts at one edge and ends at
+      // the other.
       if (path === "" || path === "compare") {
-        const sections = await page.locator("main").evaluate((main) => {
-          const right = document.documentElement.clientWidth;
+        const sections = await page.locator("main").evaluate((main, inset) => {
+          const viewport = document.documentElement.clientWidth;
           return [...main.querySelectorAll<HTMLElement>(":scope > section, :scope section[id]")].map((section) => {
             const boxes = [...section.querySelectorAll<HTMLElement>("*")]
               // Shown: not transparent (a form control Radix keeps for the form) nor hidden.
               .filter((element) => element.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && element.closest(".sr-only") === null)
               .map((element) => element.getBoundingClientRect())
-              .filter((box) => box.width > 0 && box.width < right - 1);
+              .filter((box) => box.width > 0 && box.width <= viewport - 2 * inset + 1);
             return {
               name: section.getAttribute("aria-labelledby") ?? section.id,
               left: Math.min(...boxes.map((box) => box.left)),
-              right: right - Math.max(...boxes.map((box) => box.right)),
+              right: viewport - Math.max(...boxes.map((box) => box.right)),
             };
           });
-        });
+        }, inset);
         expect(sections.length, `${where}: sections`).toBeGreaterThan(2);
         for (const { name, left, right } of sections) {
-          expect(Math.abs(left - gutter), `${where}, ${name}: left edge`).toBeLessThanOrEqual(1);
-          expect(Math.abs(right - gutter), `${where}, ${name}: right edge`).toBeLessThanOrEqual(1);
-        }
-      }
-      // The demo's form keeps its column's width (38rem from 3xl): no token row and no button wider.
-      if (path === "") {
-        const product = page.getByRole("region", { name: "Customer view" });
-        await expect(product.getByTestId("balance")).toHaveText("$0.00");
-        const rows = [
-          ...await product.getByTestId("token-option").filter({ visible: true }).all(),
-          product.getByRole("button", { name: "Pay with crypto", exact: true }),
-        ];
-        for (const row of rows) {
-          expect((await row.boundingBox())?.width ?? 0, `${where}: ${await row.textContent()}`).toBeLessThanOrEqual(38 * 16);
+          expect(Math.abs(left - inset), `${where}, ${name}: left edge`).toBeLessThanOrEqual(1);
+          expect(Math.abs(right - inset), `${where}, ${name}: right edge`).toBeLessThanOrEqual(1);
         }
       }
       // Running text: no paragraph of more than a line or two wider than its measure.
