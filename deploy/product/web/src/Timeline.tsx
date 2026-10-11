@@ -257,16 +257,17 @@ function StreamStep({
             aria-hidden="true"
           />
         </span>
-        {/* Under 384px, "usually" and "since" over their value, leaving the step's name its line. */}
+        {/* While the stepper is a column (its container under @md), "usually" and "since" over their
+            value, leaving the step's name its line at any width; in a row, the value alone. */}
         <span className="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums @md:text-center @md:text-sm/4">
           {elapsed !== null ? (
             `+${duration(elapsed)}`
           ) : step.at !== null ? (
             <time dateTime={new Date(step.at * 1000).toISOString()}>{clock(step.at)}</time>
           ) : (step.state === "upcoming" || step.state === "current") && usually !== undefined ? (
-            <><span className="max-[24rem]:block @md:hidden">usually </span>{usually}</>
+            <><span className="block @md:hidden">usually </span>{usually}</>
           ) : since !== null ? (
-            <time dateTime={new Date(since * 1000).toISOString()}><span className="max-[24rem]:block @md:hidden">since </span>{clock(since)}</time>
+            <time dateTime={new Date(since * 1000).toISOString()}><span className="block @md:hidden">since </span>{clock(since)}</time>
           ) : null}
         </span>
       </button>

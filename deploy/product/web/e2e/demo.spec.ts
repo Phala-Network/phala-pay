@@ -2398,8 +2398,9 @@ test("the hero's facts wrap alike, and the note under them qualifies the time", 
  * one. Returned: its lines; its words broken across two lines, save where a word may break (after a
  * `/`; at a `<wbr>`, where an identifier divides (scripts/markdown.ts, src/lib/typesetting.ts) or an
  * id's groups of four meet (src/components/ui/hash.tsx), but never between an id's prefix and its
- * hex; at the hyphen of a word wider than the whole line; anywhere in a hash); its runs that
- * read as one (a number and its unit, a rate, a date, the product's name) split across lines; and
+ * hex; at the hyphen of a word wider than the whole line; anywhere in a hash or a base64 key past
+ * its prefix); its runs that read as one (a number and its unit, a rate, a date, the product's name)
+ * split across lines; and
  * whether its last line is a lone short word that the word before it would have fitted beside,
  * without making two balanced lines less even.
  */
@@ -2470,7 +2471,9 @@ async function typeset(page: Page, selector: string): Promise<{ text: string; li
           const allowed = before === "/" ||
             (wbr.has(at) && !(before === "_" && /^[0-9a-f]{8,}/i.test(rest))) ||
             (before === "-" && width > content) ||
-            (/^[("'`]?(0x|[a-z]{2,8}_)?[0-9a-f]{24,}/i.test(match[0]) && /^[0-9a-f]/i.test(rest) && /[0-9a-f]$/i.test(before));
+            (/^[("'`]?(0x|[a-z]{2,8}_)?[0-9a-f]{24,}/i.test(match[0]) && /^[0-9a-f]/i.test(rest) && /[0-9a-f]$/i.test(before)) ||
+            // A key in base64 (`whpk_…`, a webhook signing key), past its prefix.
+            (/^[a-z]{2,8}_[A-Za-z0-9+/]{24,}={0,2}$/.test(match[0]) && !/_$/.test(before));
           if (!allowed) broken.push(`${text.slice(start, at)}|${rest}`);
         }
         const unit = unitOf(start);
@@ -2525,7 +2528,7 @@ async function outsideTheirBox(page: Page, scope: string): Promise<string[]> {
   })));
 }
 
-/** Units and short labels: each on one line (a step's title, in a column, only a short one: three words). */
+/** Units and short labels: each on one line (a step's title, in a column, up to four words). */
 const ONE_LINE = [
   "header nav a", "header [data-slot=button]", "main [data-slot=button]", "[data-facts] dd", "footer nav a",
   `${DEMO_SECTION} [role=tab]`, "[data-slot=segmented-control-item]", "[data-testid=token-price]", "[data-testid=token-bonus]",
@@ -2542,17 +2545,18 @@ const TEXT = (scope: string) => `${scope} :is(p, li, dt, dd, td, th, h1, h2, h3,
 const TYPE_WIDTHS = [320, 360, 390, 768, 1024, 1280, 1440, 1920];
 /**
  * At 320px, what may not fit, each for its reason: a vendor's three-word name in a column of the
- * comparison half a phone wide.
+ * comparison half a phone wide; a step's name of four words and its menu's chevron (about 167px)
+ * beside its time (162px beside "+0 s", 130px beside "since" over a time). From 360px each fits.
  */
-const AT_320 = ["Stripe stablecoin payments"];
+const AT_320 = ["Stripe stablecoin payments", "Received by Phala Pay", "Swept to the treasury"];
 
 /** Every check of the text in `scope` at the page's current width. */
 async function expectTypeset(page: Page, where: string, width: number, scope = "") {
-  const allowed = (text: string) => width <= 360 && AT_320.some((each) => text.includes(each));
+  const allowed = (text: string) => width <= 320 && AT_320.some((each) => text.includes(each));
   for (const selector of ONE_LINE) {
     const short = selector.startsWith("[data-step]");
     const wrapped = (await typeset(page, `${scope} ${selector}`.trim()))
-      .filter(({ lines, text }) => lines.length > 1 && !allowed(text) && (!short || text.split(" ").length <= 3))
+      .filter(({ lines, text }) => lines.length > 1 && !allowed(text) && (!short || lines.flat().length <= 4))
       .map(({ lines }) => lines.map((line) => line.join(" ")).join(" / "));
     expect(wrapped, `${where}: ${selector} on more than one line`).toEqual([]);
   }
@@ -2594,7 +2598,7 @@ test("type sets well: units and labels on one line, no word split, no heading en
   }
 });
 
-test("the demo sets its text well while it loads and once a payment is credited, at every width", async ({ browser, page }) => {
+test("the demo sets its text well while it loads, while paying, once credited, and once final, at every width", async ({ browser, page }) => {
   test.setTimeout(600_000);
   // While its data loads (the API held): the placeholders keep to their boxes, and the page does not scroll sideways.
   const loading = await browser.newPage();
@@ -2618,23 +2622,36 @@ test("the demo sets its text well while it loads and once a payment is credited,
   await expect(product.getByTestId("balance")).toHaveText(/^\$/);
   await page.getByRole("note", { name: "Test tokens" }).getByRole("button", { name: /^Mint 1,000 test PHA/ }).click();
   await expect(page.getByRole("note", { name: "Test tokens" })).toContainText("Minted:");
+  // Each state on each of the backend's tabs, at every width: every list shown in full (the API's
+  // requests, the quote's id in its path among them).
+  const pass = async (state: string) => {
+    for (const tab of ["Credits", "API", "Trust", "Sweeps"]) {
+      await openTab(scenes, tab);
+      await showAll(scenes);
+      for (const width of TYPE_WIDTHS) {
+        await page.setViewportSize({ width, height: 900 });
+        await expectTypeset(page, `${state}, ${tab} tab, at ${width}px`, width, DEMO_SECTION);
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+  };
+  // Paying: the checkout, and the stepper waiting for the transfer.
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await expect(product.locator(".pp-summary")).toContainText("PHA");
+  await pass("paying");
+  // Credited: the receipt, the payment's row, its webhook and requests.
   await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
-  for (const tab of ["Credits", "API"]) {
-    await openTab(scenes, tab);
-    if (tab === "API") {
-      // Every request, the quote's (its id in its path) among them.
-      await expect(scenes.getByTestId("webhook-event").first()).toBeVisible({ timeout: 30_000 });
-      await showAll(scenes);
-    }
-    for (const width of TYPE_WIDTHS) {
-      await page.setViewportSize({ width, height: 900 });
-      await expectTypeset(page, `credited, ${tab} tab, at ${width}px`, width, DEMO_SECTION);
-    }
-    await page.setViewportSize({ width: 1440, height: 900 });
-  }
+  await openTab(scenes, "API");
+  await expect(scenes.getByTestId("webhook-event").first()).toBeVisible({ timeout: 30_000 });
+  await pass("credited");
+  // Final and waiting for the sweep: the stepper's last step "since" the final time, beside the
+  // longest of its names ("Swept to the treasury").
+  const timeline = scenes.getByRole("list", { name: "Payment timeline" });
+  await expectComplete(timeline, ["final"]);
+  await expect(step(timeline, "swept")).toHaveAttribute("data-state", "current");
+  await pass("final, awaiting the sweep");
 });
 
 test("the feature cards side by side share their rules and their titles' lines", async ({ page }) => {
