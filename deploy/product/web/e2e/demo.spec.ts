@@ -1620,6 +1620,38 @@ test("home and comparison hydrate in either theme without CSP violations or Reac
   }
 });
 
+test("the checkout takes the site's theme in either theme, over the SDK's defaults", async ({ browser }) => {
+  // The SDK's stylesheet comes before the site's (src/index.css), whose `.pp-root[data-theme]` sets
+  // the components' tokens from the page's: the checkout's surface and primary are the site's muted
+  // fill and primary, not the SDK's own (its dark surface is #18181b).
+  for (const colorScheme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ colorScheme });
+    try {
+      const page = await context.newPage();
+      await page.goto(env("SITE_URL"));
+      const product = page.getByRole("region", { name: "Customer view" });
+      await expect(product.getByTestId("balance")).toHaveText("$0.00");
+      await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+      const checkout = product.locator(".pp-root").first();
+      await expect(checkout).toHaveAttribute("data-theme", colorScheme);
+      const tokens = await checkout.evaluate((root) => {
+        const style = getComputedStyle(root);
+        const value = (name: string) => style.getPropertyValue(name).trim();
+        return {
+          surface: [value("--pp-color-surface"), value("--muted")],
+          primary: [value("--pp-color-primary"), value("--primary")],
+        };
+      });
+      for (const [name, [checkoutValue, siteValue]] of Object.entries(tokens)) {
+        expect(siteValue, `${colorScheme}: the site's ${name}`).not.toBe("");
+        expect(checkoutValue, `${colorScheme}: the checkout's ${name}`).toBe(siteValue);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
+
 test("sweeps from the last good data show their balances and age, without sweep actions; an unavailable group says so", async ({ page }) => {
   const problems = await watchConsole(page);
   const asOf = Math.floor(Date.now() / 1000) - 12;
@@ -1931,7 +1963,7 @@ test("one layout grid: every right column starts on one line, and each part's co
   // is named by its section's heading, else by its landmark.
   const docs = ["main", "footer"];
   const pages: [string, string[] | number][] = [
-    ["", ["hero-title", "demo-title", "demo-title", "faq-title", "footer"]],
+    ["", ["hero-title", "demo-title", "demo-title", "faq-title", "closing-title", "footer"]],
     ["compare", ["main", "sources-title", "footer"]],
     ["docs", docs], ["docs/integration", docs], ["docs/configuration", docs], ["docs/sdk/react", docs],
     ["reference", 40],
@@ -1966,14 +1998,17 @@ test("the page takes the viewport's width, less its gutters; running text keeps 
   // No centred container: on a wide screen every page's header, content, and footer reach from one
   // gutter (at most 96px) to the other: its header's mark and footer at the left one, its header's
   // last action and its rightmost content (the hero's code window, the full comparison, the docs'
-  // outline, the reference's examples) at the right one. Only running text (leads, answers, the
-  // docs' paragraphs) stops at its measure, 36em.
+  // outline, the reference's examples) at the right one, and every section of the home page and the
+  // comparison at both. Only running text (leads, answers, the docs' paragraphs) stops at its
+  // measure, 36em, and the demo's form at its column's width.
   const rightmost: Record<string, string> = {
     "": "#hero-code",
     compare: "main table",
     "docs/integration": 'aside nav[aria-label="On this page"]',
     reference: 'main [data-layout="operation"] [data-column="right"]',
   };
+  // Still: the custody rail's moving segment would otherwise be measured mid-run.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   for (const width of [1920, 2560]) {
     for (const [path, content] of Object.entries(rightmost)) {
       await page.setViewportSize({ width, height: 1000 });
@@ -1997,6 +2032,42 @@ test("the page takes the viewport's width, less its gutters; running text keeps 
       expect(gutter, `${where}: gutter`).toBeGreaterThanOrEqual(24);
       expect(gutter, `${where}: gutter`).toBeLessThanOrEqual(96);
       for (const [name, inset] of Object.entries(insets)) expect(Math.abs(inset - gutter), `${where}: ${name}`).toBeLessThanOrEqual(1);
+      // Every section of the home page and the comparison fills the page from gutter to gutter: its
+      // content (anything shown, short of a full-bleed box) starts at one and ends at the other.
+      if (path === "" || path === "compare") {
+        const sections = await page.locator("main").evaluate((main) => {
+          const right = document.documentElement.clientWidth;
+          return [...main.querySelectorAll<HTMLElement>(":scope > section, :scope section[id]")].map((section) => {
+            const boxes = [...section.querySelectorAll<HTMLElement>("*")]
+              // Shown: not transparent (a form control Radix keeps for the form) nor hidden.
+              .filter((element) => element.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && element.closest(".sr-only") === null)
+              .map((element) => element.getBoundingClientRect())
+              .filter((box) => box.width > 0 && box.width < right - 1);
+            return {
+              name: section.getAttribute("aria-labelledby") ?? section.id,
+              left: Math.min(...boxes.map((box) => box.left)),
+              right: right - Math.max(...boxes.map((box) => box.right)),
+            };
+          });
+        });
+        expect(sections.length, `${where}: sections`).toBeGreaterThan(2);
+        for (const { name, left, right } of sections) {
+          expect(Math.abs(left - gutter), `${where}, ${name}: left edge`).toBeLessThanOrEqual(1);
+          expect(Math.abs(right - gutter), `${where}, ${name}: right edge`).toBeLessThanOrEqual(1);
+        }
+      }
+      // The demo's form keeps its column's width (38rem from 3xl): no token row and no button wider.
+      if (path === "") {
+        const product = page.getByRole("region", { name: "Customer view" });
+        await expect(product.getByTestId("balance")).toHaveText("$0.00");
+        const rows = [
+          ...await product.getByTestId("token-option").filter({ visible: true }).all(),
+          product.getByRole("button", { name: "Pay with crypto", exact: true }),
+        ];
+        for (const row of rows) {
+          expect((await row.boundingBox())?.width ?? 0, `${where}: ${await row.textContent()}`).toBeLessThanOrEqual(38 * 16);
+        }
+      }
       // Running text: no paragraph of more than a line or two wider than its measure.
       const measures = await page.locator("main").evaluate((main) => [...main.querySelectorAll<HTMLElement>(".docs-prose > p, #demo p, section p, details p")]
         .filter((element) => element.checkVisibility() && element.textContent.length > 120)
@@ -2078,9 +2149,42 @@ test("moving between pages keeps their server HTML: no hydration error, and noth
   }
 });
 
-test("the first frame is in the visitor's theme, before any of the page's code runs", async ({ browser }) => {
-  // Only the head's inline theme script may run: every module script is refused. What is painted
-  // then is the visitor's theme: the system's dark preference, or a choice stored earlier over it.
+test("a link to a part of a page opens the page at that part from its first frame", async ({ browser }) => {
+  // The header's Demo link (/#demo) and the hero's call to deploy (a docs section): the new page's
+  // first frame is already at the part, not at the page's top for a frame before it, the browser's
+  // own scroll waiting for the page's scripts. Without motion, so no cross-fade covers a frame.
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+  try {
+    await context.addInitScript(() => {
+      requestAnimationFrame(() => Object.assign(window, { firstFrameScroll: scrollY }));
+    });
+    const page = await context.newPage();
+    const cases: [string, string, Locator, string][] = [
+      ["/compare", "/#demo", page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Demo" }), "#demo"],
+      ["/", "/docs/self-hosting#one-command-deploy", page.getByRole("link", { name: "Start a testnet instance" }).first(), "#one-command-deploy"],
+    ];
+    for (const [from, to, link, target] of cases) {
+      await page.goto(new URL(from, env("SITE_URL")).href);
+      await Promise.all([page.waitForURL(new URL(to, env("SITE_URL")).href), link.click()]);
+      await expect(page.locator(target)).toBeInViewport();
+      const { first, now, top } = await page.evaluate((selector) => ({
+        first: (window as unknown as { firstFrameScroll: number }).firstFrameScroll,
+        now: scrollY,
+        top: document.querySelector(selector)?.getBoundingClientRect().top ?? -1,
+      }), target);
+      expect(first, `${to}: the first frame's scroll`).toBeGreaterThan(0);
+      expect(Math.abs(first - now), `${to}: the first frame at the part (${first}, then ${now})`).toBeLessThanOrEqual(1);
+      expect(top, `${to}: the part under the header`).toBeGreaterThanOrEqual(0);
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+test("the head's theme bootstrap alone sets the visitor's theme, with every module script refused", async ({ browser }) => {
+  // Only the head's inline theme script may run: every module script is refused, so nothing else of
+  // the page's can set the theme. The page's class and background are then the visitor's theme: the
+  // system's dark preference, or a choice stored earlier over it.
   const dark = "oklch(0.145 0 0)";
   const light = "oklch(1 0 0)";
   const cases = [

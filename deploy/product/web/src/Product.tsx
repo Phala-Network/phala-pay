@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
 import { ChainIcon, TokenIcon, assetOf, networkOf, tokenFullName } from "./chains.js";
+import { DEMO_TESTNET } from "./content/site.js";
 import { ExplorerLink, TOUCH, describe, loadSdk } from "./common.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
@@ -106,7 +107,7 @@ export function Product({
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <div className="flex items-center gap-2">
             <CardTitle id="product-title">Customer view</CardTitle>
-            {(network?.testnet ?? true) && (
+            {(network?.testnet ?? DEMO_TESTNET) && (
               <StatusBadge tone="warning" data-testid="testnet-notice">
                 Testnet
               </StatusBadge>
@@ -203,10 +204,10 @@ export function Product({
           <TestTokens key={network.chain_id} network={network} need={need} />
         </CardFooter>
       )}
-      {/* While the networks load (and as the page is prerendered), the test tokens' row keeps its
-          place, a testnet assumed as the badge above assumes it: its name (on a phone) and its first
-          button, so the card does not grow when they arrive. */}
-      {network === undefined && networksView.error === null && (
+      {/* While the networks load (and as the page is prerendered), on the demo's testnets, the test
+          tokens' row keeps its place: its name (on a phone) and its first button, so the card does
+          not grow when they arrive. */}
+      {network === undefined && networksView.error === null && DEMO_TESTNET && (
         <CardFooter aria-hidden="true" className="py-3 sm:py-3">
           <div className="flex w-full flex-col gap-3">
             <p className="text-sm font-medium text-muted-foreground lg:hidden">Test tokens</p>

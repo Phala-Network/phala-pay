@@ -22,15 +22,15 @@ function styleAttributes(node: Node): string[] {
 }
 
 /**
- * A page's style attributes (Radix's, in the prerendered demo) apply only where the CSP's style-src
- * permits each value by its hash, with 'unsafe-hashes': one it does not would be dropped, and the
- * element left unstyled once hydrated.
+ * A page's style attributes (Radix's, in the prerendered demo) apply only where the CSP's
+ * style-src-attr (else its style-src) permits each value by its hash, with 'unsafe-hashes': one it
+ * does not would be dropped, and the element left unstyled once hydrated.
  */
 function checkStyleAttributes(file: string, html: string, stylePolicy: string[]) {
   for (const value of new Set(styleAttributes(parse(html)))) {
     const hash = `'sha256-${createHash("sha256").update(value).digest("base64")}'`;
     if (!stylePolicy.includes("'unsafe-hashes'") || !stylePolicy.includes(hash)) {
-      throw new Error(`${file}: the CSP's style-src does not permit style="${value}" (${hash}, with 'unsafe-hashes')`);
+      throw new Error(`${file}: the CSP does not permit style="${value}" (${hash}, with 'unsafe-hashes', in style-src-attr)`);
     }
   }
 }
@@ -38,9 +38,13 @@ function checkStyleAttributes(file: string, html: string, stylePolicy: string[])
 async function prerender() {
   const headers = await readFile(resolve(assets, "_headers"), "utf8");
   const themeHash = createHash("sha256").update(THEME_SCRIPT).digest("base64");
-  const scriptPolicy = /\bscript-src\s+([^;\r\n]+)/i.exec(headers)?.[1];
-  if (!scriptPolicy?.split(/\s+/).includes(`'sha256-${themeHash}'`)) throw new Error("Theme bootstrap CSP hash is stale");
-  const stylePolicy = /\bstyle-src\s+([^;\r\n]+)/i.exec(headers)?.[1]?.split(/\s+/) ?? [];
+  // The policy's directives, from its header line (the file's comments may name them too).
+  const policy = /^\s*Content-Security-Policy:\s*(.+)$/im.exec(headers)?.[1] ?? "";
+  const directives = new Map(policy.split(";").map((directive) => directive.trim().split(/\s+/))
+    .flatMap(([name, ...values]) => (name === undefined || name === "" ? [] : [[name.toLowerCase(), values] as const])));
+  if (!directives.get("script-src")?.includes(`'sha256-${themeHash}'`)) throw new Error("Theme bootstrap CSP hash is stale");
+  // The directive that governs style attributes: style-src-attr, falling back to style-src.
+  const stylePolicy = directives.get("style-src-attr") ?? directives.get("style-src") ?? [];
   const { render } = await import(pathToFileURL(resolve(web, ".prerender/entry-server.js")).href) as typeof import("../src/entry-server.js");
   // Every template is read before any page is written: a template's own file is also a page (the
   // docs' index is docs.html).

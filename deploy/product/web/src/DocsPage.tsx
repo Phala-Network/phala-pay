@@ -107,8 +107,8 @@ function Neighbour({ entry, direction }: { entry: DocEntry | undefined; directio
 /**
  * From xl, the page's sections beside its text at the page's right edge, staying in view; below xl
  * they are under the page's entry in the navigation. A long outline scrolls on its own, as the
- * navigation does. It comes before the text in the page's source (the grid places it), so a long
- * page, painted as it arrives, never shows its text without it.
+ * navigation does. Its column is the grid's from the first paint, so it moves nothing as it arrives
+ * after a long text.
  */
 function Outline({ toc }: { toc: TocEntry[] }) {
   const sections = toc.filter(({ depth }) => depth === 2);
@@ -146,12 +146,11 @@ export function DocsPage({ doc }: { doc: DocContent }) {
       </aside>
       <main id="top" data-column="right" className={PAGE_COLUMN}>
         <DocsMobileNav label="Documentation menu"><DocsNav current={doc.slug} toc={doc.toc} /></DocsMobileNav>
-        {/* From xl, the text and its outline: the outline a column of its own width at the page's
-            right edge; the text, its paragraphs at a reading measure and its code and tables up to
-            60rem, centred in the rest. */}
+        {/* From xl, the text and its outline: the text beside the navigation, its paragraphs at a
+            reading measure and its code and tables up to 60rem; the outline a column of its own
+            width at the page's right edge. */}
         <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_14rem] xl:gap-x-16 2xl:grid-cols-[minmax(0,1fr)_16rem] 2xl:gap-x-20">
-          <Outline toc={doc.toc} />
-          <article className="mx-auto w-full max-w-[60rem] min-w-0 xl:col-start-1 xl:row-start-1">
+          <article className="w-full max-w-[60rem] min-w-0 xl:col-start-1 xl:row-start-1">
             {section !== undefined && <Eyebrow>{section.title}</Eyebrow>}
             <h1 className="mt-4 text-title-sm font-semibold text-balance sm:text-title">{doc.title}</h1>
             <div className={cn(PROSE, "mt-8")} dangerouslySetInnerHTML={{ __html: doc.html }} />
@@ -165,6 +164,7 @@ export function DocsPage({ doc }: { doc: DocContent }) {
               </p>
             </footer>
           </article>
+          <Outline toc={doc.toc} />
         </div>
       </main>
     </div>

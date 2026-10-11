@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
-import { ASIDE, GRID, LEFT, MAIN, RIGHT } from "./layout.js";
+import { ASIDE, DEMO_GRID, DEMO_LEFT, DEMO_RIGHT, GRID, LEFT, MAIN, RIGHT } from "./layout.js";
 import { useHydrated } from "./islands.js";
 import { ComparisonCell } from "./ComparisonCell.js";
 import { Versus } from "./Versus.js";
@@ -39,8 +39,9 @@ export const LINKS = {
  * The page's width: the whole viewport less a gutter on each side that grows with it (24px on a
  * phone to 96px on a wide screen, `--spacing-gutter`), for every section and the header and footer,
  * so all share a left edge; the 12-column grid inside it is src/layout.ts. No section is held to a
- * maximum width: running text keeps its measure (LEAD, `max-w-measure`), and an element that would
- * read badly stretched (a diagram, a summary table, a code window) caps its own width.
+ * maximum width: every one reaches from gutter to gutter, its content spread through the grid's
+ * columns (more of them on a wider screen) rather than through empty space. Only running text keeps
+ * a measure (LEAD, `max-w-measure`), and a form its width (the demo's customer column).
  */
 export const CONTAINER = "w-full px-gutter";
 /** Every H2, and every other page's H1: a step larger on a wide screen. */
@@ -253,11 +254,11 @@ export function Hero({ code }: { code: ReactNode }) {
         <div data-column="left" className={LEFT}>
           <ReleaseBadge />
           {/* On a phone a step smaller, so the claim's second line ("without a custodian") stays
-              whole; on a wide screen a step larger. */}
-          <h1 id="hero-title" className="mt-8 max-w-xl text-display-xs font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display 2xl:max-w-3xl 2xl:text-display-lg">
+              whole; from 2xl growing with the screen, its column filled by the claim and the lead. */}
+          <h1 id="hero-title" className="mt-8 max-w-xl text-display-xs font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display 2xl:max-w-none 2xl:text-display-lg">
             {TAGLINE}
           </h1>
-          <p className="mt-7 max-w-xl text-lead-lg text-pretty text-body-foreground 2xl:max-w-2xl">{unbroken(HERO_SUBHEAD)}</p>
+          <p className="mt-7 max-w-xl text-lead-lg text-pretty text-body-foreground 2xl:max-w-measure 2xl:text-lead-xl">{unbroken(HERO_SUBHEAD)}</p>
           <div className="mt-10 flex flex-col gap-3 sm:flex-row 2xl:mt-12">
             <DeployButton />
             <Button asChild size="lg" variant="secondary"><a href={LINKS.docs}>Read the docs</a></Button>
@@ -265,7 +266,7 @@ export function Hero({ code }: { code: ReactNode }) {
           {/* Three facts under a rule, each value over its meaning, and the note that qualifies the
               first under them; on a phone, a row each, the values in one column and the meanings in
               the next. */}
-          <div className="mt-14 max-w-xl border-t pt-7 2xl:max-w-2xl">
+          <div className="mt-14 max-w-xl border-t pt-7 2xl:max-w-none">
             <dl data-facts className="grid gap-y-3 sm:grid-cols-3 sm:divide-x">
               {HERO_FACTS.map(({ value, label }) => (
                 <div key={label} className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-baseline gap-x-4 sm:grid-cols-1 sm:gap-y-1 sm:px-5 sm:first:pl-0">
@@ -277,9 +278,8 @@ export function Hero({ code }: { code: ReactNode }) {
             <p data-facts-note className="mt-4 text-sm text-pretty text-muted-foreground">{unbroken(HERO_FACTS_NOTE)}</p>
           </div>
         </div>
-        {/* The window sized to its code (its lines are 45 characters): on a wide screen it keeps that
-            width at the page's right edge rather than stretching across its half. */}
-        <div data-column="right" className={cn(RIGHT, "lg:flex lg:justify-end")}><div className="w-full lg:max-w-2xl 2xl:max-w-3xl">{code}</div></div>
+        {/* The window takes its half to the page's right edge; its code grows a step on a wide screen. */}
+        <div data-column="right" className={RIGHT}>{code}</div>
       </div>
     </section>
   );
@@ -346,8 +346,8 @@ export function HeroCode() {
             <div key={key} role="tabpanel" id={`${id}-panel-${key}`} aria-labelledby={`${id}-tab-${key}`}
               className={cn("col-start-1 row-start-1 min-w-0", index !== shown && "invisible")}>
               {/* On a phone, 12px code in a 16px margin: the snippets' 45-character lines fit 390px;
-                  on a wide screen, 14px in its wider window. */}
-              <CodeBody label={file} className="px-4 text-xs/relaxed sm:px-5 sm:text-mono 2xl:px-6 2xl:text-sm/7">
+                  on a wide screen, 14px, and 16px from 3xl, in its wider window. */}
+              <CodeBody label={file} className="px-4 text-xs/relaxed sm:px-5 sm:text-mono 2xl:px-7 2xl:text-sm/7 3xl:px-8 3xl:text-base/8">
                 <HighlightedLines lines={lines} />
               </CodeBody>
             </div>
@@ -370,9 +370,11 @@ export function DemoSection({ island }: { island: ReactNode }) {
     // From xl one height in every state (`--spacing-demo`), the panels filling it.
     <section id="demo" aria-labelledby="demo-title" className="scroll-mt-16 border-b bg-surface xl:flex xl:min-h-demo xl:flex-col">
       <div className={cn(CONTAINER, "py-6 xl:flex xl:flex-1 xl:flex-col")}>
-        <div data-layout="split" className={cn(GRID, "gap-y-3 lg:items-baseline")}>
-          <div data-column="left" className={cn(LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-2")}>
-            <h2 id="demo-title" className={H2}>{DEMO_TITLE}</h2>
+        {/* The demo's own columns (src/layout.ts), the heading over the customer's, the lead over the
+            backend's; its heading a step under the others' on a wide screen, beside its status. */}
+        <div data-layout="demo" className={cn(DEMO_GRID, "gap-y-3 lg:items-baseline")}>
+          <div data-column="left" className={cn(DEMO_LEFT, "flex flex-wrap items-baseline gap-x-4 gap-y-2")}>
+            <h2 id="demo-title" className={cn(H2, "2xl:text-title")}>{DEMO_TITLE}</h2>
             <p className="inline-flex h-7 items-center gap-2 self-center rounded-full border bg-card px-3 text-sm font-medium text-body-foreground shadow-card">
               <span aria-hidden="true" className="relative flex size-2">
                 <span className="absolute inline-flex size-full rounded-full bg-brand opacity-75 motion-safe:animate-ping" />
@@ -382,7 +384,7 @@ export function DemoSection({ island }: { island: ReactNode }) {
             </p>
           </div>
           {/* The lead a step under the other sections' (one line, within the screen's budget). */}
-          <p data-column="right" className={cn(RIGHT, LEAD, "lg:text-lead")}>{DEMO_LEAD}</p>
+          <p data-column="right" className={cn(DEMO_RIGHT, LEAD, "lg:text-lead")}>{DEMO_LEAD}</p>
         </div>
         {/* The demo, prerendered (its island, src/DemoIsland.tsx): both panels are in the page as it
             arrives, so nothing moves when the demo hydrates. Without script it cannot work, so it
@@ -413,8 +415,8 @@ const STATION_ICONS: Record<Station, LucideIcon> = { wallet: Wallet, contract: F
  */
 function CustodyPath() {
   return (
-    // On a wide screen the path keeps a width its stations' text can fill, centred under its claim.
-    <figure className="mx-auto max-w-wide">
+    // The path across the page's width, its stations spread along it.
+    <figure>
       <ol className="flex flex-col xl:grid xl:grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_9rem_minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_11rem_minmax(0,1fr)_11rem_minmax(0,1fr)]">
         {CUSTODY_PATH.map(({ station, role, name, detail }, index) => {
           const Icon = STATION_ICONS[station];
@@ -477,8 +479,8 @@ export function WhereTheMoneyGoes() {
 function FeatureCard({ title, text, className, children }: { title: string; text: string; className?: string; children: ReactNode }) {
   return (
     <div data-feature className={cn("flex min-w-0 flex-col rounded-xl border bg-card shadow-card lg:row-span-2 lg:grid lg:grid-rows-subgrid lg:gap-y-0", className)}>
-      <div data-feature-well className="flex flex-col justify-center border-b px-7 py-9 sm:px-10 sm:py-10 2xl:px-12 2xl:py-12">{children}</div>
-      <div className="px-7 py-8 sm:px-10 sm:py-9 2xl:px-12 2xl:py-10">
+      <div data-feature-well className="flex flex-col justify-center border-b px-7 py-9 sm:px-10 sm:py-10 2xl:px-12 2xl:py-12 3xl:px-10">{children}</div>
+      <div className="px-7 py-8 sm:px-10 sm:py-9 2xl:px-12 2xl:py-10 3xl:px-10">
         <h3 className="text-heading font-semibold">{title}</h3>
         <p className="mt-3 max-w-measure text-pretty text-body-foreground lg:text-lg/7">{unbroken(text)}</p>
       </div>
@@ -518,14 +520,18 @@ function CreditTimes() {
   );
 }
 
-/** Names as chips, two to a row from sm (none left alone on a row: each list has four), one below. */
+/**
+ * Names as chips, two to a row from sm (none left alone on a row: each list has four), one below;
+ * their label beside them, or above them in a card of four to a row (3xl).
+ */
 function Chips({ label, items }: { label: string; items: string[] }) {
   return (
-    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
-      <p className={cn(CARD_LABEL, "sm:w-24 sm:shrink-0")}>{label}</p>
-      <ul className="grid gap-2.5 sm:grid-cols-2 2xl:gap-3">
+    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center 3xl:flex-col 3xl:items-start">
+      <p className={cn(CARD_LABEL, "sm:w-24 sm:shrink-0 3xl:w-auto")}>{label}</p>
+      {/* Two columns as wide as their names (a name never breaks inside its chip). */}
+      <ul className="grid gap-2.5 sm:grid-cols-[repeat(2,max-content)] 2xl:gap-3">
         {items.map((item) => (
-          <li key={item} className="inline-flex h-7 items-center justify-self-start rounded-md border bg-muted/50 px-2 font-mono text-mono 2xl:h-8 2xl:px-2.5 2xl:text-sm">{item}</li>
+          <li key={item} className="inline-flex h-7 items-center justify-self-start rounded-md border bg-muted/50 px-2 font-mono text-mono whitespace-nowrap 2xl:h-8 2xl:px-2.5 2xl:text-sm">{item}</li>
         ))}
       </ul>
     </div>
@@ -541,20 +547,21 @@ export function Features() {
       <div className={cn(CONTAINER, SECTION)}>
         <Intro id="features-title" eyebrow={EYEBROWS.features} title={FEATURES_TITLE} lead={PROPERTIES_LEAD} />
         <div className="mt-14 grid gap-6 lg:mt-20 lg:grid-cols-12 lg:gap-8">
-          {/* Two rows of two cards, wide and narrow, then narrow and wide; each card two of the
-              grid's rows (its figure, its text), shared with the card beside it. */}
-          <FeatureCard className="lg:col-span-5" title={fee.title} text={fee.text}>
+          {/* Two rows of two cards, wide and narrow, then narrow and wide; from 3xl one row of four.
+              Each card is two of the grid's rows (its figure, its text), shared with the cards
+              beside it. */}
+          <FeatureCard className="lg:col-span-5 3xl:col-span-3" title={fee.title} text={fee.text}>
             <p className="text-display-sm font-semibold tabular-nums sm:text-display 2xl:text-display-lg">{FEE_FIGURE.value}</p>
             <p className={cn(CARD_LABEL, "mt-2")}>{FEE_FIGURE.label}</p>
           </FeatureCard>
-          <FeatureCard className="lg:col-span-7" title={speed.title} text={speed.text}><CreditTimes /></FeatureCard>
-          <FeatureCard className="lg:col-span-7" title={api.title} text={api.text}>
+          <FeatureCard className="lg:col-span-7 3xl:col-span-3" title={speed.title} text={speed.text}><CreditTimes /></FeatureCard>
+          <FeatureCard className="lg:col-span-7 3xl:col-span-3" title={api.title} text={api.text}>
             <div className="flex flex-col gap-5 2xl:gap-6">
               <Chips label="SDKs" items={SDK_PACKAGES} />
               <Chips label="Webhooks" items={WEBHOOK_EVENTS} />
             </div>
           </FeatureCard>
-          <FeatureCard className="lg:col-span-5" title={verify.title} text={verify.text}>
+          <FeatureCard className="lg:col-span-5 3xl:col-span-3" title={verify.title} text={verify.text}>
             <ul className="flex flex-col gap-3.5 text-sm 2xl:gap-4 2xl:text-base">
               {VERIFY_CHECKS.map((item) => (
                 <li key={item} className="flex items-center gap-2.5">
@@ -602,14 +609,13 @@ export function CompareTeaser() {
     // the lime band, so the two bands meet only once (the demo and the custody path).
     <section aria-labelledby="compare-title" className="border-b bg-surface">
       <div className={cn(CONTAINER, SECTION)}>
-        {/* The summary keeps a width four columns of short answers can fill (`max-w-wide`), with the
-            way to the full comparison at its right edge. */}
-        <div className="flex max-w-wide flex-wrap items-end justify-between gap-x-8 gap-y-6">
+        {/* The summary across the grid, the way to the full comparison at its right edge. */}
+        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-6">
           <Intro id="compare-title" eyebrow={EYEBROWS.compare} title="How Phala Pay compares"
             lead={<>Beside {list.format(others.map(({ name }) => name))}, as each states it. The full comparison adds {list.format(TEASER_OTHERS)}, with a source for every value.</>} />
           <div className="hidden lg:block">{more}</div>
         </div>
-        <div className={cn(TABLE_FRAME, "mt-14 hidden max-w-wide lg:mt-16 lg:block")}>
+        <div className={cn(TABLE_FRAME, "mt-14 hidden lg:mt-16 lg:block")}>
           {/* Four equal columns, on the grid's quarters: the dimension, then each provider. */}
           <table className="w-full table-fixed border-collapse text-left">
             <caption className="sr-only">{list.format(TEASER.vendors.map(({ name }) => name))} on {TEASER.dimensions.length} dimensions.</caption>
@@ -667,18 +673,23 @@ export function Faq() {
               Not answered here? Read the <a className={TEXT_LINK} href={LINKS.docs}>documentation</a> or ask on <a className={TEXT_LINK} href={LINKS.issues}>GitHub</a>.
             </p>
           </div>
-          {/* The questions at a width their row can be read across, the toggle near its question. */}
-          <div data-column="right" className={cn(MAIN, "border-t lg:max-w-5xl")}>
-            {FAQ.map(({ question, answer }) => (
-              <details key={question} className="group border-b">
-                <summary className="flex min-h-18 cursor-pointer list-none items-center justify-between gap-8 py-6 text-base font-medium sm:text-lg 2xl:text-xl [&::-webkit-details-marker]:hidden">
-                  <span>{question}</span>
-                  <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-card">
-                    <Plus strokeWidth={1.75} className="size-4 group-open:rotate-45 motion-safe:transition-transform" />
-                  </span>
-                </summary>
-                <p className="max-w-measure pb-8 text-base/7 text-pretty text-body-foreground sm:pr-14 lg:text-lg/8">{unbroken(answer)}</p>
-              </details>
+          {/* The questions across the two thirds; from 3xl in two stacks side by side (the first half,
+              then the second), each opening on its own. */}
+          <div data-column="right" className={cn(MAIN, "grid 3xl:grid-cols-2 3xl:items-start 3xl:gap-x-16")}>
+            {[FAQ.slice(0, Math.ceil(FAQ.length / 2)), FAQ.slice(Math.ceil(FAQ.length / 2))].map((stack, index) => (
+              <div key={index} className={index === 0 ? "border-y" : "border-b 3xl:border-t"}>
+                {stack.map(({ question, answer }) => (
+                  <details key={question} className="group border-b last:border-b-0">
+                    <summary className="flex min-h-18 cursor-pointer list-none items-center justify-between gap-8 py-6 text-base font-medium sm:text-lg 2xl:text-xl [&::-webkit-details-marker]:hidden">
+                      <span>{question}</span>
+                      <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-card">
+                        <Plus strokeWidth={1.75} className="size-4 group-open:rotate-45 motion-safe:transition-transform" />
+                      </span>
+                    </summary>
+                    <p className="max-w-measure pb-8 text-base/7 text-pretty text-body-foreground sm:pr-14 lg:text-lg/8">{unbroken(answer)}</p>
+                  </details>
+                ))}
+              </div>
             ))}
           </div>
         </div>
@@ -689,22 +700,23 @@ export function Faq() {
 
 /**
  * The close, on the band: the mark, the call to deploy in the brand's colour (its one lime button,
- * dark text on the fill), and under it the one command that does.
+ * dark text on the fill), and beside it from lg (under it on a phone) the one command that does,
+ * the two centred on each other across the page's halves.
  */
 export function ClosingCta({ command }: { command: ReactNode }) {
   return (
     <section aria-labelledby="closing-title" className={BAND}>
-      <div className={cn(CONTAINER, "py-28 lg:py-40 2xl:py-48")}>
-        <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
+      <div data-layout="split" data-align="center" className={cn(CONTAINER, GRID, "gap-y-14 py-28 lg:items-center lg:py-40 2xl:py-48")}>
+        <div data-column="left" className={cn(LEFT, "flex flex-col items-center text-center lg:items-start lg:text-left")}>
           <Mark className="size-12" />
           <h2 id="closing-title" className={cn(H2, "mt-8")}>{CLOSING_TITLE}</h2>
           <p className={cn(LEAD, "mt-6")}>{CLOSING_LEAD}</p>
-          <div className="mt-10 flex w-full flex-col justify-center gap-3 sm:w-auto sm:flex-row">
+          <div className="mt-10 flex w-full flex-col justify-center gap-3 sm:w-auto sm:flex-row lg:justify-start">
             <DeployButton variant="brand" />
             <Button asChild size="lg" variant="secondary"><a href={LINKS.repo}>View on GitHub</a></Button>
           </div>
         </div>
-        <div className="mx-auto mt-16 max-w-2xl lg:mt-20">{command}</div>
+        <div data-column="right" className={RIGHT}>{command}</div>
       </div>
     </section>
   );

@@ -1,8 +1,5 @@
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
-// The SDK's components (the demo's checkout) in the page's stylesheet, before the site's own, which
-// themes them (src/index.css): loaded with the page, not later with the demo's code.
-import "@phala/pay-react/styles.css";
 import { lazy, StrictMode } from "react";
 import { hydrateRoot } from "react-dom/client";
 import { mountChrome } from "./chrome.js";

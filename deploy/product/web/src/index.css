@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* The SDK's components (the demo's checkout) before the site's own rules: `.pp-root[data-theme]`
+   below re-themes them, and wins as the later rule of the same weight in either theme. */
+@import "@phala/pay-react/styles.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -14,7 +17,9 @@
  * (`max-w-measure`, below) however wide the page.
  */
 @theme {
-    --text-display-lg: 5rem;
+    /* The home page's H1 from 2xl: growing with the screen (80px at 1536, 104px at 2560), so the
+       hero's text balances its code window across a wide page. */
+    --text-display-lg: clamp(5rem, 2.34vw + 2.75rem, 6.5rem);
     --text-display-lg--line-height: 1;
     --text-display-lg--letter-spacing: -0.04em;
     --text-display: 4rem;
@@ -40,6 +45,9 @@
     --text-heading--letter-spacing: -0.015em;
     --text-lead: 1.125rem;
     --text-lead--line-height: 1.6;
+    --text-lead-xl: 1.5rem;
+    --text-lead-xl--line-height: 1.5;
+    --text-lead-xl--letter-spacing: -0.01em;
     --text-lead-lg: 1.25rem;
     --text-lead-lg--line-height: 1.55;
     --text-lead-lg--letter-spacing: -0.005em;
@@ -58,6 +66,8 @@
     --text-wordmark: 1.0625rem;
     --text-wordmark--line-height: 1.5;
     --text-wordmark--letter-spacing: -0.02em;
+    /* A step past Tailwind's 2xl (1536px), for screens 1920px wide and wider. */
+    --breakpoint-3xl: 120rem;
     /* The page's side margins: no centred container, the whole viewport less a gutter that grows
        with it: 24px on a phone and a tablet, 32px at 1280, 64px at 1920, 96px from 2560. */
     --spacing-gutter: clamp(1.5rem, 5vw - 2rem, 6rem);
@@ -65,9 +75,6 @@
        fit in one view (1280×800) less the 64px header. Every state fits inside it
        (e2e/demo.spec.ts), so nothing under the demo moves as it changes. */
     --spacing-demo: 46rem;
-    /* The widest a single element may stretch on a wide screen (a diagram, a summary table) before
-       a row of it reads as a line too long to follow; the page itself has no maximum. */
-    --container-wide: 120rem;
     /* Running text's measure: 36em, about 75 characters of Geist at any size (a lead's line is as
        long, in words, as a paragraph's), however wide its column. */
     --container-measure: 36em;

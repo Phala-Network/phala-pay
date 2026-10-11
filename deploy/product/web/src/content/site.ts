@@ -17,6 +17,12 @@ export const HOME_TITLE = "Phala Pay: self-hosted, non-custodial crypto payments
 export const NOT_FOUND_TITLE = "Page not found | Phala Pay";
 export const HOME_DESCRIPTION = "Open-source payments API for ERC-20 tokens on Ethereum and Base. Deposits can only reach your treasury. No per-payment fee.";
 
+/**
+ * The demo's networks are testnets, as its title and status say: known when the page is rendered, so
+ * the prerendered demo shows the testnet mark and keeps the test tokens' place before the networks
+ * load. A demo on mainnets sets this false with its copy.
+ */
+export const DEMO_TESTNET: boolean = true;
 export const DEMO_TITLE = "Try it on testnet";
 export const DEMO_STATUS = "Live on Sepolia and Base Sepolia";
 export const DEMO_LEAD = "Pay with test tokens and watch the backend follow the payment.";
