@@ -17,6 +17,7 @@ import { day, dollars, price, signedDollars, statusLabel, time, tokenName, token
 import { Sweeps } from "./Sweeps.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { EventStream, EventsLog, LedgerPanel, Requests } from "./Timeline.js";
+import { unbroken } from "./text.js";
 
 // The shown payment's row (`aria-current`): an indicator on its left edge.
 const SELECTED_ROW = "aria-[current=true]:bg-muted/60 aria-[current=true]:shadow-[inset_2px_0_0_var(--foreground)]";
@@ -95,9 +96,10 @@ export function Backend({
         <TabsList
           variant="line"
           aria-label="Backend"
-          // Five short names that fit a phone's width; should they not, the row wraps.
-          // Its tabs' labels on the card's inset (each trigger pads its label by 8px).
-          className="h-auto w-full flex-wrap justify-start gap-x-2 px-5 sm:px-8 2xl:px-10"
+          // Five short names that fit a phone's width from 390px, set closer there; narrower, the
+          // row wraps. Its tabs' labels on the card's inset (each trigger pads its label by 6px on a
+          // phone, 8px from sm).
+          className="h-auto w-full flex-wrap justify-start gap-x-0 px-3.5 min-[24rem]:px-5.5 sm:gap-x-2 sm:px-8 2xl:px-10"
         >
           <Tab value="credits" count={account?.payments.length}>
             Credits
@@ -171,7 +173,7 @@ function MetaItem({ label, value, testId }: { label: string; value: string; test
  */
 function Tab({ value, count, children }: { value: string; count?: number | undefined; children: string }) {
   return (
-    <TabsTrigger value={value} className="h-11 min-w-11 flex-none px-2 tabular-nums">
+    <TabsTrigger value={value} className="h-11 min-w-11 flex-none px-1.5 tabular-nums sm:px-2">
       {children}
       {count !== undefined && count > 0 && <span className="max-sm:hidden">({count})</span>}
     </TabsTrigger>
@@ -308,7 +310,9 @@ function CreditsTab({
                     </div>
                     <ViewButton selected={isSelected} id={row.id} onClick={() => onSelect(selection)} />
                   </div>
-                  <dl className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 gap-y-3">
+                  {/* The status, the credit, and the net, each as wide as its value: where they do not fit
+                      one row (a long status on a phone), the last goes under them. */}
+                  <dl className="flex flex-wrap gap-x-6 gap-y-3">
                     <div>
                       <dt className="text-muted-foreground">Status</dt>
                       <dd className="mt-1">
@@ -338,7 +342,7 @@ function CreditsTab({
       {account.ledger.length > 0 && (
         <Subsection title="How this balance adds up" id="balance-lines-title">
           <p className="text-sm text-pretty text-muted-foreground">
-            A bonus is this demo merchant's own promotion, not Phala Pay's.{" "}
+            {unbroken("A bonus is this demo merchant's own promotion, not Phala Pay's.")}{" "}
             <LearnMore anchor="promotions-are-your-own-logic" topic="promotions in your ledger" />
           </p>
           {/* Each line: what moved the balance and by how much; under it, when and for which deposit. */}
@@ -559,7 +563,7 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
                 Verified for a fresh nonce.{" "}
                 <LearnMore anchor="53-pin-your-accounts-webhook-keys" topic="pinning the webhook key" />
               </p>
-              <p>
+              <p className="text-balance">
                 It binds the key that signs every webhook: <Hash value={attestation.webhook_public_key ?? ""} />
               </p>
             </div>
@@ -588,7 +592,7 @@ function TrustDetails({ trust: trustView, networks: networksView }: {
         )}
         <TrustItem title="Custody">
           <p className="text-pretty">
-            Every address pays only the merchant's treasury; Phala Pay holds no funds.
+            {unbroken("Every address pays only the merchant's treasury; Phala Pay holds no funds.")}
             {networksView.error === null && networks !== undefined && (
               <span className="text-muted-foreground"> On {networks.map((each) => each.name).join(" and ")}.</span>
             )}

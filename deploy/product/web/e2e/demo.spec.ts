@@ -2387,6 +2387,118 @@ test("the hero's facts wrap alike, and the note under them qualifies the time", 
   await expect(page.locator("[data-facts-note]")).toContainText("wallet checkout");
 });
 
+/**
+ * How each shown element matching `selector` sets its text: its lines, each the words on it (a run
+ * kept whole, `white-space: nowrap`, counts as one word); the words broken across two lines (save
+ * at a `<wbr>`, where an identifier divides, and a hash, which has nowhere else to break); and
+ * whether its last line is a lone short word that the word before it would have fitted beside,
+ * without making two balanced lines less even.
+ */
+async function typeset(page: Page, selector: string): Promise<{ text: string; lines: string[][]; broken: string[]; lone: boolean }[]> {
+  return page.locator(selector).evaluateAll((elements) => elements
+    .filter((element) => element.checkVisibility() && element.getBoundingClientRect().width > 2 && element.closest(".sr-only, pre") === null)
+    .map((element) => {
+      const style = getComputedStyle(element);
+      const range = document.createRange();
+      const words: { text: string; left: number; right: number; mid: number; unit: Element | null }[] = [];
+      const broken: string[] = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (parent === null || parent.closest(".sr-only") !== null || !parent.checkVisibility()) continue;
+        let unit: Element | null = null;
+        for (let up: Element | null = parent; up !== null && up !== element.parentElement; up = up.parentElement) {
+          if (getComputedStyle(up).textWrapMode === "nowrap") unit = up;
+        }
+        for (const match of (node.textContent ?? "").matchAll(/\S+/g)) {
+          range.setStart(node, match.index);
+          range.setEnd(node, match.index + match[0].length);
+          const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+          const first = rects[0];
+          const last = rects[rects.length - 1];
+          if (first === undefined || last === undefined) continue;
+          if (last.top >= (first.top + first.bottom) / 2 && !/^[("'`]?(0x)?[0-9a-f]{24,}/i.test(match[0])) broken.push(match[0]);
+          const previous = words[words.length - 1];
+          if (previous !== undefined && unit !== null && previous.unit === unit) {
+            previous.text += ` ${match[0]}`;
+            previous.right = last.right;
+            continue;
+          }
+          words.push({ text: match[0], left: first.left, right: last.right, mid: (last.top + last.bottom) / 2, unit });
+        }
+      }
+      // Lines: a word whose middle is below the last line's by more than half a line starts the next.
+      const half = parseFloat(style.fontSize) * 0.6;
+      const lines: (typeof words)[] = [];
+      for (const word of words) {
+        const line = lines[lines.length - 1];
+        if (line !== undefined && Math.abs(word.mid - (line[0]?.mid ?? 0)) < half) line.push(word);
+        else lines.push([word]);
+      }
+      const width = (line: typeof words) => (line[line.length - 1]?.right ?? 0) - (line[0]?.left ?? 0);
+      const last = lines[lines.length - 1] ?? [];
+      const before = lines[lines.length - 2]?.at(-1);
+      const content = element.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const space = parseFloat(style.fontSize) * 0.3;
+      let lone = false;
+      if (lines.length >= 2 && last.length === 1 && before !== undefined && width(last) < 0.5 * Math.max(...lines.map(width))) {
+        const moved = before.right - before.left + space;
+        const fits = moved + width(last) <= content + 0.5;
+        const first = width(lines[0] ?? []);
+        const evener = lines.length === 2 && style.textWrapStyle === "balance" && Math.abs(first - moved - (width(last) + moved)) >= Math.abs(first - width(last));
+        lone = fits && !evener;
+      }
+      return { text: element.textContent.replace(/\s+/g, " ").trim().slice(0, 60), lines: lines.map((line) => line.map(({ text }) => text)), broken, lone };
+    }));
+}
+
+/** Units and short labels: each on one line. */
+const ONE_LINE = [
+  "header nav a", "header [data-slot=button]", "main [data-slot=button]", "[data-facts] dd", "footer nav a",
+  `${DEMO_SECTION} [role=tab]`, "[data-slot=segmented-control-item]", "[data-testid=token-price]", "[data-testid=token-bonus]",
+  "[data-slot=status-badge]", ".docs-prose .unbroken", ".docs-prose th",
+];
+/** Headings and the like: never a lone short word on a last line that its neighbour would have fitted. */
+const HEADINGS = "h1, h2, h3, h4, summary > span, [data-feature] p, figure ol p, main p[class*=text-lead]";
+/** Rows of siblings that wrap alike: in each row (one top), as many lines each. */
+const ROWS = ["header nav a", "[data-facts] dt", "[data-feature] h3", "footer nav > p", "figure ol p.text-heading", "#fit h3", `${DEMO_SECTION} [role=tab]`];
+
+test("type sets well: units and labels on one line, no word split, no heading ending on a lone word, rows wrap alike", async ({ page }) => {
+  // The owner's regression: text that wraps where it should not. At a phone's, a tablet's, and the
+  // desktops' widths, on the marketing pages and the docs (their identifiers and tables).
+  test.setTimeout(300_000);
+  for (const path of ["", "compare", "no-such-page/deeper", "docs/integration", "docs/sdk/server"]) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(new URL(path, env("SITE_URL")).href);
+    if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+    for (const width of [390, 768, 1280, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 900 });
+      const where = `/${path} at ${width}px`;
+      for (const selector of ONE_LINE) {
+        const wrapped = (await typeset(page, selector)).filter(({ lines }) => lines.length > 1).map(({ lines }) => lines.map((line) => line.join(" ")).join(" / "));
+        expect(wrapped, `${where}: ${selector} on more than one line`).toEqual([]);
+      }
+      const text = await typeset(page, "main :is(p, li, dt, dd, td, th, h1, h2, h3, h4, figcaption, summary), footer :is(p, a)");
+      // In the docs, an identifier may break where it divides (at a <wbr>); the marketing pages have none to break.
+      if (!path.startsWith("docs")) expect(text.flatMap(({ broken }) => broken), `${where}: words broken across lines`).toEqual([]);
+      expect((await typeset(page, HEADINGS)).filter(({ lone }) => lone).map(({ text }) => text), `${where}: a lone word ending a heading`).toEqual([]);
+      for (const selector of ROWS) {
+        const counts = await page.locator(selector).evaluateAll((elements) => elements.filter((element) => element.checkVisibility()).map((element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const half = parseFloat(getComputedStyle(element).fontSize) * 0.6;
+          const mids = [...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => (rect.top + rect.bottom) / 2).sort((a, b) => a - b);
+          return { top: Math.round(element.getBoundingClientRect().top), lines: mids.filter((mid, index) => index === 0 || mid - (mids[index - 1] ?? 0) >= half).length };
+        }));
+        for (const top of new Set(counts.map(({ top }) => top))) {
+          const row = counts.filter((each) => each.top === top).map(({ lines }) => lines);
+          expect(new Set(row).size, `${where}: ${selector} in a row, lines ${row.join(", ")}`).toBe(1);
+        }
+      }
+    }
+  }
+});
+
 test("the feature cards side by side share their rules and their titles' lines", async ({ page }) => {
   // Each card's figure over a rule, its title under it: in a row of cards, every rule and every
   // title on one line, whatever each figure's height (the cards are subgrids of the row).

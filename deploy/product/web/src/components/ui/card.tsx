@@ -20,10 +20,11 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
 
 /**
  * A card's inset from its edges, the same for every card on the site (the demo's panels, the
- * features in src/Site.tsx): 28px on a phone, 40px from sm, 48px from 2xl. A part of a card
- * outside its header, content, and footer takes it too.
+ * features in src/Site.tsx): 28px on a phone (20px under 384px, where the demo's controls need the
+ * room), 40px from sm, 48px from 2xl. A part of a card outside its header, content, and footer takes
+ * it too.
  */
-export const CARD_INSET = "px-7 sm:px-10 2xl:px-12"
+export const CARD_INSET = "px-5 min-[24rem]:px-7 sm:px-10 2xl:px-12"
 
 /** The card's title row, its action (if any) on the right; a divider below it. */
 function CardHeader({ className, ...props }: React.ComponentProps<"div">) {

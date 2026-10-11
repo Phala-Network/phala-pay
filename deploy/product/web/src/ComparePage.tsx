@@ -40,7 +40,7 @@ function ComparisonTable() {
                 {label}
               </th>
               {vendors.map((vendor) => (
-                <td key={vendor.id} className={cn("px-5 py-5 align-top leading-6 text-pretty wrap-break-word 2xl:px-6 2xl:py-6 2xl:leading-7", vendor.id === phalaPay.id ? PHALA_CELL : "text-body-foreground")}>
+                <td key={vendor.id} className={cn("px-5 py-5 align-top leading-6 text-balance wrap-break-word 2xl:px-6 2xl:py-6 2xl:leading-7", vendor.id === phalaPay.id ? PHALA_CELL : "text-body-foreground")}>
                   <ComparisonCell cell={vendor[key]} linkSource />
                 </td>
               ))}
@@ -110,7 +110,7 @@ export function ComparePage() {
           {FIT.map(({ title, text }, index) => {
             const ours = index === FIT.length - 1;
             return (
-              <div key={title} className={cn("flex flex-col rounded-xl border bg-card p-7 shadow-card sm:p-10", ours && "border-brand-ink/70 ring-1 ring-brand-ink/30 lg:col-span-2 lg:flex-row lg:items-end lg:justify-between lg:gap-12")}>
+              <div key={title} className={cn("flex flex-col rounded-xl border bg-card p-5 shadow-card min-[24rem]:p-7 sm:p-10", ours && "border-brand-ink/70 ring-1 ring-brand-ink/30 lg:col-span-2 lg:flex-row lg:items-end lg:justify-between lg:gap-12")}>
                 <div>
                   <h3 className="text-heading font-semibold">{unbroken(title)}</h3>
                   <p className="mt-3 max-w-measure text-pretty text-body-foreground lg:text-lg/8">{unbroken(text)}</p>
@@ -133,7 +133,7 @@ export function ComparePage() {
           </div>
           <ol data-column="right" className={cn(MAIN, "list-decimal gap-12 pl-6 text-sm/6 marker:text-muted-foreground marker:tabular-nums md:columns-2")}>
             {sources.map(({ url, title, host, archived }, index) => (
-              <li key={url} id={`source-${index + 1}`} className="mb-4 scroll-mt-20 break-inside-avoid pl-1">
+              <li key={url} id={`source-${index + 1}`} className="mb-4 scroll-mt-20 break-inside-avoid pl-1 text-balance">
                 <a href={url} className={TEXT_LINK}>{title}</a>
                 <span className="text-muted-foreground"> · {host}{archived && " · read via archive snapshot"}</span>
               </li>

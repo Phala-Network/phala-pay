@@ -18,6 +18,7 @@ import { assetOf, networkOf } from "./chains.js";
 import { approx, clock, dollars, duration, rate, signedDollars, time, tokens } from "./format.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { useNetworks } from "./queries.js";
+import { divided, unbroken } from "./text.js";
 
 // Each step's title, what it waits for, and the time it usually takes: the hints are expectations,
 // every time shown next to them is real (the chain's block time, the service's timestamps, or when
@@ -235,7 +236,7 @@ function StreamStep({
         aria-expanded={open}
         aria-controls={open ? details : undefined}
         onClick={onToggle}
-        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none @md:flex @md:flex-col @md:items-center @md:gap-1 @md:px-1 @md:py-2 @md:text-center"
+        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-2 rounded-md min-[24rem]:gap-x-3 px-2 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none @md:flex @md:flex-col @md:items-center @md:gap-1 @md:px-1 @md:py-2 @md:text-center"
       >
         <StepDot state={step.state} />
         <span className="flex min-w-0 items-center gap-1.5">
@@ -247,7 +248,7 @@ function StreamStep({
               step.state === "failed" && "text-destructive",
             )}
           >
-            <span className="@md:hidden">{copy.title}</span>
+            <span className="@md:hidden">{unbroken(copy.title)}</span>
             <span className="hidden @md:inline">{copy.short}</span>
             <span className="sr-only">, {stateLabel(step.state)}</span>
           </span>
@@ -280,7 +281,7 @@ function StepDetails({ id, step, sent, token }: { id: string; step: Step; sent: 
     <section id={id} aria-label={`${copy.title}: details`} data-step-details={step.key}
       className="flex flex-col gap-2 border-l-2 py-1 pl-3 text-sm">
       <h5 className="font-medium">{copy.title}</h5>
-      <p className="text-pretty text-muted-foreground">{copy.hint}</p>
+      <p className="text-pretty text-muted-foreground">{unbroken(copy.hint)}</p>
       {step.at !== null && (
         <p className="tabular-nums" data-testid="step-time">
           {time(step.at)}
@@ -385,9 +386,10 @@ export function EventsLog({ events }: { events: WebhookEvent[] }) {
       ) : (
         <ul className="flex flex-col divide-y border-y text-sm">
           {recent.shown.map((event) => (
-            <li key={event.id} data-testid="webhook-event" className="flex min-h-11 items-center gap-3 px-2 py-2">
-              <code className="min-w-0 flex-1 font-mono text-mono wrap-anywhere">{event.type}</code>
-              <span className="text-muted-foreground tabular-nums" title={time(event.received_at)}>
+            // The event's name whole; where the row is narrow, its time and badge go under it, at the right.
+            <li key={event.id} data-testid="webhook-event" className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 px-2 py-2">
+              <code className="min-w-0 font-mono text-mono wrap-anywhere">{divided(event.type)}</code>
+              <span className="ml-auto text-muted-foreground tabular-nums" title={time(event.received_at)}>
                 {clock(event.received_at)}
               </span>
               {event.verified ? (
@@ -429,7 +431,7 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
                     />
                     {/* The method and path; the query, with the request and response, once opened. */}
                     <code className="min-w-0 flex-1 font-mono text-mono wrap-anywhere">
-                      <span className="text-muted-foreground">{exchange.method}</span> {url.pathname}
+                      <span className="text-muted-foreground">{exchange.method}</span> {divided(url.pathname)}
                       {url.search !== "" && <span className="text-muted-foreground"> ?…</span>}
                     </code>
                     <StatusBadge tone={exchange.status < 400 ? "success" : "danger"} className="tabular-nums">
@@ -437,7 +439,7 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
                     </StatusBadge>
                   </summary>
                   <div className="flex flex-col gap-2 pb-3 pl-8">
-                    <code className="font-mono text-mono wrap-anywhere">{exchange.method} {url.pathname}{url.search}</code>
+                    <code className="font-mono text-mono wrap-anywhere">{exchange.method} {divided(`${url.pathname}${url.search}`)}</code>
                     <CodeBlock
                       value={JSON.stringify({ request: exchange.request, response: exchange.response }, null, 2)}
                       label="request and response"

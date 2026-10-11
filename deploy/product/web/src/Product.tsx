@@ -331,6 +331,8 @@ function TokenOption({ id, asset, testnet }: { id: string; asset: Asset; testnet
   return (
     <ChoiceCard htmlFor={id} data-testid="token-option" className="min-h-13 py-2 leading-5">
       <TokenIcon asset={asset.asset} className="size-5" />
+      {/* The symbol over its full name, the price and any bonus beside them; where the full name
+          would not fit beside the bonus (under 416px), it takes its line whole, the bonus under it. */}
       <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] gap-x-3">
         <span className="font-medium">{asset.symbol}</span>
         {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
@@ -338,11 +340,11 @@ function TokenOption({ id, asset, testnet }: { id: string; asset: Asset; testnet
         <span className="text-right tabular-nums" data-testid="token-price">
           {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
         </span>
-        <span className="text-muted-foreground">
+        <span className="text-muted-foreground max-[26rem]:col-span-2">
           {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
         </span>
         {asset.bonus_bps > 0 ? (
-          <span className="text-right text-success" data-testid="token-bonus">
+          <span className="text-right text-success max-[26rem]:col-span-2 max-[26rem]:text-left" data-testid="token-bonus">
             +{percent(asset.bonus_bps)} bonus
           </span>
         ) : (
@@ -563,11 +565,14 @@ function Credited({ session, account, bps }: { session: CreatedQuote; account: A
       <CircleCheck aria-hidden="true" />
       <AlertTitle>Payment credited</AlertTitle>
       <AlertDescription>
-        {/* Labels on one row and values on the next, so the values stay level when a label wraps. */}
-        <dl className="mt-2 grid grid-flow-col grid-cols-3 grid-rows-[auto_auto] gap-x-4 gap-y-1 tabular-nums [&>div]:row-span-2 [&>div]:grid [&>div]:grid-rows-subgrid [&_dt]:self-end">
+        {/* On a phone, a receipt: each label beside its value, the values in a column at least as
+            wide as a pending value's place. From sm, the labels on one row and the values on the
+            next, so the values stay level when a label wraps. Either way a value arriving moves
+            nothing. */}
+        <dl className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(4rem,auto)] gap-x-3 gap-y-1 tabular-nums [&>div]:contents sm:grid-flow-col sm:grid-cols-3 sm:grid-rows-[auto_auto] sm:gap-x-4 sm:[&>div]:row-span-2 sm:[&>div]:grid sm:[&>div]:grid-rows-subgrid sm:[&_dt]:self-end">
           <div>
             <dt className="text-muted-foreground">Credit</dt>
-            <dd className="font-medium">{dollars(session.amount)}</dd>
+            <dd className="text-right font-medium sm:text-left">{dollars(session.amount)}</dd>
           </div>
           {/* The bonus and the total where the token earns one: the token's terms say so at once. */}
           {bps > 0 && (
@@ -575,13 +580,13 @@ function Credited({ session, account, bps }: { session: CreatedQuote; account: A
               <dt className="text-muted-foreground">
                 {symbol} bonus +{percent(bps)}
               </dt>
-              <dd className="font-medium">{bonus === undefined ? pending : signedDollars(bonus)}</dd>
+              <dd className="text-right font-medium sm:text-left">{bonus === undefined ? pending : signedDollars(bonus)}</dd>
             </div>
           )}
           {bps > 0 && (
             <div>
               <dt className="text-muted-foreground">Total</dt>
-              <dd className="font-medium">{bonus === undefined ? pending : dollars(session.amount + bonus)}</dd>
+              <dd className="text-right font-medium sm:text-left">{bonus === undefined ? pending : dollars(session.amount + bonus)}</dd>
             </div>
           )}
         </dl>

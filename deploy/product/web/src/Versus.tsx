@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import { ComparisonCell } from "./ComparisonCell.js";
 import type { Competitor, DimensionKey } from "./content/compare.js";
+import { unbroken } from "./text.js";
 
 /**
  * Each provider's column shows while its radio is checked: native radios and CSS `:has()`, so the
@@ -31,7 +32,7 @@ export function Versus({ phala, others, dimensions, linkSource, name, className 
   return (
     <div className={cn("group/versus", className)}>
       <fieldset>
-        <legend className="text-sm font-medium text-muted-foreground">Compare Phala Pay with</legend>
+        <legend className="text-sm font-medium text-muted-foreground">{unbroken("Compare Phala Pay with")}</legend>
         <div className="mt-3 flex flex-wrap gap-2">
           {others.map(({ id, name: label }, index) => (
             <label key={id}
@@ -46,9 +47,9 @@ export function Versus({ phala, others, dimensions, linkSource, name, className 
         <caption className="sr-only">Phala Pay beside the provider chosen above, a row per dimension.</caption>
         <thead>
           <tr>
-            <th scope="col" className="w-1/2 border-b-2 border-brand-ink pr-3 pb-2 font-semibold">{phala.name}</th>
+            <th scope="col" className="w-1/2 border-b-2 border-brand-ink pr-3 pb-2 align-bottom font-semibold">{phala.name}</th>
             {others.map(({ id, name: label }) => (
-              <th key={id} scope="col" className={cn(shown(id), "border-b-2 pb-2 pl-3 font-semibold text-body-foreground")}>{label}</th>
+              <th key={id} scope="col" className={cn(shown(id), "border-b-2 pb-2 pl-3 align-bottom font-semibold text-balance text-body-foreground")}>{label}</th>
             ))}
           </tr>
         </thead>
@@ -58,9 +59,9 @@ export function Versus({ phala, others, dimensions, linkSource, name, className 
               <th scope="rowgroup" colSpan={2} className="pt-5 pb-1.5 mono-label text-muted-foreground">{label}</th>
             </tr>
             <tr className="border-b">
-              <td className="pr-3 pb-3 align-top leading-6 text-foreground"><ComparisonCell cell={phala[key]} linkSource={linkSource} /></td>
+              <td className="pr-3 pb-3 align-top leading-6 text-balance text-foreground"><ComparisonCell cell={phala[key]} linkSource={linkSource} /></td>
               {others.map((vendor) => (
-                <td key={vendor.id} className={cn(shown(vendor.id), "pb-3 pl-3 align-top leading-6 text-body-foreground")}>
+                <td key={vendor.id} className={cn(shown(vendor.id), "pb-3 pl-3 align-top leading-6 text-balance text-body-foreground")}>
                   <ComparisonCell cell={vendor[key]} linkSource={linkSource} />
                 </td>
               ))}
