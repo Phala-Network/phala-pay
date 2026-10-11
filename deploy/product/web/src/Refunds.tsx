@@ -29,6 +29,7 @@ import {
 } from "./common.js";
 import { statusLabel, tokens } from "./format.js";
 import { useCancelRefund, useCreateRefund, useMarkRefundPaid, useNetworks } from "./queries.js";
+import { unbroken } from "./text.js";
 
 /**
  * The refund flow (design D5): declare the refund, pay it from the treasury the deposit's address
@@ -49,7 +50,7 @@ export function Refunds({ timeline, deposit }: { timeline: Timeline; deposit: De
   return (
     <Subsection title="Refunds" id="refunds-title">
       <p className="text-sm text-pretty text-muted-foreground">
-        Pay refunds from the treasury; Phala Pay verifies them once final.{" "}
+        {unbroken("Pay refunds from the treasury; Phala Pay verifies them once final.")}{" "}
         <LearnMore anchor="3-refunds" topic="refunds" />
       </p>
       {refundable ? (

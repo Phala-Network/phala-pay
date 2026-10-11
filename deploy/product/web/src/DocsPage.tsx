@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { DOC_SECTIONS, DOCS, docPath, type DocEntry } from "./content/docs.js";
 import type { RenderedDoc, TocEntry } from "../scripts/markdown.ts";
 import { CONTAINER, Eyebrow, REPO } from "./Site.js";
+import { divided, unbroken } from "./text.js";
 
 /**
  * The docs' and the reference's layout, across the page's width: the navigation in a column of its
@@ -21,7 +22,7 @@ export const LABEL = "mono-label text-muted-foreground";
 /**
  * A link in a sidebar: the current page marked by the brand's rule at its edge, on the muted fill.
  */
-export const NAV_LINK = "flex min-h-11 items-center rounded-r-md border-l-2 border-transparent px-2 py-1 text-body-foreground transition-colors hover:bg-muted hover:text-foreground aria-[current=page]:border-brand-ink aria-[current=page]:bg-muted aria-[current=page]:font-medium aria-[current=page]:text-foreground lg:min-h-8";
+export const NAV_LINK = "flex min-h-11 items-center rounded-r-md border-l-2 border-transparent px-2 py-1 text-balance text-body-foreground transition-colors hover:bg-muted hover:text-foreground aria-[current=page]:border-brand-ink aria-[current=page]:bg-muted aria-[current=page]:font-medium aria-[current=page]:text-foreground lg:min-h-8";
 
 /**
  * Rendered markdown, in the site's type: the `docs-prose` rules in src/index.css set its headings,
@@ -46,14 +47,14 @@ function DocsNav({ current, toc = [] }: { current: string | null; toc?: TocEntry
             {pages.map(({ slug, label }) => (
               <li key={slug}>
                 <a href={docPath(slug)} aria-current={slug === current ? "page" : undefined} className={NAV_LINK}>
-                  {label}
+                  <span>{unbroken(label)}</span>
                 </a>
                 {slug === current && toc.some(({ depth }) => depth === 2) && (
                   <ul aria-label="On this page" className="my-1 ml-2 border-l xl:hidden">
                     {toc.filter(({ depth }) => depth === 2).map(({ id, text }) => (
                       <li key={id}>
-                        <a href={`#${id}`} className="-ml-px flex min-h-11 items-center border-l border-transparent py-1 pr-2 pl-3 text-muted-foreground transition-colors hover:border-foreground hover:text-foreground lg:min-h-7">
-                          {text}
+                        <a href={`#${id}`} className="-ml-px flex min-h-11 items-center border-l border-transparent py-1 pr-2 pl-3 text-balance text-muted-foreground transition-colors hover:border-foreground hover:text-foreground lg:min-h-7">
+                          <span>{unbroken(text)}</span>
                         </a>
                       </li>
                     ))}
@@ -121,8 +122,8 @@ function Outline({ toc }: { toc: TocEntry[] }) {
           <ul className="border-l">
             {sections.map(({ id, text }) => (
               <li key={id}>
-                <a href={`#${id}`} className="-ml-px flex min-h-7 items-center border-l border-transparent py-1 pl-3 text-muted-foreground transition-colors hover:border-foreground hover:text-foreground">
-                  {text}
+                <a href={`#${id}`} className="-ml-px flex min-h-7 items-center border-l border-transparent py-1 pl-3 text-balance text-muted-foreground transition-colors hover:border-foreground hover:text-foreground">
+                  <span>{unbroken(text)}</span>
                 </a>
               </li>
             ))}
@@ -152,7 +153,8 @@ export function DocsPage({ doc }: { doc: DocContent }) {
         <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_14rem] xl:gap-x-16 2xl:grid-cols-[minmax(0,1fr)_16rem] 2xl:gap-x-20">
           <article className="w-full max-w-[60rem] min-w-0 xl:col-start-1 xl:row-start-1">
             {section !== undefined && <Eyebrow>{section.title}</Eyebrow>}
-            <h1 className="mt-4 text-title-sm font-semibold text-balance sm:text-title">{doc.title}</h1>
+            {/* A package's name (`@phala/pay-server`) breaks where it divides, on a phone. */}
+            <h1 className="mt-4 text-title-sm font-semibold text-balance sm:text-title">{doc.title.includes(" ") ? unbroken(doc.title) : divided(doc.title)}</h1>
             <div className={cn(PROSE, "mt-8")} dangerouslySetInnerHTML={{ __html: doc.html }} />
             <footer className="mt-20 border-t pt-10">
               <div className="grid gap-4 sm:grid-cols-2">

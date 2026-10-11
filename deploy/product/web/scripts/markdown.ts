@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { DIAGRAMS_DIR, THEMES, describeDiagram, diagramName } from "./diagram-files.ts";
 import { posix, resolve } from "node:path";
-import type { Element, ElementContent, Root } from "hast";
+import type { Element, ElementContent, Root, RootContent } from "hast";
 import { toString } from "hast-util-to-string";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeSlug from "rehype-slug";
@@ -13,6 +13,7 @@ import { unified, type PluggableList } from "unified";
 import { visit } from "unist-util-visit";
 import { DOCS, docPath } from "../src/content/docs.ts";
 import { tokenize } from "./highlight.ts";
+import { LONGEST_UNBROKEN, splitIdentifier, splitUnits } from "../src/lib/typesetting.ts";
 
 /**
  * The site's markdown, rendered at build time: GitHub-flavoured markdown (tables, task lists,
@@ -141,6 +142,44 @@ function rehypeLinks(file: string) {
   };
 }
 
+/**
+ * Line breaks where they read well. The units of src/lib/typesetting.ts ("ERC-20", "Phala Pay",
+ * "~7 s") are kept whole (`unbroken`, src/index.css), and so is each identifier of up to
+ * LONGEST_UNBROKEN characters in inline code outside a table (rehypeTables segments a table's). A
+ * longer one, an identifier or a URL in text,
+ * and any in a heading (set larger) break only where they divide (`splitIdentifier`): after `_`,
+ * `/`, `.`, `-`, … or before a capital; a part longer still (a hash) anywhere.
+ */
+function rehypeLineBreaks() {
+  const kept = (value: string) => element("span", { className: ["unbroken"] }, [text(value)]);
+  const divide = (word: string, keepParts: boolean): ElementContent[] => splitIdentifier(word).flatMap((part, index): ElementContent[] => [
+    ...(index === 0 ? [] : [element("wbr", {}, [])]),
+    keepParts && part.length <= LONGEST_UNBROKEN ? kept(part) : text(part),
+  ]);
+  const words = (value: string, each: (word: string) => ElementContent[]) =>
+    value.split(/(\s+)/).flatMap((word) => word === "" ? [] : /^\s+$/.test(word) ? [text(word)] : each(word));
+  const code = (value: string, heading: boolean): ElementContent[] => splitUnits(value).flatMap((part, index) =>
+    index % 2 === 1 && !heading ? [kept(part)]
+      : words(part, (word) => word.length <= LONGEST_UNBROKEN && !heading ? [kept(word)] : divide(word, true)));
+  const prose = (value: string): ElementContent[] => splitUnits(value).flatMap((part, index) =>
+    index % 2 === 1 ? [kept(part)]
+      : words(part, (word) => word.length <= LONGEST_UNBROKEN ? [text(word)] : divide(word, false)));
+  // In a table, code is left as rehypeTables segmented it.
+  const walk = (children: ElementContent[], inTable: boolean, heading = false): ElementContent[] => children.flatMap((child) => {
+    if (child.type === "text") return prose(child.value);
+    if (child.type !== "element" || child.tagName === "pre" || child.tagName === "svg") return [child];
+    if (child.tagName === "code") {
+      if (!inTable) child.children = child.children.flatMap((part) => part.type === "text" ? code(part.value, heading) : [part]);
+    } else {
+      child.children = walk(child.children, inTable || child.tagName === "table", heading || /^h[1-6]$/.test(child.tagName));
+    }
+    return [child];
+  });
+  return (tree: Root) => {
+    tree.children = tree.children.flatMap((child): RootContent[] => child.type === "doctype" ? [child] : walk([child], false));
+  };
+}
+
 /** The page's title (its H1, removed from the body: the page sets it), outline, and first paragraph. */
 /**
  * Each table, ready to stack on a phone (src/index.css): every cell carries its column's header
@@ -159,6 +198,8 @@ function rehypeTables() {
         if (node.tagName === "th") {
           node.properties.role = "columnheader";
           headers.push(toString(node).trim());
+          // A column's name of a few words stays on one line (src/index.css, `unbroken`).
+          if (toString(node).trim().length <= 24) node.properties.className = ["unbroken"];
         }
       });
       // An identifier in a cell wraps where it divides (`TOPUP_ADMIN_` / `PUBLIC_KEY`) and nowhere
@@ -250,14 +291,14 @@ export async function renderDoc(file: string): Promise<RenderedDoc> {
   const source = await readFile(resolve(REPO_ROOT, file), "utf8");
   const outline = { title: "", description: "", toc: [] as TocEntry[] };
   const html = await toHtml(source, [
-    rehypeSlug, [rehypeOutline, outline], [rehypeAutolinkHeadings, anchors], [rehypeLinks, file], [rehypeCodeBlocks, file], rehypeTables,
+    rehypeSlug, [rehypeOutline, outline], [rehypeAutolinkHeadings, anchors], [rehypeLinks, file], [rehypeCodeBlocks, file], rehypeTables, rehypeLineBreaks,
   ]);
   return { title: outline.title, description: summarize(outline.description), html, toc: outline.toc };
 }
 
 /** A short description (an API field's, an operation's), its links rewritten as `file`'s are. */
 export async function renderFragment(source: string, file: string): Promise<string> {
-  return toHtml(source, [[rehypeLinks, file], [rehypeCodeBlocks, file], rehypeTables]);
+  return toHtml(source, [[rehypeLinks, file], [rehypeCodeBlocks, file], rehypeTables, rehypeLineBreaks]);
 }
 
 /** `Request ids` → `Request-ids`, as Redoc wrote its section anchors. */
@@ -279,6 +320,6 @@ export async function renderSection(source: string, file: string, prefix: string
       children.push({ id: node.properties.id, title });
     });
   };
-  const html = await toHtml(source, [ids, [rehypeAutolinkHeadings, { ...anchors, test: ["h3", "h4", "h5"] }], [rehypeLinks, file], [rehypeCodeBlocks, file], rehypeTables]);
+  const html = await toHtml(source, [ids, [rehypeAutolinkHeadings, { ...anchors, test: ["h3", "h4", "h5"] }], [rehypeLinks, file], [rehypeCodeBlocks, file], rehypeTables, rehypeLineBreaks]);
   return { html, children };
 }

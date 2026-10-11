@@ -3,6 +3,7 @@ import type { Field, OperationModel, ReferenceModel, TypeNode } from "../scripts
 import { CodeBody, CodeWindow, HighlightedLines } from "@/components/code";
 import { cn } from "@/lib/utils";
 import { Eyebrow } from "./Site.js";
+import { divided } from "./text.js";
 import { DocsMobileNav, LABEL, NAV_LINK, NAV_COLUMN, NAV_SCROLL, PAGE_COLUMN, PROSE, SIDEBAR_LAYOUT } from "./DocsPage.js";
 
 /**
@@ -65,12 +66,13 @@ function Fields({ fields, nested = false }: { fields: Field[]; nested?: boolean 
       {fields.map((field) => (
         <div key={field.name} className="py-4">
           <dt className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <code className="font-mono text-mono font-semibold text-foreground">{field.name}</code>
+            <code className="min-w-0 font-mono text-mono font-semibold text-foreground">{divided(field.name)}</code>
             <span className="font-mono text-xs text-muted-foreground"><TypeLabel type={field.type} /></span>
             {field.required && <span className="mono-label text-foreground">required</span>}
           </dt>
           <dd>
-            {field.html !== "" && <div className={cn(PROSE, "mt-1 text-sm")} dangerouslySetInnerHTML={{ __html: field.html }} />}
+            {/* A field's description, a line or a few: balanced, as a caption. */}
+            {field.html !== "" && <div className={cn(PROSE, "mt-1 text-sm [&_:is(p,li)]:text-balance")} dangerouslySetInnerHTML={{ __html: field.html }} />}
             {field.fields.length > 0 && (
               <details className="group mt-2">
                 <summary className="inline-flex min-h-8 cursor-pointer items-center rounded-md border px-2.5 text-sm font-medium text-muted-foreground hover:text-foreground">
@@ -105,7 +107,7 @@ function OperationSection({ operation }: { operation: OperationModel }) {
           <h3 id={`${operation.anchor}-title`} className="text-heading font-semibold">{operation.summary}</h3>
           <p className="mt-2 flex flex-wrap items-center gap-2 font-mono text-mono">
             <Method method={operation.method} />
-            <span className="break-all">{operation.path}</span>
+            <span className="min-w-0">{divided(operation.path)}</span>
           </p>
           {operation.html !== "" && <div className={cn(PROSE, "mt-5")} dangerouslySetInnerHTML={{ __html: operation.html }} />}
           {operation.parameters.map(({ in: place, fields }) => (
@@ -171,7 +173,7 @@ function ReferenceNav({ model }: { model: ReferenceModel }) {
               <li key={operation.id}>
                 <a href={`#${operation.anchor}`} className={cn(NAV_LINK, "items-start gap-2.5 py-1.5")}>
                   <Method method={operation.method} />
-                  <span className="min-w-0">{operation.summary}</span>
+                  <span className="min-w-0 text-balance">{operation.summary}</span>
                 </a>
               </li>
             ))}
@@ -201,7 +203,7 @@ export function ReferencePage({ model }: { model: ReferenceModel }) {
           {model.servers.map(({ url, description }) => (
             <div key={url} className="rounded-xl border bg-card px-6 py-5 shadow-card">
               <dt className="text-muted-foreground">{description}</dt>
-              <dd className="mt-1 font-mono text-mono break-all">{url}</dd>
+              <dd className="mt-1 font-mono text-mono">{divided(url)}</dd>
             </div>
           ))}
         </dl>

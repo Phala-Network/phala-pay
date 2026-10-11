@@ -173,13 +173,13 @@ function SweepRow({ group, showTreasury }: { group: SweepGroup; showTreasury: bo
             ) : empty ? (
               <p className="text-sm text-muted-foreground">Nothing to sweep.</p>
             ) : (
-              <p data-testid="unswept" className="text-sm text-muted-foreground tabular-nums">
+              <p data-testid="unswept" className="text-sm text-balance text-muted-foreground tabular-nums">
                 <span className="text-foreground">
-                  {tokens(group.final_unswept_atomic, symbol, decimals)} in {group.sweepable_forwarders} forwarder
+                  <span className="whitespace-nowrap">{tokens(group.final_unswept_atomic, symbol, decimals)}</span> in {group.sweepable_forwarders} forwarder
                   {group.sweepable_forwarders === 1 ? "" : "s"}
                 </span>{" "}
                 sweepable
-                {group.unswept_atomic !== group.final_unswept_atomic && ` of ${tokens(group.unswept_atomic, symbol, decimals)} unswept`}
+                {group.unswept_atomic !== group.final_unswept_atomic && <> of <span className="whitespace-nowrap">{tokens(group.unswept_atomic, symbol, decimals)}</span> unswept</>}
                 {group.refused_forwarders > 0 && ` (${group.refused_forwarders} refused: not derivable from the pins)`}
               </p>
             )}

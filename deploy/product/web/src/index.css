@@ -27,7 +27,9 @@
     --text-display-sm: 2.75rem;
     --text-display-sm--line-height: 1.06;
     --text-display-sm--letter-spacing: -0.03em;
-    --text-display-xs: 2.25rem;
+    /* On a phone, sized to the width, so the claim's second line ("without a custodian") stays
+       whole from 320px: 36px from 390px, 29px at 320px. */
+    --text-display-xs: clamp(1.75rem, 10.5vw - 0.3rem, 2.25rem);
     --text-display-xs--line-height: 1.08;
     --text-display-xs--letter-spacing: -0.03em;
     --text-title-lg: 3rem;
@@ -294,7 +296,8 @@
 .tok-punctuation { color: oklch(0.78 0 0); }
 .tok-link { color: oklch(0.82 0.09 235); text-decoration: underline; }
 
-/* The one small label: the eyebrow's size, Geist Mono, medium, uppercase. Its colour is its place's. */
+/* The one small label: the eyebrow's size, Geist Mono, medium, uppercase, its lines balanced where
+   it wraps. Its colour is its place's. */
 @utility mono-label {
   font-family: var(--font-mono);
   font-size: var(--text-eyebrow);
@@ -302,6 +305,7 @@
   letter-spacing: var(--text-eyebrow--letter-spacing);
   font-weight: var(--font-weight-medium);
   text-transform: uppercase;
+  text-wrap-style: balance;
 }
 
 @layer base {
@@ -323,6 +327,16 @@
     }
   html.dark {
     color-scheme: dark;
+  }
+  /* Line breaking everywhere, the docs' rendered markdown and the demo too: headings balanced,
+     text set to avoid a word alone on its last line. The longhand leaves wrapping itself (a
+     `whitespace-nowrap` around them) as it is; a component's own `text-balance` or `text-pretty`
+     wins. */
+  :where(h1, h2, h3, h4, h5, h6) {
+    text-wrap-style: balance;
+  }
+  :where(p, li, dt, dd, figcaption, blockquote, td, th, summary, label, legend, caption) {
+    text-wrap-style: pretty;
   }
   ::selection {
     background-color: color-mix(in oklch, var(--brand) 55%, transparent);
@@ -386,7 +400,7 @@
   /* Tables take the column's width and wrap their cells; only code blocks scroll sideways. */
   .docs-prose :where(table) { @apply w-full text-sm; }
   .docs-prose :where(th) { @apply border-b px-4 py-3 text-left align-bottom mono-label text-muted-foreground first:pl-0; }
-  .docs-prose :where(td) { @apply border-b px-4 py-3.5 align-top first:pl-0; }
+  .docs-prose :where(td) { @apply border-b px-4 py-3.5 align-top text-balance first:pl-0; }
   /* In a table, code wraps only where its identifiers divide (<wbr>, scripts/markdown.ts), and an
      index's first column (short links, package names) not at all. */
   .docs-prose :where(td code, th code) { overflow-wrap: normal; }

@@ -33,7 +33,7 @@ function SegmentedControlItem({
     <RadioGroupPrimitive.Item
       data-slot="segmented-control-item"
       className={cn(
-        "relative inline-flex min-w-max flex-1 items-center justify-center gap-1.5 rounded-sm px-3 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 data-checked:bg-background data-checked:text-foreground data-checked:ring-1 data-checked:ring-foreground/15 dark:data-checked:bg-input/40 forced-colors:data-checked:forced-color-adjust-none forced-colors:data-checked:bg-[Highlight] forced-colors:data-checked:text-[HighlightText] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 before:absolute before:inset-x-0 before:-inset-y-1.5",
+        "relative inline-flex min-w-max flex-1 items-center justify-center gap-1.5 rounded-sm px-2.5 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 data-checked:bg-background data-checked:text-foreground data-checked:ring-1 data-checked:ring-foreground/15 dark:data-checked:bg-input/40 forced-colors:data-checked:forced-color-adjust-none forced-colors:data-checked:bg-[Highlight] forced-colors:data-checked:text-[HighlightText] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 before:absolute before:inset-x-0 before:-inset-y-1.5",
         className
       )}
       {...props}

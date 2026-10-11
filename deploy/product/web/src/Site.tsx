@@ -16,7 +16,7 @@ import {
   DEPLOY_COMMAND, EYEBROWS, FAQ, FEATURES_TITLE, FEE_FIGURE, HERO_FACTS, HERO_FACTS_NOTE, HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES,
   PROPERTIES_LEAD, SDK_PACKAGES, TAGLINE, VERIFY_CHECKS, WEBHOOK_EVENTS, type Station,
 } from "./content/site.js";
-import { unbroken } from "./text.js";
+import { divided, unbroken } from "./text.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 
 export const REPO = "https://github.com/Phala-Network/phala-pay";
@@ -47,8 +47,8 @@ export const LINKS = {
 export const CONTAINER = "mx-auto w-full max-w-[calc(var(--container-page)+2*var(--spacing-gutter))] px-gutter";
 /** Every H2, and every other page's H1: a step larger on a wide screen. */
 export const H2 = "text-title-sm font-semibold text-balance sm:text-title 2xl:text-title-lg";
-/** A section's introduction under its heading, at a reading measure; a step larger from lg. */
-export const LEAD = "max-w-measure text-lead text-pretty text-body-foreground lg:text-lead-lg";
+/** A section's introduction under its heading, at a reading measure, its lines balanced; a step larger from lg. */
+export const LEAD = "max-w-measure text-lead text-balance text-body-foreground lg:text-lead-lg";
 /** One rhythm for every section: 96px above and below on phones, 128px from lg, 160px from 2xl. */
 export const SECTION = "py-24 lg:py-32 2xl:py-40";
 /**
@@ -259,7 +259,7 @@ export function Hero({ code }: { code: ReactNode }) {
           <h1 id="hero-title" className="mt-8 max-w-xl text-display-xs font-semibold text-balance sm:text-display lg:text-display-sm xl:text-display 2xl:max-w-none 2xl:text-display-lg">
             {TAGLINE}
           </h1>
-          <p className="mt-7 max-w-xl text-lead-lg text-pretty text-body-foreground 2xl:max-w-measure 2xl:text-lead-xl">{unbroken(HERO_SUBHEAD)}</p>
+          <p className="mt-7 max-w-xl text-lead-lg text-balance text-body-foreground 2xl:max-w-measure 2xl:text-lead-xl">{unbroken(HERO_SUBHEAD)}</p>
           <div className="mt-10 flex flex-col gap-3 sm:flex-row 2xl:mt-12">
             <DeployButton />
             <Button asChild size="lg" variant="secondary"><a href={LINKS.docs}>Read the docs</a></Button>
@@ -272,7 +272,7 @@ export function Hero({ code }: { code: ReactNode }) {
               {HERO_FACTS.map(({ value, label }) => (
                 <div key={label} className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-baseline gap-x-4 sm:grid-cols-1 sm:gap-y-1 sm:px-5 sm:first:pl-0">
                   <dt className="text-sm text-pretty text-muted-foreground">{label}</dt>
-                  <dd className="order-first text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl">{value}</dd>
+                  <dd className="order-first text-xl font-semibold tracking-tight whitespace-nowrap tabular-nums sm:text-2xl lg:text-xl xl:text-2xl">{value}</dd>
                 </div>
               ))}
             </dl>
@@ -428,14 +428,14 @@ function CustodyPath() {
                   </span>
                 </span>
               )}
-              <div className={cn("flex flex-col rounded-xl border bg-card p-7 shadow-card sm:p-8 2xl:p-10", last && "border-brand-ink/70 ring-1 ring-brand-ink/30")}>
+              <div className={cn("flex flex-col rounded-xl border bg-card p-5 shadow-card min-[24rem]:p-7 sm:p-8 2xl:p-10", last && "border-brand-ink/70 ring-1 ring-brand-ink/30")}>
                 <div className="flex items-center justify-between gap-4">
                   <span className={cn("flex size-10 items-center justify-center rounded-lg border bg-muted", last && "border-transparent bg-brand text-brand-foreground")}>
                     <Icon {...ICON} className="size-5" />
                   </span>
                   <span className="mono-label text-muted-foreground">0{index + 1} · {role}</span>
                 </div>
-                <p className="mt-10 text-heading font-semibold">{name}</p>
+                <p className="mt-10 text-heading font-semibold text-balance">{name}</p>
                 <p className="mt-3 text-base/7 text-pretty text-body-foreground">{detail}</p>
               </div>
             </li>
@@ -630,7 +630,7 @@ export function CompareTeaser() {
                 <tr key={key} className="border-b last:border-b-0">
                   <th scope="row" className="px-8 py-6 align-top text-sm/7 font-medium">{label}</th>
                   {TEASER.vendors.map((vendor) => (
-                    <td key={vendor.id} className={cn("px-8 py-6 align-top text-base/7 text-pretty", vendor.id === phala?.id ? PHALA_CELL : "text-body-foreground")}>
+                    <td key={vendor.id} className={cn("px-8 py-6 align-top text-base/7 text-balance", vendor.id === phala?.id ? PHALA_CELL : "text-body-foreground")}>
                       <ComparisonCell cell={vendor[key]} linkSource={false} />
                     </td>
                   ))}
@@ -669,7 +669,7 @@ export function Faq() {
             {FAQ.map(({ question, answer }) => (
               <details key={question} className="group border-b last:border-b-0">
                 <summary className="flex min-h-18 cursor-pointer list-none items-center justify-between gap-8 py-6 text-base font-medium sm:text-lg 2xl:text-xl [&::-webkit-details-marker]:hidden">
-                  <span>{question}</span>
+                  <span className="text-balance">{unbroken(question)}</span>
                   <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-card">
                     <Plus strokeWidth={1.75} className="size-4 group-open:rotate-45 motion-safe:transition-transform" />
                   </span>
@@ -727,8 +727,9 @@ export function DeployCommand() {
         ? <CopyButton value={DEPLOY_COMMAND} label="Copy the deploy command" className="ml-auto text-code-muted hover:bg-white/10 hover:text-code-foreground" />
         : <span aria-hidden="true" className="ml-auto size-8" />}
     </>}>
-      <pre className="px-5 py-4 font-mono text-mono whitespace-pre-wrap text-code-foreground [overflow-wrap:anywhere]">
-        <code><span aria-hidden="true" className="text-code-muted select-none">$ </span>{DEPLOY_COMMAND}</code>
+      {/* Its lines balanced, the URL breaking where it divides where the line is short. */}
+      <pre className="px-5 py-4 font-mono text-mono whitespace-pre-wrap text-balance text-code-foreground [overflow-wrap:anywhere]">
+        <code><span aria-hidden="true" className="text-code-muted select-none">$ </span>{divided(DEPLOY_COMMAND)}</code>
       </pre>
     </CodeWindow>
   );
@@ -785,8 +786,9 @@ export function SiteFooter() {
           <p className="mt-4 max-w-xs text-pretty text-body-foreground">{TAGLINE}. Open source, self-hosted, on Ethereum and Base.</p>
           <ReleaseBadge className="mt-6" />
         </div>
-        {/* Four columns of links where they fit (from sm), two by two on a phone. */}
-        <div data-column="right" className={cn(MAIN, "grid grid-cols-2 gap-x-10 gap-y-12 sm:grid-cols-4")}>
+        {/* Four columns of links where they fit (from sm), two by two on a phone, one under another
+            on the narrowest, where a package's name would not fit half its width. */}
+        <div data-column="right" className={cn(MAIN, "grid gap-x-10 gap-y-12 min-[22.5rem]:grid-cols-2 sm:grid-cols-4")}>
           {FOOTER.map((column) => (
             <nav key={column.title} aria-label={column.title}>
               <p className="mono-label text-muted-foreground">{column.title}</p>

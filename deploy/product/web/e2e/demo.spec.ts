@@ -1745,18 +1745,23 @@ async function expectNothingClipped(page: Page, state: string): Promise<void> {
       .filter((element) => {
         const style = getComputedStyle(element);
         const hides = style.overflowX === "hidden" || style.overflowX === "clip" || element.getAttribute("role") === "tabpanel";
-        // Visually hidden text (a 1px box for screen readers) is clipped on purpose.
-        return hides && element.clientWidth > 1 && element.checkVisibility() && element.scrollWidth > element.clientWidth + 1;
+        // Visually hidden text (a 1px box for screen readers) is clipped on purpose, and so is a
+        // request's one-line summary, its id ending in an ellipsis (the whole id in its title, and
+        // in the opened request).
+        const summary = style.textOverflow === "ellipsis" && element.hasAttribute("title");
+        return hides && !summary && element.clientWidth > 1 && element.checkVisibility() && element.scrollWidth > element.clientWidth + 1;
       })
       .map((element) => `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")} (${element.scrollWidth} > ${element.clientWidth})`));
     expect(clipped, `${state}, ${tab} tab`).toEqual([]);
     // Nothing scrolls inside the demo: every element shows its overflow, but for code blocks, which
-    // may scroll sideways on a phone and never scroll down. Native controls, images, and visually
-    // hidden text keep their own.
+    // may scroll sideways on a phone and never scroll down, and the backend's row of tabs, which
+    // scrolls sideways where its five tabs do not fit (under 360px). Native controls, images,
+    // visually hidden text, and a summary's ellipsis (above) keep their own.
     const scrolling = await page.locator("#demo-root").evaluate((root) => [...root.querySelectorAll<HTMLElement>("*")]
       .filter((element) => {
-        if (element.matches("input, textarea, select, img, svg, svg *") || element.clientWidth <= 1) return false;
+        if (element.matches("input, textarea, select, img, svg, svg *, [role=tablist][aria-label=Backend]") || element.clientWidth <= 1) return false;
         const style = getComputedStyle(element);
+        if (style.textOverflow === "ellipsis" && element.hasAttribute("title")) return false;
         if (element.tagName === "PRE") return element.scrollHeight > element.clientHeight + 1;
         return style.overflowX !== "visible" || style.overflowY !== "visible";
       })
@@ -2385,6 +2390,268 @@ test("the hero's facts wrap alike, and the note under them qualifies the time", 
   }
   // The ~7 s is the wallet checkout's (its transaction hash reaches the service), said under the row.
   await expect(page.locator("[data-facts-note]")).toContainText("wallet checkout");
+});
+
+/**
+ * How each shown element matching `selector` sets its text. Its words run across inline elements (an
+ * id's `qt_` and the hex after it are one word); a run kept whole (`white-space: nowrap`) counts as
+ * one. Returned: its lines; its words broken across two lines, save where a word may break (after a
+ * `/`; at a `<wbr>`, where an identifier divides (scripts/markdown.ts, src/lib/typesetting.ts) or an
+ * id's groups of four meet (src/components/ui/hash.tsx), but never between an id's prefix and its
+ * hex; at the hyphen of a word wider than the whole line; anywhere in a hash or a base64 key past
+ * its prefix); its runs that read as one (a number and its unit, a rate, a date, the product's name)
+ * split across lines; and
+ * whether its last line is a lone short word that the word before it would have fitted beside,
+ * without making two balanced lines less even.
+ */
+async function typeset(page: Page, selector: string): Promise<{ text: string; lines: string[][]; broken: string[]; split: string[]; lone: boolean }[]> {
+  return page.locator(selector).evaluateAll((elements) => elements
+    .filter((element) => element.checkVisibility() && element.getBoundingClientRect().width > 2 && element.closest(".sr-only, pre") === null)
+    .map((element) => {
+      const style = getComputedStyle(element);
+      const content = element.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      // The element's text, character by character (a block inside it adds a space), and where a <wbr> sits.
+      const chars: (readonly [Text, number] | null)[] = [];
+      const wbr = new Set<number>();
+      let text = "";
+      const collect = (node: Node) => {
+        for (const child of node.childNodes) {
+          if (child instanceof Text) {
+            for (let offset = 0; offset < child.length; offset += 1) chars.push([child, offset]);
+            text += child.data;
+          } else if (child instanceof HTMLElement || child instanceof SVGElement) {
+            if (child.tagName === "WBR") wbr.add(text.length);
+            else if (child.closest(".sr-only") === null && child.checkVisibility() && child.tagName !== "svg") {
+              const block = !["inline", "contents"].includes(getComputedStyle(child).display);
+              if (block) { chars.push(null); text += " "; }
+              collect(child);
+              if (block) { chars.push(null); text += " "; }
+            }
+          }
+        }
+      };
+      collect(element);
+      const range = document.createRange();
+      const rectsOf = (start: number, end: number) => {
+        const first = chars[start];
+        const last = chars[end - 1];
+        if (first == null || last == null) return [];
+        range.setStart(first[0], first[1]);
+        range.setEnd(last[0], last[1] + 1);
+        return [...range.getClientRects()].filter((rect) => rect.width > 0);
+      };
+      const half = parseFloat(style.fontSize) * 0.6;
+      const lineCount = (rects: DOMRect[]) => {
+        const mids = rects.map((rect) => (rect.top + rect.bottom) / 2).sort((a, b) => a - b);
+        return mids.filter((mid, index) => index === 0 || mid - (mids[index - 1] ?? 0) >= half).length;
+      };
+      const unitOf = (index: number) => {
+        let unit: Element | null = null;
+        for (let up = chars[index]?.[0].parentElement ?? null; up !== null && up !== element.parentElement; up = up.parentElement) {
+          if (getComputedStyle(up).textWrapMode === "nowrap") unit = up;
+        }
+        return unit;
+      };
+      const words: { text: string; left: number; right: number; mid: number; unit: Element | null }[] = [];
+      const broken: string[] = [];
+      for (const match of text.matchAll(/\S+/g)) {
+        const start = match.index;
+        const end = start + match[0].length;
+        const rects = rectsOf(start, end);
+        const first = rects[0];
+        const last = rects[rects.length - 1];
+        if (first === undefined || last === undefined) continue;
+        if (lineCount(rects) > 1) {
+          // Where it breaks: the first character below the first line's middle.
+          let at = start + 1;
+          while (at < end && (rectsOf(at, at + 1)[0]?.top ?? 0) < (first.top + first.bottom) / 2) at += 1;
+          const before = text[at - 1] ?? "";
+          const rest = text.slice(at, end);
+          const width = rects.reduce((sum, rect) => sum + rect.width, 0);
+          const allowed = before === "/" ||
+            (wbr.has(at) && !(before === "_" && /^[0-9a-f]{8,}/i.test(rest))) ||
+            (before === "-" && width > content) ||
+            (/^[("'`]?(0x|[a-z]{2,8}_)?[0-9a-f]{24,}/i.test(match[0]) && /^[0-9a-f]/i.test(rest) && /[0-9a-f]$/i.test(before)) ||
+            // A key in base64 (`whpk_…`, a webhook signing key), past its prefix.
+            (/^[a-z]{2,8}_[A-Za-z0-9+/]{24,}={0,2}$/.test(match[0]) && !/_$/.test(before));
+          if (!allowed) broken.push(`${text.slice(start, at)}|${rest}`);
+        }
+        const unit = unitOf(start);
+        const previous = words[words.length - 1];
+        if (previous !== undefined && unit !== null && previous.unit === unit) {
+          previous.text += ` ${match[0]}`;
+          previous.right = last.right;
+          continue;
+        }
+        words.push({ text: match[0], left: first.left, right: last.right, mid: (last.top + last.bottom) / 2, unit });
+      }
+      const runs = /~?\$?\d[\d,.]*\s(?:s|ms|min|h|%|PHA|USDC|USDT|ETH)(?![\p{L}\p{N}])|\$?\d[\d,.]* \/ [A-Z]{2,5}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b|Phala Pay/gu;
+      const split = [...text.matchAll(runs)].filter((match) => lineCount(rectsOf(match.index, match.index + match[0].length)) > 1).map((match) => match[0]);
+      // Lines: a word whose middle is below the last line's by more than half a line starts the next.
+      const lines: (typeof words)[] = [];
+      for (const word of words) {
+        const line = lines[lines.length - 1];
+        if (line !== undefined && Math.abs(word.mid - (line[0]?.mid ?? 0)) < half) line.push(word);
+        else lines.push([word]);
+      }
+      const widthOf = (line: typeof words) => (line[line.length - 1]?.right ?? 0) - (line[0]?.left ?? 0);
+      const last = lines[lines.length - 1] ?? [];
+      const before = lines[lines.length - 2]?.at(-1);
+      const space = parseFloat(style.fontSize) * 0.3;
+      let lone = false;
+      if (lines.length >= 2 && last.length === 1 && before !== undefined && widthOf(last) < 0.5 * Math.max(...lines.map(widthOf))) {
+        const moved = before.right - before.left + space;
+        const fits = moved + widthOf(last) <= content + 0.5;
+        const firstWidth = widthOf(lines[0] ?? []);
+        const evener = lines.length === 2 && style.textWrapStyle === "balance" && Math.abs(firstWidth - moved - (widthOf(last) + moved)) >= Math.abs(firstWidth - widthOf(last));
+        lone = fits && !evener;
+      }
+      return { text: element.textContent.replace(/\s+/g, " ").trim().slice(0, 60), lines: lines.map((line) => line.map((word) => word.text)), broken, split, lone };
+    }));
+}
+
+/** Elements in `scope` whose box leaves the nearest container drawn around them (an edge or a fill): a card, a pill, a cell. */
+async function outsideTheirBox(page: Page, scope: string): Promise<string[]> {
+  return page.locator(scope).evaluateAll((roots) => roots.flatMap((root) => [...root.querySelectorAll<HTMLElement>("*")].flatMap((element) => {
+    const position = getComputedStyle(element).position;
+    const box = element.getBoundingClientRect();
+    if (element.closest("svg, .sr-only") !== null || position === "absolute" || position === "fixed" || box.width <= 2 || !element.checkVisibility()) return [];
+    for (let up = element.parentElement; up !== null && up !== root.parentElement; up = up.parentElement) {
+      const style = getComputedStyle(up);
+      if (style.overflowX !== "visible") return [];
+      const drawn = parseFloat(style.borderLeftWidth) > 0 || parseFloat(style.borderRightWidth) > 0 || !/rgba\(.*, 0\)$|transparent/.test(style.backgroundColor);
+      if (!drawn || style.display === "inline" || style.display === "contents") continue;
+      const edge = up.getBoundingClientRect();
+      return box.right > edge.right + 1 || box.left < edge.left - 1 ? [`${element.tagName.toLowerCase()} "${element.textContent.trim().slice(0, 30)}" past ${up.tagName.toLowerCase()}.${[...up.classList].slice(0, 3).join(".")}`] : [];
+    }
+    return [];
+  })));
+}
+
+/** Units and short labels: each on one line (a step's title, in a column, up to four words). */
+const ONE_LINE = [
+  "header nav a", "header [data-slot=button]", "main [data-slot=button]", "[data-facts] dd", "footer nav a",
+  `${DEMO_SECTION} [role=tab]`, "[data-slot=segmented-control-item]", "[data-testid=token-price]", "[data-testid=token-bonus]",
+  "[data-slot=status-badge]", "[data-step] button > span:nth-child(2) > span:first-child", "[data-testid=payment-credited] dt",
+  ".docs-prose .unbroken", ".docs-prose th",
+];
+/** Headings and the like: never a lone short word on a last line that its neighbour would have fitted. */
+const HEADINGS = "h1, h2, h3, h4, summary > span, [data-feature] p, figure ol p, main p[class*=text-lead]";
+/** Rows of siblings that wrap alike: in each row (one top), as many lines each. */
+const ROWS = ["header nav a", "[data-facts] dt", "[data-feature] h3", "footer nav > p", "figure ol p.text-heading", "#fit h3", `${DEMO_SECTION} [role=tab]`];
+/** All the text there is to set, in `scope`. */
+const TEXT = (scope: string) => `${scope} :is(p, li, dt, dd, td, th, h1, h2, h3, h4, h5, figcaption, summary, code, label, button, a)`;
+/** The widths measured: a phone's (the narrowest included), a tablet's, the desktops'. */
+const TYPE_WIDTHS = [320, 360, 390, 768, 1024, 1280, 1440, 1920];
+/**
+ * At 320px, what may not fit, each for its reason: a vendor's three-word name in a column of the
+ * comparison half a phone wide; a step's name of four words and its menu's chevron (about 167px)
+ * beside its time (162px beside "+0 s", 130px beside "since" over a time). From 360px each fits.
+ */
+const AT_320 = ["Stripe stablecoin payments", "Received by Phala Pay", "Swept to the treasury"];
+
+/** Every check of the text in `scope` at the page's current width. */
+async function expectTypeset(page: Page, where: string, width: number, scope = "") {
+  const allowed = (text: string) => width <= 320 && AT_320.some((each) => text.includes(each));
+  for (const selector of ONE_LINE) {
+    const short = selector.startsWith("[data-step]");
+    const wrapped = (await typeset(page, `${scope} ${selector}`.trim()))
+      .filter(({ lines, text }) => lines.length > 1 && !allowed(text) && (!short || lines.flat().length <= 4))
+      .map(({ lines }) => lines.map((line) => line.join(" ")).join(" / "));
+    expect(wrapped, `${where}: ${selector} on more than one line`).toEqual([]);
+  }
+  const text = await typeset(page, scope === "" ? `${TEXT("main")}, ${TEXT("footer")}` : TEXT(scope));
+  expect(text.flatMap(({ broken }) => broken), `${where}: words broken across lines`).toEqual([]);
+  expect(text.flatMap(({ split }) => split), `${where}: runs split across lines`).toEqual([]);
+  expect((await typeset(page, HEADINGS.split(", ").map((each) => `${scope} ${each}`.trim()).join(", "))).filter(({ lone }) => lone).map(({ text }) => text), `${where}: a lone word ending a heading`).toEqual([]);
+  for (const selector of ROWS) {
+    const counts = await page.locator(`${scope} ${selector}`.trim()).evaluateAll((elements) => elements.filter((element) => element.checkVisibility()).map((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const half = parseFloat(getComputedStyle(element).fontSize) * 0.6;
+      const mids = [...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => (rect.top + rect.bottom) / 2).sort((a, b) => a - b);
+      return { top: Math.round(element.getBoundingClientRect().top), text: element.textContent, lines: mids.filter((mid, index) => index === 0 || mid - (mids[index - 1] ?? 0) >= half).length };
+    }));
+    for (const top of new Set(counts.map(({ top }) => top))) {
+      const row = counts.filter((each) => each.top === top && !allowed(each.text)).map(({ lines }) => lines);
+      expect(new Set(row).size, `${where}: ${selector} in a row, lines ${row.join(", ")}`).toBeLessThanOrEqual(1);
+    }
+  }
+  expect(await outsideTheirBox(page, DEMO_SECTION), `${where}: the demo's boxes past their containers`).toEqual([]);
+}
+
+test("type sets well: units and labels on one line, no word split, no heading ending on a lone word, rows wrap alike", async ({ page }) => {
+  // The owner's regression: text that wraps where it should not. At a phone's widths (the narrowest
+  // too), a tablet's, and the desktops', on the marketing pages and the docs (their identifiers and
+  // tables), none scrolling sideways; the API reference, too large to set word by word, for that alone.
+  test.setTimeout(600_000);
+  for (const path of ["", "compare", "no-such-page/deeper", "docs/integration", "docs/sdk/server", "reference"]) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(new URL(path, env("SITE_URL")).href);
+    if (path === "") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+    for (const width of TYPE_WIDTHS) {
+      await page.setViewportSize({ width, height: 900 });
+      const where = `/${path} at ${width}px`;
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${where}: scrolls sideways`).toBe(width);
+      if (path !== "reference") await expectTypeset(page, where, width);
+    }
+  }
+});
+
+test("the demo sets its text well while it loads, while paying, once credited, and once final, at every width", async ({ browser, page }) => {
+  test.setTimeout(600_000);
+  // While its data loads (the API held): the placeholders keep to their boxes, and the page does not scroll sideways.
+  const loading = await browser.newPage();
+  try {
+    await loading.route(`${env("API_URL")}/**`, () => undefined);
+    await loading.goto(env("SITE_URL"));
+    for (const width of TYPE_WIDTHS) {
+      await loading.setViewportSize({ width, height: 900 });
+      expect(await loading.evaluate(() => document.documentElement.scrollWidth), `loading at ${width}px: scrolls sideways`).toBe(width);
+      expect(await outsideTheirBox(loading, DEMO_SECTION), `loading at ${width}px`).toEqual([]);
+    }
+  } finally {
+    await loading.close();
+  }
+  // Credited: the receipt, the timeline, the payment's row and its API requests, on their tabs.
+  await installWallet(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Customer view" });
+  const scenes = page.getByRole("complementary", { name: "Your backend" });
+  await expect(product.getByTestId("balance")).toHaveText(/^\$/);
+  await page.getByRole("note", { name: "Test tokens" }).getByRole("button", { name: /^Mint 1,000 test PHA/ }).click();
+  await expect(page.getByRole("note", { name: "Test tokens" })).toContainText("Minted:");
+  // Each state on each of the backend's tabs, at every width: every list shown in full (the API's
+  // requests, the quote's id in its path among them).
+  const pass = async (state: string) => {
+    for (const tab of ["Credits", "API", "Trust", "Sweeps"]) {
+      await openTab(scenes, tab);
+      await showAll(scenes);
+      for (const width of TYPE_WIDTHS) {
+        await page.setViewportSize({ width, height: 900 });
+        await expectTypeset(page, `${state}, ${tab} tab, at ${width}px`, width, DEMO_SECTION);
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+  };
+  // Paying: the checkout, and the stepper waiting for the transfer.
+  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await expect(product.locator(".pp-summary")).toContainText("PHA");
+  await pass("paying");
+  // Credited: the receipt, the payment's row, its webhook and requests.
+  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
+  await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
+  await openTab(scenes, "API");
+  await expect(scenes.getByTestId("webhook-event").first()).toBeVisible({ timeout: 30_000 });
+  await pass("credited");
+  // Final and waiting for the sweep: the stepper's last step "since" the final time, beside the
+  // longest of its names ("Swept to the treasury").
+  const timeline = scenes.getByRole("list", { name: "Payment timeline" });
+  await expectComplete(timeline, ["final"]);
+  await expect(step(timeline, "swept")).toHaveAttribute("data-state", "current");
+  await pass("final, awaiting the sweep");
 });
 
 test("the feature cards side by side share their rules and their titles' lines", async ({ page }) => {
