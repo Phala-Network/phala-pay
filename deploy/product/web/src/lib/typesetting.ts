@@ -5,7 +5,7 @@
  * product's name ("Phala / Pay"), and a number with its unit or symbol ("~7 s", "80 PHA", "15 min").
  * Spaces elsewhere still break.
  */
-const UNITS = /((?:-{0,2}[\p{L}\p{N}@/.~$]+(?:[-–][\p{L}\p{N}.]+)+)|Phala Pay|~?\$?\d[\d,.]*\s(?:s|ms|min|h|%|PHA|USDC|USDT|ETH)(?![\p{L}\p{N}]))/u;
+const UNITS = /((?:-{0,2}[\p{L}\p{N}@/.~$]+(?:[-–][\p{L}\p{N}.$]+)+)|Phala Pay|~?\$?\d[\d,.]*\s(?:s|ms|min|h|%|PHA|USDC|USDT|ETH)(?![\p{L}\p{N}]))/u;
 
 /** `text` split around its units: the parts at odd indices are units, the rest the text between. */
 export function splitUnits(text: string): string[] {
