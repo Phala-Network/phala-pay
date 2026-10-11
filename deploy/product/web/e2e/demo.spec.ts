@@ -2620,7 +2620,11 @@ test("the demo sets its text well while it loads and once a payment is credited,
   await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
   for (const tab of ["Credits", "API"]) {
     await openTab(scenes, tab);
-    if (tab === "API") await expect(scenes.getByTestId("webhook-event").first()).toBeVisible({ timeout: 30_000 });
+    if (tab === "API") {
+      // Every request, the quote's (its id in its path) among them.
+      await expect(scenes.getByTestId("webhook-event").first()).toBeVisible({ timeout: 30_000 });
+      await showAll(scenes);
+    }
     for (const width of TYPE_WIDTHS) {
       await page.setViewportSize({ width, height: 900 });
       await expectTypeset(page, `credited, ${tab} tab, at ${width}px`, width, DEMO_SECTION);
