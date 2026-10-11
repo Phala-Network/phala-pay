@@ -3,6 +3,7 @@
 Each configured chain has an Ankr read endpoint and an independent Infura verify endpoint.
 [Chain reads](../docs/design/chain-reads.md) specifies the evidence and read paths.
 No endpoint failover, provider pool, acceptance state or RPC recovery command remains.
+[RPC providers](RPC-PROVIDERS.md) compares providers' fee models, free tiers and compatibility.
 
 ## Configuration and preflight
 
