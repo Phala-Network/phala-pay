@@ -1745,19 +1745,23 @@ async function expectNothingClipped(page: Page, state: string): Promise<void> {
       .filter((element) => {
         const style = getComputedStyle(element);
         const hides = style.overflowX === "hidden" || style.overflowX === "clip" || element.getAttribute("role") === "tabpanel";
-        // Visually hidden text (a 1px box for screen readers) is clipped on purpose.
-        return hides && element.clientWidth > 1 && element.checkVisibility() && element.scrollWidth > element.clientWidth + 1;
+        // Visually hidden text (a 1px box for screen readers) is clipped on purpose, and so is a
+        // request's one-line summary, its id ending in an ellipsis (the whole id in its title, and
+        // in the opened request).
+        const summary = style.textOverflow === "ellipsis" && element.hasAttribute("title");
+        return hides && !summary && element.clientWidth > 1 && element.checkVisibility() && element.scrollWidth > element.clientWidth + 1;
       })
       .map((element) => `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")} (${element.scrollWidth} > ${element.clientWidth})`));
     expect(clipped, `${state}, ${tab} tab`).toEqual([]);
     // Nothing scrolls inside the demo: every element shows its overflow, but for code blocks, which
     // may scroll sideways on a phone and never scroll down, and the backend's row of tabs, which
-    // scrolls sideways where its five tabs do not fit (under 360px). Native controls, images, and
-    // visually hidden text keep their own.
+    // scrolls sideways where its five tabs do not fit (under 360px). Native controls, images,
+    // visually hidden text, and a summary's ellipsis (above) keep their own.
     const scrolling = await page.locator("#demo-root").evaluate((root) => [...root.querySelectorAll<HTMLElement>("*")]
       .filter((element) => {
         if (element.matches("input, textarea, select, img, svg, svg *, [role=tablist][aria-label=Backend]") || element.clientWidth <= 1) return false;
         const style = getComputedStyle(element);
+        if (style.textOverflow === "ellipsis" && element.hasAttribute("title")) return false;
         if (element.tagName === "PRE") return element.scrollHeight > element.clientHeight + 1;
         return style.overflowX !== "visible" || style.overflowY !== "visible";
       })
