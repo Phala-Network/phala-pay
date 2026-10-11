@@ -24,7 +24,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b px-4 py-4 sm:px-6",
+        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b px-4 py-4 sm:px-6 2xl:px-8",
         className
       )}
       {...props}
@@ -56,7 +56,7 @@ function CardContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-content"
-      className={cn("px-4 py-6 sm:px-6", className)}
+      className={cn("px-4 py-6 sm:px-6 2xl:px-8", className)}
       {...props}
     />
   )
@@ -67,7 +67,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-footer"
-      className={cn("border-t px-4 py-6 sm:px-6", className)}
+      className={cn("border-t px-4 py-6 sm:px-6 2xl:px-8", className)}
       {...props}
     />
   )

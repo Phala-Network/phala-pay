@@ -124,7 +124,9 @@ export function Product({
             aria-labelledby="balance-title"
             data-testid="balance"
           >
-            {account !== null ? dollars(account.balance) : unavailable ? "—" : <Skeleton className="ml-auto h-8 w-24" />}
+            {/* While the account loads, a new visitor's balance's size ($0.00): the column, aligned
+                right, keeps its edge when the figure arrives. */}
+            {account !== null ? dollars(account.balance) : unavailable ? "—" : <Skeleton className="ml-auto h-8 w-16" />}
           </div>
         </div>
       </CardHeader>
@@ -195,6 +197,17 @@ export function Product({
       {network?.testnet === true && (
         <CardFooter className="py-3 sm:py-3">
           <TestTokens key={network.chain_id} network={network} need={need} />
+        </CardFooter>
+      )}
+      {/* While the networks load (and as the page is prerendered), the test tokens' row keeps its
+          place, a testnet assumed as the badge above assumes it: its name (on a phone) and its first
+          button, so the card does not grow when they arrive. */}
+      {network === undefined && networksView.error === null && (
+        <CardFooter aria-hidden="true" className="py-3 sm:py-3">
+          <div className="flex w-full flex-col gap-3">
+            <p className="text-sm font-medium text-muted-foreground lg:hidden">Test tokens</p>
+            <Skeleton className={cn("h-8 w-full sm:w-48", TOUCH)} />
+          </div>
         </CardFooter>
       )}
     </Card>
@@ -278,9 +291,14 @@ function PaymentOptions({
           <span>Token</span>
         </FieldLabel>
         {network === undefined || asset === undefined ? (
-          <div className="grid gap-2">
-            <Skeleton className="h-13" />
-            <Skeleton className="h-13" />
+          // Two tokens' places, each a card's box around two lines of its text (TokenOption's), so
+          // the list is as tall as it will be when the networks arrive.
+          <div className="grid gap-2" aria-hidden="true">
+            {[0, 1].map((index) => (
+              <div key={index} className="flex min-h-13 items-center rounded-lg border px-3 py-2 text-sm leading-5">
+                <Skeleton className="h-[2lh] flex-1" />
+              </div>
+            ))}
           </div>
         ) : (
           // Keyed by network: each network lists its own tokens.

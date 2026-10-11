@@ -7,11 +7,16 @@
 /*
  * The type scale: Tailwind's defaults for text (xs 12, sm 14, base 16, lg 18, xl 20, 2xl 24), and
  * named steps for headings, each with its own line height and tracking. Pages use only these:
- * display (the home page's H1; display-xs on a phone, where its second line would break), title
- * (every H2 and every other page's H1), heading (H3), lead (a section's introduction), eyebrow (the
- * size of the one small label, `mono-label` below), and the defaults below.
+ * display (the home page's H1; display-xs on a phone, where its second line would break, and
+ * display-lg on a wide screen), title (every H2 and every other page's H1; title-lg on a wide
+ * screen), heading (H3), lead (a section's introduction), eyebrow (the size of the one small label,
+ * `mono-label` below), and the defaults below. Running text keeps a reading measure
+ * (`max-w-measure`, below) however wide the page.
  */
 @theme {
+    --text-display-lg: 5rem;
+    --text-display-lg--line-height: 1;
+    --text-display-lg--letter-spacing: -0.04em;
     --text-display: 4rem;
     --text-display--line-height: 1.02;
     --text-display--letter-spacing: -0.035em;
@@ -21,6 +26,9 @@
     --text-display-xs: 2.25rem;
     --text-display-xs--line-height: 1.08;
     --text-display-xs--letter-spacing: -0.03em;
+    --text-title-lg: 3rem;
+    --text-title-lg--line-height: 1.08;
+    --text-title-lg--letter-spacing: -0.03em;
     --text-title: 2.5rem;
     --text-title--line-height: 1.1;
     --text-title--letter-spacing: -0.028em;
@@ -50,6 +58,15 @@
     --text-wordmark: 1.0625rem;
     --text-wordmark--line-height: 1.5;
     --text-wordmark--letter-spacing: -0.02em;
+    /* The page's side margins: no centred container, the whole viewport less a gutter that grows
+       with it: 24px on a phone and a tablet, 32px at 1280, 64px at 1920, 96px from 2560. */
+    --spacing-gutter: clamp(1.5rem, 5vw - 2rem, 6rem);
+    /* The widest a single element may stretch on a wide screen (a diagram, a summary table) before
+       a row of it reads as a line too long to follow; the page itself has no maximum. */
+    --container-wide: 120rem;
+    /* Running text's measure: 36em, about 75 characters of Geist at any size (a lead's line is as
+       long, in words, as a paragraph's), however wide its column. */
+    --container-measure: 36em;
     /* A segment running along the custody diagram's rail, the way the money goes (motion-safe only). */
     --animate-rail: rail 2.4s linear infinite;
     @keyframes rail {
@@ -58,11 +75,46 @@
     }
 }
 
+/*
+ * While Geist and Geist Mono load (preloaded by every page; Fontsource's faces swap in when they
+ * arrive), text takes a local face scaled to their metrics, so the swap moves nothing: Arial (or its
+ * metric twin, Liberation Sans) for Geist, Courier New (Liberation Mono) for Geist Mono. The values
+ * come from the fonts' tables: the ratio of their advance widths over English text, then Geist's
+ * ascent and descent (1.005 and 0.295 em) over that ratio.
+ */
+@font-face {
+    font-family: "Geist Fallback";
+    src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("LiberationSans");
+    size-adjust: 105.09%;
+    ascent-override: 95.63%;
+    descent-override: 28.07%;
+    line-gap-override: 0%;
+}
+@font-face {
+    font-family: "Geist Mono Fallback";
+    src: local("Courier New"), local("CourierNewPSMT"), local("Liberation Mono"), local("LiberationMono");
+    size-adjust: 99.98%;
+    ascent-override: 100.52%;
+    descent-override: 29.51%;
+    line-gap-override: 0%;
+}
+
+/*
+ * Moving between the site's pages (each its own document), the new page replaces the old in one
+ * short cross-fade where the browser supports it, the header held in place; where motion is not
+ * welcome, at once.
+ */
+@media (prefers-reduced-motion: no-preference) {
+    @view-transition {
+        navigation: auto;
+    }
+}
+
 @theme inline {
     /* Geist and Geist Mono, bundled with the page's assets (the CSP's font-src 'self'): hashes and
        addresses are as wide on every platform. */
-    --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --font-sans: "Geist Variable", "Geist Fallback", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "Geist Mono Variable", "Geist Mono Fallback", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --color-focus: var(--focus);
     --color-success: var(--success);
     --color-success-muted: var(--success-muted);
@@ -279,16 +331,19 @@
 /*
  * Rendered markdown (/docs, /reference): the site's type scale and colours applied to plain
  * elements, which the markdown carries without classes. Running text in body-foreground at 16px
- * and 1.75; headings on the scale; code in the one dark code window; tables ruled, not boxed.
+ * and 1.75, at a reading measure (`--container-measure`) however wide its column; headings on the
+ * scale; code in the one dark code window and tables ruled, not boxed, both free to take the
+ * column's width.
  */
 @layer components {
   /* A long URL or identifier breaks rather than widening the page. */
   .docs-prose { @apply text-base/7 text-body-foreground; overflow-wrap: break-word; }
   .docs-prose > :first-child { margin-top: 0; }
-  .docs-prose :where(h2) { @apply mt-14 mb-4 scroll-mt-20 border-t pt-10 text-title-sm font-semibold text-foreground; }
-  .docs-prose :where(h3) { @apply mt-10 mb-3 scroll-mt-20 text-heading font-semibold text-foreground; }
-  .docs-prose :where(h4) { @apply mt-8 mb-2 scroll-mt-20 text-base font-semibold text-foreground; }
-  .docs-prose :where(p, ul, ol, table, pre, blockquote) { @apply my-5; }
+  .docs-prose :where(h2) { @apply mt-16 mb-5 scroll-mt-20 border-t pt-12 text-title-sm font-semibold text-foreground; }
+  .docs-prose :where(h3) { @apply mt-12 mb-4 scroll-mt-20 text-heading font-semibold text-foreground; }
+  .docs-prose :where(h4) { @apply mt-9 mb-2 scroll-mt-20 text-base font-semibold text-foreground; }
+  .docs-prose :where(p, ul, ol, table, pre, blockquote) { @apply my-6; }
+  .docs-prose :where(p, ul, ol, blockquote, h3, h4) { @apply max-w-measure; }
   .docs-prose :where(ul) { @apply list-disc pl-6 marker:text-muted-foreground; }
   .docs-prose :where(ol) { @apply list-decimal pl-6 marker:text-muted-foreground; }
   .docs-prose :where(li) { @apply my-1.5 pl-1; }
@@ -302,17 +357,17 @@
   .docs-prose :where(blockquote > :last-child) { margin-bottom: 0; }
   .docs-prose :where(:not(pre) > code) { @apply rounded-sm bg-muted px-1 py-0.5 font-mono text-[0.875em] text-foreground; overflow-wrap: anywhere; }
   /* A code block (scripts/markdown.ts): a dark frame with its language and copy button above. */
-  .docs-prose :where(.code-block) { @apply my-6 overflow-hidden rounded-xl border border-code-border bg-code shadow-card; }
+  .docs-prose :where(.code-block) { @apply my-8 overflow-hidden rounded-xl border border-code-border bg-code shadow-card; }
   .docs-prose :where(.code-block-header) { @apply flex h-9 items-center justify-between border-b border-code-border pr-1.5 pl-4 font-mono text-xs text-code-muted; }
   .docs-prose :where(.code-block-copy) { @apply inline-flex h-7 items-center rounded-md px-2 font-sans text-sm font-medium text-code-muted transition-colors hover:bg-white/10 hover:text-code-foreground; }
-  .docs-prose :where(.code-block pre) { @apply m-0 overflow-x-auto px-4 py-3.5 font-mono text-mono text-code-foreground; }
+  .docs-prose :where(.code-block pre) { @apply m-0 overflow-x-auto px-5 py-4 font-mono text-mono text-code-foreground; }
   .docs-prose :where(.code-block-note) { @apply m-0 border-t border-code-border px-4 py-2.5 text-sm text-code-muted; }
   .docs-prose :where(.code-block-note a) { @apply text-code-foreground; }
   .docs-prose :where(pre .line) { @apply block min-h-[1lh]; }
   /* Tables take the column's width and wrap their cells; only code blocks scroll sideways. */
   .docs-prose :where(table) { @apply w-full text-sm; }
-  .docs-prose :where(th) { @apply border-b px-3 py-2 text-left align-bottom mono-label text-muted-foreground first:pl-0; }
-  .docs-prose :where(td) { @apply border-b px-3 py-2.5 align-top first:pl-0; }
+  .docs-prose :where(th) { @apply border-b px-4 py-3 text-left align-bottom mono-label text-muted-foreground first:pl-0; }
+  .docs-prose :where(td) { @apply border-b px-4 py-3.5 align-top first:pl-0; }
   /* In a table, code wraps only where its identifiers divide (<wbr>, scripts/markdown.ts), and an
      index's first column (short links, package names) not at all. */
   .docs-prose :where(td code, th code) { overflow-wrap: normal; }
@@ -330,7 +385,7 @@
     .docs-prose :where(td[data-label])::before { @apply block mono-label text-muted-foreground; content: attr(data-label) / ""; }
   }
   /* A diagram (scripts/markdown.ts): its committed SVG for the page's theme, scaled to the text. */
-  .docs-prose :where(.diagram) { @apply my-8; }
+  .docs-prose :where(.diagram) { @apply my-10; }
   .docs-prose :where(.diagram img) { @apply h-auto max-w-full; }
   .docs-prose :where(.diagram figcaption) { @apply mt-3 text-sm text-muted-foreground; }
   .docs-prose :where(.diagram-dark) { display: none; }

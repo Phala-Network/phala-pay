@@ -3,19 +3,19 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { DOC_SECTIONS, DOCS, docPath, type DocEntry } from "./content/docs.js";
 import type { RenderedDoc, TocEntry } from "../scripts/markdown.ts";
-import { GRID } from "./layout.js";
 import { CONTAINER, Eyebrow, REPO } from "./Site.js";
 
 /**
- * The docs' and the reference's layout, on the page's grid (src/layout.ts): the navigation in
- * columns 1–3, the one part of the site that may stick and scroll on its own; the page in
- * columns 4–12, its text at a reading measure. Both start their first line on one baseline: the
+ * The docs' and the reference's layout, across the page's width: the navigation in a column of its
+ * own width (wider on a wider screen, the same on every docs and reference page, so moving between
+ * them moves nothing), the one part of the site that may stick and scroll on its own; the page in
+ * the rest, its text at a reading measure. Both start their first line on one baseline: the
  * navigation's first label and the page's kicker share a style (LABEL).
  */
-export const SIDEBAR_LAYOUT = cn(CONTAINER, GRID, "flex-1");
-export const NAV_COLUMN = "hidden lg:col-span-3 lg:block";
-export const NAV_SCROLL = "sticky top-16 max-h-[calc(100svh-4rem)] overflow-y-auto py-10 pr-2";
-export const PAGE_COLUMN = "min-w-0 pt-10 pb-24 lg:col-span-9 lg:col-start-4";
+export const SIDEBAR_LAYOUT = cn(CONTAINER, "grid flex-1 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-x-12 xl:grid-cols-[16rem_minmax(0,1fr)] xl:gap-x-16 2xl:grid-cols-[18rem_minmax(0,1fr)] 2xl:gap-x-20");
+export const NAV_COLUMN = "hidden lg:block";
+export const NAV_SCROLL = "sticky top-16 max-h-[calc(100svh-4rem)] overflow-y-auto pt-14 pb-12 pr-2";
+export const PAGE_COLUMN = "min-w-0 pt-12 pb-28 lg:pt-14";
 /** A small label (src/index.css, `mono-label`), muted: the one kind of text under 14px. */
 export const LABEL = "mono-label text-muted-foreground";
 /**
@@ -40,7 +40,7 @@ function DocsNav({ current, toc = [] }: { current: string | null; toc?: TocEntry
   return (
     <nav aria-label="Documentation" className="text-sm">
       {DOC_SECTIONS.map(({ title, pages }) => (
-        <div key={title} className="mb-6 last:mb-0">
+        <div key={title} className="mb-8 last:mb-0">
           <p className={cn(LABEL, "pr-2 pb-1.5 pl-2.5")}>{title}</p>
           <ul>
             {pages.map(({ slug, label }) => (
@@ -93,7 +93,7 @@ function Neighbour({ entry, direction }: { entry: DocEntry | undefined; directio
   if (entry === undefined) return <span />;
   return (
     <a href={docPath(entry.slug)} rel={direction === "previous" ? "prev" : "next"}
-      className={cn("group flex flex-col gap-1 rounded-xl border bg-card px-5 py-4 shadow-card transition-colors hover:border-border-strong", direction === "next" && "items-end text-right")}>
+      className={cn("group flex flex-col gap-1.5 rounded-xl border bg-card px-6 py-5 shadow-card transition-colors hover:border-border-strong", direction === "next" && "items-end text-right")}>
       <span className={cn(LABEL, "flex items-center gap-1.5")}>
         {direction === "previous" && <ArrowLeft aria-hidden="true" className="size-3.5" />}
         {direction === "previous" ? "Previous" : "Next"}
@@ -105,14 +105,16 @@ function Neighbour({ entry, direction }: { entry: DocEntry | undefined; directio
 }
 
 /**
- * From xl, the page's sections beside its text, staying in view; below xl they are under the page's
- * entry in the navigation. A long outline scrolls on its own, as the navigation does.
+ * From xl, the page's sections beside its text at the page's right edge, staying in view; below xl
+ * they are under the page's entry in the navigation. A long outline scrolls on its own, as the
+ * navigation does. It comes before the text in the page's source (the grid places it), so a long
+ * page, painted as it arrives, never shows its text without it.
  */
 function Outline({ toc }: { toc: TocEntry[] }) {
   const sections = toc.filter(({ depth }) => depth === 2);
   if (sections.length === 0) return null;
   return (
-    <aside className="hidden xl:col-span-2 xl:block">
+    <aside className="hidden xl:col-start-2 xl:row-start-1 xl:block">
       <div className="sticky top-16 max-h-[calc(100svh-4rem)] overflow-y-auto pb-10">
         <nav aria-label="On this page" className="text-sm">
           <p className={cn(LABEL, "pb-2")}>On this page</p>
@@ -144,14 +146,17 @@ export function DocsPage({ doc }: { doc: DocContent }) {
       </aside>
       <main id="top" data-column="right" className={PAGE_COLUMN}>
         <DocsMobileNav label="Documentation menu"><DocsNav current={doc.slug} toc={doc.toc} /></DocsMobileNav>
-        {/* From xl, the page's nine columns again: the text in seven, its outline in two beside it. */}
-        <div className="xl:grid xl:grid-cols-9 xl:gap-x-8">
-          <article className="max-w-3xl min-w-0 xl:col-span-7">
+        {/* From xl, the text and its outline: the outline a column of its own width at the page's
+            right edge; the text, its paragraphs at a reading measure and its code and tables up to
+            60rem, centred in the rest. */}
+        <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_14rem] xl:gap-x-16 2xl:grid-cols-[minmax(0,1fr)_16rem] 2xl:gap-x-20">
+          <Outline toc={doc.toc} />
+          <article className="mx-auto w-full max-w-[60rem] min-w-0 xl:col-start-1 xl:row-start-1">
             {section !== undefined && <Eyebrow>{section.title}</Eyebrow>}
             <h1 className="mt-4 text-title-sm font-semibold text-balance sm:text-title">{doc.title}</h1>
             <div className={cn(PROSE, "mt-8")} dangerouslySetInnerHTML={{ __html: doc.html }} />
-            <footer className="mt-16 border-t pt-8">
-              <div className="grid gap-3 sm:grid-cols-2">
+            <footer className="mt-20 border-t pt-10">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <Neighbour entry={DOCS[index - 1]} direction="previous" />
                 <Neighbour entry={DOCS[index + 1]} direction="next" />
               </div>
@@ -160,7 +165,6 @@ export function DocsPage({ doc }: { doc: DocContent }) {
               </p>
             </footer>
           </article>
-          <Outline toc={doc.toc} />
         </div>
       </main>
     </div>

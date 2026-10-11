@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Hash } from "@/components/ui/hash";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -71,6 +72,14 @@ export function Backend({
         {/* The ids on a line of their own, under the title. */}
         <dl className="flex basis-full flex-wrap items-center gap-x-5 gap-y-1 text-sm">
           {account !== null && selected === null && <MetaItem label="Workspace" value={account.account_id} testId="meta-workspace" />}
+          {/* The workspace's line kept while the account loads (as the page is prerendered), so the
+              panel under it does not move when it arrives. */}
+          {account === null && selected === null && accountView.error === null && (
+            <div aria-hidden="true" className="flex items-center gap-2">
+              <dt className="text-muted-foreground">Workspace</dt>
+              <dd className="font-mono text-mono"><Skeleton className="h-[1lh] w-64" /></dd>
+            </div>
+          )}
           {selected !== null && order !== undefined && <MetaItem label="Order" value={order} testId="meta-order" />}
           {selected !== null && (
             <MetaItem label={selected.kind === "quote" ? "Quote" : "Deposit"} value={selected.id} testId="meta-selected" />
@@ -78,7 +87,7 @@ export function Backend({
         </dl>
       </CardHeader>
       {/* The stepper, one row high; opened steps add their details under it. */}
-      <div className="@container px-4 py-2 sm:px-6" aria-live="off">
+      <div className="@container px-4 py-2 sm:px-6 2xl:px-8" aria-live="off">
         <EventStream timeline={timelineView} loading={selected?.id ?? null} />
         {timelineView.data !== undefined && <QueryState view={timelineView} />}
       </div>
@@ -87,7 +96,7 @@ export function Backend({
           variant="line"
           aria-label="Backend"
           // Five short names that fit a phone's width; should they not, the row wraps.
-          className="h-auto w-full flex-wrap justify-start gap-x-2 px-2 sm:px-4"
+          className="h-auto w-full flex-wrap justify-start gap-x-2 px-2 sm:px-4 2xl:px-6"
         >
           <Tab value="credits" count={account?.payments.length}>
             Credits
@@ -101,14 +110,14 @@ export function Backend({
           </Tab>
           <Tab value="trust">Trust</Tab>
         </TabsList>
-        <TabsContent value="credits" className="flex flex-col gap-3 px-4 py-4 sm:px-6">
+        <TabsContent value="credits" className="flex flex-col gap-3 px-4 py-4 sm:px-6 2xl:px-8">
           {addressView.data === undefined && <QueryState view={addressView} />}
           {accountView.error === null && (
             <CreditsTab account={account} selected={selected} address={addressView} networks={networks} onSelect={onSelect} />
           )}
           <QueryState view={accountView} />
         </TabsContent>
-        <TabsContent value="refunds" className="flex flex-col px-4 py-4 sm:px-6">
+        <TabsContent value="refunds" className="flex flex-col px-4 py-4 sm:px-6 2xl:px-8">
           {timeline === null || deposit === null || account === null ? (
             <EmptyState icon={Undo2} title="No deposit to refund">
               A credited payment can be refunded from the treasury once final.
@@ -120,10 +129,10 @@ export function Backend({
             </div>
           )}
         </TabsContent>
-        <TabsContent value="sweeps" className="flex flex-col px-4 py-4 sm:px-6">
+        <TabsContent value="sweeps" className="flex flex-col px-4 py-4 sm:px-6 2xl:px-8">
           <Sweeps ready={account !== null} />
         </TabsContent>
-        <TabsContent value="api" className="flex flex-col px-4 py-4 sm:px-6">
+        <TabsContent value="api" className="flex flex-col px-4 py-4 sm:px-6 2xl:px-8">
           {timeline === null ? (
             <EmptyState icon={Webhook} title="No requests yet">
               The signed webhooks and the API calls of a payment show here.
@@ -135,7 +144,7 @@ export function Backend({
             </div>
           )}
         </TabsContent>
-        <TabsContent value="trust" className="px-4 py-4 sm:px-6">
+        <TabsContent value="trust" className="px-4 py-4 sm:px-6 2xl:px-8">
           <TrustDetails trust={trustView} networks={networksView} />
         </TabsContent>
       </Tabs>

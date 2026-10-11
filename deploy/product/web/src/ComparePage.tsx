@@ -7,26 +7,27 @@ import { CONTAINER, Eyebrow, H2, LEAD, LINKS, PHALA_CELL, PHALA_COLUMN, TABLE_FR
 import { Versus } from "./Versus.js";
 
 const vendors = [phalaPay, ...competitors];
-const SECTION = "scroll-mt-20 border-t pt-12 lg:pt-16";
+const SECTION = "scroll-mt-20 border-t pt-16 lg:pt-20";
 
 /**
- * From xl, the whole table in its frame: six vendors, ten dimensions, no scrolling. Phala Pay's
- * column is marked by a rule above it and a tint. Below xl, where six columns would crowd, one
- * provider at a time beside Phala Pay (Versus).
+ * From xl, the whole table in its frame: six vendors, ten dimensions, no scrolling, across the
+ * page's width (its cells are prose: the wider, the fewer lines each). Phala Pay's column is marked
+ * by a rule above it and a tint. Below xl, where six columns would crowd, one provider at a time
+ * beside Phala Pay (Versus).
  */
 function ComparisonTable() {
   return (
-    <div className={cn(TABLE_FRAME, "mt-10 hidden xl:block")}>
-      <table className="w-full table-fixed border-collapse text-left text-sm">
+    <div className={cn(TABLE_FRAME, "mt-12 hidden xl:block")}>
+      <table className="w-full table-fixed border-collapse text-left text-sm 2xl:text-base">
         <caption className="sr-only">Phala Pay and five crypto payment services, compared across ten dimensions.</caption>
         <thead>
           <tr className="border-b bg-surface">
-            <th scope="col" className="w-44 py-4 pr-4 pl-5 align-bottom mono-label text-muted-foreground">
+            <th scope="col" className="w-48 py-5 pr-5 pl-6 align-bottom mono-label text-muted-foreground 2xl:w-56 2xl:pl-8">
               Dimension
             </th>
             {vendors.map(({ id, name }) => (
               <th key={id} scope="col"
-                className={cn("px-4 pt-4 pb-4 align-bottom text-table font-semibold", id === phalaPay.id ? PHALA_COLUMN : "text-body-foreground")}>
+                className={cn("px-5 py-5 align-bottom text-table font-semibold 2xl:px-6 2xl:text-base", id === phalaPay.id ? PHALA_COLUMN : "text-body-foreground")}>
                 {name}
               </th>
             ))}
@@ -35,11 +36,11 @@ function ComparisonTable() {
         <tbody>
           {dimensions.map(({ key, label }) => (
             <tr key={key} className="border-b last:border-b-0">
-              <th scope="row" className="py-4 pr-4 pl-5 align-top font-medium">
+              <th scope="row" className="py-5 pr-5 pl-6 align-top leading-6 font-medium 2xl:py-6 2xl:pl-8 2xl:leading-7">
                 {label}
               </th>
               {vendors.map((vendor) => (
-                <td key={vendor.id} className={cn("px-4 py-4 align-top leading-6 text-pretty wrap-break-word", vendor.id === phalaPay.id ? PHALA_CELL : "text-body-foreground")}>
+                <td key={vendor.id} className={cn("px-5 py-5 align-top leading-6 text-pretty wrap-break-word 2xl:px-6 2xl:py-6 2xl:leading-7", vendor.id === phalaPay.id ? PHALA_CELL : "text-body-foreground")}>
                   <ComparisonCell cell={vendor[key]} linkSource />
                 </td>
               ))}
@@ -65,7 +66,7 @@ const FIT = [
 
 export function ComparePage() {
   return (
-    <main id="top" className={`${CONTAINER} flex-1 pt-14 pb-20 sm:pt-20 lg:pb-28`}>
+    <main id="top" className={`${CONTAINER} flex-1 pt-16 pb-24 sm:pt-24 lg:pb-32 2xl:pt-28`}>
       <Eyebrow>Compare</Eyebrow>
       {/* The split header (src/layout.ts): the title in the left half, the introduction in the
           right, their first lines on one baseline. */}
@@ -73,16 +74,16 @@ export function ComparePage() {
         <h1 data-column="left" className={cn(H2, LEFT)}>{unbroken("How Phala Pay compares")}</h1>
         <div data-column="right" className={RIGHT}>
           <p className={LEAD}>Custody, fees, chains, speed, and refunds across six ways to accept crypto, each as its vendor states it, with a source for every value.</p>
-          <p className="mt-3 text-sm text-muted-foreground">
+          <p className="mt-4 max-w-measure text-sm text-muted-foreground">
             Last checked {COMPARE_ACCESSED}. Competitor terms change; check their sites before deciding.
           </p>
         </div>
       </div>
-      <nav aria-label="On this page" className="mt-12 border-y">
-        <ul className="flex flex-wrap gap-x-8 text-sm">
+      <nav aria-label="On this page" className="mt-14 border-y lg:mt-16">
+        <ul className="flex flex-wrap gap-x-10 text-sm">
           {CONTENTS.map(({ href, label }, index) => (
             <li key={href}>
-              <a href={href} className="inline-flex min-h-12 items-center gap-2.5 font-medium text-muted-foreground transition-colors hover:text-foreground">
+              <a href={href} className="inline-flex min-h-14 items-center gap-2.5 font-medium text-muted-foreground transition-colors hover:text-foreground">
                 <span aria-hidden="true" className="mono-label text-muted-foreground">0{index + 1}</span>
                 {label}
               </a>
@@ -91,28 +92,28 @@ export function ComparePage() {
         </ul>
       </nav>
 
-      <section id="glance" aria-labelledby="glance-title" className="mt-12 scroll-mt-20 lg:mt-16">
+      <section id="glance" aria-labelledby="glance-title" className="mt-16 scroll-mt-20 lg:mt-20">
         <h2 id="glance-title" className={H2}>At a glance</h2>
         <ComparisonTable />
-        <Versus phala={phalaPay} others={competitors} dimensions={dimensions} linkSource name="compare-versus" className="mt-8 xl:hidden" />
-        <div className="mt-6 grid gap-1 text-sm text-muted-foreground">
+        <Versus phala={phalaPay} others={competitors} dimensions={dimensions} linkSource name="compare-versus" className="mt-10 xl:hidden" />
+        <div className="mt-8 grid gap-1.5 text-sm text-muted-foreground">
           <p id="partial-note">(partial): Partially stated by the vendor; see source.</p>
           <p id="not-stated-note">—: Not stated publicly as of {COMPARE_ACCESSED}.</p>
         </div>
       </section>
 
-      <section id="fit" aria-labelledby="fit-title" className={cn(SECTION, "mt-16 lg:mt-24")}>
+      <section id="fit" aria-labelledby="fit-title" className={cn(SECTION, "mt-20 lg:mt-28")}>
         <h2 id="fit-title" className={H2}>Where each fits</h2>
         {/* The two alternatives side by side, their texts of a length; under them Phala Pay across
             the grid, its text beside the way to start, marked as the brand's. */}
-        <div className="mt-10 grid gap-4 lg:grid-cols-2 lg:gap-6">
+        <div className="mt-12 grid gap-6 lg:grid-cols-2 lg:gap-8">
           {FIT.map(({ title, text }, index) => {
             const ours = index === FIT.length - 1;
             return (
-              <div key={title} className={cn("flex flex-col rounded-xl border bg-card p-6 shadow-card sm:p-8", ours && "border-brand-ink/70 ring-1 ring-brand-ink/30 lg:col-span-2 lg:flex-row lg:items-end lg:justify-between lg:gap-12")}>
-                <div className={cn(ours && "max-w-3xl")}>
+              <div key={title} className={cn("flex flex-col rounded-xl border bg-card p-7 shadow-card sm:p-10", ours && "border-brand-ink/70 ring-1 ring-brand-ink/30 lg:col-span-2 lg:flex-row lg:items-end lg:justify-between lg:gap-12")}>
+                <div>
                   <h3 className="text-heading font-semibold">{unbroken(title)}</h3>
-                  <p className="mt-2 text-pretty text-body-foreground">{unbroken(text)}</p>
+                  <p className="mt-3 max-w-measure text-pretty text-body-foreground lg:text-lg/8">{unbroken(text)}</p>
                 </div>
                 {ours && (
                   <a href={LINKS.deploy} className={cn(TEXT_LINK, "mt-3 inline-flex min-h-11 shrink-0 items-center self-start text-sm lg:mt-0 lg:self-end")}>Start a testnet instance</a>
@@ -123,16 +124,16 @@ export function ComparePage() {
         </div>
       </section>
 
-      <section id="sources" aria-labelledby="sources-title" className={cn(SECTION, "mt-16 lg:mt-24")}>
+      <section id="sources" aria-labelledby="sources-title" className={cn(SECTION, "mt-20 lg:mt-28")}>
         {/* The aside (src/layout.ts), as the FAQ's: the heading stays in view beside the list. */}
-        <div data-layout="aside" className={cn(GRID, "gap-y-6 lg:items-baseline")}>
+        <div data-layout="aside" className={cn(GRID, "gap-y-8 lg:items-baseline")}>
           <div data-column="left" className={cn(ASIDE, "lg:sticky lg:top-24")}>
             <h2 id="sources-title" className={H2}>Sources</h2>
-            <p className="mt-3 text-sm text-muted-foreground">All accessed {COMPARE_ACCESSED}.</p>
+            <p className="mt-4 max-w-measure text-sm text-muted-foreground">All accessed {COMPARE_ACCESSED}.</p>
           </div>
-          <ol data-column="right" className={cn(MAIN, "list-decimal gap-8 pl-6 text-sm/6 marker:text-muted-foreground marker:tabular-nums md:columns-2")}>
+          <ol data-column="right" className={cn(MAIN, "list-decimal gap-12 pl-6 text-sm/6 marker:text-muted-foreground marker:tabular-nums md:columns-2")}>
             {sources.map(({ url, title, host, archived }, index) => (
-              <li key={url} id={`source-${index + 1}`} className="mb-3 scroll-mt-20 break-inside-avoid pl-1">
+              <li key={url} id={`source-${index + 1}`} className="mb-4 scroll-mt-20 break-inside-avoid pl-1">
                 <a href={url} className={TEXT_LINK}>{title}</a>
                 <span className="text-muted-foreground"> · {host}{archived && " · read via archive snapshot"}</span>
               </li>

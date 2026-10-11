@@ -1436,15 +1436,20 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     await expect(answer).toBeVisible();
     await expectMetadata(staticPage);
     await expect(staticPage.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
-    // The theme button cannot know the visitor's theme, so it states none; and the demo, which never
-    // arrives without script, reserves no space: only its note shows.
+    // The theme button cannot know the visitor's theme, so it states none; and the demo, prerendered
+    // but unable to work without script, is not shown: only its note.
     await expect(staticPage.getByRole("button", { name: "Dark theme" })).not.toHaveAttribute("aria-pressed");
-    await expect(staticPage.locator("#demo-root p")).toHaveText("The demo needs JavaScript.");
-    expect((await staticPage.locator("#demo-root").boundingBox())?.height).toBeLessThan(48);
+    const note = staticPage.locator("#demo noscript > p");
+    await expect(note).toHaveText("The demo needs JavaScript.");
+    await expect(note).toBeVisible();
+    await expect(staticPage.locator("#demo-root")).toBeHidden();
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Compare", exact: true })).toBeVisible();
     await expect(staticPage.getByRole("contentinfo").getByRole("link", { name: "Demo", exact: true })).toHaveAttribute("href", "/#demo");
+    // The page arrives complete: the demo's two panels are in its HTML, not added by script. (Their
+    // style attributes, Radix's, are each permitted by the CSP's hashes: scripts/prerender.ts.)
     const homeHtml = await home?.text();
-    expect(homeHtml).not.toContain('style="');
+    expect(homeHtml).toContain('aria-label="Your backend"');
+    expect(homeHtml).toContain('aria-labelledby="product-title"');
     const compare = await staticPage.goto(new URL("compare", env("SITE_URL")).href);
     expect(compare?.status()).toBe(200);
     await expect(staticPage.getByRole("heading", { level: 1 })).toHaveText("How Phala Pay compares");
@@ -1498,7 +1503,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
 });
 
 
-test("loading home islands preserves the original prerendered hero", async ({ page }) => {
+test("loading home islands preserves the original prerendered hero and demo", async ({ page }) => {
   let releaseEntry: (() => void) | undefined;
   const entryReady = new Promise<void>((resolve) => { releaseEntry = resolve; });
   await page.route("**/assets/home-*.js", async (route) => {
@@ -1512,11 +1517,19 @@ test("loading home islands preserves the original prerendered hero", async ({ pa
     const original = await hero.elementHandle();
     const originalHeader = await page.getByRole("banner").elementHandle();
     const originalFooter = await page.getByRole("contentinfo").elementHandle();
+    // The demo's panels are prerendered too: in view before any script, and the same elements once
+    // the demo has hydrated and loaded its data.
+    const product = page.getByRole("region", { name: "Customer view" });
+    await expect(product).toBeVisible();
+    const originalProduct = await product.elementHandle();
+    const originalBackend = await page.getByRole("complementary", { name: "Your backend" }).elementHandle();
     releaseEntry?.();
-    await expect(page.getByRole("region", { name: "Customer view" })).toBeVisible();
+    await expect(product.getByTestId("balance")).toHaveText("$0.00");
     expect(await original.evaluate((node) => node.isConnected)).toBe(true);
     expect(await originalHeader.evaluate((node) => node.isConnected)).toBe(true);
     expect(await originalFooter.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalProduct.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalBackend.evaluate((node) => node.isConnected)).toBe(true);
     await page.getByRole("button", { name: "Dark theme" }).click();
     await expect(page.locator("html")).toHaveClass(/dark/);
     await expect(page.getByRole("region", { name: "Customer view" })).toBeVisible();
@@ -1651,11 +1664,11 @@ test("every page fits every width in either theme, with no serious accessibility
   // layout changes the content: every width for the marketing pages, a desktop and a phone for the
   // long docs, and the desktop for the API reference, whose markup is the same at every width (axe
   // takes most of a minute over its 15,000 elements).
-  test.setTimeout(600_000);
-  const all = [1440, 1280, 1024, 768, 390];
+  test.setTimeout(900_000);
+  const all = [2560, 1920, 1440, 1280, 1024, 768, 390];
   const pages: [string, number[]][] = [
     ["", all], ["compare", all], ["no-such-page/deeper", all], ["docs", all], ["docs/sdk/react", all],
-    ["docs/integration", [1440, 390]], ["reference", [1440]],
+    ["docs/integration", [1920, 1440, 390]], ["reference", [1440]],
   ];
   for (const colorScheme of ["light", "dark"] as const) {
     const context = await browser.newContext({ colorScheme });
@@ -1908,6 +1921,152 @@ test("one layout grid: every right column starts on one line, and each part's co
   }
 });
 
+
+test("the page takes the viewport's width, less its gutters; running text keeps its measure", async ({ page }) => {
+  // No centred container: on a wide screen every page's header, content, and footer reach from one
+  // gutter (at most 96px) to the other: its header's mark and footer at the left one, its header's
+  // last action and its rightmost content (the hero's code window, the full comparison, the docs'
+  // outline, the reference's examples) at the right one. Only running text (leads, answers, the
+  // docs' paragraphs) stops at its measure, 36em.
+  const rightmost: Record<string, string> = {
+    "": "#hero-code",
+    compare: "main table",
+    "docs/integration": 'aside nav[aria-label="On this page"]',
+    reference: 'main [data-layout="operation"] [data-column="right"]',
+  };
+  for (const width of [1920, 2560]) {
+    for (const [path, content] of Object.entries(rightmost)) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(new URL(path, env("SITE_URL")).href);
+      const where = `/${path} at ${width}px`;
+      const { gutter, insets } = await page.evaluate((content) => {
+        const right = document.documentElement.clientWidth;
+        const box = (selector: string) => [...document.querySelectorAll(selector)].find((element) => element.checkVisibility())?.getBoundingClientRect();
+        const logo = box('header a[aria-label="Phala Pay home"]');
+        // Each of the insets as far from its edge of the viewport as the header's mark is from its own.
+        return {
+          gutter: logo?.left ?? 0,
+          insets: {
+            "footer's brand": box('footer [data-column="left"]')?.left ?? 0,
+            "header's last action": right - (box('header a[href="/docs/self-hosting"]')?.right ?? 0),
+            "footer's links": right - (box('footer [data-column="right"]')?.right ?? 0),
+            [content]: right - (box(content)?.right ?? 0),
+          },
+        };
+      }, content);
+      expect(gutter, `${where}: gutter`).toBeGreaterThanOrEqual(24);
+      expect(gutter, `${where}: gutter`).toBeLessThanOrEqual(96);
+      for (const [name, inset] of Object.entries(insets)) expect(Math.abs(inset - gutter), `${where}: ${name}`).toBeLessThanOrEqual(1);
+      // Running text: no paragraph of more than a line or two wider than its measure.
+      const measures = await page.locator("main").evaluate((main) => [...main.querySelectorAll<HTMLElement>(".docs-prose > p, #demo p, section p, details p")]
+        .filter((element) => element.checkVisibility() && element.textContent.length > 120)
+        .map((element) => element.getBoundingClientRect().width / parseFloat(getComputedStyle(element).fontSize)));
+      expect(measures.length, `${where}: paragraphs`).toBeGreaterThan(0);
+      expect(Math.max(...measures), `${where}: the widest paragraph, in em`).toBeLessThanOrEqual(36.01);
+    }
+  }
+});
+
+/**
+ * The site's pages in a visitor's order, each reached by its link (a full page load, as the site
+ * serves them), with what shows it has hydrated: the header's theme button states its state once
+ * it has, and the home page's demo shows the balance once its data is in.
+ */
+const JOURNEY: { path: string; link: (page: Page) => Locator }[] = [
+  { path: "/compare", link: (page) => page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Compare" }) },
+  { path: "/docs", link: (page) => page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Docs" }) },
+  { path: "/docs/integration", link: (page) => page.getByRole("navigation", { name: "Documentation" }).getByRole("link", { name: "Integration guide" }) },
+  { path: "/reference", link: (page) => page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "API reference" }) },
+  { path: "/#demo", link: (page) => page.getByRole("navigation", { name: "Site" }).getByRole("link", { name: "Demo" }) },
+  { path: "/", link: (page) => page.getByRole("link", { name: "Phala Pay home" }) },
+];
+
+test("moving between pages keeps their server HTML: no hydration error, and nothing shifts", async ({ browser }) => {
+  // Each page is complete as it arrives, and hydrating it changes nothing in view: React reports no
+  // hydration error (a mismatch logs one and replaces the server's HTML), each island's server-
+  // rendered element is still the one in the page once hydrated, and the browser records no layout
+  // shift, in either theme, at a desktop and a phone.
+  test.setTimeout(240_000);
+  for (const colorScheme of ["light", "dark"] as const) {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const context = await browser.newContext({ colorScheme, viewport });
+      try {
+        await context.addInitScript(() => {
+          window.layoutShifts = [];
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              if ("value" in entry && typeof entry.value === "number" && "hadRecentInput" in entry && entry.hadRecentInput === false) window.layoutShifts.push(entry.value);
+            }
+          }).observe({ type: "layout-shift", buffered: true });
+          // Each island's first element as the server rendered it, before any script of the page's ran.
+          document.addEventListener("readystatechange", () => {
+            if (document.readyState !== "interactive") return;
+            const islands = [...document.querySelectorAll("#site-header, #site-footer, #hero-code, #deploy-command, #demo-root")];
+            Object.assign(window, { serverIslands: islands.map((island) => island.firstElementChild) });
+          });
+        });
+        const page = await context.newPage();
+        const problems = await watchConsole(page);
+        const hydrated = async (path: string) => {
+          await expect(page.getByRole("button", { name: "Dark theme" })).toHaveAttribute("aria-pressed", String(colorScheme === "dark"));
+          if (path.startsWith("/#") || path === "/") await expect(page.getByRole("region", { name: "Customer view" }).getByTestId("balance")).toHaveText("$0.00");
+          await page.evaluate(() => document.fonts.ready);
+          const { shifts, replaced } = await page.evaluate(() => ({
+            shifts: window.layoutShifts,
+            replaced: ((window as unknown as { serverIslands?: (Element | null)[] }).serverIslands ?? [null]).filter((node) => node === null || !node.isConnected).length,
+          }));
+          const where = `${path}, ${colorScheme}, ${viewport.width}px`;
+          expect(replaced, `${where}: islands replaced on hydration`).toBe(0);
+          expect(shifts, `${where}: layout shifts`).toEqual([]);
+        };
+        await page.goto(env("SITE_URL"));
+        await hydrated("/");
+        for (const { path, link } of JOURNEY) {
+          // On a phone the site's links are in the menu, and the docs' in the page's own.
+          if (viewport.width < 768) {
+            await page.goto(new URL(path, env("SITE_URL")).href);
+          } else {
+            await Promise.all([page.waitForURL(new URL(path, env("SITE_URL")).href), link(page).click()]);
+          }
+          await hydrated(path);
+        }
+        expect(problems, `${colorScheme}, ${viewport.width}px`).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+});
+
+test("the first frame is in the visitor's theme, before any of the page's code runs", async ({ browser }) => {
+  // Only the head's inline theme script may run: every module script is refused. What is painted
+  // then is the visitor's theme: the system's dark preference, or a choice stored earlier over it.
+  const dark = "oklch(0.145 0 0)";
+  const light = "oklch(1 0 0)";
+  const cases = [
+    { colorScheme: "dark" as const, stored: null, background: dark },
+    { colorScheme: "light" as const, stored: "dark", background: dark },
+    { colorScheme: "dark" as const, stored: "light", background: light },
+  ];
+  for (const { colorScheme, stored, background } of cases) {
+    const context = await browser.newContext({ colorScheme });
+    try {
+      await context.route("**/assets/*.js", (route) => route.abort());
+      if (stored !== null) await context.addInitScript((theme) => localStorage.setItem("demo-theme", theme), stored);
+      const page = await context.newPage();
+      for (const path of ["", "compare", "docs/integration", "reference"]) {
+        await page.goto(new URL(path, env("SITE_URL")).href);
+        const painted = await page.evaluate(() => ({
+          dark: document.documentElement.classList.contains("dark"),
+          background: getComputedStyle(document.body).backgroundColor,
+        }));
+        expect(painted, `/${path}, ${colorScheme} system, ${stored ?? "nothing"} stored`).toEqual({ dark: background === dark, background });
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
 
 test("the hero's facts wrap alike, and the note under them qualifies the time", async ({ page }) => {
   // The owner's regression: one fact's meaning on two lines beside its siblings' one. At every

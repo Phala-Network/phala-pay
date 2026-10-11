@@ -1,5 +1,4 @@
 import type { Appearance } from "@phala/pay-react";
-import "@phala/pay-react/styles.css";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { CreatedQuote, DepositAddressResponse, Selection } from "./api.js";
@@ -9,13 +8,16 @@ import { GRID, LEFT, RIGHT } from "./layout.js";
 import { cn } from "@/lib/utils";
 import { Product, type Method } from "./Product.js";
 import { queryClient, keys, useAccount, useDepositAddress, useNetworks, useTimeline, useTrust } from "./queries.js";
-import type { Theme } from "./theme.js";
+import { useTheme } from "./theme.js";
 
-export default function Demo({ theme }: { theme: Theme }) {
-  return <QueryClientProvider client={queryClient}><DemoContent theme={theme} /></QueryClientProvider>;
+export default function Demo() {
+  return <QueryClientProvider client={queryClient}><DemoContent /></QueryClientProvider>;
 }
 
-function DemoContent({ theme }: { theme: Theme }) {
+function DemoContent() {
+  // Inside the island's boundary: the prerendered panels take the light theme (the server cannot know
+  // the visitor's), and so does the first render that hydrates them; then the page's theme.
+  const [theme] = useTheme();
   const queryClient = useQueryClient();
   const account = useAccount();
   const networks = useNetworks();
