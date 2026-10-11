@@ -1751,11 +1751,12 @@ async function expectNothingClipped(page: Page, state: string): Promise<void> {
       .map((element) => `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 4).join(".")} (${element.scrollWidth} > ${element.clientWidth})`));
     expect(clipped, `${state}, ${tab} tab`).toEqual([]);
     // Nothing scrolls inside the demo: every element shows its overflow, but for code blocks, which
-    // may scroll sideways on a phone and never scroll down. Native controls, images, and visually
-    // hidden text keep their own.
+    // may scroll sideways on a phone and never scroll down, and the backend's row of tabs, which
+    // scrolls sideways where its five tabs do not fit (under 360px). Native controls, images, and
+    // visually hidden text keep their own.
     const scrolling = await page.locator("#demo-root").evaluate((root) => [...root.querySelectorAll<HTMLElement>("*")]
       .filter((element) => {
-        if (element.matches("input, textarea, select, img, svg, svg *") || element.clientWidth <= 1) return false;
+        if (element.matches("input, textarea, select, img, svg, svg *, [role=tablist][aria-label=Backend]") || element.clientWidth <= 1) return false;
         const style = getComputedStyle(element);
         if (element.tagName === "PRE") return element.scrollHeight > element.clientHeight + 1;
         return style.overflowX !== "visible" || style.overflowY !== "visible";
