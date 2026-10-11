@@ -22,6 +22,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   (`Pay with crypto <wallet>`, for example "Pay with crypto MetaMask") instead of
   `Pay with crypto (<wallet>)` (WCAG 2.5.3, axe `label-content-name-mismatch`). Integrations and
   tests that select the button by its accessible name must update the name.
+- `<Checkout>`'s browser wallet button no longer breaks its label or the wallet's name across lines
+  on a narrow screen ("Pay with / crypto Test / Wallet" at 320px): each stays whole, and the
+  wallet's name goes under the label where both do not fit.
 
 ## [0.10.0] - 2026-10-10
 

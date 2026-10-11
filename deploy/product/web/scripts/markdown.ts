@@ -13,7 +13,7 @@ import { unified, type PluggableList } from "unified";
 import { visit } from "unist-util-visit";
 import { DOCS, docPath } from "../src/content/docs.ts";
 import { tokenize } from "./highlight.ts";
-import { splitIdentifier, splitUnits } from "../src/lib/typesetting.ts";
+import { LONGEST_UNBROKEN, splitIdentifier, splitUnits } from "../src/lib/typesetting.ts";
 
 /**
  * The site's markdown, rendered at build time: GitHub-flavoured markdown (tables, task lists,
@@ -142,13 +142,11 @@ function rehypeLinks(file: string) {
   };
 }
 
-/** A run longer than this may break where it divides; a shorter one fits the narrowest column. */
-const LONGEST_UNBROKEN = 20;
-
 /**
  * Line breaks where they read well. The units of src/lib/typesetting.ts ("ERC-20", "Phala Pay",
- * "~7 s") are kept whole (`unbroken`, src/index.css), and so is each identifier in inline code
- * outside a table (rehypeTables segments a table's). A longer one, an identifier or a URL in text,
+ * "~7 s") are kept whole (`unbroken`, src/index.css), and so is each identifier of up to
+ * LONGEST_UNBROKEN characters in inline code outside a table (rehypeTables segments a table's). A
+ * longer one, an identifier or a URL in text,
  * and any in a heading (set larger) break only where they divide (`splitIdentifier`): after `_`,
  * `/`, `.`, `-`, … or before a capital; a part longer still (a hash) anywhere.
  */
@@ -161,10 +159,10 @@ function rehypeLineBreaks() {
   const words = (value: string, each: (word: string) => ElementContent[]) =>
     value.split(/(\s+)/).flatMap((word) => word === "" ? [] : /^\s+$/.test(word) ? [text(word)] : each(word));
   const code = (value: string, heading: boolean): ElementContent[] => splitUnits(value).flatMap((part, index) =>
-    index % 2 === 1 && part.length <= LONGEST_UNBROKEN && !heading ? [kept(part)]
+    index % 2 === 1 && !heading ? [kept(part)]
       : words(part, (word) => word.length <= LONGEST_UNBROKEN && !heading ? [kept(word)] : divide(word, true)));
   const prose = (value: string): ElementContent[] => splitUnits(value).flatMap((part, index) =>
-    index % 2 === 1 && part.length <= LONGEST_UNBROKEN ? [kept(part)]
+    index % 2 === 1 ? [kept(part)]
       : words(part, (word) => word.length <= LONGEST_UNBROKEN ? [text(word)] : divide(word, false)));
   // In a table, code is left as rehypeTables segmented it.
   const walk = (children: ElementContent[], inTable: boolean, heading = false): ElementContent[] => children.flatMap((child) => {

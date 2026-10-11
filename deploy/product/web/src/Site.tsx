@@ -1,5 +1,5 @@
 import { ArrowRight, Check, ChevronRight, FileCode2, Landmark, Menu, MoveDown, Plus, ShieldCheck, Wallet, X, type LucideIcon } from "lucide-react";
-import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { CARD_INSET } from "@/components/ui/card";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -16,7 +16,7 @@ import {
   DEPLOY_COMMAND, EYEBROWS, FAQ, FEATURES_TITLE, FEE_FIGURE, HERO_FACTS, HERO_FACTS_NOTE, HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES,
   PROPERTIES_LEAD, SDK_PACKAGES, TAGLINE, VERIFY_CHECKS, WEBHOOK_EVENTS, type Station,
 } from "./content/site.js";
-import { unbroken } from "./text.js";
+import { divided, unbroken } from "./text.js";
 import { ICON_BUTTON, ThemeToggle, type Theme } from "./theme.js";
 
 export const REPO = "https://github.com/Phala-Network/phala-pay";
@@ -727,11 +727,9 @@ export function DeployCommand() {
         ? <CopyButton value={DEPLOY_COMMAND} label="Copy the deploy command" className="ml-auto text-code-muted hover:bg-white/10 hover:text-code-foreground" />
         : <span aria-hidden="true" className="ml-auto size-8" />}
     </>}>
-      {/* Its lines balanced, the URL breaking after its host where the line is short. */}
+      {/* Its lines balanced, the URL breaking where it divides where the line is short. */}
       <pre className="px-5 py-4 font-mono text-mono whitespace-pre-wrap text-balance text-code-foreground [overflow-wrap:anywhere]">
-        <code><span aria-hidden="true" className="text-code-muted select-none">$ </span>{DEPLOY_COMMAND.split(/(?<=[^/]\/)(?=[^/])/).map((part, index) => (
-          <Fragment key={index}>{index > 0 && <wbr />}{part}</Fragment>
-        ))}</code>
+        <code><span aria-hidden="true" className="text-code-muted select-none">$ </span>{divided(DEPLOY_COMMAND)}</code>
       </pre>
     </CodeWindow>
   );

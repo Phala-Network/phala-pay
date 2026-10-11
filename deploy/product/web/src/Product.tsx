@@ -148,8 +148,9 @@ export function Product({
             </h4>
             <Tabs value={method} onValueChange={(value) => onMethodChange(value === "address" ? "address" : "quote")}>
               <TabsList aria-label="Payment method" className="w-full">
+                {/* Under 384px, labels padded 4px rather than 8px, so both fit the pill. */}
                 {METHODS.map(({ id, label }) => (
-                  <TabsTrigger key={id} value={id}>
+                  <TabsTrigger key={id} value={id} className="max-[24rem]:group-data-[variant=default]/tabs-list:px-1">
                     {label}
                   </TabsTrigger>
                 ))}
@@ -559,7 +560,7 @@ function Credited({ session, account, bps }: { session: CreatedQuote; account: A
   // The bonus once the ledger has credited it: `null` on a row polled before then, as no row.
   const bonus = row?.bonus ?? undefined;
   const symbol = session.asset.toUpperCase();
-  const pending = <Skeleton className="h-[1lh] w-16" />;
+  const pending = <Skeleton className="h-[1lh] w-12" />;
   return (
     <Alert variant="success" data-testid="payment-credited">
       <CircleCheck aria-hidden="true" />
@@ -567,9 +568,9 @@ function Credited({ session, account, bps }: { session: CreatedQuote; account: A
       <AlertDescription>
         {/* On a phone, a receipt: each label beside its value, the values in a column at least as
             wide as a pending value's place. From sm, the labels on one row and the values on the
-            next, so the values stay level when a label wraps. Either way a value arriving moves
-            nothing. */}
-        <dl className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(4rem,auto)] gap-x-3 gap-y-1 tabular-nums [&>div]:contents sm:grid-flow-col sm:grid-cols-3 sm:grid-rows-[auto_auto] sm:gap-x-4 sm:[&>div]:row-span-2 sm:[&>div]:grid sm:[&>div]:grid-rows-subgrid sm:[&_dt]:self-end">
+            next, so the values stay level when a label wraps; the bonus's column as wide as its
+            label, the others sharing the rest. Either way a value arriving moves nothing. */}
+        <dl className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(3rem,auto)] gap-x-2 gap-y-1 tabular-nums [&>div]:contents sm:grid-flow-col sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:grid-rows-[auto_auto] sm:gap-x-4 sm:[&>div]:row-span-2 sm:[&>div]:grid sm:[&>div]:grid-rows-subgrid sm:[&_dt]:self-end">
           <div>
             <dt className="text-muted-foreground">Credit</dt>
             <dd className="text-right font-medium sm:text-left">{dollars(session.amount)}</dd>

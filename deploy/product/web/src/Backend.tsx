@@ -1,5 +1,5 @@
 import { ExternalLink, ReceiptText, Undo2, Webhook } from "lucide-react";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { CARD_INSET, Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -51,6 +51,7 @@ export function Backend({
   const order = timeline?.quote?.metadata["order_id"];
   const deposit = timeline?.deposit ?? null;
   const status = selected === null ? "Idle" : timelineView.error !== null ? "Unavailable" : live ? "Live" : "Done";
+  const tabsId = useId();
   return (
     <Card role="complementary" aria-label="Your backend" className="flex-1 rounded-xl shadow-frame">
       {/* The title and the stream's status, and under them the ids: where an id arrives, or grows,
@@ -71,14 +72,14 @@ export function Backend({
             </span>
           </p>
         </div>
-        <dl className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+        <dl className="flex max-w-full flex-wrap items-center gap-x-5 gap-y-1 text-sm">
           {account !== null && selected === null && <MetaItem label="Workspace" value={account.account_id} testId="meta-workspace" />}
           {/* The workspace's line kept while the account loads (as the page is prerendered), so the
               panel under it does not move when it arrives. */}
           {account === null && selected === null && accountView.error === null && (
-            <div aria-hidden="true" className="flex items-center gap-2">
+            <div aria-hidden="true" className="flex min-w-0 items-center gap-2">
               <dt className="text-muted-foreground">Workspace</dt>
-              <dd className="font-mono text-mono"><Skeleton className="h-[1lh] w-64" /></dd>
+              <dd className="min-w-0 font-mono text-mono"><Skeleton className="h-[1lh] w-64 max-w-full" /></dd>
             </div>
           )}
           {selected !== null && order !== undefined && <MetaItem label="Order" value={order} testId="meta-order" />}
@@ -92,14 +93,18 @@ export function Backend({
         <EventStream timeline={timelineView} loading={selected?.id ?? null} />
         {timelineView.data !== undefined && <QueryState view={timelineView} />}
       </div>
-      <Tabs defaultValue="credits" className="flex-1 gap-0 border-t">
+      {/* The chosen tab scrolled into view in its row, where the row scrolls (below 360px). */}
+      <Tabs defaultValue="credits" className="flex-1 gap-0 border-t" onValueChange={() => requestAnimationFrame(() =>
+        document.getElementById(tabsId)?.querySelector('[data-state="active"]')?.scrollIntoView({ block: "nearest", inline: "nearest" }))}>
         <TabsList
+          id={tabsId}
           variant="line"
           aria-label="Backend"
-          // Five short names that fit a phone's width from 390px, set closer there; narrower, the
-          // row wraps. Its tabs' labels on the card's inset (each trigger pads its label by 6px on a
-          // phone, 8px from sm).
-          className="h-auto w-full flex-wrap justify-start gap-x-0 px-3.5 min-[24rem]:px-5.5 sm:gap-x-2 sm:px-8 2xl:px-10"
+          // Five short names in one row, set closer on a phone, where they fit from 360px; narrower,
+          // the row scrolls sideways (its tabs' focus rings drawn inside them, so none is cut). Its
+          // tabs' labels on the card's inset (each trigger pads its label by 6px on a phone, 8px
+          // from sm); under 384px the row's end gives up its inset to the fifth tab.
+          className="h-auto w-full flex-nowrap justify-start gap-x-0 overflow-x-auto pr-1 pl-3.5 min-[24rem]:px-5.5 sm:gap-x-2 sm:px-8 2xl:px-10"
         >
           <Tab value="credits" count={account?.payments.length}>
             Credits
@@ -173,7 +178,7 @@ function MetaItem({ label, value, testId }: { label: string; value: string; test
  */
 function Tab({ value, count, children }: { value: string; count?: number | undefined; children: string }) {
   return (
-    <TabsTrigger value={value} className="h-11 min-w-11 flex-none px-1.5 tabular-nums sm:px-2">
+    <TabsTrigger value={value} className="h-11 min-w-11 flex-none px-1.5 tabular-nums focus-visible:-outline-offset-2 sm:px-2">
       {children}
       {count !== undefined && count > 0 && <span className="max-sm:hidden">({count})</span>}
     </TabsTrigger>
@@ -385,11 +390,11 @@ function PaymentAmount({ row, symbol, decimals }: { row: PaymentRow; symbol: str
       <div>
         <span className="font-medium">{tokens(row.amount_atomic, symbol, decimals)}</span>
         {row.exchange_rate !== null && (
-          <span className="text-muted-foreground"> at {price(row.exchange_rate)} / {symbol}</span>
+          <span className="text-muted-foreground"> at <span className="whitespace-nowrap">{price(row.exchange_rate)} / {symbol}</span></span>
         )}
       </div>
       <div className="text-muted-foreground">
-        {row.kind === "quote" ? "Quote" : "Deposit address"} · <span title={time(row.created)}>{day(row.created)}</span>
+        {row.kind === "quote" ? "Quote" : "Deposit address"} · <span title={time(row.created)} className="whitespace-nowrap">{day(row.created)}</span>
       </div>
     </>
   );

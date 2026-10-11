@@ -66,7 +66,7 @@ function Fields({ fields, nested = false }: { fields: Field[]; nested?: boolean 
       {fields.map((field) => (
         <div key={field.name} className="py-4">
           <dt className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <code className="font-mono text-mono font-semibold text-foreground">{field.name}</code>
+            <code className="min-w-0 font-mono text-mono font-semibold text-foreground">{divided(field.name)}</code>
             <span className="font-mono text-xs text-muted-foreground"><TypeLabel type={field.type} /></span>
             {field.required && <span className="mono-label text-foreground">required</span>}
           </dt>

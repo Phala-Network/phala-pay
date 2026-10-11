@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
-import { useId, useState } from "react";
+import { Fragment, useId, useState } from "react";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Hash } from "@/components/ui/hash";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -236,7 +236,7 @@ function StreamStep({
         aria-expanded={open}
         aria-controls={open ? details : undefined}
         onClick={onToggle}
-        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-2 rounded-md min-[24rem]:gap-x-3 px-2 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none @md:flex @md:flex-col @md:items-center @md:gap-1 @md:px-1 @md:py-2 @md:text-center"
+        className="group/trigger grid min-h-11 w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-2 rounded-md px-1 py-1.5 text-left transition-colors hover:bg-muted/60 aria-expanded:bg-muted/60 motion-reduce:transition-none min-[24rem]:gap-x-3 min-[24rem]:px-2 @md:flex @md:flex-col @md:items-center @md:gap-1 @md:px-1 @md:py-2 @md:text-center"
       >
         <StepDot state={step.state} />
         <span className="flex min-w-0 items-center gap-1.5">
@@ -271,6 +271,23 @@ function StreamStep({
       </button>
     </li>
   );
+}
+
+/**
+ * A request's path, breaking only after a `/`, each part (an id: `qt_3e9e…`) kept whole. In a
+ * request's one-line summary, a last part longer than the row ends in an ellipsis (the opened
+ * request shows it in full); opened, a part longer than a whole line (on a phone) breaks anywhere.
+ */
+function RequestPath({ path, summary = false }: { path: string; summary?: boolean }) {
+  const parts = path.split(/(?<=\/)(?=[^/])/);
+  return parts.map((part, index) => (
+    <Fragment key={index}>
+      {index > 0 && <wbr />}
+      {index === parts.length - 1
+        ? <span title={summary ? part : undefined} className={cn("inline-block max-w-full align-bottom", summary ? "truncate" : "wrap-anywhere")}>{part}</span>
+        : <span className="whitespace-nowrap">{part}</span>}
+    </Fragment>
+  ));
 }
 
 /** An opened step: what it waits for, when it happened, and its data. */
@@ -430,8 +447,8 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
                       aria-hidden="true"
                     />
                     {/* The method and path; the query, with the request and response, once opened. */}
-                    <code className="min-w-0 flex-1 font-mono text-mono wrap-anywhere">
-                      <span className="text-muted-foreground">{exchange.method}</span> {divided(url.pathname)}
+                    <code className="min-w-0 flex-1 font-mono text-mono">
+                      <span className="text-muted-foreground">{exchange.method}</span> <RequestPath path={url.pathname} summary />
                       {url.search !== "" && <span className="text-muted-foreground"> ?…</span>}
                     </code>
                     <StatusBadge tone={exchange.status < 400 ? "success" : "danger"} className="tabular-nums">
@@ -439,7 +456,7 @@ export function Requests({ exchanges, title, id }: { exchanges: ApiExchange[]; t
                     </StatusBadge>
                   </summary>
                   <div className="flex flex-col gap-2 pb-3 pl-8">
-                    <code className="font-mono text-mono wrap-anywhere">{exchange.method} {divided(`${url.pathname}${url.search}`)}</code>
+                    <code className="font-mono text-mono">{exchange.method} <RequestPath path={`${url.pathname}${url.search}`} /></code>
                     <CodeBlock
                       value={JSON.stringify({ request: exchange.request, response: exchange.response }, null, 2)}
                       label="request and response"

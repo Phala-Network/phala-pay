@@ -95,7 +95,7 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 
 /* Wallet buttons */
 .pp-wallets { display: grid; gap: 0.5em; }
-.pp-button { display: flex; gap: 0.625em; align-items: center; justify-content: center; width: 100%;
+.pp-button { display: flex; flex-wrap: wrap; gap: 0.625em; align-items: center; justify-content: center; width: 100%;
   min-height: var(--pp-control-height); padding: 0.5em 1em; appearance: none;
   border: 1px solid var(--pp-color-primary); border-radius: var(--pp-radius);
   background: var(--pp-color-primary); color: var(--pp-color-primary-foreground);
@@ -106,6 +106,9 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 .pp-button:disabled { opacity: 0.5; cursor: not-allowed; }
 .pp-button__icon { flex: none; width: 20px; height: 20px; }
 .pp-button__detail { font-weight: 400; opacity: 0.85; }
+/* The label and the wallet's name each stay whole; where both do not fit the button's width (a
+   narrow phone), the name goes under the label (the button wraps) rather than either breaking. */
+.pp-button > span { white-space: nowrap; }
 
 .pp-message { margin: 0.5em 0 0; color: var(--pp-color-text-muted); }
 /* An empty live region stays in place, without space, so that what fills it is announced. */

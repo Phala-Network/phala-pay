@@ -361,10 +361,6 @@
   --pp-font-size: var(--text-sm);
   --pp-radius: var(--radius);
 }
-/* The checkout's button keeps its label and its wallet's name each whole: on the narrowest phone,
-   the name goes under the label. */
-.pp-root .pp-button { flex-wrap: wrap; }
-.pp-root .pp-button > span { white-space: nowrap; }
 /*
  * Rendered markdown (/docs, /reference): the site's type scale and colours applied to plain
  * elements, which the markdown carries without classes. Running text in body-foreground at 16px
