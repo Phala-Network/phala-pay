@@ -594,7 +594,8 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
 - `GET /v1/deposit_addresses/{id}` and `GET /v1/deposit_addresses?client_reference_id=…&status=…`
   read them; `GET /v1/deposits?deposit_address=da_…` lists what reached one.
 - `payments` lists the address's payments of the last 24 hours, newest first, in a quote's
-  `payment` shape: `seen` within about a block of arriving (with its `confirmations`), then
+  `payment` shape: `seen` once the service finds it (within about a block when the payment's
+  hash was submitted, at the next discovery scan otherwise; with its `confirmations`), then
   `recorded` as a deposit, which `GET /v1/deposits?deposit_address=da_…` follows to `credited`.
   Display only: credit from `deposit.credited`. The customer's page reads the same, without an
   API key, from `GET /v1/deposit_addresses/{id}?client_secret=…` (`ClientDepositAddress`, any
@@ -620,18 +621,18 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   while `quotes` is paused (`400 paused`), and a network frozen by reconciliation gets no new
   address until it is lifted.
 
-**Page copy.** "One address for all listed tokens and networks. Send only listed tokens."
-Let the customer pick the network and the token; show that network, the token contract, the full
-address with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain,
-and address and no amount): "Send only PHA, USDC on Sepolia, Base Sepolia. Any amount is credited
-at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia.
-You can reuse this address." A payer sending from their own wallet or exchange gives the page no
-transaction hash, so unless your page submits one ("Transaction-hash hints"), each network's time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
-address's public view (above), the time from paying to credit at the confirmation your account's
-payments on that chain wait for, as `GET /v1/config` reports it. Do not promise
-`typical_credit_seconds` alone, which is the time of a hinted payment: even a page that submits
-the hash can exhaust the daily hint budget and fall back to the scan. Until the view is
-loaded the page names no time.
+**Page copy.** "One address for all listed tokens and networks. Send only listed tokens." Let the
+customer pick the network and the token; show that network, the token contract, the full address
+with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain, and address
+and no amount): "Send only PHA, USDC on Sepolia, Base Sepolia. Any amount is credited at the market
+rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia. You can reuse
+this address." A payer sending from their own wallet or exchange gives the page no transaction hash,
+so unless your page submits one ([transaction-hash hints](#transaction-hash-hints)), each network's
+time is the 5-minute discovery scan plus its `typical_credit_seconds` in the address's public view
+(above), the time from paying to credit at the confirmation your account's payments on that chain
+wait for, as `GET /v1/config` reports it. Do not promise `typical_credit_seconds` alone, which is
+the time of a hinted payment: even a page that submits the hash can exhaust the daily hint budget
+and fall back to the scan. Until the view is loaded the page names no time.
 `<DepositAddress depositAddress={…} clientSecret={…} apiBase={…}>` from `@phala/pay-react`
 renders exactly that from `address` and `networks` (pass only those and the `client_secret` to the
 browser) and, with the secret, shows each payment as it arrives: "1.5 PHA received on Sepolia, 1

@@ -29,9 +29,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   market rate on arrival, usually in about 30 seconds on Sepolia and about 7 seconds on Base
   Sepolia". `<DepositAddress>` submits no transaction-hash hint (the payer's own wallet or exchange
   gives it no hash), so since v0.10.0 such a transfer waits for the 5-minute discovery scan before
-  confirmation. Each network's time is now that scan
-  plus the public view's `typical_credit_seconds`: "credited at the market rate, usually within
-  about 6 minutes on Sepolia and about 5 minutes on Base Sepolia". `<Checkout>` is unchanged.
+  confirmation. Each network's time is now that scan plus the public view's
+  `typical_credit_seconds`: "credited at the market rate, usually within about 6 minutes on Sepolia
+  and about 5 minutes on Base Sepolia". `<Checkout>` is unchanged.
 
 ## [0.10.0] - 2026-10-10
 
