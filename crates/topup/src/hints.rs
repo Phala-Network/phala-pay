@@ -366,6 +366,7 @@ async fn process(
                 .map_err(|_| scanner::ScannerError::SnapshotChanged)?,
         );
         if current.as_ref() != Some(&expected) {
+            tx.rollback().await?;
             return Ok(Outcome::Deferred);
         }
         let mut recorded = false;

@@ -632,6 +632,7 @@ pub async fn disable_gone(connection: &mut PgConnection, id: Uuid) -> Result<boo
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(before) = before else {
+        transaction.rollback().await?;
         return Ok(false);
     };
     let before_object = snapshot(&mut transaction, &before).await?;

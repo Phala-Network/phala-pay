@@ -635,6 +635,7 @@ async fn claim_due_refund(
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(candidate) = candidate else {
+        transaction.rollback().await?;
         return Ok(None);
     };
     let claimed = sqlx::query_as::<_, RefundCheckRow>(
@@ -719,6 +720,7 @@ async fn succeed(
     let mut transaction = pool.begin().await?;
     let scope = Scope::new(check.account_id, check.livemode);
     if lock_refund_deposit(&mut transaction, scope, check.refund_id).await? != Some(true) {
+        transaction.rollback().await?;
         return Ok(false);
     }
     let object = EventObject::Refund(check.refund_id);
@@ -739,10 +741,14 @@ async fn succeed(
     .await;
     match updated {
         Ok(result) if result.rows_affected() == 1 => {}
-        Ok(_) => return Ok(false),
+        Ok(_) => {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
         Err(sqlx::Error::Database(error))
             if error.constraint() == Some("refunds_transfer_unique") =>
         {
+            transaction.rollback().await?;
             return Ok(false);
         }
         Err(error) => return Err(error),
@@ -776,6 +782,7 @@ async fn fail(
     let mut transaction = pool.begin().await?;
     let scope = Scope::new(check.account_id, check.livemode);
     if lock_refund_deposit(&mut transaction, scope, check.refund_id).await? != Some(true) {
+        transaction.rollback().await?;
         return Ok(false);
     }
     let object = EventObject::Refund(check.refund_id);

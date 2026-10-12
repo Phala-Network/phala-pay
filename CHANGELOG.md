@@ -14,6 +14,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed (operators)
+
+- A confirmation claim that declines a deposit now releases its row lock before returning instead
+  of holding it until the pool's background return task sends the queued `ROLLBACK`, which could
+  make the finality watcher skip that deposit for a tick. Refund verification, finality evidence
+  and reversal, scanner snapshot retries, hints, webhook disabling, treasury restoration, and
+  metadata updates also release their locks before returning.
+
 ## [0.10.1] - 2026-10-12
 
 ### Fixed (operators)
