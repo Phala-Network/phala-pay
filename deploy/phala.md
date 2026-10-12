@@ -57,7 +57,11 @@ of at most 1,000 addresses, without a contract filter. See [chain RPC operations
 
 Staging configures one Ankr read and one independent Infura verify endpoint for Sepolia,
 Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed credentials are
-`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`; both environments share upstream quotas.
+`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`; both environments may share upstream quotas
+during the pilot under the combined production D=46/staging D=20 budget. Production keeps these
+accounts. Moving staging to another pair is a tracked follow-up with a named Operations owner
+and issue, not a launch gate, before re-budgeting production caps. Production-attested comment
+edits cost a production upgrade, so batch them with the next planned production upgrade ([launch §1.8](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-follow-up)).
 The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
 key templates. Run compose-path preflight with the complete sealed env before an authorized
 upgrade, including restore-check. The typed self-test checks actual receipt, transaction,
@@ -377,7 +381,7 @@ Setup, in order, during the [staging reset](#staging-reset-human-only)'s steps 7
    export ETH_KEYSTORE=~/.foundry/keystores/staging-payer ETH_PASSWORD=~/staging/payer.password
    PYTHONPATH=deploy/product uv run --locked --project sdk/python python -m reference_product deposit \
      --config driver.json --driver-seed-file ~/staging/driver.seed \
-     --amount-minor <cents>
+     --amount-minor "<cents>"
    ```
 
    The driver recomputes the quote's address before paying and exits 0 once the product has

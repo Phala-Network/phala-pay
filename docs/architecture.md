@@ -1725,7 +1725,10 @@ is never offered for a sweep; §14). Alerts
 are platform health only (design §13): an unswept balance or a `FlushFailed` target is the
 merchant's, recorded for it, not an alert. Each loop checks in to a Sentry Crons
 monitor, which pages on scanner lag, backup age over 2 minutes, a failed reconciliation check, and
-any stopped loop; a Sentry Uptime monitor watches `/healthz`. Business state (deposits by state and
+any stopped loop. Phala's pilot disables Sentry Uptime at the owner's request; manual
+[`pilot_watch`](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions)
+checks external `/healthz` every two staffed hours for 72 h, then twice daily. The owner accepts
+the risk of external failures between checks. Business state (deposits by state and
 age, unflushed balance, open lock exposure, undelivered `deposit.credited` events and their age,
 reconciliation) is in the daily admin
 report (`GET /v1/admin/reports/daily`); RPC calls per provider, chain, and method are counters in
@@ -1756,19 +1759,21 @@ availability. Production has no deployed metrics collector, so Prometheus snapsh
 on-demand diagnostics, not automatic rolling SLO accounting or alert evaluation. Sentry is the
 only alert channel. HTTP percentages/percentiles below require an explicitly recorded observation
 interval and counter deltas from the same process; do not claim a continuous 30-day result from
-one snapshot. A restart ends that interval. Sentry Uptime history supplies external availability;
-Crons and issue history supply worker/incident evidence.
+one snapshot. A restart ends that interval. Phala's pilot records manual external health checks;
+these do not establish continuous 30-day availability. Crons and issue history supply
+worker/incident evidence. A metrics collector with a metrics-only key is the planned replacement
+for manual metrics evaluation and requires a reviewed implementation.
 
-| Objective | Target and evidence | Operational response through Sentry |
+| Objective | Target and evidence | Operational response |
 |---|---|---|
-| API availability | 99.9% successful `/healthz` probes over 30 days; inspect Sentry Uptime history. Authenticated API diagnostic error ratio is 5xx / (2xx + 3xx + 5xx). | Uptime failures page; inspect load-shed and 5xx request counts on demand. |
-| API latency | During an observed interval, p95 successful GET/HEAD response headers ≤ 250 ms and POST ≤ 1 s. Use HTTP histogram bucket deltas for matched routes; exclude admin reports/attestation and intentional waits. | This percentile is a diagnostic target with no automatic alert; investigate an Uptime or worker incident using snapshots. |
+| API availability | 99.9% successful `/healthz` probes over 30 days is the target; the pilot's manual `pilot_watch` checks do not measure continuous availability. Authenticated API diagnostic error ratio is 5xx / (2xx + 3xx + 5xx). | Failed manual health checks require immediate triage; missed Crons check-ins page. Inspect load-shed and 5xx request counts on demand. |
+| API latency | During an observed interval, p95 successful GET/HEAD response headers ≤ 250 ms and POST ≤ 1 s. Use HTTP histogram bucket deltas for matched routes; exclude admin reports/attestation and intentional waits. | This percentile is a diagnostic target with no automatic alert; investigate an external-health or worker incident using snapshots. |
 | RPC evidence availability | Every configured read/verify pair is ready; three consecutive request failures make its endpoint not-ready, and recovery probes run at most every 30 s. Infura 402 remains unavailable until UTC midnight. | `TopupRpcEndpointUnavailable` after five minutes; `TopupRpcDisagreement` and chain freezes require immediate triage. Address capacity warns at 70% and 90%. |
 | Deposit progress | For unpaused, supported deposits, target 99% leaving `detected` and `confirmed` within 30 minutes after satisfying the configured confirmation policy (for example `depth2`, `depth3`, or `finalized`), rather than starting all clocks at finalization. Review the policy, daily report ages and deposit timelines; this target is not a measured percentile. | Route age alerts and scanner/finality Crons identify stalled work. Sanctions holds alert after the configured confirmation window. Fast and coverage scanner monitors expect 5-minute and 60-minute check-ins with 2-minute margins; checkpoints publish independently every 10 minutes. This is not an automatically computed percentile. |
 | Reconciliation and backup | Every scheduled reconciliation succeeds before its next round; backup success marker age ≤ 2 minutes. Inspect Sentry Crons and the daily report. | Existing reconciliation and backup monitors alert; backup requires three stale observations to avoid restart noise. |
 
-Configure Sentry issue rules by the above alert names and existing Crons/Uptime monitors; this
-change adds no collector, Prometheus alert rules, new monitoring endpoint or deployed service.
+Configure Sentry issue rules by the above alert names and existing Crons monitors. No collector
+is deployed; evaluate the committed RPC Prometheus rules manually with `pilot_watch` for the pilot.
 Replay/coverage backlogs and HTTP latency remain diagnostic snapshots; ongoing incident review
 must confirm those backlogs drain after provider recovery. Log lines and their spans (`deposit_id`, `chain_id`,
 `state`, `attempt`) serve local stacks.

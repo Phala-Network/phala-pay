@@ -20,9 +20,9 @@ a secret are marked **HUMAN-ONLY**. Backup and restore: [RESTORE.md](RESTORE.md)
 | topup CVM, one per Environment (`staging`, `production`) | [compose.yaml](compose.yaml) with its environment directory ([Attested settings](#attested-settings)). The service variant ([compose.service.yaml](compose.service.yaml)) runs `keys` (derives the database passwords and the backup key), `postgres` (PostgreSQL 18 + WAL-G), `migrate`, `topup`, `smokescreen` (the [webhook egress](#webhook-egress) proxy), `dstack-ingress` (the only public port, 443: TLS for the [custom domain](#custom-domain)), `heartbeat`, and `backup`; the [restore-check variant](RESTORE.md#the-restore-check-variant) ([compose.restore-check.yaml](compose.restore-check.yaml)) runs `keys`, `postgres`, `migrate`, a read-only `topup` published on 8081, and `restore-check` | Deploy, target `topup` |
 | Staging reference-product CVM (optional; Phala's demo, [phala.md](phala.md#staging-reference-product)) | [product/compose.yaml](product/compose.yaml) with its environment directory: `product` (on 8089, private) and `dstack-ingress` (the only public port, 443: TLS for its [custom domain](#custom-domain)) | Deploy, target `product` |
 | Object storage (S3-compatible; Phala's instance: Cloudflare R2) | encrypted WAL-G base backups and WAL under `WALG_S3_PREFIX` | owner |
-| The operator's Sentry project (optional; Phala's: `phala-network/crypto-topup-service`) | errors, alerts, Crons and Uptime monitors | the service itself |
+| The operator's Sentry project (optional; Phala's: `phala-network/crypto-topup-service`) | errors, alerts and Crons monitors; Phala's pilot uses manual external health checks | the service itself |
 | EVM chains of the routes (the committed routes: Sepolia and Base Sepolia) | the permissionless forwarder factory, at one deterministic address on every chain; forwarders; each account's own treasury | factory: any deployer ([CONTRACTS.md](CONTRACTS.md)); treasuries: each merchant, through the API |
-| GitHub Actions | Phala Pay's repository: [Release](../.github/workflows/release.yml) (on a `v<version>` tag), [Verify contracts](../.github/workflows/verify-contracts.yml) (daily, read-only), [Restore drill](../.github/workflows/restore-drill.yml) (weekly, local stack). The operator's environment repository: a workflow that calls the release's [Deploy](../.github/workflows/deploy.yml) | — |
+| GitHub Actions | Phala Pay's repository: [Release](../.github/workflows/release.yml) (on a `v<version>` tag), [Verify contracts](../.github/workflows/verify-contracts.yml) (daily deployment checks for both environment configs and the Sepolia Safe, keyless and read-only), [Restore drill](../.github/workflows/restore-drill.yml) (weekly, local stack). The operator's environment repository: a workflow that calls the release's [Deploy](../.github/workflows/deploy.yml) | — |
 
 Production CVMs have no SSH, no logs, and no database access. Everything an operator sees comes
 from the public endpoints, the admin API, Sentry, and the chain.
@@ -96,9 +96,11 @@ GitHub-hosted `ubuntu-latest` runners.
      *Prevent Storing of IP Addresses* on.
    - An alert for the environments `staging` and `production` (not `*-restore`) that notifies the
      on-call owner when an issue is created or regresses, with no level filter (most alert lines are
-     `warning` events). Confirm that the Crons and Uptime monitors are listed as connected.
-   - One Uptime monitor per Environment (UI only): `GET https://<domain>/healthz`, interval
-     1 minute, timeout 10 seconds, environment = the Environment's name.
+     `warning` events). Confirm that the Crons monitors are listed as connected.
+   - Phala's pilot has Sentry Uptime disabled at the owner's request. External `/healthz` is
+     checked by [`pilot_watch`](runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions)
+     every two staffed hours for 72 h, then twice daily. The owner accepts the risk between checks.
+     Other operators choose their own external availability monitoring.
    - The project DSN (Settings > Client Keys) is sealed as `SENTRY_DSN` ([Sealing the
      secrets](#sealing-the-secrets)).
 
@@ -314,7 +316,7 @@ the environment repository at the deployed commit, and the rendered compose from
 artifact (the provision summary prints these commands):
 
 ```sh
-docker pull <the compose's phala-pay image>   # --offline pulls nothing; it runs topup config check in it
+docker pull "<the compose's phala-pay image>"   # --offline pulls nothing; it runs topup config check in it
 kit/deploy/preflight.sh --env .env.ENV --compose docker-compose.ENV.yml \
   --environment-dir ENV/topup --offline      # .env.ENV: mode 0600
 kit/deploy/phala envs update "$TOPUP_CVM_ID" -e .env.ENV
@@ -575,7 +577,10 @@ environment is `topup.yaml`'s `environment`, both attested.
   refund completion; hourly coverage does not set their cadence. Custody remains hourly.
   The coverage-lag warning is two hours; see [scanner lag](runbooks/scanner-lag.md).
 
-- **Uptime**: `/healthz` of each Environment ([One-time setup](#one-time-setup-human-only-repository-owner)).
+- **External health**: Phala's pilot uses manual
+  [`pilot_watch`](runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions) rather
+  than Sentry Uptime, at the owner's request. A down CVM also misses Crons check-ins. A metrics
+  collector with a metrics-only key is the planned replacement for manual metrics evaluation.
 - **Egress**: `topup` sends HTTPS to the DSN's ingest host.
 
 A restore-check instance runs no loop and reports as `<environment>-restore`, so it never checks
@@ -617,7 +622,13 @@ cost per month = 30 × cost per day
 [Chain reads §5.2](../docs/design/chain-reads.md#52-worst-case-daily-budget-staging--production-combined)
 accounts for fixed 300-second discovery, independent 600-second checkpoints, 3,600-second
 coverage, bounded backfill and six-hour catch-up. Compare measured call counters with each
-provider's dashboard. Both environments share keys and upstream quotas. Each fresh quote snapshot costs one read call and
+provider's dashboard. Both environments may share keys and upstream quotas during the pilot.
+Production keeps the existing Ankr and Infura accounts. Moving staging to another pair is a
+tracked follow-up with a named Operations owner and issue, not a launch gate; then production
+caps can be re-budgeted in a reviewed PR. Production-attested comment edits cost an upgrade,
+so batch them with the next planned production upgrade
+([launch §1.8](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-follow-up)).
+Each fresh quote snapshot costs one read call and
 240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
 [RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all nine
 chain/token routes (three production, six staging), refunds, unresolved finality stock, slow
@@ -770,10 +781,20 @@ jq -e '.passed == true' sepolia-contract-verification.json
 ```
 
 The dry run must print the two addresses above; if the factory already has that code (anyone may
-deploy it), the broadcast sends nothing. Then run **Verify contracts** (Actions), which re-checks the
-deployment, the Safe of `contracts/safe-expectations.json` (Phala's), and the committed routes daily,
-in the `staging` Environment. Repeat the verification for
-[mainnet deployment](CONTRACTS.md#mainnet).
+deploy it), the broadcast sends nothing. **Verify contracts** (Actions) runs the existing
+`verify-deployment.sh` daily in independent staging and production matrix jobs, with
+`fail-fast: false`. It derives chains and contract addresses from the resolved configs, maps
+chains through `contracts/networks.json`, and uses the explicit keyless public RPC mapping,
+separate from the service's keyed read/verify pairs. Proxy bytecode, implementation/factory
+bindings and sample forwarders are checked, then route addresses must match the report. It
+also runs `verify-safe.sh` daily for the committed Sepolia treasury Safe. Retain independent
+operator checks for all production Safes.
+
+The reviewed `PENDING_DEPLOYMENT_CHAINS: "1 8453"` permits a chain only when both configured
+addresses return exactly `0x`, with a warning and job-summary line on every such run. Any
+non-empty code goes through full verification. Remove each chain in the deployment-evidence PR
+required by [launch §1.5](runbooks/production-launch.md#15-deploy-factories-or-verify-if-already-deployed),
+which also updates CONTRACTS.md. Repeat operator checks for [mainnet deployment](CONTRACTS.md#mainnet).
 
 ## Operator onboarding
 
@@ -926,7 +947,10 @@ and it must have succeeded. Missing metadata, a higher floor or mismatched check
 SQLx continues checking all known migration checksums and dirty state. The application role cannot
 write the ledger. A rollback never lowers existing floors or edits migration history.
 
-CI resolves the latest stable release as N-1 automatically and requires v0.9.0 or later.
+CI resolves the latest stable release as N-1 automatically and requires v0.9.0 or later; currently
+it resolves v0.10.0. This is the rollback target for a later compatible release, while the initial
+production v0.10.0 launch has no earlier production target
+([launch rollback](runbooks/production-launch.md#12-rollback)).
 For any N-1, an exact `no rollback to <N-1 version>; restore required` declaration in
 `### Breaking (operators)` under `## [Unreleased]` or the dated section matching the workspace
 version (including the release PR before tagging)
@@ -974,8 +998,9 @@ The backup monitor sends Sentry-compatible alerts: `TopupDiskWarning` at >=75%,
 `TopupDiskCritical` at >=90%, and `TopupUnarchivedWalPressure` at >=1 GiB pending WAL or oldest age
 >=120 seconds. Missing/invalid samples or age >120 seconds emit `TopupCapacityProbeFailed`.
 Configure `SENTRY_DSN` and route these issues to operations; with no DSN they remain local logs.
-These alerts are sampled from the running service; external uptime/Crons monitoring is necessary
-when the service or host itself is down.
+These alerts are sampled from the running service. Crons detect missed check-ins when the service
+or host is down; external `/healthz` checks detect ingress failures. Phala's pilot uses the
+owner-accepted manual `pilot_watch` cadence above.
 
 1. At warning, inspect growth rates, filesystem free space, largest relations/indexes and
    observability files. Expand the CVM disk/filesystem before headroom is exhausted; estimate

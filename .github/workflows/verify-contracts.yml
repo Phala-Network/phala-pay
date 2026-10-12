@@ -1,8 +1,9 @@
 name: Verify contracts
 
-# Read-only: validates Phala's committed staging configuration and, through its two Sepolia RPC
-# providers, checks the approved Safe and the deployed factory. It holds no key, so both providers
-# must be keyless; they appear only as "sepolia/a" and "sepolia/b" in the reports.
+# Read-only: validates Phala's committed staging and production configurations, verifies each
+# deployed factory with the existing deployment checker, and checks the Sepolia treasury Safe.
+# Public verification reads use keyless endpoints, separate from the service's keyed read/verify
+# endpoints. RPC keys stay outside GitHub; these reads need no independent provider agreement.
 
 on:
   schedule:
@@ -30,8 +31,15 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [staging, production]
     env:
-      STAGING_CONFIG: deploy/environments/phala-network/staging/topup/topup.yaml
+      ENVIRONMENT: ${{ matrix.environment }}
+      # Reviewed undeployed chains: remove each in the deployment-evidence PR required by
+      # deploy/runbooks/production-launch.md §1.5. Any non-empty code requires full verification.
+      PENDING_DEPLOYMENT_CHAINS: "1 8453"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,32 +58,86 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-verify-contracts-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Validate the committed staging configuration
+      - name: Validate the committed environment configuration
         run: |
           mkdir -p reports
-          cargo run --locked -q -p topup -- config show "$STAGING_CONFIG" >reports/staging-config.json
+          cargo run --locked -q -p topup -- config show \
+            "deploy/environments/phala-network/$ENVIRONMENT/topup/topup.yaml" >reports/config.json
 
-      - name: Verify the Safe and the factory deployment on both providers
+      - name: Resolve public verification targets
+        id: targets
         run: |
-          # The providers of the configuration's Sepolia routes, in their order.
-          IFS=$'\t' read -r RPC_A RPC_B < <(jq -r '
-            [.routes[] | select(.chain.chain_id == 11155111)][0].chain.rpc_providers as $ids
-            | .rpc_providers as $urls | [$urls[$ids[0]], $urls[$ids[1]]] | @tsv' \
-            reports/staging-config.json)
-          [[ -n "$RPC_A" && -n "$RPC_B" && "$RPC_A$RPC_B" != *"{key}"* ]] ||
-            { echo "::error::the staging configuration needs two keyless Sepolia providers"; exit 1; }
+          # config show resolves each route's default implementation address without secrets.
+          jq -er --slurpfile networks deploy/contracts/networks.json '
+            {"1": "https://ethereum-rpc.publicnode.com",
+             "8453": "https://base-rpc.publicnode.com",
+             "11155111": "https://ethereum-sepolia-rpc.publicnode.com",
+             "84532": "https://base-sepolia-rpc.publicnode.com"} as $endpoints
+            | [. as $config | .rpc[].chain_id as $chain
+               | ($endpoints[$chain | tostring]
+                  // error("no public verification RPC mapping for chain \($chain)")) as $url
+               | ([$networks[0].networks | to_entries[]
+                   | select(.value.chain_id == $chain) | .key]
+                  | if length == 1 then .[0]
+                    else error("expected one contracts network for chain \($chain)") end) as $network
+               | $config.routes[] | select(.chain.chain_id == $chain)
+               | [$chain, $network, $url, .chain.forwarder_factory, .chain.implementation]]
+            | unique[] | @tsv' reports/config.json \
+            >reports/contract-targets.tsv
+
+      - name: Verify the Sepolia treasury Safe
+        if: ${{ !cancelled() && matrix.environment == 'staging' }}
+        run: |
+          deploy/contracts/verify-safe.sh \
+            --rpc sepolia/publicnode=https://ethereum-sepolia-rpc.publicnode.com \
+            >reports/sepolia-safe-verification.json
+
+      - name: Verify the configured contract deployments
+        if: ${{ !cancelled() && steps.targets.outcome == 'success' }}
+        run: |
           status=0
-          deploy/contracts/verify-safe.sh --rpc sepolia/a="$RPC_A" --rpc sepolia/b="$RPC_B" \
-            >reports/sepolia-safe-verification.json || status=1
-          deploy/contracts/verify-deployment.sh --rpc sepolia/a="$RPC_A" --rpc sepolia/b="$RPC_B" \
-            >reports/sepolia-contract-verification.json || status=1
-          jq '{passed, chains: [.chains[] | {target, passed}]}' reports/sepolia-*.json || true
+          target=0
+          while IFS=$'\t' read -r chain network rpc factory implementation; do
+            target=$((target + 1))
+            verification="reports/verification-$chain-$target.json"
+            if [[ " $PENDING_DEPLOYMENT_CHAINS " == *" $chain "* ]]; then
+              actual_chain=$(cast chain-id --rpc-url "$rpc")
+              [[ "$actual_chain" == "$chain" ]] ||
+                { echo "::error::public verification RPC for chain $chain reports $actual_chain"; exit 1; }
+              factory_code=$(cast code "$factory" --rpc-url "$rpc")
+              implementation_code=$(cast code "$implementation" --rpc-url "$rpc")
+              if [[ "$factory_code" == 0x && "$implementation_code" == 0x ]]; then
+                echo "::warning::chain $chain deployment pending: factory and implementation both have no code; production-launch §1.5"
+                echo "- $ENVIRONMENT chain $chain: deployment pending; both addresses returned exactly 0x (§1.5)." >>"$GITHUB_STEP_SUMMARY"
+                jq -n --argjson chain_id "$chain" --arg factory "$factory" \
+                  --arg implementation "$implementation" \
+                  '{chain_id: $chain_id, factory: $factory, implementation: $implementation,
+                    status: "pending_deployment"}' >"$verification"
+                continue
+              fi
+            fi
+            if ! deploy/contracts/verify-deployment.sh --rpc "$network/publicnode=$rpc" >"$verification"; then
+              status=1
+            fi
+            # As in preflight.sh, a passing reference deployment must match this route's addresses.
+            if jq -e --arg factory "$factory" --arg implementation "$implementation" '
+              .passed == true and (.chains | length) == 1 and all(.chains[];
+                (.factory | ascii_downcase) == ($factory | ascii_downcase) and
+                (.implementation | ascii_downcase) == ($implementation | ascii_downcase))
+              ' "$verification" >/dev/null; then
+              echo "- $ENVIRONMENT chain $chain: full deployment verification passed." >>"$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::chain $chain deployment failed verification or does not match the route"
+              echo "- $ENVIRONMENT chain $chain: deployment verification failed; see reports." >>"$GITHUB_STEP_SUMMARY"
+              status=1
+            fi
+          done <reports/contract-targets.tsv
           exit "$status"
 
       - name: Upload the reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: contract-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          name: contract-verification-${{ matrix.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: reports/
           if-no-files-found: warn

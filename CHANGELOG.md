@@ -14,6 +14,29 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed (operators)
+
+- Repair the daily contract verification workflow for the `rpc` read/verify configuration:
+  resolve both environment configs in independent matrix jobs, map public RPCs through the
+  contracts network registry, reuse the full deployment checker and daily Sepolia Safe check,
+  and compare route addresses with the deployment report. Reviewed pending chains `1 8453`
+  permit only two exactly empty code results with warnings and summaries; remove each in its
+  deployment-evidence PR. Service RPC keys remain outside GitHub.
+- Replace the production v0.10.0 launch runbook with the ordered owner procedure and sign-off
+  checklist. Document the accepted shared-account pilot budget, staging SDN prerequisite, manual
+  monitoring and uptime risk, optional staging separation, website CSP decision, and first-launch
+  recovery. Run from a private work directory, shred local key copies, bind every dispatch to
+  the approved main commit, and verify drill deletion by its saved VM id. Track staging's move
+  with an owner and batch production-attested comment edits with the next upgrade. Align the
+  RPC, sanctions, alert and integration references with v0.10.0 behavior.
+
+### Python SDK (`phala-pay`)
+
+#### Documentation
+
+- Describe the required `PhalaPay(api_key, pins=...)` constructor and deployment trust pins in
+  both modes, replacing the removed individual constructor pin arguments and test-mode fallback.
+
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Fixed

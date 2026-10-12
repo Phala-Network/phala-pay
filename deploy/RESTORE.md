@@ -137,10 +137,11 @@ promotion out of archive recovery starts a new PostgreSQL timeline, and `topup r
 the timeline is newer than the one it acknowledged.
 
 **Sentry during a real restore.** The replacement runs no loop and reports as
-`<environment>-restore`, so every Crons monitor of the environment misses its check-ins and the
-Uptime monitor fails. Mute the environment's Crons monitors and disable its Uptime monitor from
-creation until [Resume](#resume) shows `topup-backup` checking in `ok`. A staging drill needs no
-muting: the live instance keeps checking in.
+`<environment>-restore`, so every Crons monitor of the environment misses its check-ins. Mute
+the environment's Crons monitors from creation until [Resume](#resume) shows `topup-backup`
+checking in `ok`, then restore their notifications. Phala's pilot has no Sentry Uptime monitor;
+record the expected external `/healthz` interruption during `pilot_watch`. A staging drill needs
+no muting: the live instance keeps checking in.
 
 ### Render it and its env file
 
@@ -168,11 +169,11 @@ restore is abandoned:
 umask 077
 export RESTORE_ENV_DIR="$(mktemp -d)"
 # Exactly the sealed names of restore-check.yml, with a TOPUP_RPC_<ID>_KEY=<the live key> line
-# for each keyed provider the environment declares (Phala's staging declares none).
+# for each keyed provider the environment declares (Phala's staging declares Ankr and Infura).
 printf '%s\n' 'RESTORE_AWS_ACCESS_KEY_ID=<read-only key id>' \
   'RESTORE_AWS_SECRET_ACCESS_KEY=<read-only secret>' \
   'SENTRY_DSN=<the live DSN, or empty>' >"$RESTORE_ENV_DIR/restore.env"
-docker pull <restore-check.yml's phala-pay image>   # --offline checks the configuration in it
+docker pull "<restore-check.yml's phala-pay image>"   # --offline checks the configuration in it
 kit/deploy/preflight.sh --env "$RESTORE_ENV_DIR/restore.env" --compose restore-check.yml \
   --environment-dir "$ENV_DIR" --restore-check --offline
 # after creating the instance:

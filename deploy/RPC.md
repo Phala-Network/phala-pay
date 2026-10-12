@@ -11,23 +11,29 @@ Configure `rpc` entries with `chain_id`, `read` and `verify`. Each endpoint requ
 `id`, HTTPS `url` containing one whole-segment or query-value `{key}`, explicit `sealed_key`,
 and positive `max_log_blocks`. Read and verify hosts must differ. Configure observation-only
 Ethereum and Base price chains too. Both environments share `TOPUP_RPC_ANKR_KEY` and
-`TOPUP_RPC_INFURA_KEY`, including for staging's mainnet price observations.
+`TOPUP_RPC_INFURA_KEY`, including for staging's mainnet price observations. This shared-account
+pilot is accepted under the combined production D=46/staging D=20 budget. Production keeps the
+existing accounts. Moving staging to another provider pair is a tracked follow-up with a named
+Operations owner and issue, not a launch gate; after it, production caps may be re-budgeted in a
+reviewed PR. Edits to production-attested comments cost a production upgrade, so batch them
+with the next planned production upgrade
+([launch procedure](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-follow-up)).
 
 `topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:
 production sets it to 2 and staging to 1. It atomically limits attached-pending refunds across
 all accounts and modes in that environment; one new attachment per rolling 24 hours remains
 a fixed admission limit. Missing, zero or negative values fail configuration validation.
 
-For an N-1 rollback, use the previous release's verified configuration without this field;
-its strict schema rejects it. The current N-1, v0.9.2, has **no environment-wide attached-pending
-or rolling attachment-count cap**. Its built-in checks reserve pending and succeeded refund
-amounts against each deposit and reject a new refund above the remaining refundable amount.
-Its worker claims one due refund at a time (`LIMIT 1`), which does not cap attached inventory.
-See the
-[v0.9.2 refund API](https://github.com/Phala-Network/phala-pay/blob/v0.9.2/crates/topup/src/api/repository.rs#L603)
-and [worker](https://github.com/Phala-Network/phala-pay/blob/v0.9.2/crates/topup/src/refunds.rs#L699).
-The current R/N admission limits are not inherited by that release; retain operational
-inventory and load controls during rollback.
+CI resolves the latest stable release, currently v0.10.0, as N-1 for the next release's rollback
+rehearsal. v0.10.0 supports `rpc`, `max_attached_pending_refunds`, and the current R/N admission
+limits. Retain and use its verified configuration, kit and image digests when rolling back from
+a later compatible release; keep operational inventory and load controls in force.
+
+v0.10.0 is production's first release, so this launch has no earlier production rollback target.
+v0.9.2 cannot parse the current configuration, lacks the environment-wide R/N admission limits,
+and screens with the stale oracle. Never deploy it to production. See
+[launch rollback](runbooks/production-launch.md#12-rollback) and
+[rollback compatibility](README.md#rollback-compatibility).
 
 ```sh
 topup config check --secrets /etc/topup/topup.yaml

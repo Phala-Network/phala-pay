@@ -107,16 +107,21 @@ Failures raise `ApiError` with the service's stable `code`, `error_type`, `param
 `409`. Status arguments have `Literal` hints, and `EventType` names every event (`phala_pay.QuoteStatus`,
 `DepositStatus`, `RefundStatus`, `TreasuryStatus`, `EventType`, …); the generated models keep
 statuses as `str`, so a value added later still parses.
-`forwarder=(factory, implementation)`, pinned from the attested deployment, `treasuries={chain_id:
-treasury}`, your own treasury per chain as you proved it, and `account=` (`acct_…`) are the pins
-every open quote and every network of an active deposit address is recomputed from, never the
-response's `treasury`: a compromised service could return an attacker's treasury with its valid
-address. An address you cannot derive, or one naming another treasury than your pinned one of its
-chain, raises `AddressMismatchError`. A live key requires all three pins and fails closed without
-them; in test mode `account` is read once from `GET /v1/account`, and an unpinned treasury falls
-back to the response's with an `UnpinnedTreasuryWarning`. `topup_sdk.deposit_address(factory, implementation, treasury, account=, livemode=,
-client_reference_id=, version=)` recomputes any deposit address offline; pass the treasury of the
-network, since a chain whose treasury differs has its own address.
+`PhalaPay(api_key, pins=pins)` requires a `phala_pay.Pins` object or its encoded `ppay_pins_v1.…`
+string in both live and test mode. `PhalaPay.from_env()` reads `PHALA_PAY_API_KEY` and
+`PHALA_PAY_PINS`. Pins bind `api_base`, `account`, `livemode`, `factory`, `implementation`,
+`treasuries` (your proved treasury per chain), and `webhook_keys` (version/public-key pairs) from
+the verified attestation. The API key must match the pinned mode; an optional `api_base` override
+must match the pinned origin. The constructor accepts no separate `forwarder=`, `treasuries=`,
+or `account=` pins.
+
+Every open quote and every network of an active deposit address is recomputed from these pins,
+never the response's `treasury`: a compromised service could return an attacker's treasury with
+its valid address. An address you cannot derive, or one naming another treasury than your pinned
+one of its chain, raises `AddressMismatchError`. Neither mode discovers trust from the service
+or falls back to an unpinned treasury. `topup_sdk.deposit_address(factory, implementation,
+treasury, account=, livemode=, client_reference_id=, version=)` recomputes any deposit address
+offline; pass the treasury of the network, since a chain whose treasury differs has its own address.
 
 **Sweeping.** Funds stay in the forwarders until you sweep them, with your own wallet or Safe:
 
