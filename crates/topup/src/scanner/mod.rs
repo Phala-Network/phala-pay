@@ -518,11 +518,30 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         factory_receipts.push((hash, a.ok_or(ScannerError::Disagreement)?));
     }
     let mut evidence = BTreeMap::new();
-    // Any change to the unverified set invalidates this round's RPC evidence.
+    // Only covered addresses and their own covered blocks belong to this round.
+    // Other deposits use their owner's shared claim and backoff, including S/L.
+    let mut covered_ids = Vec::new();
+    let mut covered_starts = Vec::new();
+    let mut covered_ends = Vec::new();
+    for range in &ranges {
+        for address in &range.addresses {
+            let start = range.start(address);
+            if start <= range.end {
+                covered_ids.push(address.address.id);
+                covered_starts
+                    .push(i64::try_from(start).map_err(|_| ScannerError::SnapshotChanged)?);
+                covered_ends
+                    .push(i64::try_from(range.end).map_err(|_| ScannerError::SnapshotChanged)?);
+            }
+        }
+    }
+    // Any change to the covered unverified set invalidates this round's RPC evidence.
     // Abandon the round after the DB-only lock recheck; the next round reads afresh.
     let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL AND state <> 'reversed'",
-    ).bind(chain_key).fetch_all(pool).await?;
+        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL AND state <> 'reversed' \
+         AND EXISTS(SELECT 1 FROM unnest($2::uuid[],$3::bigint[],$4::bigint[]) AS covered(address_id,start_block,end_block) \
+         WHERE deposits.address_id=covered.address_id AND deposits.block_number BETWEEN covered.start_block AND covered.end_block)",
+    ).bind(chain_key).bind(&covered_ids).bind(&covered_starts).bind(&covered_ends).fetch_all(pool).await?;
     for (_, deposit) in db::deposits_by_ids(pool, &ids).await? {
         let deposit = deposit?;
         candidates.insert((deposit.tx_hash, deposit.receipt_log_index));
@@ -562,8 +581,10 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         return Err(ScannerError::SnapshotChanged);
     }
     let locked_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL AND state <> 'reversed' FOR UPDATE",
-    ).bind(chain_key).fetch_all(&mut *tx).await?;
+        "SELECT id FROM deposits WHERE chain_id=$1 AND dual_verified_at IS NULL AND state <> 'reversed' \
+         AND EXISTS(SELECT 1 FROM unnest($2::uuid[],$3::bigint[],$4::bigint[]) AS covered(address_id,start_block,end_block) \
+         WHERE deposits.address_id=covered.address_id AND deposits.block_number BETWEEN covered.start_block AND covered.end_block) FOR UPDATE",
+    ).bind(chain_key).bind(&covered_ids).bind(&covered_starts).bind(&covered_ends).fetch_all(&mut *tx).await?;
     if ids.iter().collect::<BTreeSet<_>>() != locked_ids.iter().collect::<BTreeSet<_>>() {
         tx.rollback().await?;
         return Err(ScannerError::SnapshotChanged);
@@ -575,6 +596,29 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             .entry((deposit.tx_hash, deposit.receipt_log_index))
             .or_default()
             .push(deposit);
+    }
+    // A union candidate may identify a provisional row whose stored block/recipient is
+    // outside the snapshot. Its in-range log paid for this receipt read; retain the
+    // existing correction/freeze rules for that identity, without scanning other rows.
+    for &(hash, position) in evidence.keys() {
+        if unverified.contains_key(&(hash, position)) {
+            continue;
+        }
+        let candidate_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT id FROM deposits WHERE chain_id=$1 AND tx_hash=$2 AND receipt_log_index=$3 \
+             AND dual_verified_at IS NULL AND state <> 'reversed' FOR UPDATE",
+        )
+        .bind(chain_key)
+        .bind(format!("{hash:#x}"))
+        .bind(i64::try_from(position).map_err(|_| ScannerError::SnapshotChanged)?)
+        .fetch_all(&mut *tx)
+        .await?;
+        for (_, deposit) in db::deposits_by_ids(&mut *tx, &candidate_ids).await? {
+            unverified
+                .entry((hash, position))
+                .or_default()
+                .push(deposit?);
+        }
     }
     let mut deposits = Vec::new();
     let mut corrections = Vec::new();

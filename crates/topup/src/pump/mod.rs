@@ -479,6 +479,10 @@ impl Pump {
             next_attempt_at,
         };
         let mut transaction = self.pool.begin().await?;
+        // Coverage and finality take the chain lock before any deposit row lock.
+        // Leave the freeze decision to apply_transition so waits/retries remain allowed.
+        db::rpc::lock_reconciliation_in(&mut transaction, &format!("chain:{}", deposit.chain_id))
+            .await?;
         let current: Option<Uuid> = sqlx::query_scalar("SELECT id FROM deposits WHERE id=$1 AND lease_token=$2 AND updated_at=$3 AND state=$4 FOR UPDATE")
             .bind(deposit.id).bind(lease_token).bind(deposit.updated_at).bind(db::state_code(deposit.state))
             .fetch_optional(&mut *transaction).await?;

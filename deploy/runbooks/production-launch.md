@@ -1,8 +1,8 @@
 # Production launch
 
 This is the ordered, **HUMAN-ONLY** go-live procedure for Phala's production stablecoin pilot on
-release **v0.10.0**. Agents and CI run none of it. The committed live routes are USDC and USDT on
-Ethereum (chain 1) and USDC on Base (chain 8453), in
+the **approved release** selected in §1.1. Agents and CI run none of it. The committed live routes
+are USDC and USDT on Ethereum (chain 1) and USDC on Base (chain 8453), in
 [production/topup](../environments/phala-network/production/topup). Base USDC adds a one-hour
 sequencer uptime grace period. Both chains use the same deterministic factory, deployed on each chain
 separately. The pilot may share the existing Ankr read and Infura verify accounts with staging
@@ -46,7 +46,7 @@ PDT (4:00 PM PST).
 > **One shell session:** run the launch from the private work directory of §1.1, outside the
 > repository, with `umask 077`. Keep §§4–10 in one session. If a new session is unavoidable,
 > re-export `REPO_DIR`, `KIT_DIR`, `LAUNCH_WORK_DIR`, `APPROVED_COMMIT`,
-> `GITHUB_REPOSITORY`, `ENV_DIR`, `ORIGIN`, `BASE_URL`,
+> `RELEASE_TAG`, `RELEASE_COMMIT`, `GITHUB_REPOSITORY`, `ENV_DIR`, `ORIGIN`, `BASE_URL`,
 > `TOPUP_CVM_ID`, `APP_ID`, `ATTESTED_APP_ID`, `COMPOSE_HASH`, `SMOKE_ACCOUNT_ID`,
 > `FINANCE_MAX_UNFINALIZED_CREDIT` and `SMOKE_MERCHANT_SECRET_KEY`. Re-define the §1.1 and §6
 > helpers and recreate `SMOKE_DEPOSIT_IDS` before continuing.
@@ -61,11 +61,11 @@ or env file, and keep them out of chat and tickets.
 
 Keep a checkout of this repository's `main` at the approved commit Deploy will run. Set
 `APPROVED_COMMIT` to the owner/Finance/Risk/Operations-approved **main commit**, distinct from
-the v0.10.0 release commit. Work in a private directory outside every checkout, using
+the release commit. Work in a private directory outside every checkout, using
 `umask 077`; invoke repository and kit scripts by path. Import only temporary copies of secrets
 from the owner's secret store into this directory, including `admin.seed` and
 `maintenance/production.pem`; keep the recovery originals in that store. The deploy kit and
-`images.json` come from the verified v0.10.0 release, never from the checkout
+`images.json` come from that verified release, never from the checkout
 ([Verify a release](../../docs/self-hosting.md#verify-a-release)):
 
 ```sh
@@ -83,11 +83,16 @@ cd "$LAUNCH_WORK_DIR"
 export GITHUB_REPOSITORY=Phala-Network/phala-pay
 export ENV_DIR="$REPO_DIR/deploy/environments/phala-network/production/topup"
 export KIT_DIR="$LAUNCH_WORK_DIR/kit"
-grep -q 'deploy.yml@959ca364ab2b539ab43f7af45e7f42fb6f2e80f2 # v0.10.0' "$REPO_DIR/.github/workflows/deploy-phala.yml"
-grep -q 'version: v0.10.0' "$REPO_DIR/.github/workflows/deploy-phala.yml"
+# Read the one caller pin at the approved configuration commit, shared by both environments.
+git -C "$REPO_DIR" show "$APPROVED_COMMIT:.github/workflows/deploy-phala.yml" > deploy-caller.yml
+export RELEASE_TAG="$(sed -n 's/^      version: \(v[^[:space:]]*\)$/\1/p' deploy-caller.yml)"
+export RELEASE_COMMIT="$(sed -n 's|^    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@\([0-9a-f]\{40\}\) # .*|\1|p' deploy-caller.yml)"
+[[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]
+[[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+grep -Fxq "    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@$RELEASE_COMMIT # $RELEASE_TAG" deploy-caller.yml
 test "$(cat "$ENV_DIR/os-image-hash")" = bd369a8c2f9edb2b52dad48ac8e0b32dde5f1337c423a506b48d07403a7d8033
-bash "$REPO_DIR/deploy/verify-release.sh" v0.10.0 release
-mkdir "$KIT_DIR" && tar -xzf release/phala-pay-deploy-v0.10.0.tar.gz -C "$KIT_DIR" --strip-components=1
+test "$(bash "$REPO_DIR/deploy/verify-release.sh" "$RELEASE_TAG" release "$RELEASE_COMMIT")" = "$RELEASE_COMMIT"
+mkdir "$KIT_DIR" && tar -xzf "release/phala-pay-deploy-$RELEASE_TAG.tar.gz" -C "$KIT_DIR" --strip-components=1
 npm ci --prefix "$KIT_DIR/deploy/tools" --ignore-scripts
 
 # dispatch_deploy MODE: prefer the dispatch's printed run id/URL; otherwise discover one new run
@@ -153,12 +158,17 @@ fetch_record() {
 }
 ```
 
-`verify-release.sh` prints the release commit, `959ca364…`. The workstation needs Docker, Foundry
-`cast`, `jq`, `gh` logged in with write access, the AWS CLI, `dig`, `openssl`, `xxd`, `uv`, and GNU
+`verify-release.sh` verifies the tag, caller commit, kit, image digests and their attestations.
+The workstation needs Docker, Foundry `cast`, `jq`, `gh` logged in with write access, the AWS CLI, `dig`, `openssl`, `xxd`, `uv`, and GNU
 `timeout` ([Deployment time budgets](../README.md#deployment-time-budgets)).
 
-**Checks:** every command exits 0. `deploy-phala.yml` on `main` pins v0.10.0 at
-`959ca364ab2b539ab43f7af45e7f42fb6f2e80f2`. Record `APPROVED_COMMIT` in the sign-off.
+**Checks:** every command exits 0. Record `APPROVED_COMMIT`, `RELEASE_TAG`, `RELEASE_COMMIT`
+and `release/images.json` in the sign-off. Production and staging intentionally share the one
+caller pin: adopting a release updates both environments. Production launches the exact release
+staging has soaked; retain staging's successful deployment record and soak approval, and verify
+its tag, commit and images match these values before §2. Record the previously deployed
+production release's tag, commit, kit, images, configuration commit and deployment record as the
+rollback target (§12), or explicitly record that this is the first production deployment.
 `LAUNCH_WORK_DIR` is outside the repository and has mode 0700; `umask` is 0077. `os-image-hash` is the approved non-dev `dstack-0.5.9`
 hash ([OS image](../README.md#os-image)).
 
@@ -245,7 +255,7 @@ checks.
 ### 1.5 Deploy factories, or verify if already deployed
 
 In a separate shell with `umask 077`, stay in the §1.1 private work directory and call scripts
-by path from a separate clone of Phala Pay at tag `v0.10.0`, with submodules, because
+by path from a separate clone of Phala Pay at `RELEASE_TAG`, with submodules, because
 deploying builds the contracts ([CONTRACTS.md, "Mainnet"](../CONTRACTS.md#mainnet) and
 ["Base mainnet"](../CONTRACTS.md#base-mainnet)). Broadcasting is a human action. Use a funded
 throwaway deployer EOA if deployment is needed, and keep `PRIVATE_KEY` only in the process
@@ -258,8 +268,11 @@ consume none of its quota:
 umask 077
 export LAUNCH_WORK_DIR="<private work directory from §1.1>"
 cd "$LAUNCH_WORK_DIR"
-export CONTRACT_REPO_DIR="/absolute/path/to/phala-pay-v0.10.0"
-git -C "$CONTRACT_REPO_DIR" checkout v0.10.0
+export RELEASE_TAG="<verified release tag from §1.1>"
+export RELEASE_COMMIT="<verified release commit from §1.1>"
+export CONTRACT_REPO_DIR="/absolute/path/to/phala-pay-contracts"
+git -C "$CONTRACT_REPO_DIR" checkout "$RELEASE_TAG"
+test "$(git -C "$CONTRACT_REPO_DIR" rev-parse HEAD)" = "$RELEASE_COMMIT"
 git -C "$CONTRACT_REPO_DIR" submodule update --init --recursive
 read -rs -p "Factory deployer private key: " PRIVATE_KEY && printf '\n'
 export PRIVATE_KEY
@@ -429,7 +442,7 @@ everything else:
 | `environment` | `production` |
 | `target` | `topup` |
 | `mode` | `provision` (here), then `upgrade` (§5) |
-| Fixed by the caller | `version: v0.10.0`, `deploy.yml@959ca364…`, `environment_dir: deploy/environments/phala-network/production/topup` |
+| Fixed by the caller | `version: RELEASE_TAG`, `deploy.yml@RELEASE_COMMIT` from §1.1, `environment_dir: deploy/environments/phala-network/production/topup` |
 | Fixed by Deploy | OS image `dstack-0.5.9` non-dev, `tdx.medium`, Phala KMS, name `phala-pay-production-<run id>` |
 
 ```sh
@@ -462,7 +475,7 @@ test -s provision-record/attestation.json ||
 
 The new CVM shows `error` in Phala Cloud until §4 seals it, by design. Stop if either read fails.
 
-**Checks:** the run summary lists the CVM id, the app id, release v0.10.0, and the `phala-pay` and
+**Checks:** the run summary lists the CVM id, the app id, release `RELEASE_TAG` at `RELEASE_COMMIT`, and the `phala-pay` and
 `postgres-walg` digests that match `release/images.json`. The run's `headSha` equals
 `APPROVED_COMMIT` (asserted by `dispatch_deploy`). It also lists OS image `dstack-0.5.9`
 and the read-back verification. `TOPUP_CVM_ID` is set.
@@ -1206,10 +1219,10 @@ action taken is recorded with its alert, time (PT), and the resume decision.
 
 ## 12. Rollback
 
-v0.10.0 is production's first release, so there is no earlier production release to roll back to.
-v0.9.2 has never served production, cannot parse this configuration (`rpc`,
-`max_attached_pending_refunds`), and screens with the stale oracle. Never deploy it here. Never
-delete the CVM or its app: the backups are encrypted with the app's derived key.
+The rollback target is the **previously deployed production release recorded at launch** (§1.1),
+with its own verified kit, image digests, configuration commit and deployment record. Never infer
+it from a version number or from the current caller pin. Never delete the CVM or its app: the
+backups are encrypted with the app's derived key.
 
 - **Before Phala Cloud's charges (§§2–9):** leave every account without live charges or paused, fix
   the cause, and repeat the failed section. A configuration fix is a reviewed PR to `$ENV_DIR`
@@ -1220,16 +1233,22 @@ delete the CVM or its app: the backups are encrypted with the app's derived key.
   `settlement` on Phala Cloud's account
   (`admin POST "/v1/admin/accounts/$PHALA_CLOUD_ACCOUNT_ID/pause" '{"scopes":["quotes","settlement"],"reason":"<incident>"}'`).
   Follow [incident communication](incident-communication.md). Revert a bad setting with a PR and
-  `dispatch_deploy upgrade` at v0.10.0. Fix a release defect forward with a new release. Never run
-  down migrations, edit the database, or release reservations.
+  `dispatch_deploy upgrade` at the approved release. Never run down migrations, edit the database,
+  or release reservations.
+- **Release defect with a recorded prior deployment:** check the new release's changelog and
+  [Rollback compatibility](../README.md#rollback-compatibility). Rehearse N → N-1 → N using that
+  recorded target's own CLI and configuration. A reviewed PR restores `deploy-phala.yml`'s tag
+  and commit and the retained configuration; this changes the shared staging/production pin.
+  Approve the new main commit (§1.1), then `dispatch_deploy upgrade`. If the changelog requires
+  restore, follow that procedure instead.
+- **First production deployment:** there is no prior production rollback target. Keep charges
+  paused and fix forward with an approved, staging-soaked release; never choose an older release
+  that has not served production as a substitute.
 - **Lost or corrupted database:** follow [RESTORE.md](../RESTORE.md) and the
   [restore runbook](restore.md). This launch's §9 drill is the rehearsal.
-- **The first later upgrade (N after v0.10.0):** v0.10.0 becomes N-1. CI's `Deploy rollback`
-  rehearses N → v0.10.0 → N with v0.10.0's own CLI and configuration. Keep this launch's kit,
-  `release/images.json`, the `$ENV_DIR` commit, and both deployment records as the N-1 recovery
-  point. Roll back as in [Rollback compatibility](../README.md#rollback-compatibility): a PR pins
-  `deploy-phala.yml` back to `959ca364…`/`v0.10.0` with the retained configuration, then
-  `dispatch_deploy upgrade`, unless N's changelog declares `no rollback to 0.10.0; restore required`.
+
+Retain this launch's verified kit, `release/images.json`, release tag/commit, `$ENV_DIR` commit
+and both deployment records as the recovery point for the next upgrade.
 
 **Checks:** after any rollback or fix, re-run §6 and `pilot_watch`. Lift pauses only when both pass.
 
@@ -1238,8 +1257,10 @@ delete the CVM or its app: the backups are encrypted with the app's derived key.
 Record the evidence, the owner, and the time (PT) for each item. Launch is complete when every item
 is checked.
 
-- [ ] §1.1 Release v0.10.0 verified; `deploy-phala.yml` pins `959ca364…`; OS hash and
-      `APPROVED_COMMIT` recorded; launch work directory is outside the repository with `umask 077`.
+- [ ] §1.1 `RELEASE_TAG` and `RELEASE_COMMIT` read from the caller at `APPROVED_COMMIT`;
+      kit, images and pins verified; matching staging soak approved; prior production rollback
+      target (or first deployment) recorded; OS hash recorded; launch work directory is outside
+      the repository with `umask 077`.
 - [ ] §1.2 Production Phala Cloud workspace and API key exist.
 - [ ] §1.3 `production` Environment is `main`-only, with exactly three secrets and the variables;
       the admin and maintenance keys match `topup.yaml`.
@@ -1275,7 +1296,7 @@ is checked.
       `restore-instance.json`'s `vm_uuid`; production still running; read-only token revoked.
 - [ ] §10 Phala Cloud onboarded, live, and confirmed; smoke account quotes paused.
 - [ ] §11 `pilot_watch` cadence, daily tallies, and on-call owner agreed.
-- [ ] §12 v0.10.0 kit, images, configuration commit, and deployment records retained as the future
+- [ ] §12 Approved release tag/commit, kit, images, configuration commit, and deployment records retained as the future
       N-1.
 - [ ] Owner's final go-live approval.
 - [ ] Private work copies shredded: `admin.pem`, `admin.seed`, `maintenance/production.pem`,

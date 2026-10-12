@@ -105,6 +105,7 @@ async fn rpc(
                 json!({"transactionHash":format!("{:#x}",l.tx_hash),"transactionIndex":"0x0","blockHash":format!("{:#x}",l.block_hash),"blockNumber":format!("0x{:x}",l.block_number),"from":format!("{:#x}",l.tx_from),"to":format!("{:#x}",l.token),"cumulativeGasUsed":"0x5208","gasUsed":"0x5208","effectiveGasPrice":"0x1","contractAddress":null,"logsBloom":format!("0x{}","00".repeat(256)),"status":"0x1","type":"0x0","logs":[{"address":format!("{:#x}",l.token),"topics":topics,"data":format!("0x{:064x}",l.amount.value()),"blockNumber":format!("0x{:x}",l.block_number),"transactionHash":format!("{:#x}",l.tx_hash),"transactionIndex":"0x0","blockHash":format!("{:#x}",l.block_hash),"logIndex":format!("0x{:x}",l.log_index),"removed":false}]})
             }
         },
+        "eth_getLogs" => json!([]),
         "eth_getTransactionByHash" => {
             let l = log.expect("transaction");
             json!({"hash":format!("{:#x}",l.tx_hash),"nonce":"0x0","blockHash":format!("{:#x}",l.block_hash),"blockNumber":format!("0x{:x}",l.block_number),"transactionIndex":"0x0","from":format!("{:#x}",l.tx_from),"to":format!("{:#x}",l.token),"value":"0x0","gas":"0x5208","gasPrice":"0x1","input":"0x","v":format!("0x{:x}",s.chain*2+35),"r":"0x1","s":"0x1","type":"0x0","chainId":format!("0x{:x}",s.chain)})
@@ -310,6 +311,132 @@ where
     server.await??;
     result
 }
+#[tokio::test]
+async fn coverage_method_counts_match_normal_and_catchup_budget() -> Result<()> {
+    for (round, windows) in [(1, 1), (6, 7)] {
+        with_database(|d| {
+            Box::pin(async move {
+                let pool = &d.app_pool;
+                let f = fixture(pool, Confirmations::Depth(2), 1).await?;
+                let customer_id: Uuid =
+                    sqlx::query_scalar("SELECT customer_id FROM deposits WHERE id=$1")
+                        .bind(f.id)
+                        .fetch_one(pool)
+                        .await?;
+                let lagging = seed::insert_address(
+                    pool,
+                    &NewAddress {
+                        id: Uuid::new_v4(),
+                        customer_id,
+                        chain_id: 1,
+                        route: f.route.route.clone(),
+                        salt: hash(2),
+                        address: Address::repeat_byte(3),
+                    },
+                )
+                .await?;
+                sqlx::query(
+                    "UPDATE addresses SET created_block=CASE WHEN id=$1 THEN 1 ELSE 100 END",
+                )
+                .bind(lagging.id)
+                .execute(pool)
+                .await?;
+                db::chain_reads::initialize_coverage(
+                    pool,
+                    1,
+                    db::chain_reads::Boundary {
+                        number: 99,
+                        hash: hash(99),
+                        time: f.log.block_time,
+                    },
+                )
+                .await?;
+                sqlx::query("UPDATE addresses SET dual_covered_through=99 WHERE id<>$1")
+                    .bind(lagging.id)
+                    .execute(pool)
+                    .await?;
+                db::chain_reads::advance_checkpoint(
+                    pool,
+                    1,
+                    db::chain_reads::Boundary {
+                        number: 40000,
+                        hash: hash(40000),
+                        time: f.log.block_time,
+                    },
+                )
+                .await?;
+                let state = Rpc {
+                    chain: 1,
+                    methods: Arc::new([AtomicU64::new(0), AtomicU64::new(0)]),
+                    heads: Arc::new([AtomicU64::new(40000), AtomicU64::new(40000)]),
+                    checks: Arc::new(Mutex::new([Vec::new(), Vec::new()])),
+                    clock: Arc::new(AtomicU64::new(0)),
+                    head_time: 0,
+                    head_fault: Arc::new(Mutex::new([0; 2])),
+                    transfer: Arc::new(Mutex::new([Some(f.log.clone()), Some(f.log.clone())])),
+                };
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+                let addr = listener.local_addr()?;
+                let cancel = CancellationToken::new();
+                let shutdown = cancel.clone();
+                let app = axum::Router::new()
+                    .route("/{endpoint}", axum::routing::post(rpc))
+                    .with_state(state.clone());
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, app)
+                        .with_graceful_shutdown(shutdown.cancelled_owned())
+                        .await
+                });
+                let result = async {
+                    let reader = |e| -> Result<_> {
+                        Ok(FinalizedReader::new(Arc::new(EvmClient::new(&format!(
+                            "http://{addr}/{e}"
+                        ))?)))
+                    };
+                    let read = reader(0)?;
+                    let verify = reader(1)?;
+                    let chains = topup::scanner::chain_routes(
+                        &RouteSet::new(vec![f.route.clone()]).map_err(anyhow::Error::msg)?,
+                    );
+                    topup::scanner::coverage_once(pool, &read, &verify, &chains[0], round).await?;
+                    // RPC.md's fixed coverage line: two boundary headers and two recipient
+                    // sets, each split into ceil(L/3000) logs windows. This omitted unmarked
+                    // deposit additionally needs one receipt, header and transaction per endpoint.
+                    let expected = 2 + 2 * windows + 3;
+                    for (endpoint, count) in state.methods.iter().enumerate() {
+                        ensure!(
+                            count.load(Ordering::SeqCst) == expected,
+                            "round {round} endpoint {endpoint}: expected {expected}, got {}",
+                            count.load(Ordering::SeqCst)
+                        );
+                    }
+                    let marked: bool = sqlx::query_scalar(
+                        "SELECT dual_verified_at IS NOT NULL FROM deposits WHERE id=$1",
+                    )
+                    .bind(f.id)
+                    .fetch_one(pool)
+                    .await?;
+                    ensure!(
+                        marked,
+                        "in-range deposit omitted by both logs was not verified"
+                    );
+                    ensure!(
+                        state.checks.lock().unwrap().iter().all(Vec::is_empty),
+                        "coverage repeated checkpoint head probes"
+                    );
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await;
+                cancel.cancel();
+                server.await??;
+                result
+            })
+        })
+        .await?;
+    }
+    Ok(())
+}
+
 fn terminal_proof(log: &TransferLog) -> topup::steps::confirm::ConfirmationEvidence {
     let receipt = topup_adapters::chain::evm::ReceiptLookup::Included {
         block_number: log.block_number,

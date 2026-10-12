@@ -941,6 +941,116 @@ async fn age_alert_uses_the_route_threshold_of_the_current_state() -> Result<()>
     .await
 }
 
+#[tokio::test]
+async fn frozen_chain_allows_pump_waits_and_retries_but_refuses_advances() -> Result<()> {
+    for outcome in [
+        StepOutcome::Wait {
+            reason: WaitReason::Paused,
+        },
+        StepOutcome::Retry {
+            error: RetryError::InvariantViolation,
+        },
+        StepOutcome::Advance,
+    ] {
+        with_database(|d| {
+            Box::pin(async move {
+                let seed = seed_account(&d.app_pool, 79).await?;
+                let id = insert_deposit(&d.app_pool, seed, 79).await?;
+                let control = Arc::new(StepControl::default());
+                let pump = Pump::new(
+                    d.app_pool.clone(),
+                    Arc::new(RouteSet::default()),
+                    Arc::new(blocking_steps(control.clone(), outcome)),
+                    PumpConfig::default(),
+                )?;
+                let freeze = async {
+                    control.wait_started().await?;
+                    db::chain_reads::freeze(&d.app_pool, 1, "lock-order-test").await?;
+                    control.release();
+                    Ok::<_, anyhow::Error>(())
+                };
+                let (result, frozen) = tokio::join!(pump.run_once(), freeze);
+                frozen?;
+                if outcome == StepOutcome::Advance {
+                    ensure!(result.is_err(), "frozen chain admitted an advance");
+                    ensure!(transition_count(&d.app_pool, id).await? == 0);
+                } else {
+                    ensure!(result? == RunOnceResult::Applied { deposit_id: id });
+                    let leased: bool = sqlx::query_scalar(
+                        "SELECT lease_token IS NOT NULL FROM deposits WHERE id=$1",
+                    )
+                    .bind(id)
+                    .fetch_one(&d.app_pool)
+                    .await?;
+                    ensure!(!leased, "frozen wait/retry retained the lease");
+                }
+                ensure!(
+                    db::get_deposit(&d.app_pool, id)
+                        .await?
+                        .context("deposit")?
+                        .state
+                        == DepositState::Detected
+                );
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+// The only contending connections are the pump and coverage transactions. Coverage also
+// observes pg_locks on its own connection, so the interleaving needs no timing sleeps.
+#[tokio::test]
+async fn pump_and_coverage_take_chain_lock_before_deposit_rows() -> Result<()> {
+    with_database(|d| Box::pin(async move {
+        let seed = seed_account(&d.app_pool, 80).await?;
+        let id = insert_deposit(&d.app_pool, seed, 80).await?;
+        let pump_pool = sqlx::postgres::PgPoolOptions::new().max_connections(1)
+            .connect(&d.app_url).await?;
+        let pump_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&pump_pool).await?;
+        let control = Arc::new(StepControl::default());
+        let pump = Pump::new(pump_pool.clone(), Arc::new(RouteSet::default()),
+            Arc::new(StepSet::new(Box::new(BlockingStep {
+                control: control.clone(),
+                outcome: StepOutcome::Wait { reason: WaitReason::Paused },
+            }), Box::new(StaticStep(step_result(StepOutcome::Advance))))),
+            PumpConfig::default())?;
+        let result = tokio::time::timeout(StdDuration::from_secs(30), async {
+            let pumped = async {
+                pump.run_once().await.map_err(|error| anyhow::anyhow!("pump persistence failed: {error:?}"))
+            };
+            let coverage = async {
+                control.wait_started().await?;
+                let mut tx = d.app_pool.begin().await?;
+                db::rpc::guard_in(&mut tx, 1).await?;
+                control.release();
+                loop {
+                    let waiting: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory' AND NOT granted)")
+                        .bind(pump_pid).fetch_one(&mut *tx).await?;
+                    if waiting { break; }
+                    tokio::task::yield_now().await;
+                }
+                // Old pump order already holds this row while waiting for our chain lock:
+                // this query closes the cycle and PostgreSQL reports SQLSTATE 40P01.
+                sqlx::query("SELECT id FROM deposits WHERE id=$1 FOR UPDATE")
+                    .bind(id).fetch_one(&mut *tx).await
+                    .map_err(|error| anyhow::anyhow!("coverage deposit lock failed: {error:?}"))?;
+                tx.commit().await?;
+                Ok::<_, anyhow::Error>(())
+            };
+            let (pumped, covered) = tokio::join!(pumped, coverage);
+            covered.context("coverage lock order (old order deadlocks with 40P01)")?;
+            ensure!(pumped? == RunOnceResult::Applied { deposit_id: id });
+            Ok::<_, anyhow::Error>(())
+        }).await.context("pump/coverage lock order timed out")?;
+        pump_pool.close().await;
+        result
+    })).await
+}
+
 #[derive(Clone)]
 struct StaticStep(StepResult);
 
