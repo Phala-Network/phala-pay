@@ -558,6 +558,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     .fetch_all(&mut *tx)
     .await?;
     if u64::try_from(durable).ok() != Some(cursor.number) || current_addresses != address_snapshot {
+        tx.rollback().await?;
         return Err(ScannerError::SnapshotChanged);
     }
     let locked_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
@@ -623,6 +624,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                     .await?
                     .is_none()
                     {
+                        tx.rollback().await?;
                         return Err(ScannerError::SnapshotChanged);
                     }
                 }
@@ -749,6 +751,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         let changed = sqlx::query("UPDATE deposits SET log_index=$2,block_number=$3,block_hash=$4,block_time=$5,asset_contract=$6,from_address=$7,amount_atomic=$8::text::numeric,tx_from=$9,tx_nonce=$10::text::numeric,route=$11,route_version=$12,dual_verified_at=now(),updated_at=now() WHERE id=$1 AND state=$13 AND dual_verified_at IS NULL")
         .bind(id).bind(i64::try_from(deposit.log_index).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(deposit.block_number).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{:#x}",deposit.block_hash)).bind(deposit.block_time).bind(format!("{:#x}",deposit.asset_contract)).bind(format!("{:#x}",deposit.from_address)).bind(deposit.amount_atomic.value().to_string()).bind(format!("{:#x}",deposit.tx_from)).bind(deposit.tx_nonce.to_string()).bind(deposit.route).bind(deposit.route_version.map(i64::try_from).transpose().map_err(|_|ScannerError::SnapshotChanged)?).bind(db::state_code(state)).execute(&mut *tx).await?.rows_affected();
         if changed != 1 {
+            tx.rollback().await?;
             return Err(ScannerError::SnapshotChanged);
         }
     }
@@ -762,6 +765,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             let changed = sqlx::query("UPDATE addresses SET dual_covered_through=$2,backfilled=CASE WHEN $3 THEN true ELSE backfilled END,backfilled_through=CASE WHEN $3 THEN $2 ELSE backfilled_through END WHERE id=$1 AND created_block=$4 AND dual_covered_through IS NOT DISTINCT FROM $5")
             .bind(address.address.id).bind(i64::try_from(range.end).map_err(|_|ScannerError::SnapshotChanged)?).bind(caught_up).bind(i64::try_from(address.address.created_block).map_err(|_|ScannerError::SnapshotChanged)?).bind(address.through.map(i64::try_from).transpose().map_err(|_|ScannerError::SnapshotChanged)?).execute(&mut *tx).await?.rows_affected();
             if changed != 1 {
+                tx.rollback().await?;
                 return Err(ScannerError::SnapshotChanged);
             }
             if caught_up {
@@ -772,6 +776,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     sqlx::query("UPDATE chain_coverage SET through_block=$2,through_hash=$3,through_time=$4,updated_at=now() WHERE chain_id=$1 AND through_block < $2")
     .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(end).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{:#x}",a.0)).bind(a.1).execute(&mut *tx).await?;
     if chain_reads::common_coverage_in(&mut tx, chain).await? != common {
+        tx.rollback().await?;
         return Err(ScannerError::SnapshotChanged);
     }
     chain_reads::set_compat_cursor_in(&mut tx, chain, common, Some(common_time)).await?;

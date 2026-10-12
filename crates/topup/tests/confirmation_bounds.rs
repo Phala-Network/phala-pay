@@ -653,9 +653,11 @@ async fn ineligible_claim_rolls_back_before_pool_releases_connection() -> Result
             let release_seen = Arc::new(Notify::new());
             let release_gate = Arc::new(Notify::new());
             let release_count = Arc::new(AtomicU64::new(0));
+            let wait_timeout = std::time::Duration::from_secs(30);
             let delayed = PgPoolOptions::new()
                 .max_connections(2)
                 .acquire_timeout(std::time::Duration::from_secs(10))
+                // after_release runs before SQLx flushes a dropped transaction's queued ROLLBACK.
                 .after_release({
                     let release_seen = Arc::clone(&release_seen);
                     let release_gate = Arc::clone(&release_gate);
@@ -667,7 +669,13 @@ async fn ineligible_claim_rolls_back_before_pool_releases_connection() -> Result
                         Box::pin(async move {
                             if release_count.fetch_add(1, Ordering::SeqCst) == 0 {
                                 release_seen.notify_one();
-                                release_gate.notified().await;
+                                tokio::time::timeout(wait_timeout, release_gate.notified())
+                                    .await
+                                    .map_err(|_| {
+                                        sqlx::Error::Protocol(
+                                            "timed out waiting for release gate".to_owned(),
+                                        )
+                                    })?;
                             }
                             Ok(true)
                         })
@@ -689,26 +697,37 @@ async fn ineligible_claim_rolls_back_before_pool_releases_connection() -> Result
                     )
                     .await
                 });
-                first_release.await;
+                tokio::time::timeout(wait_timeout, first_release)
+                    .await
+                    .context("timed out waiting for first connection release")?;
                 ensure!(
-                    claim.await??.is_none(),
+                    tokio::time::timeout(wait_timeout, claim)
+                        .await
+                        .context("timed out waiting for ineligible claim")???
+                        .is_none(),
                     "ineligible claim unexpectedly admitted"
                 );
 
-                let watcher = confirmation::claim_read(
-                    &delayed,
-                    f.id,
-                    Uuid::new_v4(),
-                    Reader::Watcher,
-                    f.due,
+                let watcher = tokio::time::timeout(
+                    wait_timeout,
+                    confirmation::claim_read(
+                        &delayed,
+                        f.id,
+                        Uuid::new_v4(),
+                        Reader::Watcher,
+                        f.due,
+                    ),
                 )
-                .await?;
+                .await
+                .context("timed out waiting for watcher claim")??;
                 ensure!(watcher.is_some(), "watcher skipped a released row lock");
                 Ok(())
             }
             .await;
-            release_gate.notify_waiters();
-            delayed.close().await;
+            release_gate.notify_one();
+            tokio::time::timeout(wait_timeout, delayed.close())
+                .await
+                .context("timed out closing delayed pool")?;
             result
         })
     })
