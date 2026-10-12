@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -15,6 +16,7 @@ use support::{
     seed::{self, NewAccount, NewAddress},
     with_database,
 };
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use topup::{
     db::{self, NewDeposit},
@@ -630,6 +632,87 @@ async fn missed_positions_restart_crash_and_stale_claims_never_reset_budgets() -
         let history:(i32,i32,DateTime<Utc>)=sqlx::query_as("SELECT confirm_head_checks,confirm_receipt_checks,confirm_deadline_at FROM deposits WHERE id=$1").bind(f.id).fetch_one(p).await?;
         ensure!(history==(6,1,f.due+Duration::seconds(124)));Ok(())
     })).await
+}
+
+#[tokio::test]
+async fn ineligible_claim_rolls_back_before_pool_releases_connection() -> Result<()> {
+    with_database(|ctx| {
+        Box::pin(async move {
+            use db::confirmation::{self, Reader};
+
+            let p = &ctx.app_pool;
+            let f = fixture(p, Confirmations::Depth(2), 1).await?;
+            sqlx::query(
+                "UPDATE deposits SET confirm_receipt_checks=1, finality_check_at=$2 WHERE id=$1",
+            )
+            .bind(f.id)
+            .bind(f.due)
+            .execute(p)
+            .await?;
+
+            let release_seen = Arc::new(Notify::new());
+            let release_gate = Arc::new(Notify::new());
+            let release_count = Arc::new(AtomicU64::new(0));
+            let delayed = PgPoolOptions::new()
+                .max_connections(2)
+                .acquire_timeout(std::time::Duration::from_secs(10))
+                .after_release({
+                    let release_seen = Arc::clone(&release_seen);
+                    let release_gate = Arc::clone(&release_gate);
+                    let release_count = Arc::clone(&release_count);
+                    move |_connection, _meta| {
+                        let release_seen = Arc::clone(&release_seen);
+                        let release_gate = Arc::clone(&release_gate);
+                        let release_count = Arc::clone(&release_count);
+                        Box::pin(async move {
+                            if release_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                                release_seen.notify_one();
+                                release_gate.notified().await;
+                            }
+                            Ok(true)
+                        })
+                    }
+                })
+                .connect(&ctx.app_url)
+                .await?;
+
+            let result: Result<()> = async {
+                let pool = delayed.clone();
+                let first_release = release_seen.notified();
+                let claim = tokio::spawn(async move {
+                    confirmation::claim_read(
+                        &pool,
+                        f.id,
+                        Uuid::new_v4(),
+                        Reader::Confirm(Confirmations::Depth(2)),
+                        f.due,
+                    )
+                    .await
+                });
+                first_release.await;
+                ensure!(
+                    claim.await??.is_none(),
+                    "ineligible claim unexpectedly admitted"
+                );
+
+                let watcher = confirmation::claim_read(
+                    &delayed,
+                    f.id,
+                    Uuid::new_v4(),
+                    Reader::Watcher,
+                    f.due,
+                )
+                .await?;
+                ensure!(watcher.is_some(), "watcher skipped a released row lock");
+                Ok(())
+            }
+            .await;
+            release_gate.notify_waiters();
+            delayed.close().await;
+            result
+        })
+    })
+    .await
 }
 
 #[tokio::test]

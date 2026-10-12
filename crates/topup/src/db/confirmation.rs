@@ -105,7 +105,10 @@ pub async fn claim_read(
     .bind(now)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some(row) = row else { return Ok(None) };
+    let Some(row) = row else {
+        tx.rollback().await?;
+        return Ok(None);
+    };
     let state: String = row.try_get("state")?;
     let watcher_eligible: bool = row.try_get("watcher_eligible")?;
     let mut heads: i32 = row.try_get("confirm_head_checks")?;
@@ -157,7 +160,10 @@ pub async fn claim_read(
             }
         }
         Reader::Watcher if watcher_eligible => None,
-        _ => return Ok(None),
+        _ => {
+            tx.rollback().await?;
+            return Ok(None);
+        }
     };
     sqlx::query(
         "UPDATE deposits SET lease_token=$2,lease_until=$3 + interval '5 minutes', \

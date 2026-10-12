@@ -752,6 +752,7 @@ pub async fn restore_application(
         .await?
         .ok_or(TreasuryError::DatabaseInvariant)?;
     if current.status != Status::Pending {
+        transaction.commit().await?;
         return Ok((current, false));
     }
     if screened {

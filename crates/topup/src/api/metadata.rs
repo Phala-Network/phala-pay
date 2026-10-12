@@ -175,6 +175,7 @@ pub async fn update<'c>(
         .fetch_optional(&mut *transaction)
         .await?
     else {
+        transaction.rollback().await?;
         return Ok(false);
     };
     if let Some(update) = update {

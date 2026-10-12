@@ -18,6 +18,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed (operators)
 
+- A confirmation claim that declined a deposit no longer holds its row lock until the connection is
+  recycled, which could make the finality watcher skip that deposit for a tick.
 - Repair the daily contract verification workflow for the `rpc` read/verify configuration:
   resolve both environment configs in independent matrix jobs, map public RPCs through the
   contracts network registry, reuse the full deployment checker and daily Sepolia Safe check,

@@ -847,6 +847,7 @@ async fn record_evidence(
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(row) = updated else {
+        transaction.rollback().await?;
         return Ok(false);
     };
     let state: String = row.try_get("state")?;
@@ -910,6 +911,7 @@ async fn reverse_deposit(
     let current: Option<Uuid> = sqlx::query_scalar("SELECT id FROM deposits WHERE id=$1 AND lease_token=$2 AND updated_at=$3 AND state=$4 FOR UPDATE")
         .bind(deposit.id).bind(deposit.token).bind(deposit.version).bind(db::state_code(deposit.state)).fetch_optional(&mut *transaction).await?;
     if current.is_none() {
+        transaction.rollback().await?;
         return Ok(None);
     }
     // Only this fresh, dual-source positive reversal verdict may override an old final marker.
@@ -942,6 +944,7 @@ async fn reverse_deposit(
     )
     .await?
     else {
+        transaction.rollback().await?;
         return Ok(None);
     };
     if let Some(id) = successor {
