@@ -19,6 +19,8 @@ test("retains deposit selections and payments through a three-minute network out
   await page.clock.install();
   await page.goto(`/?deposit&client_secret=${secret}&api_base=http://topup.test`);
   await expect(page.getByRole("list", { name: "Payments" })).toBeVisible();
+  // A payer sending to the address gives no hint: the discovery scan, then Sepolia's 30 s.
+  await expect(page.getByText(/credited at the market rate, usually within about 6 minutes\./)).toBeVisible();
   await page.getByRole("radio", { name: "Base Sepolia" }).check();
   const payments = await page.getByRole("list", { name: "Payments" }).textContent();
   await page.clock.pauseAt(new Date(Date.now() + 1000));

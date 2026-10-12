@@ -538,7 +538,9 @@ you accept** (§1.9), like the stable bank-transfer details Stripe gives each cu
 and like the one deposit address an exchange gives a user for every token and every EVM chain.
 It never expires: the customer sends **any amount of an accepted token, at any time, on any
 listed network**, and each transfer is credited at the market (spot) rate when it arrives,
-about 30 seconds after paying, through the same `deposit.credited` webhook as a quote payment.
+within about 5 minutes plus the chain's confirmation (a transfer sent without a
+[transaction-hash hint](#transaction-hash-hints) waits for the 5-minute discovery scan), through
+the same `deposit.credited` webhook as a quote payment.
 **Send only listed tokens**: a token that is not listed is not credited.
 
 | Use | When |
@@ -622,10 +624,13 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
 Let the customer pick the network and the token; show that network, the token contract, the full
 address with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain,
 and address and no amount): "Send only PHA, USDC on Sepolia, Base Sepolia. Any amount is credited
-at the market rate when it arrives, usually in about 30 seconds on Sepolia and about 7 seconds on
-Base Sepolia. You can reuse this address." Each network's time is its `typical_credit_seconds` in
-the address's public view (above), at the confirmation your account's payments on that chain wait
-for, as `GET /v1/config` reports it; until the view is loaded the page names no time.
+at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia.
+You can reuse this address." A payer sending to the address gives no transaction-hash hint, so
+each network's time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
+address's public view (above), the time from paying to credit at the confirmation your account's
+payments on that chain wait for, as `GET /v1/config` reports it; do not promise
+`typical_credit_seconds` alone, which is the time of a hinted wallet payment. Until the view is
+loaded the page names no time.
 `<DepositAddress depositAddress={…} clientSecret={…} apiBase={…}>` from `@phala/pay-react`
 renders exactly that from `address` and `networks` (pass only those and the `client_secret` to the
 browser) and, with the secret, shows each payment as it arrives: "1.5 PHA received on Sepolia, 1
