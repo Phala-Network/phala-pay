@@ -12,6 +12,9 @@
   --pp-color-input: #8a8a93;
   --pp-color-primary: #171717;
   --pp-color-primary-foreground: #fafafa;
+  /* The selected tab's underline and the checked choice's border. It follows the primary color;
+     a host with a light primary color sets one with 3:1 or more against the background. */
+  --pp-color-selected: var(--pp-color-primary);
   --pp-color-focus: #2563eb;
   --pp-color-success: #15803d;
   --pp-color-warning: #b45309;
@@ -89,7 +92,7 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
   border: 0; border-bottom: 2px solid transparent; background: none; color: var(--pp-color-text-muted);
   font: inherit; font-weight: 500; white-space: nowrap; cursor: pointer; transition: color 150ms, border-color 150ms; }
 .pp-tabs__tab:hover { color: var(--pp-color-text); border-bottom-color: var(--pp-color-border); }
-.pp-tabs__tab[aria-selected="true"] { color: var(--pp-color-text); border-bottom-color: var(--pp-color-primary); }
+.pp-tabs__tab[aria-selected="true"] { color: var(--pp-color-text); border-bottom-color: var(--pp-color-selected); }
 .pp-root .pp-tabs__tab:focus-visible { outline-offset: -2px; border-radius: 4px; }
 .pp-root .pp-tabs__panel:focus-visible { outline-offset: 4px; border-radius: 2px; }
 
@@ -159,7 +162,7 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
   border: 1px solid var(--pp-color-input); border-radius: inherit; background: none; cursor: pointer;
   transition: border-color 150ms; }
 .pp-choices__input:hover { border-color: var(--pp-color-text-muted); }
-.pp-choices__input:checked { border: 2px solid var(--pp-color-primary); }
+.pp-choices__input:checked { border: 2px solid var(--pp-color-selected); }
 
 .pp-payments { margin: 1em 0 0; padding: 0; list-style: none; border-top: 1px solid var(--pp-color-border); }
 .pp-payments__item { display: flex; gap: 0.625em; align-items: flex-start; padding: 0.625em 0;

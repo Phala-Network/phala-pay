@@ -435,6 +435,7 @@ import "./pay-theme.css";
   --pp-color-input: var(--app-color-input-border);
   --pp-color-primary: var(--app-color-primary);
   --pp-color-primary-foreground: var(--app-color-on-primary);
+  --pp-color-selected: var(--app-color-selected);
   --pp-color-focus: var(--app-color-focus-ring);
   --pp-color-success: var(--app-color-success);
   --pp-color-warning: var(--app-color-warning-text);
@@ -452,8 +453,12 @@ them to text-safe tokens. A mapping written for an earlier SDK must use the curr
 The components draw no frame or background: place them in your own card or dialog, and give it
 inner padding of at least 4px so that the 2px focus outline is not clipped by its
 `overflow: hidden`. They take your page's font; `--pp-font-size: 1em` also takes its text size.
-Map `--pp-color-focus` to your focus ring color, distinct from the primary color, so that a
-keyboard user can tell the focused choice from the selected one.
+`--pp-color-selected` draws the selected tab's underline and the checked choice's border, and
+follows `--pp-color-primary` when you leave it unmapped. If your primary color is a light fill,
+such as a lime button on a white card, map it to a color with 3:1 or more contrast against the
+background (WCAG 1.4.11) and keep the light primary for the pay button. Map `--pp-color-focus` to
+your focus ring color, distinct from the selected color, so that a keyboard user can tell the
+focused choice from the selected one.
 
 When you do not map your own tokens, `appearance.theme: "dark"` selects the built-in neutral dark
 palette.

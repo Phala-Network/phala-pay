@@ -49,6 +49,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
+#### Added
+
+- `@phala/pay-react`'s `--pp-color-selected` theme token colors the selected tab's underline and
+  the checked network or token choice's border. It defaults to `--pp-color-primary`, so existing
+  themes look the same. A host whose primary color is a light fill (a lime pay button on a white
+  card) sets it to a color with 3:1 or more contrast against the background, as WCAG 1.4.11 asks,
+  instead of styling `.pp-choices__input:checked` or `.pp-tabs__tab[aria-selected]`. Forced-colors
+  mode still draws the selection in `Highlight`.
+
 #### Fixed
 
 - `<Checkout>`'s browser wallet button's accessible name now matches its visible text

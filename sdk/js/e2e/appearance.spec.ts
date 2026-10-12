@@ -260,9 +260,9 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
-/** The contrast of each element's border against the page behind it, as WCAG 1.4.11 measures a control's edge. */
-function edgeContrast(locator: Locator): Promise<number[]> {
-  return locator.evaluateAll((elements) => {
+/** The contrast of each element's `side` border against the page behind it, as WCAG 1.4.11 measures a control's edge. */
+function edgeContrast(locator: Locator, side: "Top" | "Bottom" = "Top"): Promise<number[]> {
+  return locator.evaluateAll((elements, side) => {
     const rgba = (color: string) => {
       const [r = 0, g = 0, b = 0, a = 1] = (color.match(/[\d.]+/g) ?? []).map(Number);
       return { r, g, b, a };
@@ -283,13 +283,13 @@ function edgeContrast(locator: Locator): Promise<number[]> {
           break;
         }
       }
-      const edge = rgba(getComputedStyle(element).borderTopColor);
+      const edge = rgba(getComputedStyle(element)[`border${side}Color`]);
       const over = (front: number, back: number) => front * edge.a + back * (1 - edge.a);
       const drawn = { r: over(edge.r, behind.r), g: over(edge.g, behind.g), b: over(edge.b, behind.b) };
       const [light, dark] = [luminance(drawn), luminance(behind)].sort((x, y) => y - x);
       return ((light ?? 0) + 0.05) / ((dark ?? 0) + 0.05);
     });
-  });
+  }, side);
 }
 
 for (const theme of ["light", "dark"]) {
@@ -299,6 +299,55 @@ for (const theme of ["light", "dark"]) {
     await expect(choices.first()).toBeVisible();
     for (const ratio of await edgeContrast(choices)) expect(ratio).toBeGreaterThanOrEqual(3);
   });
+}
+
+// A host whose primary color is a light fill (lime, 1.31:1 on white) keeps it for the pay button
+// and gives the selection a color of its own with 3:1 or more against its page.
+const LIME_HOST = `.pp-root[data-theme] { --pp-color-primary: #cdfa50; --pp-color-primary-foreground: #161616;
+  --pp-color-selected: #4d7c0f; }
+.pp-root[data-theme="dark"] { --pp-color-selected: #cdfa50; }`;
+const LIME = "rgb(205, 250, 80)";
+
+for (const width of [390, 1280]) {
+  for (const theme of ["light", "dark"]) {
+    const suffix = `${width}-${theme}`;
+
+    test(`the selected color follows the primary color unless a host sets it at ${suffix}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      const served = waiting();
+      await serve(page, () => served);
+      await installWallet(page);
+      await page.goto(checkoutUrl(theme));
+      await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
+      const button = page.getByRole("button", { name: "Pay with crypto Test Wallet" });
+      const tab = page.getByRole("tab", { selected: true });
+      const primary = await button.evaluate((element) => getComputedStyle(element).backgroundColor);
+      await expect(tab).toHaveCSS("border-bottom-color", primary);
+
+      const selected = theme === "dark" ? LIME : "rgb(77, 124, 15)";
+      const violations = async () => {
+        await page.addScriptTag({ content: axe.source });
+        return (await page.evaluate(() => axe.run(document.querySelector(".pp-root") ?? document))).violations;
+      };
+      await page.addStyleTag({ content: LIME_HOST });
+      await expect(button).toHaveCSS("background-color", LIME);
+      await expect(tab).toHaveCSS("border-bottom-color", selected);
+      for (const ratio of await edgeContrast(tab, "Bottom")) expect(ratio).toBeGreaterThanOrEqual(3);
+      expect(await violations(), "checkout").toEqual([]);
+      await check(page, `lime-wallet-${suffix}`);
+
+      await page.goto(`/?deposit&theme=${theme}`);
+      const choice = page.locator(".pp-choices__input:checked").first();
+      await expect(choice).toHaveCSS("border-top-color", primary);
+      await page.addStyleTag({ content: LIME_HOST });
+      await expect(choice).toHaveCSS("border-top-color", selected);
+      for (const ratio of await edgeContrast(page.locator(".pp-choices__input:checked"))) {
+        expect(ratio).toBeGreaterThanOrEqual(3);
+      }
+      expect(await violations(), "deposit address").toEqual([]);
+      await check(page, `lime-deposit-${suffix}`);
+    });
+  }
 }
 
 test("keyboard focus is visible and differs from the selected state", async ({ page }) => {
