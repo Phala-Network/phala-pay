@@ -223,8 +223,9 @@ the theme (or map the colors) that suits its background.
 | `--pp-color-text-muted`         | `#52525b`         | `#a1a1aa`    | Labels, hints, in-progress status icon              |
 | `--pp-color-border`             | `#e4e4e7`         | `#27272a`    | Dividers and the QR code's frame                    |
 | `--pp-color-input`              | `#8a8a93`         | `#71717a`    | Edges of the network and token choices              |
-| `--pp-color-primary`            | `#171717`         | `#fafafa`    | Pay button, selected tab and choice                 |
+| `--pp-color-primary`            | `#171717`         | `#fafafa`    | Pay button                                          |
 | `--pp-color-primary-foreground` | `#fafafa`         | `#18181b`    | Text on the primary color                           |
+| `--pp-color-selected`           | primary           | primary      | Selected tab's underline, checked choice's border   |
 | `--pp-color-focus`              | `#2563eb`         | `#60a5fa`    | Keyboard focus ring                                 |
 | `--pp-color-success`            | `#15803d`         | `#4ade80`    | Credited icon                                       |
 | `--pp-color-warning`            | `#b45309`         | `#fbbf24`    | "Test mode"                                         |
@@ -243,16 +244,21 @@ import "@phala/pay-react/styles.css";
 
 Set these CSS custom properties in your own stylesheet, after the SDK stylesheet, on
 `.pp-root[data-theme]`; they are the supported way to theme the components. Pair a light primary
-color with a dark `--pp-color-primary-foreground`. Set `--pp-font-size: 1em` to follow your
-page's text size. Keep `--pp-color-focus` distinct from `--pp-color-primary`, with at least 3:1
-contrast to the background: it is how a keyboard user tells the focused choice from the selected
-one. Keep `--pp-color-input` at 3:1 or more against the background too, as WCAG 1.4.11 asks of the
-edge that shows where a control is; `--pp-color-border` draws only dividers and may be fainter.
+color with a dark `--pp-color-primary-foreground`. `--pp-color-selected` follows
+`--pp-color-primary` unless you set it: with a light primary color on a light background, set it
+to a color with 3:1 or more contrast against the background, as WCAG 1.4.11 asks of the selected
+tab and choice, and keep the light primary color for the pay button. Set `--pp-font-size: 1em` to
+follow your page's text size. Keep `--pp-color-focus` distinct from `--pp-color-selected`, with at
+least 3:1 contrast to the background: it is how a keyboard user tells the focused choice from the
+selected one. Keep `--pp-color-input` at 3:1 or more against the background too, as WCAG 1.4.11
+asks of the edge that shows where a control is; `--pp-color-border` draws only dividers and may be
+fainter.
 
 ```css
 .pp-root[data-theme] {
   --pp-color-primary: #cdfa50;
   --pp-color-primary-foreground: #161616;
+  --pp-color-selected: #4d7c0f;
   --pp-color-focus: #2563eb;
   --pp-radius: 12px;
 }
