@@ -14,6 +14,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed (operators)
+
+- Pump persistence takes the chain advisory lock before deposit rows, matching coverage and
+  finality and preventing a pump/coverage deadlock. Frozen chains still permit waits and retries.
+- Coverage reads unmarked deposits only for the addresses and stored block ranges covered by
+  that round. Out-of-range deposits, including unresolved and slow confirmations, keep their
+  own shared claim and backoff instead of consuming unbudgeted hourly receipt reads.
+
 ## [0.10.2] - 2026-10-12
 
 ### Fixed (operators)

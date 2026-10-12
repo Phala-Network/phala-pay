@@ -40,6 +40,7 @@ pub async fn guard_in(
     Ok(())
 }
 /// Serialize freeze, lift and ledger admission without widening append-only table privileges.
+/// Acquire a chain's advisory lock before locking any of its deposit rows.
 pub async fn lock_reconciliation_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     key: &str,

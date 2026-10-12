@@ -630,6 +630,9 @@ async fn canonical_records_beyond_the_round_are_deferred_then_updated() -> Resul
                 row == (100, false),
                 "a future canonical receipt was not deferred"
             );
+            // The stored block is now below the next range. Rediscovery in that range
+            // admits the identity as a union candidate; coverage must not rescan old rows.
+            read.logs.push(transfer(&address, 4000));
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
             let row: (i64, bool) =
                 sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits")
@@ -652,7 +655,7 @@ async fn coverage_requeries_fast_inserts_after_taking_the_chain_lock() -> Result
         scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
         read.logs_gate=Some((started.clone(),resume.clone()));
         let scan_address=db::list_scan_addresses(&d.app_pool,1).await?.remove(0);
-        let stale=provisional(transfer(&address,5000),&scan_address);
+        let stale=provisional(transfer(&address,101),&scan_address);
         let chain=chain();
         let coverage=scanner::coverage_once(&d.app_pool,&read,&verify,&chain,1);
         let fast=async {
@@ -677,7 +680,7 @@ async fn coverage_requeries_fast_inserts_after_taking_the_chain_lock() -> Result
         ensure!(matches!(outcome, Err(scanner::ScannerError::SnapshotChanged)),
             "concurrent fast insertion did not invalidate the RPC snapshot");
         let row:(i64,bool)=sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits").fetch_one(&d.app_pool).await?;
-        ensure!(row==(5000,false), "invalidated round changed the concurrent fast insert");
+        ensure!(row==(101,false), "invalidated round changed the concurrent fast insert");
         ensure!(marker(d,address.id).await?.is_none(), "invalidated round published coverage");
         read.logs_gate = None;
         scanner::coverage_once(&d.app_pool,&read,&verify,&chain,2).await?;
@@ -1477,7 +1480,8 @@ async fn request_error_or_evidence_disagreement_never_commits_coverage() -> Resu
 
 #[tokio::test]
 async fn fast_and_n_minus_one_rows_are_reverified_even_if_both_logs_omit_them() -> Result<()> {
-    with_database(|d| {
+    for omitted in [true, false] {
+        with_database(|d| {
         Box::pin(async move {
             let address = address(d, 100).await?;
             let log = transfer(&address, 100);
@@ -1496,10 +1500,11 @@ async fn fast_and_n_minus_one_rows_are_reverified_even_if_both_logs_omit_them() 
                     .await?;
             ensure!(!marked);
             // N-1 writes no new marker and may have provisional fields to correct.
-            sqlx::query("UPDATE deposits SET block_number=5000,block_time=to_timestamp(101),tx_nonce=10")
+            sqlx::query("UPDATE deposits SET block_number=$1,block_time=to_timestamp(101),tx_nonce=10")
+                .bind(if omitted { 101_i64 } else { 5000_i64 })
                 .execute(&d.owner_pool)
                 .await?;
-            read.logs.clear();
+            if omitted { read.logs.clear(); }
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
             let row: (i64, DateTime<Utc>, String, bool) = sqlx::query_as(
                 "SELECT block_number,block_time,tx_nonce::text,dual_verified_at IS NOT NULL FROM deposits",
@@ -1510,7 +1515,48 @@ async fn fast_and_n_minus_one_rows_are_reverified_even_if_both_logs_omit_them() 
             Ok(())
         })
     })
-    .await
+    .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn coverage_leaves_out_of_range_s_and_l_deposits_to_their_claim_schedule() -> Result<()> {
+    for lane in ["S", "L"] {
+        with_database(|d| Box::pin(async move {
+            let address = address(d, 100).await?;
+            let scan_address = db::list_scan_addresses(&d.app_pool, 1).await?.remove(0);
+            let mut read = Reader::new(200);
+            let mut verify = Reader::new(200);
+            let log = transfer(&address, 5000);
+            db::insert_deposit(&d.app_pool, &provisional(log.clone(), &scan_address)).await?;
+            sqlx::query("UPDATE deposits SET first_unresolved_at=CASE WHEN $1='S' THEN now() END, first_slow_at=CASE WHEN $1='L' THEN now() END, finality_check_at=now()+interval '1 hour'")
+                .bind(lane).execute(&d.owner_pool).await?;
+            // Even an available receipt must not tempt coverage to bypass that schedule.
+            read.receipt = Some(log.clone());
+            verify.receipt = Some(log);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let before: (Option<DateTime<Utc>>, Option<DateTime<Utc>>, DateTime<Utc>) = sqlx::query_as(
+                "SELECT first_unresolved_at,first_slow_at,finality_check_at FROM deposits")
+                .fetch_one(&d.app_pool).await?;
+            for round in [1, 2] {
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), round).await?;
+            }
+            for endpoint in [&read, &verify] {
+                ensure!(*endpoint.receipt_reads.lock().unwrap() == 0, "coverage read an out-of-range {lane} deposit");
+            }
+            let after: (Option<DateTime<Utc>>, Option<DateTime<Utc>>, DateTime<Utc>) = sqlx::query_as(
+                "SELECT first_unresolved_at,first_slow_at,finality_check_at FROM deposits")
+                .fetch_one(&d.app_pool).await?;
+            ensure!(before == after, "coverage changed the {lane} claim schedule");
+            let marked: bool = sqlx::query_scalar("SELECT dual_verified_at IS NOT NULL FROM deposits")
+                .fetch_one(&d.app_pool).await?;
+            ensure!(!marked);
+            ensure!(db::chain_reads::coverage(&d.app_pool, 1).await?.unwrap().number == 200);
+            Ok(())
+        })).await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
