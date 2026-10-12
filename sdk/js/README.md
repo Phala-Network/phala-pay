@@ -176,11 +176,14 @@ import { DepositAddress } from "@phala/pay-react";
 />;
 ```
 
-With `clientSecret` and `apiBase` it reads the address's public view about every three seconds and lists
-its payments of the last 24 hours: "1.5 PHA received on Sepolia, 1 confirmation" within about a
-block of the transfer, then "credited" (or rejected or reversed). Display only. It also states each
-network's typical credit time from the view's `typical_credit_seconds` ("usually in about 30 seconds
-on Sepolia and about 7 seconds on Base Sepolia"); until the view is loaded it names no time.
+With `clientSecret` and `apiBase` it reads the address's public view about every three seconds and
+lists its payments of the last 24 hours: "1.5 PHA received on Sepolia, 1 confirmation" once the
+service sees the transfer (within about a block for a hinted payment, at the next discovery scan
+otherwise), then "credited" (or rejected or reversed). Display only. It also states when each
+network's payments are usually credited: `<DepositAddress>` submits no transaction-hash hint (the
+payer's wallet or exchange gives it no hash), so the service's 5-minute discovery scan plus the
+view's `typical_credit_seconds` ("usually within about 6 minutes on Sepolia and about 5 minutes on
+Base Sepolia"); until the view is loaded it names no time.
 
 After ten minutes without a change in the public view, `<DepositAddress>` uses a base interval
 of `max(pollInterval, 15000)` milliseconds, with the same jitter and failure backoff, so a longer

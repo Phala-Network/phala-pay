@@ -259,16 +259,24 @@ function useClientView(
 }
 
 /**
- * When a payment on each of `chainIds` is credited, from `view`'s typical credit times, for
- * example "usually in about 30 seconds on Ethereum and about 7 seconds on Base". Before the view
- * is loaded it names no time.
+ * Seconds within which the service's discovery scan finds a transfer sent without a
+ * transaction-hash hint, as this component never submits one: the server's `FAST_INTERVAL`
+ * (crates/topup/src/scanner/mod.rs); change both together. The view's `typical_credit_seconds`
+ * starts at confirmation (docs/integration.md, "Transaction-hash hints").
+ */
+const DISCOVERY_SECONDS = 300;
+
+/**
+ * When a payment on each of `chainIds` is credited: the discovery scan, then `view`'s typical
+ * credit time, for example "usually within about 6 minutes on Sepolia and about 5 minutes on
+ * Base Sepolia". Before the view is loaded it names no time.
  */
 function creditMessage(chainIds: number[], view: ClientDepositAddress | null): string {
-  const names = new Map<number, string[]>();
+  const names = new Map<string, string[]>();
   for (const network of view?.networks ?? []) {
     if (chainIds.includes(network.chain_id)) {
-      const seconds = network.typical_credit_seconds;
-      names.set(seconds, [...(names.get(seconds) ?? []), networkName(network.chain_id)]);
+      const wait = formatWait(DISCOVERY_SECONDS + network.typical_credit_seconds);
+      names.set(wait, [...(names.get(wait) ?? []), networkName(network.chain_id)]);
     }
   }
   if (names.size === 0) {
@@ -276,11 +284,11 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
   }
   const list = new Intl.ListFormat("en", { type: "conjunction" });
   const [only, ...others] = names.keys();
-  const usually =
+  const within =
     only !== undefined && others.length === 0
-      ? formatWait(only)
-      : list.format([...names].map(([seconds, on]) => `${formatWait(seconds)} on ${list.format(on)}`));
-  return `Any amount is credited at the market rate on arrival, usually in ${usually}.`;
+      ? only
+      : list.format([...names].map(([wait, on]) => `${wait} on ${list.format(on)}`));
+  return `Any amount is credited at the market rate, usually within ${within}.`;
 }
 
 function paymentTone({ status }: DepositAddressPayment): "neutral" | "success" | "danger" {

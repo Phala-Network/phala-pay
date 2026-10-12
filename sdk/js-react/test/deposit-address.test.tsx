@@ -554,15 +554,19 @@ describe("DepositAddress payments", () => {
     );
   });
 
-  it("states each network's credit time from the public view", async () => {
-    expect(await messageWith([clientNetwork(11155111, 30), clientNetwork(84532, 300)])).toContain(
-      "credited at the market rate on arrival, usually in about 30 seconds on Sepolia and about 5 minutes on Base Sepolia.",
+  it("states each network's credit time after the discovery scan, as a payer sends no hint", async () => {
+    // Up to 5 minutes to discover an unhinted transfer, then the view's 30 s or 7 s confirmation.
+    expect(await messageWith([clientNetwork(11155111, 30), clientNetwork(84532, 7)])).toContain(
+      "Any amount is credited at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia.",
     );
   });
 
-  it("states one time when every network shares it, as under a finalized policy", async () => {
+  it("states one time when every network's rounds to the same, as under a finalized policy", async () => {
     expect(await messageWith([clientNetwork(11155111, 900), clientNetwork(84532, 900)])).toContain(
-      "credited at the market rate on arrival, usually in about 15 minutes.",
+      "Any amount is credited at the market rate, usually within about 20 minutes.",
+    );
+    expect(await messageWith([clientNetwork(11155111, 7), clientNetwork(84532, 2)])).toContain(
+      "Any amount is credited at the market rate, usually within about 5 minutes.",
     );
   });
 
