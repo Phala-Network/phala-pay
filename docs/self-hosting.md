@@ -550,6 +550,12 @@ merchants, deploy as this guide describes, where every one of them is attested.
 
 Allow outbound HTTPS to `sanctionslistservice.ofac.treas.gov` and
 `wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com`. A host or publication contract
-change fails verification and eventually holds negative decisions. Before N-1 rollback, pause
-settlement on routes affected by active manual sanctions entries, which N-1 cannot read.
-See the [sanctions runbook](../deploy/runbooks/sanctions-list.md).
+change fails verification and eventually holds negative decisions. v0.9.x uses the stale oracle
+and cannot read supplements: any rollback to it requires pausing **all screening-dependent fund
+processing, regardless of manual entries**, until N is restored and verified screening is healthy.
+Rollback below v0.10.0 is unsupported for this configuration.
+
+A supported N-1 at v0.10.0 or later uses verified SDN snapshots and supplements. Use its retained
+verified configuration and kit; verify snapshot freshness, supplements and re-screening before
+resuming screening-dependent processing. See the
+[sanctions runbook](../deploy/runbooks/sanctions-list.md#n-1-rollback).
