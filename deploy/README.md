@@ -22,7 +22,7 @@ a secret are marked **HUMAN-ONLY**. Backup and restore: [RESTORE.md](RESTORE.md)
 | Object storage (S3-compatible; Phala's instance: Cloudflare R2) | encrypted WAL-G base backups and WAL under `WALG_S3_PREFIX` | owner |
 | The operator's Sentry project (optional; Phala's: `phala-network/crypto-topup-service`) | errors, alerts and Crons monitors; Phala's pilot uses manual external health checks | the service itself |
 | EVM chains of the routes (the committed routes: Sepolia and Base Sepolia) | the permissionless forwarder factory, at one deterministic address on every chain; forwarders; each account's own treasury | factory: any deployer ([CONTRACTS.md](CONTRACTS.md)); treasuries: each merchant, through the API |
-| GitHub Actions | Phala Pay's repository: [Release](../.github/workflows/release.yml) (on a `v<version>` tag), [Verify contracts](../.github/workflows/verify-contracts.yml) (daily public bytecode checks for both environment configs, keyless and read-only), [Restore drill](../.github/workflows/restore-drill.yml) (weekly, local stack). The operator's environment repository: a workflow that calls the release's [Deploy](../.github/workflows/deploy.yml) | — |
+| GitHub Actions | Phala Pay's repository: [Release](../.github/workflows/release.yml) (on a `v<version>` tag), [Verify contracts](../.github/workflows/verify-contracts.yml) (daily deployment checks for both environment configs and the Sepolia Safe, keyless and read-only), [Restore drill](../.github/workflows/restore-drill.yml) (weekly, local stack). The operator's environment repository: a workflow that calls the release's [Deploy](../.github/workflows/deploy.yml) | — |
 
 Production CVMs have no SSH, no logs, and no database access. Everything an operator sees comes
 from the public endpoints, the admin API, Sentry, and the chain.
@@ -623,8 +623,10 @@ cost per month = 30 × cost per day
 accounts for fixed 300-second discovery, independent 600-second checkpoints, 3,600-second
 coverage, bounded backfill and six-hour catch-up. Compare measured call counters with each
 provider's dashboard. Both environments may share keys and upstream quotas during the pilot.
-Production keeps the existing Ankr and Infura accounts; moving staging to another pair is a
-recommended follow-up, then production caps can be re-budgeted in a reviewed PR
+Production keeps the existing Ankr and Infura accounts. Moving staging to another pair is a
+tracked follow-up with a named Operations owner and issue, not a launch gate; then production
+caps can be re-budgeted in a reviewed PR. Production-attested comment edits cost an upgrade,
+so batch them with the next planned production upgrade
 ([launch §1.8](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-follow-up)).
 Each fresh quote snapshot costs one read call and
 240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
@@ -779,12 +781,20 @@ jq -e '.passed == true' sepolia-contract-verification.json
 ```
 
 The dry run must print the two addresses above; if the factory already has that code (anyone may
-deploy it), the broadcast sends nothing. **Verify contracts** (Actions) checks the configured
-factory and implementation bytecode daily for both staging and production, against the committed
-reference hashes. It derives chains and contract addresses from the resolved configurations and
-uses an explicit mapping of keyless public RPC endpoints, separate from the service's keyed
-read/verify pairs. It does not verify Safe owners or settings; retain the independent operator
-checks above. Repeat those checks for [mainnet deployment](CONTRACTS.md#mainnet).
+deploy it), the broadcast sends nothing. **Verify contracts** (Actions) runs the existing
+`verify-deployment.sh` daily in independent staging and production matrix jobs, with
+`fail-fast: false`. It derives chains and contract addresses from the resolved configs, maps
+chains through `contracts/networks.json`, and uses the explicit keyless public RPC mapping,
+separate from the service's keyed read/verify pairs. Proxy bytecode, implementation/factory
+bindings and sample forwarders are checked, then route addresses must match the report. It
+also runs `verify-safe.sh` daily for the committed Sepolia treasury Safe. Retain independent
+operator checks for all production Safes.
+
+The reviewed `PENDING_DEPLOYMENT_CHAINS: "1 8453"` permits a chain only when both configured
+addresses return exactly `0x`, with a warning and job-summary line on every such run. Any
+non-empty code goes through full verification. Remove each chain in the deployment-evidence PR
+required by [launch §1.5](runbooks/production-launch.md#15-deploy-factories-or-verify-if-already-deployed),
+which also updates CONTRACTS.md. Repeat operator checks for [mainnet deployment](CONTRACTS.md#mainnet).
 
 ## Operator onboarding
 

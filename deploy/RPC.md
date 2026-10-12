@@ -13,8 +13,10 @@ and positive `max_log_blocks`. Read and verify hosts must differ. Configure obse
 Ethereum and Base price chains too. Both environments share `TOPUP_RPC_ANKR_KEY` and
 `TOPUP_RPC_INFURA_KEY`, including for staging's mainnet price observations. This shared-account
 pilot is accepted under the combined production D=46/staging D=20 budget. Production keeps the
-existing accounts; moving staging to another provider pair is a recommended follow-up, after
-which production caps may be re-budgeted in a reviewed PR
+existing accounts. Moving staging to another provider pair is a tracked follow-up with a named
+Operations owner and issue, not a launch gate; after it, production caps may be re-budgeted in a
+reviewed PR. Edits to production-attested comments cost a production upgrade, so batch them
+with the next planned production upgrade
 ([launch procedure](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-follow-up)).
 
 `topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:

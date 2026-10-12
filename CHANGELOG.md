@@ -17,14 +17,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 ### Fixed (operators)
 
 - Repair the daily contract verification workflow for the `rpc` read/verify configuration:
-  derive routed factory and implementation addresses from both environment configs, verify
-  bytecode against the committed reference through explicitly mapped keyless public RPCs, and
-  fail clearly on an unmapped configured chain. Service RPC keys remain outside GitHub; Safe
-  owners and settings remain an operator check.
+  resolve both environment configs in independent matrix jobs, map public RPCs through the
+  contracts network registry, reuse the full deployment checker and daily Sepolia Safe check,
+  and compare route addresses with the deployment report. Reviewed pending chains `1 8453`
+  permit only two exactly empty code results with warnings and summaries; remove each in its
+  deployment-evidence PR. Service RPC keys remain outside GitHub.
 - Replace the production v0.10.0 launch runbook with the ordered owner procedure and sign-off
   checklist. Document the accepted shared-account pilot budget, staging SDN prerequisite, manual
   monitoring and uptime risk, optional staging separation, website CSP decision, and first-launch
-  recovery. Align the RPC, sanctions, alert and integration references with v0.10.0 behavior.
+  recovery. Run from a private work directory, shred local key copies, bind every dispatch to
+  the approved main commit, and verify drill deletion by its saved VM id. Track staging's move
+  with an owner and batch production-attested comment edits with the next upgrade. Align the
+  RPC, sanctions, alert and integration references with v0.10.0 behavior.
 
 ### Python SDK (`phala-pay`)
 

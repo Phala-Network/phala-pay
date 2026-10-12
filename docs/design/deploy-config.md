@@ -343,10 +343,14 @@ recreation is about container identity, not uptime. `make cvm-rehearsal` checks 
   (`build-kit.sh`), and the Phala Cloud template's compose, each attested.
 - **`verify-contracts.yml`** resolves chain ids from `rpc` and factory/implementation addresses
   from the routes of both staging and production `topup.yaml` files (`topup config show`). It
-  checks their public bytecode against the committed reference through an explicit mapping of
-  keyless public endpoints, failing on any unmapped configured chain. These verification reads
-  are separate from the service's keyed read/verify endpoints; no RPC key or GitHub Environment
-  is needed. Safe owners and settings remain an independent operator check.
+  runs `verify-deployment.sh` through an explicit keyless public endpoint mapping and
+  `contracts/networks.json`, then compares route addresses with the report. Staging and
+  production are independent matrix jobs (`fail-fast: false`); the committed Sepolia Safe is
+  checked daily with `verify-safe.sh`. An unmapped chain fails. Reviewed pending chains `1 8453`
+  pass only when both configured contract addresses return exactly `0x`, with warnings and a
+  summary; any non-empty code requires full verification. Launch §1.5 removes each chain in the
+  deployment-evidence PR. Public verification is separate from the service's keyed read/verify
+  endpoints; no RPC key or GitHub Environment is needed.
 - **Local stacks** (`make up`, the sandbox, the drill) render a local environment with
   `render.sh --project-name <their project>`. That environment is `local/environment.sh`'s, or
   the sandbox's or drill's own. The configs are therefore inline, and nothing is bind-mounted on

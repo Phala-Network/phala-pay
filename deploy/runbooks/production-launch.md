@@ -7,7 +7,7 @@ Ethereum (chain 1) and USDC on Base (chain 8453), in
 sequencer uptime grace period. Both chains use the same deterministic factory, deployed on each chain
 separately. The pilot may share the existing Ankr read and Infura verify accounts with staging
 under the combined budget: production D=46 and staging D=20. Moving staging to another provider
-pair is a recommended follow-up
+pair is a tracked follow-up with a named Operations owner, not a launch gate
 ([RPC providers, "Adding free capacity"](../RPC-PROVIDERS.md#adding-free-capacity)).
 
 Each section ends with its checks. Do not start a section until every check of the previous one
@@ -43,8 +43,10 @@ D, the factory and Safe caps, the reserve, S and L have no code enforcement. Cou
 failed attempts against them, and stop new load at each limit (§11). The UTC day starts at 5:00 PM
 PDT (4:00 PM PST).
 
-> **One shell session:** run §§4–10 in one shell session from the release checkout of §1.1. If a
-> new session is unavoidable, re-export `GITHUB_REPOSITORY`, `ENV_DIR`, `ORIGIN`, `BASE_URL`,
+> **One shell session:** run the launch from the private work directory of §1.1, outside the
+> repository, with `umask 077`. Keep §§4–10 in one session. If a new session is unavoidable,
+> re-export `REPO_DIR`, `KIT_DIR`, `LAUNCH_WORK_DIR`, `APPROVED_COMMIT`,
+> `GITHUB_REPOSITORY`, `ENV_DIR`, `ORIGIN`, `BASE_URL`,
 > `TOPUP_CVM_ID`, `APP_ID`, `ATTESTED_APP_ID`, `COMPOSE_HASH`, `SMOKE_ACCOUNT_ID`,
 > `FINANCE_MAX_UNFINALIZED_CREDIT` and `SMOKE_MERCHANT_SECRET_KEY`. Re-define the §1.1 and §6
 > helpers and recreate `SMOKE_DEPOSIT_IDS` before continuing.
@@ -57,38 +59,77 @@ or env file, and keep them out of chat and tickets.
 
 ### 1.1 Release checkout and kit
 
-Work in a checkout of this repository's `main` at the commit Deploy will run. The deploy kit and
+Keep a checkout of this repository's `main` at the approved commit Deploy will run. Set
+`APPROVED_COMMIT` to the owner/Finance/Risk/Operations-approved **main commit**, distinct from
+the v0.10.0 release commit. Work in a private directory outside every checkout, using
+`umask 077`; invoke repository and kit scripts by path. Import only temporary copies of secrets
+from the owner's secret store into this directory, including `admin.seed` and
+`maintenance/production.pem`; keep the recovery originals in that store. The deploy kit and
 `images.json` come from the verified v0.10.0 release, never from the checkout
 ([Verify a release](../../docs/self-hosting.md#verify-a-release)):
 
 ```sh
+umask 077
+export REPO_DIR="/absolute/path/to/phala-pay"
+export REPO_DIR="$(cd "$REPO_DIR" && pwd -P)"
+git -C "$REPO_DIR" switch main && git -C "$REPO_DIR" pull --ff-only
+export APPROVED_COMMIT="<40-character approved main commit>"
+[[ "$APPROVED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+test "$(git -C "$REPO_DIR" rev-parse HEAD)" = "$APPROVED_COMMIT"
+export LAUNCH_WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/phala-pay-launch.XXXXXX")"
+export LAUNCH_WORK_DIR="$(cd "$LAUNCH_WORK_DIR" && pwd -P)"
+[[ "$LAUNCH_WORK_DIR/" != "$REPO_DIR/"* ]]
+cd "$LAUNCH_WORK_DIR"
 export GITHUB_REPOSITORY=Phala-Network/phala-pay
-export ENV_DIR=deploy/environments/phala-network/production/topup
-git switch main && git pull --ff-only
-grep -q 'deploy.yml@959ca364ab2b539ab43f7af45e7f42fb6f2e80f2 # v0.10.0' .github/workflows/deploy-phala.yml
-grep -q 'version: v0.10.0' .github/workflows/deploy-phala.yml
+export ENV_DIR="$REPO_DIR/deploy/environments/phala-network/production/topup"
+export KIT_DIR="$LAUNCH_WORK_DIR/kit"
+grep -q 'deploy.yml@959ca364ab2b539ab43f7af45e7f42fb6f2e80f2 # v0.10.0' "$REPO_DIR/.github/workflows/deploy-phala.yml"
+grep -q 'version: v0.10.0' "$REPO_DIR/.github/workflows/deploy-phala.yml"
 test "$(cat "$ENV_DIR/os-image-hash")" = bd369a8c2f9edb2b52dad48ac8e0b32dde5f1337c423a506b48d07403a7d8033
-bash deploy/verify-release.sh v0.10.0 release
-mkdir kit && tar -xzf release/phala-pay-deploy-v0.10.0.tar.gz -C kit --strip-components=1
-npm ci --prefix kit/deploy/tools --ignore-scripts
+bash "$REPO_DIR/deploy/verify-release.sh" v0.10.0 release
+mkdir "$KIT_DIR" && tar -xzf release/phala-pay-deploy-v0.10.0.tar.gz -C "$KIT_DIR" --strip-components=1
+npm ci --prefix "$KIT_DIR/deploy/tools" --ignore-scripts
 
-# dispatch_deploy MODE: dispatches "Deploy Phala's instance" for production topup, finds exactly
-# that run (this actor, after the request), and waits for it. DEPLOY_RUN_ID is set even on failure.
+# dispatch_deploy MODE: prefer the dispatch's printed run id/URL; otherwise discover one new run
+# for this actor, allowing 60 seconds of clock skew. Never redispatch on an ambiguous outcome.
 dispatch_deploy() {
-  local mode=$1 requested_at actor deadline=$((SECONDS + 300))
+  local mode=$1 requested_at actor known_runs dispatch_output line run_ref head_sha
+  local deadline=$((SECONDS + 300))
   DEPLOY_RUN_ID=""
   actor="$(gh api user --jq .login)" || return 1
-  requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
-  gh workflow run deploy-phala.yml --repo "$GITHUB_REPOSITORY" --ref main \
-    -f environment=production -f target=topup -f mode="$mode" || return 1
+  requested_at="$(date -u -d '60 seconds ago' +%Y-%m-%dT%H:%M:%SZ)" || return 1
+  known_runs="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/deploy-phala.yml/runs" \
+    -f event=workflow_dispatch -f branch=main -f actor="$actor" -f "created=>=$requested_at" \
+    -F per_page=100 --jq '[.workflow_runs[].id]')" || return 1
+  if ! dispatch_output="$(gh workflow run deploy-phala.yml --repo "$GITHUB_REPOSITORY" --ref main \
+    -f environment=production -f target=topup -f mode="$mode")"; then
+    echo "dispatch outcome uncertain; do not re-dispatch; check the Actions UI" >&2
+    return 1
+  fi
+  printf '%s\n' "$dispatch_output"
+  while IFS= read -r line; do
+    run_ref="${line#https://github.com/$GITHUB_REPOSITORY/actions/runs/}"
+    run_ref="${run_ref%/}"
+    if [[ "$run_ref" =~ ^[0-9]+$ ]]; then DEPLOY_RUN_ID=$run_ref; break; fi
+  done <<<"$dispatch_output"
   while [[ -z "$DEPLOY_RUN_ID" ]] && (( SECONDS < deadline )); do
     DEPLOY_RUN_ID="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/deploy-phala.yml/runs" \
       -f event=workflow_dispatch -f branch=main -f actor="$actor" -f "created=>=$requested_at" \
-      -F per_page=100 --jq '.workflow_runs | sort_by(.created_at) | last | .id // empty')" || DEPLOY_RUN_ID=""
+      -F per_page=100 | jq -r --argjson known "$known_runs" '
+        [.workflow_runs[] | select(.id as $id | $known | index($id) | not)]
+        | if length == 1 then .[0].id else empty end')" || DEPLOY_RUN_ID=""
     [[ -n "$DEPLOY_RUN_ID" ]] || sleep 5
   done
-  [[ -n "$DEPLOY_RUN_ID" ]] || { echo "no $mode run appeared within 300 seconds; stop" >&2; return 1; }
-  echo "Deploy $mode run: $DEPLOY_RUN_ID" >&2
+  [[ -n "$DEPLOY_RUN_ID" ]] || {
+    echo "no unique $mode run appeared within 300 seconds; do not re-dispatch; check the Actions UI" >&2
+    return 1
+  }
+  head_sha="$(gh run view "$DEPLOY_RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha -q .headSha)" || return 1
+  [[ "$head_sha" == "$APPROVED_COMMIT" ]] || {
+    echo "run $DEPLOY_RUN_ID uses $head_sha, not APPROVED_COMMIT=$APPROVED_COMMIT; stop" >&2
+    return 1
+  }
+  echo "Deploy $mode run: $DEPLOY_RUN_ID at $APPROVED_COMMIT" >&2
   gh run watch "$DEPLOY_RUN_ID" --repo "$GITHUB_REPOSITORY" --exit-status
 }
 
@@ -107,7 +148,8 @@ fetch_record() {
 `timeout` ([Deployment time budgets](../README.md#deployment-time-budgets)).
 
 **Checks:** every command exits 0. `deploy-phala.yml` on `main` pins v0.10.0 at
-`959ca364ab2b539ab43f7af45e7f42fb6f2e80f2`. `os-image-hash` is the approved non-dev `dstack-0.5.9`
+`959ca364ab2b539ab43f7af45e7f42fb6f2e80f2`. Record `APPROVED_COMMIT` in the sign-off.
+`LAUNCH_WORK_DIR` is outside the repository and has mode 0700; `umask` is 0077. `os-image-hash` is the approved non-dev `dstack-0.5.9`
 hash ([OS image](../README.md#os-image)).
 
 ### 1.2 Phala Cloud workspace
@@ -192,7 +234,8 @@ checks.
 
 ### 1.5 Deploy factories, or verify if already deployed
 
-In a separate shell, use a separate clone of Phala Pay at tag `v0.10.0`, with submodules, because
+In a separate shell with `umask 077`, stay in the §1.1 private work directory and call scripts
+by path from a separate clone of Phala Pay at tag `v0.10.0`, with submodules, because
 deploying builds the contracts ([CONTRACTS.md, "Mainnet"](../CONTRACTS.md#mainnet) and
 ["Base mainnet"](../CONTRACTS.md#base-mainnet)). Broadcasting is a human action. Use a funded
 throwaway deployer EOA if deployment is needed, and keep `PRIVATE_KEY` only in the process
@@ -202,24 +245,27 @@ are two independent operator providers per chain, not the service's production k
 consume none of its quota:
 
 ```sh
-cd /path/to/phala-pay-v0.10.0
-git checkout v0.10.0
-git submodule update --init --recursive
+umask 077
+export LAUNCH_WORK_DIR="<private work directory from §1.1>"
+cd "$LAUNCH_WORK_DIR"
+export CONTRACT_REPO_DIR="/absolute/path/to/phala-pay-v0.10.0"
+git -C "$CONTRACT_REPO_DIR" checkout v0.10.0
+git -C "$CONTRACT_REPO_DIR" submodule update --init --recursive
 read -rs -p "Factory deployer private key: " PRIVATE_KEY && printf '\n'
 export PRIVATE_KEY
 export MAINNET_RPC_A="<ethereum-mainnet-rpc-a>" MAINNET_RPC_B="<ethereum-mainnet-rpc-b>"
 export BASE_RPC_A="<base-mainnet-rpc-a>" BASE_RPC_B="<base-mainnet-rpc-b>"
 
-deploy/contracts/deploy-proxy.sh --rpc-url "$MAINNET_RPC_A"
-deploy/contracts/deploy-factory.sh --rpc mainnet/a="$MAINNET_RPC_A" --dry-run
-deploy/contracts/deploy-factory.sh --rpc mainnet/a="$MAINNET_RPC_A" --broadcast
-deploy/contracts/verify-deployment.sh --rpc mainnet/a="$MAINNET_RPC_A" --rpc mainnet/b="$MAINNET_RPC_B" > mainnet-contract-verification.json
+"$CONTRACT_REPO_DIR/deploy/contracts/deploy-proxy.sh" --rpc-url "$MAINNET_RPC_A"
+"$CONTRACT_REPO_DIR/deploy/contracts/deploy-factory.sh" --rpc mainnet/a="$MAINNET_RPC_A" --dry-run
+"$CONTRACT_REPO_DIR/deploy/contracts/deploy-factory.sh" --rpc mainnet/a="$MAINNET_RPC_A" --broadcast
+"$CONTRACT_REPO_DIR/deploy/contracts/verify-deployment.sh" --rpc mainnet/a="$MAINNET_RPC_A" --rpc mainnet/b="$MAINNET_RPC_B" > mainnet-contract-verification.json
 jq -e '.passed == true' mainnet-contract-verification.json
 
-deploy/contracts/deploy-proxy.sh --rpc-url "$BASE_RPC_A"
-deploy/contracts/deploy-factory.sh --rpc base/a="$BASE_RPC_A" --dry-run
-deploy/contracts/deploy-factory.sh --rpc base/a="$BASE_RPC_A" --broadcast
-deploy/contracts/verify-deployment.sh --rpc base/a="$BASE_RPC_A" --rpc base/b="$BASE_RPC_B" > base-contract-verification.json
+"$CONTRACT_REPO_DIR/deploy/contracts/deploy-proxy.sh" --rpc-url "$BASE_RPC_A"
+"$CONTRACT_REPO_DIR/deploy/contracts/deploy-factory.sh" --rpc base/a="$BASE_RPC_A" --dry-run
+"$CONTRACT_REPO_DIR/deploy/contracts/deploy-factory.sh" --rpc base/a="$BASE_RPC_A" --broadcast
+"$CONTRACT_REPO_DIR/deploy/contracts/verify-deployment.sh" --rpc base/a="$BASE_RPC_A" --rpc base/b="$BASE_RPC_B" > base-contract-verification.json
 jq -e '.passed == true' base-contract-verification.json
 unset PRIVATE_KEY
 ```
@@ -231,7 +277,12 @@ nothing.
 **Checks:** both reports have `passed: true`. The factory, implementation, sample forwarder, and
 runtime code hashes are identical across both reports and the Sepolia report. Keep both reports.
 Any mismatch blocks the launch. Update [CONTRACTS.md](../CONTRACTS.md#mainnet) Mainnet and Base
-mainnet with the verified deployment details and reports after this step.
+mainnet with the verified deployment details and reports after this step. In that same reviewed
+PR, remove each deployed chain (`1` and `8453`) from `PENDING_DEPLOYMENT_CHAINS` in
+[verify-contracts.yml](../../.github/workflows/verify-contracts.yml). The pending exception permits
+only two exactly empty code results and emits a warning; any non-empty code is fully verified.
+Merge the evidence PR before §2, update the checkout and `APPROVED_COMMIT` to the approved main
+commit, and repeat the §1.1 pin checks and §1.6 approval for that commit.
 
 ### 1.6 Finance, Risk, and Operations sign-off
 
@@ -262,7 +313,7 @@ against a Finance-approved expectations file in the format of
 shell:
 
 ```sh
-deploy/contracts/verify-safe.sh --expectations phala-cloud-ethereum-safe.json \
+"$CONTRACT_REPO_DIR/deploy/contracts/verify-safe.sh" --expectations phala-cloud-ethereum-safe.json \
   --rpc mainnet/a="$MAINNET_RPC_A" --rpc mainnet/b="$MAINNET_RPC_B" > phala-cloud-ethereum-safe-verification.json
 jq -e '.passed == true' phala-cloud-ethereum-safe-verification.json
 ```
@@ -277,7 +328,7 @@ and fallback handler match Finance's approval.
 Production keeps the existing Ankr and Infura accounts and the `rpc` pairs committed in
 `topup.yaml`. The pilot may start with staging sharing these accounts under the existing combined
 budget: production D=46 and staging D=20, with all other caps above. Staging separation is
-recommended, not a launch gate. Never register a second Ankr or Infura account to stack free quotas.
+a tracked follow-up with a named Operations owner and tracking issue, not a launch gate. Never register a second Ankr or Infura account to stack free quotas.
 
 Follow up under [Adding free capacity](../RPC-PROVIDERS.md#adding-free-capacity) by moving staging
 to another company's pair, for example BlockPI + dRPC:
@@ -287,7 +338,8 @@ to another company's pair, for example BlockPI + dRPC:
    [pilot budget](../RPC.md#worst-case-pilot-budget) and passes preflight. It also updates the
    "shared with staging" statements in [RPC.md](../RPC.md), [phala.md](../phala.md),
    [README.md](../README.md), and production's `topup.yaml` and `compose.yaml` comments. The
-   comments are attested, so apply their changes through the normal reviewed upgrade procedure.
+   comments are production-attested: editing them costs a production upgrade. Batch those
+   comment edits with the next planned production upgrade, through its reviewed PR.
 2. Re-seal staging with its complete new secret set, without `TOPUP_RPC_ANKR_KEY` and
    `TOPUP_RPC_INFURA_KEY`, and upgrade staging. Confirm staging is healthy and the Ankr and Infura
    dashboards show no staging traffic after its upgrade.
@@ -298,7 +350,7 @@ Once staging has moved, production's caps may be re-budgeted in a reviewed PR. U
 until that budget is approved, D=46 and every other production cap stay unchanged.
 
 **Checks:** Operations accepts the combined budget and the production D=46/staging D=20 caps.
-Record staging separation as a follow-up; its completion is not required for §2.
+Record the staging-move tracking issue and owner; its completion is not required for §2.
 
 ### 1.9 Sentry
 
@@ -378,13 +430,28 @@ export TOPUP_CVM_ID="$(jq -er '.vm_uuid' provision-record/deploy.json)"
 gh variable set TOPUP_CVM_ID --repo "$GITHUB_REPOSITORY" --env production --body "$TOPUP_CVM_ID"
 ```
 
-If the run fails, fetch its record anyway. If `deploy.json` names a CVM, set `TOPUP_CVM_ID` and
+Recovery below requires the run's `headSha == APPROVED_COMMIT`; a mismatch or unknown SHA
+means stop. If an approved run fails, fetch its record anyway. If `deploy.json` names a CVM, set `TOPUP_CVM_ID` and
 continue with §3: never provision twice
 ([Deploy, step 2](../README.md#deploy)). If no CVM was created, fix the cause and dispatch
-`provision` again. The new CVM shows `error` in Phala Cloud until §4 seals it, by design.
+`provision` again only after confirming in Actions and Phala Cloud that no CVM exists. Never
+re-dispatch merely because run discovery timed out. If `deploy.json` names the CVM but the record
+lacks `cvm.json` or `attestation.json`, fetch the missing documents before §3:
+
+```sh
+read -rs -p "Production Phala Cloud API key: " PHALA_CLOUD_API_KEY; echo
+export PHALA_CLOUD_API_KEY
+test -s provision-record/cvm.json ||
+  "$KIT_DIR/deploy/phala" cvms get "$TOPUP_CVM_ID" --json > provision-record/cvm.json
+test -s provision-record/attestation.json ||
+  "$KIT_DIR/deploy/phala" cvms attestation "$TOPUP_CVM_ID" --json > provision-record/attestation.json
+```
+
+The new CVM shows `error` in Phala Cloud until §4 seals it, by design. Stop if either read fails.
 
 **Checks:** the run summary lists the CVM id, the app id, release v0.10.0, and the `phala-pay` and
-`postgres-walg` digests that match `release/images.json`. It also lists OS image `dstack-0.5.9`
+`postgres-walg` digests that match `release/images.json`. The run's `headSha` equals
+`APPROVED_COMMIT` (asserted by `dispatch_deploy`). It also lists OS image `dstack-0.5.9`
 and the read-back verification. `TOPUP_CVM_ID` is set.
 
 ## 3. Create the DNS records
@@ -393,8 +460,8 @@ Take the records from the provision record. They must equal the run summary's
 "Owner: DNS records" table. The TXT value is the attested `instance_id`, not `TOPUP_CVM_ID`:
 
 ```sh
-export GATEWAY_HOST="$(kit/deploy/phala-cvm.sh gateway-domain provision-record/cvm.json)"
-export INSTANCE_ID="$(kit/deploy/phala-cvm.sh instance-id provision-record/attestation.json)"
+export GATEWAY_HOST="$("$KIT_DIR/deploy/phala-cvm.sh" gateway-domain provision-record/cvm.json)"
+export INSTANCE_ID="$("$KIT_DIR/deploy/phala-cvm.sh" instance-id provision-record/attestation.json)"
 echo "CNAME pay-api.phala.com $GATEWAY_HOST"
 echo "TXT _dstack-app-address.pay-api.phala.com $INSTANCE_ID:443"
 ```
@@ -424,10 +491,10 @@ export PHALA_CLOUD_API_KEY
 umask 077
 : > .env.production
 ${EDITOR:-vi} .env.production
-kit/deploy/preflight.sh --env .env.production --compose "$COMPOSE_PROVISION" \
+"$KIT_DIR/deploy/preflight.sh" --env .env.production --compose "$COMPOSE_PROVISION" \
   --environment-dir "$ENV_DIR" --workspace "$PHALA_WORKSPACE" --os-image dstack-0.5.9 \
   --require-sentry
-kit/deploy/phala envs update "$TOPUP_CVM_ID" -e .env.production
+"$KIT_DIR/deploy/phala" envs update "$TOPUP_CVM_ID" -e .env.production
 ```
 
 `.env.production` holds exactly these sealed names, one `NAME=VALUE` per line:
@@ -446,7 +513,7 @@ That needs the sealed CVM serving its certificate, so wait for the service befor
 upgrade sends no env, so the sealed secrets stay:
 
 ```sh
-HEALTH_WAIT_SECONDS=1800 kit/deploy/phala-cvm.sh healthz https://pay-api.phala.com
+HEALTH_WAIT_SECONDS=1800 "$KIT_DIR/deploy/phala-cvm.sh" healthz https://pay-api.phala.com
 dispatch_deploy upgrade
 fetch_record "$DEPLOY_RUN_ID" upgrade-record
 export UPGRADE_RUN_ID="$DEPLOY_RUN_ID"
@@ -473,17 +540,17 @@ Verify the guest independently of Deploy, using the upgrade record's compose:
 mapfile -t UPGRADE_COMPOSE_FILES < <(find upgrade-record -type f -name 'docker-compose.*.yml' -print)
 test "${#UPGRADE_COMPOSE_FILES[@]}" -eq 1
 export UPGRADE_COMPOSE="${UPGRADE_COMPOSE_FILES[0]}"
-kit/deploy/phala cvms get "$TOPUP_CVM_ID" --json > cvm.json
-kit/deploy/phala cvms attestation "$TOPUP_CVM_ID" --json > attestation.json
+"$KIT_DIR/deploy/phala" cvms get "$TOPUP_CVM_ID" --json > cvm.json
+"$KIT_DIR/deploy/phala" cvms attestation "$TOPUP_CVM_ID" --json > attestation.json
 export APP_ID="$(jq -er '.app_id' cvm.json)"
 export ATTESTED_APP_ID="$(jq -er '.app_id | ltrimstr("0x") | ascii_downcase' cvm.json)"
 export COMPOSE_HASH="$(jq -j '.compose_file' attestation.json | sha256sum | cut -d' ' -f1)"
-export INSTANCE_ID="$(kit/deploy/phala-cvm.sh instance-id attestation.json)"
+export INSTANCE_ID="$("$KIT_DIR/deploy/phala-cvm.sh" instance-id attestation.json)"
 export GATEWAY_DOMAIN="$(jq -er '.gateway.base_domain' cvm.json)"
 curl -fsS "https://${INSTANCE_ID}-8090.$GATEWAY_DOMAIN/prpc/Info" > info.json
 EXPECTED_OS_IMAGE_HASH="$(cat "$ENV_DIR/os-image-hash")"
-kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" "$UPGRADE_COMPOSE" service "$EXPECTED_OS_IMAGE_HASH"
-kit/deploy/verify-ingress-evidence.sh pay-api.phala.com "$APP_ID"
+"$KIT_DIR/deploy/verify-attestation.sh" attestation.json info.json "$APP_ID" "$UPGRADE_COMPOSE" service "$EXPECTED_OS_IMAGE_HASH"
+"$KIT_DIR/deploy/verify-ingress-evidence.sh" pay-api.phala.com "$APP_ID"
 test "$(curl -sS -o healthz.body -w '%{http_code}' https://pay-api.phala.com/healthz)" = 200
 test ! -s healthz.body
 ```
@@ -494,11 +561,12 @@ and the daily report:
 ```sh
 export ORIGIN=https://pay-api.phala.com
 export BASE_URL="$ORIGIN"
-export ADMIN_KEY_FILE=admin.pem ADMIN_KEY_ID=admin/production-v1
+export ADMIN_KEY_FILE="$LAUNCH_WORK_DIR/admin.pem" ADMIN_KEY_ID=admin/production-v1
 admin() {
-  printf '%s' "${3:-}" > /tmp/topup-admin-body
-  mapfile -t headers < <(deploy/runbooks/sign-admin-request.sh "$1" "$BASE_URL$2" /tmp/topup-admin-body "$ADMIN_KEY_FILE" "$ADMIN_KEY_ID")
-  curl --fail-with-body -sS -X "$1" -H 'content-type: application/json' -H "${headers[0]}" -H "${headers[1]}" -H "${headers[2]}" --data-binary @/tmp/topup-admin-body "$BASE_URL$2"
+  local body="$LAUNCH_WORK_DIR/admin-body.json"
+  printf '%s' "${3:-}" > "$body" || return 1
+  mapfile -t headers < <("$REPO_DIR/deploy/runbooks/sign-admin-request.sh" "$1" "$BASE_URL$2" "$body" "$ADMIN_KEY_FILE" "$ADMIN_KEY_ID")
+  curl --fail-with-body -sS -X "$1" -H 'content-type: application/json' -H "${headers[0]}" -H "${headers[1]}" -H "${headers[2]}" --data-binary @"$body" "$BASE_URL$2"
 }
 
 # metric_lines NAME FILE: the samples of one metric, without the other metrics that share its prefix.
@@ -616,7 +684,7 @@ pin_live_webhook_keys() {
   curl -fsS -H "Authorization: Bearer $merchant_key" "$ORIGIN/v1/attestation?nonce=$nonce" \
     > "${prefix}-public-attestation.json" || return 1
   jq '{quote: null, attestation: .tdx_quote}' "${prefix}-public-attestation.json" \
-    | kit/deploy/dstack-verifier.sh > "${prefix}-public-verification.json" || return 1
+    | "$KIT_DIR/deploy/dstack-verifier.sh" > "${prefix}-public-verification.json" || return 1
   report_data="$(jq -er '.report_data' "${prefix}-public-attestation.json")" || return 1
   jq -e --arg app "$ATTESTED_APP_ID" --arg compose "$COMPOSE_HASH" \
     --arg report_data "$report_data" \
@@ -625,7 +693,7 @@ pin_live_webhook_keys() {
      and .details.report_data == $report_data + ("0" * 64)' \
     "${prefix}-public-verification.json" || return 1
   NONCE="$nonce" ACCOUNT_ID="$account_id" ATTESTATION_FILE="${prefix}-public-attestation.json" \
-    uv run --project sdk/python --locked python -c '
+    uv run --project "$REPO_DIR/sdk/python" --locked python -c '
 import json, os
 from topup_client.models import AttestationResponse
 from topup_sdk import verify_attestation_binding
@@ -686,7 +754,8 @@ at most one hour for a credited deposit. Credit comes at the route's confirmatio
 `PAYER_RPC_BASE` are the operator's RPCs, not the service's keys:
 
 ```sh
-export PAYER_ACCOUNT="<foundry-keystore-account>" PAYER_PASSWORD_FILE="<mode-0600-keystore-password-file>"
+# Copy the keystore password from the secret store into this private work directory first.
+export PAYER_ACCOUNT="<foundry-keystore-account>" PAYER_PASSWORD_FILE="$LAUNCH_WORK_DIR/payer.password"
 export PAYER_RPC_ETHEREUM="<operator ethereum rpc>" PAYER_RPC_BASE="<operator base rpc>"
 wait_for_credit() {
   local quote_id=$1 deadline=$((SECONDS + 3600)) response
@@ -716,9 +785,9 @@ smoke_payment() {
   tx_hash="$(cast send --json --account "$PAYER_ACCOUNT" --password-file "$PAYER_PASSWORD_FILE" \
     --rpc-url "$rpc_url" "$token" 'transfer(address,uint256)' "$address" "$amount" | jq -er '.transactionHash')" || return 1
   if [[ "$hint" == hint ]]; then
-    curl -fsS -X POST "$ORIGIN/v1/quotes/$quote_id/transactions" \
+    test "$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "$ORIGIN/v1/quotes/$quote_id/transactions" \
       -H "Authorization: Bearer $SMOKE_MERCHANT_SECRET_KEY" -H 'content-type: application/json' \
-      -d "$(jq -cn --arg hash "$tx_hash" '{transaction_hash:$hash}')" > /dev/null || return 1
+      -d "$(jq -cn --arg hash "$tx_hash" '{transaction_hash:$hash}')")" = 202 || return 1
   fi
   wait_for_credit "$quote_id"
 }
@@ -801,7 +870,7 @@ restore_drill() {
   restore_cleanup() {
     trap - RETURN
     if [[ -n "${RESTORE_CVM_ID:-}" ]]; then
-      kit/deploy/phala cvms delete "$RESTORE_CVM_ID" --force ||
+      "$KIT_DIR/deploy/phala" cvms delete "$RESTORE_CVM_ID" --force ||
         echo "failed to delete restore instance $RESTORE_CVM_ID; delete it by vm_uuid before proceeding" >&2
       unset RESTORE_CVM_ID
     fi
@@ -816,23 +885,23 @@ restore_drill() {
   live_isolated || { restore_cleanup; return 1; }
   RESTORE_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
   export RESTORE_STARTED_AT
-  RESTORE_ENV_DIR="$(mktemp -d)" || return 1
+  RESTORE_ENV_DIR="$(mktemp -d "$LAUNCH_WORK_DIR/restore-env.XXXXXX")" || return 1
   export RESTORE_ENV_DIR
   umask 077
   : > "$RESTORE_ENV_DIR/restore.env"
   ${EDITOR:-vi} "$RESTORE_ENV_DIR/restore.env" || return 1
   # Exactly RESTORE_AWS_ACCESS_KEY_ID, RESTORE_AWS_SECRET_ACCESS_KEY (read-only token), SENTRY_DSN,
   # TOPUP_RPC_ANKR_KEY and TOPUP_RPC_INFURA_KEY.
-  kit/deploy/render.sh --restore-check --images release/images.json --origin https://pending.invalid \
+  "$KIT_DIR/deploy/render.sh" --restore-check --images release/images.json --origin https://pending.invalid \
     "$ENV_DIR" > restore-check.yml || return 1
-  kit/deploy/preflight.sh --env "$RESTORE_ENV_DIR/restore.env" --compose restore-check.yml \
+  "$KIT_DIR/deploy/preflight.sh" --env "$RESTORE_ENV_DIR/restore.env" --compose restore-check.yml \
     --environment-dir "$ENV_DIR" --restore-check --workspace "$PHALA_WORKSPACE" \
     --os-image dstack-0.5.9 --require-sentry || return 1
 
   # Restore step 1: create a new instance of the original app with its own read-only env.
   live_isolated || { restore_cleanup; return 1; }
-  kit/deploy/phala instances add --app-id "$APP_ID" --compose-file restore-check.yml \
-    --pre-launch-script kit/deploy/phala-cloud-pre-launch.sh --env-file "$RESTORE_ENV_DIR/restore.env" \
+  "$KIT_DIR/deploy/phala" instances add --app-id "$APP_ID" --compose-file restore-check.yml \
+    --pre-launch-script "$KIT_DIR/deploy/phala-cloud-pre-launch.sh" --env-file "$RESTORE_ENV_DIR/restore.env" \
     --name phala-pay-production-restore --json > restore-instance.json || return 1
   RESTORE_CVM_ID="$(jq -er '.vm_uuid' restore-instance.json)" || return 1
   export RESTORE_CVM_ID
@@ -842,15 +911,15 @@ restore_drill() {
   export PHALA_ATTESTATION_URL="https://cloud-api.phala.com/api/v1/cvms/$RESTORE_CVM_ID/attestation"
   curl -fsS -H "X-API-Key: $PHALA_CLOUD_API_KEY" "$PHALA_ATTESTATION_URL" \
     > restore-attestation.json || return 1
-  kit/deploy/phala cvms get "$RESTORE_CVM_ID" --json > restore-cvm.json || return 1
-  RESTORE_INSTANCE_ID="$(kit/deploy/phala-cvm.sh instance-id restore-attestation.json)" || return 1
+  "$KIT_DIR/deploy/phala" cvms get "$RESTORE_CVM_ID" --json > restore-cvm.json || return 1
+  RESTORE_INSTANCE_ID="$("$KIT_DIR/deploy/phala-cvm.sh" instance-id restore-attestation.json)" || return 1
   export RESTORE_INSTANCE_ID
   RESTORE_GATEWAY_DOMAIN="$(jq -er '.gateway.base_domain' restore-cvm.json)" || return 1
   export RESTORE_GATEWAY_DOMAIN
   curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \
     > restore-info.json || return 1
   EXPECTED_OS_IMAGE_HASH="$(cat "$ENV_DIR/os-image-hash")" || return 1
-  kit/deploy/verify-attestation.sh restore-attestation.json restore-info.json "$APP_ID" \
+  "$KIT_DIR/deploy/verify-attestation.sh" restore-attestation.json restore-info.json "$APP_ID" \
     restore-check.yml restore-check "$EXPECTED_OS_IMAGE_HASH" || return 1
 
   # Restore step 3: wait for the report, checking live isolation at least every five minutes.
@@ -875,11 +944,11 @@ restore_drill() {
 
   # Restore step 4: give the drill its own origin and rerun the restore-check variant.
   live_isolated || { restore_cleanup; return 1; }
-  kit/deploy/render.sh --restore-check --images release/images.json --origin "$RESTORE_URL" \
+  "$KIT_DIR/deploy/render.sh" --restore-check --images release/images.json --origin "$RESTORE_URL" \
     "$ENV_DIR" > restore-check.yml || return 1
   live_isolated || { restore_cleanup; return 1; }
-  kit/deploy/phala deploy --json --cvm-id "$RESTORE_CVM_ID" --compose restore-check.yml \
-    --pre-launch-script kit/deploy/phala-cloud-pre-launch.sh --no-public-logs --no-public-sysinfo --wait || return 1
+  "$KIT_DIR/deploy/phala" deploy --json --cvm-id "$RESTORE_CVM_ID" --compose restore-check.yml \
+    --pre-launch-script "$KIT_DIR/deploy/phala-cloud-pre-launch.sh" --no-public-logs --no-public-sysinfo --wait || return 1
 
   # The report is rerun after the origin change; keep the same one-hour bound and isolation checks.
   RESTORE_DEADLINE=$((SECONDS + 3600))
@@ -901,11 +970,11 @@ restore_drill() {
   live_isolated || { restore_cleanup; return 1; }
   curl -fsS -H "X-API-Key: $PHALA_CLOUD_API_KEY" "$PHALA_ATTESTATION_URL" \
     > restore-attestation-final.json || return 1
-  RESTORE_INSTANCE_ID="$(kit/deploy/phala-cvm.sh instance-id restore-attestation-final.json)" || return 1
+  RESTORE_INSTANCE_ID="$("$KIT_DIR/deploy/phala-cvm.sh" instance-id restore-attestation-final.json)" || return 1
   export RESTORE_INSTANCE_ID
   curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \
     > restore-info-final.json || return 1
-  kit/deploy/verify-attestation.sh restore-attestation-final.json restore-info-final.json "$APP_ID" \
+  "$KIT_DIR/deploy/verify-attestation.sh" restore-attestation-final.json restore-info-final.json "$APP_ID" \
     restore-check.yml restore-check "$EXPECTED_OS_IMAGE_HASH" || return 1
 
   # Restore step 5: verify a nonce-bound admin attestation, the frozen state, and every smoke deposit.
@@ -922,7 +991,7 @@ restore_drill() {
   RESTORE_PUBLIC_REPORT_DATA="$(jq -er '.report_data' restore-public-attestation.json)" || return 1
   export RESTORE_PUBLIC_REPORT_DATA
   jq '{quote: null, attestation: .tdx_quote}' restore-public-attestation.json \
-    | kit/deploy/dstack-verifier.sh > restore-public-verification.json || return 1
+    | "$KIT_DIR/deploy/dstack-verifier.sh" > restore-public-verification.json || return 1
   jq -e --arg app "$ATTESTED_APP_ID" --arg compose "$RESTORE_COMPOSE_HASH" \
     --arg report_data "$RESTORE_PUBLIC_REPORT_DATA" \
     '.details.tcb_status == "UpToDate" and .details.app_info.app_id == $app
@@ -930,7 +999,7 @@ restore_drill() {
      and .details.report_data == $report_data + ("0" * 64)' \
     restore-public-verification.json || return 1
   NONCE="$NONCE" ACCOUNT_ID="$SMOKE_ACCOUNT_ID" ATTESTATION_FILE=restore-public-attestation.json \
-    uv run --project sdk/python --locked python -c '
+    uv run --project "$REPO_DIR/sdk/python" --locked python -c '
 import json, os
 from topup_client.models import AttestationResponse
 from topup_sdk import verify_attestation_binding
@@ -957,11 +1026,18 @@ verify_attestation_binding(
 restore_drill
 ```
 
-After the function returns, confirm the instance is gone, then revoke the read-only token in the
-R2 dashboard. Issue a new one for the next drill:
+After the function returns, confirm the drill instance is gone using the `vm_uuid` saved in
+`restore-instance.json`: its API read must return **404**, not an authentication or network
+failure. Also confirm production is still running, then revoke the read-only token in the R2
+dashboard. Issue a new one for the next drill:
 
 ```sh
-kit/deploy/phala cvms get "$TOPUP_CVM_ID" --json | jq -e '.status == "running"'
+export DELETED_DRILL_CVM_ID="$(jq -er '.vm_uuid' restore-instance.json)"
+export DRILL_CVM_URL="https://cloud-api.phala.com/api/v1/cvms/$DELETED_DRILL_CVM_ID"
+test "$(curl -sS -o restore-deletion.json -w '%{http_code}' \
+  -H "X-API-Key: $PHALA_CLOUD_API_KEY" \
+  "$DRILL_CVM_URL")" = 404
+"$KIT_DIR/deploy/phala" cvms get "$TOPUP_CVM_ID" --json | jq -e '.status == "running"'
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 ```
 
@@ -1038,7 +1114,9 @@ Sentry receives the service's alerts and Crons. The RPC, S, L, H, Q and quota ru
 production CVM has no collector, and the admin key never leaves the operator, so the operator
 evaluates them with `pilot_watch`. Run it in the first 72 hours at least every two staffed hours
 and at each UTC day boundary, then at least twice a day. Also run it at once on any Sentry alert.
-The owner accepts this manual cadence for the pilot. A metrics collector with a metrics-only
+The owner accepts this manual cadence for the pilot. For each later watch session, use the same
+private-directory/`umask 077` setup, derive a temporary `admin.pem` from the owner's stored seed,
+and shred the local key and seed copy after the check (§13). A metrics collector with a metrics-only
 key is the planned replacement and requires a reviewed implementation. Read the Ankr and Infura
 dashboards daily:
 
@@ -1054,6 +1132,7 @@ pilot_watch() {
   test "$(curl -sS -o /dev/null -w '%{http_code}' "$ORIGIN/healthz")" = 200 || { echo "STOP: /healthz is not 200"; status=1; }
   metric_lines topup_rpc_endpoint_ready "$metrics" | awk '$NF + 0 == 1 { ok++ } END { exit !(NR == 4 && ok == 4) }' ||
     { echo "RPC endpoint not ready: rpc-health.md"; status=1; }
+  above topup_addresses_lagging 0 && { echo "RpcAddressBackfillLag: recheck within one hour; rpc-health.md if still lagging"; status=1; }
   above topup_finality_unresolved 1 && { echo "STOP S stock: pause the chain's quotes; deposit-reversed.md"; status=1; }
   above topup_finality_unresolved_entries_24h 1 && { echo "STOP S entries: pause the chain's quotes; deposit-reversed.md"; status=1; }
   above topup_confirmation_slow 1 && { echo "STOP L stock: pause the chain's quotes; rpc-health.md"; status=1; }
@@ -1119,7 +1198,7 @@ delete the CVM or its app: the backups are encrypted with the app's derived key.
 - **Before Phala Cloud's charges (§§2–9):** leave every account without live charges or paused, fix
   the cause, and repeat the failed section. A configuration fix is a reviewed PR to `$ENV_DIR`
   followed by `dispatch_deploy upgrade`. To abandon the launch, stop the CVM
-  (`kit/deploy/phala cvms stop "$TOPUP_CVM_ID"`), and keep the app, the bucket, and the DNS records
+  (`"$KIT_DIR/deploy/phala" cvms stop "$TOPUP_CVM_ID"`), and keep the app, the bucket, and the DNS records
   until the owner decides.
 - **After charges:** pause first. Pause `quotes` on the affected routes, or `quotes` and
   `settlement` on Phala Cloud's account
@@ -1143,37 +1222,70 @@ delete the CVM or its app: the backups are encrypted with the app's derived key.
 Record the evidence, the owner, and the time (PT) for each item. Launch is complete when every item
 is checked.
 
-- [ ] §1.1 Release v0.10.0 verified; `deploy-phala.yml` pins `959ca364…`; the OS hash is approved.
+- [ ] §1.1 Release v0.10.0 verified; `deploy-phala.yml` pins `959ca364…`; OS hash and
+      `APPROVED_COMMIT` recorded; launch work directory is outside the repository with `umask 077`.
 - [ ] §1.2 Production Phala Cloud workspace and API key exist.
 - [ ] §1.3 `production` Environment is `main`-only, with exactly three secrets and the variables;
       the admin and maintenance keys match `topup.yaml`.
 - [ ] §1.4 `phala-pay-production` exists; the prefix was empty; read-write and Object Read only
       tokens are scoped to that bucket only.
 - [ ] §1.5 Factories deployed, or existing deployments verified, on Ethereum and Base; reports
-      kept and CONTRACTS.md updated.
+      kept; evidence PR updates CONTRACTS.md and removes `1`/`8453` from
+      `PENDING_DEPLOYMENT_CHAINS`, merged before §2; final main commit approved.
 - [ ] §1.6 Finance, Risk, and Operations signed off route amounts, `max_unfinalized_credit`,
       limits, and pilot caps for the deployed commit.
 - [ ] §1.7 Four Safes verified against Finance's expectations.
 - [ ] §1.8 Shared-account pilot budget accepted (production D=46, staging D=20); staging
-      separation recorded as a recommended follow-up, with optional key regeneration.
+      separation tracked in issue `<link>` with Operations owner `<name>`, not a launch gate;
+      production-attested comment edits batched with the next production upgrade; key regeneration optional.
 - [ ] §1.9 Sentry scrubbing and alert rule set; synthetic alert received; owner accepts the
       pilot's external-monitoring risk and no Sentry Uptime monitor.
 - [ ] §1.10 `pay-api.phala.com` records are DNS only with CAA compatible; owner's
       `pay.phala.com` JavaScript Detections decision and accepted CSP violations recorded.
 - [ ] §1.11 Staging live SDN smoke passed; evidence and owner/Compliance sign-off recorded.
-- [ ] §2 Provision run `<id>`; `TOPUP_CVM_ID` set.
+- [ ] §2 Provision run `<id>` has `headSha == APPROVED_COMMIT`; `TOPUP_CVM_ID` set; missing
+      CVM/attestation documents fetched before DNS setup.
 - [ ] §3 CNAME and TXT resolve publicly.
 - [ ] §4 Online preflight passed with `rpc check` on all four endpoints; secrets sealed.
-- [ ] §5 Acceptance upgrade run `<id>` passed; WAL archiving confirmed; unavailability recorded.
+- [ ] §5 Acceptance upgrade run `<id>` passed with `headSha == APPROVED_COMMIT`; WAL
+      archiving confirmed; unavailability recorded.
 - [ ] §6 Attestation, OS hash `bd369a8c…`, ingress evidence, `/healthz`, endpoint readiness,
       OFAC snapshot, and Crons verified.
 - [ ] §7 Four supplements added and audited; re-screen clean; owner/Compliance signed off the
       known SDN address and its use in a refused refund request; address and SDN uid recorded.
 - [ ] §8 Three live payments credited and delivered (two hinted, one scanned); SDN and supplement
       hits refused.
-- [ ] §9 Restore drill passed; RPO and RTO recorded; drill instance deleted; token revoked.
+- [ ] §9 Restore drill passed; RPO and RTO recorded; deletion confirmed by 404 for
+      `restore-instance.json`'s `vm_uuid`; production still running; read-only token revoked.
 - [ ] §10 Phala Cloud onboarded, live, and confirmed; smoke account quotes paused.
 - [ ] §11 `pilot_watch` cadence, daily tallies, and on-call owner agreed.
 - [ ] §12 v0.10.0 kit, images, configuration commit, and deployment records retained as the future
       N-1.
 - [ ] Owner's final go-live approval.
+- [ ] Private work copies shredded: `admin.pem`, `admin.seed`, `maintenance/production.pem`,
+      `.env.production`, restore env, `payer.password`, admin request body, and smoke/Phala Cloud
+      first-key response JSON files; transient secret environment variables unset.
+
+After sign-off, keep the verified kit, images, configuration commit and non-secret evidence in
+the owner's recovery store. Shred the local private copies below, including on an abandoned
+launch once recovery work is complete; keep the original recovery keys in the secret store.
+Restore env files are normally shredded by §9's cleanup; include any interrupted-drill copies
+below. Configure the editor to avoid swap/backup files, and shred any private ones it created.
+Repeat key/seed cleanup after each `pilot_watch`.
+
+```sh
+cleanup_launch_private_material() {
+  local private_file
+  for private_file in admin.pem admin.seed maintenance/production.pem .env.production payer.password \
+    admin-body.json smoke-account.json smoke-account-limits.json smoke-live.json \
+    phala-cloud-account.json phala-cloud-account-limits.json phala-cloud-live.json \
+    restore-env.*/restore.env; do
+    if [[ -f "$LAUNCH_WORK_DIR/$private_file" ]]; then
+      shred -u -- "$LAUNCH_WORK_DIR/$private_file" || return 1
+    fi
+  done
+  unset PHALA_CLOUD_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN PRIVATE_KEY
+  unset SMOKE_MERCHANT_SECRET_KEY PHALA_CLOUD_MERCHANT_SECRET_KEY
+}
+cleanup_launch_private_material
+```
