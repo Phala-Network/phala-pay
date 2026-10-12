@@ -93,7 +93,7 @@ npm ci --prefix "$KIT_DIR/deploy/tools" --ignore-scripts
 # dispatch_deploy MODE: prefer the dispatch's printed run id/URL; otherwise discover one new run
 # for this actor, allowing 60 seconds of clock skew. Never redispatch on an ambiguous outcome.
 dispatch_deploy() {
-  local mode=$1 requested_at actor known_runs dispatch_output line run_ref head_sha
+  local mode=$1 requested_at actor known_runs remote_main dispatch_output line run_ref head_sha
   local deadline=$((SECONDS + 300))
   DEPLOY_RUN_ID=""
   actor="$(gh api user --jq .login)" || return 1
@@ -101,6 +101,11 @@ dispatch_deploy() {
   known_runs="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/deploy-phala.yml/runs" \
     -f event=workflow_dispatch -f branch=main -f actor="$actor" -f "created=>=$requested_at" \
     -F per_page=100 --jq '[.workflow_runs[].id]')" || return 1
+  remote_main="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)" || return 1
+  [[ "$remote_main" == "$APPROVED_COMMIT" ]] || {
+    echo "remote main is $remote_main, not APPROVED_COMMIT=$APPROVED_COMMIT; refusing to dispatch" >&2
+    return 1
+  }
   if ! dispatch_output="$(gh workflow run deploy-phala.yml --repo "$GITHUB_REPOSITORY" --ref main \
     -f environment=production -f target=topup -f mode="$mode")"; then
     echo "dispatch outcome uncertain; do not re-dispatch; check the Actions UI" >&2
@@ -127,6 +132,11 @@ dispatch_deploy() {
   head_sha="$(gh run view "$DEPLOY_RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha -q .headSha)" || return 1
   [[ "$head_sha" == "$APPROVED_COMMIT" ]] || {
     echo "run $DEPLOY_RUN_ID uses $head_sha, not APPROVED_COMMIT=$APPROVED_COMMIT; stop" >&2
+    gh run cancel "$DEPLOY_RUN_ID" --repo "$GITHUB_REPOSITORY" ||
+      echo "cancellation failed; check the Actions UI immediately" >&2
+    if [[ "$mode" == provision ]]; then
+      echo "check whether a CVM was created; follow §2's never provision twice recovery before any retry" >&2
+    fi
     return 1
   }
   echo "Deploy $mode run: $DEPLOY_RUN_ID at $APPROVED_COMMIT" >&2
@@ -430,8 +440,11 @@ export TOPUP_CVM_ID="$(jq -er '.vm_uuid' provision-record/deploy.json)"
 gh variable set TOPUP_CVM_ID --repo "$GITHUB_REPOSITORY" --env production --body "$TOPUP_CVM_ID"
 ```
 
-Recovery below requires the run's `headSha == APPROVED_COMMIT`; a mismatch or unknown SHA
-means stop. If an approved run fails, fetch its record anyway. If `deploy.json` names a CVM, set `TOPUP_CVM_ID` and
+Continuing launch requires the run's `headSha == APPROVED_COMMIT`; a mismatch or unknown SHA
+means stop. On mismatch the helper requests cancellation, but provisioning may already have
+created a CVM: inspect the record and Phala Cloud, preserve any created CVM, and follow the
+"never provision twice" recovery below. Resolve the commit mismatch before continuing launch.
+If an approved run fails, fetch its record anyway. If `deploy.json` names a CVM, set `TOPUP_CVM_ID` and
 continue with §3: never provision twice
 ([Deploy, step 2](../README.md#deploy)). If no CVM was created, fix the cause and dispatch
 `provision` again only after confirming in Actions and Phala Cloud that no CVM exists. Never
@@ -1041,6 +1054,9 @@ test "$(curl -sS -o restore-deletion.json -w '%{http_code}' \
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 ```
 
+If Phala Cloud retains a deleted CVM record, the 404 check fails safely. Confirm the saved
+`vm_uuid` has a deleted status in Phala Cloud and record that evidence instead.
+
 **Checks:**
 
 - `restore_drill` returned 0 and live isolation held throughout.
@@ -1255,7 +1271,7 @@ is checked.
       known SDN address and its use in a refused refund request; address and SDN uid recorded.
 - [ ] §8 Three live payments credited and delivered (two hinted, one scanned); SDN and supplement
       hits refused.
-- [ ] §9 Restore drill passed; RPO and RTO recorded; deletion confirmed by 404 for
+- [ ] §9 Restore drill passed; RPO and RTO recorded; deletion confirmed by 404 or retained deleted status for
       `restore-instance.json`'s `vm_uuid`; production still running; read-only token revoked.
 - [ ] §10 Phala Cloud onboarded, live, and confirmed; smoke account quotes paused.
 - [ ] §11 `pilot_watch` cadence, daily tallies, and on-call owner agreed.
