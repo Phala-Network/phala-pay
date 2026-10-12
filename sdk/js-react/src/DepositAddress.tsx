@@ -260,8 +260,9 @@ function useClientView(
 
 /**
  * Seconds within which the service's discovery scan finds a transfer sent without a
- * transaction-hash hint, as a payer sending to this address does (docs/integration.md,
- * "Transaction-hash hints"). The view's `typical_credit_seconds` starts at confirmation.
+ * transaction-hash hint, as this component never submits one: the server's `FAST_INTERVAL`
+ * (crates/topup/src/scanner/mod.rs); change both together. The view's `typical_credit_seconds`
+ * starts at confirmation (docs/integration.md, "Transaction-hash hints").
  */
 const DISCOVERY_SECONDS = 300;
 

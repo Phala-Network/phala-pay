@@ -625,11 +625,12 @@ Let the customer pick the network and the token; show that network, the token co
 address with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain,
 and address and no amount): "Send only PHA, USDC on Sepolia, Base Sepolia. Any amount is credited
 at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia.
-You can reuse this address." A payer sending to the address gives no transaction-hash hint, so
-each network's time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
+You can reuse this address." A payer sending from their own wallet or exchange gives the page no
+transaction hash, so unless your page submits one ("Transaction-hash hints"), each network's time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
 address's public view (above), the time from paying to credit at the confirmation your account's
-payments on that chain wait for, as `GET /v1/config` reports it; do not promise
-`typical_credit_seconds` alone, which is the time of a hinted wallet payment. Until the view is
+payments on that chain wait for, as `GET /v1/config` reports it. Do not promise
+`typical_credit_seconds` alone, which is the time of a hinted payment: even a page that submits
+the hash can exhaust the daily hint budget and fall back to the scan. Until the view is
 loaded the page names no time.
 `<DepositAddress depositAddress={…} clientSecret={…} apiBase={…}>` from `@phala/pay-react`
 renders exactly that from `address` and `networks` (pass only those and the `client_secret` to the

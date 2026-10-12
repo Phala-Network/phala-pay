@@ -1445,9 +1445,9 @@ from fetched state, never from webhook order.
 - Deposit address page: "One address for all supported tokens and networks; send only supported
   tokens." The payer picks a network and a token; the page shows that network, the token contract,
   the address with a copy button, and a QR of that token's EIP-681 URI (no amount), with "Send
-  only PHA, USDC on Ethereum, Base. Any amount is credited at the market rate when it arrives,
-  usually in about 30 seconds on Ethereum and about 7 seconds on Base," each network's time from
-  its `typical_credit_seconds` in the public view; until the view is loaded, "once it is confirmed
+  only PHA, USDC on Ethereum, Base. Any amount is credited at the market rate, usually within
+  about 6 minutes on Ethereum and about 5 minutes on Base," each network's time the 5-minute
+  discovery scan plus its `typical_credit_seconds` in the public view (the page submits no hint); until the view is loaded, "once it is confirmed
   on its network". Where a network's address differs (another treasury), show each network's own
   address. After a rotation, stop showing the retired address; a payment to it is still credited.
 - Network warning on every address: "Ethereum mainnet only. Payments sent on any other network
