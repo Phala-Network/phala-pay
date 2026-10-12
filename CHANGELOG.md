@@ -14,6 +14,25 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed (operators)
+
+- Repair the daily contract verification workflow for the `rpc` read/verify configuration:
+  derive routed factory and implementation addresses from both environment configs, verify
+  bytecode against the committed reference through explicitly mapped keyless public RPCs, and
+  fail clearly on an unmapped configured chain. Service RPC keys remain outside GitHub; Safe
+  owners and settings remain an operator check.
+- Replace the production v0.10.0 launch runbook with the ordered owner procedure and sign-off
+  checklist. Document the accepted shared-account pilot budget, staging SDN prerequisite, manual
+  monitoring and uptime risk, optional staging separation, website CSP decision, and first-launch
+  recovery. Align the RPC, sanctions, alert and integration references with v0.10.0 behavior.
+
+### Python SDK (`phala-pay`)
+
+#### Documentation
+
+- Describe the required `PhalaPay(api_key, pins=...)` constructor and deployment trust pins in
+  both modes, replacing the removed individual constructor pin arguments and test-mode fallback.
+
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Fixed

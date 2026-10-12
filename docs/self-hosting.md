@@ -312,7 +312,7 @@ Deploy `upgrade`, never a runtime setting.
    `PHALA_CLOUD_API_KEY` exported:
 
    ```sh
-   docker pull <the compose's phala-pay image>   # preflight --offline checks the configuration in it
+   docker pull "<the compose's phala-pay image>"   # preflight --offline checks the configuration in it
    kit/deploy/preflight.sh --env .env.production --compose docker-compose.production.yml \
      --environment-dir production/topup --offline
    kit/deploy/phala envs update "$TOPUP_CVM_ID" -e .env.production
@@ -335,8 +335,10 @@ Deploy `upgrade`, never a runtime setting.
    ```
 
 6. **Sentry and egress** (**HUMAN-ONLY**), if you use them: the scrubbing settings, an alert, and
-   an Uptime monitor on `/healthz` ([One-time setup](../deploy/README.md#one-time-setup-human-only-repository-owner),
-   step 5); and outbound traffic restricted to the RPC hosts, price sources, object store, Sentry,
+   Crons monitors and your chosen external `/healthz` checks
+   ([One-time setup](../deploy/README.md#one-time-setup-human-only-repository-owner), step 5).
+   Phala's pilot disables Sentry Uptime per the owner's decision and uses manual `pilot_watch`.
+   Restrict outbound traffic to the RPC hosts, price sources, object store, Sentry,
    DNS, the Phala Cloud platform, and public addresses on 443 and 80 for webhooks
    ([Attestation, ingress, and egress](../deploy/README.md#attestation-ingress-and-egress)).
 

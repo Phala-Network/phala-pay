@@ -1168,7 +1168,7 @@ Standard Webhooks, not `Stripe-Signature`, because you hold only the service's p
 | `deposit.refunded` | A refund transaction is final; one event per refund. | The deposit, with its cumulative `amount_refunded_atomic` and `amount_refunded` |
 | `refund.created` | A refund was requested (`POST /v1/refunds`, §3). | The refund, `status: "pending"` |
 | `refund.updated` | A refund changed: marked paid, canceled (by you before `mark_paid`), succeeded or failed, or its `metadata`; `data.previous_attributes` names what changed. | The refund |
-| `refund.failed` | The transaction attached with `mark_paid` does not pay the refund: final without paying it, dropped, or never seen (§3); one event per refund, beside its `refund.updated`. Create a new refund to try again. | The refund, `status: "failed"` with its `failure_reason` |
+| `refund.failed` | Both providers agree that the finalized transaction attached with `mark_paid` does not pay the refund (§3); one event per failed refund, beside its `refund.updated`. Create a new refund only after it fails. Missing or dropped transactions stay pending and reserved; never seen by either provider for 24 h alerts the operator. | The refund, `status: "failed"` with its `failure_reason` |
 | `quote.canceled` | Dual coverage completed a requested cancellation; payments outside its shortened window are credited at spot. | The quote, `status: "canceled"` |
 | `quote.expired` | The finalized chain passed `expires_at` with the quote unpaid. | The quote |
 | `treasury.created` | A treasury was proven (§1.6): `active` at once for a chain's first one and in test mode, else `pending` until `effective_at`. Cancel a change you did not request. | The treasury |

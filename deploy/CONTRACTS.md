@@ -51,7 +51,9 @@ forwarder commits to the treasury it pays
 `deploy/contracts/safe-expectations.json`. In this repository that is Phala's finance Safe, which
 Phala's finance proves as the treasury of Phala Cloud's account; an operator or merchant that wants
 the same check of its own Safe records that Safe in that file of its own checkout. Run it before
-that proof and whenever the Safe's owners change (the Verify contracts workflow runs it daily on Sepolia). On every target it checks: the RPC's
+that proof and whenever the Safe's owners change. The Verify contracts workflow checks public
+factory and implementation bytecode only; Safe owners and settings remain an operator check.
+On every target `verify-safe.sh` checks: the RPC's
 `eth_chainId` equals the committed chain id for the target network, the address has code (an EOA is rejected), the proxy
 runtime code hash is approved, storage slot 0 and `masterCopy()` both equal the approved singleton,
 the singleton's runtime code hash matches, owners match as a set, the threshold matches exactly,
@@ -183,7 +185,8 @@ The committed Base Sepolia routes ([staging routes](phala.md#staging-routes) on 
 same file) use the same deployment, **deployed on Base Sepolia (84532)
 and verified**: `verify-deployment.sh --rpc base-sepolia/a=… --rpc base-sepolia/b=…` passes on both
 staging providers (September 2026), and every runtime code hash equals Sepolia's. Preflight
-re-checks it on every Deploy; the Verify contracts workflow checks Sepolia only.
+re-checks it on every Deploy; the Verify contracts workflow checks public factory and
+implementation bytecode on every routed chain in both environment configurations.
 
 | Contract | Address |
 |---|---|

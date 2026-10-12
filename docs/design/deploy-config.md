@@ -341,9 +341,12 @@ recreation is about container identity, not uptime. `make cvm-rehearsal` checks 
 - **`release.yml`**, on a `v<version>` tag, builds the images with `SOURCE_COMMIT` (the
   reproducible ones twice), and publishes `images.json` keyed by image name, the deploy kit
   (`build-kit.sh`), and the Phala Cloud template's compose, each attested.
-- **`verify-contracts.yml`** takes Sepolia's two provider URLs from the committed staging
-  `topup.yaml` (`topup config show`). It fails if one needs a `{key}`, since the workflow holds no
-  key. It needs no GitHub Environment.
+- **`verify-contracts.yml`** resolves chain ids from `rpc` and factory/implementation addresses
+  from the routes of both staging and production `topup.yaml` files (`topup config show`). It
+  checks their public bytecode against the committed reference through an explicit mapping of
+  keyless public endpoints, failing on any unmapped configured chain. These verification reads
+  are separate from the service's keyed read/verify endpoints; no RPC key or GitHub Environment
+  is needed. Safe owners and settings remain an independent operator check.
 - **Local stacks** (`make up`, the sandbox, the drill) render a local environment with
   `render.sh --project-name <their project>`. That environment is `local/environment.sh`'s, or
   the sandbox's or drill's own. The configs are therefore inline, and nothing is bind-mounted on

@@ -104,16 +104,17 @@ retained. There is no clear-result cache; every decision uses local database rea
 
 ## N-1 rollback
 
-The expand-only tables remain in place and N-1 ignores them. N-1 resumes the deprecated
-Chainalysis oracle, whose list is known to be stale, and may re-screen held deposits with that
-oracle. A successful rollback drill proves binary/schema compatibility, not current sanctions
-coverage. **Before a production rollback, pause all fund processing that depends on screening
-(settlement pause), regardless of active manual entries.** N-1 cannot see the supplements and
-uses the stale oracle. Retain the pause until N is restored and verified screening is healthy;
-a passing database/binary rollback drill does not authorize resuming settlement.
-Keep the previous configuration with the parsed `chain.sanctions_oracle`; N+1 removes it.
-N-1's strict configuration schema cannot parse the new top-level `sanctions` section, so use the
-retained previous configuration when rolling back.
+CI currently resolves v0.10.0 as N-1 for the next release's rollback rehearsal. It uses the
+verified OFAC SDN snapshot and manual supplements, supports the current `rpc` configuration and
+refund caps, and retains the sanctions tables. Use its retained verified configuration and kit;
+a successful rollback drill proves binary/schema compatibility, so also verify a fresh snapshot,
+manual supplements and re-screening before resuming screening-dependent processing.
+
+v0.10.0 is production's first release, with no earlier production rollback target. v0.9.2 ignores
+the sanctions tables and supplements, uses the known-stale Chainalysis oracle, and cannot parse
+the current configuration. Never deploy it to production. Pause and fix forward as in
+[production launch rollback](production-launch.md#12-rollback). Keep `chain.sanctions_oracle`
+in retained configurations for compatibility with older schemas; current screening does not use it.
 
 Run the disposable local [rollback drill](../local/rollback-drill.sh) with the verified published
 N-1 image digest. The N worker uses a loopback-only SLS fixture in the test-support build; the

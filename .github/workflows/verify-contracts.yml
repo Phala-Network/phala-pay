@@ -1,8 +1,9 @@
 name: Verify contracts
 
-# Read-only: validates Phala's committed staging configuration and, through its two Sepolia RPC
-# providers, checks the approved Safe and the deployed factory. It holds no key, so both providers
-# must be keyless; they appear only as "sepolia/a" and "sepolia/b" in the reports.
+# Read-only: validates Phala's committed staging and production configurations and verifies the
+# configured factories' and implementations' public bytecode against the committed reference.
+# Public verification reads use keyless endpoints, separate from the service's keyed read/verify
+# endpoints. RPC keys stay outside GitHub; these reads need no independent provider agreement.
 
 on:
   schedule:
@@ -30,8 +31,6 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      STAGING_CONFIG: deploy/environments/phala-network/staging/topup/topup.yaml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,26 +49,61 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-verify-contracts-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Validate the committed staging configuration
+      - name: Validate the committed environment configurations
         run: |
           mkdir -p reports
-          cargo run --locked -q -p topup -- config show "$STAGING_CONFIG" >reports/staging-config.json
+          for environment in staging production; do
+            cargo run --locked -q -p topup -- config show \
+              "deploy/environments/phala-network/$environment/topup/topup.yaml" \
+              >"reports/$environment-config.json"
+          done
 
-      - name: Verify the Safe and the factory deployment on both providers
+      - name: Resolve public verification targets
         run: |
-          # The providers of the configuration's Sepolia routes, in their order.
-          IFS=$'\t' read -r RPC_A RPC_B < <(jq -r '
-            [.routes[] | select(.chain.chain_id == 11155111)][0].chain.rpc_providers as $ids
-            | .rpc_providers as $urls | [$urls[$ids[0]], $urls[$ids[1]]] | @tsv' \
-            reports/staging-config.json)
-          [[ -n "$RPC_A" && -n "$RPC_B" && "$RPC_A$RPC_B" != *"{key}"* ]] ||
-            { echo "::error::the staging configuration needs two keyless Sepolia providers"; exit 1; }
+          # config show resolves each route's default implementation address without secrets.
+          jq -ers '
+            {"1": "https://ethereum-rpc.publicnode.com",
+             "8453": "https://base-rpc.publicnode.com",
+             "11155111": "https://ethereum-sepolia-rpc.publicnode.com",
+             "84532": "https://base-sepolia-rpc.publicnode.com"} as $endpoints
+            | [.[] | . as $config | .rpc[].chain_id as $chain
+               | ($endpoints[$chain | tostring]
+                  // error("no public verification RPC mapping for chain \($chain)")) as $url
+               | $config.routes[] | select(.chain.chain_id == $chain)
+               | [$chain, $url, .chain.forwarder_factory, .chain.implementation]]
+            | unique[] | @tsv' reports/staging-config.json reports/production-config.json \
+            >reports/contract-targets.tsv
+
+      - name: Verify the configured factory and implementation bytecode
+        run: |
           status=0
-          deploy/contracts/verify-safe.sh --rpc sepolia/a="$RPC_A" --rpc sepolia/b="$RPC_B" \
-            >reports/sepolia-safe-verification.json || status=1
-          deploy/contracts/verify-deployment.sh --rpc sepolia/a="$RPC_A" --rpc sepolia/b="$RPC_B" \
-            >reports/sepolia-contract-verification.json || status=1
-          jq '{passed, chains: [.chains[] | {target, passed}]}' reports/sepolia-*.json || true
+          while IFS=$'\t' read -r chain rpc factory implementation; do
+            actual_chain=$(cast chain-id --rpc-url "$rpc")
+            [[ "$actual_chain" == "$chain" ]] ||
+              { echo "::error::public verification RPC for chain $chain reports $actual_chain"; exit 1; }
+            for contract in factory implementation; do
+              address=${!contract}
+              expected=$(jq -er --arg contract "$contract" '.[$contract + "_code_hash"]' \
+                deploy/contracts/reference.json)
+              code=$(cast code "$address" --rpc-url "$rpc")
+              actual=$(cast keccak "$code")
+              passed=false
+              if [[ "$actual" == "$expected" ]]; then
+                passed=true
+              else
+                echo "::error::chain $chain $contract $address bytecode does not match the reference"
+                status=1
+              fi
+              jq -cn --argjson chain_id "$chain" --arg contract "$contract" --arg address "$address" \
+                --arg expected "$expected" --arg actual "$actual" --argjson passed "$passed" \
+                '{chain_id: $chain_id, contract: $contract, address: $address,
+                  expected_code_hash: $expected, actual_code_hash: $actual, passed: $passed}' \
+                >>reports/bytecode-verification.jsonl
+            done
+          done <reports/contract-targets.tsv
+          jq -s '{passed: all(.[]; .passed), contracts: .}' reports/bytecode-verification.jsonl \
+            >reports/contract-verification.json
+          cat reports/contract-verification.json
           exit "$status"
 
       - name: Upload the reports
