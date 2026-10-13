@@ -255,6 +255,7 @@ implementation, every sample forwarder, and runtime code hashes must be identica
 ## Base mainnet
 
 Production's Base route uses the same deterministic factory and implementation at chain 8453.
+It is **deployed and verified**; the transaction and evidence are under [Mainnet](#mainnet).
 Deploy and verify it only after the Ethereum mainnet deployment has passed the same human release
 approval. The network name is `base` in `deploy/contracts/networks.json`; the broadcast key stays
 in the operator's environment and is never an argument or a repository value.
