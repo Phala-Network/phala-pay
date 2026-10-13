@@ -320,10 +320,11 @@ Finance, Risk, and Operations approve the following in writing
 - any account `limits` that differ from the defaults;
 - the pilot limits above.
 
-The owner approved the committed pilot amounts on 2026-10-13: $5 minimum sale and 10,000-token
-maximum deposit per route, with `max_unfinalized_credit` of 1,000,000 cents ($10,000) per live
-account. One quote is also bounded by the account's live `max_open_amount_per_customer`, whose
-default is $5,000, so §10 raises Phala Cloud's to 1,000,000 cents ($10,000).
+The owner approved the committed pilot amounts on 2026-10-13: $5 minimum sale and $10,000 maximum
+quote, with `max_unfinalized_credit` of 1,000,000 cents ($10,000) per live account. One quote is
+bounded by the account's live `max_open_amount_per_customer`, whose default is $5,000, so §10
+raises Phala Cloud's to 1,000,000 cents. Each route's maximum deposit is 10,100 tokens, so a
+$10,000 quote overpaid within its default 1% tolerance is still accepted.
 Any change is a reviewed PR to `topup.yaml`, merged **before** §2. A settings change after
 provisioning costs an extra upgrade and changes the compose hash.
 
@@ -1142,8 +1143,8 @@ shred -u phala-cloud-account.json phala-cloud-account-limits.json phala-cloud-li
 unset SMOKE_MERCHANT_SECRET_KEY PHALA_CLOUD_MERCHANT_SECRET_KEY PHALA_CLOUD_API_KEY
 ```
 
-**Checks:** Phala Cloud's account has `charges_enabled: true` and Finance's
-`max_unfinalized_credit`. Both Safes are active treasuries, the three assets are accepted, and its
+**Checks:** Phala Cloud's account has `charges_enabled: true`, Finance's `max_unfinalized_credit`,
+and a live `max_open_amount_per_customer` of at least the largest approved quote. Both Safes are active treasuries, the three assets are accepted, and its
 webhook keys are pinned. Phala Cloud confirms receipt, the key roll, and its first live payment
 credited and delivered.
 
