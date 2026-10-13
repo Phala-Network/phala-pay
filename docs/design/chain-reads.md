@@ -60,10 +60,11 @@ Each round, staggered per chain:
    addresses whose `created_block` was lowered by `deposit_addresses.rs` reissue, restored
    addresses). Addresses issued after the snapshot are paid above `t` (payments before issuance
    are out of scope, as today).
-3. Query on **each** endpoint, windows ≤ `max_log_blocks`, recipient chunks of 1 000,
-   `topics: [[Transfer, ForwarderCreated, Flushed, FlushFailed], null, [chunk]]` (all four index
-   the recipient/forwarder at `topics[2]`, `contracts/src/ForwarderFactory.sol`; factory events
-   count only from the configured factory): C over `(c, e]`; G from
+3. Query on **each** endpoint, windows ≤ `max_log_blocks`: address-less Transfer logs with
+   recipient chunks of 1 000, `topics: [Transfer, null, [chunk]]`, plus the configured factory's
+   logs with `topics: [[ForwarderCreated, Flushed, FlushFailed]]`, filtered locally to the
+   tracked forwarders (`contracts/src/ForwarderFactory.sol`). This avoids multiplying four
+   event signatures by 1 000 recipients. Query C over `(c, e]`; G from
    `g = min(coalesce(dual_covered_through + 1, created_block))` to `g_end = min(e, g + L − 1)`,
    keeping only logs at or after each address's own start. Any failed request aborts the round.
 4. **Union** both candidate sets (never equality, never intersection) and resolve:
@@ -293,10 +294,14 @@ coverage-driven flow (§2.6) then expires or cancels it.
   never a crash loop.
 - Startup self-test = `topup rpc check`, both endpoints of every chain, real typed calls:
   `eth_chainId`; `latest`/`finalized` headers; typed transaction and receipt from the finalized
-  block; `eth_getLogs({blockHash})` returning a log of that receipt; the coverage query shape
-  (1 000 recipients, `max_log_blocks`); EIP-1898 `requireCanonical` calls (token `decimals`,
+  block; `eth_getLogs({blockHash})` returning a log of that receipt (equality ignores only
+  optional `blockTimestamp` metadata); the real `coverage_logs` queries (1 000 synthetic
+  recipients, `max_log_blocks`); EIP-1898 `requireCanonical` calls (token `decimals`,
   factory and Multicall3 code, price feeds) at the checkpoint; state at
-  2 × the observed finalized lag.
+  2 × the observed finalized lag. Contract identity and preflight boundaries use
+  `min(read.finalized, verify.finalized)`, then read both numbered headers and require matching
+  hash and timestamp. A height-only lag is not a disagreement in these checks. The runtime
+  checkpoint advancement rule (§2.5) is unchanged.
 - Deploy preflight runs that check through the real compose env path
   (`docker compose --env-file <candidate sealed env> -f <rendered compose> run --rm --no-deps
   topup topup rpc check …`, also for `restore-check`), replacing `docker run -e` in
@@ -386,13 +391,16 @@ Production D=46 and staging D=20 give 66 deposits/day; other existing caps remai
 The approved arithmetic, including all existing proof/reserve allocations, is:
 
 ```text
-Non-refund Ankr:   10,424 − 20×80 + 24×66 + 172 = 10,580
-Non-refund Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 = 865,460
-Combined Ankr:     10,580×1.1 + 4,968 = 16,606 calls/day
-Combined Infura:   865,460×1.1 + 397,440 = 1,349,446 credits/day
+Non-refund Ankr:   10,424 − 20×80 + 24×66 + 172 + 4×96 = 10,964
+Non-refund Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 + 4×96×255 = 963,380
+Combined Ankr:     ceil(10,964×1.1 + 4,968) = 17,029 calls/day
+Combined Infura:   963,380×1.1 + 397,440 = 1,457,158 credits/day
 ```
 
-Headroom is **33.58% Ankr / 10.04% Infura**. Non-refund reads use ×1.1; refunds reserve all
+Coverage logs increase from 96 to 192 per endpoint per payment chain per day. Headroom is
+**31.88% Ankr / 2.86% Infura** while staging shares Infura. The separate staging dRPC verify
+PR (`deploy/staging-drpc-rpc`) restores Infura headroom and must merge before production launch
+§2; all caps remain unchanged. Non-refund reads use ×1.1; refunds reserve all
 three transport attempts. Logical method counts have hard bounds; each method can still make
 up to three physical sends. These totals do not guarantee ten-percent headroom if all
 non-refund requests exhaust retries. See the

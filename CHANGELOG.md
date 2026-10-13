@@ -21,6 +21,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   (deploy/CONTRACTS.md, "Mainnet"). The daily contract verification no longer treats chains `1`
   and `8453` as pending, so an empty or mismatched deployment on either chain now fails it.
 
+### Fixed (operators)
+
+- Coverage uses separate Transfer-recipient and factory-address log queries so Ankr accepts
+  the full 1,000-address cap; `topup rpc check` exercises those same queries. Receipt-log
+  self-tests tolerate optional `blockTimestamp` metadata, and dual contract/preflight checks
+  compare both headers at the lower finalized height, with contract failures reporting their
+  result or error. The corrected RPC budget requires staging's separate dRPC verify move
+  before production launch §2; caps and runtime checkpoint advancement remain unchanged.
+
 ## [0.10.3] - 2026-10-12
 
 ### Fixed (operators)

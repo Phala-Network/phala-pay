@@ -400,9 +400,10 @@ async fn coverage_method_counts_match_normal_and_catchup_budget() -> Result<()> 
                     );
                     topup::scanner::coverage_once(pool, &read, &verify, &chains[0], round).await?;
                     // RPC.md's fixed coverage line: two boundary headers and two recipient
-                    // sets, each split into ceil(L/3000) logs windows. This omitted unmarked
-                    // deposit additionally needs one receipt, header and transaction per endpoint.
-                    let expected = 2 + 2 * windows + 3;
+                    // sets, each split into ceil(L/3000) windows with one Transfer query and
+                    // one factory query. This omitted unmarked deposit additionally needs one
+                    // receipt, header and transaction per endpoint.
+                    let expected = 2 + 2 * 2 * windows + 3;
                     for (endpoint, count) in state.methods.iter().enumerate() {
                         ensure!(
                             count.load(Ordering::SeqCst) == expected,
