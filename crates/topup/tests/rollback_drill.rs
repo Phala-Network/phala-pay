@@ -108,12 +108,13 @@ struct Relay {
     scanner_observed: Arc<AtomicBool>,
 }
 async fn relay(State(s): State<Relay>, Json(request): Json<Value>) -> Json<Value> {
-    // Block all scanner range queries, including fast detection, while allowing startup's
-    // 1000-recipient capability test and block-hash receipt checks to finish normally.
+    // Hold runtime recipient queries, including fast discovery and dual coverage. Startup's
+    // 1000-recipient probe, its separate factory query and block-hash receipt checks pass.
     if s.scanner_gate.load(Ordering::SeqCst)
         && request["method"] == "eth_getLogs"
         && !request["params"][0]["fromBlock"].is_null()
         && !request["params"][0]["toBlock"].is_null()
+        && !request["params"][0]["topics"][2].is_null()
         && !request["params"][0]["topics"][2]
             .as_array()
             .is_some_and(|recipients| recipients.len() == 1000)
@@ -125,12 +126,12 @@ async fn relay(State(s): State<Relay>, Json(request): Json<Value>) -> Json<Value
     }
     if s.gate.load(Ordering::SeqCst)
         && request["method"] == "eth_getLogs"
-        && request["params"][0]["topics"][2]
-            .as_array()
-            .is_some_and(|recipients| recipients.len() < 1000)
+        && !request["params"][0]["fromBlock"].is_null()
+        && !request["params"][0]["toBlock"].is_null()
+        && !request["params"][0]["address"].is_null()
         && request["params"][0]["topics"][0]
             .as_array()
-            .is_some_and(|topics| topics.len() == 4)
+            .is_some_and(|topics| topics.len() == 3)
     {
         s.observed.store(true, Ordering::SeqCst);
         while s.gate.load(Ordering::SeqCst) {
@@ -210,6 +211,81 @@ where
         ensure!(tokio::time::Instant::now() < end, "timed out: {label}");
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+#[tokio::test]
+async fn coverage_gate_allows_preflight_then_interrupts_the_factory_request() -> Result<()> {
+    use alloy_primitives::U256;
+    use topup_adapters::chain::evm::{ChainReader, EvmClient, FinalizedReader};
+
+    let (upstream, _upstream_task) = serve(Router::new().route(
+        "/",
+        post(|Json(request): Json<Value>| async move {
+            assert_eq!(request["method"], "eth_getLogs");
+            Json(json!({"jsonrpc":"2.0","id":request["id"],"result":[]}))
+        }),
+    ))
+    .await?;
+    let state = Relay {
+        upstream,
+        client: reqwest::Client::new(),
+        gate: Arc::new(AtomicBool::new(false)),
+        observed: Arc::new(AtomicBool::new(false)),
+        scanner_gate: Arc::new(AtomicBool::new(true)),
+        scanner_observed: Arc::new(AtomicBool::new(false)),
+    };
+    let (origin, _relay_task) = serve(
+        Router::new()
+            .route("/{*path}", post(relay))
+            .with_state(state.clone()),
+    )
+    .await?;
+    let reader = FinalizedReader::new(Arc::new(EvmClient::new(&format!(
+        "{origin}/local-drill-key"
+    ))?));
+    let factory = Address::repeat_byte(0x42);
+    let recipients: Vec<_> = (1..=1000_u64)
+        .map(|i| Address::from_word(U256::from(i).into()))
+        .collect();
+    let bound = Duration::from_secs(5);
+    // Exercise the actual two-query preflight shape while runtime recipient reads are held.
+    tokio::time::timeout(bound, reader.coverage_logs(factory, &recipients, 1, 100)).await??;
+    ensure!(!state.scanner_observed.load(Ordering::SeqCst));
+
+    // Alloy serializes one recipient as a scalar and multiple recipients as an array.
+    for runtime_recipients in [
+        vec![Address::repeat_byte(0x43)],
+        vec![Address::repeat_byte(0x43), Address::repeat_byte(0x44)],
+    ] {
+        state.scanner_gate.store(true, Ordering::SeqCst);
+        state.scanner_observed.store(false, Ordering::SeqCst);
+        state.observed.store(false, Ordering::SeqCst);
+        let coverage = reader.coverage_logs(factory, &runtime_recipients, 1, 100);
+        tokio::pin!(coverage);
+        tokio::select! {
+            result = &mut coverage => anyhow::bail!("runtime coverage bypassed scanner gate: {result:?}"),
+            result = tokio::time::timeout(bound, wait_until("runtime recipient query held", || async {
+                Ok(state.scanner_observed.load(Ordering::SeqCst))
+            })) => result??,
+        }
+        state.gate.store(true, Ordering::SeqCst);
+        state.scanner_gate.store(false, Ordering::SeqCst);
+        tokio::select! {
+            result = &mut coverage => anyhow::bail!("runtime coverage bypassed factory gate: {result:?}"),
+            result = tokio::time::timeout(bound, wait_until("factory coverage query held", || async {
+                Ok(state.observed.load(Ordering::SeqCst))
+            })) => result??,
+        }
+        ensure!(
+            tokio::time::timeout(Duration::from_millis(100), &mut coverage)
+                .await
+                .is_err()
+        );
+        state.gate.store(false, Ordering::SeqCst);
+        let (transfers, events) = tokio::time::timeout(bound, &mut coverage).await??;
+        ensure!(transfers.is_empty() && events.is_empty());
+    }
+    Ok(())
 }
 async fn merchant(origin: &str, key: &str, path: &str, body: Value) -> Result<Value> {
     let response = reqwest::Client::new()
@@ -540,9 +616,14 @@ async fn published_image_round_trip() -> Result<()> {
         send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&salts,&format!("{token:#x}")])?;
         anvil.mine(16)?;
         let before:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;
-        gate.store(true,Ordering::SeqCst);observed.store(false,Ordering::SeqCst);
+        // Let startup finish both capability queries, then interrupt runtime coverage after
+        // its Transfer query and before its factory query can finish or commit any boundary.
+        scanner_gate.store(true,Ordering::SeqCst);scanner_observed.store(false,Ordering::SeqCst);
+        observed.store(false,Ordering::SeqCst);
         let mut interrupted=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;
         ready(&mut interrupted,&origin).await?;
+        wait_until("coverage recipient query held before interruption",||async {Ok(scanner_observed.load(Ordering::SeqCst))}).await?;
+        gate.store(true,Ordering::SeqCst);scanner_gate.store(false,Ordering::SeqCst);
         wait_until("coverage request interrupted",||async {Ok(observed.load(Ordering::SeqCst))}).await?;
         interrupted.stop()?;gate.store(false,Ordering::SeqCst);
         let after:(i64,i64)=sqlx::query_as("SELECT through_block,(SELECT scanned_block FROM cursors WHERE chain_id=1) FROM chain_coverage WHERE chain_id=1").fetch_one(&database.app_pool).await?;ensure!(before==after,"interrupted coverage advanced");
