@@ -213,8 +213,25 @@ network, so `verify-safe.sh` refuses a Base Sepolia target instead of checking t
 
 ## Mainnet
 
-Not deployed yet. Repeat only after Sepolia verification and the human release approval; if
-anyone has deployed the factory first, the broadcast sends nothing. **HUMAN-ONLY:**
+**Deployed on Ethereum mainnet (1) and Base mainnet (8453), and verified** (October 13, 2026 UTC):
+
+| Chain | Deployment transaction | Block |
+|---|---|---:|
+| Ethereum (1) | [`0xa6ce3af877893dcb994fd31eae090a17f7f897b06b9434e99771fd0a5bc3f0c3`](https://etherscan.io/tx/0xa6ce3af877893dcb994fd31eae090a17f7f897b06b9434e99771fd0a5bc3f0c3) | 26,180,131 |
+| Base (8453) | [`0xbe9dcbb3b784c77bbb9fab71771892475232930baa1a637b166b1fb65720128e`](https://basescan.org/tx/0xbe9dcbb3b784c77bbb9fab71771892475232930baa1a637b166b1fb65720128e) | 52,531,879 |
+
+Both transactions came from the throwaway deployer EOA
+`0x75370c0994853a35f126C05641da6B2b64dF8cFA` through the canonical CREATE2 proxy and created
+`ForwarderFactory` `0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747` and forwarder implementation
+`0x49F2F1F1a25269Ea0C6FF2AB1C7B09dCBE9c5bA9`. The factory has no owner, so the deployer holds no
+authority over it. `verify-deployment.sh` passed with two independent providers per chain. All
+four targets reported the same factory, implementation and proxy code hashes as
+[`reference.json`](contracts/reference.json) and Sepolia, and the same sample forwarders. The
+operator keeps the JSON reports. The Verify contracts workflow re-checks both chains daily.
+
+To redeploy on a new chain or verify again, repeat the steps below only after Sepolia verification
+and the human release approval. If anyone has deployed the factory first, the broadcast sends
+nothing. **HUMAN-ONLY:**
 
 ```sh
 read -rsp "Deployment private key: " PRIVATE_KEY && printf '\n'
@@ -238,6 +255,7 @@ implementation, every sample forwarder, and runtime code hashes must be identica
 ## Base mainnet
 
 Production's Base route uses the same deterministic factory and implementation at chain 8453.
+It is **deployed and verified**; the transaction and evidence are under [Mainnet](#mainnet).
 Deploy and verify it only after the Ethereum mainnet deployment has passed the same human release
 approval. The network name is `base` in `deploy/contracts/networks.json`; the broadcast key stays
 in the operator's environment and is never an argument or a repository value.

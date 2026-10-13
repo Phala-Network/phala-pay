@@ -14,6 +14,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed (operators)
+
+- `ForwarderFactory` `0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747` and its forwarder implementation
+  are deployed on Ethereum mainnet and Base mainnet and verified on two providers per chain
+  (deploy/CONTRACTS.md, "Mainnet"). The daily contract verification no longer treats chains `1`
+  and `8453` as pending, so an empty or mismatched deployment on either chain now fails it.
+
 ## [0.10.3] - 2026-10-12
 
 ### Fixed (operators)
