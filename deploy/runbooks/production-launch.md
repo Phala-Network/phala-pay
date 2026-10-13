@@ -773,11 +773,11 @@ prove_live_treasuries "$SMOKE_MERCHANT_SECRET_KEY" "$ETH_TREASURY_SAFE" "$BASE_T
 curl -fsS -H "Authorization: Bearer $SMOKE_MERCHANT_SECRET_KEY" "$ORIGIN/v1/config" | jq
 ```
 
-Make three $1 payments from a funded Foundry keystore. Ethereum USDC and Base USDC submit a
-transaction-hash hint. Ethereum USDT sends none, which proves scanner discovery. Each payment waits
-at most one hour for a credited deposit. Credit comes at the route's confirmation within
-`max_unfinalized_credit`, otherwise at finality. On any failure, stop. `PAYER_RPC_ETHEREUM` and
-`PAYER_RPC_BASE` are the operator's RPCs, not the service's keys:
+Make three $5 payments, the committed `min_amount`, from a funded Foundry keystore. Ethereum USDC
+and Base USDC submit a transaction-hash hint. Ethereum USDT sends none, which proves scanner
+discovery. Each payment waits at most one hour for a credited deposit. Credit comes at the route's
+confirmation within `max_unfinalized_credit`, otherwise at finality. On any failure, stop.
+`PAYER_RPC_ETHEREUM` and `PAYER_RPC_BASE` are the operator's RPCs, not the service's keys:
 
 ```sh
 # Copy the keystore password from the secret store into this private work directory first.
@@ -798,14 +798,14 @@ wait_for_credit() {
   return 1
 }
 
-# smoke_payment LABEL CHAIN_ID ASSET TOKEN RPC_URL HINT: one $1 quote paid from the keystore; with
+# smoke_payment LABEL CHAIN_ID ASSET TOKEN RPC_URL HINT: one $5 quote paid from the keystore; with
 # HINT=hint its transaction hash is submitted to the quote. Sets CREDITED_DEPOSIT_ID.
 smoke_payment() {
   local label=$1 chain_id=$2 asset=$3 token=$4 rpc_url=$5 hint=$6 quote quote_id address amount tx_hash
   quote="$(curl -fsS -X POST "$ORIGIN/v1/quotes" -H "Authorization: Bearer $SMOKE_MERCHANT_SECRET_KEY" \
     -H 'content-type: application/json' -H "Idempotency-Key: production-smoke-$label-1" \
     -d "$(jq -cn --arg label "$label" --argjson chain_id "$chain_id" --arg asset "$asset" \
-      '{client_reference_id:("production-smoke-" + $label),amount:100,currency:"usd",chain_id:$chain_id,asset:$asset}')")" || return 1
+      '{client_reference_id:("production-smoke-" + $label),amount:500,currency:"usd",chain_id:$chain_id,asset:$asset}')")" || return 1
   quote_id="$(jq -er '.id' <<<"$quote")" && address="$(jq -er '.address' <<<"$quote")" &&
     amount="$(jq -er '.amount_atomic' <<<"$quote")" || return 1
   tx_hash="$(cast send --json --account "$PAYER_ACCOUNT" --password-file "$PAYER_PASSWORD_FILE" \
