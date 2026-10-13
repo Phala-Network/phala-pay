@@ -89,13 +89,30 @@ groups:
           runbook: "deploy/runbooks/address-capacity.md"
       - record: topup_rpc_daily_calls
         expr: sum by (provider, chain_id) (increase(topup_rpc_calls_total[1d]))
+      # Staging only: production has no Infura endpoints.
       - record: topup_rpc_infura_daily_credits
         expr: sum by (provider, chain_id) (increase(topup_rpc_calls_total{provider=~"infura-.*",method="eth_getLogs"}[1d])) * 255 + sum by (provider, chain_id) (increase(topup_rpc_calls_total{provider=~"infura-.*",method!="eth_getLogs"}[1d])) * 80
       - alert: RpcInfuraQuotaPressure
         expr: sum(topup_rpc_infura_daily_credits) > 1500000
         labels: { severity: warning }
         annotations:
-          summary: "Infura daily run rate exceeds half the shared quota; stop adding load"
+          summary: "Staging Infura daily credits exceed 1,500,000; stop adding load"
+          runbook: "deploy/runbooks/rpc-health.md"
+      # Production only: one BlockPI account across both chain keys. Base RU rates exclude
+      # eth_getLogs response-size surcharges; reconcile with the provider dashboard.
+      - record: topup_rpc_blockpi_weekly_ru
+        expr: >-
+          (sum(increase(topup_rpc_calls_total{provider=~"blockpi-.*",method="eth_getLogs"}[7d])) or vector(0)) * 50
+          + (sum(increase(topup_rpc_calls_total{provider=~"blockpi-.*",method=~"eth_getCode|eth_getTransactionReceipt"}[7d])) or vector(0)) * 15
+          + (sum(increase(topup_rpc_calls_total{provider=~"blockpi-.*",method="eth_blockNumber"}[7d])) or vector(0)) * 10
+          + (sum(increase(topup_rpc_calls_total{provider=~"blockpi-.*",method="eth_chainId"}[7d])) or vector(0)) * 5
+          + (sum(increase(topup_rpc_calls_total{provider=~"blockpi-.*",method=~"eth_getBlockByNumber|eth_getBlockByHash|eth_call"}[7d])) or vector(0)) * 20
+          + (sum(increase(topup_rpc_calls_total{provider=~"blockpi-.*",method!~"eth_getLogs|eth_getCode|eth_getTransactionReceipt|eth_blockNumber|eth_chainId|eth_getBlockByNumber|eth_getBlockByHash|eth_call"}[7d])) or vector(0)) * 35
+      - alert: RpcBlockpiQuotaPressure
+        expr: topup_rpc_blockpi_weekly_ru / 7 > 1250000
+        labels: { severity: warning }
+        annotations:
+          summary: "Production BlockPI seven-day run rate exceeds 1,250,000 RU/day; stop adding load"
           runbook: "deploy/runbooks/rpc-health.md"
       - alert: RpcAnkrQuotaPressure
         expr: sum(sum by (provider) (increase(topup_rpc_calls_total{provider=~"ankr-.*"}[7d]))) / 7 > 25000

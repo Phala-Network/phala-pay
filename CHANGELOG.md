@@ -14,6 +14,16 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed (operators)
+
+- Production reads with Ankr and verifies with BlockPI free on Ethereum and Base, using separate
+  sealed `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` / `TOPUP_RPC_BLOCKPI_BASE_KEY` mappings and 1,000-block
+  log windows under the measured 1,024-block cap. Production removes `TOPUP_RPC_INFURA_KEY`;
+  staging stays on Ankr + Infura. The launch gate is production's reviewed allocation and
+  preflight before provisioning, replacing the staging dRPC prerequisite. Per-account budgets
+  and quota alerts cover shared Ankr, staging-only Infura and production-only BlockPI;
+  configured D=46/20 and every other cap stay unchanged.
+
 ## [0.10.4] - 2026-10-13
 
 ### Changed (operators)
@@ -29,8 +39,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   the full 1,000-address cap; `topup rpc check` exercises those same queries. Receipt-log
   self-tests tolerate optional `blockTimestamp` metadata, and dual contract/preflight checks
   compare both headers at the lower finalized height, with contract failures reporting their
-  result or error. The corrected RPC budget requires staging's separate dRPC verify move
-  before production launch §2; caps and runtime checkpoint advancement remain unchanged.
+  result or error. The production launch allocation uses Ankr read + BlockPI verify while staging
+  stays on Ankr + Infura; caps and runtime checkpoint advancement remain unchanged.
 
 ## [0.10.3] - 2026-10-12
 

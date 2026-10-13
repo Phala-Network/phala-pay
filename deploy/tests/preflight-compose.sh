@@ -20,34 +20,47 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 docker image inspect "$probe" >/dev/null 2>&1 || docker pull "$probe" >/dev/null
 jq -n --arg image "$probe" '{"phala-pay":$image,"postgres-walg":$image}' >"$tmp/images.json"
-printf '%s\n' TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY SENTRY_DSN >"$tmp/sealed"
-printf '%s\n' TOPUP_RPC_ANKR_KEY=candidate-read TOPUP_RPC_INFURA_KEY=candidate-verify >"$tmp/candidate.env"
 # These must never override the candidate, including a name omitted from the candidate.
 export TOPUP_RPC_ANKR_KEY=ambient-read TOPUP_RPC_INFURA_KEY=ambient-verify SENTRY_DSN=ambient-sentry
-for variant in service restore-check; do
-    inputs=(--gateway-domain gateway.dstack-pha-prod5.phala.network)
-    [[ "$variant" != restore-check ]] || inputs=(--restore-check --origin https://restore.example.net)
-    "$root/deploy/render.sh" "${inputs[@]}" --project-name "$project-$variant" \
-        --images "$tmp/images.json" "$root/deploy/environments/phala-network/staging/topup" >"$tmp/rendered.yml"
-    "$compose" -f "$tmp/rendered.yml" config --no-interpolate --format json |
-        jq --arg image "$probe" '
-            .services |= with_entries(select(.key == "topup" or .key == "restore-check")
-                | .value |= (del(.depends_on,.volumes,.ports,.healthcheck,.networks)
-                    | .image=$image | .network_mode="none" | .restart="no"
-                    | .entrypoint=["/bin/sh","-c","test \"$1 $2 $3 $4 $5\" = \"topup rpc check --config /etc/topup/topup.yaml\" && test \"$TOPUP_RPC_ANKR_KEY\" = candidate-read && test \"$TOPUP_RPC_INFURA_KEY\" = candidate-verify && test -z \"$SENTRY_DSN\" && test -r /etc/topup/topup.yaml", "probe"]))
-            | del(.volumes,.networks)
-        ' >"$tmp/raw.json"
-    # Escape only shell dollars; preserve candidate interpolation in the rendered environment.
-    jq '.services[].entrypoint |= map(if startswith("test ") then gsub("\\$"; "$$") else . end)' \
-        "$tmp/raw.json" >"$tmp/probe-$variant.json"
-    compose_topup "$tmp/candidate.env" "$tmp/probe-$variant.json" "$tmp/sealed" rpc check --config
-    grep -v '^TOPUP_RPC_INFURA_KEY=' "$tmp/candidate.env" >"$tmp/missing.env"
-    if compose_topup "$tmp/missing.env" "$tmp/probe-$variant.json" "$tmp/sealed" rpc check --config; then
-        echo 'ambient verify key supplied a missing candidate secret' >&2; exit 1
-    fi
-    jq 'del(.services.topup.environment.TOPUP_RPC_INFURA_KEY)' "$tmp/probe-$variant.json" >"$tmp/probe-$variant-missing.json"
-    if compose_topup "$tmp/candidate.env" "$tmp/probe-$variant-missing.json" "$tmp/sealed" rpc check --config; then
-        echo 'missing compose key mapping passed' >&2; exit 1
-    fi
-    echo "ok: $variant candidate env, missing key, missing mapping, command override"
+export TOPUP_RPC_BLOCKPI_ETHEREUM_KEY=ambient-verify TOPUP_RPC_BLOCKPI_BASE_KEY=ambient-verify
+for environment in staging production; do
+    verify_keys=(TOPUP_RPC_INFURA_KEY)
+    [[ "$environment" != production ]] || verify_keys=(TOPUP_RPC_BLOCKPI_ETHEREUM_KEY TOPUP_RPC_BLOCKPI_BASE_KEY)
+    printf '%s\n' TOPUP_RPC_ANKR_KEY "${verify_keys[@]}" SENTRY_DSN >"$tmp/sealed"
+    printf '%s\n' TOPUP_RPC_ANKR_KEY=candidate-read >"$tmp/candidate.env"
+    probe_command='test "$1 $2 $3 $4 $5" = "topup rpc check --config /etc/topup/topup.yaml" && test "$TOPUP_RPC_ANKR_KEY" = candidate-read && test -z "$SENTRY_DSN" && test -r /etc/topup/topup.yaml'
+    for key in "${verify_keys[@]}"; do
+        printf '%s=candidate-verify\n' "$key" >>"$tmp/candidate.env"
+        probe_command+=" && test \"\$$key\" = candidate-verify"
+    done
+    for variant in service restore-check; do
+        name="$environment-$variant"
+        inputs=(--gateway-domain gateway.dstack-pha-prod5.phala.network)
+        [[ "$variant" != restore-check ]] || inputs=(--restore-check --origin https://restore.example.net)
+        "$root/deploy/render.sh" "${inputs[@]}" --project-name "$project-$name" \
+            --images "$tmp/images.json" "$root/deploy/environments/phala-network/$environment/topup" >"$tmp/rendered.yml"
+        "$compose" -f "$tmp/rendered.yml" config --no-interpolate --format json |
+            jq --arg image "$probe" --arg command "$probe_command" '
+                .services |= with_entries(select(.key == "topup" or .key == "restore-check")
+                    | .value |= (del(.depends_on,.volumes,.ports,.healthcheck,.networks)
+                        | .image=$image | .network_mode="none" | .restart="no"
+                        | .entrypoint=["/bin/sh","-c",$command, "probe"]))
+                | del(.volumes,.networks)
+            ' >"$tmp/raw.json"
+        # Escape only shell dollars; preserve candidate interpolation in the rendered environment.
+        jq '.services[].entrypoint |= map(if startswith("test ") then gsub("\\$"; "$$") else . end)' \
+            "$tmp/raw.json" >"$tmp/probe-$name.json"
+        compose_topup "$tmp/candidate.env" "$tmp/probe-$name.json" "$tmp/sealed" rpc check --config
+        for key in "${verify_keys[@]}"; do
+            grep -v "^$key=" "$tmp/candidate.env" >"$tmp/missing.env"
+            if compose_topup "$tmp/missing.env" "$tmp/probe-$name.json" "$tmp/sealed" rpc check --config; then
+                echo 'ambient verify key supplied a missing candidate secret' >&2; exit 1
+            fi
+            jq --arg key "$key" 'del(.services.topup.environment[$key])' "$tmp/probe-$name.json" >"$tmp/probe-$name-missing.json"
+            if compose_topup "$tmp/candidate.env" "$tmp/probe-$name-missing.json" "$tmp/sealed" rpc check --config; then
+                echo 'missing compose key mapping passed' >&2; exit 1
+            fi
+        done
+        echo "ok: $name candidate env, missing key, missing mapping, command override"
+    done
 done

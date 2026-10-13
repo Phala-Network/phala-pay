@@ -113,8 +113,8 @@ verified. Restore N-1 with its verified release configuration, which predates th
   operator's admin key retains full access. For generation, CI configuration and overlapping
   rotation, see [planned upgrades](../deploy/README.md#planned-upgrade-admission-and-downtime).
 - **`rpc`** configures exactly one read/verify pair per route or price chain. Read is Ankr;
-  verify is Infura. IDs are globally unique `[a-z0-9-]{1,40}` labels, chain IDs are unique,
-  both endpoints use HTTPS and their hosts differ. Each URL has one `{key}` as a whole path
+  verify is BlockPI in production and Infura in staging. IDs are globally unique `[a-z0-9-]{1,40}`
+  labels, chain IDs are unique, both endpoints use HTTPS and their hosts differ. Each URL has one `{key}` as a whole path
   segment or query value; `sealed_key` names an explicit `TOPUP_RPC_[A-Z0-9_]+_KEY` variable.
   `max_log_blocks` is positive and measured per endpoint. Every configured sealed key must be
   present in the candidate sealed environment and in the topup/restore-check compose mapping.

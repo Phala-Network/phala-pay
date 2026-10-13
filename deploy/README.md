@@ -298,9 +298,10 @@ hash. The sealed names are:
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, the object store's token (declared in
   [compose.yaml](compose.yaml));
 - `SENTRY_DSN`, required for production; staging and templates may leave it empty to turn Sentry off;
-- `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`, declared in each environment's
-  `compose.yaml` overlay. Each replaces `{key}` in its endpoint's attested URL, including
-  staging's route and price chains.
+- `TOPUP_RPC_ANKR_KEY`, shared by production and staging; `TOPUP_RPC_INFURA_KEY` in staging
+  only (including its mainnet price chains); `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
+  `TOPUP_RPC_BLOCKPI_BASE_KEY` in production only. Each replaces `{key}` in its endpoint's
+  attested URL and is declared in that environment's `compose.yaml` and restore-check mapping.
 
 Each line is `NAME=VALUE`, the value as is. The Phala Cloud CLI reads the file as dotenv does, which
 would cut a value at `#` and strip quotes and surrounding whitespace, so preflight refuses a value
@@ -451,12 +452,14 @@ a testnet quick start and is why an instance with merchants uses the service pat
 ### RPC providers
 
 Every chain used for payments or prices has one read endpoint (Ankr) and one verify endpoint
-(Infura), configured in top-level `rpc`. Both independently derive money evidence; state calls
+(BlockPI in production, Infura in staging), configured in top-level `rpc`. Both independently derive money evidence; state calls
 use canonical EIP-1898 hash pins. There is no in-process failover.
 
 URLs use `{key}` placeholders and explicit `sealed_key` names. Staging uses
-`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Seal the complete secret set; both topup and
-restore-check declare these names in their compose environment mappings.
+`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`; production uses Ankr plus
+`TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY` from one BlockPI account.
+BlockPI uses `max_log_blocks: 1000` below its measured free 1,024-block limit. Seal the complete
+secret set; both topup and restore-check declare the environment's keys in compose mappings.
 
 `topup config check --secrets FILE` validates the strict public schema and keys without network
 access. `topup rpc check --config FILE` checks both endpoints, complete recipient log filters,
@@ -622,15 +625,14 @@ cost per month = 30 × cost per day
 [Chain reads §5.2](../docs/design/chain-reads.md#52-worst-case-daily-budget-staging--production-combined)
 accounts for fixed 300-second discovery, independent 600-second checkpoints, 3,600-second
 coverage, bounded backfill and six-hour catch-up. Compare measured call counters with each
-provider's dashboard. Production keeps the existing Ankr and Infura accounts. Before production
-launch §2, staging must retain Ankr read, move verify to dRPC, and stop using Infura. The reviewed
-PR on `deploy/staging-drpc-rpc` must merge and the authorized staging upgrade must pass
-verification: this is a launch gate with a named Operations owner and issue. All caps stay
-unchanged; later cap changes require a separately reviewed budget. Production-attested comment
-edits cost an upgrade, so batch them with the next planned production upgrade
-([launch §1.8](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-launch-gate)).
-Each fresh quote snapshot costs one read call and
-240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
+provider's dashboard. Production reads with Ankr and verifies with BlockPI; staging stays on
+Ankr + Infura. Merge and preflight the production allocation and complete sealed mappings
+before launch §2; no dRPC move or staging upgrade is required by this allocation. All caps stay
+unchanged; later increases require a separately reviewed budget. Production-attested comments
+are updated before provisioning
+([launch §1.8](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
+Each fresh quote snapshot costs one read call, 240 Infura verify credits in staging or 60
+BlockPI RU in production; the DB enforces 60 per price chain per UTC day per environment.
 [RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all nine
 chain/token routes (three production, six staging), refunds, unresolved finality stock, slow
 confirmation lane L and proof work. Parallel-mode caps are production D=46/day and staging

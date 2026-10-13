@@ -5,11 +5,11 @@ the **approved release** selected in §1.1. Agents and CI run none of it. The co
 are USDC and USDT on Ethereum (chain 1) and USDC on Base (chain 8453), in
 [production/topup](../environments/phala-network/production/topup). Base USDC adds a one-hour
 sequencer uptime grace period. Both chains use the same deterministic factory, deployed on each chain
-separately. Production keeps the existing Ankr read and Infura verify accounts. Before §2,
-staging must retain Ankr read, move verify to dRPC, and stop using Infura (§1.8). The staging
-move is a launch gate: the reviewed PR on `deploy/staging-drpc-rpc` must merge and the authorized
-staging upgrade must pass verification. Production D=46, staging D=20, and every other cap stay
-unchanged ([RPC operations](../RPC.md#worst-case-pilot-budget)).
+separately. Production reads with Ankr and verifies with BlockPI on both mainnets. Before §2,
+the reviewed production RPC allocation and complete sealed mappings must be merged and pass
+preflight (§1.8). Staging stays on Ankr + Infura; no dRPC move is required. Production D=46,
+staging D=20, and every other cap stay unchanged
+([RPC operations](../RPC.md#worst-case-pilot-budget)).
 
 Each section ends with its checks. Do not start a section until every check of the previous one
 passes, and record each result in the [sign-off checklist](#13-sign-off-checklist). A failed check
@@ -38,7 +38,7 @@ means stop, fix the cause, and repeat the step. Never work around it.
 | Safe challenge/proof sets per day | 10 (2) | Operational |
 | Extra RPC calls per endpoint per day | 150 (150) | Operational reserve |
 | Historical issued addresses per payment chain | 1,000 | Service: `422 address_capacity_reached` |
-| Ankr calls/day (seven-day run rate) and Infura credits/day | 25,000 and 1,500,000 | Stop lines: add no load at or above them |
+| Ankr calls/day (shared seven-day run rate), Infura credits/day (staging), BlockPI RU/day (production seven-day run rate) | 25,000; 1,500,000; 1,250,000 | Stop lines: add no load at or above them |
 
 D, the factory and Safe caps, the reserve, S and L have no code enforcement. Count recovery work and
 failed attempts against them, and stop new load at each limit (§11). The UTC day starts at 5:00 PM
@@ -54,7 +54,7 @@ PDT (4:00 PM PST).
 
 ## 1. Owner prerequisites
 
-Each required check is a gate for §2, including staging's move off Infura in §1.8; §1.10
+Each required check is a gate for §2, including the production RPC allocation in §1.8; §1.10
 marks the website setting as an owner decision. Never commit or paste a private key, token, seed,
 or env file, and keep them out of chat and tickets.
 
@@ -348,38 +348,33 @@ Repeat the check for the Phala Cloud Base Safe with `base/a` and `base/b`, and f
 **Checks:** all four reports have `passed: true`. The owners, threshold, singleton, modules, guard,
 and fallback handler match Finance's approval.
 
-### 1.8 Ankr and Infura accounts and the staging launch gate
+### 1.8 RPC accounts and production allocation
 
-Production keeps the existing Ankr and Infura accounts and the `rpc` pairs committed in
-`topup.yaml`. The current shared-account budget leaves only 2.86% Infura headroom. Before §2,
-staging must retain Ankr read, move verify to dRPC on every configured chain (including mainnet
-price observations), and stop using Infura. This is a launch gate with a named Operations owner
-and tracking issue. Never register a second Ankr or Infura account to stack free quotas.
+Production uses Ankr read and BlockPI verify on Ethereum and Base, with
+`max_log_blocks: 1000` for BlockPI's measured 1,024-block free-tier cap. Staging retains Ankr
+read and Infura verify on every configured chain, including mainnet price observations.
+Never register extra free accounts to stack quotas. The two BlockPI chain keys share one account.
 
-Complete the staging move under [Adding free capacity](../RPC-PROVIDERS.md#adding-free-capacity):
-
-1. The reviewed PR on `deploy/staging-drpc-rpc` retains staging's Ankr read endpoints, replaces
-   its Infura verify endpoints with dRPC, adds the dRPC sealed credential in staging's
-   `topup.yaml`, and updates `rpc-alerts.yaml`. It recomputes the
-   [pilot budget](../RPC.md#worst-case-pilot-budget), passes preflight, and merges before §2.
-   It also updates the "shared with staging" statements in [RPC.md](../RPC.md), [phala.md](../phala.md),
-   [README.md](../README.md), and production's `topup.yaml` and `compose.yaml` comments. The
-   comments are production-attested: editing them costs a production upgrade. Batch those
-   comment edits with the next planned production upgrade, through its reviewed PR.
-2. Re-seal staging with its complete new secret set, retaining `TOPUP_RPC_ANKR_KEY`, adding the
-   dRPC credential, and removing `TOPUP_RPC_INFURA_KEY`. Complete the authorized staging upgrade
-   before §2. Confirm staging is healthy, compose-path preflight and `rpc check` pass with the
-   Ankr/dRPC pair, and Infura shows no staging traffic. Ankr continues serving staging reads.
-3. Optionally regenerate production's Infura key after staging moves, if the provider allows it.
-   Key regeneration is not required. Ankr remains shared with staging, so coordinate any Ankr
-   key rotation across both environments. Keep the values in the owner's secret store.
+1. Merge the reviewed production allocation PR before §2. Its `topup.yaml` selects
+   `blockpi-mainnet` and `blockpi-base-mainnet`; production and restore-check map
+   `TOPUP_RPC_ANKR_KEY`, `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY`, with
+   no `TOPUP_RPC_INFURA_KEY`. Record the PR, Operations owner and passing configuration,
+   compose-path and consecutive RPC checks. Staging configuration stays unchanged.
+2. Keep BlockPI archive mode off and create one key for each mainnet in the same free account.
+   Store these values in the owner's secret store. §4 seals them with the complete production
+   secret set. Production-attested comments are updated before first provisioning; later
+   configuration changes require a reviewed upgrade.
+3. Accept the [per-account budget](../RPC.md#worst-case-pilot-budget): 17,029 shared Ankr
+   calls/day, 736,331 staging-only Infura credits/day and 249,848 production-only BlockPI RU/day.
+   Compare both environments' counters with the dashboards. Coordinate any Ankr key rotation
+   across both environments. No staging re-seal or upgrade is required by this allocation.
 
 Production D=46, staging D=20, and every other cap stay unchanged. Any later cap change requires
 a separately reviewed and approved budget.
 
-**Checks:** Record the staging-move PR, tracking issue, Operations owner, authorized upgrade,
-and passing verification. Staging uses Ankr read and dRPC verify with no Infura traffic before
-§2. Operations accepts the resulting budget and unchanged production D=46/staging D=20 caps.
+**Checks:** the production RPC allocation PR is merged and its configuration, sealed mappings
+and preflight pass before §2. Record its PR and Operations owner. Operations accepts the resulting
+budget and unchanged caps. Staging remains Ankr + Infura.
 
 ### 1.9 Sentry
 
@@ -531,7 +526,8 @@ ${EDITOR:-vi} .env.production
 
 `.env.production` holds exactly these sealed names, one `NAME=VALUE` per line:
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (the read-write token), `SENTRY_DSN`,
-`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Write it with the editor, never with a heredoc,
+`TOPUP_RPC_ANKR_KEY`, `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY`.
+Production does not seal an Infura key. Write it with the editor, never with a heredoc,
 `printf`, or shell history.
 
 **Checks:** preflight ends with `preflight: all checks passed`. That includes "both RPC endpoints
@@ -1152,7 +1148,7 @@ and at each UTC day boundary, then at least twice a day. Also run it at once on 
 The owner accepts this manual cadence for the pilot. For each later watch session, use the same
 private-directory/`umask 077` setup, derive a temporary `admin.pem` from the owner's stored seed,
 and shred the local key and seed copy after the check (§13). A metrics collector with a metrics-only
-key is the planned replacement and requires a reviewed implementation. Read the Ankr and Infura
+key is the planned replacement and requires a reviewed implementation. Read the shared Ankr, staging Infura and production BlockPI
 dashboards daily:
 
 ```sh
@@ -1186,14 +1182,15 @@ pilot_watch
 
 **D tally:** D for a UTC day is that day's last `deposits_total` minus the previous day's last one,
 plus recovery work. Record each day's figures for D, factory verifications and Safe proof sets,
-with the Ankr seven-day run rate and the Infura daily credits. Stop new load at each limit:
+with the shared Ankr seven-day run rate, staging Infura daily credits and production BlockPI
+seven-day RU run rate. BlockPI payload surcharges are visible in its dashboard. Stop new load at each limit:
 
 | Signal | Stop action | Runbook |
 |---|---|---|
 | S or L stock above 1, or S or L entries in rolling 24 h above 1 | Pause `quotes` on every route of the affected chain (below) and escalate. Keep verifying funded work and keep its reservations. Resume only when stock, entries and the day's work all fit | [Deposit reversed](deposit-reversed.md), [RPC health](rpc-health.md) |
 | D reaches 46 in a UTC day, factory 60/day, or Safe 10/day | Pause `quotes` on all three routes until 00:00 UTC (5:00 PM PDT) and coordinate Phala Cloud's intake. Start no proof batch | [RPC operations](../RPC.md#monitoring-and-stop-actions) |
-| Ankr seven-day run rate ≥ 25,000 calls/day or Infura ≥ 1,500,000 credits/day | Add no merchant, route or test load. Investigate retry or range growth. Never add a second free account | [RPC health](rpc-health.md) |
-| Infura `402` | Verify halts until UTC midnight. Preserve pending work and do not switch endpoints | [RPC health](rpc-health.md) |
+| Shared Ankr seven-day run rate ≥ 25,000 calls/day, staging Infura ≥ 1,500,000 credits/day, or production BlockPI seven-day run rate ≥ 1,250,000 RU/day | Add no merchant, route or test load. Investigate retry or range growth. Never add a second free account | [RPC health](rpc-health.md) |
+| Staging Infura `402`, or production BlockPI quota/throughput exhaustion | Infura verify halts until UTC midnight; BlockPI verify waits for provider recovery. Preserve pending work and do not switch endpoints | [RPC health](rpc-health.md) |
 | `TopupAddressCapacity` or 700 addresses on a chain (70%); 900 is critical | Plan the paid-provider or indexer upgrade, and stop growth before 1,000 | [Address capacity](address-capacity.md) |
 | `422 refund_attachment_limit_exceeded` (R=2 attached pending, N=1 per 24 h) | Enforced by the service. Phala Cloud contacts the operator before another payout. Never cancel an attached refund to make room | [RPC operations](../RPC.md#pilot-limits-and-operating-modes) |
 | `TopupRefundProgressAge`: attached refund pending over 1 h, or unseen by both endpoints for 24 h | The refund stays pending and reserved. Checks back off from 60 s to ten minutes after 30 min, then hourly after 24 h | [Pending refund transaction](rejected-funds-at-treasury.md#pending-refund-transaction-alert) |
@@ -1278,10 +1275,10 @@ is checked.
 - [ ] §1.6 Finance, Risk, and Operations signed off route amounts, `max_unfinalized_credit`,
       limits, and pilot caps for the deployed commit.
 - [ ] §1.7 Four Safes verified against Finance's expectations.
-- [ ] §1.8 Staging Ankr read/dRPC verify PR merged; authorized staging upgrade and verification
-      passed; staging is off Infura before §2. PR/issue `<link>` and Operations owner `<name>`
-      recorded; resulting budget and unchanged production D=46/staging D=20 caps accepted;
-      production-attested comment edits batched with the next production upgrade; key regeneration optional.
+- [ ] §1.8 Production Ankr read/BlockPI verify allocation PR merged; configuration, complete
+      sealed mappings and preflight passed before §2. PR `<link>` and Operations owner `<name>`
+      recorded; staging stays Ankr + Infura; resulting budget and unchanged D=46/20 caps accepted;
+      production-attested comments updated before provisioning; both BlockPI chain keys ready.
 - [ ] §1.9 Sentry scrubbing and alert rule set; synthetic alert received; owner accepts the
       pilot's external-monitoring risk and no Sentry Uptime monitor.
 - [ ] §1.10 `pay-api.phala.com` records are DNS only with CAA compatible; owner's

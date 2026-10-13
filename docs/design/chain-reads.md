@@ -326,9 +326,13 @@ rpc:                                    # one entry per chain used by a route or
       max_log_blocks: 3000
 ```
 
-Same for `84532` (`rpc.ankr.com/base_sepolia/{key}`, `base-sepolia.infura.io`), `1`
-(`rpc.ankr.com/eth/{key}`, `mainnet.infura.io`), `8453` (`rpc.ankr.com/base/{key}`,
-`base-mainnet.infura.io`) in both environments (staging uses `1` and `8453` for prices only).
+Staging also configures `84532` (`rpc.ankr.com/base_sepolia/{key}`, `base-sepolia.infura.io`),
+`1` (`rpc.ankr.com/eth/{key}`, `mainnet.infura.io`) and `8453` (`rpc.ankr.com/base/{key}`,
+`base-mainnet.infura.io`); its mainnets are price-only. Production keeps Ankr read on `1` and
+`8453`, and verifies with `blockpi-mainnet` / `blockpi-base-mainnet` at
+`https://ethereum.blockpi.network/v1/rpc/{key}` / `https://base.blockpi.network/v1/rpc/{key}`.
+Production seals `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` / `TOPUP_RPC_BLOCKPI_BASE_KEY`, with
+`max_log_blocks: 1000` for BlockPI's measured free 1,024-block cap.
 Cadences, hint/price budgets, the address cap and new-refund attachment cap are code constants;
 concurrent attached-pending refunds use the required positive deployment setting above.
 Deposit, factory and Safe limits are
@@ -342,12 +346,12 @@ same-host pairs and bad templates.
 
 ### 5.1 Verified limits and measurements
 
-| | Ankr Freemium (read) | Infura Free (verify) |
+| | Ankr Freemium (shared read) | Infura Free (staging verify) |
 |---|---|---|
 | Quota | 200 M credits/month at 200 per EVM call = 1 M calls/month | 3 M credits/day; 80 per call, 255 per `eth_getLogs`; batch items billed each |
 | Throughput | ≈1 800 req/min guaranteed | 500 credits/s (HTTP 429) |
 | Exhausted | response not documented → generic errors → not-ready | HTTP 402, halted for the rest of the UTC day |
-| Keys | 1 personal token → shared by both environments | API key limit 1 → shared |
+| Keys | 1 personal token → shared by both environments | API key limit 1 → staging only |
 | Terms | Freemium "to try out premium features"; no production prohibition found (full ToS unverified) | Consensys terms forbid use "intended to avoid … usage limits or quotas"; no free-tier production prohibition found |
 
 Sources: ankr.com/docs/rpc-service/service-plans; infura.io/pricing;
@@ -361,6 +365,19 @@ chains) and − 1 300 (Base chains); a 1 000-recipient OR-list (returned the rea
 3 000-block logs; full transaction fields (`accessList`, `yParity`). Infura serves Base finalized
 state, so there is no third provider. Not yet measured: the staging CVM's egress, Ankr's
 exhaustion response, address-less logs over 3 000 blocks (self-test covers it).
+
+Measured with real keys, 2026-10-13: Ankr limits topic alternatives to ≤1,000 per position and
+`topic0×topic2 ≤1,024`; coverage uses separate Transfer-recipient and factory-address queries.
+Infura showed 429 bursts when shared with live staging. BlockPI free serves mainnets only,
+requires a key for each chain in one account, and rejects log windows above 1,024 blocks
+(despite the advertised 5,000). Production Ankr/BlockPI preflight passed five consecutive runs
+at a configured 1,000-block window with archive mode off. dRPC free has a 101-block log cap and
+staging preflight passed only 1/5; it is not part of the launch allocation.
+
+BlockPI pricing pages specify 50M RU/month, 20 requests/s and 400 RU/s per endpoint; its RU
+table and response-size surcharges are in [RPC operations](../../deploy/RPC.md#worst-case-pilot-budget).
+See [RPC providers](../../deploy/RPC-PROVIDERS.md#measured-with-real-keys-2026-10-13) for the dated
+measurement record, separate from pricing-page claims.
 
 ### 5.2 Worst-case daily budget (staging + production combined)
 
@@ -380,27 +397,32 @@ daily budgets and the permanent address cap are hard limits.
 Per endpoint, Depth's normal allocation is 6 head methods + 3 complete-evidence methods + 4
 first-finality methods = 13. Safe uses 3 + 3 + 4 = 10; Finalized uses 7 + 3 + 0 = 10 and records
 finality without a duplicate first watcher check. Each deposit budgets 3 cold-discovery + 13
-confirmation/finality + 6 coverage + 2 price methods = **24 Ankr / 2,000 Infura**.
+confirmation/finality + 6 coverage + 2 price methods = **24 Ankr / 2,000 staging Infura**.
 
 With K=1, S rechecks cost `max(3, 1 + 3×K) = 4` methods per endpoint. S=1 plus at most one new
-entry per environment per rolling 24 h gives `2×(62 + 24) = 172` daily rechecks: 688 Ankr /
-55,040 Infura before retries. L has its own one-stock/one-entry limits, giving 172 head methods
-per endpoint: **172 Ankr / 13,760 Infura**. Its final full evidence read is already in D.
+entry per environment per rolling 24 h gives `2×(62 + 24) = 172` daily rechecks: 688 shared Ankr
+before retries. Staging uses half the rechecks, 27,520 Infura credits, and production uses
+7,310 BlockPI RU. L has its own one-stock/one-entry limits, giving 172 head methods
+across both environments: **172 shared Ankr**, with 6,880 staging Infura credits and
+1,720 production BlockPI RU. Its final full evidence read is already in D.
 
 Production D=46 and staging D=20 give 66 deposits/day; other existing caps remain unchanged.
-The approved arithmetic, including all existing proof/reserve allocations, is:
+The per-account arithmetic, including all existing proof/reserve allocations, is:
 
 ```text
-Non-refund Ankr:   10,424 − 20×80 + 24×66 + 172 + 4×96 = 10,964
-Non-refund Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 + 4×96×255 = 963,380
-Combined Ankr:     ceil(10,964×1.1 + 4,968) = 17,029 calls/day
-Combined Infura:   963,380×1.1 + 397,440 = 1,457,158 credits/day
+Shared Ankr:         ceil(10,964×1.1 + 4,968) = 17,029 calls/day
+Staging-only Infura:  499,210×1.1 + 187,200 = 736,331 credits/day
+Production BlockPI:  173,380×1.1 + 59,130 = 249,848 RU/day
 ```
 
-Coverage logs increase from 96 to 192 per endpoint per payment chain per day. Headroom is
-**31.88% Ankr / 2.86% Infura** while staging shares Infura. The separate staging dRPC verify
-PR (`deploy/staging-drpc-rpc`) restores Infura headroom and must merge before production launch
-§2; all caps remain unchanged. Non-refund reads use ×1.1; refunds reserve all
+At 3,000-block windows, coverage uses 192 log requests per endpoint/payment chain/day;
+BlockPI's 1,000-block windows conservatively require 560. Headroom below stop lines is
+**31.88% shared Ankr / 50.91% staging Infura / 80.01% production BlockPI**. With staging D=20,
+shared Ankr permits production D≤253 at ≥10% modeled headroom; the conservative BlockPI budget
+permits D≤955. Infura is no longer a production constraint (its staging-only bound is D≤298).
+All configured caps remain unchanged. Before production launch §2, merge and preflight the
+production Ankr/BlockPI allocation and complete sealed mappings; staging stays Ankr + Infura,
+with no dRPC prerequisite. Non-refund reads use ×1.1; refunds reserve all
 three transport attempts. Logical method counts have hard bounds; each method can still make
 up to three physical sends. These totals do not guarantee ten-percent headroom if all
 non-refund requests exhaust retries. See the
@@ -538,7 +560,8 @@ Docs: architecture §0, §2 rule 7, §7, §8, §9 (cancel, snapshot cap), §13;
    `@phala/pay-react`, `@phala/pay-server`, `docs/integration.md`. Released together with PR 2.
 4. **Staging adoption** (operator-authorised): seal the complete secret set with
    `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`, compose-path preflight, Deploy upgrade, §9.
-5. **Production pilot config**: same providers and keys, after staging acceptance.
+5. **Production pilot config**: Ankr read + BlockPI verify with two chain-specific keys,
+   after staging acceptance; staging retains Ankr + Infura.
 
 ## 9. Acceptance
 
@@ -573,7 +596,8 @@ Staging (48 h, real USDC/USDT/PHA payments on Sepolia and Base Sepolia, checkout
   release, reversal and custody targets with healthy endpoints and caught-up addresses.
 - Coverage lag ≤ 2 h in healthy steady state; no lagging addresses older than one day; zero disagreements;
   reconciler clean; every deposit final and `dual_verified_at` set.
-- Ankr and Infura usage below both stop lines under §5.2 caps and retry assumptions; provider
+- Shared Ankr, staging Infura and production BlockPI usage below their stop lines under §5.2
+  caps and retry assumptions; provider
   dashboards agree with the recording rules and operational tallies include recovery work.
 - Fault drill: wrong verify key → that chain not-ready, credit pauses, service up; restored →
   resumes. Recover ≤24 h equivalent backlog within the twelve-hour target in §5.3.
@@ -583,7 +607,8 @@ Staging (48 h, real USDC/USDT/PHA payments on Sepolia and Base Sepolia, checkout
 | Account | Key | Sealed name | Environments |
 |---|---|---|---|
 | Ankr (Freemium, one account) | the single personal token | `TOPUP_RPC_ANKR_KEY` | staging and production (shared quota) |
-| Infura / MetaMask Developer (Free, one account) | the single API key; Ethereum, Sepolia, Base, Base Sepolia enabled; usage emails on | `TOPUP_RPC_INFURA_KEY` | staging and production (shared quota) |
+| Infura / MetaMask Developer (Free, one account) | the single API key; Ethereum, Sepolia, Base, Base Sepolia enabled; usage emails on | `TOPUP_RPC_INFURA_KEY` | staging only |
+| BlockPI (Free, one account) | one key for Ethereum and one for Base; archive mode off; 1,024-block log cap, configured 1,000 | `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY`, `TOPUP_RPC_BLOCKPI_BASE_KEY` | production only (shared account quota) |
 
 No keyless endpoints. Do not open extra free accounts to raise quota.
 

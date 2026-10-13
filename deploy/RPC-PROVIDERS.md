@@ -5,24 +5,31 @@ volumes. Use it to choose a `read` and `verify` pair for each environment.
 [RPC operations](RPC.md) owns the live budget, stop lines and alerts, and
 [chain reads](../docs/design/chain-reads.md) specifies the read and evidence paths.
 
-> **Last verified:** 2026-10-11, against each provider's own pricing and documentation pages
-> (see [Sources](#sources)). Providers change plans often; re-check before adopting one.
+> **Measured with real keys:** 2026-10-13 (below). Pricing-page comparison checked 2026-10-11;
+> BlockPI RU and rate-limit pages rechecked 2026-10-13 (see [Sources](#sources)).
+> Measured limits take precedence over advertised limits. Re-check before adopting a provider.
 
 ## Summary
 
 | Volume | Deposits/day | Recommended pair (read + verify) | Monthly cost |
 |---|---:|---|---:|
-| Pilot (today) | 66 | Ankr Freemium + Infura Core | **$0** |
+| Pilot (allocation B) | 46 production + 20 staging | Production Ankr + BlockPI; staging Ankr + Infura | **$0** |
 | Growth | 2,800 | BlockPI + Chainstack Growth | **about $52** |
 | Scale | 15,000 | BlockPI + Chainstack Growth | **about $75–101** |
 
-- **Stay on Ankr + Infura during the pilot.** Both are free, already sealed, alerted and
-  preflighted. Infura's quota is what caps production at 46 deposits/day.
-- **Past the free tiers, move to BlockPI + Chainstack Growth.** It is the cheapest pair in which
-  both companies run their own nodes. Staying on Ankr + Infura costs about $104/month at 2,800
-  deposits/day and about $471/month at 15,000.
-- **To add free capacity now,** give staging its own pair (for example BlockPI + dRPC) so
-  production stops sharing Ankr and Infura with it. See [Adding free capacity](#adding-free-capacity).
+- **Allocation B (selected):** production keeps Ankr read and verifies with BlockPI on Ethereum
+  and Base. Staging keeps Ankr + Infura on its two payment chains and two mainnet price chains.
+  One account per company: Ankr is shared, Infura is staging-only, and the two BlockPI keys share
+  one account quota. Under the [per-account budget](RPC.md#worst-case-pilot-budget), shared Ankr
+  permits production D≤253 with staging D=20 and ≥10% modeled headroom. Configured caps stay
+  D=46/20; raising them needs a separate reviewed PR.
+- **Allocation C (next candidate, untested):** replace staging read with Chainstack free on
+  all four configured chains and retain Infura verify, freeing Ankr for production. Its
+  100-block log cap multiplies discovery/coverage requests; preflight, account-wide budgeting,
+  throughput and reliability must be measured before adoption. No keys or staging changes are
+  required for allocation B.
+- **Past the free tiers,** BlockPI + Chainstack Growth remains a paid option. The cost estimates
+  below come from pricing pages and a blended request mix, not deployment measurements.
 
 ## Requirements
 
@@ -43,11 +50,29 @@ staging; in production, pair one only with a provider that runs its own nodes, a
 independence is not guaranteed.
 
 Run `topup rpc check` ([preflight](RPC.md#configuration-and-preflight)) against a new provider
-on all four chains before relying on it.
+on every chain assigned to it before relying on it. BlockPI free is assigned only mainnets.
 
-## Usage model
+## Measured with real keys (2026-10-13)
 
-From the [worst-case pilot budget](RPC.md#worst-case-pilot-budget), per endpoint:
+| Provider | Measured result | Allocation consequence |
+|---|---|---|
+| Ankr free | All four chains; ≥3,000-block logs; at most 1,000 topic alternatives per position and topic0×topic2 ≤1,024. Production preflight passed after separate Transfer-recipient and factory-address filters | Keep read at `max_log_blocks: 3000` in both environments |
+| Infura free | All four chains; production preflight passed after the coverage fix; HTTP 429 bursts when shared with live staging | Keep staging verify; remove production traffic |
+| BlockPI free | Ethereum and Base mainnets only; testnets require a paid $49 package. 3,000/5,000-block probes failed with `-32602`, "eth_getLogs is limited to 1024 block range". One key per chain (another chain's key errors "apikey is on another chain"), archive mode off | Use production verify at `max_log_blocks: 1000`, beneath the measured 1,024-block cap |
+| dRPC free | All four chains; 101-block cap; safe/finalized and EIP-1898 worked; four-signature × 1,000-recipient filter worked. Staging preflight passed 1/5, with transport/429 and "Temporary internal error" on Base/Base Sepolia | Unreliable for the launch allocation; no dRPC adoption |
+
+The orchestrator's production Ankr/BlockPI `topup rpc check` passed **5/5 consecutive runs**
+with real free keys, including historical state, 1×1,000-recipient coverage plus factory filters,
+receipt-log equality and dual contract identity. The BlockPI URLs are
+`https://ethereum.blockpi.network/v1/rpc/{key}` and `https://base.blockpi.network/v1/rpc/{key}`.
+Seal `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY` in production only.
+Measurements are from an operator host; they do not establish CVM egress behavior.
+
+## Pricing-page usage estimates
+
+The earlier equal-window, combined-environment comparison used this approximate per-endpoint
+model. It is only a pricing illustration; allocation B uses the provider-specific
+[worst-case pilot budget](RPC.md#worst-case-pilot-budget), including BlockPI window splitting:
 
 ```text
 calls/day   ≈ 15,050 fixed + 26.4 × deposits/day     (24 calls per deposit + 10% retries)
@@ -65,7 +90,7 @@ receipt and transaction reads. Weighted billing below is blended with this mix. 
 1,000 issued-address cap and the hint and quote caps must also rise; custody then adds about
 120 calls/day per route per 1,000 addresses on each endpoint.
 
-## Fee models
+## From pricing pages: fee models
 
 | Provider | Billing unit | Our blended weight | Free tier | Paid pricing | $ per 1M of our calls |
 |---|---|---|---|---|---:|
@@ -84,17 +109,17 @@ receipt and transaction reads. Weighted billing below is blended with this mix. 
 
 ¹ Within the plan's included quota.
 
-## Compatibility
+## Compatibility: measured limits and pricing-page claims
 
 | Provider | Chains | Free-tier log window | Paid log window | Fit |
 |---|---|---|---|---|
 | Ankr | All four | ≥3,000 blocks | ≥3,000 blocks | **Production** (current `read`) |
-| Infura | All four | ≥3,000 blocks | ≥3,000 blocks | **Production** (current `verify`) |
-| BlockPI | All four | 5,000 blocks, address or topic filtered | Same | **Production** |
+| Infura | All four | ≥3,000 blocks, measured | ≥3,000 blocks | **Staging** (`verify`) |
+| BlockPI | Mainnets free; testnets paid | **1,024 blocks measured**, configure 1,000 | 5,000 blocks advertised, untested | **Production** (`verify`), separate chain keys |
 | Chainstack | All four | 100 blocks | 10,000 blocks | Production on paid plans |
 | Alchemy | All four | 10 blocks | Unlimited (pay as you go) | Production on paid plans |
 | QuickNode | All four | 5 blocks (trial) | 10,000 blocks | Production on paid plans |
-| dRPC | All four | Public nodes only | Full | Staging; production only beside an own-node provider |
+| dRPC | All four | **101 blocks measured**, public nodes | Full, untested | Free preflight 1/5; unreliable for launch |
 | Lava | Not verified ² | Not documented | Not documented | Staging, after preflight |
 | Nodies (Pocket) | Not verified ² | Not documented | Not documented | Staging, after preflight |
 | OnFinality | Not verified ² | Not documented | Not documented | After preflight |
@@ -117,7 +142,7 @@ Both endpoints combined, from the usage model.
 
 | Pair (read + verify) | Pilot | Growth | Scale |
 |---|---:|---:|---:|
-| Ankr Freemium + Infura Core (current) | **$0** | $104 (Ankr $54 + Infura Developer $50) | $471 (Ankr $246 + Infura Team $225) |
+| Ankr Freemium + Infura Core (earlier pair) | **$0** | $104 (Ankr $54 + Infura Developer $50) | $471 (Ankr $246 + Infura Team $225) |
 | BlockPI + Infura | $0 | $53 (BlockPI $3 + Infura Developer $50) | $251–277 |
 | BlockPI + dRPC | $0–3 | $19 | $100–126 |
 | **BlockPI + Chainstack Growth** | $49 | **$52** | **$75–101** |
@@ -132,11 +157,16 @@ register more accounts at the same provider to stack free quotas: it risks suspe
 provider's terms, and a suspended key stops crediting. Spread load across companies instead,
 one account each:
 
-1. **Separate staging.** Give staging its own pair, for example BlockPI + dRPC, so production
-   keeps the whole Ankr and Infura quotas.
-2. **Separate a chain.** Give one production chain (for example Base) a different pair from the
-   other.
+1. **Allocation B (this change):** production read Ankr / verify BlockPI; staging read Ankr /
+   verify Infura. No staging upgrade is required. Remove production's Infura sealed mapping and
+   seal both chain-specific BlockPI keys with the complete production secret set before launch.
+2. **Allocation C (next, untested):** staging read Chainstack / verify Infura; production stays
+   Ankr / BlockPI. Research and test Chainstack's four-chain support, free endpoint count,
+   100-block splitting, per-account RU, burst limits and reliability before proposing it.
 
+BlockPI free cannot serve staging's testnets. dRPC free's 101-block cap and 1/5 preflight record
+exclude the abandoned staging move from the launch plan. Never count per-chain keys as separate
+free quotas.
 Each change needs:
 
 - new sealed keys;
@@ -153,7 +183,7 @@ All checked on 2026-10-11.
 |---|---|
 | Ankr | [API credits](https://www.ankr.com/docs/rpc-service/pricing/), [service plans](https://www.ankr.com/docs/rpc-service/pricing-plans) |
 | Infura | [pricing](https://www.infura.io/pricing), [daily limits](https://support.metamask.io/develop/account/limits/daily-limits/), [credit costs](https://docs.metamask.io/services/get-started/pricing/credit-cost/) |
-| BlockPI | [packages and rate limits](https://docs.blockpi.io/pricing/pricing-and-rate-limit), [RU table](https://docs.blockpi.io/pricing/request-unit-ru/evm-ru-table), [range limits](https://docs.blockpi.io/basic-tutorials/best-practices) |
+| BlockPI | [packages and rate limits](https://docs.blockpi.io/pricing/pricing-and-rate-limit), [RU table](https://docs.blockpi.io/pricing/request-unit-ru/evm-ru-table), [response-size billing](https://docs.blockpi.io/pricing/request-unit-ru), [range limits](https://docs.blockpi.io/basic-tutorials/best-practices) |
 | Chainstack | [pricing](https://chainstack.com/pricing/), [`eth_getLogs` limits](https://docs.chainstack.com/docs/understanding-eth-getlogs-limitations) |
 | dRPC | [pricing](https://drpc.org/pricing), [compute units](https://drpc.org/docs/pricing/compute-units), [free and paid](https://drpc.org/docs/pricing/requests) |
 | Alchemy | [pricing](https://www.alchemy.com/pricing), [compute unit costs](https://www.alchemy.com/docs/reference/compute-unit-costs), [`eth_getLogs`](https://www.alchemy.com/docs/reference/eth-getlogs) |

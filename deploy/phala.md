@@ -57,14 +57,13 @@ of at most 1,000 addresses, without a contract filter. See [chain RPC operations
 
 Staging configures one Ankr read and one independent Infura verify endpoint for Sepolia,
 Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed credentials are
-`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`; the current shared-account production D=46/staging
-D=20 budget leaves only 2.86% Infura headroom. Production keeps these accounts. Before production
-launch §2, staging must retain Ankr read, move verify to dRPC on all four chains, and stop using
-Infura. The reviewed PR on `deploy/staging-drpc-rpc` must merge and the authorized staging upgrade
-must pass verification: this is an explicit launch gate with a named Operations owner and issue.
-Retain staging's `TOPUP_RPC_ANKR_KEY`, add its dRPC credential, and remove
-`TOPUP_RPC_INFURA_KEY`; all caps stay unchanged. Production-attested comment
-edits cost a production upgrade, so batch them with the next planned production upgrade ([launch §1.8](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-launch-gate)).
+`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Production keeps shared Ankr read and uses
+BlockPI verify on Ethereum and Base, with `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
+`TOPUP_RPC_BLOCKPI_BASE_KEY` from one free account. Before production launch §2, merge and
+preflight this production allocation and its complete sealed mappings. Staging stays unchanged;
+no dRPC move, staging re-seal or staging upgrade is required by the allocation. All caps stay
+D=46 production / D=20 staging. Production-attested comments are updated before provisioning
+([launch §1.8](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
 The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
 key templates. Run compose-path preflight with the complete sealed env before an authorized
 upgrade, including restore-check. The typed self-test checks actual receipt, transaction,

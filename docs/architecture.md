@@ -557,8 +557,8 @@ credit not yet final (§7) bounds what is exposed meanwhile.
 | Any other chain | `finalized` | `finalized` |
 
 **Endpoints and evidence.** Each payment or price chain has one Ankr `read` and one independent
-Infura `verify` endpoint. Every permanent fact and money decision requires independently decoded
-agreement. State reads use EIP-1898 `{blockHash, requireCanonical: true}`; current pins come from
+`verify` endpoint: BlockPI in production, Infura in staging. Every permanent fact and money
+decision requires independently decoded agreement. State reads use EIP-1898 `{blockHash, requireCanonical: true}`; current pins come from
 verify's latest minus two, finalized pins from the agreed checkpoint. Errors and disagreement
 wait and alert. An endpoint failure makes only its chain or observing price feature not-ready.
 The API and other chains continue. Both agreeing on unreviewed factory, implementation or
