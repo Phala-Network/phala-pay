@@ -5,10 +5,11 @@ the **approved release** selected in §1.1. Agents and CI run none of it. The co
 are USDC and USDT on Ethereum (chain 1) and USDC on Base (chain 8453), in
 [production/topup](../environments/phala-network/production/topup). Base USDC adds a one-hour
 sequencer uptime grace period. Both chains use the same deterministic factory, deployed on each chain
-separately. The pilot may share the existing Ankr read and Infura verify accounts with staging
-under the combined budget: production D=46 and staging D=20. Moving staging to another provider
-pair is a tracked follow-up with a named Operations owner, not a launch gate
-([RPC providers, "Adding free capacity"](../RPC-PROVIDERS.md#adding-free-capacity)).
+separately. Production keeps the existing Ankr read and Infura verify accounts. Before §2,
+staging must retain Ankr read, move verify to dRPC, and stop using Infura (§1.8). The staging
+move is a launch gate: the reviewed PR on `deploy/staging-drpc-rpc` must merge and the authorized
+staging upgrade must pass verification. Production D=46, staging D=20, and every other cap stay
+unchanged ([RPC operations](../RPC.md#worst-case-pilot-budget)).
 
 Each section ends with its checks. Do not start a section until every check of the previous one
 passes, and record each result in the [sign-off checklist](#13-sign-off-checklist). A failed check
@@ -53,7 +54,7 @@ PDT (4:00 PM PST).
 
 ## 1. Owner prerequisites
 
-Each required check is a gate for §2; §1.8 marks staging separation as a follow-up, and §1.10
+Each required check is a gate for §2, including staging's move off Infura in §1.8; §1.10
 marks the website setting as an owner decision. Never commit or paste a private key, token, seed,
 or env file, and keep them out of chat and tickets.
 
@@ -346,34 +347,38 @@ Repeat the check for the Phala Cloud Base Safe with `base/a` and `base/b`, and f
 **Checks:** all four reports have `passed: true`. The owners, threshold, singleton, modules, guard,
 and fallback handler match Finance's approval.
 
-### 1.8 Ankr and Infura accounts and the staging follow-up
+### 1.8 Ankr and Infura accounts and the staging launch gate
 
 Production keeps the existing Ankr and Infura accounts and the `rpc` pairs committed in
-`topup.yaml`. The pilot may start with staging sharing these accounts under the existing combined
-budget: production D=46 and staging D=20, with all other caps above. Staging separation is
-a tracked follow-up with a named Operations owner and tracking issue, not a launch gate. Never register a second Ankr or Infura account to stack free quotas.
+`topup.yaml`. The current shared-account budget leaves only 2.86% Infura headroom. Before §2,
+staging must retain Ankr read, move verify to dRPC on every configured chain (including mainnet
+price observations), and stop using Infura. This is a launch gate with a named Operations owner
+and tracking issue. Never register a second Ankr or Infura account to stack free quotas.
 
-Follow up under [Adding free capacity](../RPC-PROVIDERS.md#adding-free-capacity) by moving staging
-to another company's pair, for example BlockPI + dRPC:
+Complete the staging move under [Adding free capacity](../RPC-PROVIDERS.md#adding-free-capacity):
 
-1. A reviewed PR moves staging to its new pair, adds its sealed names and endpoints in staging's
+1. The reviewed PR on `deploy/staging-drpc-rpc` retains staging's Ankr read endpoints, replaces
+   its Infura verify endpoints with dRPC, adds the dRPC sealed credential in staging's
    `topup.yaml`, and updates `rpc-alerts.yaml`. It recomputes the
-   [pilot budget](../RPC.md#worst-case-pilot-budget) and passes preflight. It also updates the
-   "shared with staging" statements in [RPC.md](../RPC.md), [phala.md](../phala.md),
+   [pilot budget](../RPC.md#worst-case-pilot-budget), passes preflight, and merges before §2.
+   It also updates the "shared with staging" statements in [RPC.md](../RPC.md), [phala.md](../phala.md),
    [README.md](../README.md), and production's `topup.yaml` and `compose.yaml` comments. The
    comments are production-attested: editing them costs a production upgrade. Batch those
    comment edits with the next planned production upgrade, through its reviewed PR.
-2. Re-seal staging with its complete new secret set, without `TOPUP_RPC_ANKR_KEY` and
-   `TOPUP_RPC_INFURA_KEY`, and upgrade staging. Confirm staging is healthy and the Ankr and Infura
-   dashboards show no staging traffic after its upgrade.
-3. Optionally regenerate the Ankr and Infura keys after staging moves, if the provider allows it.
-   Key regeneration is not required. Keep production's values in the owner's secret store.
+2. Re-seal staging with its complete new secret set, retaining `TOPUP_RPC_ANKR_KEY`, adding the
+   dRPC credential, and removing `TOPUP_RPC_INFURA_KEY`. Complete the authorized staging upgrade
+   before §2. Confirm staging is healthy, compose-path preflight and `rpc check` pass with the
+   Ankr/dRPC pair, and Infura shows no staging traffic. Ankr continues serving staging reads.
+3. Optionally regenerate production's Infura key after staging moves, if the provider allows it.
+   Key regeneration is not required. Ankr remains shared with staging, so coordinate any Ankr
+   key rotation across both environments. Keep the values in the owner's secret store.
 
-Once staging has moved, production's caps may be re-budgeted in a reviewed PR. Until then, and
-until that budget is approved, D=46 and every other production cap stay unchanged.
+Production D=46, staging D=20, and every other cap stay unchanged. Any later cap change requires
+a separately reviewed and approved budget.
 
-**Checks:** Operations accepts the combined budget and the production D=46/staging D=20 caps.
-Record the staging-move tracking issue and owner; its completion is not required for §2.
+**Checks:** Record the staging-move PR, tracking issue, Operations owner, authorized upgrade,
+and passing verification. Staging uses Ankr read and dRPC verify with no Infura traffic before
+§2. Operations accepts the resulting budget and unchanged production D=46/staging D=20 caps.
 
 ### 1.9 Sentry
 
@@ -1272,8 +1277,9 @@ is checked.
 - [ ] §1.6 Finance, Risk, and Operations signed off route amounts, `max_unfinalized_credit`,
       limits, and pilot caps for the deployed commit.
 - [ ] §1.7 Four Safes verified against Finance's expectations.
-- [ ] §1.8 Shared-account pilot budget accepted (production D=46, staging D=20); staging
-      separation tracked in issue `<link>` with Operations owner `<name>`, not a launch gate;
+- [ ] §1.8 Staging Ankr read/dRPC verify PR merged; authorized staging upgrade and verification
+      passed; staging is off Infura before §2. PR/issue `<link>` and Operations owner `<name>`
+      recorded; resulting budget and unchanged production D=46/staging D=20 caps accepted;
       production-attested comment edits batched with the next production upgrade; key regeneration optional.
 - [ ] §1.9 Sentry scrubbing and alert rule set; synthetic alert received; owner accepts the
       pilot's external-monitoring risk and no Sentry Uptime monitor.

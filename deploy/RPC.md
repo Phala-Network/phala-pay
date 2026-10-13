@@ -18,7 +18,7 @@ Infura. The staging move to dRPC verify (separate PR on `deploy/staging-drpc-rpc
 Infura headroom and **must merge before production launch §2**. All caps remain unchanged.
 Edits to production-attested comments cost a production upgrade, so batch them with the next
 planned production upgrade
-([launch procedure](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-follow-up)).
+([launch procedure](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-launch-gate)).
 
 `topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:
 production sets it to 2 and staging to 1. It atomically limits attached-pending refunds across
