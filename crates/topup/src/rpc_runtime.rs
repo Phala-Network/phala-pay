@@ -1,13 +1,9 @@
 //! Typed startup/deploy endpoint checks and bounded transport-readiness recovery.
 use crate::{db, routes::RouteSet};
-use alloy::sol_types::SolEvent;
-use alloy::{
-    eips::{BlockId, BlockNumberOrTag},
-    rpc::types::Filter,
-};
+use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy_primitives::{Address, Bytes, U256};
 use sqlx::PgPool;
-use topup_adapters::chain::evm::{EvmClient, MULTICALL3, Transfer};
+use topup_adapters::chain::evm::{ChainReader, EvmClient, FinalizedReader, MULTICALL3};
 
 /// Both endpoints of every route and price chain pass the real production request shapes.
 pub async fn preflight(routes: &RouteSet) -> Result<Vec<String>, String> {
@@ -34,34 +30,24 @@ pub async fn preflight(routes: &RouteSet) -> Result<Vec<String>, String> {
         if !identity_ok {
             continue;
         }
-        let boundary = async {
-            let (a, b) = tokio::try_join!(
-                pair.read.price_block(BlockNumberOrTag::Finalized),
-                pair.verify.price_block(BlockNumberOrTag::Finalized)
-            )
-            .map_err(|e| e.to_string())?;
-            if a.0 > b.0 {
-                return Err(format!("chain {chain}: verify finalized is behind read"));
-            }
-            let verify = pair
-                .verify
-                .price_block(BlockNumberOrTag::Number(a.0))
-                .await
-                .map_err(|e| e.to_string())?;
-            if a != verify {
-                return Err(format!("chain {chain}: finalized checkpoint disagreed"));
-            }
-            Ok(a)
-        }
-        .await;
+        let boundary = crate::contracts::agreed_finalized_block(&pair.read, &pair.verify)
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|block| {
+                block.ok_or_else(|| format!("chain {chain}: finalized checkpoint disagreed"))
+            });
         let contract_check =
             crate::contracts::check_pair(&pair.read, &pair.verify, *chain, routes.routes()).await;
         let passed = matches!(contract_check, Ok(crate::contracts::ContractCheck::Pass));
         pair.read.contract_checked(passed);
         pair.verify.contract_checked(passed);
         if !passed {
+            let detail = match contract_check {
+                Ok(result) => format!("{result:?}"),
+                Err(error) => error.to_string(),
+            };
             errors.push(format!(
-                "chain {chain}: dual contract identity check failed"
+                "chain {chain}: dual contract identity check failed: {detail}"
             ));
             continue;
         }
@@ -104,23 +90,14 @@ async fn check_endpoint(
         .check_receipt_logs(checkpoint)
         .await
         .map_err(|e| e.to_string())?;
-    let recipients: Vec<_> = (1..=1000_u64)
-        .map(|i| alloy_primitives::B256::from(U256::from(i)))
-        .collect();
-    let mut signatures = topup_adapters::chain::flush::factory_event_signatures().to_vec();
-    signatures.push(Transfer::SIGNATURE_HASH);
-    client
-        .logs(
-            &Filter::new()
-                .from_block(
-                    checkpoint.saturating_sub(u64::from(client.max_log_blocks()).saturating_sub(1)),
-                )
-                .to_block(checkpoint)
-                .event_signature(signatures)
-                .topic2(recipients),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    let factory = routes
+        .routes()
+        .iter()
+        .find(|route| route.chain.chain_id == chain)
+        .map(|route| route.chain.contracts.forwarder_factory)
+        // Observation-only chains have no factory; retain the same address-scoped probe shape.
+        .unwrap_or(MULTICALL3);
+    check_coverage(client, factory, checkpoint).await?;
     let historical = latest
         .0
         .saturating_sub(latest.0.saturating_sub(checkpoint).saturating_mul(2));
@@ -204,6 +181,26 @@ async fn check_endpoint(
     }
     Ok(())
 }
+async fn check_coverage(
+    client: &EvmClient,
+    factory: Address,
+    checkpoint: u64,
+) -> Result<(), String> {
+    let recipients: Vec<_> = (1..=1000_u64)
+        .map(|i| Address::from_word(U256::from(i).into()))
+        .collect();
+    FinalizedReader::new(std::sync::Arc::new(client.clone()))
+        .coverage_logs(
+            factory,
+            &recipients,
+            checkpoint.saturating_sub(u64::from(client.max_log_blocks()).saturating_sub(1)),
+            checkpoint,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Establish durable checkpoints for restore/reconcile before any checkpoint-pinned check runs.
 pub async fn ensure_checkpoints(pool: &PgPool, routes: &RouteSet) -> Result<(), String> {
     db::rpc::check_start(pool, &routes.chain_ids().collect::<Vec<_>>())
@@ -277,6 +274,64 @@ mod recovery_tests {
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
+
+    #[tokio::test]
+    async fn preflight_coverage_uses_the_production_request_shapes() {
+        use std::sync::Mutex;
+        use topup_adapters::chain::evm::MAX_ADDRESSES_PER_REQUEST;
+
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = requests.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let node = Router::new().route(
+            "/",
+            post(move |Json(body): Json<Value>| {
+                let captured = captured.clone();
+                async move {
+                    assert_eq!(body["method"], "eth_getLogs");
+                    captured.lock().unwrap().push(body["params"][0].clone());
+                    Json(json!({"jsonrpc": "2.0", "id": body["id"], "result": []}))
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, node).await.unwrap() });
+        let client = EvmClient::new(&url).unwrap().with_max_log_blocks(3000);
+        let factory = Address::repeat_byte(0xab);
+        check_coverage(&client, factory, 4000).await.unwrap();
+        let probe_requests = std::mem::take(&mut *requests.lock().unwrap());
+        let recipients: Vec<_> = (1..=1000_u64)
+            .map(|i| Address::from_word(U256::from(i).into()))
+            .collect();
+        let result = FinalizedReader::new(Arc::new(client))
+            .coverage_logs(factory, &recipients, 1001, 4000)
+            .await;
+        server.abort();
+        let _ = server.await;
+        result.unwrap();
+        // Alloy stores topic alternatives as sets; their serialized order is unspecified.
+        let normalize = |mut filters: Vec<Value>| {
+            for filter in &mut filters {
+                for topic in filter["topics"].as_array_mut().unwrap() {
+                    if let Some(values) = topic.as_array_mut() {
+                        values.sort_by_key(Value::to_string);
+                    }
+                }
+            }
+            filters
+        };
+        assert_eq!(
+            normalize(probe_requests.clone()),
+            normalize(requests.lock().unwrap().clone())
+        );
+        assert_eq!(probe_requests.len(), 2);
+        assert_eq!(
+            probe_requests[0]["topics"][2].as_array().unwrap().len(),
+            MAX_ADDRESSES_PER_REQUEST
+        );
+        assert_eq!(probe_requests[1]["address"], json!(factory));
+        assert!(probe_requests[1]["topics"].as_array().unwrap().len() < 3);
+    }
 
     #[tokio::test]
     async fn flapping_requests_stay_ready_and_failed_endpoint_recovers_on_a_head_probe() {

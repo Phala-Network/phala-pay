@@ -12,12 +12,13 @@ Configure `rpc` entries with `chain_id`, `read` and `verify`. Each endpoint requ
 and positive `max_log_blocks`. Read and verify hosts must differ. Configure observation-only
 Ethereum and Base price chains too. Both environments share `TOPUP_RPC_ANKR_KEY` and
 `TOPUP_RPC_INFURA_KEY`, including for staging's mainnet price observations. This shared-account
-pilot is accepted under the combined production D=46/staging D=20 budget. Production keeps the
-existing accounts. Moving staging to another provider pair is a tracked follow-up with a named
-Operations owner and issue, not a launch gate; after it, production caps may be re-budgeted in a
-reviewed PR. Edits to production-attested comments cost a production upgrade, so batch them
-with the next planned production upgrade
-([launch procedure](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-follow-up)).
+pilot retains the production D=46/staging D=20 caps. Production keeps the existing accounts.
+The corrected coverage request shapes leave only 2.86% Infura headroom while staging shares
+Infura. The staging move to dRPC verify (separate PR on `deploy/staging-drpc-rpc`) restores
+Infura headroom and **must merge before production launch §2**. All caps remain unchanged.
+Edits to production-attested comments cost a production upgrade, so batch them with the next
+planned production upgrade
+([launch procedure](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-launch-gate)).
 
 `topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:
 production sets it to 2 and staging to 1. It atomically limits attached-pending refunds across
@@ -41,8 +42,12 @@ topup rpc check --config /etc/topup/topup.yaml
 ```
 
 `rpc check` independently validates both endpoints with typed identity, finalized transaction,
-receipt and log reads, a 1,000-recipient coverage filter, canonical state calls, and state at
-twice the observed finalized lag. Deploy uses the actual candidate compose environment:
+receipt and log reads, the real coverage queries with 1,000 recipients, canonical state calls,
+and state at
+twice the observed finalized lag. Contract identity and the preflight boundary pin both
+endpoints at the lower finalized height and require matching header hash and timestamp.
+Receipt-log comparison ignores only optional `blockTimestamp` metadata. Deploy uses the
+actual candidate compose environment:
 
 ```sh
 docker compose --env-file candidate.env -f rendered-compose.yaml run --rm --no-deps \
@@ -117,9 +122,12 @@ all day, one caught-up recipient chunk plus one lagging chunk, and full custody 
 1,000 historical addresses. No idle savings are used.
 
 An hour adds about 300 blocks on Ethereum/Sepolia or 1,800 on Base/Base Sepolia, within the
-configured 3,000-block log window. A normal range needs one request per recipient chunk;
-19,200 blocks need seven. An Infura 10,000-result limit error aborts the round: the current
-adapter does not automatically split on that error. Extra requests must fit the reserve or
+configured 3,000-block log window. Coverage uses one address-less Transfer query per
+1,000-recipient chunk and one factory-address query with three event signatures, filtered
+locally to the tracked forwarders. This avoids Ankr's multi-topic alternatives limit.
+A normal range needs two requests per recipient set; 19,200 blocks need fourteen. An Infura
+10,000-result limit error aborts the round: the current adapter does not automatically split
+on that error. Extra requests must fit the reserve or
 be budgeted separately.
 
 For each payment chain with C custody routes:
@@ -128,11 +136,11 @@ For each payment chain with C custody routes:
 Fast discovery:      288 × (1 head + 1 logs) = 576 Ankr
 Checkpoint headers: 144 × 2 = 288 Ankr; 144 × 3 × 80 = 34,560 Infura
 Coverage headers:   24 × 2 = 48 calls per endpoint
-Coverage logs:      20 × 2 × 1 + 4 × 2 × ceil(19,200 / 3,000) = 96 per endpoint
+Coverage logs:      20 × 2 × 2 + 4 × 2 × 2 × ceil(19,200 / 3,000) = 192 per endpoint
 Hourly custody:     C × 24 × ceil(1,000 / 200) = 120C per endpoint
 
-Ankr:   576 + 288 + 48 + 96 + 120C = 1,008 + 120C
-Infura: (432 + 48)×80 + 96×255 + 120C×80 = 62,880 + 9,600C
+Ankr:   576 + 288 + 48 + 192 + 120C = 1,104 + 120C
+Infura: (432 + 48)×80 + 192×255 + 120C×80 = 87,360 + 9,600C
 ```
 
 Checkpoint checks include both previous-checkpoint headers, both finalized heads and verify's
@@ -141,11 +149,11 @@ those checks. Its header term includes the extra common-boundary read when that 
 
 | Payment chain | Custody routes | Fixed Ankr calls/day | Fixed Infura credits/day |
 |---|---:|---:|---:|
-| Staging Sepolia | 3 | 1,368 | 91,680 |
-| Staging Base Sepolia | 3 | 1,368 | 91,680 |
-| Production Ethereum | 2 | 1,248 | 82,080 |
-| Production Base | 1 | 1,128 | 72,480 |
-| **Combined** | **9** | **5,112** | **337,920** |
+| Staging Sepolia | 3 | 1,464 | 116,160 |
+| Staging Base Sepolia | 3 | 1,464 | 116,160 |
+| Production Ethereum | 2 | 1,344 | 106,560 |
+| Production Base | 1 | 1,224 | 96,960 |
+| **Combined** | **9** | **5,496** | **435,840** |
 
 Variable allowances before retries:
 
@@ -263,32 +271,33 @@ non-refund work uses the approved ten-percent allowance:
 
 ```text
 Non-refund Ankr:
-5,112 + 528 + 24×66 + 2×12×80 + 3×80 + 3×12 + 300
-+ 688 + 172 = 10,580
+5,496 + 528 + 24×66 + 2×12×80 + 3×80 + 3×12 + 300
++ 688 + 172 = 10,964
 
 Non-refund Infura:
-337,920 + 240×528 + 2,000×66 + 2×640×80
-+ 240×80 + 160×12 + 255×300 + 55,040 + 13,760 = 865,460
+435,840 + 240×528 + 2,000×66 + 2×640×80
++ 240×80 + 160×12 + 255×300 + 55,040 + 13,760 = 963,380
 
 Refund Ankr:   3 × (684×2 + 96×3)       = 4,968
 Refund Infura: 3 × (54,720×2 + 7,680×3) = 397,440
 
-Combined Ankr:   10,580×1.1 + 4,968    = 16,606 calls/day
-Combined Infura: 865,460×1.1 + 397,440 = 1,349,446 credits/day
+Combined Ankr:   ceil(10,964×1.1 + 4,968) = 17,029 calls/day
+Combined Infura: 963,380×1.1 + 397,440 = 1,457,158 credits/day
 
 From the previous allocation:
-Ankr:   10,424 − 20×80 + 24×66 + 172 = 10,580 before retries
-Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 = 865,460 before retries
+Ankr:   10,424 − 20×80 + 24×66 + 172 + 4×96 = 10,964 before retries
+Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 + 4×96×255 = 963,380 before retries
 
-Headroom Ankr:   (25,000 − 16,606) / 25,000       = 33.58%
-Headroom Infura: (1,500,000 − 1,349,446) / 1,500,000 = 10.04%
+Headroom Ankr:   (25,000 − 17,029) / 25,000         = 31.88%
+Headroom Infura: (1,500,000 − 1,457,158) / 1,500,000 = 2.86%
 ```
 
-The modeled allowance is **16,606 Ankr calls/day** and **1,349,446 Infura credits/day**, with
-**33.58% Ankr / 10.04% Infura** headroom below the stop lines. Production D=46 and staging D=20
-give 66 deposits/day combined; all other existing caps remain unchanged. Production D=47 would
-cost 1,351,646 Infura credits/day and leave 9.89%, so 46 is the largest production D that fits
-the approved headroom with this allocation.
+The modeled allowance is **17,029 Ankr calls/day** (rounded up) and **1,457,158 Infura
+credits/day**, with **31.88% Ankr / 2.86% Infura** headroom below the stop lines while staging
+still shares Infura. Production D=46 and staging D=20 give 66 deposits/day combined; all caps
+remain unchanged. The separate staging dRPC verify PR (`deploy/staging-drpc-rpc`) must merge
+before [production launch §2](runbooks/production-launch.md#2-provision-the-topup-cvm)
+to restore Infura headroom. This is a launch prerequisite under the corrected coverage budget.
 
 Non-refund reads use ×1.1; refunds reserve all three transport attempts. Logical method counts
 have hard bounds, while each method can make up to three physical sends. These totals do not

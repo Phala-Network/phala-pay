@@ -47,22 +47,14 @@ pub async fn check_pair(
     chain: u64,
     routes: &[RouteFile],
 ) -> Result<ContractCheck, ChainError> {
-    use alloy::eips::{BlockId, BlockNumberOrTag};
+    use alloy::eips::BlockId;
     let (a, b) = tokio::try_join!(read.network_id(), verify.network_id())?;
     if a != chain || b != chain {
         return Ok(ContractCheck::Disagreement);
     }
-    let (a, b) = tokio::try_join!(
-        read.price_block(BlockNumberOrTag::Finalized),
-        verify.price_block(BlockNumberOrTag::Finalized)
-    )?;
-    if a.0 > b.0 {
+    let Some(a) = agreed_finalized_block(read, verify).await? else {
         return Ok(ContractCheck::Disagreement);
-    }
-    let target = verify.price_block(BlockNumberOrTag::Number(a.0)).await?;
-    if a != target {
-        return Ok(ContractCheck::Disagreement);
-    }
+    };
     let mut addresses = BTreeSet::from([MULTICALL3]);
     for route in routes.iter().filter(|r| r.chain.chain_id == chain) {
         addresses.extend([
@@ -112,6 +104,22 @@ pub async fn check_pair(
         ContractCheck::Mismatch
     })
 }
+/// Pin startup checks to the latest height finalized by both endpoints.
+pub(crate) async fn agreed_finalized_block(
+    read: &EvmClient,
+    verify: &EvmClient,
+) -> Result<Option<(u64, B256, u64)>, ChainError> {
+    use alloy::eips::BlockNumberOrTag;
+    let (a, b) = tokio::try_join!(
+        read.price_block(BlockNumberOrTag::Finalized),
+        verify.price_block(BlockNumberOrTag::Finalized)
+    )?;
+    let number = a.0.min(b.0);
+    let target = BlockNumberOrTag::Number(number);
+    let (a, b) = tokio::try_join!(read.price_block(target), verify.price_block(target))?;
+    Ok((a.0 == number && a == b).then_some(a))
+}
+
 /// Update readiness and freeze only on a complete agreed mismatch, without stopping other chains.
 pub async fn check_and_enforce(
     pool: &sqlx::PgPool,
@@ -178,6 +186,96 @@ fn verify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dual_contract_checks_pin_both_headers_to_the_lower_finalized_height() {
+        use axum::{Json, Router, routing::post};
+        use serde_json::{Value, json};
+        use std::sync::{Arc, Mutex};
+
+        let recorded: Value =
+            serde_json::from_str(include_str!("../../../deploy/contracts/multicall3.json"))
+                .unwrap();
+        let common: Value = serde_json::from_str(include_str!(
+            "../../adapters/tests/fixtures/base-sepolia/finalized-47446540.json"
+        ))
+        .unwrap();
+        for (read_ahead, conflict) in [
+            (true, "none"),
+            (false, "none"),
+            (true, "hash"),
+            (true, "time"),
+        ] {
+            let mut servers = Vec::new();
+            let mut clients = Vec::new();
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            for is_read in [true, false] {
+                let common = common.clone();
+                let mut finalized = common.clone();
+                if is_read == read_ahead {
+                    finalized["number"] = json!("0x2d3fb9c");
+                }
+                let mut numbered = common.clone();
+                if !is_read {
+                    match conflict {
+                        "hash" => numbered["hash"] = json!(B256::repeat_byte(1)),
+                        "time" => numbered["timestamp"] = json!("0x1"),
+                        _ => {}
+                    }
+                }
+                let code = recorded["runtime_code"].clone();
+                let captured = requests.clone();
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let node = Router::new().route("/", post(move |Json(body): Json<Value>| {
+                    let (finalized, numbered, code) = (finalized.clone(), numbered.clone(), code.clone());
+                    let captured = captured.clone();
+                    let common = common.clone();
+                    async move {
+                        captured.lock().unwrap().push((is_read, body.clone()));
+                        let result = match body["method"].as_str().unwrap() {
+                            "eth_chainId" => json!("0x14a34"),
+                            "eth_getBlockByNumber" if body["params"][0] == "finalized" => finalized,
+                            "eth_getBlockByNumber" => {
+                                assert_eq!(body["params"][0], common["number"]);
+                                numbered
+                            }
+                            "eth_getCode" => {
+                                assert_eq!(body["params"][0], json!(MULTICALL3));
+                                assert_eq!(body["params"][1], json!({"blockHash": common["hash"], "requireCanonical": true}));
+                                code
+                            }
+                            other => panic!("unexpected method {other}")
+                        };
+                        Json(json!({"jsonrpc": "2.0", "id": body["id"], "result": result}))
+                    }
+                }));
+                servers.push(tokio::spawn(async move {
+                    axum::serve(listener, node).await.unwrap()
+                }));
+                clients.push(EvmClient::new(&url).unwrap());
+            }
+            let result = check_pair(&clients[0], &clients[1], 84532, &[]).await;
+            for server in servers {
+                server.abort();
+                let _ = server.await;
+            }
+            assert_eq!(
+                result.unwrap(),
+                if conflict == "none" {
+                    ContractCheck::Pass
+                } else {
+                    ContractCheck::Disagreement
+                }
+            );
+            let requests = requests.lock().unwrap();
+            for is_read in [true, false] {
+                assert!(requests.iter().any(|(side, body)| *side == is_read
+                    && body["method"] == "eth_getBlockByNumber"
+                    && body["params"][0] == common["number"]));
+            }
+        }
+    }
 
     #[test]
     fn multicall3_code_hash_matches_the_recorded_deployment() {

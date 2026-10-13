@@ -622,12 +622,13 @@ cost per month = 30 × cost per day
 [Chain reads §5.2](../docs/design/chain-reads.md#52-worst-case-daily-budget-staging--production-combined)
 accounts for fixed 300-second discovery, independent 600-second checkpoints, 3,600-second
 coverage, bounded backfill and six-hour catch-up. Compare measured call counters with each
-provider's dashboard. Both environments may share keys and upstream quotas during the pilot.
-Production keeps the existing Ankr and Infura accounts. Moving staging to another pair is a
-tracked follow-up with a named Operations owner and issue, not a launch gate; then production
-caps can be re-budgeted in a reviewed PR. Production-attested comment edits cost an upgrade,
-so batch them with the next planned production upgrade
-([launch §1.8](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-follow-up)).
+provider's dashboard. Production keeps the existing Ankr and Infura accounts. Before production
+launch §2, staging must retain Ankr read, move verify to dRPC, and stop using Infura. The reviewed
+PR on `deploy/staging-drpc-rpc` must merge and the authorized staging upgrade must pass
+verification: this is a launch gate with a named Operations owner and issue. All caps stay
+unchanged; later cap changes require a separately reviewed budget. Production-attested comment
+edits cost an upgrade, so batch them with the next planned production upgrade
+([launch §1.8](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-launch-gate)).
 Each fresh quote snapshot costs one read call and
 240 verify credits; the DB enforces 60 fresh snapshots per price chain per UTC day per environment.
 [RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all nine

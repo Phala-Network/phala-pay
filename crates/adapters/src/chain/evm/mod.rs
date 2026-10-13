@@ -262,7 +262,7 @@ pub trait ChainReader: Send + Sync {
     ) -> impl Future<Output = Result<(B256, DateTime<Utc>), ChainError>> + Send {
         async { Err(ChainError::MissingField("numbered header")) }
     }
-    /// Four-topic address-less coverage query. Each request must complete on this endpoint.
+    /// Complete transfer and factory coverage. Each request must complete on this endpoint.
     fn coverage_logs(
         &self,
         factory: Address,
@@ -674,7 +674,13 @@ impl EvmClient {
                 let logs = self
                     .logs(&Filter::new().at_block_hash(block.header.hash))
                     .await?;
-                if !logs.contains(log) {
+                // blockTimestamp is optional RPC metadata and can differ between methods.
+                let mut expected = log.clone();
+                expected.block_timestamp = None;
+                if !logs.into_iter().any(|mut candidate| {
+                    candidate.block_timestamp = None;
+                    candidate == expected
+                }) {
                     return Err(ChainError::MissingField("self-test receipt log"));
                 }
                 return Ok(());
@@ -1537,42 +1543,6 @@ impl ChainReader for FinalizedReader {
         }
         Ok((hash, utc_timestamp(timestamp)?))
     }
-    async fn coverage_logs(
-        &self,
-        factory: Address,
-        addresses: &[Address],
-        from: u64,
-        to: u64,
-    ) -> Result<(Vec<TransferLog>, Vec<FactoryLog>), ChainError> {
-        let mut transfers = Vec::new();
-        let mut events = Vec::new();
-        let mut signatures = factory_event_signatures().to_vec();
-        signatures.push(Transfer::SIGNATURE_HASH);
-        for (start, end) in log_windows(from, to, self.client.max_log_blocks)? {
-            for chunk in addresses.chunks(MAX_ADDRESSES_PER_REQUEST) {
-                let filter = Filter::new()
-                    .from_block(start)
-                    .to_block(end)
-                    .event_signature(signatures.clone())
-                    .topic2(chunk.iter().copied().fold(Topic::default(), Topic::extend));
-                for log in self.client.logs(&filter).await? {
-                    if is_transfer(&log) {
-                        if let Some(decoded) = decode_transfer_log(&log)?
-                            && chunk.contains(&decoded.to)
-                        {
-                            transfers.push(self.complete(decoded).await?);
-                        }
-                    } else if log.address() == factory {
-                        let event = decode_factory_log(&log)?;
-                        if chunk.contains(&event.event.forwarder()) {
-                            events.push(event);
-                        }
-                    }
-                }
-            }
-        }
-        Ok((transfers, events))
-    }
     async fn factory_receipt(
         &self,
         tx: B256,
@@ -2111,6 +2081,127 @@ mod tests {
             .with_provider("base-sepolia-a")
             .with_chain_id(84532);
         (FinalizedReader::new(Arc::new(client)), server)
+    }
+
+    #[tokio::test]
+    async fn coverage_keeps_topic_alternatives_within_provider_limits() {
+        use axum::{Json, Router, routing::post};
+        use serde_json::json;
+
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = requests.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let node = Router::new().route(
+            "/",
+            post(move |Json(body): Json<Value>| {
+                let captured = captured.clone();
+                async move {
+                    assert_eq!(body["method"], "eth_getLogs");
+                    captured.lock().unwrap().push(body["params"][0].clone());
+                    Json(json!({"jsonrpc": "2.0", "id": body["id"], "result": []}))
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, node).await.unwrap() });
+        let client = EvmClient::new(&url).unwrap().with_max_log_blocks(100);
+        let reader = FinalizedReader::new(Arc::new(client));
+        let addresses: Vec<_> = (1..=1001_u64)
+            .map(|i| Address::from_word(U256::from(i).into()))
+            .collect();
+        let factory = Address::repeat_byte(0xab);
+        let result = reader.coverage_logs(factory, &addresses, 1, 101).await;
+        server.abort();
+        let _ = server.await;
+        assert_eq!(result.unwrap(), (Vec::new(), Vec::new()));
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            6,
+            "two transfer chunks and one factory query per window"
+        );
+        let mut transfer_recipients = 0;
+        let mut factory_requests = 0;
+        for filter in requests.iter() {
+            let topics = filter["topics"].as_array().unwrap();
+            let alternatives = |position| match topics.get(position) {
+                Some(Value::Array(values)) => values.len(),
+                _ => 1,
+            };
+            assert!(
+                topics
+                    .iter()
+                    .all(|topic| topic.as_array().is_none_or(|values| values.len() <= 1000))
+            );
+            assert!(alternatives(0) * alternatives(2) <= 1024);
+            let from = u64::from_str_radix(
+                filter["fromBlock"]
+                    .as_str()
+                    .unwrap()
+                    .trim_start_matches("0x"),
+                16,
+            )
+            .unwrap();
+            let to = u64::from_str_radix(
+                filter["toBlock"].as_str().unwrap().trim_start_matches("0x"),
+                16,
+            )
+            .unwrap();
+            assert!(to - from < 100);
+            if filter.get("address").is_some() {
+                assert_eq!(filter["address"], json!(factory));
+                assert_eq!(alternatives(0), 3);
+                assert!(topics.get(2).is_none_or(Value::is_null));
+                factory_requests += 1;
+            } else {
+                assert_eq!(topics[0], json!(Transfer::SIGNATURE_HASH));
+                transfer_recipients += alternatives(2);
+            }
+        }
+        assert_eq!(factory_requests, 2);
+        assert_eq!(
+            transfer_recipients, 2002,
+            "every recipient is queried in each window"
+        );
+    }
+
+    #[tokio::test]
+    async fn receipt_log_self_test_ignores_only_optional_block_timestamp() {
+        for changed_data in [false, true] {
+            let mut block = base_sepolia("block-47297199");
+            block["transactions"] = serde_json::json!([BRIDGE_MINT]);
+            let receipt = base_sepolia("bridge-mint-receipt");
+            assert!(receipt["logs"][0].get("blockTimestamp").is_some());
+            let mut logs = receipt["logs"].clone();
+            for log in logs.as_array_mut().unwrap() {
+                log.as_object_mut().unwrap().remove("blockTimestamp");
+            }
+            if changed_data {
+                logs[0]["data"] = serde_json::json!(B256::ZERO);
+            }
+            let (reader, server) = replay_node(
+                vec![
+                    ("eth_getBlockByNumber", block.clone()),
+                    ("eth_getBlockByHash", block),
+                    ("eth_getTransactionReceipt", receipt),
+                    ("eth_getLogs", logs),
+                ],
+                Vec::new(),
+            )
+            .await;
+            let result = reader.client.check_receipt_logs(47_297_199).await;
+            server.abort();
+            let _ = server.await;
+            if changed_data {
+                assert_eq!(
+                    result,
+                    Err(ChainError::MissingField("self-test receipt log"))
+                );
+            } else {
+                assert_eq!(result, Ok(()));
+            }
+        }
     }
 
     /// A real L1-to-L2 bridge mint on Base Sepolia: the deposit transaction (type `0x7e`)
