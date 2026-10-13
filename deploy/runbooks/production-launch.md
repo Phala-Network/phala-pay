@@ -320,8 +320,10 @@ Finance, Risk, and Operations approve the following in writing
 - any account `limits` that differ from the defaults;
 - the pilot limits above.
 
-The owner approved the committed pilot amounts on 2026-10-13: $5 minimum sale and 1,000-token
-maximum deposit per route, with the default `max_unfinalized_credit` of $1,000 per account.
+The owner approved the committed pilot amounts on 2026-10-13: $5 minimum sale and 10,000-token
+maximum deposit per route, with `max_unfinalized_credit` of 1,000,000 cents ($10,000) per live
+account. One quote is also bounded by the account's live `max_open_amount_per_customer`, whose
+default is $5,000, so §10 raises Phala Cloud's to 1,000,000 cents ($10,000).
 Any change is a reviewed PR to `topup.yaml`, merged **before** §2. A settings change after
 provisioning costs an extra upgrade and changes the compose hash.
 
@@ -1091,14 +1093,17 @@ If Phala Cloud retains a deleted CVM record, the 404 check fails safely. Confirm
 ## 10. Onboard Phala Cloud and enable its charges last
 
 Only after §§6–9 pass may Phala Cloud be onboarded. Open its account with charges disabled and set
-Finance's `max_unfinalized_credit`, plus any Finance-approved `limits`:
+Finance's `max_unfinalized_credit` and its live `max_open_amount_per_customer`, which must be at
+least the largest approved quote (§1.6):
 
 ```sh
 (umask 077 && admin POST /v1/admin/accounts "$(jq -cn '{name:"Phala Cloud",contact:{name:"<name>",email:"<security email>"},due_diligence:{reference:"<review reference>",reviewed_at:"<YYYY-MM-DD>",reviewed_by:"<reviewer>"},charges_enabled:false,reason:"production onboarding after smoke and restore"}')" > phala-cloud-account.json)
 export PHALA_CLOUD_ACCOUNT_ID="$(jq -er '.id' phala-cloud-account.json)"
 (umask 077 && admin POST "/v1/admin/accounts/$PHALA_CLOUD_ACCOUNT_ID" \
-  "$(jq -cn --argjson cents "$FINANCE_MAX_UNFINALIZED_CREDIT" '{max_unfinalized_credit:$cents,reason:"Finance-approved pilot value"}')" \
+  "$(jq -cn --argjson cents "$FINANCE_MAX_UNFINALIZED_CREDIT" --argjson customer 1000000 \
+    '{max_unfinalized_credit:$cents,limits:{livemode:true,max_open_amount_per_customer:$customer},reason:"Finance-approved pilot value"}')" \
   > phala-cloud-account-limits.json)
+jq -e '.limits.live.max_open_amount_per_customer == 1000000' phala-cloud-account-limits.json
 ```
 
 With every gate passed, enable charges. The gates are the screening gates (§§6–8), Finance
