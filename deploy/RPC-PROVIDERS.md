@@ -177,7 +177,8 @@ Each change needs:
 
 ## Sources
 
-All checked on 2026-10-11.
+Pricing-page comparison checked on 2026-10-11; BlockPI RU and rate-limit pages rechecked on
+2026-10-13.
 
 | Provider | Pages |
 |---|---|

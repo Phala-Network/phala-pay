@@ -8,7 +8,10 @@ environment directory in the operator's environment repository, for example
 compose. A change is therefore a pull request and a Deploy `upgrade`
 ([deploy/README.md, "Attested settings"](../deploy/README.md#attested-settings)). The only
 environment variables are the database login's and the two kinds of secret the owner seals into
-the CVM's encrypted environment: `SENTRY_DSN` and each `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`
+the CVM's encrypted environment: `SENTRY_DSN` and the configured RPC keys. Production uses
+Ankr read + BlockPI verify and seals `TOPUP_RPC_ANKR_KEY`, `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
+`TOPUP_RPC_BLOCKPI_BASE_KEY`; staging uses Ankr read + Infura verify and seals
+`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`
 ([deploy/README.md, "Sealing the secrets"](../deploy/README.md#sealing-the-secrets)). The design
 is in [design/deploy-config.md](design/deploy-config.md).
 
@@ -47,7 +50,7 @@ client-supplied forwarding headers are not trusted.
 |---|---|
 | `topup run --config FILE` | The service: the HTTP API and every worker loop. |
 | `topup migrate` | Applies migrations as the database owner. Incomplete payment settings cutovers must be completed on 0.9.x before upgrading. |
-| `topup config check [--secrets] FILE`, `topup config show FILE` | Validates a configuration file without any secret; prints it resolved, as JSON with every route default written out and each keyed provider's URL still carrying its `{key}`. `--secrets` also checks each provider's sealed key (`TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`) against its URL and prints no value. |
+| `topup config check [--secrets] FILE`, `topup config show FILE` | Validates a configuration file without any secret; prints it resolved, as JSON with every route default written out and each keyed provider's URL still carrying its `{key}`. `--secrets` also checks each configured `sealed_key` against its URL and prints no value. |
 | `topup route validate FILE`, `topup route show FILE` | The same for one route file (`examples/`, the sandbox template). `--template` permits the zero factory and implementation placeholders of a deployment template. |
 | `topup rpc check --config FILE` | Checks both endpoints with typed production calls through their sealed credentials; prints endpoint ids. |
 | `topup reconcile --config FILE` | Runs one reconciliation pass and exits. |

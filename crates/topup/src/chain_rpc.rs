@@ -27,7 +27,7 @@ pub struct ChainRpcSpec {
     pub chain_id: u64,
     /// Ankr read endpoint.
     pub read: EndpointSpec,
-    /// Independent Infura verify endpoint.
+    /// Independent verify endpoint (BlockPI in production, Infura in staging).
     pub verify: EndpointSpec,
 }
 /// Shared endpoint clients, without selection, member pinning or failover.

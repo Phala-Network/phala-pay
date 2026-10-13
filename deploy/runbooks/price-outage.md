@@ -25,11 +25,14 @@ and agreement/peg checks remain active (see the design and registry evidence).
 Ethereum USDC uses 82,800 seconds; Ethereum USDT and Base stablecoin feeds use 86,400 seconds.
 Ethereum ETH/USD uses 3,600 seconds. All values are read at one agreed canonical block hash with EIP-1898 `requireCanonical`.
 Testnet tokens deliberately observe Ethereum mainnet; verify `observation_chain_id` and the
-configured `ankr-mainnet`/`infura-mainnet` pair, not a nonexistent testnet price feed.
+configured Ethereum mainnet pair: `ankr-mainnet`/`blockpi-mainnet` in production and
+`ankr-mainnet`/`infura-mainnet` in staging.
 
 For Base and Base Sepolia, also inspect the Base mainnet sequencer proxy through
-`ankr-base-mainnet`/`infura-base-mainnet`: zero means up, one means down. A zero or future recovery
-start, inconsistent round, or the first 3,600 seconds after recovery keeps valuation halted.
+`ankr-base-mainnet`/`blockpi-base-mainnet` in production or
+`ankr-base-mainnet`/`infura-base-mainnet` in staging: zero means up, one means down. A zero or
+future recovery start, inconsistent round, or the first 3,600 seconds after recovery keeps
+valuation halted.
 
 For PHA, inspect `uniswap_v2_twap` evidence and `price_source_refusals_total{code=...}`.
 Read the pinned PHA/WETH pair through both mainnet endpoints at the **same canonical block hash** as ETH/USD;

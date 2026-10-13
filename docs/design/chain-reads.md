@@ -14,8 +14,12 @@ N-1 → N → N-1 → N rollback passes.
 
 ## 1. Model
 
-Every chain has two endpoints from independent companies: **read** (Ankr Freemium) and
-**verify** (Infura Free). Assumption: at least one is correct and synced.
+Every configured chain has two endpoints from independent companies: **read** (Ankr Freemium)
+and **verify** (BlockPI Free in production, Infura Free in staging). Production seals
+`TOPUP_RPC_ANKR_KEY`, `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY`;
+staging seals `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. The Ankr account is shared
+across environments; BlockPI's two chain keys share one account quota.
+Assumption: at least one endpoint is correct and synced.
 
 - **R1 Dual evidence.** A chain fact that moves money or is permanently recorded is accepted only when
   both endpoints derive the same decoded fields independently. Disagreement = wait + alert.

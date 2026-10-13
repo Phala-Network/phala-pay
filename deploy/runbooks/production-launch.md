@@ -623,8 +623,8 @@ In Sentry, the `production` environment's Crons monitors connect within about an
 - The verifier reports `UpToDate` TCB, the app id, the compose hash of the upgrade record's compose,
   and OS image hash `bd369a8c…8033`.
 - The certificate evidence verifies for `$APP_ID`, and `/healthz` answers `200` with an empty body.
-- The four endpoints `ankr-mainnet`, `infura-mainnet`, `ankr-base-mainnet` and
-  `infura-base-mainnet` are ready (`1`). `topup_addresses_lagging` is `0`, and the address cap is
+- The four endpoints `ankr-mainnet`, `blockpi-mainnet`, `ankr-base-mainnet` and
+  `blockpi-base-mainnet` are ready (`1`). `topup_addresses_lagging` is `0`, and the address cap is
   `1000` per chain.
 - The daily report's `sanctions_snapshot` is present, with a `publish_date` matching the
   [OFAC SLS page](https://sanctionslist.ofac.treas.gov/Home/SdnList) and a `verified_at` within the
@@ -919,7 +919,7 @@ restore_drill() {
   : > "$RESTORE_ENV_DIR/restore.env"
   ${EDITOR:-vi} "$RESTORE_ENV_DIR/restore.env" || return 1
   # Exactly RESTORE_AWS_ACCESS_KEY_ID, RESTORE_AWS_SECRET_ACCESS_KEY (read-only token), SENTRY_DSN,
-  # TOPUP_RPC_ANKR_KEY and TOPUP_RPC_INFURA_KEY.
+  # TOPUP_RPC_ANKR_KEY, TOPUP_RPC_BLOCKPI_ETHEREUM_KEY and TOPUP_RPC_BLOCKPI_BASE_KEY.
   "$KIT_DIR/deploy/render.sh" --restore-check --images release/images.json --origin https://pending.invalid \
     "$ENV_DIR" > restore-check.yml || return 1
   "$KIT_DIR/deploy/preflight.sh" --env "$RESTORE_ENV_DIR/restore.env" --compose restore-check.yml \

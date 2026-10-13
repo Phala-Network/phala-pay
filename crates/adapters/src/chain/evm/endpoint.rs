@@ -17,7 +17,7 @@ pub struct EndpointState {
 }
 
 impl EndpointState {
-    /// Marks this endpoint as the independent Infura verifier.
+    /// Marks this endpoint as the independent verifier.
     pub fn set_verify(&self) {
         self.verify.store(true, Ordering::Relaxed);
     }

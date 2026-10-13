@@ -133,7 +133,7 @@ chain is caught up and the actual normal range is shorter. An Infura
 on that error. Extra requests must fit the reserve or
 be budgeted separately.
 
-For each payment chain with C custody routes:
+For each payment chain with C custody routes, the shared Ankr and staging-only Infura costs are:
 
 ```text
 Fast discovery:      288 × (1 head + 1 logs) = 576 Ankr
@@ -232,9 +232,11 @@ alone stays in normal confirmation or L and does not enter S. Missing transfers,
 or changed evidence, and RPC failures that cannot establish height-only lag enter S.
 
 `ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
-A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr / 80 Infura).
+A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr call,
+80 staging Infura credits or 15 production BlockPI RU).
 A present ordinary EVM receipt also requires its block header and transaction: three methods
-per endpoint (3 / 240), even if the evidence disagrees and remains unresolved.
+per endpoint (3 Ankr calls, 240 staging Infura credits or 70 production BlockPI RU), even if
+the evidence disagrees and remains unresolved.
 
 When both original receipts are missing, replacement lookup considers service-known candidates
 with the same chain, sender and nonce but a different hash. **Exactly one candidate** permits
@@ -248,10 +250,11 @@ release reservations to bypass this gate. Follow the
 The branches are mutually exclusive, so the complete per-endpoint recheck bound is
 `max(3, 1 + 3×K) = 4` methods at K=1: one original receipt plus the candidate's receipt,
 header and transaction. D includes four first-finality methods in its worst-case Depth
-allocation: 24 Ankr / 2,000 Infura per deposit in total.
-Charge four Ankr calls / 320 Infura credits per subsequent recheck, before ×1.1:
+allocation: 24 Ankr calls plus 2,000 staging Infura credits or 875 conservative production
+BlockPI RU per deposit in total. Charge four Ankr calls, 320 staging Infura credits or
+85 production BlockPI RU per subsequent recheck, before ×1.1:
 
-| Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Infura credits/deposit/day |
+| Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Staging Infura credits/deposit/day |
 |---|---:|---:|---:|
 | First unresolved-day | 10 + 34 + 18 = 62 | 62×4 = 248 | 62×320 = 19,840 |
 | Every later day | 24 | 24×4 = 96 | 24×320 = 7,680 |
@@ -263,6 +266,7 @@ staging half; production BlockPI uses the RU weights above):
 Rechecks: 2 environments × (1 new × 62 + 1 carried × 24) = 172
 Ankr:     172 × 4   = 688 calls
 Infura:   86 × 320 = 27,520 staging credits
+BlockPI:  86 × 85 = 7,310 production RU
 ```
 
 This includes all allowed replacement-candidate reads and stock turnover; neither is charged
@@ -274,9 +278,10 @@ L separately budgets first-day head probes for one new entry plus hourly probes 
 entry per environment. Its full evidence read is already in D's three-method allocation:
 
 ```text
-L head methods: 2 environments × (1 new × 62 + 1 carried × 24) = 172 per endpoint
+L head methods/role: 2 environments × (1 new × 62 + 1 carried × 24) = 172
 Ankr:          172 calls
 Infura:        86 × 80 = 6,880 staging credits
+BlockPI:       86 × 20 = 1,720 production RU
 ```
 
 The refund receipt reader uses `eth_getTransactionReceipt`, the persisted-checkpoint header and
@@ -288,7 +293,9 @@ endpoints until an agreed sender/nonce is persisted. Asymmetric evidence can the
 four methods per endpoint per check; a never-seen transaction costs two.
 
 Checks run every 60 s for the first 30 min after attachment, every ten minutes until 24 h, then
-hourly indefinitely. Before transport retries, the first half-open refund-day has at most
+hourly indefinitely. The Infura figures below apply only to staging; production uses the
+90-RU BlockPI bound per check above. Before transport retries, the first half-open refund-day
+has at most
 `30 + 141 = 171` checks: `171×4 = 684` Ankr / 54,720 Infura. A full ten-minute-phase day costs
 `144×4 = 576` / 46,080; an hourly-phase day costs `24×4 = 96` / 7,680. A never-seen transaction
 uses `171×2 = 342` / 27,360 on its first day and `24×2 = 48` / 3,840 per hourly-phase day.
