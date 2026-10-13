@@ -42,8 +42,9 @@ rpc:
 
 routes:
   # Owner-approved pilot amounts (2026-10-13): each sale is at least $5 (min_amount, in cents) and
-  # each deposit at most 1,000 tokens (max_deposit_atomic, 6 decimals). Refunds go down to 1 token,
-  # with no quote spread. Accounts keep the default max_unfinalized_credit of $1,000.
+  # each deposit at most 10,100 tokens (max_deposit_atomic, 6 decimals): a $10,000 quote, the
+  # largest one customer's open-quote cap allows, plus its default 1% quote tolerance. Refunds go
+  # down to 1 token, with no quote spread. Each live account's max_unfinalized_credit is $10,000.
   # Ethereum mainnet USDC. The route uses Circle's canonical 6-decimal token and Chainlink's
   # same-chain USDC/USD feed; every route value is live because this is a production environment.
   - route: phala-cloud-ethereum-usdc-usd
@@ -69,7 +70,7 @@ routes:
 
     merchant:
       min_amount: { default: 500 }
-      max_deposit_atomic: { default: "1000000000" }
+      max_deposit_atomic: { default: "10100000000" }
       min_refund_atomic: { default: "1000000" }
       quote_spread_bps: { default: 0 }
 
@@ -98,7 +99,7 @@ routes:
 
     merchant:
       min_amount: { default: 500 }
-      max_deposit_atomic: { default: "1000000000" }
+      max_deposit_atomic: { default: "10100000000" }
       min_refund_atomic: { default: "1000000" }
       quote_spread_bps: { default: 0 }
 
@@ -129,6 +130,6 @@ routes:
 
     merchant:
       min_amount: { default: 500 }
-      max_deposit_atomic: { default: "1000000000" }
+      max_deposit_atomic: { default: "10100000000" }
       min_refund_atomic: { default: "1000000" }
       quote_spread_bps: { default: 0 }
