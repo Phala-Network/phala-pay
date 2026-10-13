@@ -319,7 +319,8 @@ Finance, Risk, and Operations approve the following in writing
 - any account `limits` that differ from the defaults;
 - the pilot limits above.
 
-The committed amounts are copied from the templates and are illustrative until Finance confirms them.
+The owner approved the committed pilot amounts on 2026-10-13: $5 minimum sale and 1,000-token
+maximum deposit per route, with the default `max_unfinalized_credit` of $1,000 per account.
 Any change is a reviewed PR to `topup.yaml`, merged **before** §2. A settings change after
 provisioning costs an extra upgrade and changes the compose hash.
 
