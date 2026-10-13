@@ -790,7 +790,7 @@ bindings and sample forwarders are checked, then route addresses must match the 
 also runs `verify-safe.sh` daily for the committed Sepolia treasury Safe. Retain independent
 operator checks for all production Safes.
 
-The reviewed `PENDING_DEPLOYMENT_CHAINS: "1 8453"` permits a chain only when both configured
+The reviewed `PENDING_DEPLOYMENT_CHAINS` list (now empty) permits a chain only when both configured
 addresses return exactly `0x`, with a warning and job-summary line on every such run. Any
 non-empty code goes through full verification. Remove each chain in the deployment-evidence PR
 required by [launch §1.5](runbooks/production-launch.md#15-deploy-factories-or-verify-if-already-deployed),

@@ -37,9 +37,10 @@ jobs:
         environment: [staging, production]
     env:
       ENVIRONMENT: ${{ matrix.environment }}
-      # Reviewed undeployed chains: remove each in the deployment-evidence PR required by
-      # deploy/runbooks/production-launch.md §1.5. Any non-empty code requires full verification.
-      PENDING_DEPLOYMENT_CHAINS: "1 8453"
+      # Reviewed undeployed chains, space-separated: remove each in the deployment-evidence PR
+      # required by deploy/runbooks/production-launch.md §1.5. Any non-empty code requires full
+      # verification. Ethereum (1) and Base (8453) are deployed; see deploy/CONTRACTS.md.
+      PENDING_DEPLOYMENT_CHAINS: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
