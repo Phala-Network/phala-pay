@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-10-14
+
 ### Added (API)
 
 - Deposit-address assets in merchant and client views include `min_amount` (minimum credit in USD cents),
@@ -1974,7 +1976,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.4...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.5...HEAD
+[0.10.5]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.5
 [0.10.4]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.4
 [0.10.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.3
 [0.10.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.2
