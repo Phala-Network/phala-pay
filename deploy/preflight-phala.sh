@@ -82,14 +82,14 @@ check_phala_cloud() {
     if ! stage_call 30 "${phala[@]}" os-images --prod --all --json >"$tmp/os-images.json" 2>"$tmp/phala.err"; then
         fail "'os-images --prod' failed: $(tool_error "$tmp/phala.err")"
     elif jq -e --arg image "$os_image" \
-        'any(.items[]; .name == $image and .is_dev == false and (.version | test("^v?0[.]5[.]9$")))' \
+        'any(.items[]; .name == $image and .is_dev == false and (.version | test("^v?0[.]5[.]12$")))' \
         "$tmp/os-images.json" >/dev/null; then
-        ok "OS image $os_image is a production (non-dev) dstack 0.5.9 image"
+        ok "OS image $os_image is a production (non-dev) dstack 0.5.12 image"
     else
-        fail "OS image $os_image is not listed as a production dstack 0.5.9 image by 'os-images --prod'"
+        fail "OS image $os_image is not listed as a production dstack 0.5.12 image by 'os-images --prod'"
     fi
     # The platform picks the node; it must be one whose images include this one.
-    offering='[.nodes[] | select(any(.images[]; .name == $image and .is_dev == false and .version[0:3] == [0, 5, 9]))]'
+    offering='[.nodes[] | select(any(.images[]; .name == $image and .is_dev == false and .version[0:3] == [0, 5, 12]))]'
     if ! stage_call 30 "${phala[@]}" api /teepods/available >"$tmp/nodes.json" 2>"$tmp/phala.err"; then
         fail "'api /teepods/available' failed: $(tool_error "$tmp/phala.err")"
     elif count=$(jq -er --arg image "$os_image" "$offering | length" "$tmp/nodes.json") && ((count > 0)); then
@@ -98,6 +98,30 @@ check_phala_cloud() {
         fail "no node of the workspace offers OS image $os_image; offered:" \
             "$(jq -r '[.nodes[].images[] | select(.is_dev == false) | .name] | unique | join(", ")' \
                 "$tmp/nodes.json" 2>/dev/null)"
+    fi
+}
+
+# check_cvm_os_image CVM_ID OS_IMAGE: the CVM's own node/KMS upgrade allowlist, not just
+# the workspace-wide catalogue. Source this during upgrade preflight before any mutation.
+check_cvm_os_image() {
+    local cvm_id=$1 os_image=$2 phala
+    [[ "$cvm_id" =~ ^[A-Za-z0-9_-]+$ ]] || { fail "invalid CVM id"; return 1; }
+    read -r -a phala <<<"${PHALA:-$REPO_ROOT/deploy/phala}"
+    stage_start cvm-os-image-preflight 60
+    if ! stage_call 30 "${phala[@]}" api "/cvms/$cvm_id/available-os-images" \
+        >"$tmp/cvm-os-images.json" 2>"$tmp/phala.err"; then
+        # Raw API failures can include stdout JSON; keep the CLI's error evidence.
+        cat "$tmp/cvm-os-images.json" >&2
+        fail "CVM $cvm_id available-os-images failed: $(tool_error "$tmp/phala.err")"
+        return 1
+    fi
+    if jq -e --arg image "$os_image" \
+        'any(.[]; .version[0:3] == [0, 5, 12] and .prod.name == $image and .prod.enabled == true)' \
+        "$tmp/cvm-os-images.json" >/dev/null; then
+        ok "CVM $cvm_id can run approved OS image $os_image (node and KMS allowlist)"
+    else
+        fail "CVM $cvm_id available-os-images does not include enabled production image $os_image"
+        return 1
     fi
 }
 

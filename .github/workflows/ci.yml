@@ -534,6 +534,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_upgrade_monitor.py
           deploy/tests/phala-cvm-wait.sh
           deploy/tests/phala-cvm-deploy.sh
+          deploy/tests/phala-cvm-os-image.sh
+          deploy/tests/dstack-verifier.sh
           PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_deploy_workflow.py
           deploy/tests/attested-compose.sh
           deploy/tests/verify-attestation.sh

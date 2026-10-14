@@ -81,7 +81,7 @@ Phala Cloud login (with a release's locked CLI, `kit/deploy/phala login`: [secti
 3. refuses an instance name your Phala Cloud workspace already has (before it generates an admin
    key), or a workspace CVM list it cannot read, renders the compose with the
    kit's `render.sh`, runs `preflight.sh --offline` and `check-route-modes.sh`, and provisions the
-   CVM with the kit's locked Phala Cloud CLI, pre-launch script, `--image dstack-0.5.9 --no-dev-os`,
+   CVM with the kit's locked Phala Cloud CLI, pre-launch script, `--image dstack-0.5.12 --no-dev-os`,
    and Phala Cloud's KMS, sealing the secrets you gave from a mode 0600 file, on tmpfs
    (`$XDG_RUNTIME_DIR`) where your session has one and otherwise in the temporary directory,
    shredded where `shred` exists and removed on every exit. It records the new CVM's id in the
@@ -112,7 +112,7 @@ CVM id to run that upgrade; then onboard your first account (section 6).
 
 - **A Phala Cloud workspace** with an API key for each GitHub Environment you deploy
   (`production`, and optionally `staging`), capacity for a `tdx.medium` CVM each, and a node that
-  offers the OS image `dstack-0.5.9` ([deploy/README.md, "OS image"](../deploy/README.md#os-image)).
+  offers the OS image `dstack-0.5.12` ([deploy/README.md, "OS image"](../deploy/README.md#os-image)).
 - **An S3-compatible object store** for the encrypted WAL-G backups: a bucket or prefix per
   Environment that the other Environment's credentials cannot reach, and a read-write token for it.
   The environment directory sets its endpoint, region, and addressing (R2: `auto` and path-style).

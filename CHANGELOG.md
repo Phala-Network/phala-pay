@@ -14,6 +14,24 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed (operators)
+
+- Approve the non-dev `dstack-0.5.12` OS image and its verified hash in all five deployment
+  environments after Phala Cloud retired 0.5.9. Keep `dstack-sdk =0.1.3` and existing app-derived
+  keys. Upgrade preflight checks the existing CVM's OS-image allowlist; Deploy changes the image
+  in place when needed, waits for the old compose to recover, then takes a fresh maintenance
+  lease before deploying compose. Provision uses 0.5.12 directly; CI's simulator uses its guest
+  source. OS measurement verification can use the checksum-pinned official meta-dstack release
+  when the measurement download is unavailable, with a fresh authenticated verifier cache.
+
+### Fixed (operators)
+
+- Keep upgrade availability probes running through both OS-image and compose reboots until the
+  deployment step ends, within its 60-minute budget. Record every outage window and the summed
+  duration; interrupted sampling or an open outage reports only a lower bound.
+- Require observing the OS-image operation start before accepting its settled running state,
+  preventing an early image-name update from racing the compose deployment.
+
 ## [0.10.6] - 2026-10-14
 
 ### Security

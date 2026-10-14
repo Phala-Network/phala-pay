@@ -169,8 +169,8 @@ if grep -rqF 'sealed-key-0123456789' "$tmp"/*.out "$tmp"/*.err; then
 fi
 
 # Only the approved production image passes.
-for image in dstack-0.6.0-rc5 dstack-dev-0.5.9 dstack-nvidia-0.5.9 dstack-0.5.8; do
-    expect_failure "image-$image" "OS image $image is not the approved dstack-0.5.9" \
+for image in dstack-0.6.1 dstack-dev-0.5.12 dstack-nvidia-0.5.12 dstack-0.5.9 dstack-0.5.8; do
+    expect_failure "image-$image" "OS image $image is not the approved dstack-0.5.12" \
         --env "$tmp/complete.env" --compose "$tmp/service.yml" --environment-dir "$staging" \
         --os-image "$image"
 done

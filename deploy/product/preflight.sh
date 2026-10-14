@@ -18,7 +18,7 @@ set -euo pipefail
 source "$(dirname -- "$0")/../contracts/common.sh"
 source "$(dirname -- "$0")/../preflight-phala.sh"
 
-approved_os_image=dstack-0.5.9
+approved_os_image=dstack-0.5.12
 
 usage() {
     echo "usage: $0 --env FILE --compose FILE --environment-dir DIR" \
