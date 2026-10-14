@@ -234,8 +234,13 @@ comes from a release.
          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
    ```
 
-   The Environment's variables are only deployment state: `PHALA_WORKSPACE` (the display name of
-   the API key's workspace) and `TOPUP_CVM_ID` (empty until the first provisioning). Why every
+   The Environment's variables are deployment state and placement: `PHALA_WORKSPACE` (the display
+   name of the API key's workspace), `TOPUP_CVM_ID` (empty until the first provisioning), and
+   optional `PHALA_NODE_ID` (digits: the node id from `kit/deploy/phala nodes list` with that
+   workspace's API key). Empty or unset lets Phala Cloud select the node. The called job reads
+   `PHALA_NODE_ID` from its Environment; the caller example needs no extra input. Only `provision`
+   passes `--node-id`; `upgrade` keeps the CVM's node. The run summary records the requested and
+   actual node, whose id, name and region are in `cvm.json`. Why every
    other setting is committed and attested is in
    [deploy/README.md, "Attested settings"](../deploy/README.md#attested-settings). Another CI
    system, or none, can run the same steps: they are the kit's commands, in the order Deploy runs

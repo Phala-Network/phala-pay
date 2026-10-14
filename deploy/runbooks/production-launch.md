@@ -201,6 +201,8 @@ gh secret set SENTRY_DSN --repo "$GITHUB_REPOSITORY" --env production
 gh secret set TOPUP_MAINTENANCE_PRIVATE_KEY_PEM --repo "$GITHUB_REPOSITORY" --env production \
   < maintenance/production.pem
 gh variable set PHALA_WORKSPACE --repo "$GITHUB_REPOSITORY" --env production --body "$PHALA_WORKSPACE"
+# Owner-approved placement: prod5, node id 26, US-WEST-1 in the production workspace.
+gh variable set PHALA_NODE_ID --repo "$GITHUB_REPOSITORY" --env production --body 26
 gh variable set TOPUP_MAINTENANCE_KEY_ID --repo "$GITHUB_REPOSITORY" --env production \
   --body maintenance/production-v1
 ```
@@ -216,11 +218,15 @@ test "$(openssl pkey -in maintenance/production.pem -pubout -outform DER | tail 
 gh api "repos/$GITHUB_REPOSITORY/environments/production" --jq '.deployment_branch_policy'
 gh api "repos/$GITHUB_REPOSITORY/environments/production/secrets" --jq '[.secrets[].name] | sort'
 gh api "repos/$GITHUB_REPOSITORY/environments/production/variables" --jq '[.variables[].name] | sort'
+gh variable get PHALA_NODE_ID --repo "$GITHUB_REPOSITORY" --env production
 ```
 
 **Checks:** the branch policy is `custom_branch_policies: true`, with `main` as the only policy.
 The secrets are exactly `PHALA_CLOUD_API_KEY`, `SENTRY_DSN` and `TOPUP_MAINTENANCE_PRIVATE_KEY_PEM`.
-The variables are `PHALA_WORKSPACE` and `TOPUP_MAINTENANCE_KEY_ID`, and `TOPUP_CVM_ID` is absent.
+The variables are `PHALA_WORKSPACE`, `PHALA_NODE_ID` (`26`) and `TOPUP_MAINTENANCE_KEY_ID`, and
+`TOPUP_CVM_ID` is absent. `PHALA_NODE_ID` is optional for other instances: empty or unset means
+automatic selection; a set value must be digits. The called Deploy job reads it from the
+Environment and passes `--node-id` only on provision; upgrades keep the CVM's node.
 Both public keys match: `admin/production-v1` and `maintenance/production-v1`.
 
 ### 1.4 R2 bucket and tokens
@@ -447,6 +453,7 @@ everything else:
 | `target` | `topup` |
 | `mode` | `provision` (here), then `upgrade` (§5) |
 | Fixed by the caller | `version: RELEASE_TAG`, `deploy.yml@RELEASE_COMMIT` from §1.1, `environment_dir: deploy/environments/phala-network/production/topup` |
+| Environment placement | `PHALA_NODE_ID: 26` (prod5, US-WEST-1); provision only, upgrade keeps the node |
 | Fixed by Deploy | OS image `dstack-0.5.9` non-dev, `tdx.medium`, Phala KMS, name `phala-pay-production-<run id>` |
 
 ```sh
@@ -482,7 +489,9 @@ The new CVM shows `error` in Phala Cloud until §4 seals it, by design. Stop if 
 **Checks:** the run summary lists the CVM id, the app id, release `RELEASE_TAG` at `RELEASE_COMMIT`, and the `phala-pay` and
 `postgres-walg` digests that match `release/images.json`. The run's `headSha` equals
 `APPROVED_COMMIT` (asserted by `dispatch_deploy`). It also lists OS image `dstack-0.5.9`
-and the read-back verification. `TOPUP_CVM_ID` is set.
+and the read-back verification. Record the requested node `26` and the actual CVM node's id,
+name and region from the summary and `provision-record/cvm.json` (`.node_info`); require node `26`
+(prod5, US-WEST-1) before continuing. `TOPUP_CVM_ID` is set.
 
 ## 3. Create the DNS records
 

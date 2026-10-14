@@ -23,6 +23,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   preflight before provisioning, replacing the staging dRPC prerequisite. Per-account budgets
   and quota alerts cover shared Ankr, staging-only Infura and production-only BlockPI;
   configured D=46/20 and every other cap stay unchanged.
+- Deploy accepts optional Environment variable `PHALA_NODE_ID` (empty means automatic
+  placement), passes it only when provisioning, and records requested and actual node placement
+  in the run summary. Upgrades keep the CVM's node.
+
+### Fixed (operators)
+
+- Deploy logs the Phala Cloud CLI's JSON output even when it fails and preserves its exit
+  status, so failed provisioning reports its error and request id.
 
 ## [0.10.4] - 2026-10-13
 

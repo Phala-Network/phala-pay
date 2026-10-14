@@ -182,6 +182,13 @@ official dstack verifier; it uploads the rendered compose and the verification a
 [Deploy Phala's instance](../.github/workflows/deploy-phala.yml) is Phala's caller, the same way;
 adopting a release is a pull request that changes its release.
 
+The optional GitHub Environment variable `PHALA_NODE_ID` pins a new CVM to a Phala Cloud node:
+empty or unset lets Phala Cloud select it; otherwise the value must contain only digits, the
+node id from `deploy/phala nodes list` with that workspace's API key. Deploy passes `--node-id`
+only for `mode: provision`; an upgrade keeps the CVM's node. The run summary records the
+requested node (or `auto`) and the actual node's id, name and region from `cvm.json`.
+The CLI's JSON output is logged even if deployment fails, with its exit status preserved.
+
 #### Planned upgrade admission and downtime
 
 Before a topup upgrade calls Phala Cloud, the workflow admin-signs
