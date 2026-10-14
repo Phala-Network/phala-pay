@@ -259,7 +259,7 @@ printf '%s\n' 'id = "another-cvm"' 'env_file = "other.env"' >"$tmp/phala.toml"
 succeeds quick TOPUP_ADMIN_PUBLIC_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo= AWS_REGION=auto
 [[ "$(grep -c '^gh attestation verify' "$tmp/log")" == 11 ]] || fail "quick did not verify 5 assets and provenance plus SBOM for 3 images"
 [[ "$(deploys | wc -l)" == 1 ]] || fail "quick did not deploy exactly once"
-for argument in "--name quick " "--image dstack-0.5.9 " "--no-dev-os" "--kms phala " "--instance-type tdx.medium " \
+for argument in "--name quick " "--image dstack-0.5.12 " "--no-dev-os" "--kms phala " "--instance-type tdx.medium " \
     "/kit/deploy/phala-cloud-pre-launch.sh " "-e $tmp/runtime/"; do
     deploys | grep -qF -- "$argument" || fail "quick did not deploy with $argument"
 done

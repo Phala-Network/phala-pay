@@ -1,9 +1,9 @@
 FROM rust:1.98.1-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546 AS builder
 
-# dstack v0.5.9, the guest agent of the dstack-0.5.9 OS image: the v0.5.9, rust-sdk-v0.5.9, kms,
-# gateway, and verifier v0.5.9 tags all point here.
-ARG DSTACK_REV=282eeb27d22d8f091ad0fa5a90e638f85cf68751
-ARG DSTACK_ARCHIVE_SHA256=f5685294c8d5f3794fd5060a6870b5f8a231cb451aff57b9b7ce2c6ca1121ab0
+# dstack v0.5.12, the guest agent of the approved dstack-0.5.12 OS image.
+# Keep dstack-sdk =0.1.3: the 0.5 guest API and key derivation remain compatible.
+ARG DSTACK_REV=43f69f41cc546423f9f73fc48b16f8cf19053cbc
+ARG DSTACK_ARCHIVE_SHA256=eb23bcd3a7c1638eab9dfddd3ebdc2ad413023f8f20eccf87c99417dff94729a
 
 WORKDIR /src
 ADD https://github.com/Dstack-TEE/dstack/archive/${DSTACK_REV}.tar.gz /tmp/dstack.tar.gz

@@ -15,7 +15,7 @@
 # provenance. --strict, or PHALA_PAY_REQUIRE_ATTESTATION=1, refuses to go on without the GitHub CLI.
 # It then runs only the verified kit's scripts, in Deploy's order (.github/workflows/deploy.yml):
 # render.sh, preflight.sh --offline, check-route-modes.sh, and the kit's locked Phala Cloud CLI
-# through phala-cvm.sh, with the kit's pre-launch script, OS image dstack-0.5.9, and Phala Cloud's
+# through phala-cvm.sh, with the kit's pre-launch script, OS image dstack-0.5.12, and Phala Cloud's
 # KMS. Two variants:
 # - quick start: the Phala Cloud template (deploy/README.md, "The Phala Cloud template variant"),
 #   a testnet instance at its gateway domain, its admin key and backup location in the CVM's env;
@@ -462,7 +462,7 @@ YAML
     local update=(--compose "$compose" --pre-launch-script "$kit/deploy/phala-cloud-pre-launch.sh"
         --no-public-logs --no-public-sysinfo)
     phala_cvm deploy "$work/deploy.json" --name "$CVM_NAME" "${update[@]}" -e "$env_file" \
-        --instance-type tdx.medium --fs ext4 --kms phala --image dstack-0.5.9 --no-dev-os \
+        --instance-type tdx.medium --fs ext4 --kms phala --image dstack-0.5.12 --no-dev-os \
         --public-tcbinfo --secure-time </dev/null
     cvm_id=$(jq -er '.vm_uuid' "$work/deploy.json")
     printf '%s\n' "$cvm_id" >"$state"

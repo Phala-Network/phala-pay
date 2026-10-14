@@ -40,8 +40,8 @@ deploy, makes it detectable.
 
 ### OS image
 
-The approved OS image is `dstack-0.5.9`, non-dev, with verified image hash
-`bd369a8c2f9edb2b52dad48ac8e0b32dde5f1337c423a506b48d07403a7d8033`.
+The approved OS image is `dstack-0.5.12`, non-dev, with verified image hash
+`8db40cb23008d6213668b5816702d100b37b859a8a5bfd18d938ae3a1b3715bd`.
 The reviewed `os-image-hash` file in each environment directory pins this hash, including both
 Phala staging and production topup configurations. Staging must run this production image before
 acceptance; a dev image fails verification. Changing the approved pin requires a reviewed PR.
@@ -51,6 +51,42 @@ workspace to offer it. The service speaks the dstack 0.5 guest API (`dstack-sdk 
 local simulator is built from the same release. dstack 0.6 derives different keys for the same
 domain, so moving to it changes every account's webhook keys (which merchants pin), the backup
 key, and the database passwords: that is a key migration, not an image bump.
+
+#### Approval evidence for dstack-0.5.12
+
+Checked on 2026-10-14 against Phala Cloud CLI 1.1.22 and the official
+[meta-dstack v0.5.12 release](https://github.com/Dstack-TEE/meta-dstack/releases/tag/v0.5.12):
+
+- `phala os-images --prod --all --json` lists `name: dstack-0.5.12`, `version: 0.5.12`,
+  `is_dev: false`, `requires_gpu: false`, and
+  `os_image_hash: 8db40cb23008d6213668b5816702d100b37b859a8a5bfd18d938ae3a1b3715bd`.
+- The release's
+  [dstack-0.5.12.tar.gz](https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.12/dstack-0.5.12.tar.gz)
+  has SHA-256 `e3037d99d99ec963bbe43929856c1e46e7197a1178da5867024c4b68064eb176`.
+- After extraction, `sha256sum dstack-0.5.12/sha256sum.txt` equals the approved image hash;
+  `(cd dstack-0.5.12 && sha256sum -c sha256sum.txt)` passes for `ovmf.fd`, `bzImage`,
+  `initramfs.cpio.gz`, and `metadata.json`. The verified metadata says
+  `version: 0.5.12`, `is_dev: false`, and `ovmf_variant: pre202505`.
+
+[dstack-verifier.sh](dstack-verifier.sh) first fetches the measurement archive from
+`download.dstack.org/os-images/mr_<approved-hash>.tar.gz` (404 at approval time). When unavailable,
+it uses the release asset above, verifies its archive checksum, then authenticates
+`sha256sum.txt` against the approved hash and verifies every listed file. Only the four verified
+inputs enter a fresh tmpfs mounted at `/tmp/dstack-verifier/cache/images/<approved-hash>`;
+unlisted release files and old measurement caches are never reused. This works with remote
+Docker daemons because the request and files are streamed through stdin.
+
+Keep the verifier image `dstacktee/dstack-verifier:0.5.9` at digest
+`sha256:cfc06d5bdaa71a8a942c8bfa04d2d17dc30f13d92f26386c5d45d454606e8b70`:
+0.5.12 retains the `pre202505` OVMF measurement semantics supported by that verifier. Image
+version and verifier version need not match. Live quote/TCB verification remains a deployment
+acceptance check; approving these bytes does not claim a live CVM was upgraded or attested.
+
+The [0.5.12 guest release](https://github.com/Dstack-TEE/dstack/releases/tag/v0.5.12) preserves
+0.5 app-key derivation: an in-place upgrade keeping the same CVM/app/KMS identity retains webhook,
+backup and database keys. The simulator pins guest commit
+`43f69f41cc546423f9f73fc48b16f8cf19053cbc` with source-archive SHA-256
+`eb23bcd3a7c1638eab9dfddd3ebdc2ad413023f8f20eccf87c99417dff94729a`.
 
 ## One-time setup (HUMAN-ONLY, repository owner)
 
@@ -205,6 +241,30 @@ the uploaded deployment record, and is deleted after each signed request.
 
 The pause and resume helper retries transport errors and HTTP 408, 429, 500, 502, 503, and 504 responses;
 each attempt is signed fresh, delays are at least 1 second, and the operation is bounded by a 60-second deadline.
+
+Upgrade preflight also reads `GET /cvms/<id>/available-os-images`, which filters for the existing
+CVM's node, KMS allowlist and production/GPU rules. It requires an enabled production
+`dstack-0.5.12` entry before any pause or upgrade call. If `cvm-before.json` already reports that
+image, Deploy skips the OS-image operation; new CVMs provision directly on it.
+Otherwise, after the initial pause, the locked CLI's raw API sends
+`PATCH /cvms/<id>/os-image` with `{"os_image_name":"dstack-0.5.12"}` and waits for the image
+name, running status and no operation in progress. This reboots the same CVM without changing
+compose, app id, instance id, node or sealed env. Deploy waits for the old compose's `/healthz`,
+then topup takes a fresh 900-second lease immediately before the compose deployment.
+The first lease disappears on process exit; between OS recovery and the second pause the old
+compose serves normally, a safe ordinary state. Product upgrades use the same image/health checks
+without topup's maintenance API.
+
+For planning, assume two restart envelopes of about three minutes each: the prior compose-only
+staging upgrade took 163 seconds ([deployment study](../docs/design/zero-downtime-upgrades.md)).
+The OS-image reboot has not been measured by this PR, so six minutes total is an assumption,
+not a downtime guarantee. Each reboot has its own process pause/startup protection; the two
+900-second leases are not one continuous pause and cannot be extended across process exit.
+The upgrade monitor spans both reboots and the healthy interval and records observed availability.
+Convergence ceilings are 15 minutes for OS change (including its PATCH), 10 minutes for old-compose
+health, 60 seconds for the fresh pause, and 5/15/10 minutes for compose submission/convergence/health.
+The deployment step allows 60 minutes; the overall job still stops after 75 minutes. A timeout
+requires inspection and recovery; it does not prove the image change was undone.
 
 Generate an independent key per Environment on the owner's machine using the installed Python
 SDK CLI. Convert its seed to the PEM the workflow helper accepts:
@@ -1037,10 +1097,12 @@ Bash 4.4 or newer. The quick-start bootstrap downloads the verifier and its dead
 the same release tag; release checksums and provenance verification still run before kit scripts.
 
 Deploy stages have workflow step deadlines (10 minutes, 20 for preflight/attestation/health,
-and 25 for deployment plus CVM convergence), in addition
+60 for deployment including an optional OS-image reboot, and 25 for provision's gateway update), in addition
 to the 75-minute job ceiling. Shell stages use absolute elapsed-time deadlines: anonymous pulls
 share 600 seconds (each pull <=180 seconds, three attempts); Phala preflight shares 120 seconds
 (each call <=30 seconds); deployment submission <=300 seconds; CVM convergence <=900 seconds;
+OS-image PATCH and convergence share <=900 seconds, followed by old-compose health <=600 seconds
+and a fresh maintenance pause <=60 seconds before compose deployment;
 attestation and health convergence <=600 seconds each. Each call is capped by remaining stage
 time, with TERM and a two-second KILL grace. Poll sleeps cannot extend the stage. Diagnostics
 name the stage, elapsed/remaining seconds and exit status without credentials. Contract and

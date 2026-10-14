@@ -23,7 +23,7 @@
 # checks each RPC URL (https, no embedded key) and each route's chain, contracts, and asset
 # through every provider the route names; that needs the keys, so --unsealed skips it for a
 # keyed provider. Finally it checks the Phala Cloud workspace and the owner-approved OS image
-# dstack-0.5.9 (deploy/README.md). PHALA selects the CLI command (default
+# dstack-0.5.12 (deploy/README.md). PHALA selects the CLI command (default
 # deploy/phala, the locked CLI), and TOPUP a local topup command instead of the pinned image's (tests).
 #
 # Every failure is reported, and the exit status is 1 if any. Output never prints a URL with its
@@ -34,8 +34,8 @@ source "$(dirname -- "$0")/preflight-phala.sh"
 source "$(dirname -- "$0")/preflight-rpc.sh"
 
 networks="$DEPLOY_CONTRACTS_DIR/networks.json"
-# The owner-approved OS image (deploy/README.md, "OS image"): production, dstack 0.5.9.
-approved_os_image=dstack-0.5.9
+# The owner-approved OS image (deploy/README.md, "OS image"): production, dstack 0.5.12.
+approved_os_image=dstack-0.5.12
 
 usage() {
     echo "usage: $0 --env FILE --compose FILE --environment-dir DIR [--restore-check | --template]" \

@@ -9,6 +9,9 @@
 #                                                    custom domain's CNAME target
 #   deploy/phala-cvm.sh deploy OUTPUT CLI_ARGS...    `deploy --json`; its output goes to the log, its
 #                                                    JSON object to OUTPUT, and it must succeed
+#   deploy/phala-cvm.sh os-image CVM_ID IMAGE >cvm.json
+#                                                    change the OS image, then wait for it to run,
+#                                                    settled (15 minutes including the PATCH)
 #   deploy/phala-cvm.sh wait [--unsealed] CVM_ID [PREVIOUS_HASH] >cvm.json
 #                                                    until the CVM runs, settled, with a compose hash
 #                                                    other than PREVIOUS_HASH (15 minutes); with
@@ -60,6 +63,40 @@ case "$command" in
         ((status == 0)) || exit "$status"
         sed -n '/^{/,$p' "$output.raw" >"$output"
         jq -e '.success == true' "$output" >/dev/null
+        ;;
+    os-image)
+        [[ $# -eq 2 && "$1" =~ ^[A-Za-z0-9_-]+$ && "$2" =~ ^[A-Za-z0-9._-]+$ ]] || {
+            echo "usage: $0 os-image CVM_ID IMAGE" >&2
+            exit 64
+        }
+        stage_start os-image "${OS_IMAGE_WAIT_SECONDS:-900}"
+        # CLI 1.1.22 has no OS-image subcommand. Its raw API sends this JSON body; Cloud
+        # responds 202 with no body and reboots the same CVM, retaining app/KMS identity.
+        status=0
+        response=$(phala api "/cvms/$1/os-image" -X PATCH -F "os_image_name=$2") || status=$?
+        [[ -z "$response" ]] || printf '%s\n' "$response" >&2
+        ((status == 0)) || exit "$status"
+        while stage_remaining; do
+            status=0
+            cvm=$(phala cvms get "$1" --json) || status=$?
+            if ((status == 0)); then
+                jq -r '"status=\(.status) in_progress=\(.in_progress) os_image=\(.os.name)"' \
+                    <<<"$cvm" >&2 || true
+                if jq -e --arg image "$2" \
+                    '.os.name == $image and .status == "running" and (.in_progress | not)' \
+                    <<<"$cvm" >/dev/null; then
+                    printf '%s\n' "$cvm"
+                    exit 0
+                fi
+            else
+                # --json errors are on stdout, just as with `deploy --json` (#466).
+                [[ -z "$cvm" ]] || printf '%s\n' "$cvm" >&2
+            fi
+            stage_sleep 15
+        done
+        stage_expired
+        echo "::error::CVM $1 did not run OS image $2" >&2
+        exit 1
         ;;
     wait)
         # Settled: no operation in progress, with a new compose. A provision (--unsealed) only
@@ -125,7 +162,7 @@ case "$command" in
         exit 1
         ;;
     *)
-        echo "usage: $0 get|url|gateway-domain|deploy|wait|attestation|instance-id|healthz ARGS..." >&2
+        echo "usage: $0 get|url|gateway-domain|deploy|os-image|wait|attestation|instance-id|healthz ARGS..." >&2
         exit 64
         ;;
 esac

@@ -27,14 +27,14 @@ printf '#!/bin/sh\necho "request failed: ECONNRESET" >&2\nexit 1\n' >"$tmp/bin/p
 chmod +x "$tmp/bin/docker" "$tmp/bin/phala"
 printf '%s\n' flaky private down >"$tmp/images"
 
+export PATH="$tmp/bin:$PATH" STUB_LOG="$tmp/pulls" PHALA="$tmp/bin/phala" DOCKER_HOST=unix:///stub
 (
-    export PATH="$tmp/bin:$PATH" STUB_LOG="$tmp/pulls" PHALA="$tmp/bin/phala" DOCKER_HOST=unix:///stub
     fail() { printf 'FAIL: %s\n' "$*"; }
     ok() { printf 'ok: %s\n' "$*"; }
     sleep() { :; }
     source "$root/deploy/preflight-phala.sh"
     check_anonymous_pulls "$tmp/images"
-    check_phala_cloud workspace dstack-0.5.9
+    check_phala_cloud workspace dstack-0.5.12
 ) >"$tmp/out"
 
 expect() {
@@ -56,5 +56,37 @@ expect "FAIL: the Phala CLI is error: request failed: ECONNRESET; these steps ar
 expect "FAIL: the CLI is not logged in to workspace 'workspace': request failed: ECONNRESET"
 expect "FAIL: 'os-images --prod' failed: request failed: ECONNRESET"
 expect "FAIL: 'api /teepods/available' failed: request failed: ECONNRESET"
+
+# The catalogue uses a version string, while available nodes use a version tuple.
+cat >"$tmp/bin/phala" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+    --version) echo v1.1.22 ;;
+    status) echo '{"team_name":"workspace"}' ;;
+    os-images) jq -nc --arg version "$STUB_VERSION" --argjson dev "$STUB_DEV" \
+        '{items: [{name: "dstack-0.5.12", version: $version, is_dev: $dev}]}' ;;
+    api) jq -nc --argjson version "$STUB_NODE_VERSION" --argjson dev "$STUB_DEV" \
+        '{nodes: [{images: [{name: "dstack-0.5.12", version: $version, is_dev: $dev}]}]}' ;;
+    *) exit 64 ;;
+esac
+STUB
+check_listing() {
+    (
+        export STUB_VERSION=$1 STUB_NODE_VERSION=$2 STUB_DEV=$3
+        fail() { printf 'FAIL: %s\n' "$*"; }
+        ok() { printf 'ok: %s\n' "$*"; }
+        source "$root/deploy/preflight-phala.sh"
+        check_phala_cloud workspace dstack-0.5.12
+    ) >"$tmp/out"
+}
+check_listing 0.5.12 '[0,5,12]' false
+expect 'ok: OS image dstack-0.5.12 is a production (non-dev) dstack 0.5.12 image'
+expect 'ok: 1 node(s) of the workspace offer OS image dstack-0.5.12'
+for rejected in '0.5.9 [0,5,9] false' '0.5.12 [0,5,12] true'; do
+    read -r version node_version dev <<<"$rejected"
+    check_listing "$version" "$node_version" "$dev"
+    expect "FAIL: OS image dstack-0.5.12 is not listed as a production dstack 0.5.12 image by 'os-images --prod'"
+    grep -qF 'FAIL: no node of the workspace offers OS image dstack-0.5.12' "$tmp/out"
+done
 
 echo "preflight online checks test passed"

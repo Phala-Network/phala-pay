@@ -6,11 +6,12 @@ Scope: the attested compose, its variants, every setting of `topup` and of the
 deployment, and the scripts, workflows, and docs around them. Owner's rules:
 "精简优雅重构compose和各种配置项"; use a standard mechanism wherever one exists; don't abuse env.
 
-Claims about third-party behaviour were checked on 2026-09-30 against source or by experiment.
-The **dstack-0.5.9 guest runs Docker Compose v2.26.0**: `meta-dstack` v0.5.9 pins
+Claims about third-party behaviour were checked on 2026-09-30 and the OS-image pin updated on
+2026-10-14 against upstream source. The **dstack-0.5.12 guest runs Docker Compose v2.26.0**:
+`meta-dstack` v0.5.12 still pins
 `meta-virtualization` 52cd8a2, whose `docker-compose_git.bb` has `PV = "v2.26.0"`. The guest runs
 `docker compose up --remove-orphans -d --build` in `/dstack`, with the sealed env as its process
-environment (dstack v0.5.9 `basefiles/app-compose.{sh,service}`:
+environment (dstack v0.5.12 `basefiles/app-compose.{sh,service}`:
 `EnvironmentFile=-/dstack/.host-shared/.decrypted-env`); `ExecStop` stops the whole stack.
 
 ## 1. Decisions
