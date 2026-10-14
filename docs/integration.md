@@ -542,8 +542,8 @@ you accept** (§1.9), like the stable bank-transfer details Stripe gives each cu
 ([customer balance funding instructions](https://docs.stripe.com/payments/customer-balance/funding-instructions)),
 and like the one deposit address an exchange gives a user for every token and every EVM chain.
 It never expires: the customer chooses an amount **within the accepted token’s per-transfer
-deposit limits, at any time, on any listed network**. Eligible transfers are credited at the
-market (spot) rate after confirmation,
+token bounds and meeting its minimum credit value, at any time, on any listed network**.
+Eligible transfers are credited at the market (spot) rate after confirmation,
 within about 5 minutes plus the chain's confirmation (a transfer sent without a
 [transaction-hash hint](#transaction-hash-hints) waits for the 5-minute discovery scan), through
 the same `deposit.credited` webhook as a quote payment.
@@ -563,7 +563,7 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
 #  "networks": [
 #    {"chain_id": 11155111, "address": "0xabc…", "treasury": "0x…",
 #     "assets": [{"asset": "pha", "contract": "0x…", "decimals": 18,
-#                 "min_deposit_atomic": "100000000000000000",
+#                 "min_amount": 500, "min_deposit_atomic": "100000000000000000",
 #                 "max_deposit_atomic": "10100000000000000000000",
 #                 "payment_uri": "ethereum:0x…@11155111/transfer?address=0xabc…"}]},
 #    {"chain_id": 84532, "address": "0xabc…", "treasury": "0x…", "assets": [ … ]}]}
@@ -583,16 +583,19 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   one address for all.
 - Show only the networks in `networks` and the tokens in their `assets`: the networks and tokens
   your payment settings accept, read when the address is returned, so a change of your settings
-  shows on the next read. Each asset carries `min_deposit_atomic` and `max_deposit_atomic`,
-  inclusive per-transfer bounds as decimal strings in atomic units, resolved from the account’s
-  current payment settings and the route at view time by the same resolver screening uses.
-  Merchant and client deposit-address views always carry both resolved bounds. The admin
-  `POST /v1/admin/restore/deposit_addresses` response omits both fields (never `null` or zero
+  shows on the next read. Each asset carries `min_amount`, the minimum per-transfer credit in
+  the account currency’s minor units (currently USD cents), and `min_deposit_atomic` and
+  `max_deposit_atomic`, inclusive token bounds as decimal strings in atomic units. All three
+  come from the account’s current payment settings and the route at view time, using the same
+  resolver as screening and valuation. Both minima are independently enforced: a zero atomic
+  minimum does not waive the credit minimum; smaller spot-valued transfers are rejected with
+  `below_minimum`. Merchant and client views always carry all three resolved fields. The admin
+  `POST /v1/admin/restore/deposit_addresses` response omits all three (never `null` or zero
   placeholders): reconstruction intentionally ignores payment settings while they are held.
-  Divide by `10 ** decimals` for display without floating-point rounding. They are current terms, not a quote or a guarantee for a later
-  transfer: screening uses the deposit’s bound settings revision and route version (§1.9).
-  Eligible transfers within the bounds are credited; transfers outside them are rejected and
-  follow the existing refund rules (§1.3). Credit before finality also obeys `max_unfinalized_credit`: a
+  Divide token bounds by `10 ** decimals` for display without floating-point rounding. These
+  are current terms, not a quote or a guarantee for a later transfer: screening uses the deposit’s bound settings revision and route version (§1.9).
+  Eligible transfers meeting the credit minimum and token bounds are credited; transfers outside
+  them are rejected and follow the existing refund rules (§1.3). Credit before finality also obeys `max_unfinalized_credit`: a
   transfer past that cap waits for finality, so the typical credit time can be longer. A routed
   token you do not accept is `rejected(asset_not_accepted)`, any other token `rejected
   (unsupported_asset)`, and neither is credited. Funds sent on a network that is not listed are not seen:
@@ -642,11 +645,14 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
 **Page copy.** "One address for all listed tokens and networks. Send only listed tokens." Let the
 customer pick the network and the token; show that network, the token contract, the full address
 with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain, and address
-and no amount). State the selected token’s range on its network, for example: "Send 0.1–10100 PHA
-per transfer on Sepolia. Unsupported tokens or networks are not credited. Eligible transfers are
-credited at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base
-Sepolia." Read the range from the latest public view when available. When an older server omits
-the bounds, use "Send PHA on Sepolia" without a range; never promise credit for any amount.
+and no amount). State the USD credit minimum and selected token’s maximum on its network, for
+example: "Send at least $5.00 and up to 10,100 USDC per transfer on Base. Unsupported tokens or
+networks are not credited. Eligible transfers are credited at the market rate, usually within about
+5 minutes." If the atomic minimum is positive, state both independent floors: "Send at least $5.00
+and 10 USDC, up to 10,100 USDC per transfer on Base." Omit the atomic minimum when it is zero;
+the stricter floor at payment time binds. Group token amounts in English without losing precision.
+Read all limits from the latest public view when available. When any limit is missing or malformed,
+use "Send USDC on Base" without a range; never promise credit for any amount.
 A payer sending from their own wallet or exchange gives the page no transaction hash,
 so unless your page submits one ([transaction-hash hints](#transaction-hash-hints)), each network's
 time is the 5-minute discovery scan plus its `typical_credit_seconds` in the address's public view

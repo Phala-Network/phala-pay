@@ -1425,6 +1425,7 @@ async fn a_deposit_address_given_out_after_the_restore_point_is_reissued_identic
                 let assets = network["assets"].as_array().context("restored assets")?;
                 ensure!(!assets.is_empty());
                 for asset in assets {
+                    ensure!(asset.get("min_amount").is_none());
                     ensure!(asset.get("min_deposit_atomic").is_none());
                     ensure!(asset.get("max_deposit_atomic").is_none());
                 }

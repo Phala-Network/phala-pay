@@ -651,6 +651,7 @@ async fn deposit_address_views_state_current_per_transfer_bounds() -> Result<()>
             let id = object["id"].as_str().context("id")?;
             for network in networks(&object)? {
                 for asset in network["assets"].as_array().context("assets")? {
+                    ensure!(asset["min_amount"] == 100);
                     ensure!(asset["min_deposit_atomic"] == "20000000000000000000");
                     ensure!(asset["max_deposit_atomic"] == "200000000000000000000000");
                 }
@@ -664,7 +665,7 @@ async fn deposit_address_views_state_current_per_transfer_bounds() -> Result<()>
                     &fixture.live_key,
                     json!({"chains": [
                         {"chain_id": 1, "assets": [
-                            {"asset": "pha", "min_deposit_atomic": "25000000000000000000",
+                            {"asset": "pha", "min_amount": 500, "min_deposit_atomic": "25000000000000000000",
                              "max_deposit_atomic": "10100000000000000000000"},
                             {"asset": "usdc", "max_deposit_atomic": "100000000000000000000"}
                         ]},
@@ -691,12 +692,14 @@ async fn deposit_address_views_state_current_per_transfer_bounds() -> Result<()>
                     .find(|asset| asset["asset"] == "pha")
                     .context("pha")?;
                 ensure!(pha["min_deposit_atomic"] == "25000000000000000000");
+                ensure!(pha["min_amount"] == 500);
                 ensure!(pha["max_deposit_atomic"] == "10100000000000000000000");
                 let usdc = assets
                     .iter()
                     .find(|asset| asset["asset"] == "usdc")
                     .context("usdc")?;
                 ensure!(usdc["min_deposit_atomic"] == "20000000000000000000");
+                ensure!(usdc["min_amount"] == 100);
                 ensure!(usdc["max_deposit_atomic"] == "100000000000000000000");
                 // The same token on another network keeps that route's default bounds.
                 ensure!(

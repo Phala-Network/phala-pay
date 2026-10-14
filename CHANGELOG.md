@@ -16,10 +16,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Added (API)
 
-- Deposit-address assets in merchant and client views include `min_deposit_atomic` and
-  `max_deposit_atomic`: inclusive per-transfer bounds as decimal strings in atomic units,
+- Deposit-address assets in merchant and client views include `min_amount` (minimum credit in USD cents),
+  `min_deposit_atomic`, and `max_deposit_atomic` (inclusive token bounds as atomic-unit strings),
   resolved from the account’s payment settings and route at view time, using screening’s resolver.
-  Admin restore responses omit both fields because reconstruction ignores held payment settings.
+  Admin restore responses omit all three fields because reconstruction ignores held payment settings.
 
 ### Changed (operators)
 
@@ -36,20 +36,23 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 #### Fixed
 
 - `<DepositAddress>` replaces “Any amount is credited” with “Eligible transfers are credited”
-  and shows the selected token/network’s per-transfer range, formatted without precision loss.
+  and shows the selected token/network’s USD credit minimum and token maximum, plus the atomic
+  minimum when nonzero. Token amounts use English thousands grouping without precision loss;
+  malformed merchant-supplied limits omit the range instead of crashing.
   Public-view reads refresh the limits; older servers without bounds use neutral copy without
   a range. Discovery plus confirmation credit-time estimates are unchanged.
 
 #### Added
 
-- Deposit-address types carry the per-transfer bounds, including the public-view parser and
-  regenerated server SDK types and schemas.
+- Deposit-address types carry the credit minimum and per-transfer token bounds, including the
+  public-view parser and regenerated server SDK types and schemas.
 
 ### Python SDK (`phala-pay`)
 
 #### Added
 
-- Regenerated `DepositAddressAsset` includes the per-transfer minimum and maximum atomic amounts.
+- Regenerated `DepositAddressAsset` includes `min_amount` (minimum credit in USD cents) and
+  the per-transfer minimum and maximum atomic amounts.
 
 ## [0.10.4] - 2026-10-13
 

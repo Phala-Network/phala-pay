@@ -22,9 +22,11 @@ export interface DepositAddressAsset {
   /** The ERC-20 contract. */
   contract: string;
   decimals: number;
-  /** Inclusive per-transfer minimum at view time, in atomic units; absent on older servers. */
+  /** Minimum per-transfer credit in account currency minor units (USD cents), independent of atomic bounds; absent on older servers and admin restore. */
+  min_amount?: number;
+  /** Inclusive per-transfer token minimum; zero does not waive min_amount. Absent on older servers and admin restore. */
   min_deposit_atomic?: string;
-  /** Inclusive per-transfer maximum at view time, in atomic units; absent on older servers. */
+  /** Inclusive per-transfer maximum at view time, in atomic units; absent on older servers and admin restore. */
   max_deposit_atomic?: string;
   /** The EIP-681 transfer request of this token to the network's address, without an amount. */
   payment_uri: string;

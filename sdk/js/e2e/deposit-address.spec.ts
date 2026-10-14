@@ -8,11 +8,11 @@ for (const width of [320, 1280]) {
       await page.goto(`/?deposit&theme=${theme}`);
       const message = page.locator(".pp-message").last();
       await expect(message).toHaveText(
-        "Send 0.1–10100 PHA per transfer on Sepolia. Unsupported tokens or networks are not credited. Eligible transfers are credited at the market rate after confirmation.",
+        "Send at least $5.00 and 0.1 PHA, up to 10,100 PHA per transfer on Sepolia. Unsupported tokens or networks are not credited. Eligible transfers are credited at the market rate after confirmation.",
       );
       await page.getByRole("radio", { name: "Base Sepolia" }).check();
       await page.getByRole("radio", { name: "USDC" }).check();
-      await expect(message).toContainText("Send 0.1–10100 USDC per transfer on Base Sepolia.");
+      await expect(message).toContainText("Send at least $5.00 and up to 10,100 USDC per transfer on Base Sepolia.");
       expect(await message.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await page.addScriptTag({ content: axe.source });

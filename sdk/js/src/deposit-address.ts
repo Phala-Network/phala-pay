@@ -151,6 +151,7 @@ function parseNetwork(value: unknown): ClientDepositAddressNetwork {
 function parseAsset(value: unknown): DepositAddressAsset {
   const a = record(value);
   const decimals = a["decimals"];
+  const creditMinimum = a["min_amount"];
   const minimum = a["min_deposit_atomic"];
   const maximum = a["max_deposit_atomic"];
   if (
@@ -159,8 +160,9 @@ function parseAsset(value: unknown): DepositAddressAsset {
     typeof a["payment_uri"] !== "string" ||
     typeof decimals !== "number" ||
     !Number.isInteger(decimals) || decimals < 0 || decimals > 255 ||
-    !(minimum === undefined || (typeof minimum === "string" && /^\d+$/.test(minimum))) ||
-    !(maximum === undefined || (typeof maximum === "string" && /^\d+$/.test(maximum))) ||
+    !(creditMinimum === undefined || (typeof creditMinimum === "number" && Number.isSafeInteger(creditMinimum) && creditMinimum > 0)) ||
+    !(minimum === undefined || (typeof minimum === "string" && minimum.length > 0 && !/[^0-9]/.test(minimum))) ||
+    !(maximum === undefined || (typeof maximum === "string" && maximum.length > 0 && !/[^0-9]/.test(maximum))) ||
     (minimum !== undefined && maximum !== undefined && BigInt(minimum) > BigInt(maximum))
   ) {
     throw new TypeError("asset does not match the public deposit address view");
@@ -170,6 +172,7 @@ function parseAsset(value: unknown): DepositAddressAsset {
     contract: a["contract"],
     decimals,
     payment_uri: a["payment_uri"],
+    ...(creditMinimum === undefined ? {} : { min_amount: creditMinimum }),
     ...(minimum === undefined ? {} : { min_deposit_atomic: minimum }),
     ...(maximum === undefined ? {} : { max_deposit_atomic: maximum }),
   };

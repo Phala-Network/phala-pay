@@ -479,6 +479,7 @@ pub(crate) fn deposit_address_object<'r>(
                         asset: route.asset.symbol.clone(),
                         contract: format!("{:#x}", route.asset.contract),
                         decimals: route.asset.decimals,
+                        min_amount: terms.map(|terms| terms.min_amount),
                         min_deposit_atomic: terms
                             .map(|terms| terms.min_deposit_atomic.value().to_string()),
                         max_deposit_atomic: terms

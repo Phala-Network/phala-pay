@@ -160,10 +160,12 @@ For top-ups within your deposit limits, your backend creates the customer's pers
 `POST /v1/deposit_addresses` (its API key) and passes its `address` and `networks` to the page:
 one address for all supported tokens and networks. `<DepositAddress>` lets the payer pick a
 network and a token and shows a QR code of that token's transfer request, the token contract, and
-the address to copy, with the selected token’s per-transfer range from `min_deposit_atomic` and
-`max_deposit_atomic` (atomic-unit strings, formatted with `decimals`) and "Eligible transfers are
-credited at the market rate" copy. The latest public view supplies current limits when available;
-older servers without bounds show neutral copy without a range. Where a network’s address differs
+the address to copy, with the selected token’s per-transfer USD credit minimum (`min_amount`,
+in cents) and token maximum (`max_deposit_atomic`). A positive `min_deposit_atomic` adds the
+independent token minimum; a zero atomic minimum is omitted. Atomic-unit strings are formatted
+with `decimals` and English thousands grouping without precision loss. The copy says "Eligible
+transfers are credited at the market rate". The latest public view supplies current limits when
+available; missing or malformed limits show neutral copy without a range. Where a network’s address differs
 (another treasury), it shows that network’s own.
 Credit the customer from the `deposit.credited` webhook.
 
