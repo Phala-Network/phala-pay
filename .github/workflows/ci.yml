@@ -533,6 +533,8 @@ jobs:
           python3 .github/security/test-exceptions.py
           PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_upgrade_monitor.py
           deploy/tests/phala-cvm-wait.sh
+          deploy/tests/phala-cvm-deploy.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_deploy_workflow.py
           deploy/tests/attested-compose.sh
           deploy/tests/verify-attestation.sh
           deploy/tests/instance-pause.sh

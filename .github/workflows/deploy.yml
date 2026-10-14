@@ -107,6 +107,8 @@ jobs:
       TOPUP_CVM_ID: ${{ vars.TOPUP_CVM_ID }}
       STAGING_PRODUCT_CVM_ID: ${{ vars.STAGING_PRODUCT_CVM_ID }}
       PHALA_WORKSPACE: ${{ vars.PHALA_WORKSPACE }}
+      # Optional node pin for provision only; an upgrade keeps the CVM's node.
+      PHALA_NODE_ID: ${{ vars.PHALA_NODE_ID }}
     steps:
       # Fixes the target's kit scripts and CVM for the later steps.
       - name: Check inputs and Environment settings
@@ -119,6 +121,8 @@ jobs:
             { echo "::error::PHALA_CLOUD_API_KEY is empty: a caller in the Phala-Network organisation passes 'secrets: inherit' with the key as the Environment's secret; a caller in another organisation passes PHALA_CLOUD_API_KEY from a repository secret (docs/self-hosting.md, step 5)"; status=1; }
           [[ -n "$PHALA_WORKSPACE" ]] ||
             { echo "::error::Environment variable PHALA_WORKSPACE is not set"; status=1; }
+          [[ -z "$PHALA_NODE_ID" || "$PHALA_NODE_ID" =~ ^[0-9]+$ ]] ||
+            { echo "::error::Environment variable PHALA_NODE_ID must be empty (auto) or digits"; status=1; }
           [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] ||
             { echo "::error::version must be a release tag, v<semver>"; status=1; }
           [[ "$DEPLOY_ENVIRONMENT" == staging || "$DEPLOY_ENVIRONMENT" == production ]] ||
@@ -331,7 +335,10 @@ jobs:
             monitor_pid=$!
           fi
           if [[ "$MODE" == provision ]]; then
+            node_args=()
+            [[ -z "$PHALA_NODE_ID" ]] || node_args=(--node-id "$PHALA_NODE_ID")
             "$KIT/deploy/phala-cvm.sh" deploy "$WORK/deploy.json" \
+              "${node_args[@]}" \
               --name "$CVM_NAME" \
               --compose "$COMPOSE" \
               --pre-launch-script "$KIT/deploy/phala-cloud-pre-launch.sh" \
@@ -370,6 +377,11 @@ jobs:
             echo "|---|---|"
             echo "| CVM id | \`$cvm_id\` |"
             echo "| App id | \`$app_id\` |"
+            if [[ "$MODE" == provision ]]; then
+              echo "| Requested node | \`${PHALA_NODE_ID:-auto}\` |"
+            else
+              echo "| Requested node | unchanged (upgrade) |"
+            fi
             echo "| Release | $GITHUB_SERVER_URL/$RELEASE_REPOSITORY/releases/tag/$VERSION |"
             for name in $IMAGES; do
               echo "| $name | \`$(jq -r --arg name "$name" '.[$name]' "$WORK/release/images.json")\` |"
@@ -391,11 +403,19 @@ jobs:
             "$KIT/deploy/phala-cvm.sh" wait --unsealed "$cvm_id" >"$WORK/cvm.json"
           else
             "$KIT/deploy/phala-cvm.sh" wait "$cvm_id" >"$WORK/cvm.json"
+          fi
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| CVM node | $(jq -r 'if .node_info.id != null then "\(.node_info.id) (\(.node_info.name), \(.node_info.region // "region not reported"))" else "not reported by Phala Cloud" end' "$WORK/cvm.json") |"
+            echo
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [[ "$MODE" == upgrade ]]; then
             # Keep sampling through boot and service readiness, before stopping the child process.
             "$KIT/deploy/phala-cvm.sh" healthz "$PUBLIC_URL"
           fi
 
-      # A new CVM lands on a node chosen by Phala Cloud. Its gateway (the domain's CNAME target, which
+      # A new CVM lands on the pinned node, or one chosen by Phala Cloud. Its gateway (the CNAME target, which
       # dstack-ingress names) is known only now, and is attested configuration: upgrade the new CVM
       # to the compose rendered with it (no -e: the env stays). Still unsealed, it does not run, so
       # no --wait (the CLI's waits for `running`): it waits as the provision did.

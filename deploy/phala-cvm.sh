@@ -53,8 +53,11 @@ case "$command" in
         # Keep the CLI's machine-readable stdout separate from stage diagnostics on stderr.  The
         # deadline wrapper reports elapsed time on stderr; merging both streams makes jq parse the
         # diagnostic line as if it were part of the JSON response.
-        stage_call 300 "$(dirname -- "$0")/phala" deploy --json "$@" >"$output.raw"
+        # On failure the CLI's --json error (code, message, request id) is on stdout: show it.
+        status=0
+        stage_call 300 "$(dirname -- "$0")/phala" deploy --json "$@" >"$output.raw" || status=$?
         cat "$output.raw" >&2
+        ((status == 0)) || exit "$status"
         sed -n '/^{/,$p' "$output.raw" >"$output"
         jq -e '.success == true' "$output" >/dev/null
         ;;
