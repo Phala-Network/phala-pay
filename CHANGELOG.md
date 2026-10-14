@@ -14,6 +14,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Security
+
+- Updated `rustls` to 0.23.46, fixing RUSTSEC-2026-0346 through RUSTSEC-2026-0349: TLS session secret exposure in `Debug` output, application data sent after ECH rejection, excessive Brotli certificate decompression allocation, and unauthenticated key-exchange downgrade prediction.
+
 ## [0.10.5] - 2026-10-14
 
 ### Added (API)
