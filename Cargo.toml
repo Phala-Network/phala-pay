@@ -37,7 +37,7 @@ hex = "=0.4.3"
 hmac = "=0.13.0"
 httpdate = "=1.0.3"
 prometheus = { version = "=0.14.0", default-features = false }
-proptest = "=1.11.0"
+proptest = "=1.12.0"
 rand = "=0.10.3"
 reqwest = { version = "=0.13.5", default-features = false, features = ["json", "query", "rustls", "stream"] }
 secrecy = "=0.10.3"
@@ -54,13 +54,13 @@ static_assertions = "=1.1.0"
 thiserror = "=2.0.21"
 tokio = { version = "=1.53.2", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "=0.5.3", features = ["util", "timeout", "retry", "limit", "load-shed"] }
-tokio-util = { version = "=0.7.19", features = ["rt"] }
+tokio-util = { version = "=0.7.20", features = ["rt"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json"] }
 utoipa = { version = "=6.0.0", features = ["chrono", "uuid"] }
 utoipa-axum = "=0.3.0"
 url = "=2.5.8"
-uuid = { version = "=1.27.0", features = ["serde", "v4", "v5"] }
+uuid = { version = "=1.28.0", features = ["serde", "v4", "v5"] }
 zeroize = "=1.9.1"
 
 [workspace.lints.rust]
