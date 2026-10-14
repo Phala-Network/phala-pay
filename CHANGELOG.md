@@ -24,6 +24,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   source. OS measurement verification can use the checksum-pinned official meta-dstack release
   when the measurement download is unavailable, with a fresh authenticated verifier cache.
 
+### Fixed (operators)
+
+- Keep upgrade availability probes running through both OS-image and compose reboots until the
+  deployment step ends, within its 60-minute budget. Record every outage window and the summed
+  duration; interrupted sampling or an open outage reports only a lower bound.
+- Require observing the OS-image operation start before accepting its settled running state,
+  preventing an early image-name update from racing the compose deployment.
+
 ## [0.10.6] - 2026-10-14
 
 ### Security

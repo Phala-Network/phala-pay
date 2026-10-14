@@ -43,9 +43,17 @@ case "$1" in
         if [[ "$2" == */available-os-images ]]; then
             printf '%s\\n' "$STUB_AVAILABLE_IMAGES"
         else
-            exit "${STUB_OS_STATUS:-0}"
+            [[ "${STUB_OS_STATUS:-0}" == 0 ]] || exit "$STUB_OS_STATUS"
+            touch "$STUB_OS_STARTED"
         fi ;;
-    cvms) echo '{"os":{"name":"dstack-0.5.12"},"status":"running","in_progress":false,"compose_hash":"ab12","node_info":{"id":26,"name":"prod5","region":"US-WEST-1"}}' ;;
+    cvms)
+        busy=false
+        if [[ -f "$STUB_OS_STARTED" ]]; then
+            busy=true
+            rm "$STUB_OS_STARTED"
+        fi
+        jq -nc --argjson busy "$busy" '{os:{name:"dstack-0.5.12"},status:"running",in_progress:$busy,
+            compose_hash:"ab12",node_info:{id:26,name:"prod5",region:"US-WEST-1"}}' ;;
     *) exit 64 ;;
 esac
 ''')
@@ -67,6 +75,9 @@ echo '{"paused_scopes":["mutations"]}'
 jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
 ''')
         curl.chmod(0o755)
+        sleep = bin_dir / "sleep"
+        sleep.write_text("#!/bin/sh\nexit 0\n")
+        sleep.chmod(0o755)
         self.work = self.tmp / "work"
         (self.work / "release").mkdir(parents=True)
         (self.work / "release/images.json").write_text('{"phala-pay":"test-image"}')
@@ -75,6 +86,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
                     "KIT": str(self.kit), "WORK": str(self.work), "RUNNER_TEMP": str(self.tmp),
                     "STUB_LOG": str(self.tmp / "cli.jsonl"), "GITHUB_ENV": str(self.tmp / "env"),
+                    "STUB_OS_STARTED": str(self.tmp / "os-started"),
                     "GITHUB_STEP_SUMMARY": str(self.tmp / "summary"),
                     "PHALA_CLOUD_API_KEY": "test-key", "PHALA_WORKSPACE": "test-workspace",
                     "PHALA_NODE_ID": "", "TOPUP_CVM_ID": "", "STAGING_PRODUCT_CVM_ID": "",
@@ -147,7 +159,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         commands = [args[0] for args in self.calls()]
-        self.assertEqual(commands, ["maintenance", "api", "cvms", "health", "maintenance",
+        self.assertEqual(commands, ["maintenance", "api", "cvms", "cvms", "health", "maintenance",
                                     "deploy", "cvms", "health"])
         leases = [args for args in self.calls() if args[0] == "maintenance"]
         self.assertEqual(leases[0], leases[1])
@@ -158,7 +170,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([args[0] for args in self.calls()],
-                         ["api", "cvms", "health", "deploy", "cvms", "health"])
+                         ["api", "cvms", "cvms", "health", "deploy", "cvms", "health"])
 
     def test_os_image_or_fresh_lease_failure_prevents_compose_deploy(self):
         self.env["MODE"] = "upgrade"

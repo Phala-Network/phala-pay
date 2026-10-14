@@ -76,14 +76,21 @@ case "$command" in
         response=$(phala api "/cvms/$1/os-image" -X PATCH -F "os_image_name=$2") || status=$?
         [[ -z "$response" ]] || printf '%s\n' "$response" >&2
         ((status == 0)) || exit "$status"
+        operation_started=false
         while stage_remaining; do
             status=0
             cvm=$(phala cvms get "$1" --json) || status=$?
             if ((status == 0)); then
                 jq -r '"status=\(.status) in_progress=\(.in_progress) os_image=\(.os.name)"' \
                     <<<"$cvm" >&2 || true
-                if jq -e --arg image "$2" \
-                    '.os.name == $image and .status == "running" and (.in_progress | not)' \
+                # Cloud can publish the new image name before the reboot starts. Require a
+                # busy/non-running observation before accepting its settled running state.
+                if jq -e '.in_progress == true or
+                    ((.status | type) == "string" and .status != "running")' <<<"$cvm" >/dev/null; then
+                    operation_started=true
+                fi
+                if [[ "$operation_started" == true ]] && jq -e --arg image "$2" \
+                    '.os.name == $image and .status == "running" and .in_progress == false' \
                     <<<"$cvm" >/dev/null; then
                     printf '%s\n' "$cvm"
                     exit 0

@@ -249,8 +249,12 @@ image, Deploy skips the OS-image operation; new CVMs provision directly on it.
 Otherwise, after the initial pause, the locked CLI's raw API sends
 `PATCH /cvms/<id>/os-image` with `{"os_image_name":"dstack-0.5.12"}` and waits for the image
 name, running status and no operation in progress. This reboots the same CVM without changing
-compose, app id, instance id, node or sealed env. Deploy waits for the old compose's `/healthz`,
-then topup takes a fresh 900-second lease immediately before the compose deployment.
+compose, app id, instance id, node or sealed env.
+The poll must first observe a busy or non-running state: a new image name on an immediately
+idle, running CVM does not prove a reboot completed. If the transition is never observed, the
+bounded poll fails rather than submitting compose while the image operation may be pending.
+Deploy waits for the old compose's `/healthz`, then topup takes a fresh 900-second lease immediately
+before the compose deployment.
 The first lease disappears on process exit; between OS recovery and the second pause the old
 compose serves normally, a safe ordinary state. Product upgrades use the same image/health checks
 without topup's maintenance API.
@@ -260,7 +264,8 @@ staging upgrade took 163 seconds ([deployment study](../docs/design/zero-downtim
 The OS-image reboot has not been measured by this PR, so six minutes total is an assumption,
 not a downtime guarantee. Each reboot has its own process pause/startup protection; the two
 900-second leases are not one continuous pause and cannot be extended across process exit.
-The upgrade monitor spans both reboots and the healthy interval and records observed availability.
+The upgrade monitor keeps sampling through both reboots and the healthy interval until the step's
+stop file appears, bounded by its 3,600-second budget. It records each outage window and their total.
 Convergence ceilings are 15 minutes for OS change (including its PATCH), 10 minutes for old-compose
 health, 60 seconds for the fresh pause, and 5/15/10 minutes for compose submission/convergence/health.
 The deployment step allows 60 minutes; the overall job still stops after 75 minutes. A timeout
@@ -312,13 +317,16 @@ customer, treasury, and route incident pauses remain. See the
 [stuck-maintenance runbook](runbooks/instance-maintenance.md) for inspection and manual clear.
 
 Upgrade probes run from before the upgrade call through service readiness, sampling `/healthz`
-every 2 seconds with a 3-second timeout. `unavailability.json` records `first_failed_at`,
-`first_healthy_at`, and `unavailability_seconds`; the job summary shows the same window in PT
-and UTC. Maintenance admission and clear responses are separate artifacts. Failed/canceled runs
-keep an incomplete window if recovery was not observed; no observed failure is not a claim of
-zero downtime. Staging run 37215125136 took about 160 seconds (upgrade step to service readiness),
-which motivates the SDK's opt-in 300-second budget. This masks transient failures for clients;
-the CVM still restarts and raw HTTP callers must implement retries.
+every 2 seconds with a 3-second timeout. Recovery closes a window and sampling continues.
+`unavailability.json` records each failure/recovery pair in `outage_windows` and their summed
+`unavailability_seconds`; `first_failed_at` and `first_healthy_at` retain the first outage's
+timestamps. The job summary shows all windows in PT and UTC and their total. Maintenance admission
+and clear responses are separate artifacts. An open window, cancellation or the monitor's time
+limit leaves the total unknown; `observed_unavailability_seconds` is then a lower bound from the
+samples already taken. Interrupted sampling is not a complete deployment measurement, and no
+observed failure is not a claim of zero downtime. Staging run 37215125136 took about 160 seconds
+(upgrade step to service readiness), which motivates the SDK's opt-in 300-second budget. This masks
+transient failures for clients; the CVM still restarts and raw HTTP callers must implement retries.
 
 1. Merge the change to the environment repository's `main`: a setting, or a new `version`.
 2. First deployment: Deploy with `mode: provision`, then set `TOPUP_CVM_ID` (or, for the product,

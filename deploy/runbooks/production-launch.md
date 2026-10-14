@@ -573,8 +573,8 @@ shred -u .env.production
 
 **Checks:** the run passed. That means mutations paused, the CVM is running, `/healthz` answered,
 the attested compose verified with the OS pin, the certificate evidence verified, and mutations
-resumed. The summary's unavailability window is recorded. The newest `wal_005/` segment is less than
-two minutes old. If the run failed with mutations still paused, follow
+resumed. The summary's outage windows and total unavailability are recorded. The newest `wal_005/`
+segment is less than two minutes old. If the run failed with mutations still paused, follow
 [instance maintenance](instance-maintenance.md).
 
 ## 6. Verify attestation, OS image, ingress, health, RPC, sanctions, and metrics

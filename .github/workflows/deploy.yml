@@ -342,7 +342,8 @@ jobs:
           }
           trap stop_monitor EXIT
           if [[ "$MODE" == upgrade ]]; then
-            python3 "$KIT/deploy/upgrade-monitor.py" "$PUBLIC_URL" "$WORK/unavailability.json" "$WORK/upgrade-monitor.stop" &
+            # Keep sampling through every reboot, bounded by this step's 60-minute budget.
+            python3 "$KIT/deploy/upgrade-monitor.py" "$PUBLIC_URL" "$WORK/unavailability.json" "$WORK/upgrade-monitor.stop" 3600 &
             monitor_pid=$!
           fi
           if [[ "$MODE" == provision ]]; then
