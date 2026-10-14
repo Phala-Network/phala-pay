@@ -45,8 +45,8 @@ export interface DepositAddressProps {
 /**
  * A customer's persistent deposit address: one address for every supported token on every
  * supported network. The payer picks a network and a token; the component shows a QR code of that
- * EIP-681 transfer request and the address and token contract to copy. Any amount of a supported
- * token sent is credited at the market rate when it arrives; follow it from your backend's
+ * EIP-681 transfer request, per-transfer limits, and the address and token contract to copy.
+ * Eligible transfers are credited at the market rate; follow them from your backend's
  * `deposit.credited` webhook.
  */
 export function DepositAddress({
@@ -78,6 +78,14 @@ export function DepositAddress({
   const { token: contract, to } = depositAddressTransfer(network, token);
   const symbol = token.asset.toUpperCase();
   const name = networkName(network.chain_id);
+  const currentToken = view?.networks
+    .find((each) => each.chain_id === network.chain_id)?.assets
+    ?.find((each) => each.asset === token.asset) ?? token;
+  const minimum = currentToken.min_deposit_atomic;
+  const maximum = currentToken.max_deposit_atomic;
+  const amount = minimum === undefined || maximum === undefined
+    ? symbol
+    : `${formatUnits(BigInt(minimum), currentToken.decimals)}–${formatUnits(BigInt(maximum), currentToken.decimals)} ${symbol} per transfer`;
   return (
     <div
       className={className === undefined ? "pp-root" : `pp-root ${className}`}
@@ -148,7 +156,7 @@ export function DepositAddress({
         </ul>
       )}
       <p className="pp-message">
-        Send {symbol} on {name}. Unsupported tokens or networks are not credited.{" "}
+        Send {amount} on {name}. Unsupported tokens or networks are not credited.{" "}
         {creditMessage(networks.map((each) => each.chain_id), view)}
       </p>
     </div>
@@ -280,7 +288,7 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
     }
   }
   if (names.size === 0) {
-    return "Any amount is credited at the market rate after confirmation.";
+    return "Eligible transfers are credited at the market rate after confirmation.";
   }
   const list = new Intl.ListFormat("en", { type: "conjunction" });
   const [only, ...others] = names.keys();
@@ -288,7 +296,7 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
     only !== undefined && others.length === 0
       ? only
       : list.format([...names].map(([wait, on]) => `${wait} on ${list.format(on)}`));
-  return `Any amount is credited at the market rate, usually within ${within}.`;
+  return `Eligible transfers are credited at the market rate, usually within ${within}.`;
 }
 
 function paymentTone({ status }: DepositAddressPayment): "neutral" | "success" | "danger" {

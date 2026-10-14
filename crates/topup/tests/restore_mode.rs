@@ -1417,6 +1417,18 @@ async fn a_deposit_address_given_out_after_the_restore_point_is_reissued_identic
             .await?;
             ensure!(public.status == StatusCode::OK, "{}", public.body);
             let object = &reissued.body["deposit_address"];
+            // Admin reconstruction ignores held payment settings; unknown limits are omitted,
+            // never represented as null or fabricated defaults.
+            let networks = object["networks"].as_array().context("restored networks")?;
+            ensure!(!networks.is_empty());
+            for network in networks {
+                let assets = network["assets"].as_array().context("restored assets")?;
+                ensure!(!assets.is_empty());
+                for asset in assets {
+                    ensure!(asset.get("min_deposit_atomic").is_none());
+                    ensure!(asset.get("max_deposit_atomic").is_none());
+                }
+            }
             ensure!(object["id"] == held_id && object["version"] == 3);
             ensure!(object["status"] == "active" && object["address"] == format!("{held:#x}"));
             ensure!(object["metadata"]["plan"] == "pro");

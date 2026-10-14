@@ -630,7 +630,10 @@ pub(crate) async fn reissue_deposit_address(
         // Every network the address has: re-issuing never depends on the payment settings, which
         // are held until the merchant reconfirms them.
         deposit_address: super::deposit_addresses::deposit_address_object(
-            state.routes.current_in(request.livemode),
+            state
+                .routes
+                .current_in(request.livemode)
+                .map(|route| (route, None)),
             &reissued,
         )?,
     }))

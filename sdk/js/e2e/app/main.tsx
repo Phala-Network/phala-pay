@@ -26,6 +26,8 @@ const networks = chains.map((chain_id) => ({
     asset,
     contract: token,
     decimals: 18,
+    min_deposit_atomic: "100000000000000000",
+    max_deposit_atomic: "10100000000000000000000",
     payment_uri: `ethereum:${token}@${chain_id}/transfer?address=${address}`,
   })),
 }));

@@ -498,11 +498,11 @@ describe("DepositAddress payments", () => {
   }
 
   /** The address's message once its public view, served with `networks`, is read. */
-  async function messageWith(networks: unknown[]): Promise<string> {
+  async function messageWith(networks: unknown[], initial = details()): Promise<string> {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.stubGlobal("fetch", () => Promise.resolve(Response.json(view([], networks))));
     const { container } = render(
-      <DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" />,
+      <DepositAddress depositAddress={initial} clientSecret={SECRET} apiBase="https://pay.example" />,
     );
     await act(() => vi.advanceTimersByTimeAsync(0));
     return [...container.querySelectorAll(".pp-message")].at(-1)?.textContent ?? "";
@@ -557,16 +557,85 @@ describe("DepositAddress payments", () => {
   it("states each network's credit time after the discovery scan, as a payer sends no hint", async () => {
     // Up to 5 minutes to discover an unhinted transfer, then the view's 30 s or 7 s confirmation.
     expect(await messageWith([clientNetwork(11155111, 30), clientNetwork(84532, 7)])).toContain(
-      "Any amount is credited at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia.",
+      "Eligible transfers are credited at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia.",
     );
+  });
+
+  it("formats the selected token's exact per-transfer range and changes it with the selection", () => {
+    const pha = {
+      ...asset(11155111, "pha", TOKEN),
+      min_deposit_atomic: "100000000000000001",
+      max_deposit_atomic: "10100000000000000000000",
+    };
+    const usdc = {
+      ...asset(11155111, "usdc", USDC), decimals: 6,
+      min_deposit_atomic: "1500000", max_deposit_atomic: "10100000000",
+    };
+    const base = {
+      ...asset(84532, "usdc", USDC), decimals: 6,
+      min_deposit_atomic: "0", max_deposit_atomic: "50000000",
+    };
+    render(<DepositAddress depositAddress={details({ networks: [
+      network(11155111, [pha, usdc]), network(84532, [base]),
+    ] })} />);
+    expect(screen.getByText(/Send 0\.100000000000000001–10100 PHA per transfer on Sepolia\./)).toBeDefined();
+    fireEvent.click(screen.getByRole("radio", { name: "USDC" }));
+    expect(screen.getByText(/Send 1\.5–10100 USDC per transfer on Sepolia\./)).toBeDefined();
+    fireEvent.click(screen.getByRole("radio", { name: "Base Sepolia" }));
+    expect(screen.getByText(/Send 0–50 USDC per transfer on Base Sepolia\./)).toBeDefined();
+    expect(screen.queryByText(/Any amount/)).toBeNull();
+  });
+
+  it("uses current public-view limits instead of the original backend response", async () => {
+    const current = {
+      ...clientNetwork(11155111),
+      assets: [{ ...asset(11155111, "pha", TOKEN),
+        min_deposit_atomic: "25000000000000000000", max_deposit_atomic: "10100000000000000000000" }],
+    };
+    const initial = details({ networks: [network(11155111, [{
+      ...asset(11155111, "pha", TOKEN), min_deposit_atomic: "0", max_deposit_atomic: "1000000000000000000",
+    }])] });
+    expect(await messageWith([current], initial)).toContain("Send 25–10100 PHA per transfer on Sepolia.");
+    expect(screen.getByText(/Eligible transfers are credited at the market rate, usually within about 6 minutes\./)).toBeDefined();
+  });
+
+  it("uses neutral copy when older servers omit limits or only one bound is known", async () => {
+    const old = clientNetwork(11155111);
+    old.assets = [asset(11155111, "pha", TOKEN)];
+    const message = await messageWith([old]);
+    expect(message).toContain("Send PHA on Sepolia.");
+    expect(message).toContain("Eligible transfers are credited at the market rate, usually within about 6 minutes.");
+    expect(message).not.toMatch(/Any amount|per transfer/);
+    cleanup();
+    render(<DepositAddress depositAddress={details({ networks: [network(11155111, [
+      { ...asset(11155111, "pha", TOKEN), max_deposit_atomic: "1" },
+    ])] })} />);
+    expect(screen.getByText(/Send PHA on Sepolia\./)).toBeDefined();
+    expect(screen.queryByText(/per transfer|Any amount/)).toBeNull();
+  });
+
+  it("validates bounds before using public-view amounts", () => {
+    const valid = { ...asset(11155111, "pha", TOKEN),
+      min_deposit_atomic: "0", max_deposit_atomic: "10100000000000000000000" };
+    const body = (overrides: Record<string, unknown>) => view([], [{
+      ...clientNetwork(11155111), assets: [{ ...valid, ...overrides }],
+    }]);
+    expect(parseClientDepositAddress(body({})).networks[0]?.assets?.[0]).toEqual(valid);
+    for (const invalid of [null, -1, "-1", "1.5", "1e18", "", "abc"]) {
+      expect(() => parseClientDepositAddress(body({ min_deposit_atomic: invalid }))).toThrow(TypeError);
+      expect(() => parseClientDepositAddress(body({ max_deposit_atomic: invalid }))).toThrow(TypeError);
+    }
+    expect(() => parseClientDepositAddress(body({ min_deposit_atomic: "2", max_deposit_atomic: "1" }))).toThrow(TypeError);
+    expect(() => parseClientDepositAddress(body({ decimals: 256 }))).toThrow(TypeError);
+    expect(() => parseClientDepositAddress(body({ decimals: -1 }))).toThrow(TypeError);
   });
 
   it("states one time when every network's rounds to the same, as under a finalized policy", async () => {
     expect(await messageWith([clientNetwork(11155111, 900), clientNetwork(84532, 900)])).toContain(
-      "Any amount is credited at the market rate, usually within about 20 minutes.",
+      "Eligible transfers are credited at the market rate, usually within about 20 minutes.",
     );
     expect(await messageWith([clientNetwork(11155111, 7), clientNetwork(84532, 2)])).toContain(
-      "Any amount is credited at the market rate, usually within about 5 minutes.",
+      "Eligible transfers are credited at the market rate, usually within about 5 minutes.",
     );
   });
 
@@ -577,8 +646,8 @@ describe("DepositAddress payments", () => {
     expect(
       parseClientDepositAddress(view([], [clientNetwork(84532, 300), clientNetwork(11155111, 30)])).networks,
     ).toEqual([
-      { chain_id: 84532, address: ADDRESS, typical_credit_seconds: 300 },
-      { chain_id: 11155111, address: ADDRESS, typical_credit_seconds: 30 },
+      clientNetwork(84532, 300),
+      clientNetwork(11155111, 30),
     ]);
     for (const seconds of [undefined, -1, 1.5, "300", null]) {
       expect(() =>

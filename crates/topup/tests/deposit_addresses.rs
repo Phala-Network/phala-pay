@@ -638,6 +638,78 @@ async fn the_public_view_states_each_networks_credit_time() -> Result<()> {
     .await
 }
 
+/// Both views expose the same account-resolved bounds as screening, not the route defaults,
+/// and a settings change is reflected on the next read without reissuing the address.
+#[tokio::test]
+async fn deposit_address_views_state_current_per_transfer_bounds() -> Result<()> {
+    with_database(|database| {
+        Box::pin(async move {
+            let fixture = Fixture::new(&database.app_pool).await?;
+            let (object, secret) = fixture
+                .create_with_secret(&fixture.live_key, "limits")
+                .await?;
+            let id = object["id"].as_str().context("id")?;
+            for network in networks(&object)? {
+                for asset in network["assets"].as_array().context("assets")? {
+                    ensure!(asset["min_deposit_atomic"] == "20000000000000000000");
+                    ensure!(asset["max_deposit_atomic"] == "200000000000000000000000");
+                }
+            }
+            let (_, before) = fixture.client_read(id, &secret).await?;
+            ensure!(before["networks"][0]["assets"] == object["networks"][0]["assets"]);
+            let (status, settings) = fixture
+                .request(
+                    Method::POST,
+                    "/v1/payment_settings",
+                    &fixture.live_key,
+                    json!({"chains": [
+                        {"chain_id": 1, "assets": [
+                            {"asset": "pha", "min_deposit_atomic": "25000000000000000000",
+                             "max_deposit_atomic": "10100000000000000000000"},
+                            {"asset": "usdc", "max_deposit_atomic": "100000000000000000000"}
+                        ]},
+                        {"chain_id": OTHER_CHAIN, "assets": [{"asset": "pha"}]}
+                    ]}),
+                )
+                .await?;
+            ensure!(status == StatusCode::OK, "{settings}");
+            let (status, merchant) = fixture
+                .request(
+                    Method::GET,
+                    &format!("/v1/deposit_addresses/{id}"),
+                    &fixture.live_key,
+                    Value::Null,
+                )
+                .await?;
+            ensure!(status == StatusCode::OK, "{merchant}");
+            let (status, client) = fixture.client_read(id, &secret).await?;
+            ensure!(status == StatusCode::OK, "{client}");
+            for view in [&merchant, &client] {
+                let assets = view["networks"][0]["assets"].as_array().context("assets")?;
+                let pha = assets
+                    .iter()
+                    .find(|asset| asset["asset"] == "pha")
+                    .context("pha")?;
+                ensure!(pha["min_deposit_atomic"] == "25000000000000000000");
+                ensure!(pha["max_deposit_atomic"] == "10100000000000000000000");
+                let usdc = assets
+                    .iter()
+                    .find(|asset| asset["asset"] == "usdc")
+                    .context("usdc")?;
+                ensure!(usdc["min_deposit_atomic"] == "20000000000000000000");
+                ensure!(usdc["max_deposit_atomic"] == "100000000000000000000");
+                // The same token on another network keeps that route's default bounds.
+                ensure!(
+                    view["networks"][1]["assets"][0]["max_deposit_atomic"]
+                        == "200000000000000000000000"
+                );
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
 #[tokio::test]
 async fn a_chain_added_later_gets_the_same_address_on_the_next_creation() -> Result<()> {
     with_database(|database| {

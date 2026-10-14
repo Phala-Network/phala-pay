@@ -14,6 +14,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added (API)
+
+- Deposit-address assets in merchant and client views include `min_deposit_atomic` and
+  `max_deposit_atomic`: inclusive per-transfer bounds as decimal strings in atomic units,
+  resolved from the account’s payment settings and route at view time, using screening’s resolver.
+  Admin restore responses omit both fields because reconstruction ignores held payment settings.
+
 ### Changed (operators)
 
 - Production reads with Ankr and verifies with BlockPI free on Ethereum and Base, using separate
@@ -23,6 +30,26 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   preflight before provisioning, replacing the staging dRPC prerequisite. Per-account budgets
   and quota alerts cover shared Ankr, staging-only Infura and production-only BlockPI;
   configured D=46/20 and every other cap stay unchanged.
+
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Fixed
+
+- `<DepositAddress>` replaces “Any amount is credited” with “Eligible transfers are credited”
+  and shows the selected token/network’s per-transfer range, formatted without precision loss.
+  Public-view reads refresh the limits; older servers without bounds use neutral copy without
+  a range. Discovery plus confirmation credit-time estimates are unchanged.
+
+#### Added
+
+- Deposit-address types carry the per-transfer bounds, including the public-view parser and
+  regenerated server SDK types and schemas.
+
+### Python SDK (`phala-pay`)
+
+#### Added
+
+- Regenerated `DepositAddressAsset` includes the per-transfer minimum and maximum atomic amounts.
 
 ## [0.10.4] - 2026-10-13
 

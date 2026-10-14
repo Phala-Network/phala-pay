@@ -1691,7 +1691,7 @@
         "type": "object"
       },
       "DepositAddress": {
-        "description": "A customer's persistent deposit address, like a bank-transfer virtual account: one address for\nevery supported token on every supported network. Any amount of a supported token sent to it\nis credited to the customer at the market (spot) price when it arrives. Rotation retires it and\nissues a new one on every network; a retired address is still credited.",
+        "description": "A customer's persistent deposit address, like a bank-transfer virtual account: one address for\nevery supported token on every supported network. Eligible transfers within the account’s\nper-transfer deposit bounds are credited at the market (spot) price after confirmation. Rotation\nretires it and issues a new one on every network; eligible payments to a retired address are\nstill credited.",
         "example": {
           "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
           "client_reference_id": "team-42",
@@ -1841,6 +1841,14 @@
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "max_deposit_atomic": {
+            "description": "Inclusive maximum per-transfer deposit at view time, in atomic units as a decimal string.\nAlways populated from resolved terms in merchant and client deposit-address views;\nomitted (never null) in the admin restore response, which ignores held payment settings.",
+            "type": "string"
+          },
+          "min_deposit_atomic": {
+            "description": "Inclusive minimum per-transfer deposit at view time, in atomic units as a decimal string.\nAlways populated from resolved terms in merchant and client deposit-address views;\nomitted (never null) in the admin restore response, which ignores held payment settings.",
+            "type": "string"
           },
           "payment_uri": {
             "description": "EIP-681 ERC-20 transfer URI carrying the token, chain, and address, and no amount: the\npayer chooses it.",

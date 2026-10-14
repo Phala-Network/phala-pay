@@ -1,5 +1,6 @@
 import { requestSignal, trimTrailingSlashes } from "./request.js";
 import { CheckoutError, responseError } from "./checkout.js";
+import type { DepositAddressAsset } from "./payment.js";
 
 /** A payment to a deposit address as the customer's page sees it. Display only. */
 export interface DepositAddressPayment {
@@ -27,6 +28,8 @@ export interface ClientDepositAddressNetwork {
   chain_id: number;
   /** The forwarder address to pay on this chain. */
   address: string;
+  /** Accepted tokens and their per-transfer bounds at view time, when provided by the server. */
+  assets?: DepositAddressAsset[];
   /**
    * Typical seconds from payment to credit at the confirmation this chain's payments are credited
    * at: about 30 on Ethereum (two blocks), 7 on an OP-stack chain (three blocks), 300 under a
@@ -127,9 +130,11 @@ export function parseClientDepositAddress(value: unknown): ClientDepositAddress 
 function parseNetwork(value: unknown): ClientDepositAddressNetwork {
   const n = record(value);
   const seconds = n["typical_credit_seconds"];
+  const assets = n["assets"];
   if (
     !Number.isSafeInteger(n["chain_id"]) ||
     typeof n["address"] !== "string" ||
+    !(assets === undefined || Array.isArray(assets)) ||
     !Number.isSafeInteger(seconds) ||
     (seconds as number) < 0
   ) {
@@ -138,7 +143,35 @@ function parseNetwork(value: unknown): ClientDepositAddressNetwork {
   return {
     chain_id: n["chain_id"] as number,
     address: n["address"],
+    ...(assets === undefined ? {} : { assets: assets.map(parseAsset) }),
     typical_credit_seconds: seconds as number,
+  };
+}
+
+function parseAsset(value: unknown): DepositAddressAsset {
+  const a = record(value);
+  const decimals = a["decimals"];
+  const minimum = a["min_deposit_atomic"];
+  const maximum = a["max_deposit_atomic"];
+  if (
+    typeof a["asset"] !== "string" ||
+    typeof a["contract"] !== "string" ||
+    typeof a["payment_uri"] !== "string" ||
+    typeof decimals !== "number" ||
+    !Number.isInteger(decimals) || decimals < 0 || decimals > 255 ||
+    !(minimum === undefined || (typeof minimum === "string" && /^\d+$/.test(minimum))) ||
+    !(maximum === undefined || (typeof maximum === "string" && /^\d+$/.test(maximum))) ||
+    (minimum !== undefined && maximum !== undefined && BigInt(minimum) > BigInt(maximum))
+  ) {
+    throw new TypeError("asset does not match the public deposit address view");
+  }
+  return {
+    asset: a["asset"],
+    contract: a["contract"],
+    decimals,
+    payment_uri: a["payment_uri"],
+    ...(minimum === undefined ? {} : { min_deposit_atomic: minimum }),
+    ...(maximum === undefined ? {} : { max_deposit_atomic: maximum }),
   };
 }
 
