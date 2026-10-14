@@ -25,9 +25,10 @@ T = TypeVar("T", bound="DepositAddress")
 @_attrs_define
 class DepositAddress:
     """A customer's persistent deposit address, like a bank-transfer virtual account: one address for
-    every supported token on every supported network. Any amount of a supported token sent to it
-    is credited to the customer at the market (spot) price when it arrives. Rotation retires it and
-    issues a new one on every network; a retired address is still credited.
+    every supported token on every supported network. Eligible transfers within the account’s
+    per-transfer deposit bounds are credited at the market (spot) price after confirmation. Rotation
+    retires it and issues a new one on every network; eligible payments to a retired address are
+    still credited.
 
         Example:
             {'address': '0x0f45147a02e4c9d91aff20024e22095536fd5053', 'client_reference_id': 'team-42', 'client_secret':

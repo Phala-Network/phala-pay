@@ -520,9 +520,10 @@ pub struct CreateDepositAddressRequest {
 }
 
 /// A customer's persistent deposit address, like a bank-transfer virtual account: one address for
-/// every supported token on every supported network. Any amount of a supported token sent to it
-/// is credited to the customer at the market (spot) price when it arrives. Rotation retires it and
-/// issues a new one on every network; a retired address is still credited.
+/// every supported token on every supported network. Eligible transfers within the account’s
+/// per-transfer deposit bounds are credited at the market (spot) price after confirmation. Rotation
+/// retires it and issues a new one on every network; eligible payments to a retired address are
+/// still credited.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct DepositAddress {
     /// `da_` id.
@@ -665,6 +666,26 @@ pub struct DepositAddressAsset {
     pub contract: String,
     /// ERC-20 decimal count.
     pub decimals: u8,
+    /// Minimum per-transfer credit at view time, in the account currency's minor units (USD cents).
+    /// Enforced independently of the atomic bounds; smaller spot-valued deposits are not credited.
+    /// Always populated from resolved terms in merchant and client deposit-address views;
+    /// omitted (never null) in the admin restore response, which ignores held payment settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = u64, required = false)]
+    pub min_amount: Option<u64>,
+    /// Inclusive minimum per-transfer deposit at view time, in atomic units as a decimal string.
+    /// A zero atomic minimum does not waive the independent `min_amount` credit minimum.
+    /// Always populated from resolved terms in merchant and client deposit-address views;
+    /// omitted (never null) in the admin restore response, which ignores held payment settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, required = false)]
+    pub min_deposit_atomic: Option<String>,
+    /// Inclusive maximum per-transfer deposit at view time, in atomic units as a decimal string.
+    /// Always populated from resolved terms in merchant and client deposit-address views;
+    /// omitted (never null) in the admin restore response, which ignores held payment settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, required = false)]
+    pub max_deposit_atomic: Option<String>,
     /// EIP-681 ERC-20 transfer URI carrying the token, chain, and address, and no amount: the
     /// payer chooses it.
     pub payment_uri: String,

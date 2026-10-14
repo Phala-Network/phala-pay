@@ -8,6 +8,8 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
+from ..types import UNSET, Unset
+
 
 T = TypeVar("T", bound="DepositAddressAsset")
 
@@ -22,12 +24,29 @@ class DepositAddressAsset:
         decimals (int): ERC-20 decimal count.
         payment_uri (str): EIP-681 ERC-20 transfer URI carrying the token, chain, and address, and no amount: the
             payer chooses it.
+        max_deposit_atomic (str | Unset): Inclusive maximum per-transfer deposit at view time, in atomic units as a
+            decimal string.
+            Always populated from resolved terms in merchant and client deposit-address views;
+            omitted (never null) in the admin restore response, which ignores held payment settings.
+        min_amount (int | Unset): Minimum per-transfer credit at view time, in the account currency's minor units (USD
+            cents).
+            Enforced independently of the atomic bounds; smaller spot-valued deposits are not credited.
+            Always populated from resolved terms in merchant and client deposit-address views;
+            omitted (never null) in the admin restore response, which ignores held payment settings.
+        min_deposit_atomic (str | Unset): Inclusive minimum per-transfer deposit at view time, in atomic units as a
+            decimal string.
+            A zero atomic minimum does not waive the independent `min_amount` credit minimum.
+            Always populated from resolved terms in merchant and client deposit-address views;
+            omitted (never null) in the admin restore response, which ignores held payment settings.
     """
 
     asset: str
     contract: str
     decimals: int
     payment_uri: str
+    max_deposit_atomic: str | Unset = UNSET
+    min_amount: int | Unset = UNSET
+    min_deposit_atomic: str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -39,6 +58,12 @@ class DepositAddressAsset:
 
         payment_uri = self.payment_uri
 
+        max_deposit_atomic = self.max_deposit_atomic
+
+        min_amount = self.min_amount
+
+        min_deposit_atomic = self.min_deposit_atomic
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -49,6 +74,12 @@ class DepositAddressAsset:
                 "payment_uri": payment_uri,
             }
         )
+        if max_deposit_atomic is not UNSET:
+            field_dict["max_deposit_atomic"] = max_deposit_atomic
+        if min_amount is not UNSET:
+            field_dict["min_amount"] = min_amount
+        if min_deposit_atomic is not UNSET:
+            field_dict["min_deposit_atomic"] = min_deposit_atomic
 
         return field_dict
 
@@ -63,11 +94,20 @@ class DepositAddressAsset:
 
         payment_uri = d.pop("payment_uri")
 
+        max_deposit_atomic = d.pop("max_deposit_atomic", UNSET)
+
+        min_amount = d.pop("min_amount", UNSET)
+
+        min_deposit_atomic = d.pop("min_deposit_atomic", UNSET)
+
         deposit_address_asset = cls(
             asset=asset,
             contract=contract,
             decimals=decimals,
             payment_uri=payment_uri,
+            max_deposit_atomic=max_deposit_atomic,
+            min_amount=min_amount,
+            min_deposit_atomic=min_deposit_atomic,
         )
 
         deposit_address_asset.additional_properties = d

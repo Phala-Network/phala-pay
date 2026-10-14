@@ -1,6 +1,27 @@
 import { expect, test } from "@playwright/test";
 import axe from "axe-core";
 
+for (const width of [320, 1280]) {
+  for (const theme of ["light", "dark"]) {
+    test(`deposit limits are readable at ${width}px in ${theme} theme`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/?deposit&theme=${theme}`);
+      const message = page.locator(".pp-message").last();
+      await expect(message).toHaveText(
+        "Send at least $5.00 and 0.1 PHA, up to 10,100 PHA per transfer on Sepolia. Unsupported tokens or networks are not credited. Eligible transfers are credited at the market rate after confirmation.",
+      );
+      await page.getByRole("radio", { name: "Base Sepolia" }).check();
+      await page.getByRole("radio", { name: "USDC" }).check();
+      await expect(message).toContainText("Send at least $5.00 and up to 10,100 USDC per transfer on Base Sepolia.");
+      expect(await message.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.addScriptTag({ content: axe.source });
+      const result = await page.evaluate(() => axe.run(document.querySelector(".pp-root") ?? document));
+      expect(result.violations).toEqual([]);
+    });
+  }
+}
+
 test("retains deposit selections and payments through a three-minute network outage", async ({ page }) => {
   const secret = `da_${"0d".repeat(16)}_secret_${"ab".repeat(24)}`;
   let online = true;

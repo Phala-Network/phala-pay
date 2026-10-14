@@ -23,7 +23,7 @@ export {
   type RetrieveDepositAddressOptions,
 } from "./deposit-address.js";
 export { knownChain, networkName, transactionUrl, networkIconName } from "./chains.js";
-export { formatAmount, formatCountdown, formatMinorAmount, formatTokenAmount, formatWait, tokenAmount } from "./format.js";
+export { formatAmount, formatCountdown, formatMinorAmount, formatTokenAmount, formatUnitsGrouped, formatWait, tokenAmount } from "./format.js";
 export {
   depositAddressTransfer,
   parseTransferUri,

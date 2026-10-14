@@ -66,8 +66,9 @@ Commerce and BitPay. A payment that does not match its quote (late, wrong amount
 payment) is still credited, at the price observed when it is confirmed. A **deposit address**
 (§9, [design §5a](design/multi-tenant.md#5a-deposit-addresses-d16)) is the customer's
 persistent, rotatable address, one for every supported token on every supported chain, like the
-stable bank-transfer details of Stripe's customer balance: any amount of a supported token sent to
-it, active or retired, is credited at spot.
+stable bank-transfer details of Stripe's customer balance: eligible transfers of supported tokens
+meeting the account’s minimum credit value and per-transfer token bounds, to an active or retired
+address, are credited at spot.
 
 A deposit's `amount` is a valuation: the USD value of the tokens at the locked or observed rate,
 which the merchant credits to its customer; the merchant receives the tokens themselves and
@@ -1444,11 +1445,20 @@ from fetched state, never from webhook order.
   window closed. A payment sent in time is still credited at the quoted price." Offer a re-quote; the quote stays `open` until chain-time expiry (§9).
 - Deposit address page: "One address for all supported tokens and networks; send only supported
   tokens." The payer picks a network and a token; the page shows that network, the token contract,
-  the address with a copy button, and a QR of that token's EIP-681 URI (no amount), with "Send only
-  PHA, USDC on Ethereum, Base. Any amount is credited at the market rate, usually within about 6
-  minutes on Ethereum and about 5 minutes on Base," each network's time the 5-minute discovery scan
-  plus its `typical_credit_seconds` in the public view (the page submits no hint); until the view is
-  loaded, "once it is confirmed on its network". Where a network's address differs (another
+  the address with a copy button, and a QR of that token's EIP-681 URI (no amount), with the selected
+  token’s per-transfer limits from the account’s resolved `min_amount` (USD cents),
+  `min_deposit_atomic`, and `max_deposit_atomic` at view time: "Send at least $5.00 and up to
+  10,100 USDC per transfer on Ethereum. Unsupported tokens or networks are not credited. Eligible
+  transfers are credited at the market rate, usually within about 6 minutes on Ethereum and about
+  5 minutes on Base."
+  Each network’s time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
+  public view (the page submits no hint); until the view is loaded, "Eligible transfers are
+  credited at the market rate after confirmation." Both minima apply independently. When the
+  atomic minimum is positive, show both: "Send at least $5.00 and 10 USDC, up to 10,100 USDC
+  per transfer on Ethereum." Omit a zero atomic minimum. Group token amounts in English,
+  preserving every fractional digit. If any limit is missing or malformed, show "Send USDC on
+  Ethereum" without a range. Transfers below the credit minimum or outside token bounds are rejected;
+  `max_unfinalized_credit` can delay credit until finality (§7). Where a network's address differs (another
   treasury), show each network's own address. After a rotation, stop showing the retired address; a
   payment to it is still credited.
 - Network warning on every address: "Ethereum mainnet only. Payments sent on any other network

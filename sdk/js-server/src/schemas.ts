@@ -1252,6 +1252,16 @@ export const schemas: Record<string, Schema> = {
         "minimum": 0,
         "type": "integer"
       },
+      "max_deposit_atomic": {
+        "type": "string"
+      },
+      "min_amount": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "min_deposit_atomic": {
+        "type": "string"
+      },
       "payment_uri": {
         "type": "string"
       }

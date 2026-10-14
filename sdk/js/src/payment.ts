@@ -22,6 +22,12 @@ export interface DepositAddressAsset {
   /** The ERC-20 contract. */
   contract: string;
   decimals: number;
+  /** Minimum per-transfer credit in account currency minor units (USD cents), independent of atomic bounds; absent on older servers and admin restore. */
+  min_amount?: number;
+  /** Inclusive per-transfer token minimum; zero does not waive min_amount. Absent on older servers and admin restore. */
+  min_deposit_atomic?: string;
+  /** Inclusive per-transfer maximum at view time, in atomic units; absent on older servers and admin restore. */
+  max_deposit_atomic?: string;
   /** The EIP-681 transfer request of this token to the network's address, without an amount. */
   payment_uri: string;
 }
@@ -37,7 +43,7 @@ export interface DepositAddressNetwork {
 /**
  * The fields of a deposit address that a payer's page shows: pass them from your backend's
  * `POST /v1/deposit_addresses` response. One address takes every supported token on every
- * supported network; any amount of a supported token sent is credited at the market rate.
+ * supported network; eligible transfers within its deposit limits are credited at the market rate.
  */
 export interface DepositAddressDetails {
   /** The address shared by every network, or `null` when a network's address differs. */

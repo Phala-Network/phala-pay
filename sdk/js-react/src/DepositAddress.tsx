@@ -9,8 +9,8 @@ import {
   type DepositAddressPayment,
 } from "@phala/pay";
 import { CheckoutError, pollDelay } from "@phala/pay";
-import { formatWait } from "@phala/pay";
-import { depositAddressTransfer, type DepositAddressDetails } from "@phala/pay";
+import { formatUnitsGrouped, formatWait } from "@phala/pay";
+import { depositAddressTransfer, type DepositAddressAsset, type DepositAddressDetails } from "@phala/pay";
 import type { Appearance } from "./appearance.js";
 import { AssetIcon, NetworkIcon } from "./Icons.js";
 import { Field } from "./Field.js";
@@ -45,8 +45,8 @@ export interface DepositAddressProps {
 /**
  * A customer's persistent deposit address: one address for every supported token on every
  * supported network. The payer picks a network and a token; the component shows a QR code of that
- * EIP-681 transfer request and the address and token contract to copy. Any amount of a supported
- * token sent is credited at the market rate when it arrives; follow it from your backend's
+ * EIP-681 transfer request, per-transfer limits, and the address and token contract to copy.
+ * Eligible transfers are credited at the market rate; follow them from your backend's
  * `deposit.credited` webhook.
  */
 export function DepositAddress({
@@ -78,6 +78,10 @@ export function DepositAddress({
   const { token: contract, to } = depositAddressTransfer(network, token);
   const symbol = token.asset.toUpperCase();
   const name = networkName(network.chain_id);
+  const currentToken = view?.networks
+    .find((each) => each.chain_id === network.chain_id)?.assets
+    ?.find((each) => each.asset === token.asset) ?? token;
+  const amount = depositLimits(currentToken) ?? symbol;
   return (
     <div
       className={className === undefined ? "pp-root" : `pp-root ${className}`}
@@ -148,11 +152,33 @@ export function DepositAddress({
         </ul>
       )}
       <p className="pp-message">
-        Send {symbol} on {name}. Unsupported tokens or networks are not credited.{" "}
+        Send {amount} on {name}. Unsupported tokens or networks are not credited.{" "}
         {creditMessage(networks.map((each) => each.chain_id), view)}
       </p>
     </div>
   );
+}
+
+/** Both independent floors apply; never interpret missing or malformed merchant props as limits. */
+function depositLimits(token: DepositAddressAsset): string | undefined {
+  const { min_amount: creditMinimum, min_deposit_atomic: minimum, max_deposit_atomic: maximum, decimals } = token;
+  if (
+    typeof creditMinimum !== "number" || !Number.isSafeInteger(creditMinimum) || creditMinimum <= 0 ||
+    typeof minimum !== "string" || minimum.length === 0 || /[^0-9]/.test(minimum) ||
+    typeof maximum !== "string" || maximum.length === 0 || /[^0-9]/.test(maximum) ||
+    !Number.isInteger(decimals) || decimals < 0 || decimals > 255
+  ) {
+    return undefined;
+  }
+  const minAtomic = BigInt(minimum);
+  const maxAtomic = BigInt(maximum);
+  if (minAtomic > maxAtomic) return undefined;
+  const credit = new Intl.NumberFormat("en", { style: "currency", currency: "USD" }).format(creditMinimum / 100);
+  const symbol = token.asset.toUpperCase();
+  const upper = `${formatUnitsGrouped(maxAtomic, decimals, "en")} ${symbol} per transfer`;
+  return minAtomic === 0n
+    ? `at least ${credit} and up to ${upper}`
+    : `at least ${credit} and ${formatUnitsGrouped(minAtomic, decimals, "en")} ${symbol}, up to ${upper}`;
 }
 
 /** The address's public view, read every `interval` while mounted; `null` without a secret. */
@@ -280,7 +306,7 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
     }
   }
   if (names.size === 0) {
-    return "Any amount is credited at the market rate after confirmation.";
+    return "Eligible transfers are credited at the market rate after confirmation.";
   }
   const list = new Intl.ListFormat("en", { type: "conjunction" });
   const [only, ...others] = names.keys();
@@ -288,7 +314,7 @@ function creditMessage(chainIds: number[], view: ClientDepositAddress | null): s
     only !== undefined && others.length === 0
       ? only
       : list.format([...names].map(([wait, on]) => `${wait} on ${list.format(on)}`));
-  return `Any amount is credited at the market rate, usually within ${within}.`;
+  return `Eligible transfers are credited at the market rate, usually within ${within}.`;
 }
 
 function paymentTone({ status }: DepositAddressPayment): "neutral" | "success" | "danger" {

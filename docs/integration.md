@@ -204,7 +204,7 @@ amount in dollars and receives a locked price, an exact token amount, and a sing
 pay within the window. A quote is a **payment instruction at a locked price, not a guarantee of
 payment in full**: an underpayment, an overpayment, or a late payment to its address is still
 credited, at spot, for what arrived (§1.3). Treat an order as paid in full only when the deposit's
-`price_source` is `quote` (or its `amount` is what you expected). For top-ups of any amount at any time, give the customer a persistent
+`price_source` is `quote` (or its `amount` is what you expected). For top-ups within your deposit limits at any time, give the customer a persistent
 deposit address instead (§1.5). The service watches Ethereum for transfers to its addresses, waits for the
 route's confirmation (two blocks on Ethereum), prices each deposit, and screens it. A deposit that
 passes is credited, typically **about 30 seconds after paying**, and the service tells you
@@ -485,7 +485,7 @@ locally ([deploy/sandbox/README.md](../deploy/sandbox/README.md#scenarios)).
 | Overpayment beyond tolerance | Credited at spot for the full amount; quote not completed. |
 | After the window (mined after `expires_at`) | `quote.expired`, then credited at spot (the deposit's `quote` still names the quote). A payment mined inside the window stays at the quoted price even if final later; the quote stays `open` past `expires_at` until then. |
 | Second payment to a quote's address, or to a canceled quote's | Credited at spot. |
-| Deposit address (§1.5), active or retired, any amount of an accepted token on any listed network | Credited at spot when confirmed; the deposit has `quote: null` and names the `deposit_address`, its `chain_id`, and its `address`. |
+| Deposit address (§1.5), active or retired, an accepted token within its deposit limits on a listed network | Credited at spot when confirmed; the deposit has `quote: null` and names the `deposit_address`, its `chain_id`, and its `address`. |
 | A routed token your payment settings do not accept (§1.9), on a chain or for an asset not configured, or anything while the account accepts nothing | `rejected(asset_not_accepted)` once both providers confirm it, before it is valued; never credited; refundable once final, above the route's dust floor, like any rejected deposit (§3). The settings that decide are those current when the payment is recorded. A payment that completes a quote (its asset, in time, within its tolerance) is honoured at the quote's terms even if you stopped accepting the asset after issuing it. |
 | Token without a route | Once final (about 15 minutes, up to one more reconciliation round), `rejected(unsupported_asset)`; never credited; the tokens stay in the forwarder. |
 | Below your `min_amount` | `rejected(below_minimum)`. |
@@ -541,8 +541,9 @@ A deposit address is the customer's own address, **one address for all the token
 you accept** (§1.9), like the stable bank-transfer details Stripe gives each customer
 ([customer balance funding instructions](https://docs.stripe.com/payments/customer-balance/funding-instructions)),
 and like the one deposit address an exchange gives a user for every token and every EVM chain.
-It never expires: the customer sends **any amount of an accepted token, at any time, on any
-listed network**, and each transfer is credited at the market (spot) rate when it arrives,
+It never expires: the customer chooses an amount **within the accepted token’s per-transfer
+token bounds and meeting its minimum credit value, at any time, on any listed network**.
+Eligible transfers are credited at the market (spot) rate after confirmation,
 within about 5 minutes plus the chain's confirmation (a transfer sent without a
 [transaction-hash hint](#transaction-hash-hints) waits for the 5-minute discovery scan), through
 the same `deposit.credited` webhook as a quote payment.
@@ -562,6 +563,8 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
 #  "networks": [
 #    {"chain_id": 11155111, "address": "0xabc…", "treasury": "0x…",
 #     "assets": [{"asset": "pha", "contract": "0x…", "decimals": 18,
+#                 "min_amount": 500, "min_deposit_atomic": "100000000000000000",
+#                 "max_deposit_atomic": "10100000000000000000000",
 #                 "payment_uri": "ethereum:0x…@11155111/transfer?address=0xabc…"}]},
 #    {"chain_id": 84532, "address": "0xabc…", "treasury": "0x…", "assets": [ … ]}]}
 ```
@@ -580,7 +583,20 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   one address for all.
 - Show only the networks in `networks` and the tokens in their `assets`: the networks and tokens
   your payment settings accept, read when the address is returned, so a change of your settings
-  shows on the next read. A transfer of a listed token on a listed network is credited; a routed
+  shows on the next read. Each asset carries `min_amount`, the minimum per-transfer credit in
+  the account currency’s minor units (currently USD cents), and `min_deposit_atomic` and
+  `max_deposit_atomic`, inclusive token bounds as decimal strings in atomic units. All three
+  come from the account’s current payment settings and the route at view time, using the same
+  resolver as screening and valuation. Both minima are independently enforced: a zero atomic
+  minimum does not waive the credit minimum; smaller spot-valued transfers are rejected with
+  `below_minimum`. Merchant and client views always carry all three resolved fields. The admin
+  `POST /v1/admin/restore/deposit_addresses` response omits all three (never `null` or zero
+  placeholders): reconstruction intentionally ignores payment settings while they are held.
+  Divide token bounds by `10 ** decimals` for display without floating-point rounding. These
+  are current terms, not a quote or a guarantee for a later transfer: screening uses the deposit’s bound settings revision and route version (§1.9).
+  Eligible transfers meeting the credit minimum and token bounds are credited; transfers outside
+  them are rejected and follow the existing refund rules (§1.3). Credit before finality also obeys `max_unfinalized_credit`: a
+  transfer past that cap waits for finality, so the typical credit time can be longer. A routed
   token you do not accept is `rejected(asset_not_accepted)`, any other token `rejected
   (unsupported_asset)`, and neither is credited. Funds sent on a network that is not listed are not seen:
   they stay at the address on that chain and can be swept only once the forwarder factory is
@@ -629,15 +645,22 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
 **Page copy.** "One address for all listed tokens and networks. Send only listed tokens." Let the
 customer pick the network and the token; show that network, the token contract, the full address
 with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain, and address
-and no amount): "Send only PHA, USDC on Sepolia, Base Sepolia. Any amount is credited at the market
-rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia. You can reuse
-this address." A payer sending from their own wallet or exchange gives the page no transaction hash,
+and no amount). State the USD credit minimum and selected token’s maximum on its network, for
+example: "Send at least $5.00 and up to 10,100 USDC per transfer on Base. Unsupported tokens or
+networks are not credited. Eligible transfers are credited at the market rate, usually within about
+5 minutes." If the atomic minimum is positive, state both independent floors: "Send at least $5.00
+and 10 USDC, up to 10,100 USDC per transfer on Base." Omit the atomic minimum when it is zero;
+the stricter floor at payment time binds. Group token amounts in English without losing precision.
+Read all limits from the latest public view when available. When any limit is missing or malformed,
+use "Send USDC on Base" without a range; never promise credit for any amount.
+A payer sending from their own wallet or exchange gives the page no transaction hash,
 so unless your page submits one ([transaction-hash hints](#transaction-hash-hints)), each network's
 time is the 5-minute discovery scan plus its `typical_credit_seconds` in the address's public view
 (above), the time from paying to credit at the confirmation your account's payments on that chain
 wait for, as `GET /v1/config` reports it. Do not promise `typical_credit_seconds` alone, which is
 the time of a hinted payment: even a page that submits the hash can exhaust the daily hint budget
-and fall back to the scan. Until the view is loaded the page names no time.
+and fall back to the scan. Until the view is loaded the page names no time: "Eligible transfers are credited at the
+market rate after confirmation."
 `<DepositAddress depositAddress={…} clientSecret={…} apiBase={…}>` from `@phala/pay-react`
 renders exactly that from `address` and `networks` (pass only those and the `client_secret` to the
 browser) and, with the secret, shows each payment as it arrives: "1.5 PHA received on Sepolia, 1

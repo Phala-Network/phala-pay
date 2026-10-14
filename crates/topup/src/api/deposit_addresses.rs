@@ -450,16 +450,19 @@ async fn issuable_chains(
     Ok(issuable)
 }
 
-/// The API representation of a deposit address: its networks on the chains of `routes`, each with
-/// those routes' tokens. The merchant's and the payer's views pass the routes the account's
-/// effective config accepts.
+/// The API representation of a deposit address: its networks and tokens, with per-transfer bounds
+/// from resolved terms in merchant/client views. Admin restore alone passes no terms: it must
+/// reconstruct every network even while payment settings are held, and omits the bounds.
 pub(crate) fn deposit_address_object<'r>(
-    routes: impl IntoIterator<Item = &'r RouteFile>,
+    routes: impl IntoIterator<Item = (&'r RouteFile, Option<payment_config::Terms>)>,
     address: &deposit_addresses::DepositAddress,
 ) -> ApiResult<DepositAddress> {
-    let mut assets = BTreeMap::<u64, Vec<&RouteFile>>::new();
-    for route in routes {
-        assets.entry(route.chain.chain_id).or_default().push(route);
+    let mut assets = BTreeMap::<u64, Vec<(&RouteFile, Option<payment_config::Terms>)>>::new();
+    for (route, terms) in routes {
+        assets
+            .entry(route.chain.chain_id)
+            .or_default()
+            .push((route, terms));
     }
     let networks: Vec<DepositAddressNetwork> = address
         .networks
@@ -472,10 +475,15 @@ pub(crate) fn deposit_address_object<'r>(
                 treasury: format!("{:#x}", network.treasury),
                 assets: routes
                     .iter()
-                    .map(|route| DepositAddressAsset {
+                    .map(|(route, terms)| DepositAddressAsset {
                         asset: route.asset.symbol.clone(),
                         contract: format!("{:#x}", route.asset.contract),
                         decimals: route.asset.decimals,
+                        min_amount: terms.map(|terms| terms.min_amount),
+                        min_deposit_atomic: terms
+                            .map(|terms| terms.min_deposit_atomic.value().to_string()),
+                        max_deposit_atomic: terms
+                            .map(|terms| terms.max_deposit_atomic.value().to_string()),
                         payment_uri: format!(
                             "ethereum:{:#x}@{}/transfer?address={:#x}",
                             route.asset.contract, network.chain_id, network.address
@@ -515,8 +523,13 @@ async fn deposit_address_response(
     address: &deposit_addresses::DepositAddress,
 ) -> ApiResult<DepositAddress> {
     let effective = payment_config::load_effective(&mut *connection, routes, scope).await?;
-    let mut object =
-        deposit_address_object(effective.assets.iter().map(|asset| asset.route), address)?;
+    let mut object = deposit_address_object(
+        effective
+            .assets
+            .iter()
+            .map(|asset| (asset.route, Some(asset.terms))),
+        address,
+    )?;
     object.payments = recent_payments(connection, routes, address.id, Utc::now())
         .await?
         .into_iter()
@@ -626,8 +639,13 @@ async fn client_deposit_address_view(
     let effective =
         payment_config::load_effective(&mut *state.pool.acquire().await?, &state.routes, scope)
             .await?;
-    let object =
-        deposit_address_object(effective.assets.iter().map(|asset| asset.route), &address)?;
+    let object = deposit_address_object(
+        effective
+            .assets
+            .iter()
+            .map(|asset| (asset.route, Some(asset.terms))),
+        &address,
+    )?;
     let payments = client_payments(
         &mut *state.pool.acquire().await?,
         &state.routes,
