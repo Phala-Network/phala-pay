@@ -642,7 +642,7 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
 **Page copy.** "One address for all listed tokens and networks. Send only listed tokens." Let the
 customer pick the network and the token; show that network, the token contract, the full address
 with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain, and address
-and no amount). State the selected token’s range on its network, for example: "Send 0.1–10100 PHA
+and no amount). State the selected token’s range on its network, for example: "Send 0.1–10100 PHA
 per transfer on Sepolia. Unsupported tokens or networks are not credited. Eligible transfers are
 credited at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base
 Sepolia." Read the range from the latest public view when available. When an older server omits

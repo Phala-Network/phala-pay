@@ -1446,7 +1446,7 @@ from fetched state, never from webhook order.
   tokens." The payer picks a network and a token; the page shows that network, the token contract,
   the address with a copy button, and a QR of that token's EIP-681 URI (no amount), with the selected
   token’s inclusive per-transfer range from the account’s resolved `min_deposit_atomic` and
-  `max_deposit_atomic` at view time, formatted with its decimals: "Send 0.1–10100 PHA per transfer
+  `max_deposit_atomic` at view time, formatted with its decimals: "Send 0.1–10100 PHA per transfer
   on Ethereum. Unsupported tokens or networks are not credited. Eligible transfers are credited
   at the market rate, usually within about 6 minutes on Ethereum and about 5 minutes on Base."
   Each network’s time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
