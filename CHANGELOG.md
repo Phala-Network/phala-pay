@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-10-14
+
 ### Security
 
 - Updated `rustls` to 0.23.46, fixing RUSTSEC-2026-0346 through RUSTSEC-2026-0349: TLS session secret exposure in `Debug` output, application data sent after ECH rejection, excessive Brotli certificate decompression allocation, and unauthenticated key-exchange downgrade prediction.
@@ -1980,7 +1982,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.5...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.6...HEAD
+[0.10.6]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.6
 [0.10.5]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.5
 [0.10.4]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.4
 [0.10.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.3
