@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-10-14
+
 ### Changed (operators)
 
 - Approve the non-dev `dstack-0.5.12` OS image and its verified hash in all five deployment
@@ -2000,7 +2002,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.6...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.7...HEAD
+[0.10.7]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.7
 [0.10.6]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.6
 [0.10.5]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.5
 [0.10.4]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.4
