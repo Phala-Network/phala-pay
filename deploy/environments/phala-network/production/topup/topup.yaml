@@ -12,10 +12,10 @@ admin_key:
 maintenance_keys:
   - id: maintenance/production-v1
     public_key: 3Gnbo5Er8uURAOH1OON7mNZWpghmbJTeyelV7HsLjhE=
-# Independent Ankr read and Infura verify endpoints, with both sealed keys (deploy/RPC.md).
-# Fast discovery uses read; coverage and money decisions require read/verify agreement. The same
-# owner-managed credentials are shared with staging, so the combined pilot caps in chain-reads.md
-# apply across both environments.
+# Independent Ankr read and BlockPI verify endpoints (deploy/RPC.md). Ankr is shared with staging;
+# BlockPI uses one mainnet key per chain from one free account. Staging retains Ankr + Infura.
+# Fast discovery uses read; coverage and money decisions require read/verify agreement.
+# Pilot caps remain unchanged; BlockPI log requests use its measured free-tier range limit.
 rpc:
   - chain_id: 1
     read:
@@ -24,10 +24,10 @@ rpc:
       sealed_key: TOPUP_RPC_ANKR_KEY
       max_log_blocks: 3000
     verify:
-      id: infura-mainnet
-      url: "https://mainnet.infura.io/v3/{key}"
-      sealed_key: TOPUP_RPC_INFURA_KEY
-      max_log_blocks: 3000
+      id: blockpi-mainnet
+      url: "https://ethereum.blockpi.network/v1/rpc/{key}"
+      sealed_key: TOPUP_RPC_BLOCKPI_ETHEREUM_KEY
+      max_log_blocks: 1000
   - chain_id: 8453
     read:
       id: ankr-base-mainnet
@@ -35,10 +35,10 @@ rpc:
       sealed_key: TOPUP_RPC_ANKR_KEY
       max_log_blocks: 3000
     verify:
-      id: infura-base-mainnet
-      url: "https://base-mainnet.infura.io/v3/{key}"
-      sealed_key: TOPUP_RPC_INFURA_KEY
-      max_log_blocks: 3000
+      id: blockpi-base-mainnet
+      url: "https://base.blockpi.network/v1/rpc/{key}"
+      sealed_key: TOPUP_RPC_BLOCKPI_BASE_KEY
+      max_log_blocks: 1000
 
 routes:
   # Owner-approved pilot amounts (2026-10-13): each sale is at least $5 (min_amount, in cents) and

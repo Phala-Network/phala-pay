@@ -30,7 +30,7 @@ env_file() {
     "$("$root/deploy/pinned-compose.sh")" -f "$2" config --variables |
         awk 'NR > 1 && NF > 0 { print $1 }' | sort | while read -r name; do
         case "$name" in
-            *AWS_ACCESS_KEY_ID | *AWS_SECRET_ACCESS_KEY | TOPUP_RPC_ANKR_KEY | TOPUP_RPC_INFURA_KEY) echo "$name=staging-value" ;;
+            *AWS_ACCESS_KEY_ID | *AWS_SECRET_ACCESS_KEY | TOPUP_RPC_ANKR_KEY | TOPUP_RPC_INFURA_KEY | TOPUP_RPC_BLOCKPI_ETHEREUM_KEY | TOPUP_RPC_BLOCKPI_BASE_KEY) echo "$name=staging-value" ;;
             *) echo "$name=" ;;
         esac
     done >"$file"
@@ -69,6 +69,29 @@ passes() {
 render service "$staging"
 env_file complete "$tmp/service.yml"
 passes --env "$tmp/complete.env" --compose "$tmp/service.yml" --environment-dir "$staging"
+
+# Production and its restore-check variant require both chain-specific BlockPI keys,
+# and reject the former Infura secret.
+production="$root/deploy/environments/phala-network/production/topup"
+for variant in service restore-check; do
+    inputs=()
+    [[ "$variant" != restore-check ]] || inputs=(--restore-check)
+    render "production-$variant" "$production" "${inputs[@]}"
+    env_file "production-$variant" "$tmp/production-$variant.yml"
+    passes --env "$tmp/production-$variant.env" --compose "$tmp/production-$variant.yml" \
+        --environment-dir "$production" "${inputs[@]}"
+    for key in TOPUP_RPC_BLOCKPI_ETHEREUM_KEY TOPUP_RPC_BLOCKPI_BASE_KEY; do
+        grep -v "^$key=" "$tmp/production-$variant.env" >"$tmp/production-missing-$key.env"
+        expect_failure "production-$variant-missing-$key" "$key" \
+            --env "$tmp/production-missing-$key.env" --compose "$tmp/production-$variant.yml" \
+            --environment-dir "$production" "${inputs[@]}"
+    done
+    { cat "$tmp/production-$variant.env"; echo "TOPUP_RPC_INFURA_KEY=former-verify-key"; } \
+        >"$tmp/production-former.env"
+    expect_failure "production-$variant-former" "the env may set only the compose's sealed names, not TOPUP_RPC_INFURA_KEY" \
+        --env "$tmp/production-former.env" --compose "$tmp/production-$variant.yml" \
+        --environment-dir "$production" "${inputs[@]}"
+done
 
 # The env file names only the compose's sealed names, with no placeholder; an optional one left
 # out is unset, a required one is refused.

@@ -51,9 +51,9 @@ render template "$root/deploy/environments/phala-cloud-template/topup" --templat
     fail "staging's sealed names changed: $(sealed service)"
 [[ "$(sealed restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
     fail "staging's restore-check sealed names changed: $(sealed restore-check)"
-[[ "$(sealed production)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
+[[ "$(sealed production)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_BLOCKPI_BASE_KEY TOPUP_RPC_BLOCKPI_ETHEREUM_KEY " ]] ||
     fail "production's sealed names changed: $(sealed production)"
-[[ "$(sealed production-restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
+[[ "$(sealed production-restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_BLOCKPI_BASE_KEY TOPUP_RPC_BLOCKPI_ETHEREUM_KEY " ]] ||
     fail "production's restore-check sealed names changed: $(sealed production-restore-check)"
 [[ "$(sealed product)" == "PRODUCT_API_KEY " ]] || fail "the product's sealed names changed"
 

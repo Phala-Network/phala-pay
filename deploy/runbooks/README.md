@@ -64,7 +64,7 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 | Alert, monitor, or symptom | Runbook |
 |---|---|
 | `TopupSanctionsListStale`, `TopupSanctionsListVerifyFailed`, `TopupSanctionsRescreenFailed`, `TopupRefundDestinationSanctioned`, `topup-sanctions-refresh` | [Sanctions list](sanctions-list.md) |
-| `TopupRpcEndpointUnavailable`, `RpcEndpointUnavailable`, `RpcCoverageLag`, `RpcAddressBackfillLag`, `RpcPriceSnapshotBudgetExhausted`, `RpcInfuraQuotaPressure`, `RpcAnkrQuotaPressure` | [RPC health](rpc-health.md) |
+| `TopupRpcEndpointUnavailable`, `RpcEndpointUnavailable`, `RpcCoverageLag`, `RpcAddressBackfillLag`, `RpcPriceSnapshotBudgetExhausted`, `RpcInfuraQuotaPressure`, `RpcBlockpiQuotaPressure`, `RpcAnkrQuotaPressure` | [RPC health](rpc-health.md) |
 | `TopupReconciliationMismatch` (`check:address_derivation` or `check:custody_balance`), `TopupContractCodeMismatch`, `TopupFinalizedCheckpointConflict`, `TopupUnverifiedEvidenceMismatch`, `400 chain_frozen` | [Chain frozen](chain-frozen.md) |
 | `TopupReconciliationMismatch` (other `check`), `topup-reconciler` | [Reconciliation mismatch](reconciliation-mismatch.md) |
 | `price-outage` (zero sources, disagreement, depeg, sequencer/grace, stuck valuation) | [Price outage](price-outage.md) |

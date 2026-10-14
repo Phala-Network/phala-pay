@@ -46,8 +46,11 @@ def main() -> None:
         services[service] = {
             "environment": {
                 "SSL_CERT_FILE": "/etc/rpc-tls/cert.pem",
-                "TOPUP_RPC_ANKR_KEY": "${TOPUP_RPC_ANKR_KEY:-local-rpc-key}",
-                "TOPUP_RPC_INFURA_KEY": "${TOPUP_RPC_INFURA_KEY:-local-rpc-key}",
+                **{
+                    chain[role]["sealed_key"]: "${" + chain[role]["sealed_key"] + ":-local-rpc-key}"
+                    for chain in config["rpc"]
+                    for role in ("read", "verify")
+                },
             },
             "configs": [{"source": "rpc_tls_certificate", "target": "/etc/rpc-tls/cert.pem"}],
             "depends_on": relays,

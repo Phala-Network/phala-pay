@@ -2,7 +2,10 @@
 
 Use this procedure for an endpoint unavailable for five minutes, dual evidence disagreement,
 coverage lag over two hours, or provider quota pressure. [RPC operations](../RPC.md) lists the
-fixed cadences and shared quotas.
+fixed cadences and per-account quotas: shared Ankr read, staging Infura verify and production
+BlockPI verify. Stop adding load at 25,000 Ankr calls/day (seven-day run rate), 1,500,000 Infura
+credits/day or 1,250,000 BlockPI RU/day (seven-day run rate). Compare BlockPI with its account
+dashboard too: log responses above 200 KB incur surcharges that method counters cannot measure.
 
 ## Confirmation provider lag
 

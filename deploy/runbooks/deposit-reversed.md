@@ -129,9 +129,11 @@ price-only retries. Provisional reappearance stays in S on the watcher schedule.
 evidence retains watcher eligibility. Never clear due fields or infer proof from
 `dual_verified_at` alone.
 
-L budgets `2×(62 + 24) = 172` head methods per endpoint across both environments daily:
-172 Ankr calls / 13,760 Infura credits before retries. The complete read is already in D's
-24 Ankr / 2,000 Infura allocation. Production D=46 and staging D=20 remain operational caps;
+L budgets `2×(62 + 24) = 172` head methods per role across both environments daily:
+172 shared Ankr calls, 6,880 staging Infura credits and 1,720 production BlockPI RU before
+retries. The complete read is already in D's allocation: 24 Ankr calls plus 2,000 staging
+Infura credits or 875 conservative production BlockPI RU per deposit.
+Production D=46 and staging D=20 remain operational caps;
 follow the [full arithmetic and retry caveat](../RPC.md#worst-case-pilot-budget).
 Resume new quotes only when L stock/entries, S and daily work fit. N-1 preserves compatible
 rows, but its binary does not obey the new scheduler budget; use the prior operating budget.

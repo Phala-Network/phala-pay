@@ -1,6 +1,7 @@
 # Chain RPC operations
 
-Each configured chain has an Ankr read endpoint and an independent Infura verify endpoint.
+Each configured chain has an Ankr read endpoint and an independent verify endpoint: BlockPI in
+production, Infura in staging.
 [Chain reads](../docs/design/chain-reads.md) specifies the evidence and read paths.
 No endpoint failover, provider pool, acceptance state or RPC recovery command remains.
 [RPC providers](RPC-PROVIDERS.md) compares providers' fee models, free tiers and compatibility.
@@ -10,15 +11,13 @@ No endpoint failover, provider pool, acceptance state or RPC recovery command re
 Configure `rpc` entries with `chain_id`, `read` and `verify`. Each endpoint requires a unique
 `id`, HTTPS `url` containing one whole-segment or query-value `{key}`, explicit `sealed_key`,
 and positive `max_log_blocks`. Read and verify hosts must differ. Configure observation-only
-Ethereum and Base price chains too. Both environments share `TOPUP_RPC_ANKR_KEY` and
-`TOPUP_RPC_INFURA_KEY`, including for staging's mainnet price observations. This shared-account
-pilot retains the production D=46/staging D=20 caps. Production keeps the existing accounts.
-The corrected coverage request shapes leave only 2.86% Infura headroom while staging shares
-Infura. The staging move to dRPC verify (separate PR on `deploy/staging-drpc-rpc`) restores
-Infura headroom and **must merge before production launch §2**. All caps remain unchanged.
-Edits to production-attested comments cost a production upgrade, so batch them with the next
-planned production upgrade
-([launch procedure](runbooks/production-launch.md#18-ankr-and-infura-accounts-and-the-staging-launch-gate)).
+Ethereum and Base price chains too. Both environments share `TOPUP_RPC_ANKR_KEY`. Staging keeps
+`TOPUP_RPC_INFURA_KEY` for its payment chains and mainnet price observations. Production uses
+`TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY` from one BlockPI free account,
+with archive mode off and a separate key for each mainnet. Production verifies with BlockPI
+before provisioning; staging stays on Ankr + Infura. No dRPC adoption is required.
+All pilot caps remain unchanged; a later increase needs a separately reviewed budget
+([launch procedure](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
 
 `topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:
 production sets it to 2 and staging to 1. It atomically limits attached-pending refunds across
@@ -83,7 +82,7 @@ checks and restarts run custody immediately and consume the extra-operation rese
 ### Pilot limits and operating modes
 
 The approved parallel mode runs normal staging tests, including refunds, alongside production.
-Both environments use Ankr read and Infura verify for payments and prices.
+Both environments use Ankr read; production uses BlockPI verify, staging uses Infura verify.
 
 | Limit | Production | Staging | Enforcement |
 |---|---:|---:|---|
@@ -115,22 +114,26 @@ caps require a reviewed budget before adding load.
 
 ### Worst-case pilot budget
 
-Stop lines are **25,000 Ankr calls/day** (75% of 1,000,000 monthly calls divided by 30) and
-**1,500,000 Infura credits/day** (50% of the daily quota). Charge one Ankr call per method,
-80 Infura credits per non-log method and 255 per `eth_getLogs`. Assume every payment chain runs
-all day, one caught-up recipient chunk plus one lagging chunk, and full custody vectors on all
+Stop lines are **25,000 Ankr calls/day** (75% of 1,000,000 monthly calls divided by 30),
+**1,500,000 staging-only Infura credits/day** (50% of the daily quota), and
+**1,250,000 production-only BlockPI RU/day** (75% of 50M monthly RU divided by 30).
+Charge one Ankr call per method, 80 Infura credits per non-log method and 255 per `eth_getLogs`.
+BlockPI weights are below. Assume every payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and full custody vectors on all
 1,000 historical addresses. No idle savings are used.
 
 An hour adds about 300 blocks on Ethereum/Sepolia or 1,800 on Base/Base Sepolia, within the
 configured 3,000-block log window. Coverage uses one address-less Transfer query per
 1,000-recipient chunk and one factory-address query with three event signatures, filtered
 locally to the tracked forwarders. This avoids Ankr's multi-topic alternatives limit.
-A normal range needs two requests per recipient set; 19,200 blocks need fourteen. An Infura
+At `max_log_blocks: 3000`, a normal range needs two requests per recipient set; 19,200 blocks
+need fourteen. BlockPI uses `max_log_blocks: 1000` beneath its measured 1,024-block cap: budget
+three windows for the full 3,000-block normal allowance and twenty for catch-up, even when the
+chain is caught up and the actual normal range is shorter. An Infura
 10,000-result limit error aborts the round: the current adapter does not automatically split
 on that error. Extra requests must fit the reserve or
 be budgeted separately.
 
-For each payment chain with C custody routes:
+For each payment chain with C custody routes, the shared Ankr and staging-only Infura costs are:
 
 ```text
 Fast discovery:      288 × (1 head + 1 logs) = 576 Ankr
@@ -147,26 +150,49 @@ Checkpoint checks include both previous-checkpoint headers, both finalized heads
 header at read's finalized height. Coverage uses the published checkpoint without repeating
 those checks. Its header term includes the extra common-boundary read when that boundary lags.
 
-| Payment chain | Custody routes | Fixed Ankr calls/day | Fixed Infura credits/day |
-|---|---:|---:|---:|
-| Staging Sepolia | 3 | 1,464 | 116,160 |
-| Staging Base Sepolia | 3 | 1,464 | 116,160 |
-| Production Ethereum | 2 | 1,344 | 106,560 |
-| Production Base | 1 | 1,224 | 96,960 |
-| **Combined** | **9** | **5,496** | **435,840** |
+BlockPI's [EVM RU table](https://docs.blockpi.io/pricing/request-unit-ru/evm-ru-table), checked
+2026-10-13, charges `eth_chainId` 5; `eth_blockNumber` 10; `eth_getCode` and
+`eth_getTransactionReceipt` 15; both block-header methods and `eth_call` 20;
+`eth_getTransactionByHash` 35; `eth_getLogs` 50 RU. The
+[request-unit policy](https://docs.blockpi.io/pricing/request-unit-ru) adds log response-size
+charges above 200 KB. The budget assumes no such surcharge; reconcile counters with the
+account dashboard and charge any excess to the reserve before adding load.
 
-Variable allowances before retries:
+```text
+BlockPI coverage logs/payment chain: 20×2×2×ceil(3,000/1,000)
+                                  + 4×2×2×ceil(19,200/1,000) = 560
+BlockPI fixed RU/payment chain: (432 + 48)×20 + 560×50 + 120C×20 = 37,600 + 2,400C
+```
+
+| Payment chain | Custody routes | Fixed Ankr calls/day | Fixed verify units/day |
+|---|---:|---:|---:|
+| Staging Sepolia | 3 | 1,464 | 116,160 Infura credits |
+| Staging Base Sepolia | 3 | 1,464 | 116,160 Infura credits |
+| Production Ethereum | 2 | 1,344 | 42,400 BlockPI RU |
+| Production Base | 1 | 1,224 | 40,000 BlockPI RU |
+| **Per account** | **9** | **5,496 shared** | **232,320 Infura; 82,400 BlockPI** |
+
+Variable allowances before retries (the Infura column applies only to staging):
 
 | Work | Ankr calls | Infura credits |
 |---|---:|---:|
 | Deposit: cold discovery 3, confirmation and first finality verification 13, coverage completion/re-verification 6, price snapshots 2 | 24 | 2,000 |
 | Unresolved finality recheck, including at most one replacement candidate | 4 | 320 |
-| Combined L stock/turnover: 172 head methods per endpoint/day | 172 | 13,760 |
+| L stock/turnover: 86 head methods per environment/day | 86 | 6,880 |
 | Hint task | 12 | 640 |
 | Price snapshot, including verify's head and pin header | 1 | 240 |
 | Factory receipt verification | 3 | 240 |
 | Safe challenge/proof set | 3 | 160 |
 | Extra operation, conservatively priced as logs | 1 | 255 |
+
+BlockPI variable allowances use the same pilot work limits, priced by its RU table. A complete
+receipt/header/transaction set costs 70 RU; an unresolved replacement check costs at most
+15 + 70 = 85; a refund check costs 15 + 35 + 2×20 = 90. Price snapshots cost 3×20 = 60
+on verify. For the existing 2,000-credit deposit allowance and 640-credit hint allowance,
+conservatively charge all non-log methods at the highest used rate, 35 RU: **875/deposit**
+and **280/hint**. These are upper bounds, not a blended average. Each environment has 86 S
+rechecks and 86 L head methods. Factory verification costs 70 and a two-call Safe proof 40 RU.
+Extra operations reserve 50 RU each. Lower actual method weights do not authorize raising caps.
 
 Confirmation first probes the required head independently on both endpoints. Once both reach
 the requirement, the same claim reads full evidence once per endpoint: receipt, canonical
@@ -206,9 +232,11 @@ alone stays in normal confirmation or L and does not enter S. Missing transfers,
 or changed evidence, and RPC failures that cannot establish height-only lag enter S.
 
 `ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
-A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr / 80 Infura).
+A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr call,
+80 staging Infura credits or 15 production BlockPI RU).
 A present ordinary EVM receipt also requires its block header and transaction: three methods
-per endpoint (3 / 240), even if the evidence disagrees and remains unresolved.
+per endpoint (3 Ankr calls, 240 staging Infura credits or 70 production BlockPI RU), even if
+the evidence disagrees and remains unresolved.
 
 When both original receipts are missing, replacement lookup considers service-known candidates
 with the same chain, sender and nonce but a different hash. **Exactly one candidate** permits
@@ -222,20 +250,23 @@ release reservations to bypass this gate. Follow the
 The branches are mutually exclusive, so the complete per-endpoint recheck bound is
 `max(3, 1 + 3×K) = 4` methods at K=1: one original receipt plus the candidate's receipt,
 header and transaction. D includes four first-finality methods in its worst-case Depth
-allocation: 24 Ankr / 2,000 Infura per deposit in total.
-Charge four Ankr calls / 320 Infura credits per subsequent recheck, before ×1.1:
+allocation: 24 Ankr calls plus 2,000 staging Infura credits or 875 conservative production
+BlockPI RU per deposit in total. Charge four Ankr calls, 320 staging Infura credits or
+85 production BlockPI RU per subsequent recheck, before ×1.1:
 
-| Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Infura credits/deposit/day |
+| Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Staging Infura credits/deposit/day |
 |---|---:|---:|---:|
 | First unresolved-day | 10 + 34 + 18 = 62 | 62×4 = 248 | 62×320 = 19,840 |
 | Every later day | 24 | 24×4 = 96 | 24×320 = 7,680 |
 
-The daily stock/turnover bound per endpoint is:
+The shared-read stock/turnover bound across both environments is (Infura serves only the
+staging half; production BlockPI uses the RU weights above):
 
 ```text
 Rechecks: 2 environments × (1 new × 62 + 1 carried × 24) = 172
 Ankr:     172 × 4   = 688 calls
-Infura:   172 × 320 = 55,040 credits
+Infura:   86 × 320 = 27,520 staging credits
+BlockPI:  86 × 85 = 7,310 production RU
 ```
 
 This includes all allowed replacement-candidate reads and stock turnover; neither is charged
@@ -247,9 +278,10 @@ L separately budgets first-day head probes for one new entry plus hourly probes 
 entry per environment. Its full evidence read is already in D's three-method allocation:
 
 ```text
-L head methods: 2 environments × (1 new × 62 + 1 carried × 24) = 172 per endpoint
+L head methods/role: 2 environments × (1 new × 62 + 1 carried × 24) = 172
 Ankr:          172 calls
-Infura:        172 × 80 = 13,760 credits
+Infura:        86 × 80 = 6,880 staging credits
+BlockPI:       86 × 20 = 1,720 production RU
 ```
 
 The refund receipt reader uses `eth_getTransactionReceipt`, the persisted-checkpoint header and
@@ -261,7 +293,9 @@ endpoints until an agreed sender/nonce is persisted. Asymmetric evidence can the
 four methods per endpoint per check; a never-seen transaction costs two.
 
 Checks run every 60 s for the first 30 min after attachment, every ten minutes until 24 h, then
-hourly indefinitely. Before transport retries, the first half-open refund-day has at most
+hourly indefinitely. The Infura figures below apply only to staging; production uses the
+90-RU BlockPI bound per check above. Before transport retries, the first half-open refund-day
+has at most
 `30 + 141 = 171` checks: `171×4 = 684` Ankr / 54,720 Infura. A full ten-minute-phase day costs
 `144×4 = 576` / 46,080; an hourly-phase day costs `24×4 = 96` / 7,680. A never-seen transaction
 uses `171×2 = 342` / 27,360 on its first day and `24×2 = 48` / 3,840 per hourly-phase day.
@@ -270,34 +304,50 @@ including carry-over. Combined N=2, R=3. Refunds reserve all three allowed trans
 non-refund work uses the approved ten-percent allowance:
 
 ```text
-Non-refund Ankr:
-5,496 + 528 + 24×66 + 2×12×80 + 3×80 + 3×12 + 300
-+ 688 + 172 = 10,964
+Shared Ankr non-refund:
+5,496 + 528 + 24×(46+20) + 2×12×80 + 3×80 + 3×12 + 300 + 688 + 172 = 10,964
+Shared Ankr refunds: 3×(684×2 + 96×3) = 4,968
+Shared Ankr total:   ceil(10,964×1.1 + 4,968) = 17,029 calls/day
 
-Non-refund Infura:
-435,840 + 240×528 + 2,000×66 + 2×640×80
-+ 240×80 + 160×12 + 255×300 + 55,040 + 13,760 = 963,380
+Staging-only Infura non-refund:
+232,320 + 240×408 + 2,000×20 + 640×80 + 240×20 + 160×2
++ 255×150 + 320×86 + 80×86 = 499,210
+Staging-only Infura refunds: 3×(54,720×1 + 7,680×1) = 187,200
+Staging-only Infura total:   499,210×1.1 + 187,200 = 736,331 credits/day
 
-Refund Ankr:   3 × (684×2 + 96×3)       = 4,968
-Refund Infura: 3 × (54,720×2 + 7,680×3) = 397,440
-
-Combined Ankr:   ceil(10,964×1.1 + 4,968) = 17,029 calls/day
-Combined Infura: 963,380×1.1 + 397,440 = 1,457,158 credits/day
-
-From the previous allocation:
-Ankr:   10,424 − 20×80 + 24×66 + 172 + 4×96 = 10,964 before retries
-Infura: 854,100 − 1,680×80 + 2,000×66 + 13,760 + 4×96×255 = 963,380 before retries
-
-Headroom Ankr:   (25,000 − 17,029) / 25,000         = 31.88%
-Headroom Infura: (1,500,000 − 1,457,158) / 1,500,000 = 2.86%
+Production-only BlockPI non-refund:
+82,400 + 60×120 + 875×46 + 280×80 + 70×60 + 40×10
++ 50×150 + 85×86 + 20×86 = 173,380
+Production-only BlockPI refunds: 3×(171×90×1 + 24×90×2) = 59,130
+Production-only BlockPI total:   173,380×1.1 + 59,130 = 249,848 RU/day
 ```
 
-The modeled allowance is **17,029 Ankr calls/day** (rounded up) and **1,457,158 Infura
-credits/day**, with **31.88% Ankr / 2.86% Infura** headroom below the stop lines while staging
-still shares Infura. Production D=46 and staging D=20 give 66 deposits/day combined; all caps
-remain unchanged. The separate staging dRPC verify PR (`deploy/staging-drpc-rpc`) must merge
-before [production launch §2](runbooks/production-launch.md#2-provision-the-topup-cvm)
-to restore Infura headroom. This is a launch prerequisite under the corrected coverage budget.
+Staging's two mainnet price chains do not run payment discovery, checkpoints, coverage or
+custody. They contribute quote snapshots and the PHA sampler: staging uses 288 + 2Q = 408
+snapshots/day; production uses 2Q = 120. All of staging's verify traffic stays on Infura.
+BlockPI's two chain keys share one account quota; they do not each receive 50M RU.
+
+| Provider account | Roles | Modeled daily usage | Stop line/day | Headroom below stop | D permitted with ≥10% headroom |
+|---|---|---:|---:|---:|---|
+| Ankr | Production + staging read | 17,029 calls | 25,000 calls | 31.88% | Production ≤253 with staging D=20 |
+| Infura | Staging verify only | 736,331 credits | 1,500,000 credits | 50.91% | Staging ≤298; no production D constraint |
+| BlockPI | Production verify only | 249,848 RU | 1,250,000 RU | 80.01% | Production ≤955 under conservative method weights |
+
+Holding every other allowance fixed, the equations before rounding are:
+
+```text
+Ankr(D production, staging 20) = 15,814 + 26.4D;  ≤ 0.9×25,000       → D≤253
+Infura(D staging)             = 692,331 + 2,200D; ≤ 0.9×1,500,000    → D≤298
+BlockPI(D production)         = 205,573 + 962.5D; ≤ 0.9×1,250,000    → D≤955
+```
+
+The shared Ankr account is the production capacity bound. BlockPI's D ceiling uses conservative
+35-RU non-log bounds for deposits and hints; actual billing may be lower.
+**Configured production D=46, staging D=20 and all other caps remain unchanged.** Increasing
+any cap is a separate reviewed PR. The launch gate is the production Ankr/BlockPI allocation
+and complete sealed mappings, with passing preflight before
+[production launch §2](runbooks/production-launch.md#2-provision-the-topup-cvm).
+Staging continues using Ankr + Infura.
 
 Non-refund reads use ×1.1; refunds reserve all three transport attempts. Logical method counts
 have hard bounds, while each method can make up to three physical sends. These totals do not
@@ -399,15 +449,20 @@ does not authorize raising D, factory or Safe caps.
 Observe `topup_rpc_calls_total`, `topup_rpc_endpoint_ready`, `topup_rpc_errors_total`,
 `topup_coverage_lag_seconds`, `topup_addresses_lagging` and `topup_daily_budget_used`.
 Import [rpc-alerts.yaml](rpc-alerts.yaml) and compare both environments' counters with provider
-dashboards. Stop adding load at Ankr's 25,000/day seven-day run rate or Infura's 1,500,000 daily
-credits. Investigate retry/range growth before it consumes headroom. Alerts do not authorize
-exceeding stop lines or adding another free key.
+dashboards. Stop adding load at shared Ankr's 25,000/day seven-day run rate, staging-only
+Infura's 1,500,000 credits/day, or production-only BlockPI's 1,250,000 RU/day seven-day run rate.
+BlockPI's counter estimate uses the RU table (unknown methods cost 35) and excludes payload
+surcharges; its account dashboard is authoritative. Its free rate limits are 20 requests/s
+and 400 RU/s per endpoint; at 50 RU/log, at most eight log requests/s fit. Run preflights
+serially, count bursts against the reserve, and investigate retry/range growth and 429s before
+adding load. Alerts do not authorize exceeding stop lines or adding another free key.
 
 At hard caps, the admission/budget paths refuse new refund attachments, hint tasks, price
 snapshots or address issuance. Hints fall back to scanning; quotes needing exhausted price
 budgets return retryable `price_unavailable`. Infura 402 halts verify until UTC midnight;
-Ankr exhaustion makes read unavailable until its quota resets. Preserve pending work and let
-bounded loops recover; never advance cursors or release reservations manually.
+Ankr exhaustion makes read unavailable until its quota resets. BlockPI exhaustion or persistent
+throughput errors pause production verification until its account recovers. Preserve pending
+work and let bounded loops recover; never advance cursors or release reservations manually.
 
 ### Latency and recovery targets
 
