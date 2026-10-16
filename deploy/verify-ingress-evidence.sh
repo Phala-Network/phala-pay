@@ -9,8 +9,8 @@ set -eu
 #    of app APP_ID whose report_data is SHA-256(sha256sum.txt) zero-padded to 64 bytes;
 # 3. the certificate DOMAIN serves on 443 is the leaf of cert-DOMAIN.pem.
 # So the key TLS terminates with was obtained inside a CVM of APP_ID. The quote dates from the last
-# issuance, so it may attest an earlier compose of the app. Prints the ACME account URI, which an
-# optional CAA record pins.
+# evidence publication, so it may attest an earlier compose of the app. Prints the ACME account
+# URI, which an optional CAA record pins.
 if [ "$#" -ne 2 ]; then
     echo "usage: verify-ingress-evidence.sh DOMAIN APP_ID" >&2
     exit 64
@@ -27,7 +27,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 for file in quote.json sha256sum.txt acme-account.json "cert-$domain.pem"; do
-    curl -fsS --max-time 30 --retry 3 -o "$tmp/$file" "https://$domain/evidences/$file"
+    # Ingress withdraws evidence with 404 until it can republish it. Retry within the same
+    # three-retry, 30-seconds-per-attempt bound; Deploy also enforces a ten-minute outer deadline.
+    curl -fsS --max-time 30 --retry 3 --retry-all-errors -o "$tmp/$file" "https://$domain/evidences/$file"
 done
 
 awk -v cert="cert-$domain.pem" '

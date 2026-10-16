@@ -23,9 +23,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Changed (operators)
 
-- Pin dstack-ingress 2.7 for topup and the reference product, with PROXY off and backend ports
+- Pin dstack-ingress 2.8 for topup and the reference product, with PROXY off and backend ports
   unchanged. Deploy upgrades and provisioning follow-ups use the compose-file API to set and
   verify an explicit attested `pp:false` policy while preserving the sealed environment.
+- Retry temporarily unavailable ingress evidence (HTTP 404) within the existing request and Deploy
+  deadlines. Ingress 2.8 republishes evidence before serving on startup and withdraws it while
+  regeneration fails, with evidence retries independent of HAProxy reloads.
 - Phase 2 will enable gateway PROXY and ingress ACCEPT/SEND together in a separate release.
   Once phase 2 ships, **no rollback past this release**; rollback must first restore PROXY-off
   settings atomically. HAProxy's private access logs may contain client IPs, an accepted exception

@@ -152,7 +152,7 @@ policy() {
 "$compose" -f "$tmp/restore-check.yml" config --no-interpolate --format json >"$tmp/restore-check.json"
 service=(service "$tmp/service.json")
 # Phase 1 keeps the ingress image pinned and every proxy hop disabled.
-jq -e '.services["dstack-ingress"].image == "ghcr.io/dstack-tee/dstack-ingress:2.7@sha256:bc0c97e76810c6368a9ae0d8efd156ffa0027806e43f9d9f8834eabef0192283"' "$tmp/service.json" >/dev/null
+jq -e '.services["dstack-ingress"].image == "ghcr.io/dstack-tee/dstack-ingress:2.8@sha256:60e682449534715a2f2e5b72326ca4229209c8e26c931c6f34d27e02200ac086"' "$tmp/service.json" >/dev/null
 for setting in ACCEPT_PROXY_PROTOCOL SEND_PROXY_PROTOCOL; do
     policy "ingress-$setting" "${service[@]}" ".services[\"dstack-ingress\"].environment.$setting = \"true\"" \
         "dstack-ingress must keep ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL off"
@@ -286,6 +286,8 @@ allowed_envs not-a-list service "$tmp/service.json" 'null' "allowed_envs must be
 product="$root/deploy/environments/phala-network/staging/product"
 render "${gateway[@]}" "$product" >"$tmp/product.yml"
 "$compose" -f "$tmp/product.yml" config --no-interpolate --format json >"$tmp/product.json"
+jq -e --slurpfile service "$tmp/service.json" '.services["dstack-ingress"].image
+    == $service[0].services["dstack-ingress"].image' "$tmp/product.json" >/dev/null
 policy product-readonly-config product "$tmp/product.json" '.services.product.read_only = true' \
     "inline config consumers must use a writable root filesystem for Compose injection"
 [[ "$("$compose" -f "$tmp/product.yml" config --variables | awk 'NR > 1 { print $1 }')" == PRODUCT_API_KEY ]]

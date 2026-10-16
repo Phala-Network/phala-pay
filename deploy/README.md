@@ -567,10 +567,10 @@ The API has one public origin, `public_origin` (`https://$DOMAIN`, where `$DOMAI
 dstack-ingress's `DOMAIN` in the environment overlay), a stable name the owner controls, not
 the CVM's gateway URL, which changes with the node and the app id: merchants call it and pin its
 attestation, treasury challenges (EIP-4361) name it as their `domain` and `uri`, and the admin
-API verifies every signed `@target-uri` against it. The official [dstack-ingress](https://github.com/Dstack-TEE/dstack-examples/tree/dstack-ingress-v2.7/custom-domain/dstack-ingress)
-2.7 (`ghcr.io/dstack-tee/dstack-ingress`, pinned by the digest of its release notes; `gh
-attestation verify oci://ghcr.io/dstack-tee/dstack-ingress@sha256:bc0c97e76810c6368a9ae0d8efd156ffa0027806e43f9d9f8834eabef0192283
---owner Dstack-TEE` shows it was built from tag `dstack-ingress-v2.7`) publishes the compose's only
+API verifies every signed `@target-uri` against it. The official [dstack-ingress](https://github.com/Dstack-TEE/dstack-examples/tree/dstack-ingress-v2.8/custom-domain/dstack-ingress)
+2.8 (`ghcr.io/dstack-tee/dstack-ingress`, pinned by the digest of its release notes; `gh
+attestation verify oci://ghcr.io/dstack-tee/dstack-ingress@sha256:60e682449534715a2f2e5b72326ca4229209c8e26c931c6f34d27e02200ac086
+--owner Dstack-TEE` shows it was built from tag `dstack-ingress-v2.8`) publishes the compose's only
 port, 443. The gateway passes the TLS connection for the domain through to it, it terminates TLS
 inside the CVM, and forwards the stream to `topup:8080`. It gets the Let's Encrypt certificate
 with `tls-alpn-01` through that same port, so the CVM holds no DNS credentials; the ACME contact is
@@ -581,12 +581,15 @@ with the compose.
 A reference-product CVM is served the same way on its own overlay's `DOMAIN`
 ([Phala's instance, "Staging reference product"](phala.md#staging-reference-product)).
 
-**Phase 1: PROXY remains off.** Both topup and product pin ingress 2.7; topup still targets
+**Phase 1: PROXY remains off.** Both topup and product pin ingress 2.8; topup still targets
 `topup:8080`, the product `product:8089`. Neither ACCEPT nor SEND is set. The configured `5s` /
-`30s` / `30s` HAProxy deadlines and numeric ports pass 2.7's strict validation. Renewal settings
+`30s` / `30s` HAProxy deadlines and numeric ports pass 2.8's strict validation. Renewal settings
 are omitted, so upstream uses integer `RENEW_INTERVAL=43200` and an unset `RENEW_DAYS_BEFORE`;
 explicit overrides must be positive whole numbers, not `12h` or `30d`. Boolean settings accept
-only exact `true` / `false`; omitted PROXY booleans default to `false`.
+only exact `true` / `false`, including `ACME_STAGING` / `CERTBOT_STAGING` and
+`DETERMINISTIC_TLS_KEY`; those and the omitted PROXY booleans default to `false`.
+[render.sh](render.sh) requires and sets `GATEWAY_DOMAIN` for both service and product variants,
+as 2.8 requires. Neither variant sets `ROUTING_MAP`; each uses the single `TARGET_ENDPOINT` above.
 
 [phala-cvm.sh](phala-cvm.sh)'s `compose-update CVM_ID COMPOSE PRE_LAUNCH PORT_POLICY_JSON OUT`
 reads `GET /cvms/{id}/compose_file`, replaces the compose, pre-launch script, port policy and
@@ -643,8 +646,9 @@ the tls-alpn-01 format of the pinned README:
 **Certificate evidence.** dstack-ingress publishes, at `https://$DOMAIN/evidences/`, the
 ACME account, the certificate, `sha256sum.txt` over both, and a TDX quote whose `report_data` is
 the hash of `sha256sum.txt`. Its evidence server listens on the ingress container's loopback (port
-80) and is reached only through 443, where HAProxy routes `GET /evidences` to it, so there is no
-evidence port to publish. [verify-ingress-evidence.sh](verify-ingress-evidence.sh) checks the
+80) and is reached only through 443, where HAProxy routes `/evidences` and `/evidences/...` to it
+(not paths such as `/evidences-report`), so there is no evidence port to publish.
+[verify-ingress-evidence.sh](verify-ingress-evidence.sh) checks the
 chain with the official verifier (the quote is app `APP_ID`'s and binds the files) and that the
 domain serves exactly that certificate; Deploy runs it after every topup upgrade:
 
@@ -652,8 +656,12 @@ domain serves exactly that certificate; Deploy runs it after every topup upgrade
 kit/deploy/verify-ingress-evidence.sh "$DOMAIN" "$APP_ID"
 ```
 
-Ingress 2.7 republishes evidence at startup and after issuance. It also publishes
-`attestation.json` through `/v1/Attest` on the pinned dstack 0.6.1. Older guests fall back
+Ingress 2.8 republishes evidence before HAProxy starts and after issuance. If regeneration fails,
+it withdraws the previous evidence (`/evidences` returns HTTP 404) and retries without reloading
+HAProxy. The verifier treats 404 as not available yet and retries each file up to three times,
+with the existing 30-second request limit; Deploy retries the whole check within its existing
+ten-minute deadline. Ingress also publishes `attestation.json` through `/v1/Attest` on the pinned
+dstack 0.6.1. Older guests fall back
 to `quote.json`, which the verifier above continues to check. The quote's compose hash records
 the app-compose at publication time.
 
