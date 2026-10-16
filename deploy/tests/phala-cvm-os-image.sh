@@ -37,31 +37,31 @@ state() {
 change_image() {
     echo 0 >"$STUB_COUNT"
     : >"$STUB_LOG"
-    "$tmp/deploy/phala-cvm.sh" os-image cvm-1 dstack-0.5.12 >"$tmp/out" 2>"$tmp/err"
+    "$tmp/deploy/phala-cvm.sh" os-image cvm-1 dstack-0.6.1 >"$tmp/out" 2>"$tmp/err"
 }
 
 {
     # The name can change while the old boot is still running, before busy is published.
-    state dstack-0.5.12 running false
+    state dstack-0.6.1 running false
     echo ERROR
-    state dstack-0.5.9 running false
-    state dstack-0.5.12 stopped false
-    state dstack-0.5.12 running true
     state dstack-0.5.12 running false
+    state dstack-0.6.1 stopped false
+    state dstack-0.6.1 running true
+    state dstack-0.6.1 running false
 } >"$STUB_STATES"
 change_image || fail 'refused a settled CVM on the requested image'
 [[ $(cat "$STUB_COUNT") == 6 ]] || fail 'accepted a stale idle state, old image or in-progress operation'
-jq -e '.os.name == "dstack-0.5.12" and .compose_hash == "unchanged"' "$tmp/out" >/dev/null
-jq -se '.[0] == ["api", "/cvms/cvm-1/os-image", "-X", "PATCH", "-F", "os_image_name=dstack-0.5.12"]
+jq -e '.os.name == "dstack-0.6.1" and .compose_hash == "unchanged"' "$tmp/out" >/dev/null
+jq -se '.[0] == ["api", "/cvms/cvm-1/os-image", "-X", "PATCH", "-F", "os_image_name=dstack-0.6.1"]
     and ([.[] | select(.[0] == "api")] | length) == 1' "$STUB_LOG" >/dev/null
 grep -Fq 'PATCH response diagnostic' "$tmp/err"
 grep -Fq 'req-os-image' "$tmp/err"
 
 # A busy indication suffices even when a non-running status was not sampled.
 {
-    state dstack-0.5.12 running false
-    state dstack-0.5.12 running true
-    state dstack-0.5.12 running false
+    state dstack-0.6.1 running false
+    state dstack-0.6.1 running true
+    state dstack-0.6.1 running false
 } >"$STUB_STATES"
 change_image || fail 'refused recovery after observing the operation start'
 [[ $(cat "$STUB_COUNT") == 3 ]] || fail 'accepted the new image before the operation started'
@@ -74,12 +74,12 @@ for STUB_PATCH_STATUS in 1 42 124; do
     grep -Fq 'PATCH response diagnostic' "$tmp/err"
 done
 STUB_PATCH_STATUS=0
-for fixture in 'dstack-0.5.9 running false' 'dstack-0.5.12 stopped false' 'dstack-0.5.12 running true' 'dstack-0.5.12 running false'; do
+for fixture in 'dstack-0.5.12 running false' 'dstack-0.6.1 stopped false' 'dstack-0.6.1 running true' 'dstack-0.6.1 running false'; do
     read -r image status busy <<<"$fixture"
     state "$image" "$status" "$busy" >"$STUB_STATES"
     ! change_image || fail "accepted $fixture"
     grep -Fq 'stage=os-image deadline expired' "$tmp/err"
-    grep -Fq 'did not run OS image dstack-0.5.12' "$tmp/err"
+    grep -Fq 'did not run OS image dstack-0.6.1' "$tmp/err"
 done
-! "$tmp/deploy/phala-cvm.sh" os-image '../cvm' dstack-0.5.12 >/dev/null 2>&1 || fail 'accepted an invalid CVM id'
+! "$tmp/deploy/phala-cvm.sh" os-image '../cvm' dstack-0.6.1 >/dev/null 2>&1 || fail 'accepted an invalid CVM id'
 echo 'CVM OS-image PATCH, error diagnostics and deadline tests passed'

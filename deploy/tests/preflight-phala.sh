@@ -34,7 +34,7 @@ export PATH="$tmp/bin:$PATH" STUB_LOG="$tmp/pulls" PHALA="$tmp/bin/phala" DOCKER
     sleep() { :; }
     source "$root/deploy/preflight-phala.sh"
     check_anonymous_pulls "$tmp/images"
-    check_phala_cloud workspace dstack-0.5.12
+    check_phala_cloud workspace dstack-0.6.1
 ) >"$tmp/out"
 
 expect() {
@@ -64,9 +64,9 @@ case "$1" in
     --version) echo v1.1.22 ;;
     status) echo '{"team_name":"workspace"}' ;;
     os-images) jq -nc --arg version "$STUB_VERSION" --argjson dev "$STUB_DEV" \
-        '{items: [{name: "dstack-0.5.12", version: $version, is_dev: $dev}]}' ;;
+        '{items: [{name: "dstack-0.6.1", version: $version, is_dev: $dev}]}' ;;
     api) jq -nc --argjson version "$STUB_NODE_VERSION" --argjson dev "$STUB_DEV" \
-        '{nodes: [{images: [{name: "dstack-0.5.12", version: $version, is_dev: $dev}]}]}' ;;
+        '{nodes: [{images: [{name: "dstack-0.6.1", version: $version, is_dev: $dev}]}]}' ;;
     *) exit 64 ;;
 esac
 STUB
@@ -76,17 +76,17 @@ check_listing() {
         fail() { printf 'FAIL: %s\n' "$*"; }
         ok() { printf 'ok: %s\n' "$*"; }
         source "$root/deploy/preflight-phala.sh"
-        check_phala_cloud workspace dstack-0.5.12
+        check_phala_cloud workspace dstack-0.6.1
     ) >"$tmp/out"
 }
-check_listing 0.5.12 '[0,5,12]' false
-expect 'ok: OS image dstack-0.5.12 is a production (non-dev) dstack 0.5.12 image'
-expect 'ok: 1 node(s) of the workspace offer OS image dstack-0.5.12'
-for rejected in '0.5.9 [0,5,9] false' '0.5.12 [0,5,12] true'; do
+check_listing 0.6.1 '[0,6,1]' false
+expect 'ok: OS image dstack-0.6.1 is a production (non-dev) dstack 0.6.1 image'
+expect 'ok: 1 node(s) of the workspace offer OS image dstack-0.6.1'
+for rejected in '0.5.9 [0,5,9] false' '0.5.12 [0,5,12] false' '0.6.1 [0,6,1] true'; do
     read -r version node_version dev <<<"$rejected"
     check_listing "$version" "$node_version" "$dev"
-    expect "FAIL: OS image dstack-0.5.12 is not listed as a production dstack 0.5.12 image by 'os-images --prod'"
-    grep -qF 'FAIL: no node of the workspace offers OS image dstack-0.5.12' "$tmp/out"
+    expect "FAIL: OS image dstack-0.6.1 is not listed as a production dstack 0.6.1 image by 'os-images --prod'"
+    grep -qF 'FAIL: no node of the workspace offers OS image dstack-0.6.1' "$tmp/out"
 done
 
 echo "preflight online checks test passed"

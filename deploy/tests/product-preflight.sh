@@ -91,4 +91,12 @@ expect_failure extra "the env may set only the compose's sealed names, not EXTRA
 "$preflight" --env "$tmp/restricted.env" --compose "$tmp/compose.yml" "${staging[@]}" --offline >/dev/null
 "$preflight" --env "$tmp/secret.env" --compose "$tmp/compose.yml" "${staging[@]}" --offline >/dev/null
 
+# Both previously approved images and dev/GPU variants must fail locally.
+for image in dstack-0.5.9 dstack-0.5.12 dstack-dev-0.6.1 dstack-nvidia-0.6.1; do
+    expect_failure "image-$image" "OS image $image is not the approved dstack-0.6.1" --unsealed \
+        --env "$tmp/unsealed.env" --compose "$tmp/compose.yml" "${staging[@]}" --os-image "$image"
+done
+"$preflight" --env "$tmp/unsealed.env" --compose "$tmp/compose.yml" "${staging[@]}" \
+    --offline --unsealed --os-image dstack-0.6.1 >/dev/null
+
 echo "product preflight local checks test passed"

@@ -208,15 +208,16 @@ contract ForwarderFactory {                            // no roles, no admin, no
 ## 5. Stack
 
 Rust stable, `#![forbid(unsafe_code)]`, release `overflow-checks = true`. `tokio`, `axum` +
-`utoipa`, `sqlx`, `alloy`, `dstack-sdk = "=0.1.3"` for the compatible dstack 0.5 guest API, whose
-guest agent the deployed OS image `dstack-0.5.12` runs (§14), `secrecy` + `zeroize`. That
+`utoipa`, `sqlx`, `alloy`, `dstack-sdk = "=0.1.3"` for the compatible dstack v0 guest API, whose
+guest agent the deployed OS image `dstack-0.6.1` runs (§14), `secrecy` + `zeroize`. That
 crates.io release is the `rust-sdk-v0.5.9` source (commit
 `282eeb27d22d8f091ad0fa5a90e638f85cf68751`) with only `hickory-dns` dropped from its `reqwest`
 features (commit `f67b4f67ebabef0a27795705121698280a1038dc`); changing the SDK or the OS image
-requires a spec change. The approved 0.5.9 → 0.5.12 in-place image upgrade retains key derivation
-and app/instance identity; the simulator pins the 0.5.12 guest source. The dstack 0.6 `/v1` guest
-API derives different keys for the same domain, so it is out of scope until a key migration is
-specified. `core` denies `arithmetic_side_effects`, `float_arithmetic`, `as_conversions`,
+requires a spec change. The approved 0.5.12 → 0.6.1 in-place image upgrade retains v0 key derivation,
+app/TDX instance identity and the encrypted data disk; the simulator pins the 0.6.1 guest source
+([upstream upgrade guide](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/docs/upgrading-to-0.6.md)).
+The dstack 0.6 `/v1` guest API derives different keys for the same domain, so it is out of scope
+until a key migration is specified. `core` denies `arithmetic_side_effects`, `float_arithmetic`, `as_conversions`,
 `unwrap_used`. `cargo-deny`, committed lockfile, reproducible distroless image by digest.
 Contracts: Solidity with OpenZeppelin and Foundry (§4).
 
@@ -1674,7 +1675,7 @@ too. The restore drill runs weekly in CI
 on a local stack, including the freeze and the reconciliation; the staging drill restores
 staging's real backups. Ingress via the
 dstack gateway to dstack-ingress, which terminates TLS for the custom domain in the CVM; egress limited to providers, price sources, object storage, Sentry, and merchants' webhook URLs,
-which leave only through the smokescreen proxy (§11). The CVM runs the approved non-dev OS image `dstack-0.5.12`; deploy preflight refuses any other image
+which leave only through the smokescreen proxy (§11). The CVM runs the approved non-dev OS image `dstack-0.6.1`; deploy preflight refuses any other image
 and a node set that does not offer it. Upgrade = release tag on `main` → reproducible build → digest and attested deploy kit (Release)
 → compose hash of the operator's environment directory → CI deploy (the reusable Deploy workflow,
 called from the operator's environment repository; the dispatcher is accountable; no approval

@@ -1,6 +1,6 @@
 //! dstack-backed signing adapter.
 //!
-//! Keys come from the `GetKey` method of the dstack 0.5 guest API on `/var/run/dstack.sock`. That
+//! Keys come from the `GetKey` method of the dstack v0 guest API (supported by 0.6.1) on `/var/run/dstack.sock`. That
 //! agent derives the key from the domain (its `path`) and the app key alone: the algorithm only
 //! selects the public key it signs, so one domain has one secret. The pinned SDK always requests
 //! `secp256k1`; a webhook key's secret (`settlement/{account}/{live|test}/v{n}`, design D11) is used

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Prints the path of Docker Compose v2.26.0, the version the dstack-0.5.12 guest runs
-# (docs/design/deploy-config.md), verified by the sha256 of its official release. render.sh renders
-# the attested compose with it, so the bytes are the same on every machine and load on the CVM.
+# Prints the path of Docker Compose v2.26.0, retained for stable attested render bytes; the
+# dstack-0.6.1 guest runs v2.26.1 (docs/design/deploy-config.md). Verified by the sha256 of its
+# official release. render.sh uses it so attested bytes are the same on every machine and load
+# on the CVM.
 #
 # The binary is cached under ${XDG_CACHE_HOME:-~/.cache}/phala-pay. --no-download fails instead of
 # fetching a missing binary (preflight --offline); PINNED_COMPOSE names a binary to verify and use
