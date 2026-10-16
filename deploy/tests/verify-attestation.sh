@@ -73,7 +73,7 @@ echo 'attestation OS pin tests passed (matching, mismatch, missing, invalid resu
 
 result "$hash"
 for variant in service restore-check template product; do
-    if [[ "$variant" == service ]]; then proxy=true; else proxy=false; fi
+    case "$variant" in service | restore-check) proxy=true ;; *) proxy=false ;; esac
     FIXTURE_PORT_POLICY=$(jq -cn --argjson proxy "$proxy" \
         '{ports:[{port:443,pp:$proxy}],restrict_mode:false}')
     verify
@@ -81,10 +81,55 @@ for variant in service restore-check template product; do
     for FIXTURE_PORT_POLICY in null \
         "$(jq '.ports[0].pp |= not' <<<"$saved_policy")" \
         "$(jq '.restrict_mode = true' <<<"$saved_policy")" \
-        "$(jq '.ports[0].port = 80' <<<"$saved_policy")"; do
+        "$(jq '.ports[0].port = 80' <<<"$saved_policy")" \
+        "$(jq '.ports += [{port:8081,pp:true}]' <<<"$saved_policy")" \
+        "$(jq '.ports[0].pp |= tostring' <<<"$saved_policy")" \
+        "$(jq 'del(.restrict_mode)' <<<"$saved_policy")"; do
         ! verify || { echo "verify-attestation: accepted a foreign $variant port policy" >&2; exit 1; }
         grep -qF 'the attested port_policy must match' "$tmp/err"
     done
     FIXTURE_PORT_POLICY=$saved_policy
 done
 echo 'attested port-policy checks passed for every variant'
+
+# Exercise the real render, attested-compose binding, and complete policy with the backend's
+# instances-add contract: copy the source app-compose, replacing only compose and pre-launch.
+# Only the external quote verifier is stubbed; all inherited fields remain in the measured hash.
+cp "$root/deploy/"{attested-compose.sh,pinned-compose.sh,phala-cloud-pre-launch.sh,compose-policy.jq} "$tmp/kit/deploy/"
+jq -n '{"phala-pay":"ghcr.io/phala-network/phala-pay@sha256:\("1" * 64)",
+    "postgres-walg":"ghcr.io/phala-network/postgres-walg@sha256:\("2" * 64)"}' >"$tmp/images.json"
+variant=restore-check
+for environment in staging production; do
+    env_dir="$root/deploy/environments/phala-network/$environment/topup"
+    "$root/deploy/render.sh" --images "$tmp/images.json" --gateway-domain gateway.example.net \
+        "$env_dir" >"$tmp/service.yml"
+    "$root/deploy/render.sh" --restore-check --images "$tmp/images.json" --origin https://restore.example.net \
+        "$env_dir" >"$tmp/expected.yml"
+    compose=$("$root/deploy/pinned-compose.sh")
+    "$compose" -f "$tmp/service.yml" config --no-interpolate --format json |
+        jq -L "$root/deploy" --rawfile compose "$tmp/service.yml" \
+            --rawfile pre_launch "$root/deploy/phala-cloud-pre-launch.sh" '
+            include "compose-policy";
+            {manifest_version:2, name:"source-service", runner:"docker-compose",
+             docker_compose_file:$compose, pre_launch_script:$pre_launch, allowed_envs:sealed_names,
+             port_policy:{ports:[{port:443,pp:true}],restrict_mode:false},
+             gateway_enabled:true, tproxy_enabled:true, kms_enabled:true,
+             public_logs:false, public_sysinfo:false, public_tcbinfo:true, secure_time:true,
+             features:["kms","tproxy-net"], storage_fs:"ext4"}
+        ' >"$tmp/source-app.json"
+    jq -cj --rawfile compose "$tmp/expected.yml" \
+        --rawfile pre_launch "$root/deploy/phala-cloud-pre-launch.sh" \
+        '.docker_compose_file = $compose | .pre_launch_script = $pre_launch' \
+        "$tmp/source-app.json" >"$tmp/inherited-app.json"
+    inherited_hash=$(sha256sum "$tmp/inherited-app.json" | cut -d' ' -f1)
+    jq -n --rawfile app "$tmp/inherited-app.json" --arg hash "$inherited_hash" '{
+        compose_file:$app, app_certificates:[{position_in_chain:0,quote:"fixture"}],
+        tcb_info:{event_log:[{event:"compose-hash",event_payload:$hash}]}}
+    ' >"$tmp/attestation.json"
+    result "$hash"
+    jq --arg hash "$inherited_hash" '.details.app_info.compose_hash = $hash' \
+        "$VERIFIED_RESULT" >"$tmp/inherited-result.json"
+    cp "$tmp/inherited-result.json" "$VERIFIED_RESULT"
+    verify || { cat "$tmp/err" >&2; exit 1; }
+done
+echo 'inherited service app-compose passes the full restore-check policy for staging and production'

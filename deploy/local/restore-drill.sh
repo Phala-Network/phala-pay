@@ -1459,6 +1459,8 @@ done
 # empty volume, replays every archived segment, and never archives; no heartbeat, backup, egress,
 # or ingress runs; topup is read-only. No command runs inside the stack. Nothing may reach object
 # storage from here on; the drill's own storage tool uses the replacement's read-only key.
+# This local Docker stack has no gateway/app-compose. On a CVM, instances add inherits the
+# source's PROXY-on 443 policy, inert without a 443 listener; verify-attestation tests cover it.
 storage_before=$(storage_listing)
 test -n "$storage_before"
 variant=(--restore-check)

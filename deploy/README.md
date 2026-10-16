@@ -619,8 +619,10 @@ including its hash; callers wait for that exact hash to settle before verifying 
 probing the upgraded service.
 Deploy upgrades and both provisioning follow-ups use this path because CLI 1.1.22 cannot set
 `port_policy` directly. The **service** policy is
-`{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`; **product, template, and restore-check**
-keep `pp:false` with the same port and `restrict_mode:false`. This does not restrict the
+`{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`; **restore-check** inherits that
+same policy through `instances add`. PROXY on 443 is inert there: no ingress or listener runs
+on 443, and only plain HTTP on 8081 is published. **Product and template** keep `pp:false`
+with the same port and `restrict_mode:false`. This does not restrict the
 template's 80 or restore-check's 8081. Attestation verification checks the variant's exact
 app-compose field; changing it changes the attested compose hash.
 
@@ -632,8 +634,9 @@ per-IP limits, including for transaction-hash hints.
 
 **Rollout and rollback.** First deploy and verify v0.10.8 (dstack 0.6.1, ingress 2.8, and
 phase 1 with PROXY off) on staging and production. Then release phase 2 as v0.10.9 and follow the
-[staging verification recipe](client-ip-staging.md) before production topup. Product,
-restore-check, and template keep PROXY off. Gateway `pp:true`, ingress ACCEPT/SEND, the 8082 target,
+[staging verification recipe](client-ip-staging.md) before production topup. Product and template
+keep PROXY off; restore-check inherits the service's policy on its unbound 443. Gateway `pp:true`,
+ingress ACCEPT/SEND, the 8082 target,
 and topup's private listener must change together in one app-compose. Enabling only one hop breaks
 every connection, including health and certificate checks.
 
