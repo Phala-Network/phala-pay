@@ -8,7 +8,9 @@
 # --compose is the rendered compose (deploy/render.sh), --environment-dir the environment it was
 # rendered from. --restore-check expects the restore-check variant (deploy/RESTORE.md) and its
 # own env file with a read-only token in the app's AWS_* names, even with --unsealed; it must
-# never inherit the service's read-write env. --template expects the
+# never inherit the service's read-write env. `instances add` also inherits the service's
+# port_policy (PROXY on for the unbound 443, restrict_mode false). Preflight checks the Docker
+# compose; verify-attestation.sh checks that exact app-compose policy after boot. --template expects the
 # Phala Cloud template variant, whose env file also holds the deploy form's values
 # (deploy/README.md, "The Phala Cloud template variant").
 #

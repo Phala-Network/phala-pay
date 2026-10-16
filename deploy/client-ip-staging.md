@@ -12,8 +12,9 @@ changing a live CVM requires the owner's separate deployment approval.
    `{"ports":[{"port":443,"pp":true}],"restrict_mode":false}` and `public_logs:false`.
    The same app-compose must set ingress `ACCEPT_PROXY_PROTOCOL: "true"`,
    `SEND_PROXY_PROTOCOL: "true"`, and `TARGET_ENDPOINT: topup:8082`, and start topup with
-   `--proxy-protocol-bind 0.0.0.0:8082`. No topup port is published. Product, template, and
-   restore-check still attest `pp:false`.
+   `--proxy-protocol-bind 0.0.0.0:8082`. No topup port is published. Product and template attest
+   `pp:false`. Restore-check inherits the service's exact policy through `instances add`;
+   `pp:true` on 443 is inert without an ingress or listener there (only plain HTTP on 8081).
 2. Require the Deploy upgrade-monitor result through the public domain to cover the upgrade
    through recovery. `/healthz` must return 200 with an empty body after readiness, and the
    normal Deploy attestation and certificate-evidence checks must pass. Neither the monitor nor

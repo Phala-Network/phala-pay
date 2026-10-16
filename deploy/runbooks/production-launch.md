@@ -900,7 +900,17 @@ only. `live_isolated` is a hard abort: run it before the instance exists, immedi
 creation, before each step, and at least every five minutes. On failure, delete the drill instance
 by its `vm_uuid` and record the drill as aborted. The `RETURN` trap always deletes the throwaway
 instance and the temporary env file. The restore-check report runs a reconciliation round twice;
-count those RPC calls against the 150-call reserve:
+count those RPC calls against the 150-call reserve.
+
+`instances add` copies the source app-compose, replacing only the Docker compose and pre-launch
+script. The restore inherits both `allowed_envs` (use the existing `AWS_*` names with its own
+read-only values) and `port_policy`, exactly
+`{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`. The kit must verify that exact
+policy. PROXY on 443 is inert because restore-check has no ingress or listener there; it publishes
+only plain HTTP on 8081. `restrict_mode:false` permits that port without a PROXY header. Keep the
+inherited gateway/KMS, public flags, secure time, and legacy features; no current restore check
+requires different values ([inheritance details](../RESTORE.md#why-the-sealed-names-match-the-service)).
+Preflight checks the Docker compose; verification after boot checks the inherited app-compose.
 
 ```sh
 live_isolated() {

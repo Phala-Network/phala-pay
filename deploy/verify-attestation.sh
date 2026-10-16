@@ -13,6 +13,8 @@ set -eu
 # reviewed deploy/phala-cloud-pre-launch.sh that Deploy sends (`--pre-launch-script`). A sealed name
 # missing from allowed_envs is unset; the template's DSTACK_APP_DOMAIN is not an allowed env: that
 # script exports it from the app id and the gateway domain.
+# Restore-check inherits the service's allowed_envs and port_policy via `instances add`: require
+# exactly the service's PROXY-on 443 policy, inert because restore-check publishes only 8081.
 #
 # ATTESTATION_JSON is `phala cvms attestation --json` (the app certificate's quote, the event log,
 # and the app-compose). INFO_JSON is the guest agent's public `GET /prpc/Info` on port 8090 (the

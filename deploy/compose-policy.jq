@@ -13,16 +13,17 @@ def env_map:
 
 def check(ok; message): if ok then empty else message end;
 
-# Explicit for every variant, including those without an ingress. The service enables gateway
-# PROXY and ingress ACCEPT/SEND in one app-compose; other variants keep PROXY off.
+# Explicit for every variant, including those without an ingress. `instances add` copies the
+# service's app-compose, so restore-check inherits its PROXY-on policy for 443. Nothing listens
+# on 443 there; only plain HTTP on 8081 is published. Template and product keep PROXY off.
 def port_policy($variant):
     if (["service", "restore-check", "template", "product"] | index($variant)) != null then
-        {ports: [{port: 443, pp: ($variant == "service")}], restrict_mode: false}
+        {ports: [{port: 443, pp: ($variant == "service" or $variant == "restore-check")}], restrict_mode: false}
     else error("unknown variant \($variant)") end;
 
 def port_policy_violations($variant; $app):
     [check($app.port_policy == port_policy($variant);
-        "the attested port_policy must match the \($variant) policy (PROXY \(if $variant == "service" then "on" else "off" end), restrict_mode false)")];
+        "the attested port_policy must match the \($variant) policy (PROXY \(if port_policy($variant).ports[0].pp then "on" else "off" end), restrict_mode false)")];
 
 def ingress_violations($proxy):
     [check([.services["dstack-ingress"].environment | env_map

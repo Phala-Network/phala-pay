@@ -16,6 +16,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed (operators)
 
+- Restore attestation accepts exactly the service's inherited port policy: PROXY on for 443,
+  `restrict_mode:false`. `instances add` copies that field from the source app-compose; requiring
+  PROXY off rejected a booted restore-check instance. Port 443 is unbound in restore-check, which
+  publishes plain HTTP only on 8081, so the inherited setting is inert. Service, product, and
+  template policies are unchanged; production needs no upgrade.
 - Restore checks use the app's allowed `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` names
   with a fresh read-only token in an explicit restore env file. `instances add` retains the source
   allowlist, so dstack dropped the former `RESTORE_AWS_*` values and PostgreSQL could not restore.

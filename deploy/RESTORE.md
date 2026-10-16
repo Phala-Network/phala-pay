@@ -192,7 +192,9 @@ The pinned Phala CLI 1.1.22's
 [`instances add` flow](https://github.com/Phala-Network/phala-cloud/blob/4ff72a6/cli/src/commands/instances/add/index.ts#L283-L347)
 encrypts the explicit env file and sends `encrypted_env`, `docker_compose_file`, and
 `pre_launch_script` to `/apps/{app_id}/instances`; it does not send a new `allowed_envs` list.
-The new instance retains the source app-compose's allowlist. The production drill on 2026-10-16
+The backend [copies the source app-compose](https://github.com/Phala-Network/phala-cloud-monorepo/blob/0899f1c7975531ce2b2a841ba03623bccb11acc8/teehouse/api/routes/workspace/apps/cvms.py#L263-L288),
+replacing only `docker_compose_file` and `pre_launch_script`; both `allowed_envs` and `port_policy`
+are inherited. The production drill on 2026-10-16
 confirmed this: `RESTORE_AWS_ACCESS_KEY_ID` and `RESTORE_AWS_SECRET_ACCESS_KEY` were dropped as
 unauthorized, so PostgreSQL could not restore.
 
@@ -200,6 +202,23 @@ The restore variant therefore keeps the service's sealed names and supplies diff
 storage values in its own explicit env file. Its attestation policy accepts the inherited
 allowlist while retaining the restore topology and archiving-off checks. The service compose and
 allowlist are unchanged, so this fix needs an updated deploy kit, without a production upgrade.
+
+The service's port policy, inherited since v0.10.9, is exactly
+`{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`. The restore verifier requires that
+same value and rejects every other policy. PROXY on 443 is inert here: restore-check has no
+ingress or listener on 443 and publishes only plain HTTP on 8081 → 8080. With `restrict_mode:false`,
+8081 remains accessible without a PROXY header. The production drill on 2026-10-16 reached a
+booted instance with verified TCB, OS image, and app id, then failed the former PROXY-off
+expectation. This policy correction also needs only the updated kit.
+
+The remaining app-compose settings are inherited too: gateway/KMS flags, public logs/sysinfo/TCB
+flags, `secure_time`, and legacy `features`. Keep the service settings: gateway and KMS enabled,
+public TCB info available for verification, logs/sysinfo private, and secure time enabled. The
+current restore checks have no conflicting variant-specific expectation for those fields; the
+full inherited app-compose remains bound to the replayed attested hash. Preflight validates the
+Docker compose before creation; the app-compose policy is verified after boot. The local Docker
+drill has no gateway/app-compose; the attestation regression covers inheritance with both staging
+and production renders.
 
 ## Addressing the restore-check instance
 

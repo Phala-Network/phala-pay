@@ -315,6 +315,9 @@ recreation is about container identity, not uptime. `make cvm-rehearsal` checks 
     publishes, on 8081 → 8080; topup `--read-only`; postgres with `TOPUP_RESTORE_FROM_BACKUP=on`
     and no command or entrypoint override (so `archive_mode=off` wins); storage credentials in
     the app's allowed `AWS_*` names, with the read-only token in its own explicit env file.
+    `instances add` inherits the service's `allowed_envs` and `port_policy`; attestation requires
+    exactly `{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`. PROXY on 443 is inert
+    without an ingress or listener there; unrestricted 8081 carries plain HTTP.
   - Both variants: no password in env; the secret positions of §4; volumes named `<project>_*`.
 - **`validate-compose.sh`** renders the example environment, the staging environment, and the
   product in both variants, and applies the policy. It also checks the local, drill, sandbox, and
@@ -392,6 +395,13 @@ recreation is about container identity, not uptime. `make cvm-rehearsal` checks 
   it inherits live read-write values. Preflight requires both storage values even with
   `--unsealed`, but cannot prove token permissions; the operator must issue **Object Read only**
   as [RESTORE.md](../../deploy/RESTORE.md#render-it-and-its-env-file) requires.
+- **Inherited app-compose.** The backend copies every source field except `docker_compose_file`
+  and `pre_launch_script`, including the service's PROXY-on 443 `port_policy`. Restore-check's
+  exact expected policy must match it, even though only 8081 is published. Gateway/KMS flags,
+  public flags, `secure_time`, and legacy `features` retain their source settings; current
+  restore checks have no different expectation for them. The full app-compose is hash-bound by
+  attestation. Preflight and the local Docker drill inspect the Docker compose, without an
+  app-compose; the attestation regression tests the inherited fields against both environments.
 
 ## 11. Guarantees
 
