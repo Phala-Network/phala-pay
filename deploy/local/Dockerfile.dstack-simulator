@@ -11,7 +11,7 @@ RUN echo "$DSTACK_ARCHIVE_SHA256  /tmp/dstack.tar.gz" | sha256sum -c - && \
     tar -xzf /tmp/dstack.tar.gz --strip-components=1 -C /src && \
     cargo build --manifest-path dstack/Cargo.toml --locked --release -p dstack-guest-agent-simulator
 
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 WORKDIR /opt/dstack-simulator
 COPY --from=builder /src/dstack/target/release/dstack-simulator /usr/local/bin/dstack-simulator
