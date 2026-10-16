@@ -7,12 +7,13 @@ deployment, and the scripts, workflows, and docs around them. Owner's rules:
 "精简优雅重构compose和各种配置项"; use a standard mechanism wherever one exists; don't abuse env.
 
 Claims about third-party behaviour were checked on 2026-09-30 and the OS-image pin updated on
-2026-10-14 against upstream source. The **dstack-0.5.12 guest runs Docker Compose v2.26.0**:
-`meta-dstack` v0.5.12 still pins
-`meta-virtualization` 52cd8a2, whose `docker-compose_git.bb` has `PV = "v2.26.0"`. The guest runs
-`docker compose up --remove-orphans -d --build` in `/dstack`, with the sealed env as its process
-environment (dstack v0.5.12 `basefiles/app-compose.{sh,service}`:
-`EnvironmentFile=-/dstack/.host-shared/.decrypted-env`); `ExecStop` stops the whole stack.
+2026-10-16 against upstream source. The **dstack-0.6.1 guest runs Docker Compose v2.26.1**
+([upstream upgrade guide](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/docs/upgrading-to-0.6.md#what-stays-the-same)).
+Rendering stays pinned to v2.26.0 to preserve attested bytes; the rendered artifacts also load
+with the guest's v2.26.1. The guest runs `docker compose up --remove-orphans -d --build` in
+`/dstack`, with the sealed env as its process environment (dstack v0.6.1
+[`os/common/rootfs/app-compose.sh`](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/os/common/rootfs/app-compose.sh));
+`ExecStop` stops the whole stack.
 
 ## 1. Decisions
 
@@ -35,7 +36,7 @@ environment (dstack v0.5.12 `basefiles/app-compose.{sh,service}`:
      `config` output, still carrying `profiles:`.)
 4. **Public settings live in reviewed files, not GitHub.** The GitHub Environment holds only 3
    deployment-state variables.
-5. **Rendering uses Compose itself**, pinned by sha256 to v2.26.0, the version the CVM runs:
+5. **Rendering uses Compose itself**, pinned by sha256 to v2.26.0 for stable attested bytes (the CVM runs v2.26.1):
    `config --no-interpolate`, plus three bounded deploy-time inputs. Those inputs are image
    digests, the gateway domain (service only), and the restore instance's origin (restore-check
    only). Each has a restricted format and there is no general `--set`. The output is Compose's

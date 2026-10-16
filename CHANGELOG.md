@@ -31,6 +31,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   settings atomically. HAProxy's private access logs may contain client IPs, an accepted exception
   with `public_logs=false`; topup's logging privacy rules remain unchanged.
 
+- Approve the non-dev `dstack-0.6.1` OS image and verified hash in all five environments; use
+  verifier 0.6.1 with its authenticated manifest and all nine measurement files. When the
+  measurement archive is unavailable, verification downloads the checksum-pinned ~617 MB mkosi
+  release. CI's simulator uses the 0.6.1 guest source. Keep `dstack-sdk =0.1.3` and v0 `GetKey`:
+  an in-place OS upgrade preserves app identity, webhook keys, backup keys, database passwords
+  and the encrypted data disk. Take and verify a fresh backup first. OS rollback is a PATCH back
+  to `dstack-0.5.12` with the previous kit; keep the app-compose manifest version and follow the
+  existing schema rollback policy.
+
 ## [0.10.7] - 2026-10-14
 
 ### Changed (operators)

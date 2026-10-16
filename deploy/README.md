@@ -40,53 +40,67 @@ deploy, makes it detectable.
 
 ### OS image
 
-The approved OS image is `dstack-0.5.12`, non-dev, with verified image hash
-`8db40cb23008d6213668b5816702d100b37b859a8a5bfd18d938ae3a1b3715bd`.
+The approved OS image is `dstack-0.6.1`, non-dev, with verified image hash
+`ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6`.
 The reviewed `os-image-hash` file in each environment directory pins this hash, including both
 Phala staging and production topup configurations. Staging must run this production image before
 acceptance; a dev image fails verification. Changing the approved pin requires a reviewed PR.
 Both provision and upgrade pass the pin to [verify-attestation.sh](verify-attestation.sh), which
 fails if the official verifier's attested OS hash differs or is missing. [preflight.sh](preflight.sh) accepts only that name and, online, requires a node of the
-workspace to offer it. The service speaks the dstack 0.5 guest API (`dstack-sdk = "=0.1.3"`); the
-local simulator is built from the same release. dstack 0.6 derives different keys for the same
-domain, so moving to it changes every account's webhook keys (which merchants pin), the backup
-key, and the database passwords: that is a key migration, not an image bump.
+workspace to offer it. The service keeps the dstack v0 guest API (`dstack-sdk = "=0.1.3"`); the
+local simulator is built from the 0.6.1 guest release. As documented in the upstream
+[0.6 upgrade guide](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/docs/upgrading-to-0.6.md#what-stays-the-same),
+v0 `GetKey`, the app ID, socket paths, disk key and disk format carry over. An in-place upgrade
+keeping the same CVM/app/KMS identity retains webhook keys, backup encryption keys and database
+passwords; merchants do not need to re-pin keys or re-onboard, and backup prefixes stay the same.
+Only the opt-in v1 `GetKey` derives different keys for the same name; adopting it needs a separate
+key migration. On TDX, instance identity also stays the same.
 
-#### Approval evidence for dstack-0.5.12
+Take and verify a fresh backup before the image upgrade: upstream does not test moving data disks
+between image versions. Retain the previous kit and deployment record. OS rollback uses
+`PATCH /cvms/<id>/os-image` with `{"os_image_name":"dstack-0.5.12"}`, then the previous kit to
+verify the old image and recover compose under the [rollback compatibility policy](#rollback-compatibility).
+Keep the existing app-compose manifest version; changing it to `"3"` prevents rollback to 0.5.x.
 
-Checked on 2026-10-14 against Phala Cloud CLI 1.1.22 and the official
-[meta-dstack v0.5.12 release](https://github.com/Dstack-TEE/meta-dstack/releases/tag/v0.5.12):
+#### Approval evidence for dstack-0.6.1
 
-- `phala os-images --prod --all --json` lists `name: dstack-0.5.12`, `version: 0.5.12`,
+Checked on 2026-10-16 against Phala Cloud CLI 1.1.22 and the official
+[mkosi-os-v0.6.1 release](https://github.com/Dstack-TEE/dstack/releases/tag/mkosi-os-v0.6.1):
+
+- `phala os-images --prod --all --json` lists `name: dstack-0.6.1`, `version: 0.6.1`,
   `is_dev: false`, `requires_gpu: false`, and
-  `os_image_hash: 8db40cb23008d6213668b5816702d100b37b859a8a5bfd18d938ae3a1b3715bd`.
+  `os_image_hash: ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6`.
+  `phala api /teepods/available` offers the same non-dev hash on every listed node, including prod5.
 - The release's
-  [dstack-0.5.12.tar.gz](https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.12/dstack-0.5.12.tar.gz)
-  has SHA-256 `e3037d99d99ec963bbe43929856c1e46e7197a1178da5867024c4b68064eb176`.
-- After extraction, `sha256sum dstack-0.5.12/sha256sum.txt` equals the approved image hash;
-  `(cd dstack-0.5.12 && sha256sum -c sha256sum.txt)` passes for `ovmf.fd`, `bzImage`,
-  `initramfs.cpio.gz`, and `metadata.json`. The verified metadata says
-  `version: 0.5.12`, `is_dev: false`, and `ovmf_variant: pre202505`.
+  [dstack-0.6.1.tar.gz](https://github.com/Dstack-TEE/dstack/releases/download/mkosi-os-v0.6.1/dstack-0.6.1.tar.gz)
+  has SHA-256 `7583f51c717011b8086c2dd4d1e73fbbe7bf2d6d2420b90858d538c26efcca41`.
+- After extraction, `sha256sum dstack-0.6.1/sha256sum.txt` equals the approved image hash;
+  `(cd dstack-0.6.1 && sha256sum -c sha256sum.txt)` passes for all nine listed files: `ovmf.fd`,
+  `bzImage`, `initramfs.cpio.gz`, `metadata.json`, `measurement.tdx.cbor`, `measurement.snp.cbor`,
+  `measurement.gcp.cbor`, `measurement.aws.cbor`, and `measurement.aws.replay.json`.
+  The verified metadata says `version: 0.6.1`, `is_dev: false`, `ovmf_variant: pre202505`, and
+  `kernel_header_normalized: true`.
 
 [dstack-verifier.sh](dstack-verifier.sh) first fetches the measurement archive from
 `download.dstack.org/os-images/mr_<approved-hash>.tar.gz` (404 at approval time). When unavailable,
 it uses the release asset above, verifies its archive checksum, then authenticates
-`sha256sum.txt` against the approved hash and verifies every listed file. Only the four verified
-inputs enter a fresh tmpfs mounted at `/tmp/dstack-verifier/cache/images/<approved-hash>`;
-unlisted release files and old measurement caches are never reused. This works with remote
+`sha256sum.txt` against the approved hash and verifies every listed file. The authenticated
+manifest and all nine verified files enter a fresh tmpfs mounted at
+`/tmp/dstack-verifier/cache/images/<approved-hash>`; unlisted release files and old measurement caches are never reused. This works with remote
 Docker daemons because the request and files are streamed through stdin.
 
-Keep the verifier image `dstacktee/dstack-verifier:0.5.9` at digest
-`sha256:cfc06d5bdaa71a8a942c8bfa04d2d17dc30f13d92f26386c5d45d454606e8b70`:
-0.5.12 retains the `pre202505` OVMF measurement semantics supported by that verifier. Image
-version and verifier version need not match. Live quote/TCB verification remains a deployment
+The fallback downloads the full OS archive (~617 MB) on each invocation while the measurement
+archive is unavailable. Budget temporary storage and network time; for manual checks, set
+`TMPDIR="$XDG_RUNTIME_DIR"` to use runtime storage and remove it on exit.
+
+Use verifier image `ghcr.io/dstack-tee/dstack-verifier:0.6.1` at digest
+`sha256:9f2c07a94efd3d8a1a89268e5faa35e91e3cb345b9c4ab859c86d35142f4f788`
+for the mkosi image's measurement documents. Live quote/TCB verification remains a deployment
 acceptance check; approving these bytes does not claim a live CVM was upgraded or attested.
 
-The [0.5.12 guest release](https://github.com/Dstack-TEE/dstack/releases/tag/v0.5.12) preserves
-0.5 app-key derivation: an in-place upgrade keeping the same CVM/app/KMS identity retains webhook,
-backup and database keys. The simulator pins guest commit
-`43f69f41cc546423f9f73fc48b16f8cf19053cbc` with source-archive SHA-256
-`eb23bcd3a7c1638eab9dfddd3ebdc2ad413023f8f20eccf87c99417dff94729a`.
+The simulator pins [guest commit
+`7f143148cc49f4a09799958835d310e050137cb3`](https://github.com/Dstack-TEE/dstack/tree/7f143148cc49f4a09799958835d310e050137cb3)
+with source-archive SHA-256 `14ae67bcc941b9ec1af9ee17db9a0fc325d1e302c59f28f18695cc73bdc6a276`.
 
 ## One-time setup (HUMAN-ONLY, repository owner)
 
@@ -244,10 +258,10 @@ each attempt is signed fresh, delays are at least 1 second, and the operation is
 
 Upgrade preflight also reads `GET /cvms/<id>/available-os-images`, which filters for the existing
 CVM's node, KMS allowlist and production/GPU rules. It requires an enabled production
-`dstack-0.5.12` entry before any pause or upgrade call. If `cvm-before.json` already reports that
+`dstack-0.6.1` entry before any pause or upgrade call. If `cvm-before.json` already reports that
 image, Deploy skips the OS-image operation; new CVMs provision directly on it.
 Otherwise, after the initial pause, the locked CLI's raw API sends
-`PATCH /cvms/<id>/os-image` with `{"os_image_name":"dstack-0.5.12"}` and waits for the image
+`PATCH /cvms/<id>/os-image` with `{"os_image_name":"dstack-0.6.1"}` and waits for the image
 name, running status and no operation in progress. This reboots the same CVM without changing
 compose, app id, instance id, node or sealed env.
 The poll must first observe a busy or non-running state: a new image name on an immediately
@@ -429,8 +443,8 @@ are four kinds of input, each with one home ([design](../docs/design/deploy-conf
 | Deploy-time facts | [render.sh](render.sh)'s three inputs: `--images` (the release's `images.json`), `--gateway-domain` (the CVM node's gateway, dstack-ingress's `GATEWAY_DOMAIN`), and, for the restore-check variant only, `--origin` (the restore instance's own origin) |
 | Secrets | the CVM's sealed env ([Sealing the secrets](#sealing-the-secrets)) |
 
-[render.sh](render.sh) renders them with Docker Compose v2.26.0, the version the CVM runs, pinned by
-sha256 ([pinned-compose.sh](pinned-compose.sh)):
+[render.sh](render.sh) renders them with Docker Compose v2.26.0 for stable attested bytes
+(the 0.6.1 CVM runs v2.26.1), pinned by sha256 ([pinned-compose.sh](pinned-compose.sh)):
 
 ```sh
 kit/deploy/render.sh --images images.json --gateway-domain gateway.dstack-pha-prod5.phala.network \
@@ -639,7 +653,7 @@ kit/deploy/verify-ingress-evidence.sh "$DOMAIN" "$APP_ID"
 ```
 
 Ingress 2.7 republishes evidence at startup and after issuance. It also publishes
-`attestation.json` when the guest supports `/v1/Attest`; on the pinned dstack 0.5.12 it falls back
+`attestation.json` through `/v1/Attest` on the pinned dstack 0.6.1. Older guests fall back
 to `quote.json`, which the verifier above continues to check. The quote's compose hash records
 the app-compose at publication time.
 
@@ -780,7 +794,7 @@ kit/deploy/verify-ingress-evidence.sh "$DOMAIN" "$APP_ID"
 ```
 
 [verify-attestation.sh](verify-attestation.sh) runs the official dstack verifier
-([dstack-verifier.sh](dstack-verifier.sh), `dstacktee/dstack-verifier:0.5.9` pinned by digest:
+([dstack-verifier.sh](dstack-verifier.sh), `ghcr.io/dstack-tee/dstack-verifier:0.6.1` pinned by digest:
 TDX quote and TCB, RTMR3 event-log replay, OS image measurements). It requires the approved OS image hash, TCB `UpToDate`, the
 app id, and a compose hash whose app-compose holds exactly the rendered compose. The compose hash
 is the hash of the full app-compose JSON the Phala CLI builds (with `allowed_envs` and the CVM

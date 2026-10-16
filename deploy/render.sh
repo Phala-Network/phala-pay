@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Renders the attested compose of one CVM (docs/design/deploy-config.md, "Rendering") with the
-# pinned Docker Compose the CVM runs (pinned-compose.sh):
+# pinned Docker Compose renderer (pinned-compose.sh):
 #
 #   1. Merges the stack with the environment directory ENV_DIR (`compose.yaml` and `topup.yaml` for
 #      a topup CVM, `compose.yaml` and `config.json` for the reference product,

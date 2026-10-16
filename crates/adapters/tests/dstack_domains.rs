@@ -16,7 +16,7 @@ use topup_core::{Signer as _, WebhookKeyId};
 
 type Requests = Arc<Mutex<Vec<String>>>;
 
-/// Serves the dstack 0.5 `/GetKey` with a key derived from the requested path and records each path.
+/// Serves the dstack v0 `/GetKey` (supported by 0.6.1) with a key derived from the requested path and records each path.
 struct GuestAgent {
     endpoint: String,
     requests: Requests,

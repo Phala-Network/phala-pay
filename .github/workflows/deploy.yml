@@ -103,7 +103,7 @@ jobs:
       ENVIRONMENT_DIR: ${{ inputs.environment_dir }}
       TOPUP_MAINTENANCE_KEY_ID: ${{ vars.TOPUP_MAINTENANCE_KEY_ID }}
       # The owner-approved OS image (architecture §14); preflight refuses any other.
-      DSTACK_OS_IMAGE: dstack-0.5.12
+      DSTACK_OS_IMAGE: dstack-0.6.1
       # Deployment state and the workspace preflight checks; not settings of the CVM.
       TOPUP_CVM_ID: ${{ vars.TOPUP_CVM_ID }}
       STAGING_PRODUCT_CVM_ID: ${{ vars.STAGING_PRODUCT_CVM_ID }}

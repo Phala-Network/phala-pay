@@ -283,7 +283,7 @@ succeeds quick TOPUP_ADMIN_PUBLIC_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHUR
 [[ "$(deploys | wc -l)" == 1 ]] || fail "quick did not deploy exactly once"
 [[ "$(grep -c '^phala api /cvms/cvm-0123/compose_file' "$tmp/log")" == 3 ]] || fail "quick did not set port policy via compose-update"
 jq -e '.port_policy == {ports:[{port:443,pp:false}],restrict_mode:false}' "$tmp/state/app-compose.json" >/dev/null
-for argument in "--name quick " "--image dstack-0.5.12 " "--no-dev-os" "--kms phala " "--instance-type tdx.medium " \
+for argument in "--name quick " "--image dstack-0.6.1 " "--no-dev-os" "--kms phala " "--instance-type tdx.medium " \
     "/kit/deploy/phala-cloud-pre-launch.sh " "-e $tmp/runtime/"; do
     deploys | grep -qF -- "$argument" || fail "quick did not deploy with $argument"
 done

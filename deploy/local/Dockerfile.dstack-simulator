@@ -1,20 +1,20 @@
 FROM rust:1.98.1-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546 AS builder
 
-# dstack v0.5.12, the guest agent of the approved dstack-0.5.12 OS image.
-# Keep dstack-sdk =0.1.3: the 0.5 guest API and key derivation remain compatible.
-ARG DSTACK_REV=43f69f41cc546423f9f73fc48b16f8cf19053cbc
-ARG DSTACK_ARCHIVE_SHA256=eb23bcd3a7c1638eab9dfddd3ebdc2ad413023f8f20eccf87c99417dff94729a
+# dstack v0.6.1, the guest agent of the approved dstack-0.6.1 OS image.
+# Keep dstack-sdk =0.1.3: the v0 guest API and key derivation remain compatible.
+ARG DSTACK_REV=7f143148cc49f4a09799958835d310e050137cb3
+ARG DSTACK_ARCHIVE_SHA256=14ae67bcc941b9ec1af9ee17db9a0fc325d1e302c59f28f18695cc73bdc6a276
 
 WORKDIR /src
 ADD https://github.com/Dstack-TEE/dstack/archive/${DSTACK_REV}.tar.gz /tmp/dstack.tar.gz
 RUN echo "$DSTACK_ARCHIVE_SHA256  /tmp/dstack.tar.gz" | sha256sum -c - && \
     tar -xzf /tmp/dstack.tar.gz --strip-components=1 -C /src && \
-    cargo build --locked --release -p dstack-guest-agent-simulator
+    cargo build --manifest-path dstack/Cargo.toml --locked --release -p dstack-guest-agent-simulator
 
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 WORKDIR /opt/dstack-simulator
-COPY --from=builder /src/target/release/dstack-simulator /usr/local/bin/dstack-simulator
+COPY --from=builder /src/dstack/target/release/dstack-simulator /usr/local/bin/dstack-simulator
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=builder /usr/share/ca-certificates /usr/share/ca-certificates
 COPY --from=builder /src/sdk/simulator/app-compose.json ./app-compose.json
