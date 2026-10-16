@@ -155,7 +155,7 @@ case "$1" in
         echo "phala $*" >>"$STUB_LOG"
         if [[ "$2" == */compose_file/provision ]]; then
             [[ "${STUB_FAIL_DEPLOY:-}" != 2 ]] || exit 42
-            jq -cjn '.' "${@: -1}" >"$STUB_STATE/prepared.json"
+            jq -cj '.' "${@: -1}" >"$STUB_STATE/prepared.json"
             sha256sum "$STUB_STATE/prepared.json" | cut -d' ' -f1 >"$STUB_STATE/prepared.hash"
             jq -n --arg hash "$(cat "$STUB_STATE/prepared.hash")" \
                 '{compose_hash: $hash, app_id: "0xabcdef0123456789abcdef0123456789abcdef01"}'
@@ -164,7 +164,7 @@ case "$1" in
             cp "$STUB_STATE/prepared.json" "$STUB_STATE/app-compose.json"
             cp "$STUB_STATE/prepared.hash" "$STUB_STATE/app-compose.hash"
             if [[ -n "${STUB_FOREIGN:-}" ]]; then
-                jq -cjn '.docker_compose_file = "services: {}\\n"' "$STUB_STATE/app-compose.json" >"$STUB_STATE/foreign.json"
+                jq -cj '.docker_compose_file = "services: {}\\n"' "$STUB_STATE/app-compose.json" >"$STUB_STATE/foreign.json"
                 sha256sum "$STUB_STATE/foreign.json" | cut -d' ' -f1 >"$STUB_STATE/foreign.hash"
             fi
         elif [[ "$2" == */compose_file ]]; then
