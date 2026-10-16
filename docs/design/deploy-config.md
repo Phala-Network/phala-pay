@@ -308,9 +308,10 @@ recreation is about container identity, not uptime. `make cvm-rehearsal` checks 
 - **`compose-policy.jq`** (§1.6) is included by `validate-compose.sh`, preflight, and
   `verify-attestation.sh`.
   - Service variant: exactly `keys postgres migrate topup smokescreen dstack-ingress heartbeat
-    backup`; only dstack-ingress publishes, on 443 (tls-alpn-01 → `topup:8080`, `DOMAIN` equal to
-    `public_origin`'s host); each credential volume on tmpfs with exactly its mounters, read-only
-    but for `keys`; smokescreen's exact command and deny list.
+    backup`; only dstack-ingress publishes, on 443 (tls-alpn-01 → PROXY v2 `topup:8082`, `DOMAIN` equal to
+    `public_origin`'s host), with gateway `pp:true`, ingress ACCEPT/SEND, and topup's private
+    `--proxy-protocol-bind 0.0.0.0:8082` in one app-compose; each credential volume on tmpfs with
+    exactly its mounters, read-only but for `keys`; smokescreen's exact command and deny list.
   - Restore-check variant: exactly `keys postgres migrate topup restore-check`; only topup
     publishes, on 8081 → 8080; topup `--read-only`; postgres with `TOPUP_RESTORE_FROM_BACKUP=on`
     and no command or entrypoint override (so `archive_mode=off` wins); storage credentials only

@@ -572,8 +572,8 @@ API verifies every signed `@target-uri` against it. The official [dstack-ingress
 attestation verify oci://ghcr.io/dstack-tee/dstack-ingress@sha256:60e682449534715a2f2e5b72326ca4229209c8e26c931c6f34d27e02200ac086
 --owner Dstack-TEE` shows it was built from tag `dstack-ingress-v2.8`) publishes the compose's only
 port, 443. The gateway passes the TLS connection for the domain through to it, it terminates TLS
-inside the CVM, and forwards the stream to `topup:8080`. It gets the Let's Encrypt certificate
-with `tls-alpn-01` through that same port, so the CVM holds no DNS credentials; the ACME contact is
+inside the CVM, and forwards the stream with PROXY v2 to `topup:8082`. It gets the Let's Encrypt
+certificate with `tls-alpn-01` through that same port, so the CVM holds no DNS credentials; the ACME contact is
 unset because the account document is published. Like `keys` and `topup` it mounts the dstack
 socket (its instance id and the evidence quote), which is why it is pinned by digest and attested
 with the compose.
@@ -581,15 +581,27 @@ with the compose.
 A reference-product CVM is served the same way on its own overlay's `DOMAIN`
 ([Phala's instance, "Staging reference product"](phala.md#staging-reference-product)).
 
-**Phase 1: PROXY remains off.** Both topup and product pin ingress 2.8; topup still targets
-`topup:8080`, the product `product:8089`. Neither ACCEPT nor SEND is set. The configured `5s` /
-`30s` / `30s` HAProxy deadlines and numeric ports pass 2.8's strict validation. Renewal settings
-are omitted, so upstream uses integer `RENEW_INTERVAL=43200` and an unset `RENEW_DAYS_BEFORE`;
+**Client address passthrough (v0.10.9).** The service sets gateway `pp:true` on 443,
+`ACCEPT_PROXY_PROTOCOL: "true"`, `SEND_PROXY_PROTOCOL: "true"`, and `TARGET_ENDPOINT: topup:8082`
+together in one attested app-compose. Topup runs `--proxy-protocol-bind 0.0.0.0:8082`; this private
+listener requires PROXY v2 and preserves its source as Axum connection information. It publishes
+no port. Only ingress sends traffic to it; internal `topup healthcheck` and other direct HTTP
+checks keep using plain HTTP on 8080. Public `/healthz`, upgrade-monitor, and certificate-evidence
+verification keep calling `https://$DOMAIN` through the gateway and ingress; their clients send
+ordinary HTTPS and the gateway supplies the header.
+
+The product keeps `product:8089`, with both PROXY switches omitted. Both variants pin ingress 2.8.
+The configured `5s` / `30s` / `30s` HAProxy deadlines and numeric ports pass 2.8's strict validation.
+Renewal settings are omitted, so upstream uses integer `RENEW_INTERVAL=43200` and an unset `RENEW_DAYS_BEFORE`;
 explicit overrides must be positive whole numbers, not `12h` or `30d`. Boolean settings accept
 only exact `true` / `false`, including `ACME_STAGING` / `CERTBOT_STAGING` and
 `DETERMINISTIC_TLS_KEY`; those and the omitted PROXY booleans default to `false`.
 [render.sh](render.sh) requires and sets `GATEWAY_DOMAIN` for both service and product variants,
 as 2.8 requires. Neither variant sets `ROUTING_MAP`; each uses the single `TARGET_ENDPOINT` above.
+In tls-alpn-01 mode, ingress preserves the client address across its loopback TLS frontend;
+its ACME responder and evidence
+HTTP server receive no PROXY header, so issuance, renewal, and `/evidences/` retain their normal
+protocols. See the pinned upstream README's [Client address section](https://github.com/Dstack-TEE/dstack-examples/blob/dstack-ingress-v2.8/custom-domain/dstack-ingress/README.md#client-address-proxy-protocol).
 
 [phala-cvm.sh](phala-cvm.sh)'s `compose-update CVM_ID COMPOSE PRE_LAUNCH PORT_POLICY_JSON OUT`
 reads `GET /cvms/{id}/compose_file`, replaces the compose, pre-launch script, port policy and
@@ -600,25 +612,30 @@ values. Calls share a five-minute stage deadline and each API call is capped at 
 failures print the CLI/API diagnostic. OUT records the provision response, including its hash; callers wait for that exact hash to settle
 before verifying attestation or probing the upgraded service.
 Deploy upgrades and both provisioning follow-ups use this path because CLI 1.1.22 cannot set
-`port_policy` directly. The policy for **every variant** is
-`{"ports":[{"port":443,"pp":false}],"restrict_mode":false}`. With `restrict_mode:false`, this does
-not restrict the template's 80 or restore-check's 8081. Attestation verification checks that exact
+`port_policy` directly. The **service** policy is
+`{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`; **product, template, and restore-check**
+keep `pp:false` with the same port and `restrict_mode:false`. This does not restrict the
+template's 80 or restore-check's 8081. Attestation verification checks the variant's exact
 app-compose field; changing it changes the attested compose hash.
 
 **Log privacy exception.** HAProxy TCP access logs can contain client IPs, including real client
-IPs after phase 2. This is an accepted exception for private CVM logs, with `public_logs=false`;
+IPs with service passthrough enabled. This is an accepted exception for private CVM logs, with `public_logs=false`;
 do not export those access logs to Sentry. Topup's tracing and Sentry still never contain client
-IPs. The optional topup PROXY listener only carries connection information; there are no new
+IPs. The topup PROXY listener only carries connection information; there are no new
 per-IP limits, including for transaction-hash hints.
 
-**Rollout and rollback.** Publish phase 1 as a release, then upgrade and verify staging topup and
-the staging product before production topup. The restore-check and template variants keep plain
-HTTP and PROXY off. Phase 2 is a separate release: gateway `pp:true`, ingress
-`ACCEPT_PROXY_PROTOCOL=true` / `SEND_PROXY_PROTOCOL=true`, and `TARGET_ENDPOINT=topup:8082` must
-change together in one app-compose, with topup's private `--proxy-protocol-bind 0.0.0.0:8082`.
-Enabling only one hop breaks every connection, including health and certificate checks. Once
-phase 2 ships, **no rollback past this phase-1 release**: first return atomically to its PROXY-off
-policy and ingress settings. Phase 1 alone does not enable real client IP delivery.
+**Rollout and rollback.** First deploy and verify v0.10.8 (dstack 0.6.1, ingress 2.8, and
+phase 1 with PROXY off) on staging and production. Then release phase 2 as v0.10.9 and follow the
+[staging verification recipe](client-ip-staging.md) before production topup. Product,
+restore-check, and template keep PROXY off. Gateway `pp:true`, ingress ACCEPT/SEND, the 8082 target,
+and topup's private listener must change together in one app-compose. Enabling only one hop breaks
+every connection, including health and certificate checks.
+
+Rolling back from v0.10.9 to an earlier release requires the **target release's compose-update
+path from a v0.10.8 or newer kit**, which explicitly restores `pp:false` together with PROXY-off
+ingress settings. Never roll back directly to v0.10.7 or older: their deployment path can leave
+gateway PROXY enabled against an ingress that expects ordinary TLS. Verify health, attestation,
+and ingress evidence after rollback.
 
 **HUMAN-ONLY, owner of the domain's DNS zone** (any DNS provider; the Deploy summary's
 wording assumes Cloudflare, as in Phala's instance), once per CVM instance. Every Deploy run
@@ -810,7 +827,7 @@ options), not of the YAML file, so every upgrade's hash is new and goes to merch
 ([docs/integration.md §5.3](../docs/integration.md#53-pin-your-accounts-webhook-keys)). It then
 requires `allowed_envs` to name only the compose's sealed names, and the variant's
 [compose-policy.jq](compose-policy.jq): for the service, the only published port is
-`dstack-ingress` on 443 (`tls-alpn-01`, forwarding to `topup:8080`, for the host of
+`dstack-ingress` on 443 (`tls-alpn-01`, PROXY v2 forwarding to `topup:8082`, for the host of
 `public_origin`); for the restore-check variant it is `topup` on 8081, with no ingress.
 
 The app-compose also carries a pre-launch script, which the guest sources before `docker compose

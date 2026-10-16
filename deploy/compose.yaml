@@ -92,7 +92,8 @@ services:
     mem_limit: 1g
     pids_limit: 256
     stop_grace_period: 360s
-    command: [topup, run, --config, /etc/topup/topup.yaml, --webhook-proxy, "http://smokescreen:4750"]
+    command: [topup, run, --config, /etc/topup/topup.yaml, --webhook-proxy, "http://smokescreen:4750",
+      --proxy-protocol-bind, "0.0.0.0:8082"]
     environment:
       DATABASE_URL: postgres://topup_service@postgres:5432/topup
       PGPASSFILE: /run/db-app/topup_service.pgpass
@@ -124,7 +125,9 @@ services:
       TIMEOUT_CLIENT: 30s
       TIMEOUT_SERVER: 30s
       CHALLENGE_TYPE: tls-alpn-01
-      TARGET_ENDPOINT: topup:8080
+      ACCEPT_PROXY_PROTOCOL: "true"
+      SEND_PROXY_PROTOCOL: "true"
+      TARGET_ENDPOINT: topup:8082
     ports:
       - "443:443"
     volumes:

@@ -14,6 +14,20 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Breaking (operators)
+
+- Service client-IP passthrough ships in v0.10.9. Rolling back to an earlier release requires
+  that release's compose-update path from a v0.10.8 or newer kit, which explicitly sets `pp:false`
+  together with PROXY-off ingress settings. Never roll back directly to v0.10.7 or older.
+
+### Changed (operators)
+
+- Enable gateway PROXY on service port 443 and ingress ACCEPT/SEND atomically with topup's
+  private PROXY v2 listener on 8082. Product, template, and restore-check keep PROXY off. Public
+  health, certificate evidence, and tls-alpn-01 use the same domain; internal HTTP checks keep
+  port 8080. Document staging verification without adding an IP diagnostic endpoint or topup IP
+  logging.
+
 ## [0.10.8] - 2026-10-16
 
 ### Added (operators)

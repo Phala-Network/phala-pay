@@ -142,9 +142,11 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                 self.assertIn("PHALA_NODE_ID must be empty (auto) or digits", result.stdout)
 
     def test_node_selection_and_summary(self):
-        for mode, node in (("provision", "26"), ("provision", ""), ("upgrade", "26")):
-            with self.subTest(mode=mode, node=node):
-                self.env.update(MODE=mode, PHALA_NODE_ID=node)
+        for mode, node, variant in (("provision", "26", "service"), ("provision", "", "service"),
+                                    ("upgrade", "26", "service"), ("upgrade", "26", "product")):
+            with self.subTest(mode=mode, node=node, variant=variant):
+                self.env.update(MODE=mode, PHALA_NODE_ID=node, VARIANT=variant,
+                                TARGET="topup" if variant == "service" else "product")
                 for path in (self.tmp / "cli.jsonl", self.tmp / "summary"):
                     path.unlink(missing_ok=True)
                 result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
@@ -181,11 +183,13 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         commands = [args[0] for args in self.calls()]
         self.assertEqual(commands, ["maintenance", "api", "cvms", "cvms", "health", "maintenance",
                                     "api", "api", "api", "cvms", "health"])
+        probes = [args for args in self.calls() if args[0] == "health"]
+        self.assertTrue(all(args[-1] == f"{self.env['PUBLIC_URL']}/healthz" for args in probes))
         leases = [args for args in self.calls() if args[0] == "maintenance"]
         self.assertEqual(leases[0], leases[1])
 
     def test_product_os_image_change_without_maintenance(self):
-        self.env.update(MODE="upgrade", TARGET="product")
+        self.env.update(MODE="upgrade", TARGET="product", VARIANT="product")
         self.set_current_image("dstack-0.5.9")
         result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -206,7 +210,8 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
 
     def assert_policy_request(self, path):
         body = json.loads(path.read_text())
-        self.assertEqual(body["port_policy"], {"ports": [{"port": 443, "pp": False}], "restrict_mode": False})
+        self.assertEqual(body["port_policy"], {
+            "ports": [{"port": 443, "pp": self.env["VARIANT"] == "service"}], "restrict_mode": False})
         self.assertEqual(body["allowed_envs"], ["SENTRY_DSN"])
         for key in ("encrypted_env", "env_keys", "update_env_vars"):
             self.assertNotIn(key, body)

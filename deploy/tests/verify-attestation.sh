@@ -9,7 +9,7 @@ cp "$root/deploy/verify-attestation.sh" "$tmp/kit/deploy/"
 hash=$(cat "$root/deploy/environments/phala-network/production/topup/os-image-hash")
 cmp "$root/deploy/environments/phala-network/staging/topup/os-image-hash" \
     "$root/deploy/environments/phala-network/production/topup/os-image-hash"
-export FIXTURE_PORT_POLICY='{"ports":[{"port":443,"pp":false}],"restrict_mode":false}'
+export FIXTURE_PORT_POLICY='{"ports":[{"port":443,"pp":true}],"restrict_mode":false}'
 export VERIFIED_RESULT="$tmp/result.json" FIXTURE_DIR="$tmp"
 cat >"$tmp/kit/deploy/dstack-verifier.sh" <<'SH'
 #!/bin/sh
@@ -73,11 +73,15 @@ echo 'attestation OS pin tests passed (matching, mismatch, missing, invalid resu
 
 result "$hash"
 for variant in service restore-check template product; do
+    if [[ "$variant" == service ]]; then proxy=true; else proxy=false; fi
+    FIXTURE_PORT_POLICY=$(jq -cn --argjson proxy "$proxy" \
+        '{ports:[{port:443,pp:$proxy}],restrict_mode:false}')
     verify
     saved_policy=$FIXTURE_PORT_POLICY
-    for FIXTURE_PORT_POLICY in null '{"ports":[{"port":443,"pp":true}],"restrict_mode":false}' \
-        '{"ports":[{"port":443,"pp":false}],"restrict_mode":true}' \
-        '{"ports":[{"port":80,"pp":false}],"restrict_mode":false}'; do
+    for FIXTURE_PORT_POLICY in null \
+        "$(jq '.ports[0].pp |= not' <<<"$saved_policy")" \
+        "$(jq '.restrict_mode = true' <<<"$saved_policy")" \
+        "$(jq '.ports[0].port = 80' <<<"$saved_policy")"; do
         ! verify || { echo "verify-attestation: accepted a foreign $variant port policy" >&2; exit 1; }
         grep -qF 'the attested port_policy must match' "$tmp/err"
     done
