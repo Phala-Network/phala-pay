@@ -638,7 +638,10 @@ domain serves exactly that certificate; Deploy runs it after every topup upgrade
 kit/deploy/verify-ingress-evidence.sh "$DOMAIN" "$APP_ID"
 ```
 
-The quote dates from the last issuance, so its compose hash can be an earlier compose of the app.
+Ingress 2.7 republishes evidence at startup and after issuance. It also publishes
+`attestation.json` when the guest supports `/v1/Attest`; on the pinned dstack 0.5.12 it falls back
+to `quote.json`, which the verifier above continues to check. The quote's compose hash records
+the app-compose at publication time.
 
 ### Database credentials
 

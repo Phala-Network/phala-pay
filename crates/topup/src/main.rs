@@ -52,7 +52,7 @@ enum TopupCommand {
         #[arg(long, default_value = "warning", value_parser = ["warning", "critical"])]
         severity: String,
     },
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// Apply the database migrations as the database owner.
     Migrate,
     Route {
