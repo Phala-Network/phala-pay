@@ -78,10 +78,11 @@ requires each of these differences of the merged artifact, wherever it is checke
 - **PostgreSQL restores and never archives.** Its `TOPUP_RESTORE_FROM_BACKUP=on` requires a base
   backup (an empty prefix fails) and makes the entrypoint set `archive_mode=off` after any other
   argument. The policy forbids overriding the image's entrypoint or command.
-- **Its storage credentials are its own:** `RESTORE_AWS_ACCESS_KEY_ID` and
-  `RESTORE_AWS_SECRET_ACCESS_KEY`, a read-only token. The variant reads no `AWS_*` name, so an
-  instance that inherits the live read-write env (created without `--env-file`) cannot list the
-  prefix and never starts.
+- **Its storage credentials are its own:** a new read-only token sealed in `AWS_ACCESS_KEY_ID`
+  and `AWS_SECRET_ACCESS_KEY`, the names the service app already allows. Always pass a fresh
+  `--env-file` containing those read-only values; omitting it inherits the live read-write token.
+  Preflight requires both values even with `--unsealed`. It cannot prove a token's permissions:
+  the operator must issue **Object Read only**, and must never copy the live storage values.
 - **`topup` runs `--read-only`.** It answers only `GET`, `HEAD`, and the operator's restore
   reconciliation under `/v1/admin/restore/`; anything else answers `503 service_restoring`, and so
   does every request with a merchant API key (`restore-check` records the freeze in parallel, and
@@ -145,9 +146,10 @@ no muting: the live instance keeps checking in.
 
 ### Render it and its env file
 
-Render with the live release (the `version` Deploy last deployed to the Environment): its
-`images.json` and deploy kit, downloaded and verified as in
-[Verify a release](../docs/self-hosting.md#verify-a-release), the kit extracted to `kit/`. The
+Render with the live release's `images.json` (the `version` Deploy last deployed to the
+Environment) and a reviewed deploy kit containing the allowed-env restore fix described below.
+Download and verify the artifacts as in [Verify a release](../docs/self-hosting.md#verify-a-release),
+with the kit extracted to `kit/`. This does not require upgrading the live instance. The
 environment directory is the live one, at the commit Deploy rendered: for example
 `production/topup` in the operator's environment repository, and for Phala's staging
 `deploy/environments/phala-network/staging/topup`; `ENV_DIR` below is that directory. Pass a
@@ -159,8 +161,8 @@ kit/deploy/render.sh --restore-check --images images.json --origin https://pendi
   "$ENV_DIR" >restore-check.yml
 ```
 
-The env holds the variant's sealed names, `RESTORE_AWS_ACCESS_KEY_ID` and
-`RESTORE_AWS_SECRET_ACCESS_KEY` among them. Those are storage credentials that can only list and
+The env holds the variant's sealed names, `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` among them. Those are storage credentials that can only list and
 read the prefix: on R2, an API token with **Object Read only** on the backup bucket only. Create it
 on the operator's machine, for this restore only, and shred it once the instance exists or the
 restore is abandoned:
@@ -170,8 +172,8 @@ umask 077
 export RESTORE_ENV_DIR="$(mktemp -d)"
 # Exactly the sealed names of restore-check.yml, with a TOPUP_RPC_<ID>_KEY=<the live key> line
 # for each keyed provider the environment declares (Phala's staging declares Ankr and Infura).
-printf '%s\n' 'RESTORE_AWS_ACCESS_KEY_ID=<read-only key id>' \
-  'RESTORE_AWS_SECRET_ACCESS_KEY=<read-only secret>' \
+printf '%s\n' 'AWS_ACCESS_KEY_ID=<read-only key id>' \
+  'AWS_SECRET_ACCESS_KEY=<read-only secret>' \
   'SENTRY_DSN=<the live DSN, or empty>' >"$RESTORE_ENV_DIR/restore.env"
 docker pull "<restore-check.yml's phala-pay image>"   # --offline checks the configuration in it
 kit/deploy/preflight.sh --env "$RESTORE_ENV_DIR/restore.env" --compose restore-check.yml \
@@ -179,6 +181,25 @@ kit/deploy/preflight.sh --env "$RESTORE_ENV_DIR/restore.env" --compose restore-c
 # after creating the instance:
 shred -u "$RESTORE_ENV_DIR/restore.env" && rm -rf "$RESTORE_ENV_DIR"
 ```
+
+### Why the sealed names match the service
+
+dstack 0.6.1 reads `allowed_envs` from the instance's attested app-compose
+([system_setup.rs](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/dstack/dstack-util/src/system_setup.rs#L3166-L3179))
+and drops any decrypted env name outside that list
+([parse_env_file.rs](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/dstack/dstack-util/src/parse_env_file.rs#L63-L70)).
+The pinned Phala CLI 1.1.22's
+[`instances add` flow](https://github.com/Phala-Network/phala-cloud/blob/4ff72a6/cli/src/commands/instances/add/index.ts#L283-L347)
+encrypts the explicit env file and sends `encrypted_env`, `docker_compose_file`, and
+`pre_launch_script` to `/apps/{app_id}/instances`; it does not send a new `allowed_envs` list.
+The new instance retains the source app-compose's allowlist. The production drill on 2026-10-16
+confirmed this: `RESTORE_AWS_ACCESS_KEY_ID` and `RESTORE_AWS_SECRET_ACCESS_KEY` were dropped as
+unauthorized, so PostgreSQL could not restore.
+
+The restore variant therefore keeps the service's sealed names and supplies different, read-only
+storage values in its own explicit env file. Its attestation policy accepts the inherited
+allowlist while retaining the restore topology and archiving-off checks. The service compose and
+allowlist are unchanged, so this fix needs an updated deploy kit, without a production upgrade.
 
 ## Addressing the restore-check instance
 
@@ -225,6 +246,11 @@ live_isolated() {
      --env-file "$RESTORE_ENV_DIR/restore.env" --name phala-pay-restore --json >instance.json
    export RESTORE_CVM_ID="$(jq -er '.vm_uuid' instance.json)"
    ```
+
+   Creation returns before first boot. Wait at most ten minutes for the attestation to contain
+   exactly one valid instance-id event before step 2. During a drill, keep `live_isolated` checks
+   at least every five minutes and delete the instance on failure. The executable bounded wait
+   and cleanup are in [production-launch.md §9](runbooks/production-launch.md#9-production-restore-drill).
 
 2. **Verify its attestation**, addressing the guest agent by the instance id from the attested
    event log. Fetch the attestation from the Phala Cloud API by `vm_uuid`: CLI 1.1.22's
@@ -305,8 +331,8 @@ were sent the restore point in the reconciliation's step 2
 Its origin is the one merchants call and admin requests are signed for. Upgrade the instance to it
 (`kit/deploy/phala deploy --cvm-id "$RESTORE_CVM_ID" --compose <file> --pre-launch-script kit/deploy/phala-cloud-pre-launch.sh`, no `-e`), and set `TOPUP_CVM_ID` to
 `$RESTORE_CVM_ID`. Then seal the service's names with the read-write credentials
-(`kit/deploy/phala envs update "$RESTORE_CVM_ID" -e <env file>`, with `AWS_ACCESS_KEY_ID` and
-`AWS_SECRET_ACCESS_KEY` in place of the `RESTORE_AWS_*` pair). The domain's TXT record still names the failed instance: set
+(`kit/deploy/phala envs update "$RESTORE_CVM_ID" -e <env file>`, replacing the read-only values of
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`). The domain's TXT record still names the failed instance: set
 `_dstack-app-address.$DOMAIN` to `$INSTANCE_ID:443` (step 2) so the gateway routes the
 domain here and dstack-ingress, whose account and certificate volume is new, can obtain a
 certificate; update a CAA record that pins the old ACME account. Require:
@@ -364,8 +390,8 @@ then pauses the archiver on the disposable source so its later business changes 
 definitely lost; `crash` retains the natural 30-second archive timer, kills PostgreSQL after an
 upload and reports the observed loss. Both require that a
 wrong key fails the restore command (`126`). Then they boot the whole restore-check variant on an
-empty volume, with its read-only `RESTORE_AWS_*` credentials while the live read-write names stay in
-its environment. They require:
+empty volume, with its own read-only values selected into `AWS_*` instead of the live read-write
+token. They require:
 
 - PostgreSQL using only the read-only credentials;
 - promotion with archiving off;

@@ -126,6 +126,20 @@ render restore-check "$staging" --restore-check
 env_file restore-check "$tmp/restore-check.yml"
 passes --env "$tmp/restore-check.env" --compose "$tmp/restore-check.yml" --environment-dir "$staging" \
     --restore-check
+# The restore env must use the inherited AWS_* names, and never fall back to ambient/live values.
+sed 's/^AWS_/RESTORE_AWS_/' "$tmp/restore-check.env" >"$tmp/restore-former.env"
+expect_failure restore-former "the env may set only the compose's sealed names, not RESTORE_AWS_ACCESS_KEY_ID" \
+    --env "$tmp/restore-former.env" --compose "$tmp/restore-check.yml" --environment-dir "$staging" --restore-check
+for key in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+    grep -v "^$key=" "$tmp/restore-check.env" >"$tmp/restore-missing.env"
+    env_file restore-empty "$tmp/restore-check.yml" "$key="
+    for file in restore-missing restore-empty; do
+        AWS_ACCESS_KEY_ID=ambient-write AWS_SECRET_ACCESS_KEY=ambient-write \
+            expect_failure "$file-$key" "$key is empty or not set" \
+            --env "$tmp/$file.env" --compose "$tmp/restore-check.yml" --environment-dir "$staging" \
+            --restore-check --unsealed
+    done
+done
 expect_failure restore-check-as-service "the service runs exactly" \
     --env "$tmp/restore-check.env" --compose "$tmp/restore-check.yml" --environment-dir "$staging"
 expect_failure service-as-restore-check "restore-check runs exactly" \

@@ -373,7 +373,10 @@ drill ([RESTORE.md](RESTORE.md)); then [onboard](#operator-onboarding) accounts 
 ### Sealing the secrets
 
 The CVM's encrypted env holds the rendered compose's sealed names, its `${NAME:-}` references.
-The Phala Cloud CLI makes the names of the env file it sends the CVM's `allowed_envs`, and
+On initial deployment, the Phala Cloud CLI makes the env file's names the CVM's `allowed_envs`.
+`instances add` retains the source app-compose's allowlist; the
+[restore variant](RESTORE.md#why-the-sealed-names-match-the-service) uses the same names with its
+own read-only storage token in an explicit env file. In either case,
 [verify-attestation.sh](verify-attestation.sh) requires them to be among the sealed names
 ([compose-policy.jq](compose-policy.jq), `allowed_envs_violations`): another name is refused, since
 it would put in the env a value the compose does not reference. A sealed name left out is unset,

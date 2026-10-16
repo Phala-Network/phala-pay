@@ -6,7 +6,8 @@
 #      a topup CVM, `compose.yaml` and `config.json` for the reference product,
 #      deploy/product/compose.yaml) and, for a topup CVM, its variant: compose.service.yaml,
 #      compose.restore-check.yaml with --restore-check, or compose.template.yaml with --template
-#      (the Phala Cloud template).
+#      (the Phala Cloud template). Restore-check retains the service's sealed AWS_* names:
+#      `instances add` inherits allowed_envs, so only the explicit env file's token values differ.
 #      `config --no-interpolate` keeps the sealed secrets as `${NAME:-}` references. The
 #      environment's compose.yaml may set only the documented settings (`settable` below): the
 #      merge with it may differ from the merge without it in those environment keys and nowhere

@@ -14,6 +14,16 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed (operators)
+
+- Restore checks use the app's allowed `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` names
+  with a fresh read-only token in an explicit restore env file. `instances add` retains the source
+  allowlist, so dstack dropped the former `RESTORE_AWS_*` values and PostgreSQL could not restore.
+  Preflight requires both restore credentials even with `--unsealed`; the local drill selects
+  only its read-only token. The service compose is unchanged; production needs no upgrade.
+- The production restore drill waits up to ten minutes for the new instance's attested instance
+  id before verification, with bounded requests and live-isolation checks during the wait.
+
 ## [0.10.9] - 2026-10-16
 
 ### Breaking (operators)

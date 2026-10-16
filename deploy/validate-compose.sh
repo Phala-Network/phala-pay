@@ -49,12 +49,12 @@ render template "$root/deploy/environments/phala-cloud-template/topup" --templat
 # (deploy/README.md, "Sealing the secrets") before the upgrade that makes it.
 [[ "$(sealed service)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
     fail "staging's sealed names changed: $(sealed service)"
-[[ "$(sealed restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
-    fail "staging's restore-check sealed names changed: $(sealed restore-check)"
+[[ "$(sealed restore-check)" == "$(sealed service)" ]] ||
+    fail "staging's restore-check must use the service app's allowed names: $(sealed restore-check)"
 [[ "$(sealed production)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_BLOCKPI_BASE_KEY TOPUP_RPC_BLOCKPI_ETHEREUM_KEY " ]] ||
     fail "production's sealed names changed: $(sealed production)"
-[[ "$(sealed production-restore-check)" == "RESTORE_AWS_ACCESS_KEY_ID RESTORE_AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_BLOCKPI_BASE_KEY TOPUP_RPC_BLOCKPI_ETHEREUM_KEY " ]] ||
-    fail "production's restore-check sealed names changed: $(sealed production-restore-check)"
+[[ "$(sealed production-restore-check)" == "$(sealed production)" ]] ||
+    fail "production's restore-check must use the service app's allowed names: $(sealed production-restore-check)"
 [[ "$(sealed product)" == "PRODUCT_API_KEY " ]] || fail "the product's sealed names changed"
 
 # The restore-check variant is the service with the service-only services removed, topup read-only
@@ -63,9 +63,7 @@ jq -e --slurpfile service "$tmp/service.json" '
     def normal: del(.services["dstack-ingress", "smokescreen", "heartbeat", "backup", "capacity", "restore-check"])
         | .configs |= with_entries(select(.key | startswith("capacity_probe_") | not))
         | del(.services.topup.command, .services.topup.ports)
-        | del(.services.postgres.environment.TOPUP_RESTORE_FROM_BACKUP,
-            .services.postgres.environment.AWS_ACCESS_KEY_ID,
-            .services.postgres.environment.AWS_SECRET_ACCESS_KEY)
+        | del(.services.postgres.environment.TOPUP_RESTORE_FROM_BACKUP)
         | del(.volumes.ingress_certs, .volumes.ingress_evidences);
     normal == ($service[0] | normal)' "$tmp/restore-check.json" >/dev/null ||
     fail "the restore-check variant differs from the service in more than its declared changes"
@@ -117,6 +115,15 @@ jq -e '[.services[].volumes[]? | select(.source == "/var/run/dstack.sock")] == [
 local_stack -p validate-sandbox -f "$root/deploy/sandbox/docker-compose.local.yml" >/dev/null
 local_stack --restore-check -p validate-drill -f "$root/deploy/local/restore-drill.compose.yml" \
     >"$tmp/drill.json"
+# The local wrapper seals each variant's own values under the shared names, even with ambient
+# credentials and the source's read-write token present. Only the read-only values reach restore.
+AWS_ACCESS_KEY_ID=ambient-write AWS_SECRET_ACCESS_KEY=ambient-write-secret \
+    TOPUP_LOCAL_S3_ACCESS_KEY_ID=source-write TOPUP_LOCAL_S3_SECRET_ACCESS_KEY=source-write-secret \
+    TOPUP_LOCAL_RESTORE_S3_ACCESS_KEY_ID=restore-read TOPUP_LOCAL_RESTORE_S3_SECRET_ACCESS_KEY=restore-read-secret \
+    local_stack --restore-check -p validate-restore-credentials >"$tmp/restore-credentials.json"
+jq -e '.services.postgres.environment
+    | .AWS_ACCESS_KEY_ID == "restore-read" and .AWS_SECRET_ACCESS_KEY == "restore-read-secret"' \
+    "$tmp/restore-credentials.json" >/dev/null || fail "the restore stack must use only its read-only token"
 jq -e '[.services[].volumes[]? | select(.type == "bind")] == []' "$tmp/drill.json" >/dev/null ||
     fail "the restore-drill stack bind-mounts a host path; CI's Docker daemon cannot see it"
 jq -e '[.services[].ports[]?] == []' "$tmp/drill.json" >/dev/null ||

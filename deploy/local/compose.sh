@@ -38,17 +38,17 @@ printf '%s\n' '{"phala-pay": "phala-pay-local@sha256:111111111111111111111111111
     >"$tmp/images.json"
 if ((${#variant[@]})); then
     origin=(--origin https://topup.localhost) overlay=restore-check.yml
+    storage_key=${TOPUP_LOCAL_RESTORE_S3_ACCESS_KEY_ID:-topup-restore-read}
+    storage_secret=${TOPUP_LOCAL_RESTORE_S3_SECRET_ACCESS_KEY:-topup-restore-read-secret}
 else
     origin=(--gateway-domain gateway.localhost) overlay=service.yml
+    storage_key=${TOPUP_LOCAL_S3_ACCESS_KEY_ID:-topup-s3}
+    storage_secret=${TOPUP_LOCAL_S3_SECRET_ACCESS_KEY:-topup-s3-secret-key}
 fi
 "$root/deploy/render.sh" "${variant[@]}" --images "$tmp/images.json" "${origin[@]}" \
     --project-name "$project" "$environment_dir" >"$tmp/rendered.yml"
 # Relative paths in the overlays resolve against deploy/, as for deploy/compose.yaml itself.
-env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u RESTORE_AWS_ACCESS_KEY_ID \
-    -u RESTORE_AWS_SECRET_ACCESS_KEY -u SENTRY_DSN \
-    AWS_ACCESS_KEY_ID="${TOPUP_LOCAL_S3_ACCESS_KEY_ID:-topup-s3}" \
-    AWS_SECRET_ACCESS_KEY="${TOPUP_LOCAL_S3_SECRET_ACCESS_KEY:-topup-s3-secret-key}" \
-    RESTORE_AWS_ACCESS_KEY_ID="${TOPUP_LOCAL_RESTORE_S3_ACCESS_KEY_ID:-topup-restore-read}" \
-    RESTORE_AWS_SECRET_ACCESS_KEY="${TOPUP_LOCAL_RESTORE_S3_SECRET_ACCESS_KEY:-topup-restore-read-secret}" \
+env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u SENTRY_DSN \
+    AWS_ACCESS_KEY_ID="$storage_key" AWS_SECRET_ACCESS_KEY="$storage_secret" \
     docker compose -p "$project" --project-directory "$root/deploy" -f "$tmp/rendered.yml" \
     -f "$root/deploy/local/docker-compose.yml" -f "$root/deploy/local/$overlay" "$@"
