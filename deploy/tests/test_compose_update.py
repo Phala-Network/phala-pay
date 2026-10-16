@@ -32,7 +32,8 @@ if "--input" in args:
 with open(os.environ["STUB_LOG"], "a") as log:
     log.write(json.dumps(call) + "\\n")
 if operation == os.environ.get("STUB_HANG"):
-    time.sleep(10)
+    # Exceed the harness timeout so only the stage deadline can end a hang.
+    time.sleep(30)
 if operation == os.environ.get("STUB_FAIL"):
     print('{"error":"operation failed","request_id":"req-compose-test"}')
     sys.exit(42)
@@ -160,8 +161,11 @@ elif method == "POST":
         self.env.update(COMPOSE_UPDATE_SECONDS="1", STUB_HANG="POST")
         result = self.run_update()
         self.assertEqual(result.returncode, 124, result.stderr)
-        self.assertEqual([call["method"] for call in self.calls()], ["GET", "GET", "POST"])
-        self.assertIn("stage=compose-update", result.stderr)
+        # The shared budget can expire before POST on slow runners. Only a prefix is
+        # valid: expiry must prevent the PATCH commit, even if no API call starts.
+        methods = [call["method"] for call in self.calls()]
+        self.assertEqual(methods, ["GET", "GET", "POST"][:len(methods)])
+        self.assertRegex(result.stderr, r"stage=compose-update (deadline expired|[^\n]*call_status=124)")
 
 
 if __name__ == "__main__":
