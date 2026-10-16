@@ -38,7 +38,7 @@ coming:
 
 ```sh
 curl -fsSL https://pay.phala.com/deploy.sh | bash              # the latest release
-curl -fsSL https://pay.phala.com/deploy/v0.10.8.sh | bash       # a given release
+curl -fsSL https://pay.phala.com/deploy/v0.10.9.sh | bash       # a given release
 ```
 
 pay.phala.com redirects to the release's `deploy.sh` asset on GitHub, which deploys that release.
@@ -53,7 +53,7 @@ run it with `--strict`, which refuses to go on unless the GitHub CLI verifies th
 provenance (as `PHALA_PAY_REQUIRE_ATTESTATION=1` does):
 
 ```sh
-version=v0.10.8 repo=Phala-Network/phala-pay
+version=v0.10.9 repo=Phala-Network/phala-pay
 gh release download "$version" -R "$repo" -p deploy.sh
 gh attestation verify deploy.sh -R "$repo" --deny-self-hosted-runners \
   --source-digest "$(gh api "repos/$repo/commits/$version" --jq .sha)" \
@@ -221,9 +221,9 @@ comes from a release.
      attestations: read
    jobs:
      deploy:
-       uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@<the release's commit SHA> # v0.10.8
+       uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@<the release's commit SHA> # v0.10.9
        with:
-         version: v0.10.8
+         version: v0.10.9
          environment: ${{ inputs.environment }}
          mode: ${{ inputs.mode }}
          environment_dir: ${{ inputs.environment }}/topup
@@ -514,7 +514,7 @@ into a directory and stops at the first failure:
    commit (`gh attestation verify --source-digest`).
 
 ```sh
-version=v0.10.8   # the release you adopt
+version=v0.10.9   # the release you adopt
 for tool in verify-release.sh deadline.sh; do
   gh api -H 'Accept: application/vnd.github.raw' \
     "repos/Phala-Network/phala-pay/contents/deploy/$tool?ref=$version" >"$tool"
