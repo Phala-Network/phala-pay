@@ -14,6 +14,23 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added (operators)
+
+- Optional private `topup run --proxy-protocol-bind ADDR` listener requiring PROXY v2, with concurrent
+  five-second header reads, bounded pending connections, the existing router and deadlines, and
+  graceful shutdown. Carries the source in connection information without logging it to tracing
+  or Sentry or introducing per-IP limits.
+
+### Changed (operators)
+
+- Pin dstack-ingress 2.7 for topup and the reference product, with PROXY off and backend ports
+  unchanged. Deploy upgrades and provisioning follow-ups use the compose-file API to set and
+  verify an explicit attested `pp:false` policy while preserving the sealed environment.
+- Phase 2 will enable gateway PROXY and ingress ACCEPT/SEND together in a separate release.
+  Once phase 2 ships, **no rollback past this release**; rollback must first restore PROXY-off
+  settings atomically. HAProxy's private access logs may contain client IPs, an accepted exception
+  with `public_logs=false`; topup's logging privacy rules remain unchanged.
+
 ## [0.10.7] - 2026-10-14
 
 ### Changed (operators)

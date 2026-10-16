@@ -35,8 +35,9 @@ name: Deploy
 #   the runner's home can be read. The API key belongs to the workspace in vars.PHALA_WORKSPACE.
 # - `--kms phala` selects Phala Cloud's KMS for every CVM (owner decision, deploy/README.md "KMS"):
 #   no DstackApp contract, no provisioner key, and an update applies directly.
-# - `--pre-launch-script` sends the kit's deploy/phala-cloud-pre-launch.sh on provision and
-#   upgrade alike (cli/src/commands/deploy/handler.ts), which verify-attestation.sh then requires.
+# - Provision sends the kit's pre-launch script with `--pre-launch-script`; compose-update sets
+#   that same script and the explicit port policy on upgrades and provisioning follow-ups.
+#   verify-attestation.sh requires both in the attested app-compose.
 # - `deploy --json` ignores `--wait` on a new CVM; this workflow waits by polling `cvms get`.
 
 on:
@@ -377,19 +378,17 @@ jobs:
               fi
               echo "OS image upgraded from $current_image to $DSTACK_OS_IMAGE; old compose healthy before compose deployment. Topup takes a fresh 900-second lease for the second reboot." >>"$GITHUB_STEP_SUMMARY"
             fi
-            # No -e: CLI 1.1.22 then sends neither allowed_envs nor encrypted_env in the PATCH
-            # (cli/src/commands/deploy/handler.ts: resolveEnvVars returns undefined, and updateCvm
-            # sets both fields only for a non-empty list), so the owner-sealed env stays.
-            "$KIT/deploy/phala-cvm.sh" deploy "$WORK/deploy.json" \
-              --cvm-id "$EXISTING_CVM_ID" \
-              --compose "$COMPOSE" \
-              --pre-launch-script "$KIT/deploy/phala-cloud-pre-launch.sh" \
-              --no-public-logs \
-              --no-public-sysinfo \
-              --wait
+            policy=$(jq -cn -L "$KIT/deploy" --arg variant "$VARIANT" 'include "compose-policy"; port_policy($variant)')
+            "$KIT/deploy/phala-cvm.sh" compose-update "$EXISTING_CVM_ID" "$COMPOSE" \
+              "$KIT/deploy/phala-cloud-pre-launch.sh" "$policy" "$WORK/deploy.json"
           fi
-          cvm_id=$(jq -er '.vm_uuid' "$WORK/deploy.json")
-          app_id=$(jq -er '.app_id' "$WORK/deploy.json")
+          if [[ "$MODE" == provision ]]; then
+            cvm_id=$(jq -er '.vm_uuid' "$WORK/deploy.json")
+            app_id=$(jq -er '.app_id' "$WORK/deploy.json")
+          else
+            cvm_id=$EXISTING_CVM_ID
+            app_id=$(jq -er '.app_id' "$WORK/cvm-before.json")
+          fi
           {
             echo "CVM_ID=$cvm_id"
             echo "APP_ID=$app_id"
@@ -426,7 +425,8 @@ jobs:
           if [[ "$MODE" == provision ]]; then
             "$KIT/deploy/phala-cvm.sh" wait --unsealed "$cvm_id" >"$WORK/cvm.json"
           else
-            "$KIT/deploy/phala-cvm.sh" wait "$cvm_id" >"$WORK/cvm.json"
+            expected=$(jq -er '.compose_hash' "$WORK/deploy.json")
+            "$KIT/deploy/phala-cvm.sh" wait --compose-hash "$expected" "$cvm_id" >"$WORK/cvm.json"
           fi
           {
             echo "| | |"
@@ -441,8 +441,8 @@ jobs:
 
       # A new CVM lands on the pinned node, or one chosen by Phala Cloud. Its gateway (the CNAME target, which
       # dstack-ingress names) is known only now, and is attested configuration: upgrade the new CVM
-      # to the compose rendered with it (no -e: the env stays). Still unsealed, it does not run, so
-      # no --wait (the CLI's waits for `running`): it waits as the provision did.
+      # to the compose rendered with it and the explicit port policy, retaining the sealed env.
+      # Still unsealed, it waits as the provision did.
       - name: Set the values known only after provisioning
         timeout-minutes: 25
         if: inputs.mode == 'provision'
@@ -455,14 +455,11 @@ jobs:
           echo "GATEWAY=$gateway" | tee -a "$GITHUB_ENV"
           "$PREFLIGHT" --env "$ENV_FILE" --compose "$COMPOSE" --environment-dir "$ENVIRONMENT_DIR" \
             --offline --unsealed
-          previous=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$WORK/cvm.json")
-          "$KIT/deploy/phala-cvm.sh" deploy "$WORK/deploy-public-url.json" \
-            --cvm-id "$CVM_ID" \
-            --compose "$COMPOSE" \
-            --pre-launch-script "$KIT/deploy/phala-cloud-pre-launch.sh" \
-            --no-public-logs \
-            --no-public-sysinfo
-          "$KIT/deploy/phala-cvm.sh" wait --unsealed "$CVM_ID" "$previous" >"$WORK/cvm.json"
+          policy=$(jq -cn -L "$KIT/deploy" --arg variant "$VARIANT" 'include "compose-policy"; port_policy($variant)')
+          "$KIT/deploy/phala-cvm.sh" compose-update "$CVM_ID" "$COMPOSE" \
+            "$KIT/deploy/phala-cloud-pre-launch.sh" "$policy" "$WORK/deploy-public-url.json"
+          expected=$(jq -er '.compose_hash' "$WORK/deploy-public-url.json")
+          "$KIT/deploy/phala-cvm.sh" wait --unsealed --compose-hash "$expected" "$CVM_ID" >"$WORK/cvm.json"
 
       # After an upgrade the attestation can still describe the previous compose for a while.
       - name: Read back and verify the attested compose

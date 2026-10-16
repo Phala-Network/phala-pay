@@ -2,13 +2,14 @@
 # Verify the OS pin against the official verifier's result, never the unverified guest info.
 set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-tmp=$(mktemp -d "$root/.attestation-tests.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/attestation-tests.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 mkdir -p "$tmp/kit/deploy"
 cp "$root/deploy/verify-attestation.sh" "$tmp/kit/deploy/"
 hash=$(cat "$root/deploy/environments/phala-network/production/topup/os-image-hash")
 cmp "$root/deploy/environments/phala-network/staging/topup/os-image-hash" \
     "$root/deploy/environments/phala-network/production/topup/os-image-hash"
+export FIXTURE_PORT_POLICY='{"ports":[{"port":443,"pp":false}],"restrict_mode":false}'
 export VERIFIED_RESULT="$tmp/result.json" FIXTURE_DIR="$tmp"
 cat >"$tmp/kit/deploy/dstack-verifier.sh" <<'SH'
 #!/bin/sh
@@ -17,7 +18,7 @@ cat "$VERIFIED_RESULT"
 SH
 cat >"$tmp/kit/deploy/attested-compose.sh" <<'SH'
 #!/bin/sh
-printf '{}\n' >"$3/app-compose.json"
+jq -n --argjson policy "$FIXTURE_PORT_POLICY" '{port_policy: $policy}' >"$3/app-compose.json"
 printf 'services: {}\n' >"$3/docker-compose.yml"
 printf 'fixture-compose-hash\n'
 SH
@@ -31,8 +32,9 @@ printf '{}\n'
 SH
 chmod +x "$tmp/kit/deploy/"*.sh "$tmp/compose"
 # Compose policy has its own behavioral tests; this fixture isolates verified measurement pins.
-printf 'def violations($variant; $runtime): []; def allowed_envs_violations($variant; $env): [];\n' \
-    >"$tmp/kit/deploy/compose-policy.jq"
+cp "$root/deploy/compose-policy.jq" "$tmp/kit/deploy/compose-policy.jq"
+printf '\ndef violations($variant; $runtime): []; def allowed_envs_violations($variant; $env): [];\n' \
+    >>"$tmp/kit/deploy/compose-policy.jq"
 jq -n '{app_certificates: [{position_in_chain: 0, quote: "fixture"}], tcb_info: {event_log: []}}' \
     >"$tmp/attestation.json"
 jq -n --arg hash "$hash" '{vm_config: ({os_image_hash: $hash} | tojson)}' >"$tmp/info.json"
@@ -43,7 +45,7 @@ result() {
 }
 verify() {
     "$tmp/kit/deploy/verify-attestation.sh" "$tmp/attestation.json" "$tmp/info.json" app \
-        "$tmp/expected.yml" service "$hash" >"$tmp/out" 2>"$tmp/err"
+        "$tmp/expected.yml" "${variant:-service}" "$hash" >"$tmp/out" 2>"$tmp/err"
 }
 refused() {
     if verify; then echo "verify-attestation: $1 was accepted" >&2; exit 1; fi
@@ -68,3 +70,17 @@ if "$tmp/kit/deploy/verify-attestation.sh" "$tmp/attestation.json" "$tmp/info.js
 fi
 grep -qF 'EXPECTED_OS_IMAGE_HASH must be 64' "$tmp/err"
 echo 'attestation OS pin tests passed (matching, mismatch, missing, invalid result and malformed pin)'
+
+result "$hash"
+for variant in service restore-check template product; do
+    verify
+    saved_policy=$FIXTURE_PORT_POLICY
+    for FIXTURE_PORT_POLICY in null '{"ports":[{"port":443,"pp":true}],"restrict_mode":false}' \
+        '{"ports":[{"port":443,"pp":false}],"restrict_mode":true}' \
+        '{"ports":[{"port":80,"pp":false}],"restrict_mode":false}'; do
+        ! verify || { echo "verify-attestation: accepted a foreign $variant port policy" >&2; exit 1; }
+        grep -qF 'the attested port_policy must match' "$tmp/err"
+    done
+    FIXTURE_PORT_POLICY=$saved_policy
+done
+echo 'attested port-policy checks passed for every variant'

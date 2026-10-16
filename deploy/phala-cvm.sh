@@ -9,13 +9,17 @@
 #                                                    custom domain's CNAME target
 #   deploy/phala-cvm.sh deploy OUTPUT CLI_ARGS...    `deploy --json`; its output goes to the log, its
 #                                                    JSON object to OUTPUT, and it must succeed
+#   deploy/phala-cvm.sh compose-update CVM_ID COMPOSE PRE_LAUNCH PORT_POLICY_JSON OUT
+#                                                    preserve the sealed env, provision and commit
+#                                                    one app-compose; OUT holds the provision JSON
 #   deploy/phala-cvm.sh os-image CVM_ID IMAGE >cvm.json
 #                                                    change the OS image, then wait for it to run,
 #                                                    settled (15 minutes including the PATCH)
-#   deploy/phala-cvm.sh wait [--unsealed] CVM_ID [PREVIOUS_HASH] >cvm.json
+#   deploy/phala-cvm.sh wait [--unsealed] [--compose-hash HASH] CVM_ID [PREVIOUS_HASH] >cvm.json
 #                                                    until the CVM runs, settled, with a compose hash
 #                                                    other than PREVIOUS_HASH (15 minutes); with
 #                                                    --unsealed, settled in any status
+#                                                    --compose-hash waits for exactly that hash
 #   deploy/phala-cvm.sh attestation CVM_ID HASH >attestation.json
 #                                                    until the attestation reports compose hash HASH
 #                                                    (10 minutes; an upgrade attests late): the CVM
@@ -63,6 +67,57 @@ case "$command" in
         ((status == 0)) || exit "$status"
         sed -n '/^{/,$p' "$output.raw" >"$output"
         jq -e '.success == true' "$output" >/dev/null
+        ;;
+    compose-update)
+        [[ $# -eq 5 && "$1" =~ ^[A-Za-z0-9_-]+$ ]] || {
+            echo "usage: $0 compose-update CVM_ID COMPOSE PRE_LAUNCH PORT_POLICY_JSON OUT" >&2
+            exit 64
+        }
+        cvm_id=$1 compose=$2 pre_launch=$3 policy=$4 output=$5
+        jq -en --argjson policy "$policy" '$policy | type == "object" and
+            keys == ["ports", "restrict_mode"] and .restrict_mode == false and
+            (.ports | type == "array" and all(type == "object" and keys == ["port", "pp"] and
+                (.port | type == "number" and floor == . and . >= 1 and . <= 65535) and
+                (.pp | type == "boolean"))) and
+            ([.ports[].port] | length == (unique | length))' >/dev/null || {
+            echo "invalid port policy (restrict_mode must remain false)" >&2
+            exit 64
+        }
+        [[ -r "$compose" && -r "$pre_launch" ]] || {
+            echo "compose and pre-launch script must be readable files" >&2
+            exit 64
+        }
+        stage_start compose-update "${COMPOSE_UPDATE_SECONDS:-300}"
+        # Raw API JSON goes to files; print errors even when the CLI puts them on stdout (#466).
+        status=0
+        phala api "/cvms/$cvm_id/compose_file" >"$output.current.json" || status=$?
+        if ((status != 0)); then cat "$output.current.json" >&2; exit "$status"; fi
+        # Keep the current app-compose, including allowed_envs and all KMS/storage settings.
+        # No encrypted_env, env_keys, or update_env_vars: the sealed environment stays untouched.
+        jq -e --rawfile compose "$compose" --rawfile pre_launch "$pre_launch" --argjson policy "$policy" '
+            select(type == "object" and (.docker_compose_file | type == "string")
+                and (has("encrypted_env") | not) and (has("env_keys") | not)
+                and (has("update_env_vars") | not))
+            | .docker_compose_file = $compose | .pre_launch_script = $pre_launch
+            | .port_policy = $policy | .public_logs = false | .public_sysinfo = false
+        ' "$output.current.json" >"$output.request.json" || {
+            cat "$output.current.json" >&2
+            echo "invalid current app-compose response" >&2
+            exit 1
+        }
+        status=0
+        phala api "/cvms/$cvm_id/compose_file/provision" -X POST --input "$output.request.json" >"$output" || status=$?
+        cat "$output" >&2
+        ((status == 0)) || exit "$status"
+        hash=$(jq -er '.compose_hash | select(type == "string" and test("^(0x)?[0-9a-fA-F]{64}$"))' "$output") || {
+            echo "compose provision returned no valid compose hash" >&2
+            exit 1
+        }
+        jq -n --arg hash "$hash" '{compose_hash: $hash}' >"$output.commit.json"
+        status=0
+        response=$(phala api "/cvms/$cvm_id/compose_file" -X PATCH --input "$output.commit.json") || status=$?
+        [[ -z "$response" ]] || printf '%s\n' "$response" >&2
+        ((status == 0)) || exit "$status"
         ;;
     os-image)
         [[ $# -eq 2 && "$1" =~ ^[A-Za-z0-9_-]+$ && "$2" =~ ^[A-Za-z0-9._-]+$ ]] || {
@@ -114,18 +169,29 @@ case "$command" in
         # null in practice. The upgrade after the sealing proves the CVM: running, /healthz, the
         # attestation, the certificate.
         accepted='(.in_progress | not) and ((.compose_hash | '"$normal_hash"') != $previous)'
+        expected_hash=""
         if [[ "${1:-}" == --unsealed ]]; then
             shift
             outcome="settle with a new compose"
         else
             accepted='.status == "running" and '$accepted outcome="run a new compose"
         fi
+        if [[ "${1:-}" == --compose-hash ]]; then
+            expected_hash=$(jq -ner --arg hash "${2:-}" '$hash | ascii_downcase | ltrimstr("0x")
+                | select(test("^[0-9a-f]{64}$"))') || {
+                echo "--compose-hash requires a SHA-256 hash" >&2
+                exit 64
+            }
+            shift 2
+            accepted+=' and ((.compose_hash | '"$normal_hash"') == $expected)'
+            outcome="settle with compose hash $expected_hash"
+        fi
         stage_start cvm-wait "${CVM_WAIT_SECONDS:-900}"
         while stage_remaining; do
             if cvm=$(phala cvms get "$1" --json); then
                 jq -r '"status=\(.status) in_progress=\(.in_progress) compose_hash=\(.compose_hash)"' \
                     <<<"$cvm" >&2 || true
-                if jq -e --arg previous "${2:-}" "$accepted" <<<"$cvm" >/dev/null; then
+                if jq -e --arg previous "${2:-}" --arg expected "$expected_hash" "$accepted" <<<"$cvm" >/dev/null; then
                     printf '%s\n' "$cvm"
                     exit 0
                 fi
@@ -169,7 +235,7 @@ case "$command" in
         exit 1
         ;;
     *)
-        echo "usage: $0 get|url|gateway-domain|deploy|os-image|wait|attestation|instance-id|healthz ARGS..." >&2
+        echo "usage: $0 get|url|gateway-domain|deploy|compose-update|os-image|wait|attestation|instance-id|healthz ARGS..." >&2
         exit 64
         ;;
 esac

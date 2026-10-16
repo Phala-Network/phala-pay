@@ -30,7 +30,7 @@ class DeployWorkflowTests(unittest.TestCase):
         self.kit = self.tmp / "kit"
         deploy = self.kit / "deploy"
         deploy.mkdir(parents=True)
-        for script in ("phala-cvm.sh", "deadline.sh", "preflight-phala.sh"):
+        for script in ("phala-cvm.sh", "deadline.sh", "preflight-phala.sh", "compose-policy.jq", "phala-cloud-pre-launch.sh"):
             shutil.copy2(ROOT / "deploy" / script, deploy)
         (deploy / "upgrade-monitor.py").write_text("# No network sampling in this workflow test.\n")
         cli = deploy / "phala"
@@ -42,6 +42,14 @@ case "$1" in
     api)
         if [[ "$2" == */available-os-images ]]; then
             printf '%s\\n' "$STUB_AVAILABLE_IMAGES"
+        elif [[ "$2" == */compose_file/provision ]]; then
+            jq -nc '{compose_hash: ("ab" * 32), app_id: null}'
+        elif [[ "$2" == */compose_file ]]; then
+            if [[ "${3:-}" == -X ]]; then
+                touch "$STUB_COMPOSE_COMMITTED"
+            else
+                echo '{"docker_compose_file":"old", "allowed_envs":["SENTRY_DSN"]}'
+            fi
         else
             [[ "${STUB_OS_STATUS:-0}" == 0 ]] || exit "$STUB_OS_STATUS"
             touch "$STUB_OS_STARTED"
@@ -52,8 +60,10 @@ case "$1" in
             busy=true
             rm "$STUB_OS_STARTED"
         fi
-        jq -nc --argjson busy "$busy" '{os:{name:"dstack-0.5.12"},status:"running",in_progress:$busy,
-            compose_hash:"ab12",node_info:{id:26,name:"prod5",region:"US-WEST-1"}}' ;;
+        hash=ab12
+        [[ ! -f "$STUB_COMPOSE_COMMITTED" ]] || hash=$(printf 'ab%.0s' {1..32})
+        jq -nc --arg hash "$hash" --argjson busy "$busy" '{os:{name:"dstack-0.5.12"},status:"running",in_progress:$busy,
+            compose_hash:$hash,node_info:{id:26,name:"prod5",region:"US-WEST-1"}}' ;;
     *) exit 64 ;;
 esac
 ''')
@@ -81,12 +91,15 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         self.work = self.tmp / "work"
         (self.work / "release").mkdir(parents=True)
         (self.work / "release/images.json").write_text('{"phala-pay":"test-image"}')
+        (self.tmp / "compose.yml").write_text("services: {}\n")
         self.set_current_image("dstack-0.5.12")
         (self.tmp / "env-file").write_text("SENTRY_DSN=\n")
         self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
                     "KIT": str(self.kit), "WORK": str(self.work), "RUNNER_TEMP": str(self.tmp),
                     "STUB_LOG": str(self.tmp / "cli.jsonl"), "GITHUB_ENV": str(self.tmp / "env"),
                     "STUB_OS_STARTED": str(self.tmp / "os-started"),
+                    "STUB_COMPOSE_COMMITTED": str(self.tmp / "compose-committed"),
+                    "VARIANT": "service",
                     "GITHUB_STEP_SUMMARY": str(self.tmp / "summary"),
                     "PHALA_CLOUD_API_KEY": "test-key", "PHALA_WORKSPACE": "test-workspace",
                     "PHALA_NODE_ID": "", "TOPUP_CVM_ID": "", "STAGING_PRODUCT_CVM_ID": "",
@@ -106,7 +119,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                     "RELEASE_REPOSITORY": "Phala-Network/phala-pay"}
 
     def set_current_image(self, image):
-        (self.work / "cvm-before.json").write_text(json.dumps({"os": {"name": image}}))
+        (self.work / "cvm-before.json").write_text(json.dumps({"os": {"name": image}, "app_id": "app-1"}))
 
     def calls(self):
         return [json.loads(line) for line in (self.tmp / "cli.jsonl").read_text().splitlines()]
@@ -137,15 +150,22 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                 result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 calls = [json.loads(line) for line in (self.tmp / "cli.jsonl").read_text().splitlines()]
-                deployment = next(args for args in calls if args[0] == "deploy")
-                if mode == "provision" and node:
-                    self.assertEqual(deployment[deployment.index("--node-id") + 1], "26")
+                if mode == "provision":
+                    deployment = next(args for args in calls if args[0] == "deploy")
+                    if node:
+                        self.assertEqual(deployment[deployment.index("--node-id") + 1], "26")
+                    else:
+                        self.assertNotIn("--node-id", deployment)
+                    self.assertFalse(any(args[0] == "api" for args in calls))
                 else:
-                    self.assertNotIn("--node-id", deployment)
-                if mode == "upgrade":
-                    self.assertNotIn("-e", deployment)
-                    self.assertEqual(deployment[deployment.index("--cvm-id") + 1], "cvm-1")
-                self.assertFalse(any(args[0] == "api" for args in calls))
+                    self.assertFalse(any(args[0] == "deploy" for args in calls))
+                    updates = [args for args in calls if args[0] == "api"]
+                    self.assertEqual([args[1] for args in updates], ["/cvms/cvm-1/compose_file",
+                                     "/cvms/cvm-1/compose_file/provision", "/cvms/cvm-1/compose_file"])
+                    for update in updates:
+                        self.assertNotIn("--node-id", update)
+                        self.assertNotIn("-e", update)
+                    self.assert_policy_request(self.work / "deploy.json.request.json")
                 summary = (self.tmp / "summary").read_text()
                 requested = f"`{node or 'auto'}`" if mode == "provision" else "unchanged (upgrade)"
                 self.assertIn(f"| Requested node | {requested} |", summary)
@@ -160,7 +180,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         commands = [args[0] for args in self.calls()]
         self.assertEqual(commands, ["maintenance", "api", "cvms", "cvms", "health", "maintenance",
-                                    "deploy", "cvms", "health"])
+                                    "api", "api", "api", "cvms", "health"])
         leases = [args for args in self.calls() if args[0] == "maintenance"]
         self.assertEqual(leases[0], leases[1])
 
@@ -170,7 +190,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([args[0] for args in self.calls()],
-                         ["api", "cvms", "cvms", "health", "deploy", "cvms", "health"])
+                         ["api", "cvms", "cvms", "health", "api", "api", "api", "cvms", "health"])
 
     def test_os_image_or_fresh_lease_failure_prevents_compose_deploy(self):
         self.env["MODE"] = "upgrade"
@@ -181,8 +201,28 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                 self.env[failure] = "42"
                 result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
                 self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
-                self.assertFalse(any(args[0] == "deploy" for args in self.calls()))
+                self.assertFalse(any(args[0] == "deploy" or "compose_file" in args[1] for args in self.calls()))
                 del self.env[failure]
+
+    def assert_policy_request(self, path):
+        body = json.loads(path.read_text())
+        self.assertEqual(body["port_policy"], {"ports": [{"port": 443, "pp": False}], "restrict_mode": False})
+        self.assertEqual(body["allowed_envs"], ["SENTRY_DSN"])
+        for key in ("encrypted_env", "env_keys", "update_env_vars"):
+            self.assertNotIn(key, body)
+
+    def test_provision_followup_commits_gateway_and_port_policy_for_both_targets(self):
+        render = self.kit / "deploy/render.sh"
+        render.write_text("#!/bin/sh\nprintf 'services: {}\\n'\n")
+        render.chmod(0o755)
+        for target, variant in (("topup", "service"), ("product", "product")):
+            with self.subTest(target=target):
+                self.env.update(TARGET=target, VARIANT=variant, CVM_ID="cvm-1")
+                (self.work / "cvm.json").write_text(json.dumps({"gateway": {"base_domain": "example.invalid"},
+                                                               "compose_hash": "ab12"}))
+                result = self.run_step("Set the values known only after provisioning")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assert_policy_request(self.work / "deploy-public-url.json.request.json")
 
     def test_upgrade_preflight_uses_cvm_specific_allowlist(self):
         self.env["MODE"] = "upgrade"

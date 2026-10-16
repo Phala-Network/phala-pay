@@ -31,8 +31,19 @@ checksum-invalid keys return `401` before taking a slot. Anonymous `client_secre
 their own slots; `/healthz` and admin authentication do not use this gate. The service admission
 limits are built in, with no new configuration setting.
 
-Carrying real client IPs via PROXY protocol is future work: it requires the dstack gateway's
-`port_policy` option `pp` and a corresponding ingress change.
+The phase-1 release supports an optional private `--proxy-protocol-bind ADDR` listener, but
+shipped compose commands leave it disabled. It requires a PROXY v2 header on every connection,
+reads each header concurrently with a five-second deadline (at most 256 pending headers), and
+passes the source socket address into Axum's `ConnectInfo<SocketAddr>` on the same router.
+LOCAL and unspecified-address headers use the peer socket address. Invalid, missing, and timed-out
+headers close the connection with a generic diagnostic; topup never records client addresses in
+tracing or Sentry. The existing plain HTTP listener and healthcheck on 8080 stay unchanged.
+
+Expose the optional listener only to a trusted ingress hop: PROXY headers assert an address
+without authenticating it. Client-supplied `X-Real-IP` and `X-Forwarded-For` remain untrusted.
+The attested gateway `port_policy` explicitly keeps `pp:false` and `restrict_mode:false`; a later
+phase 2 must enable gateway PROXY v2 and ingress ACCEPT/SEND together in one app-compose update.
+Carrying the address introduces no per-IP admission or transaction-hint limits.
 
 Transaction-hash hints have no per-IP limit. Their controls are credential-gated per-object
 limits of 3/minute and 10/day, a hard cap of 80 tasks per environment per UTC day, and at most
@@ -154,6 +165,7 @@ The files it refuses include:
 |---|---|---|
 | `--config FILE` | required | The configuration file. |
 | `--bind` | `0.0.0.0:8080` | The API's socket address. |
+| `--proxy-protocol-bind ADDR` | none | Second private listener requiring PROXY v2 from a trusted ingress hop. Same router, request deadlines, and graceful shutdown, including in read-only mode. Never publish this port directly. |
 | `--webhook-proxy URL` | none | The egress proxy every webhook delivery goes through, the smokescreen sidecar in a CVM ([webhook egress](../deploy/README.md#webhook-egress)). Required unless the public origin is `http` (local stacks). |
 | `--read-only` | off | Serves only the read API of a database restored from backup (the restore-check variant, [deploy/RESTORE.md](../deploy/RESTORE.md)): no loop, no lease-owner lock, every write refused, and Sentry reports as `<environment>-restore`. |
 | `--restore-report FILE` | none | With `--read-only`, the restore-check report `/healthz` serves. |

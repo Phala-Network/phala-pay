@@ -553,10 +553,10 @@ The API has one public origin, `public_origin` (`https://$DOMAIN`, where `$DOMAI
 dstack-ingress's `DOMAIN` in the environment overlay), a stable name the owner controls, not
 the CVM's gateway URL, which changes with the node and the app id: merchants call it and pin its
 attestation, treasury challenges (EIP-4361) name it as their `domain` and `uri`, and the admin
-API verifies every signed `@target-uri` against it. The official [dstack-ingress](https://github.com/Dstack-TEE/dstack-examples/tree/dstack-ingress-v2.6/custom-domain/dstack-ingress)
-2.6 (`ghcr.io/dstack-tee/dstack-ingress`, pinned by the digest of its release notes; `gh
-attestation verify oci://ghcr.io/dstack-tee/dstack-ingress@sha256:c212abb7bedec4d7b54a82bcf9972e58e39a4757cc811faeb6017eee6c0673b0
---owner Dstack-TEE` shows it was built from tag `dstack-ingress-v2.6`) publishes the compose's only
+API verifies every signed `@target-uri` against it. The official [dstack-ingress](https://github.com/Dstack-TEE/dstack-examples/tree/dstack-ingress-v2.7/custom-domain/dstack-ingress)
+2.7 (`ghcr.io/dstack-tee/dstack-ingress`, pinned by the digest of its release notes; `gh
+attestation verify oci://ghcr.io/dstack-tee/dstack-ingress@sha256:bc0c97e76810c6368a9ae0d8efd156ffa0027806e43f9d9f8834eabef0192283
+--owner Dstack-TEE` shows it was built from tag `dstack-ingress-v2.7`) publishes the compose's only
 port, 443. The gateway passes the TLS connection for the domain through to it, it terminates TLS
 inside the CVM, and forwards the stream to `topup:8080`. It gets the Let's Encrypt certificate
 with `tls-alpn-01` through that same port, so the CVM holds no DNS credentials; the ACME contact is
@@ -566,6 +566,42 @@ with the compose.
 
 A reference-product CVM is served the same way on its own overlay's `DOMAIN`
 ([Phala's instance, "Staging reference product"](phala.md#staging-reference-product)).
+
+**Phase 1: PROXY remains off.** Both topup and product pin ingress 2.7; topup still targets
+`topup:8080`, the product `product:8089`. Neither ACCEPT nor SEND is set. The configured `5s` /
+`30s` / `30s` HAProxy deadlines and numeric ports pass 2.7's strict validation. Renewal settings
+are omitted, so upstream uses integer `RENEW_INTERVAL=43200` and an unset `RENEW_DAYS_BEFORE`;
+explicit overrides must be positive whole numbers, not `12h` or `30d`. Boolean settings accept
+only exact `true` / `false`; omitted PROXY booleans default to `false`.
+
+[phala-cvm.sh](phala-cvm.sh)'s `compose-update CVM_ID COMPOSE PRE_LAUNCH PORT_POLICY_JSON OUT`
+reads `GET /cvms/{id}/compose_file`, replaces the compose, pre-launch script, port policy and
+private-log flags, then POSTs `/cvms/{id}/compose_file/provision` and PATCHes `/cvms/{id}/compose_file`
+with only the returned `compose_hash`. It keeps the current allowed secret names and KMS/storage
+settings, sends no encrypted env or environment-update fields, and preserves the owner-sealed
+values. Calls share a five-minute stage deadline and each API call is capped at 30 seconds;
+failures print the CLI/API diagnostic. OUT records the provision response, including its hash; callers wait for that exact hash to settle
+before verifying attestation or probing the upgraded service.
+Deploy upgrades and both provisioning follow-ups use this path because CLI 1.1.22 cannot set
+`port_policy` directly. The policy for **every variant** is
+`{"ports":[{"port":443,"pp":false}],"restrict_mode":false}`. With `restrict_mode:false`, this does
+not restrict the template's 80 or restore-check's 8081. Attestation verification checks that exact
+app-compose field; changing it changes the attested compose hash.
+
+**Log privacy exception.** HAProxy TCP access logs can contain client IPs, including real client
+IPs after phase 2. This is an accepted exception for private CVM logs, with `public_logs=false`;
+do not export those access logs to Sentry. Topup's tracing and Sentry still never contain client
+IPs. The optional topup PROXY listener only carries connection information; there are no new
+per-IP limits, including for transaction-hash hints.
+
+**Rollout and rollback.** Publish phase 1 as a release, then upgrade and verify staging topup and
+the staging product before production topup. The restore-check and template variants keep plain
+HTTP and PROXY off. Phase 2 is a separate release: gateway `pp:true`, ingress
+`ACCEPT_PROXY_PROTOCOL=true` / `SEND_PROXY_PROTOCOL=true`, and `TARGET_ENDPOINT=topup:8082` must
+change together in one app-compose, with topup's private `--proxy-protocol-bind 0.0.0.0:8082`.
+Enabling only one hop breaks every connection, including health and certificate checks. Once
+phase 2 ships, **no rollback past this phase-1 release**: first return atomically to its PROXY-off
+policy and ingress settings. Phase 1 alone does not enable real client IP delivery.
 
 **HUMAN-ONLY, owner of the domain's DNS zone** (any DNS provider; the Deploy summary's
 wording assumes Cloudflare, as in Phala's instance), once per CVM instance. Every Deploy run

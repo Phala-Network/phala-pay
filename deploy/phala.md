@@ -14,6 +14,21 @@ API-key authentication that cannot acquire a database slot within 250 ms returns
 [Service configuration](../docs/configuration.md#api-admission-limits) for the authentication
 gate and protection model.
 
+## Ingress rollout
+
+The phase-1 deploy kit pins dstack-ingress 2.7 for both topup and the staging reference product.
+Its explicit attested port policy keeps PROXY off (`pp:false`, `restrict_mode:false`); existing
+backend ports and the template/restore-check listeners stay unchanged. Upgrade through a release,
+staging topup and product verification, then production topup. These are rollout instructions,
+not a claim that any live CVM has been upgraded.
+
+Phase 2 is a separate release that enables gateway PROXY and ingress ACCEPT/SEND atomically for
+topup. Keep phase 1 as its rollback floor: once phase 2 ships, no rollback past that release.
+The product remains on its plain HTTP backend until separately approved. Topup carries the
+address without per-IP limits and never logs it; HAProxy's private access logs are the documented
+privacy exception. See [Custom domain](README.md#custom-domain) for the compose-update API path,
+attestation checks, validation rules, and rollback ordering.
+
 ## Onboarding policy
 
 Phala's instance onboards only Phala's own accounts, as in

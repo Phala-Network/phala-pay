@@ -34,6 +34,7 @@ hex.workspace = true
 hmac.workspace = true
 httpdate.workspace = true
 prometheus.workspace = true
+ppp = "=2.3.0"
 rand.workspace = true
 reqwest.workspace = true
 sentry.workspace = true

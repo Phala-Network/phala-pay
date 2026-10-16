@@ -85,6 +85,24 @@ timed_out "an upgrade in progress" "run a new compose"
 ! state running false "$old" | wait_for cvm-1 cd34 >/dev/null || fail "an upgrade accepted the previous compose"
 timed_out "an upgrade with the previous compose" "run a new compose"
 
+# Compose-file PATCH is asynchronous: an old settled compose must not satisfy the read-back.
+expected=$(printf 'ab%.0s' {1..32})
+foreign=$(printf 'cd%.0s' {1..32})
+running=$(state running false "0x${expected^^}")
+output=$({ state running false "$foreign"; state running true "$expected"; echo "$running"; } |
+    wait_for --compose-hash "$expected" cvm-1) || fail "exact-hash upgrade refused its compose"
+accepted "exact-hash upgrade" "$output" "$running" 3
+# An idempotent update may have the same hash as before; it still settles successfully.
+output=$(echo "$running" | wait_for --compose-hash "$expected" cvm-1) || fail "idempotent update refused"
+accepted "idempotent update" "$output" "$running" 1
+settled=$(state error false "$expected")
+output=$(echo "$settled" | wait_for --unsealed --compose-hash "$expected" cvm-1) || fail "unsealed exact hash refused"
+accepted "unsealed exact hash" "$output" "$settled" 1
+! state running false "$foreign" | wait_for --compose-hash "$expected" cvm-1 >/dev/null || fail "accepted a foreign hash"
+timed_out "foreign compose" "settle with compose hash $expected"
+! state running false "$expected" | wait_for --compose-hash invalid cvm-1 >/dev/null || fail "accepted malformed expected hash"
+grep -qF -- '--compose-hash requires a SHA-256 hash' "$tmp/err"
+
 # instance-id: the event log's single instance-id event, as 40 lowercase hex digits.
 # attestation EVENT... : an attestation whose event log has each instance-id EVENT payload.
 attestation() {
