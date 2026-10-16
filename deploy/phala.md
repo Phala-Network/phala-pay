@@ -16,7 +16,7 @@ gate and protection model.
 
 ## Ingress rollout
 
-The phase-1 deploy kit pins dstack-ingress 2.7 for both topup and the staging reference product.
+The phase-1 deploy kit pins dstack-ingress 2.8 for both topup and the staging reference product.
 Its explicit attested port policy keeps PROXY off (`pp:false`, `restrict_mode:false`); existing
 backend ports and the template/restore-check listeners stay unchanged. Upgrade through a release,
 staging topup and product verification, then production topup. These are rollout instructions,

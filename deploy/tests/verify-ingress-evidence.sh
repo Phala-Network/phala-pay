@@ -2,11 +2,22 @@
 # deploy/verify-ingress-evidence.sh against stub evidence, verifier, and TLS endpoint: it passes when
 # the domain serves the certificate of its evidence, and a domain that does not answer the TLS
 # handshake fails within the handshake's bound (`timeout 30`, shortened here) instead of hanging.
+# Real curl requests to a local HTTP server cover evidence withdrawn with 404 and bounded retries.
 set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT INT TERM
+server_pid=""
+cleanup() {
+    if [[ -n "$server_pid" ]]; then
+        kill "$server_pid" 2>/dev/null || true
+        wait "$server_pid" 2>/dev/null || true
+    fi
+    rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
+curl_cli=$(command -v curl)
+timeout_cli=$(command -v timeout)
 domain=pay.example.com app_id=95174fcad739ae76c7510dc1b2bc00a32e25c644
 mkdir -p "$tmp/kit/deploy" "$tmp/bin" "$tmp/evidence"
 cp "$root/deploy/verify-ingress-evidence.sh" "$tmp/kit/deploy/"
@@ -24,6 +35,12 @@ jq -n --arg app_id "$app_id" --arg report_data "$manifest$(printf '0%.0s' {1..64
 printf '#!/bin/sh\ncat >/dev/null\ncat "%s"\n' "$tmp/result.json" >"$tmp/kit/deploy/dstack-verifier.sh"
 cat >"$tmp/bin/curl" <<'STUB'
 #!/usr/bin/env bash
+if [[ -n "${STUB_EVIDENCE_URL:-}" ]]; then
+    args=("$@")
+    url=${!#}
+    args[${#args[@]}-1]="$STUB_EVIDENCE_URL/${url##*/}"
+    exec "$STUB_CURL" "${args[@]}"
+fi
 while (($# > 1)); do [[ "$1" != -o ]] || output=$2; shift; done
 cp "$STUB_EVIDENCE/${1##*/}" "$output"
 STUB
@@ -55,6 +72,72 @@ fail() {
 STUB_SERVE=certificate "$tmp/kit/deploy/verify-ingress-evidence.sh" "$domain" "0x$app_id" >"$tmp/out" 2>&1 ||
     { cat "$tmp/out" >&2; fail "refused the certificate its evidence names"; }
 grep -q "certificate evidence of $domain passed" "$tmp/out" || fail "did not report the passed evidence"
+
+# 2.8 withdraws evidence until it can regenerate it. Exercise curl's actual HTTP retry behavior,
+# serving each file with 404 once and then the valid fixture, or with 404 on every request.
+cat >"$tmp/server.py" <<'PY'
+import http.server
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+attempts = {}
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        mode = (root / "mode").read_text().strip()
+        key = (mode, self.path)
+        attempts[key] = attempts.get(key, 0) + 1
+        status = 404 if mode == "unavailable" or attempts[key] == 1 else 200
+        with (root / "requests").open("a") as log:
+            log.write(f"{mode} {self.path} {status}\n")
+        if status == 404:
+            self.send_error(404)
+        else:
+            data = (root / "evidence" / self.path.removeprefix("/")).read_bytes()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(data)
+
+    def log_message(self, *_args):
+        pass
+
+
+with http.server.HTTPServer(("127.0.0.1", 0), Handler) as server:
+    (root / "port").write_text(str(server.server_port))
+    server.serve_forever()
+PY
+echo transient >"$tmp/mode"
+python3 "$tmp/server.py" "$tmp" >"$tmp/server.log" 2>&1 &
+server_pid=$!
+start=$SECONDS
+until [[ -s "$tmp/port" ]]; do
+    if ! kill -0 "$server_pid" 2>/dev/null || ((SECONDS - start >= 5)); then
+        cat "$tmp/server.log" >&2
+        fail "local evidence server did not start"
+    fi
+    sleep 0.05
+done
+STUB_EVIDENCE_URL="http://127.0.0.1:$(cat "$tmp/port")"
+export STUB_CURL="$curl_cli" STUB_EVIDENCE_URL
+STUB_SERVE=certificate "$tmp/kit/deploy/verify-ingress-evidence.sh" "$domain" "$app_id" >"$tmp/out" 2>&1 ||
+    { cat "$tmp/out" >&2; fail "did not recover from temporarily unavailable evidence"; }
+grep -q "certificate evidence of $domain passed" "$tmp/out" || fail "did not verify recovered evidence"
+for file in quote.json sha256sum.txt acme-account.json "cert-$domain.pem"; do
+    [[ "$(grep -cxF "transient /$file 404" "$tmp/requests")" == 1 &&
+        "$(grep -cxF "transient /$file 200" "$tmp/requests")" == 1 ]] ||
+        fail "did not retry $file after a 404"
+done
+
+echo unavailable >"$tmp/mode"
+result=0
+STUB_SERVE=certificate "$timeout_cli" 20 "$tmp/kit/deploy/verify-ingress-evidence.sh" \
+    "$domain" "$app_id" >"$tmp/out" 2>&1 || result=$?
+[[ "$result" == 22 ]] || fail "permanently unavailable evidence did not fail with curl's HTTP error"
+[[ "$(grep -cxF 'unavailable /quote.json 404' "$tmp/requests")" == 4 ]] ||
+    fail "did not stop after the initial request and three retries"
+unset STUB_EVIDENCE_URL
 
 start=$SECONDS
 ! STUB_SERVE=hang "$tmp/kit/deploy/verify-ingress-evidence.sh" "$domain" "$app_id" >"$tmp/out" 2>&1 ||

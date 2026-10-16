@@ -24,7 +24,7 @@ services:
 
   # The single public ingress, as in topup's compose (deploy/README.md, "Custom domain").
   dstack-ingress:
-    image: ghcr.io/dstack-tee/dstack-ingress:2.7@sha256:bc0c97e76810c6368a9ae0d8efd156ffa0027806e43f9d9f8834eabef0192283
+    image: ghcr.io/dstack-tee/dstack-ingress:2.8@sha256:60e682449534715a2f2e5b72326ca4229209c8e26c931c6f34d27e02200ac086
     environment:
       TIMEOUT_CONNECT: 5s
       TIMEOUT_CLIENT: 30s
