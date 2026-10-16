@@ -28,6 +28,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   port 8080. Document staging verification without adding an IP diagnostic endpoint or topup IP
   logging.
 
+### Fixed (operators)
+
+- Make compose-update reruns succeed when the provisioned compose hash already matches the
+  CVM's current hash, skipping the redundant commit while keeping the exact-hash wait and
+  attestation checks. Registered hashes that differ from the current hash still require a commit.
+
 ## [0.10.8] - 2026-10-16
 
 ### Added (operators)

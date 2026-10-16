@@ -606,11 +606,14 @@ protocols. See the pinned upstream README's [Client address section](https://git
 [phala-cvm.sh](phala-cvm.sh)'s `compose-update CVM_ID COMPOSE PRE_LAUNCH PORT_POLICY_JSON OUT`
 reads `GET /cvms/{id}/compose_file`, replaces the compose, pre-launch script, port policy and
 private-log flags, then POSTs `/cvms/{id}/compose_file/provision` and PATCHes `/cvms/{id}/compose_file`
-with only the returned `compose_hash`. It keeps the current allowed secret names and KMS/storage
-settings, sends no encrypted env or environment-update fields, and preserves the owner-sealed
-values. Calls share a five-minute stage deadline and each API call is capped at 30 seconds;
-failures print the CLI/API diagnostic. OUT records the provision response, including its hash; callers wait for that exact hash to settle
-before verifying attestation or probing the upgraded service.
+with only the returned `compose_hash`. Before the update it reads the CVM's current compose hash
+with `cvms get`; if the provisioned hash matches, it reports `unchanged; nothing to commit` and
+skips the PATCH. A registered hash alone does not skip the commit. It keeps the current allowed
+secret names and KMS/storage settings, sends no encrypted env or environment-update fields, and
+preserves the owner-sealed values. Calls share a five-minute stage deadline and each API call is
+capped at 30 seconds; failures print the CLI/API diagnostic. OUT records the provision response,
+including its hash; callers wait for that exact hash to settle before verifying attestation or
+probing the upgraded service.
 Deploy upgrades and both provisioning follow-ups use this path because CLI 1.1.22 cannot set
 `port_policy` directly. The **service** policy is
 `{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`; **product, template, and restore-check**

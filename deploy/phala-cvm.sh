@@ -90,6 +90,15 @@ case "$command" in
         stage_start compose-update "${COMPOSE_UPDATE_SECONDS:-300}"
         # Raw API JSON goes to files; print errors even when the CLI puts them on stdout (#466).
         status=0
+        phala cvms get "$cvm_id" --json >"$output.cvm.json" || status=$?
+        if ((status != 0)); then cat "$output.cvm.json" >&2; exit "$status"; fi
+        current_hash=$(jq -er '.compose_hash
+            | select(type == "string" and test("^(0x)?[0-9a-fA-F]{64}$"))
+            | '"$normal_hash" "$output.cvm.json") || {
+            echo "CVM returned no valid current compose hash" >&2
+            exit 1
+        }
+        status=0
         phala api "/cvms/$cvm_id/compose_file" >"$output.current.json" || status=$?
         if ((status != 0)); then cat "$output.current.json" >&2; exit "$status"; fi
         # Keep the current app-compose, including allowed_envs and all KMS/storage settings.
@@ -113,6 +122,11 @@ case "$command" in
             echo "compose provision returned no valid compose hash" >&2
             exit 1
         }
+        # Registration alone does not prove this CVM runs the target compose (for example, rollback).
+        if jq -e --arg current "$current_hash" '.compose_hash | '"$normal_hash"' | . == $current' "$output" >/dev/null; then
+            echo "compose hash $current_hash unchanged; nothing to commit" >&2
+            exit 0
+        fi
         jq -n --arg hash "$hash" '{compose_hash: $hash}' >"$output.commit.json"
         status=0
         response=$(phala api "/cvms/$cvm_id/compose_file" -X PATCH --input "$output.commit.json") || status=$?

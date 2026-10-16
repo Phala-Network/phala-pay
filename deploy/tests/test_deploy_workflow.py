@@ -60,7 +60,7 @@ case "$1" in
             busy=true
             rm "$STUB_OS_STARTED"
         fi
-        hash=ab12
+        hash=$(printf 'cd%.0s' {1..32})
         [[ ! -f "$STUB_COMPOSE_COMMITTED" ]] || hash=$(printf 'ab%.0s' {1..32})
         jq -nc --arg hash "$hash" --argjson busy "$busy" '{os:{name:"dstack-0.6.1"},status:"running",in_progress:$busy,
             compose_hash:$hash,node_info:{id:26,name:"prod5",region:"US-WEST-1"}}' ;;
@@ -147,7 +147,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
             with self.subTest(mode=mode, node=node, variant=variant):
                 self.env.update(MODE=mode, PHALA_NODE_ID=node, VARIANT=variant,
                                 TARGET="topup" if variant == "service" else "product")
-                for path in (self.tmp / "cli.jsonl", self.tmp / "summary"):
+                for path in (self.tmp / "cli.jsonl", self.tmp / "summary", self.tmp / "compose-committed"):
                     path.unlink(missing_ok=True)
                 result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -173,6 +173,20 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                 self.assertIn(f"| Requested node | {requested} |", summary)
                 self.assertIn("| CVM node | 26 (prod5, US-WEST-1) |", summary)
 
+    def test_product_upgrade_rerun_waits_for_current_hash_without_commit(self):
+        self.env.update(MODE="upgrade", TARGET="product", VARIANT="product")
+        result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (self.tmp / "cli.jsonl").unlink()
+        result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("unchanged; nothing to commit", result.stderr)
+        self.assertEqual([args[0] for args in self.calls()], ["cvms", "api", "api", "cvms", "health"])
+        updates = [args for args in self.calls() if args[0] == "api"]
+        self.assertEqual([args[1] for args in updates], ["/cvms/cvm-1/compose_file",
+                         "/cvms/cvm-1/compose_file/provision"])
+        self.assertEqual(json.loads((self.work / "cvm.json").read_text())["compose_hash"], "ab" * 32)
+
     def test_os_image_then_health_then_fresh_lease_then_compose(self):
         self.env["MODE"] = "upgrade"
         self.set_current_image("dstack-0.5.12")
@@ -182,7 +196,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         commands = [args[0] for args in self.calls()]
         self.assertEqual(commands, ["maintenance", "api", "cvms", "cvms", "health", "maintenance",
-                                    "api", "api", "api", "cvms", "health"])
+                                    "cvms", "api", "api", "api", "cvms", "health"])
         probes = [args for args in self.calls() if args[0] == "health"]
         self.assertTrue(all(args[-1] == f"{self.env['PUBLIC_URL']}/healthz" for args in probes))
         leases = [args for args in self.calls() if args[0] == "maintenance"]
@@ -194,7 +208,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         result = self.run_step("Deploy (${{ inputs.mode }}) and wait for the CVM")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([args[0] for args in self.calls()],
-                         ["api", "cvms", "cvms", "health", "api", "api", "api", "cvms", "health"])
+                         ["api", "cvms", "cvms", "health", "cvms", "api", "api", "api", "cvms", "health"])
 
     def test_os_image_or_fresh_lease_failure_prevents_compose_deploy(self):
         self.env["MODE"] = "upgrade"
@@ -223,6 +237,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         for target, variant in (("topup", "service"), ("product", "product")):
             with self.subTest(target=target):
                 self.env.update(TARGET=target, VARIANT=variant, CVM_ID="cvm-1")
+                (self.tmp / "compose-committed").unlink(missing_ok=True)
                 (self.work / "cvm.json").write_text(json.dumps({"gateway": {"base_domain": "example.invalid"},
                                                                "compose_hash": "ab12"}))
                 result = self.run_step("Set the values known only after provisioning")
