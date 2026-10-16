@@ -13,6 +13,22 @@ def env_map:
 
 def check(ok; message): if ok then empty else message end;
 
+# Explicit for every variant, including those without an ingress. Phase 2 changes the service
+# policy and ingress in one app-compose; until then no gateway port emits PROXY headers.
+def port_policy($variant):
+    if (["service", "restore-check", "template", "product"] | index($variant)) != null then
+        {ports: [{port: 443, pp: false}], restrict_mode: false}
+    else error("unknown variant \($variant)") end;
+
+def port_policy_violations($variant; $app):
+    [check($app.port_policy == port_policy($variant);
+        "the attested port_policy must match the \($variant) policy (PROXY off, restrict_mode false)")];
+
+def ingress_violations:
+    [check([.services["dstack-ingress"].environment | env_map
+        | .ACCEPT_PROXY_PROTOCOL, .SEND_PROXY_PROTOCOL] | all(. == null or . == "false");
+        "dstack-ingress must keep ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL off")];
+
 def published: [.services | to_entries[] | select((.value.ports // []) | length > 0)
     | {service: .key, ports: .value.ports}];
 
@@ -243,7 +259,7 @@ def service_violations:
         check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
                 | unique == ["dstack-ingress", "keys", "topup"];
               "only keys, topup, and dstack-ingress may mount the dstack socket")
-      ] + live_violations(serve_command) + capacity_violations;
+      ] + ingress_violations + live_violations(serve_command) + capacity_violations;
 
 # The template: the service without dstack-ingress, topup published on 80 for the Phala Cloud
 # gateway, which serves it as https://<app-id>.<gateway-domain>, the origin DSTACK_APP_DOMAIN names.
@@ -297,7 +313,7 @@ def product_violations:
               "dstack-ingress must serve the host of the product's public_url with tls-alpn-01, forwarding to product:8089"),
         check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
                 == ["dstack-ingress"]; "only dstack-ingress may mount the dstack socket")
-      ];
+      ] + ingress_violations;
 
 def violations($variant; $project):
     common_violations($variant; $project)

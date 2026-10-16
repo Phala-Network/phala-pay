@@ -73,7 +73,7 @@ pub struct DeadlineStream {
 }
 
 impl DeadlineStream {
-    fn new(stream: TcpStream) -> Self {
+    pub(super) fn new(stream: TcpStream) -> Self {
         Self {
             stream,
             idle: Box::pin(tokio::time::sleep(IDLE_TIMEOUT)),

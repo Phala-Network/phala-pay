@@ -23,6 +23,7 @@ mod openapi;
 mod pagination;
 mod payment_settings;
 mod pending;
+mod proxy_protocol;
 mod quotes;
 mod rate_limit;
 mod repository;
@@ -64,6 +65,7 @@ pub use client_limit::ClientReadLimiter;
 pub use deadlines::DeadlineListener;
 pub use idempotency::IdempotencyKeyPruner;
 pub(crate) use keys::api_key_object;
+pub use proxy_protocol::ProxyProtocolListener;
 pub use rate_limit::{ApiRateLimiter, HintRateLimiter, RateLimits};
 pub use topup_adapters::http_signature::PublicOrigin;
 pub(crate) use treasuries::treasury_object;
@@ -563,7 +565,7 @@ fn router_inner(state: AppState, pause: Arc<crate::pause::InstancePause>) -> (Ro
             merchant_auth,
             auth::authenticate_merchant_or_client_secret,
         ));
-    // No per-client IP is available behind the ingress, so hints have no per-IP limit.
+    // Hints intentionally have no per-IP limit, including on the optional PROXY listener.
     // Authenticated object limits, the daily hard cap and the in-flight cap bound hint work.
     let merchant = merchant.merge(client_secret).merge(hints);
     router_from_routes(state, pause, merchant, admin)

@@ -470,16 +470,18 @@ YAML
     say "created CVM $cvm_id (app $app_id), recorded in $state; waiting for it to settle"
     [[ "$variant" == template ]] || url=https://$DOMAIN
     phala_cvm wait --unsealed "$cvm_id" </dev/null >"$work/cvm.json"
-    local previous deployed
+    local expected deployed policy
+    policy=$(jq -cn -L "$kit/deploy" --arg variant "$variant" 'include "compose-policy"; port_policy($variant)')
     if [[ "$variant" == service ]]; then
         # The node's gateway is attested configuration: upgrade the new CVM to the compose rendered
         # with it. No -e, so the sealed env stays.
         gateway=$(phala_cvm gateway-domain "$work/cvm.json")
         "$kit/deploy/render.sh" --gateway-domain "$gateway" --images "$images" "$env_dir" >"$compose"
         "${preflight[@]}" </dev/null >&2
-        previous=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$work/cvm.json")
-        phala_cvm deploy "$work/deploy-gateway.json" --cvm-id "$cvm_id" "${update[@]}" </dev/null
-        phala_cvm wait --unsealed "$cvm_id" "$previous" </dev/null >"$work/cvm.json"
+        phala_cvm compose-update "$cvm_id" "$compose" "$kit/deploy/phala-cloud-pre-launch.sh" \
+            "$policy" "$work/deploy-gateway.json" </dev/null
+        expected=$(jq -er '.compose_hash' "$work/deploy-gateway.json")
+        phala_cvm wait --unsealed --compose-hash "$expected" "$cvm_id" </dev/null >"$work/cvm.json"
         # The TXT record names the instance: the attestation of this compose, which the CVM booted,
         # carries its id in the event log (`cvms get` reports none).
         deployed=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$work/cvm.json")
@@ -494,12 +496,20 @@ YAML
             die "CVM $cvm_id attests another compose than this run's"
         [[ "$attested" == "$deployed" ]] ||
             die "CVM $cvm_id reports compose hash $deployed, not this run's attested $attested"
+        jq -e -L "$kit/deploy" --arg variant "$variant" \
+            'include "compose-policy"; port_policy_violations($variant; .) | length == 0' \
+            "$work/attested/app-compose.json" >/dev/null || die "CVM $cvm_id attests another port policy"
         instance_id=$(phala_cvm instance-id "$work/attestation.json")
         record=$(dirname -- "$env_dir")/docker-compose.$CVM_NAME.yml
         cp "$compose" "$record"
         answers="the DNS records resolve and $url/healthz answers: Deploy's upgrade with this
     release checks that, the attested compose, and the certificate evidence"
     else
+        # CLI provisioning cannot set port_policy. Commit it before handing the CVM to its owner.
+        phala_cvm compose-update "$cvm_id" "$compose" "$kit/deploy/phala-cloud-pre-launch.sh" \
+            "$policy" "$work/deploy-policy.json" </dev/null
+        expected=$(jq -er '.compose_hash' "$work/deploy-policy.json")
+        phala_cvm wait --unsealed --compose-hash "$expected" "$cvm_id" </dev/null >"$work/cvm.json"
         # The quick start is served at its gateway domain: no instance id to wait for.
         url=$(jq -er '"https://\(.app_id | ltrimstr("0x")).\(.gateway.base_domain)"' "$work/cvm.json")
         record=phala-cloud-template.yml answers="$url/healthz answers"

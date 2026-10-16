@@ -151,6 +151,28 @@ case "$1" in
         echo "Provisioning CVM ..."
         echo '{"success": true, "vm_uuid": "cvm-0123", "app_id": "0xabcdef0123456789abcdef0123456789abcdef01"}'
         ;;
+    api)
+        echo "phala $*" >>"$STUB_LOG"
+        if [[ "$2" == */compose_file/provision ]]; then
+            [[ "${STUB_FAIL_DEPLOY:-}" != 2 ]] || exit 42
+            jq -cj '.' "${@: -1}" >"$STUB_STATE/prepared.json"
+            sha256sum "$STUB_STATE/prepared.json" | cut -d' ' -f1 >"$STUB_STATE/prepared.hash"
+            jq -n --arg hash "$(cat "$STUB_STATE/prepared.hash")" \
+                '{compose_hash: $hash, app_id: "0xabcdef0123456789abcdef0123456789abcdef01"}'
+        elif [[ "$2" == */compose_file && "${3:-}" == -X ]]; then
+            jq -e --arg hash "$(cat "$STUB_STATE/prepared.hash")" '. == {compose_hash:$hash}' "${@: -1}" >/dev/null || exit 64
+            cp "$STUB_STATE/prepared.json" "$STUB_STATE/app-compose.json"
+            cp "$STUB_STATE/prepared.hash" "$STUB_STATE/app-compose.hash"
+            if [[ -n "${STUB_FOREIGN:-}" ]]; then
+                jq -cj '.docker_compose_file = "services: {}\\n"' "$STUB_STATE/app-compose.json" >"$STUB_STATE/foreign.json"
+                sha256sum "$STUB_STATE/foreign.json" | cut -d' ' -f1 >"$STUB_STATE/foreign.hash"
+            fi
+        elif [[ "$2" == */compose_file ]]; then
+            cat "$STUB_STATE/app-compose.json"
+        else
+            exit 64
+        fi
+        ;;
     cvms)
         echo "phala $*" >>"$STUB_LOG"
         case "$2" in
@@ -259,6 +281,8 @@ printf '%s\n' 'id = "another-cvm"' 'env_file = "other.env"' >"$tmp/phala.toml"
 succeeds quick TOPUP_ADMIN_PUBLIC_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo= AWS_REGION=auto
 [[ "$(grep -c '^gh attestation verify' "$tmp/log")" == 11 ]] || fail "quick did not verify 5 assets and provenance plus SBOM for 3 images"
 [[ "$(deploys | wc -l)" == 1 ]] || fail "quick did not deploy exactly once"
+[[ "$(grep -c '^phala api /cvms/cvm-0123/compose_file' "$tmp/log")" == 3 ]] || fail "quick did not set port policy via compose-update"
+jq -e '.port_policy == {ports:[{port:443,pp:false}],restrict_mode:false}' "$tmp/state/app-compose.json" >/dev/null
 for argument in "--name quick " "--image dstack-0.5.12 " "--no-dev-os" "--kms phala " "--instance-type tdx.medium " \
     "/kit/deploy/phala-cloud-pre-launch.sh " "-e $tmp/runtime/"; do
     deploys | grep -qF -- "$argument" || fail "quick did not deploy with $argument"
@@ -315,10 +339,11 @@ grep -q "SHA256SUMS only" "$tmp/custom.err" || fail "custom did not say it check
 [[ "$(stat -c %a "$tmp/admin.seed")" == 600 ]] || fail "custom's admin seed is not mode 0600"
 grep -qx '  public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=' "$tmp/custom/topup/topup.yaml" ||
     fail "custom did not attest the generated admin key"
-[[ "$(deploys | wc -l)" == 2 ]] || fail "custom did not provision and then set the gateway"
-deploys | head -1 | grep -qF -- "--name custom " || fail "custom did not provision first"
-deploys | tail -1 | grep -qF -- "--cvm-id cvm-0123 " || fail "custom did not upgrade the new CVM"
-! deploys | tail -1 | grep -qF -- " -e " || fail "custom's upgrade sent an env"
+[[ "$(deploys | wc -l)" == 1 ]] || fail "custom did not provision exactly once"
+deploys | grep -qF -- "--name custom " || fail "custom did not provision first"
+[[ "$(grep -c '^phala api /cvms/cvm-0123/compose_file' "$tmp/log")" == 3 ]] || fail "custom did not set the gateway via compose-update"
+jq -e '.port_policy == {ports:[{port:443,pp:false}],restrict_mode:false}
+    and (has("encrypted_env") | not) and (has("update_env_vars") | not)' "$tmp/state/app-compose.json" >/dev/null
 [[ "$(cut -d= -f1 "$tmp/state/env" | tr '\n' ' ')" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
     fail "custom sealed other names than the ones it was given"
 grep -q 'GATEWAY_DOMAIN: gateway.dstack-pha-prod5.phala.network' "$tmp/custom/docker-compose.custom.yml" ||
@@ -369,16 +394,14 @@ grep -qF "the attestation reports compose hash '0', not the deployed " "$tmp/una
 unfinished foreign-hash STUB_GH_VERSION=2.100.0 DOMAIN=pay-api.foreign.test \
     ENVIRONMENT_DIR="$tmp/foreign-hash/topup" TOPUP_ADMIN_PUBLIC_KEY=23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo= \
     STUB_FOREIGN=hash
-grep -qF "the attestation reports compose hash '$(cat "$tmp/state/app-compose.hash")', not the deployed $(cat "$tmp/state/foreign.hash")" \
+grep -qF "CVM cvm-0123 did not settle with compose hash $(cat "$tmp/state/app-compose.hash")" \
     "$tmp/foreign-hash.err" || { cat "$tmp/foreign-hash.err" >&2; fail "foreign-hash failed for another reason"; }
 ! grep -q '^  TXT' "$tmp/foreign-hash.out" || fail "foreign-hash printed DNS records"
 unfinished foreign-update STUB_GH_VERSION=2.100.0 DOMAIN=pay-api.foreign.test \
     ENVIRONMENT_DIR="$tmp/foreign-update/topup" TOPUP_ADMIN_PUBLIC_KEY=23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo= \
     STUB_FOREIGN=update
-for line in "CVM cvm-0123 attests another compose than this run's" \
-    "attested docker_compose_file differs from the prepared compose"; do
-    grep -qF "$line" "$tmp/foreign-update.err" || { cat "$tmp/foreign-update.err" >&2; fail "foreign-update failed for another reason"; }
-done
+grep -qF "CVM cvm-0123 did not settle with compose hash $(cat "$tmp/state/app-compose.hash")" \
+    "$tmp/foreign-update.err" || { cat "$tmp/foreign-update.err" >&2; fail "foreign-update failed for another reason"; }
 ! grep -q '^  TXT' "$tmp/foreign-update.out" || fail "foreign-update printed DNS records"
 
 # Ctrl-C mid-deploy, while the redirected wait runs: the summary still reaches the script's own

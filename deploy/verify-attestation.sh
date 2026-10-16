@@ -78,11 +78,12 @@ compose=$("$root/deploy/pinned-compose.sh")
 "$compose" -f "$tmp/docker-compose.yml" config --no-interpolate --format json >"$tmp/docker-compose.json"
 # Every setting is attested: the env may set only the compose's sealed names.
 violations=$(jq -r -L "$root/deploy" --arg variant "$variant" --slurpfile app "$tmp/app-compose.json" \
-    'include "compose-policy"; (violations($variant; "dstack") + allowed_envs_violations($variant; $app[0].allowed_envs))[]' \
+    'include "compose-policy"; (violations($variant; "dstack") + allowed_envs_violations($variant; $app[0].allowed_envs)
+        + port_policy_violations($variant; $app[0]))[]' \
     "$tmp/docker-compose.json")
 if [ -n "$violations" ]; then
     echo "the attested $variant compose breaks deploy/compose-policy.jq:" >&2
     printf '%s\n' "$violations" | sed 's/^/  /' >&2
     exit 1
 fi
-echo "attested compose, allowed_envs, and the $variant policy passed"
+echo "attested compose, allowed_envs, port_policy, and the $variant policy passed"

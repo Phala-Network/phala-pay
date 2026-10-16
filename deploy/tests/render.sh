@@ -151,6 +151,13 @@ policy() {
 }
 "$compose" -f "$tmp/restore-check.yml" config --no-interpolate --format json >"$tmp/restore-check.json"
 service=(service "$tmp/service.json")
+# Phase 1 keeps the ingress image pinned and every proxy hop disabled.
+jq -e '.services["dstack-ingress"].image == "ghcr.io/dstack-tee/dstack-ingress:2.7@sha256:bc0c97e76810c6368a9ae0d8efd156ffa0027806e43f9d9f8834eabef0192283"' "$tmp/service.json" >/dev/null
+for setting in ACCEPT_PROXY_PROTOCOL SEND_PROXY_PROTOCOL; do
+    policy "ingress-$setting" "${service[@]}" ".services[\"dstack-ingress\"].environment.$setting = \"true\"" \
+        "dstack-ingress must keep ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL off"
+done
+
 # TCP proxy deadlines must not silently revert to the ingress image's one-day defaults.
 for setting in TIMEOUT_CONNECT TIMEOUT_CLIENT TIMEOUT_SERVER; do
     policy "ingress-$setting" "${service[@]}" ".services[\"dstack-ingress\"].environment.$setting = \"86400s\"" \

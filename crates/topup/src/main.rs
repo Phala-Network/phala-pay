@@ -52,7 +52,7 @@ enum TopupCommand {
         #[arg(long, default_value = "warning", value_parser = ["warning", "critical"])]
         severity: String,
     },
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// Apply the database migrations as the database owner.
     Migrate,
     Route {
@@ -146,6 +146,9 @@ struct RunArgs {
     /// API socket address; defaults to the deployment port on all interfaces.
     #[arg(long, default_value = "0.0.0.0:8080")]
     bind: std::net::SocketAddr,
+    /// Optional private listener requiring PROXY v2; trust only the ingress hop.
+    #[arg(long, value_name = "ADDR")]
+    proxy_protocol_bind: Option<std::net::SocketAddr>,
     /// The egress proxy every webhook delivery goes through (the smokescreen sidecar); required
     /// unless the public origin is `http` (local stacks).
     #[arg(long, value_name = "URL")]
@@ -685,7 +688,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             sanctions_rescreen: Arc::default(),
             contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
         };
-        return serve_read_only(args.bind, state, args.restore_report.clone()).await;
+        return serve_read_only(args, state, args.restore_report.clone()).await;
     }
     let routes = Arc::new(routes);
     let scanner_count = routes.chain_ids().count();
@@ -769,6 +772,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let listener = tokio::net::TcpListener::bind(args.bind)
         .await
         .with_context(|| format!("failed to bind API listener on {}", args.bind))?;
+    let proxy_listener = bind_proxy_listener(args.proxy_protocol_bind).await?;
     let confirm_step =
         ConfirmStep::from_routes(pool.clone(), &routes, Arc::clone(&pricing_runtimes))
             .context("invalid confirm-step configuration")?;
@@ -844,12 +848,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let monitored_origin = state.public_origin.to_string();
     let (application, _) = topup::api::booting_router(state);
     tasks.spawn("API server", |cancellation| {
-        axum::serve(
-            topup::api::DeadlineListener::new(listener).with_connect_info(),
-            application.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(cancellation.cancelled_owned())
-        .into_future()
+        serve_api(listener, proxy_listener, application, cancellation)
     });
     tracing::info!(bind = %args.bind, "API listening");
 
@@ -1119,18 +1118,21 @@ async fn after_unfreeze<F>(
 /// operator can verify it through the product-signed lookups: no lease-owner lock, scanner, pump,
 /// webhook delivery, reconciler, or signer runs, and every non-GET request is refused.
 async fn serve_read_only(
-    bind: std::net::SocketAddr,
+    args: &RunArgs,
     state: topup::api::AppState,
     report: Option<PathBuf>,
 ) -> anyhow::Result<ExitCode> {
     let pool = state.pool.clone();
+    let bind = args.bind;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("failed to bind API listener on {bind}"))?;
+    let proxy_listener = bind_proxy_listener(args.proxy_protocol_bind).await?;
     let application = topup::api::read_only_router(state, report);
     tracing::warn!(%bind, "API listening read-only (--read-only)");
     serve_read_only_until(
         listener,
+        proxy_listener,
         application,
         pool,
         wait_for_shutdown_signal(),
@@ -1140,8 +1142,50 @@ async fn serve_read_only(
     .await
 }
 
+async fn bind_proxy_listener(
+    bind: Option<std::net::SocketAddr>,
+) -> anyhow::Result<Option<tokio::net::TcpListener>> {
+    match bind {
+        Some(bind) => Ok(Some(
+            tokio::net::TcpListener::bind(bind)
+                .await
+                .context("failed to bind PROXY protocol listener")?,
+        )),
+        None => Ok(None),
+    }
+}
+
+async fn serve_api(
+    listener: tokio::net::TcpListener,
+    proxy_listener: Option<tokio::net::TcpListener>,
+    application: axum::Router,
+    cancellation: CancellationToken,
+) -> std::io::Result<()> {
+    let plain = axum::serve(
+        topup::api::DeadlineListener::new(listener).with_connect_info(),
+        application
+            .clone()
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(cancellation.clone().cancelled_owned())
+    .into_future();
+    if let Some(listener) = proxy_listener {
+        let proxy = axum::serve(
+            topup::api::ProxyProtocolListener::new(listener).with_connect_info(),
+            application.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(cancellation.cancelled_owned())
+        .into_future();
+        tokio::try_join!(plain, proxy)?;
+        Ok(())
+    } else {
+        plain.await
+    }
+}
+
 async fn serve_read_only_until(
     listener: tokio::net::TcpListener,
+    proxy_listener: Option<tokio::net::TcpListener>,
     application: axum::Router,
     pool: PgPool,
     shutdown: impl Future<Output = std::io::Result<()>>,
@@ -1149,12 +1193,7 @@ async fn serve_read_only_until(
     close_timeout: Duration,
 ) -> anyhow::Result<ExitCode> {
     let cancellation = CancellationToken::new();
-    let served = axum::serve(
-        topup::api::DeadlineListener::new(listener).with_connect_info(),
-        application.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(cancellation.clone().cancelled_owned())
-    .into_future();
+    let served = serve_api(listener, proxy_listener, application, cancellation.clone());
     tokio::pin!(served);
     let mut signal_failed = false;
     let result = tokio::select! {
@@ -1750,6 +1789,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn both_api_listeners_serve_the_same_router_and_stop_together() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let plain = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let plain_address = plain.local_addr().unwrap();
+        let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_address = proxy.local_addr().unwrap();
+        let app = axum::Router::new().route("/healthz", axum::routing::get(|| async { "healthy" }));
+        let stop = tokio_util::sync::CancellationToken::new();
+        let server = tokio::spawn(super::serve_api(plain, Some(proxy), app, stop.clone()));
+        assert_eq!(
+            reqwest::get(format!("http://{plain_address}/healthz"))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "healthy"
+        );
+        let mut stream = tokio::net::TcpStream::connect(proxy_address).await.unwrap();
+        stream.write_all(b"\r\n\r\n\0\r\nQUIT\n\x20\0\0\0GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        assert!(response.ends_with("healthy"));
+        stop.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(tokio::net::TcpStream::connect(plain_address).await.is_err());
+        assert!(tokio::net::TcpStream::connect(proxy_address).await.is_err());
+    }
+
+    #[tokio::test]
     async fn read_only_shutdown_bounds_a_stalled_request_and_closes_the_pool() {
         use std::time::Duration;
         use tokio_util::sync::CancellationToken;
@@ -1773,6 +1846,7 @@ mod tests {
         let observed_pool = pool.clone();
         let server = tokio::spawn(super::serve_read_only_until(
             listener,
+            None,
             app,
             pool,
             async move {
@@ -1824,6 +1898,7 @@ mod tests {
             std::time::Duration::from_secs(2),
             super::serve_read_only_until(
                 listener,
+                None,
                 axum::Router::new(),
                 pool.clone(),
                 async { Ok(()) },
@@ -1951,6 +2026,7 @@ mod tests {
             Duration::from_secs(2),
             super::serve_read_only_until(
                 listener,
+                None,
                 axum::Router::new(),
                 pool.clone(),
                 async { Err(std::io::Error::other("signal setup failed")) },
