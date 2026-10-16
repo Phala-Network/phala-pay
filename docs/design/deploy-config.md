@@ -217,7 +217,7 @@ are exactly the names the CVM derives from `/dstack`.
 | `{key}` placement | a whole path segment or query value only; the authority must survive substitution |
 | Routes | `topup.yaml` `routes`; one config, mounted in 2 services |
 | `WALG_S3_PREFIX`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_S3_FORCE_PATH_STYLE` | overlay literals (WAL-G's env interface) |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | sealed; the restore-check variant reads `RESTORE_AWS_ACCESS_KEY_ID`/`RESTORE_AWS_SECRET_ACCESS_KEY`, so an instance created without `--env-file` inherits no read-write credential |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | sealed; restore-check uses these same allowed names with a fresh read-only token in an explicit `--env-file`, never the live values |
 | `SENTRY_DSN` | sealed |
 | The Sentry environment | `topup.yaml` `environment` (a Sentry tag, never a policy input) |
 | Read-only mode | `topup run --read-only` in the restore-check variant; `heartbeat` does not exist there |
@@ -244,8 +244,7 @@ value of an environment key it names:
 
 | Secret | Allowed positions |
 |---|---|
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `postgres`/`backup` env of the same key (service variant) |
-| `RESTORE_AWS_*` | `postgres` `AWS_*` (restore-check variant) |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `postgres`/`backup` env of the same key (service/template); `postgres` only (restore-check) |
 | `SENTRY_DSN` | `topup` `SENTRY_DSN` |
 | `TOPUP_RPC_<ID>_KEY` | `topup`/`restore-check` env of the same key |
 | `PRODUCT_API_KEY` | `product` `PRODUCT_API_KEY` |
@@ -314,8 +313,8 @@ recreation is about container identity, not uptime. `make cvm-rehearsal` checks 
     exactly its mounters, read-only but for `keys`; smokescreen's exact command and deny list.
   - Restore-check variant: exactly `keys postgres migrate topup restore-check`; only topup
     publishes, on 8081 → 8080; topup `--read-only`; postgres with `TOPUP_RESTORE_FROM_BACKUP=on`
-    and no command or entrypoint override (so `archive_mode=off` wins); storage credentials only
-    `RESTORE_AWS_*`.
+    and no command or entrypoint override (so `archive_mode=off` wins); storage credentials in
+    the app's allowed `AWS_*` names, with the read-only token in its own explicit env file.
   - Both variants: no password in env; the secret positions of §4; volumes named `<project>_*`.
 - **`validate-compose.sh`** renders the example environment, the staging environment, and the
   product in both variants, and applies the policy. It also checks the local, drill, sandbox, and
@@ -388,8 +387,11 @@ recreation is about container identity, not uptime. `make cvm-rehearsal` checks 
 - **A pinned tool.** `render.sh` refuses any Compose but v2.26.0 by sha256.
 - **Volume identity.** Rendering under any project name but `dstack` would move the CVM onto new
   empty volumes. `render.sh` fixes `-p dstack`, and the policy asserts the volume names.
-- **Restore credentials.** A restore env file without the `RESTORE_AWS_*` names fails closed:
-  PostgreSQL cannot list the prefix. `RESTORE.md` and its preflight name them.
+- **Restore credentials.** `instances add` inherits the source app-compose's `allowed_envs`, so
+  restore-check uses the allowed `AWS_*` names. Always pass its own read-only env file; omitting
+  it inherits live read-write values. Preflight requires both storage values even with
+  `--unsealed`, but cannot prove token permissions; the operator must issue **Object Read only**
+  as [RESTORE.md](../../deploy/RESTORE.md#render-it-and-its-env-file) requires.
 
 ## 11. Guarantees
 

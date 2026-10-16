@@ -230,10 +230,12 @@ policy security-opt "${service[@]}" '.services.topup.security_opt += ["seccomp:u
 policy restore-readonly-config restore-check "$tmp/restore-check.json" '.services.topup.read_only = true' \
     "inline config consumers must use a writable root filesystem for Compose injection"
 
-# The restore-check variant never reads the live storage credentials.
-policy live-credentials restore-check "$tmp/restore-check.json" \
-    '.services.postgres.environment.AWS_ACCESS_KEY_ID = "${AWS_ACCESS_KEY_ID:-}"' \
-    "postgres must read the restore instance's own storage credentials"
+# `instances add` inherits allowed_envs: a new RESTORE_* name would be dropped by dstack.
+for key in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+    policy "unauthorized-$key" restore-check "$tmp/restore-check.json" \
+        ".services.postgres.environment.$key = \"\${RESTORE_$key:-}\"" \
+        "postgres must read the app's allowed AWS_* names from the restore instance's read-only env"
+done
 
 # The template variant: the service without dstack-ingress, topup on port 80 for the gateway, and
 # only the deploy form's values at runtime (deploy/compose.template.yaml).
@@ -282,6 +284,9 @@ service_names=$("$compose" -f "$tmp/service.yml" config --variables | awk 'NR > 
 [[ "$(jq -c -L "$root/deploy" 'include "compose-policy"; sealed_names' "$tmp/service.json")" == "$service_names" ]] ||
     { echo "the policy's sealed names are not Compose's" >&2; exit 1; }
 allowed_envs service-all service "$tmp/service.json" "$service_names"
+allowed_envs restore-inherited restore-check "$tmp/restore-check.json" "$service_names"
+allowed_envs restore-unauthorized restore-check "$tmp/restore-check.json" '["RESTORE_AWS_ACCESS_KEY_ID"]' \
+    "the env may set only the compose's sealed names, not RESTORE_AWS_ACCESS_KEY_ID"
 allowed_envs service-subset service "$tmp/service.json" '["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]'
 allowed_envs service-none service "$tmp/service.json" '[]'
 allowed_envs service-extra service "$tmp/service.json" '["AWS_ACCESS_KEY_ID", "DSTACK_APP_DOMAIN"]' \

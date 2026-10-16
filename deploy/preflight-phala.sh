@@ -149,8 +149,8 @@ read_env_file() {
 # check_artifact ENV_FILE COMPOSE ENV_DIR VARIANT: the checks every attested compose shares, run
 # with the pinned Compose (deploy/pinned-compose.sh, never downloaded here). Leaves the compose as
 # JSON in $tmp/compose.json, its images in $tmp/images, and the env file in the array `env`.
-# - The env file names only the compose's sealed names (the CLI makes them allowed_envs; one left
-#   out is unset).
+# - The env file names only the compose's sealed names (initial deploy makes them allowed_envs;
+#   instances add inherits the source allowlist). A name left out is unset.
 # - The compose passes deploy/compose-policy.jq for VARIANT.
 # - It is byte for byte a fresh render of ENV_DIR with its own images and gateway or origin, so
 #   no stale render or hand edit reaches the CLI.

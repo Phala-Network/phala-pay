@@ -935,7 +935,7 @@ restore_drill() {
   umask 077
   : > "$RESTORE_ENV_DIR/restore.env"
   ${EDITOR:-vi} "$RESTORE_ENV_DIR/restore.env" || return 1
-  # Exactly RESTORE_AWS_ACCESS_KEY_ID, RESTORE_AWS_SECRET_ACCESS_KEY (read-only token), SENTRY_DSN,
+  # Exactly AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (the new read-only token, never the live values), SENTRY_DSN,
   # TOPUP_RPC_ANKR_KEY, TOPUP_RPC_BLOCKPI_ETHEREUM_KEY and TOPUP_RPC_BLOCKPI_BASE_KEY.
   "$KIT_DIR/deploy/render.sh" --restore-check --images release/images.json --origin https://pending.invalid \
     "$ENV_DIR" > restore-check.yml || return 1
@@ -951,14 +951,29 @@ restore_drill() {
   RESTORE_CVM_ID="$(jq -er '.vm_uuid' restore-instance.json)" || return 1
   export RESTORE_CVM_ID
 
-  # Restore step 2: fetch by vm_uuid, address the guest by its attested instance id, and verify.
+  # instances add returns before first boot. Wait at most ten minutes for the attested instance id.
   live_isolated || { restore_cleanup; return 1; }
   export PHALA_ATTESTATION_URL="https://cloud-api.phala.com/api/v1/cvms/$RESTORE_CVM_ID/attestation"
-  curl -fsS -H "X-API-Key: $PHALA_CLOUD_API_KEY" "$PHALA_ATTESTATION_URL" \
-    > restore-attestation.json || return 1
-  "$KIT_DIR/deploy/phala" cvms get "$RESTORE_CVM_ID" --json > restore-cvm.json || return 1
-  RESTORE_INSTANCE_ID="$("$KIT_DIR/deploy/phala-cvm.sh" instance-id restore-attestation.json)" || return 1
+  RESTORE_DEADLINE=$((SECONDS + 600))
+  RESTORE_NEXT_ISOLATION=$SECONDS
+  while (( SECONDS < RESTORE_DEADLINE )); do
+    if (( SECONDS >= RESTORE_NEXT_ISOLATION )); then
+      live_isolated || { restore_cleanup; return 1; }
+      RESTORE_NEXT_ISOLATION=$((SECONDS + 300))
+    fi
+    if curl -fsS --connect-timeout 10 --max-time 30 -H "X-API-Key: $PHALA_CLOUD_API_KEY" \
+      "$PHALA_ATTESTATION_URL" > restore-attestation.json &&
+      RESTORE_INSTANCE_ID="$("$KIT_DIR/deploy/phala-cvm.sh" instance-id restore-attestation.json 2>/dev/null)"; then
+      break
+    fi
+    sleep 15
+  done
+  (( SECONDS < RESTORE_DEADLINE )) || { echo "restore instance id was not attested within ten minutes" >&2; return 1; }
   export RESTORE_INSTANCE_ID
+
+  # Restore step 2: address the guest by its attested instance id, and verify.
+  live_isolated || { restore_cleanup; return 1; }
+  "$KIT_DIR/deploy/phala" cvms get "$RESTORE_CVM_ID" --json > restore-cvm.json || return 1
   RESTORE_GATEWAY_DOMAIN="$(jq -er '.gateway.base_domain' restore-cvm.json)" || return 1
   export RESTORE_GATEWAY_DOMAIN
   curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \

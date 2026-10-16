@@ -1075,8 +1075,8 @@ no_background_work() {
     esac
 }
 
-# The replacement's PostgreSQL reads the restore instance's own read-only credentials
-# (RESTORE_AWS_*), even with the live read-write names in its environment.
+# The replacement's PostgreSQL reads the restore instance's own read-only credentials in AWS_*;
+# the local wrapper selects these instead of the source's read-write token.
 restore_credentials_only() {
     test "$(dc exec -T postgres printenv AWS_ACCESS_KEY_ID)" = topup-restore-read || {
         echo "the replacement's PostgreSQL does not use the read-only restore credentials" >&2
@@ -1454,8 +1454,8 @@ done
 
 # Replacement boot, exactly as dstack's app-compose.sh starts a CVM: the whole restore-check
 # variant of deploy/RESTORE.md comes up at once. Its PostgreSQL reads the read-only restore
-# credentials (RESTORE_AWS_*), while the live read-write names stay in the environment, as on an
-# instance created without its own env file. PostgreSQL restores the newest base backup into the
+# credentials in AWS_*, selected instead of the source's read-write token, as on an instance
+# created with its own explicit env file. PostgreSQL restores the newest base backup into the
 # empty volume, replays every archived segment, and never archives; no heartbeat, backup, egress,
 # or ingress runs; topup is read-only. No command runs inside the stack. Nothing may reach object
 # storage from here on; the drill's own storage tool uses the replacement's read-only key.

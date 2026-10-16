@@ -6,8 +6,10 @@
 #          [--restore-check | --template] (--workspace NAME --os-image NAME | --offline) [--unsealed] [--require-sentry]
 #
 # --compose is the rendered compose (deploy/render.sh), --environment-dir the environment it was
-# rendered from, --restore-check expects the restore-check variant (deploy/RESTORE.md), and
-# --template the Phala Cloud template variant, whose env file also holds the deploy form's values
+# rendered from. --restore-check expects the restore-check variant (deploy/RESTORE.md) and its
+# own env file with a read-only token in the app's AWS_* names, even with --unsealed; it must
+# never inherit the service's read-write env. --template expects the
+# Phala Cloud template variant, whose env file also holds the deploy form's values
 # (deploy/README.md, "The Phala Cloud template variant").
 #
 # --offline makes no network access and pulls nothing. It checks:
@@ -82,8 +84,10 @@ while IFS= read -r name; do
     value=${env[$name]-}
     if [[ "$value" == *replace-me* ]]; then
         fail "$name still contains replace-me"
-    elif [[ -z "$value" ]] && ((unsealed == 0)) && [[ "$name" != SENTRY_DSN && "$name" != TOPUP_RPC_*_KEY ]]; then
-        # An empty or unset DSN turns Sentry off; configured RPC sealed keys are required.
+    elif [[ -z "$value" ]] && { ((unsealed == 0)) || [[ "$variant" == restore-check ]]; } &&
+        [[ "$name" != SENTRY_DSN && "$name" != TOPUP_RPC_*_KEY ]]; then
+        # A restore always needs its own storage token. An empty DSN turns Sentry off;
+        # configured RPC sealed keys are required by the configuration checks below.
         fail "$name is empty or not set"
     fi
 done <"$tmp/sealed"

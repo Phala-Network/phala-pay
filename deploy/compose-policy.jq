@@ -76,13 +76,8 @@ def secret_allowed($variant; $service; $key; $name):
         ($name == "SENTRY_DSN" and $service == "topup" and $key == $name)
         or (($name | test("^TOPUP_RPC_[A-Z0-9_]+_KEY$")) and $key == $name
             and ($service == "topup" or $service == "restore-check"))
-        or (if $variant == "service" or $variant == "template" then
-                ($name == "AWS_ACCESS_KEY_ID" or $name == "AWS_SECRET_ACCESS_KEY")
-                and ($service == "postgres" or $service == "backup") and $key == $name
-            else
-                ($key == "AWS_ACCESS_KEY_ID" or $key == "AWS_SECRET_ACCESS_KEY")
-                and $service == "postgres" and $name == "RESTORE_\($key)"
-            end)
+        or (($name == "AWS_ACCESS_KEY_ID" or $name == "AWS_SECRET_ACCESS_KEY") and $key == $name
+            and ($service == "postgres" or ($service == "backup" and $variant != "restore-check")))
         or ($variant == "template" and template_runtime_setting($service; $key; $name))
     end;
 
@@ -106,7 +101,7 @@ def sealed_names:
     [.services[] | .environment | env_map | .[]
         | strings | capture("^\\$\\{(?<name>[A-Z_][A-Z0-9_]*):-\\}$").name] | unique;
 
-# `$allowed`, the app-compose's allowed_envs (the names of the env file the Phala Cloud CLI sends),
+# `$allowed`, the app-compose's allowed_envs (inherited from the source for `instances add`),
 # may name only sealed names of the compose, so the env can fill nothing the compose does not
 # reference; the template's DSTACK_APP_DOMAIN is none, since the pre-launch script exports it. A
 # sealed name it leaves out is unset in the CVM, as an empty one is: a required secret is enforced
@@ -291,9 +286,9 @@ def restore_check_violations:
         check($postgres.TOPUP_RESTORE_FROM_BACKUP == "on" and .services.postgres.command == null
                 and .services.postgres.entrypoint == null;
               "postgres must restore with archiving off (TOPUP_RESTORE_FROM_BACKUP=on, the image's own entrypoint and command)"),
-        check($postgres.AWS_ACCESS_KEY_ID == "${RESTORE_AWS_ACCESS_KEY_ID:-}"
-                and $postgres.AWS_SECRET_ACCESS_KEY == "${RESTORE_AWS_SECRET_ACCESS_KEY:-}";
-              "postgres must read the restore instance's own storage credentials"),
+        check($postgres.AWS_ACCESS_KEY_ID == "${AWS_ACCESS_KEY_ID:-}"
+                and $postgres.AWS_SECRET_ACCESS_KEY == "${AWS_SECRET_ACCESS_KEY:-}";
+              "postgres must read the app's allowed AWS_* names from the restore instance's read-only env"),
         check(.services["restore-check"].entrypoint[0:4] == ["topup", "restore-check", "--config", "/etc/topup/topup.yaml"]
                 and ($check.DATABASE_URL | database_user) == "postgres"
                 and (volume_sources("restore-check") | index("/var/run/dstack.sock")) != null;
