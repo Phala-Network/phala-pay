@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-10-16
+
 ### Breaking (operators)
 
 - Service client-IP passthrough ships in v0.10.9. Rolling back to an earlier release requires
@@ -2053,7 +2055,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.8...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.9...HEAD
+[0.10.9]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.9
 [0.10.8]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.8
 [0.10.7]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.7
 [0.10.6]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.6
