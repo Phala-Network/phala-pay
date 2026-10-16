@@ -342,7 +342,7 @@ grep -qx '  public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=' "$tmp/cust
 [[ "$(deploys | wc -l)" == 1 ]] || fail "custom did not provision exactly once"
 deploys | grep -qF -- "--name custom " || fail "custom did not provision first"
 [[ "$(grep -c '^phala api /cvms/cvm-0123/compose_file' "$tmp/log")" == 3 ]] || fail "custom did not set the gateway via compose-update"
-jq -e '.port_policy == {ports:[{port:443,pp:false}],restrict_mode:false}
+jq -e '.port_policy == {ports:[{port:443,pp:true}],restrict_mode:false}
     and (has("encrypted_env") | not) and (has("update_env_vars") | not)' "$tmp/state/app-compose.json" >/dev/null
 [[ "$(cut -d= -f1 "$tmp/state/env" | tr '\n' ' ')" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||
     fail "custom sealed other names than the ones it was given"

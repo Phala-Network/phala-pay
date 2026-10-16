@@ -151,12 +151,21 @@ policy() {
 }
 "$compose" -f "$tmp/restore-check.yml" config --no-interpolate --format json >"$tmp/restore-check.json"
 service=(service "$tmp/service.json")
-# Phase 1 keeps the ingress image pinned and every proxy hop disabled.
+# Phase 2 requires both ingress hops and the private PROXY listener together.
 jq -e '.services["dstack-ingress"].image == "ghcr.io/dstack-tee/dstack-ingress:2.8@sha256:60e682449534715a2f2e5b72326ca4229209c8e26c931c6f34d27e02200ac086"' "$tmp/service.json" >/dev/null
 for setting in ACCEPT_PROXY_PROTOCOL SEND_PROXY_PROTOCOL; do
-    policy "ingress-$setting" "${service[@]}" ".services[\"dstack-ingress\"].environment.$setting = \"true\"" \
-        "dstack-ingress must keep ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL off"
+    for value in '"false"' null true; do
+        policy "ingress-$setting-$value" "${service[@]}" ".services[\"dstack-ingress\"].environment.$setting = $value" \
+            "dstack-ingress must set ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL to true"
+    done
 done
+policy ingress-plain-backend "${service[@]}" '.services["dstack-ingress"].environment.TARGET_ENDPOINT = "topup:8080"' \
+    "dstack-ingress must serve the host of topup's public_origin"
+policy no-proxy-listener "${service[@]}" '.services.topup.command |= .[0:6]' \
+    "topup must run the service with its webhooks through smokescreen"
+jq -e '.services.topup.healthcheck.test == ["CMD", "topup", "healthcheck"]
+    and (.services.topup.ports // []) == []' "$tmp/service.json" >/dev/null
+jq -e '.services.topup.command | index("--proxy-protocol-bind") == null' "$tmp/restore-check.json" >/dev/null
 
 # TCP proxy deadlines must not silently revert to the ingress image's one-day defaults.
 for setting in TIMEOUT_CONNECT TIMEOUT_CLIENT TIMEOUT_SERVER; do
@@ -247,6 +256,7 @@ cmp -s <("$compose" -f "$tmp/template.yml" config --variables | sort) \
     <("$compose" -f "$tmp/template-key-id.yml" config --variables | sort) ||
     { echo "a \$ in the template's topup.yaml became a runtime reference" >&2; exit 1; }
 "$compose" -f "$tmp/template.yml" config --no-interpolate --format json >"$tmp/template.json"
+jq -e '.services.topup.command | index("--proxy-protocol-bind") == null' "$tmp/template.json" >/dev/null
 policy template-readonly-config template "$tmp/template.json" '.services.topup.read_only = true' \
     "inline config consumers must use a writable root filesystem for Compose injection"
 policy template-extra template "$tmp/template.json" \
@@ -288,6 +298,10 @@ render "${gateway[@]}" "$product" >"$tmp/product.yml"
 "$compose" -f "$tmp/product.yml" config --no-interpolate --format json >"$tmp/product.json"
 jq -e --slurpfile service "$tmp/service.json" '.services["dstack-ingress"].image
     == $service[0].services["dstack-ingress"].image' "$tmp/product.json" >/dev/null
+for setting in ACCEPT_PROXY_PROTOCOL SEND_PROXY_PROTOCOL; do
+    policy "product-$setting" product "$tmp/product.json" ".services[\"dstack-ingress\"].environment.$setting = \"true\"" \
+        "dstack-ingress must set ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL to false or omit them"
+done
 policy product-readonly-config product "$tmp/product.json" '.services.product.read_only = true' \
     "inline config consumers must use a writable root filesystem for Compose injection"
 [[ "$("$compose" -f "$tmp/product.yml" config --variables | awk 'NR > 1 { print $1 }')" == PRODUCT_API_KEY ]]

@@ -13,21 +13,22 @@ def env_map:
 
 def check(ok; message): if ok then empty else message end;
 
-# Explicit for every variant, including those without an ingress. Phase 2 changes the service
-# policy and ingress in one app-compose; until then no gateway port emits PROXY headers.
+# Explicit for every variant, including those without an ingress. The service enables gateway
+# PROXY and ingress ACCEPT/SEND in one app-compose; other variants keep PROXY off.
 def port_policy($variant):
     if (["service", "restore-check", "template", "product"] | index($variant)) != null then
-        {ports: [{port: 443, pp: false}], restrict_mode: false}
+        {ports: [{port: 443, pp: ($variant == "service")}], restrict_mode: false}
     else error("unknown variant \($variant)") end;
 
 def port_policy_violations($variant; $app):
     [check($app.port_policy == port_policy($variant);
-        "the attested port_policy must match the \($variant) policy (PROXY off, restrict_mode false)")];
+        "the attested port_policy must match the \($variant) policy (PROXY \(if $variant == "service" then "on" else "off" end), restrict_mode false)")];
 
-def ingress_violations:
+def ingress_violations($proxy):
     [check([.services["dstack-ingress"].environment | env_map
-        | .ACCEPT_PROXY_PROTOCOL, .SEND_PROXY_PROTOCOL] | all(. == null or . == "false");
-        "dstack-ingress must keep ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL off")];
+        | .ACCEPT_PROXY_PROTOCOL, .SEND_PROXY_PROTOCOL]
+        | all(if $proxy then . == "true" else . == null or . == "false" end);
+        "dstack-ingress must set ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL to \(if $proxy then "true" else "false or omit them" end)")];
 
 def published: [.services | to_entries[] | select((.value.ports // []) | length > 0)
     | {service: .key, ports: .value.ports}];
@@ -134,7 +135,8 @@ def common_violations($variant; $project):
               | select($root.configs[.source].content != null)] == [];
             "inline config consumers must use a writable root filesystem for Compose injection"),
       check([.services[] | .environment | env_map | to_entries[]
-              | select((.key | test("PASSWORD$")) or ((.value // "") | test("postgres(ql)?://[^/@]*:[^/@]*@")))]
+              | select((.key | test("PASSWORD$")) or (.value
+                  | if type == "string" then test("postgres(ql)?://[^/@]*:[^/@]*@") else false end))]
               == []; "no service environment may carry a password"),
       check([.services | to_entries[] | .key as $service | .value.volumes[]?
               | select(.type == "bind") | select(.source != "/var/run/dstack.sock")] == [];
@@ -252,14 +254,15 @@ def service_violations:
         check(only_published("dstack-ingress"; 443; "443");
               "only dstack-ingress may publish a port, 443"),
         check($ingress.TIMEOUT_CONNECT == "5s" and $ingress.TIMEOUT_CLIENT == "30s"
-                and $ingress.TIMEOUT_SERVER == "30s" and $ingress.CHALLENGE_TYPE == "tls-alpn-01" and $ingress.TARGET_ENDPOINT == "topup:8080"
+                and $ingress.TIMEOUT_SERVER == "30s" and $ingress.CHALLENGE_TYPE == "tls-alpn-01" and $ingress.TARGET_ENDPOINT == "topup:8082"
                 and ($ingress.GATEWAY_DOMAIN // "" | host_name) and ($ingress.DOMAIN // "" | host_name)
                 and $origin == "https://\($ingress.DOMAIN)";
-              "dstack-ingress must serve the host of topup's public_origin with tls-alpn-01, forwarding to topup:8080, through a gateway host"),
+              "dstack-ingress must serve the host of topup's public_origin with tls-alpn-01, forwarding to topup:8082, through a gateway host"),
         check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
                 | unique == ["dstack-ingress", "keys", "topup"];
               "only keys, topup, and dstack-ingress may mount the dstack socket")
-      ] + ingress_violations + live_violations(serve_command) + capacity_violations;
+      ] + ingress_violations(true)
+      + live_violations(serve_command + ["--proxy-protocol-bind", "0.0.0.0:8082"]) + capacity_violations;
 
 # The template: the service without dstack-ingress, topup published on 80 for the Phala Cloud
 # gateway, which serves it as https://<app-id>.<gateway-domain>, the origin DSTACK_APP_DOMAIN names.
@@ -313,7 +316,7 @@ def product_violations:
               "dstack-ingress must serve the host of the product's public_url with tls-alpn-01, forwarding to product:8089"),
         check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
                 == ["dstack-ingress"]; "only dstack-ingress may mount the dstack socket")
-      ] + ingress_violations;
+      ] + ingress_violations(false);
 
 def violations($variant; $project):
     common_violations($variant; $project)
