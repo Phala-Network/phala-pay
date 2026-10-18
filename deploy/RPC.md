@@ -86,16 +86,16 @@ Both environments use Ankr read; production uses BlockPI verify, staging uses In
 
 | Limit | Production | Staging | Enforcement |
 |---|---:|---:|---|
-| Deposits handled/day, D | 46 | 20 | Operational |
+| Deposits handled/day, D | 115 | 20 | Operational |
 | Concurrent attached pending refunds, R | 2 | 1 | Atomic attachment admission |
 | New refund attachments/rolling 24 h, N | 1 | 1 | Atomic attachment admission |
 | Unresolved finality stock/environment, S | 1 | 1 | Operational; pause affected-chain quotes and escalate above S |
 | New unresolved entries/environment/rolling 24 h | 1 | 1 | Operational; same stock stop rule |
 | Current slow-confirmation stock, L/environment | 1 | 1 | Operational; pause affected-chain quotes above the limit |
 | New slow-confirmation entries/environment/rolling 24 h | 1 | 1 | Operational; same L capacity stop rule |
-| Hint tasks/environment/UTC day, H | 80 | 80 | Atomic daily budget |
-| Fresh quote snapshots/price chain/environment/UTC day, Q | 60 | 60 | Atomic daily budget |
-| Factory receipt-verification instances/day | 60 | 20 | Operational |
+| Hint tasks/environment/UTC day, H | 200 | 80 | Atomic daily budget (`hints_per_day`) |
+| Fresh quote snapshots/price chain/environment/UTC day, Q | 150 | 60 | Atomic daily budget (`quote_snapshots_per_day`) |
+| Factory receipt-verification instances/day | 150 | 20 | Operational |
 | Safe challenge/proof sets/day | 10 | 2 | Operational |
 | Extra RPC calls/endpoint/day | 150 | 150 | Operational reserve |
 | Historical issued addresses/payment chain | 1,000 | 1,000 | Permanent issuance cap |
@@ -215,7 +215,8 @@ normal/L together permit only one full confirmation-evidence read per endpoint. 
 
 Sanctions screening uses local OFAC/manual lists, with no RPC term; address derivation is local.
 Staging's two PHA routes share one TWAP pool and five-minute sampler: `86,400 / 300 = 288`
-snapshots/day. Quotes have four price-chain/environment instances, so `288 + 4Q = 528` snapshots.
+snapshots/day. Quotes have four price-chain/environment instances, so
+`288 + 2×60 staging + 2×150 production = 708` snapshots/day.
 Production has no periodic TWAP sampler in this pilot.
 
 A deposit enters S at its first unresolved check, persisted as `first_unresolved_at`. This
@@ -305,9 +306,9 @@ non-refund work uses the approved ten-percent allowance:
 
 ```text
 Shared Ankr non-refund:
-5,496 + 528 + 24×(46+20) + 2×12×80 + 3×80 + 3×12 + 300 + 688 + 172 = 10,964
+5,496 + 708 + 24×(115+20) + 12×(200+80) + 3×(150+20) + 3×12 + 300 + 688 + 172 = 14,510
 Shared Ankr refunds: 3×(684×2 + 96×3) = 4,968
-Shared Ankr total:   ceil(10,964×1.1 + 4,968) = 17,029 calls/day
+Shared Ankr total:   ceil(14,510×1.1 + 4,968) = 20,929 calls/day
 
 Staging-only Infura non-refund:
 232,320 + 240×408 + 2,000×20 + 640×80 + 240×20 + 160×2
@@ -316,35 +317,38 @@ Staging-only Infura refunds: 3×(54,720×1 + 7,680×1) = 187,200
 Staging-only Infura total:   499,210×1.1 + 187,200 = 736,331 credits/day
 
 Production-only BlockPI non-refund:
-82,400 + 60×120 + 875×46 + 280×80 + 70×60 + 40×10
-+ 50×150 + 85×86 + 20×86 = 173,380
+82,400 + 60×300 + 875×115 + 280×200 + 70×150 + 40×10
++ 50×150 + 85×86 + 20×86 = 284,455
 Production-only BlockPI refunds: 3×(171×90×1 + 24×90×2) = 59,130
-Production-only BlockPI total:   173,380×1.1 + 59,130 = 249,848 RU/day
+Production-only BlockPI total:   284,455×1.1 + 59,130 = 372,030.5 RU/day (ceil: 372,031)
 ```
 
 Staging's two mainnet price chains do not run payment discovery, checkpoints, coverage or
 custody. They contribute quote snapshots and the PHA sampler: staging uses 288 + 2Q = 408
-snapshots/day; production uses 2Q = 120. All of staging's verify traffic stays on Infura.
+snapshots/day at Q=60; production uses 2Q = 300 at Q=150. All of staging's verify traffic
+stays on Infura.
 BlockPI's two chain keys share one account quota; they do not each receive 50M RU.
 
 | Provider account | Roles | Modeled daily usage | Stop line/day | Headroom below stop | D permitted with ≥10% headroom |
 |---|---|---:|---:|---:|---|
-| Ankr | Production + staging read | 17,029 calls | 25,000 calls | 31.88% | Production ≤253 with staging D=20 |
+| Ankr | Production + staging read | 20,929 calls | 25,000 calls | 16.28% | Production ≤174 with staging D=20 |
 | Infura | Staging verify only | 736,331 credits | 1,500,000 credits | 50.91% | Staging ≤298; no production D constraint |
-| BlockPI | Production verify only | 249,848 RU | 1,250,000 RU | 80.01% | Production ≤955 under conservative method weights |
+| BlockPI | Production verify only | 372,031 RU (rounded up) | 1,250,000 RU | 70.24% | Production ≤897 under conservative method weights |
 
 Holding every other allowance fixed, the equations before rounding are:
 
 ```text
-Ankr(D production, staging 20) = 15,814 + 26.4D;  ≤ 0.9×25,000       → D≤253
+Ankr(D production, staging 20) = 17,893 + 26.4D;  ≤ 0.9×25,000       → D≤174
 Infura(D staging)             = 692,331 + 2,200D; ≤ 0.9×1,500,000    → D≤298
-BlockPI(D production)         = 205,573 + 962.5D; ≤ 0.9×1,250,000    → D≤955
+BlockPI(D production)         = 261,343 + 962.5D; ≤ 0.9×1,250,000    → D≤897
 ```
 
 The shared Ankr account is the production capacity bound. BlockPI's D ceiling uses conservative
 35-RU non-log bounds for deposits and hints; actual billing may be lower.
-**Configured production D=46, staging D=20 and all other caps remain unchanged.** Increasing
-any cap is a separate reviewed PR. The launch gate is the production Ankr/BlockPI allocation
+**Approved production caps: D=115, H=200, Q=150, factory=150 and Safe=10.** Staging
+remains D=20, H=80, Q=60, factory=20 and Safe=2. Production R=2/N=1 and the permanent
+1,000-address cap stay unchanged. Any further increase requires a separate reviewed budget.
+The launch gate is the production Ankr/BlockPI allocation
 and complete sealed mappings, with passing preflight before
 [production launch §2](runbooks/production-launch.md#2-provision-the-topup-cvm).
 Staging continues using Ankr + Infura.
@@ -447,7 +451,9 @@ Resume new work only when its next budget window and pending inventory fit. Extr
 does not authorize raising D, factory or Safe caps.
 
 Observe `topup_rpc_calls_total`, `topup_rpc_endpoint_ready`, `topup_rpc_errors_total`,
-`topup_coverage_lag_seconds`, `topup_addresses_lagging` and `topup_daily_budget_used`.
+`topup_coverage_lag_seconds`, `topup_addresses_lagging`, `topup_daily_budget_used` and
+`topup_daily_budget_limit`. Exhaustion alerts compare usage with the configured H/Q limits,
+matching all deployment scrape labels as well as the budget name.
 Import [rpc-alerts.yaml](rpc-alerts.yaml) and compare both environments' counters with provider
 dashboards. Stop adding load at shared Ankr's 25,000/day seven-day run rate, staging-only
 Infura's 1,500,000 credits/day, or production-only BlockPI's 1,250,000 RU/day seven-day run rate.

@@ -14,6 +14,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed (operators)
+
+- Add attested `hints_per_day` and `quote_snapshots_per_day` configuration keys, integers from
+  1 to 1,000,000 with defaults 80/60. Production sets H=200/Q=150 and raises operational
+  deposits to D=115/day and factory receipt verifications to 150/day; Safe proof sets stay
+  10/day, refunds R=2/N=1 and historical address capacity 1,000/chain. Staging stays unchanged,
+  including factory=20/day. The shared Ankr budget is 20,929 calls/day (16.28% headroom);
+  production BlockPI is 372,030.5 RU/day, rounded up to 372,031 (70.24% headroom).
+- Expose `topup_daily_budget_limit{name}` beside persisted usage and compare them in the RPC
+  exhaustion alerts. Rollback to older releases requires their verified configuration, kit
+  and alert rules: their strict parser rejects the new keys. Keep the existing PROXY rollback
+  requirements; retaining DB compatibility does not make old binaries honor the new caps.
+
 ### Fixed (operators)
 
 - Restore attestation accepts exactly the service's inherited port policy: PROXY on for 443,

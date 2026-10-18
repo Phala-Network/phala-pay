@@ -155,6 +155,15 @@ type PositionHistory = (
     Option<chrono::DateTime<chrono::Utc>>,
 );
 async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<Harness> {
+    harness_with_hint_budget(pool, read_rpc, verify_rpc, topup::hints::HINTS_PER_DAY).await
+}
+
+async fn harness_with_hint_budget(
+    pool: &sqlx::PgPool,
+    read_rpc: Rpc,
+    verify_rpc: Rpc,
+    hints_per_day: i32,
+) -> Result<Harness> {
     let read_label = format!("hint-read-{}", Uuid::new_v4());
     let verify_label = format!("hint-verify-{}", Uuid::new_v4());
     let (read, read_task) = node(read_rpc, &read_label).await?;
@@ -179,6 +188,11 @@ async fn harness(pool: &sqlx::PgPool, read_rpc: Rpc, verify_rpc: Rpc) -> Result<
                     verify: verify.clone(),
                 },
             )]),
+        )
+        .map_err(anyhow::Error::msg)?
+        .with_daily_budgets(
+            hints_per_day,
+            topup::db::daily_budgets::QUOTE_SNAPSHOTS_PER_DAY,
         )
         .map_err(anyhow::Error::msg)?,
     );
@@ -1020,6 +1034,39 @@ async fn daily_budget_is_atomic_hard_counter_and_81st_task_per_utc_day_is_ignore
     .await;
     db.cleanup().await?;
     result
+}
+
+#[tokio::test]
+async fn configured_hint_budget_admits_the_last_task_and_refuses_further_rpc() -> Result<()> {
+    for limit in [1, 200] {
+        support::with_database(|db| Box::pin(async move {
+            let read_rpc = Rpc::new();
+            let verify_rpc = Rpc::new();
+            let h = harness_with_hint_budget(&db.app_pool, read_rpc.clone(), verify_rpc.clone(), limit).await?;
+            sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES ((now() AT TIME ZONE 'UTC')::date,'hints',$1)")
+                .bind(limit - 1).execute(&db.app_pool).await?;
+            let path = format!("/v1/quotes/{}/transactions", h.quote_id);
+            h.submit(&path, Some(&h.key), json!({"transaction_hash":TX})).await?;
+            let (cancel, worker) = h.worker(&db.app_pool);
+            wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+            cancel.cancel();
+            drop(worker);
+            ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&db.app_pool).await? == limit);
+
+            let calls_before = read_rpc.calls.load(Ordering::SeqCst) + verify_rpc.calls.load(Ordering::SeqCst);
+            h.submit(&path, Some(&h.key), json!({"transaction_hash":format!("{:#x}",B256::repeat_byte(9))})).await?;
+            ensure!(h.queue.pending() == 1);
+            let (cancel, _worker) = h.worker(&db.app_pool);
+            wait_until(async || Ok(h.queue.pending() == 0)).await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            cancel.cancel();
+            ensure!(deposits(&db.app_pool).await? == 1);
+            ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&db.app_pool).await? == limit);
+            ensure!(read_rpc.calls.load(Ordering::SeqCst) + verify_rpc.calls.load(Ordering::SeqCst) == calls_before, "exhausted hints must not issue RPC");
+            Ok(())
+        })).await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]

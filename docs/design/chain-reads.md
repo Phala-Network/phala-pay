@@ -316,6 +316,8 @@ coverage-driven flow (§2.6) then expires or cancels it.
 
 ```yaml
 max_attached_pending_refunds: 1           # required positive deployment cap; production uses 2
+# hints_per_day: 80                     # optional; integer 1..1,000,000; production 200
+# quote_snapshots_per_day: 60           # optional; same bounds; production 150
 rpc:                                    # one entry per chain used by a route or a price source
   - chain_id: 11155111                  # u64, unique
     read:                               # required
@@ -337,8 +339,11 @@ Staging also configures `84532` (`rpc.ankr.com/base_sepolia/{key}`, `base-sepoli
 `https://ethereum.blockpi.network/v1/rpc/{key}` / `https://base.blockpi.network/v1/rpc/{key}`.
 Production seals `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` / `TOPUP_RPC_BLOCKPI_BASE_KEY`, with
 `max_log_blocks: 1000` for BlockPI's measured free 1,024-block cap.
-Cadences, hint/price budgets, the address cap and new-refund attachment cap are code constants;
-concurrent attached-pending refunds use the required positive deployment setting above.
+Hint and fresh quote snapshot budgets use the optional deployment fields above, defaulting to
+80/60; their resolved values appear in `topup config show`. Cadences, the address cap and
+new-refund attachment cap remain code constants; concurrent attached-pending refunds use the
+required positive deployment setting above. Older parsers reject the new H/Q keys, so rollback
+must render the older kit with that release's verified configuration and original alert rules.
 Deposit, factory and Safe limits are
 operational caps with monitoring and stop actions in §5.2. Removed: `rpc_companies`,
 `rpc_budgets`, `rpc_groups`, route `chain.rpc_groups`, price `rpc_group`/`rpc_group_b`,
@@ -410,21 +415,23 @@ before retries. Staging uses half the rechecks, 27,520 Infura credits, and produ
 across both environments: **172 shared Ankr**, with 6,880 staging Infura credits and
 1,720 production BlockPI RU. Its final full evidence read is already in D.
 
-Production D=46 and staging D=20 give 66 deposits/day; other existing caps remain unchanged.
+Production D=115 and staging D=20 give 135 deposits/day. Production H=200/Q=150,
+factory=150 and Safe=10; staging retains H=80/Q=60, factory=20 and Safe=2.
 The per-account arithmetic, including all existing proof/reserve allocations, is:
 
 ```text
-Shared Ankr:         ceil(10,964×1.1 + 4,968) = 17,029 calls/day
+Shared Ankr:         ceil(14,510×1.1 + 4,968) = 20,929 calls/day
 Staging-only Infura:  499,210×1.1 + 187,200 = 736,331 credits/day
-Production BlockPI:  173,380×1.1 + 59,130 = 249,848 RU/day
+Production BlockPI:  284,455×1.1 + 59,130 = 372,030.5 RU/day (ceil: 372,031)
 ```
 
 At 3,000-block windows, coverage uses 192 log requests per endpoint/payment chain/day;
 BlockPI's 1,000-block windows conservatively require 560. Headroom below stop lines is
-**31.88% shared Ankr / 50.91% staging Infura / 80.01% production BlockPI**. With staging D=20,
-shared Ankr permits production D≤253 at ≥10% modeled headroom; the conservative BlockPI budget
-permits D≤955. Infura is no longer a production constraint (its staging-only bound is D≤298).
-All configured caps remain unchanged. Before production launch §2, merge and preflight the
+**16.28% shared Ankr / 50.91% staging Infura / 70.24% production BlockPI**. With staging D=20,
+shared Ankr permits production D≤174 at ≥10% modeled headroom; the conservative BlockPI budget
+permits D≤897. Infura is no longer a production constraint (its staging-only bound is D≤298).
+These D ceilings hold the other approved allowances fixed; they do not authorize increases.
+Before production launch §2, merge and preflight the
 production Ankr/BlockPI allocation and complete sealed mappings; staging stays Ankr + Infura,
 with no dRPC prerequisite. Non-refund reads use ×1.1; refunds reserve all
 three transport attempts. Logical method counts have hard bounds; each method can still make
@@ -532,6 +539,7 @@ Added: `ChainRpc {read, verify}`, coverage rounds, checkpoint, hint endpoints an
 budgets; metrics `topup_rpc_errors_total{provider,chain_id,method,class}`,
 `topup_rpc_endpoint_ready`, `topup_coverage_lag_seconds{chain_id}` (now − `through_time`),
 `topup_addresses_lagging{chain_id}`, `topup_hint_total{result}`, `topup_daily_budget_used{name}`,
+`topup_daily_budget_limit{name}`,
 `topup_finality_unresolved{chain_id}` (current-stock gauge),
 `topup_finality_unresolved_entries_24h{chain_id}` (DB-derived rolling-entry gauge: deposits
 whose persisted `first_unresolved_at` is within the last 24 hours, including resolved ones).

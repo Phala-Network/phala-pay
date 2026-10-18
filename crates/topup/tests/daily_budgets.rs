@@ -5,6 +5,7 @@ use anyhow::{Result, ensure};
 use chrono::NaiveDate;
 use support::with_database;
 use topup::db::daily_budgets::{QUOTE_SNAPSHOTS_PER_DAY, claim_on};
+use topup_adapters::pricing::snapshot::SnapshotBudget;
 
 #[tokio::test]
 async fn snapshot_budget_is_atomic_scoped_and_resets_next_utc_day() -> Result<()> {
@@ -61,4 +62,58 @@ async fn snapshot_budget_is_atomic_scoped_and_resets_next_utc_day() -> Result<()
         })
     })
     .await
+}
+
+#[tokio::test]
+async fn configured_snapshot_budget_is_atomic_and_config_changes_preserve_usage() -> Result<()> {
+    for limit in [1, 150] {
+        with_database(|context| {
+            Box::pin(async move {
+                let budget = std::sync::Arc::new(topup::db::pricing::PriceBudget {
+                    pool: context.app_pool.clone(),
+                    limit,
+                });
+                let mut workers = tokio::task::JoinSet::new();
+                for _ in 0..limit + 20 {
+                    let budget = budget.clone();
+                    workers.spawn(async move { budget.claim(1).await });
+                }
+                let mut admitted = 0;
+                while let Some(result) = workers.join_next().await {
+                    admitted += i32::from(result??);
+                }
+                ensure!(
+                    admitted == limit,
+                    "configured snapshot cap must hold across concurrent workers"
+                );
+                ensure!(!budget.claim(1).await?);
+                ensure!(
+                    budget.claim(8453).await?,
+                    "price chains have independent budgets"
+                );
+                let restarted = topup::db::pricing::PriceBudget {
+                    pool: context.app_pool.clone(),
+                    limit,
+                };
+                ensure!(!restarted.claim(1).await?, "restart cannot reset usage");
+                let lower = topup::db::pricing::PriceBudget {
+                    pool: context.app_pool.clone(),
+                    limit: 1,
+                };
+                ensure!(
+                    !lower.claim(1).await?,
+                    "lowering the cap cannot reset usage"
+                );
+                let higher = topup::db::pricing::PriceBudget {
+                    pool: context.app_pool.clone(),
+                    limit: limit + 1,
+                };
+                ensure!(higher.claim(1).await?);
+                ensure!(!higher.claim(1).await?);
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    Ok(())
 }

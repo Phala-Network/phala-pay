@@ -3,7 +3,7 @@
 use chrono::{NaiveDate, Utc};
 use sqlx::PgPool;
 
-/// Fresh quote snapshots allowed per price chain and UTC day in this environment.
+/// Default fresh quote snapshots per price chain and UTC day, when unset in the configuration.
 pub const QUOTE_SNAPSHOTS_PER_DAY: i32 = 60;
 
 /// Claims one unit without exceeding `limit`; a failed persistence operation is never admission.

@@ -473,7 +473,10 @@ impl PricingRuntime {
                 crate::db::pricing::TwapStore::new(pool.clone())
             });
         let budget: Arc<dyn topup_adapters::pricing::snapshot::SnapshotBudget> =
-            Arc::new(crate::db::pricing::PriceBudget(pool));
+            Arc::new(crate::db::pricing::PriceBudget {
+                pool,
+                limit: routes.quote_snapshots_per_day(),
+            });
         let mut snapshots = BTreeMap::new();
         for (chain, calls) in calls {
             let mut snapshot = topup_adapters::pricing::snapshot::Snapshots::new(

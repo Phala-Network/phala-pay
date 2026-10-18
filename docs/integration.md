@@ -339,8 +339,9 @@ verbatim:
 | `paused`, `chain_frozen` (400) | Crypto top-ups are temporarily unavailable. |
 | `price_unavailable`, `unavailable`, `service_restoring` (503), `rate_limit`, `customer_rate_limit` (429) | Try again in a minute (`Retry-After` says how long). |
 
-Fresh quote snapshots have a hard daily cap of 60 per price chain and environment. Exhaustion
-returns retryable `503 price_unavailable`; the service never substitutes a stale price. Manual
+Fresh quote snapshots have a configured daily cap per price chain and environment
+(default 60, production 150). Exhaustion returns retryable `503 price_unavailable`; the
+service never substitutes a stale price. Manual
 transfers are discovered every 300 seconds; admitted checkout hints use the independent instant
 processing path at route confirmation. Separate dual checkpoints run every 600 seconds, and
 full dual coverage runs every 3,600 seconds with six-hour catch-up. With healthy endpoints,

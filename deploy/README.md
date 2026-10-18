@@ -789,17 +789,20 @@ accounts for fixed 300-second discovery, independent 600-second checkpoints, 3,6
 coverage, bounded backfill and six-hour catch-up. Compare measured call counters with each
 provider's dashboard. Production reads with Ankr and verifies with BlockPI; staging stays on
 Ankr + Infura. Merge and preflight the production allocation and complete sealed mappings
-before launch §2; no dRPC move or staging upgrade is required by this allocation. All caps stay
-unchanged; later increases require a separately reviewed budget. Production-attested comments
-are updated before provisioning
+before launch §2; no dRPC move or staging upgrade is required by this allocation. Production
+uses the approved D=115/H=200/Q=150/factory=150/Safe=10 caps; staging keeps its existing caps.
+Later increases require a separately reviewed budget. Production-attested comments are updated
+before provisioning
 ([launch §1.8](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
 Each fresh quote snapshot costs one read call, 240 Infura verify credits in staging or 60
-BlockPI RU in production; the DB enforces 60 per price chain per UTC day per environment.
+BlockPI RU in production; the DB enforces the configured `quote_snapshots_per_day`
+(150 production, 60 staging) per price chain per UTC day.
 [RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all nine
 chain/token routes (three production, six staging), refunds, unresolved finality stock, slow
-confirmation lane L and proof work. Parallel-mode caps are production D=46/day and staging
-D=20/day, with H=80 hint tasks per environment/UTC day and Q=60 fresh snapshots per price
-chain/environment/UTC day.
+confirmation lane L and proof work. Parallel-mode production caps are D=115/day, H=200 hint
+tasks/UTC day and Q=150 fresh snapshots/price chain/UTC day, with factory=150/day and
+Safe=10/day. Staging
+retains D=20/H=80/Q=60/factory=20/Safe=2. H/Q default to 80/60 when unset.
 D, factory and Safe counts are operational caps with monitoring and stop actions.
 L accepts normal-window exhaustion solely from height lag, credits without a checkpoint wait
 and does not count toward S. Current L stock and rolling-24-hour entries are each ≤1 per
@@ -1103,6 +1106,13 @@ Ingress uses the supported dstack-ingress TCP settings `TIMEOUT_CONNECT=5s`,
 `TIMEOUT_CLIENT=30s`, and `TIMEOUT_SERVER=30s`, allowing the API deadline response to complete.
 
 ## Rollback compatibility
+
+Before rolling back to a release without `hints_per_day` and `quote_snapshots_per_day`, render
+that release's kit with its verified configuration and use its original RPC alert rules. Its
+strict parser rejects the new fields, including defaulted fields printed by newer
+`topup config show`. Preserve each release's configuration and operating allocation alongside
+its verified images. Database compatibility does not make the older binary honor the new caps.
+The [client address passthrough rollback requirements](#custom-domain) still apply.
 
 Migrations must be expand-only and preserve N-1 reads, writes, defaults and constraints. Under the
 migration advisory lock, protocol-aware binaries validate every newer applied migration against

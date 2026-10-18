@@ -44,15 +44,16 @@ and has its own capacity stop action.
 3. For a credential failure, submit the complete sealed secret set, preserving all unchanged
    secrets. Run compose-path preflight before an owner-authorized upgrade.
 4. HTTP 402 waits until UTC midnight. Do not create extra free accounts, switch endpoints or
-   enlarge budgets. Fresh quote snapshots also have a hard 60/day/price-chain cap; exhaustion
-   returns retryable `price_unavailable`, and the UTC day resets that budget.
-   `RpcPriceSnapshotBudgetExhausted` fires at `topup_daily_budget_used{name=~"price:.*"} >= 60`,
-   including exactly the hard cap. This repository has no Prometheus rule-test harness; when
-   importing the rules, verify with the operator's rule evaluator that a sample of 59 does not
-   fire and a sample of 60 does. Admitted hint tasks have a hard 80/day/environment cap;
-   `RpcHintBudgetExhausted` fires at `topup_daily_budget_used{name="hints"} >= 80`.
-   Verify that 79 does not fire and 80 does. Exhausted hints keep their quiet acknowledgement
-   and fall back to scanning; they cannot establish negative coverage.
+   enlarge budgets. Fresh quote snapshots have a configured daily cap per price chain
+   (production 150, staging/default 60); exhaustion returns retryable `price_unavailable`,
+   and the UTC day resets that budget.
+   `RpcPriceSnapshotBudgetExhausted` and `RpcHintBudgetExhausted` compare
+   `topup_daily_budget_used{name}` against the matching `topup_daily_budget_limit{name}`,
+   including all deployment scrape labels, and fire at exactly the configured cap. Hint tasks
+   use production 200, staging/default 80 per environment per UTC day. When importing the rules,
+   verify with the operator's evaluator that cap−1 does not fire and cap does for both environments.
+   Older binaries lack the limit gauge; retain their original rules for rollback. Exhausted hints
+   keep their quiet acknowledgement and fall back to scanning; they cannot establish negative coverage.
 5. On disagreement, preserve decoded evidence and wait. Never pick one source or manually
    advance coverage. A checkpoint conflict or progressed evidence mismatch uses the existing
    [chain freeze gate](chain-frozen.md) and audited lift.

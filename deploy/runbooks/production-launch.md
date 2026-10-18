@@ -7,8 +7,9 @@ are USDC and USDT on Ethereum (chain 1) and USDC on Base (chain 8453), in
 sequencer uptime grace period. Both chains use the same deterministic factory, deployed on each chain
 separately. Production reads with Ankr and verifies with BlockPI on both mainnets. Before §2,
 the reviewed production RPC allocation and complete sealed mappings must be merged and pass
-preflight (§1.8). Staging stays on Ankr + Infura; no dRPC move is required. Production D=46,
-staging D=20, and every other cap stay unchanged
+preflight (§1.8). Staging stays on Ankr + Infura; no dRPC move is required. Production uses
+D=115, H=200, Q=150, factory=150 and Safe=10; staging retains D=20, H=80, Q=60, factory=20
+and Safe=2
 ([RPC operations](../RPC.md#worst-case-pilot-budget)).
 
 Each section ends with its checks. Do not start a section until every check of the previous one
@@ -27,14 +28,14 @@ means stop, fix the cause, and repeat the step. Never work around it.
 
 | Limit | Value | Enforcement |
 |---|---:|---|
-| Deposits handled per UTC day, D | 46 (20) | Operational: tally and stop |
+| Deposits handled per UTC day, D | 115 (20) | Operational: tally and stop |
 | Concurrent attached pending refunds, R (`max_attached_pending_refunds`) | 2 (1) | Service: `422 refund_attachment_limit_exceeded` |
 | New refund attachments per rolling 24 h, N | 1 (1) | Service: same error |
 | Unresolved finality stock S, and its new entries per rolling 24 h | 1 and 1 | Operational: pause the chain's quotes above it |
 | Slow-confirmation stock L, and its new entries per rolling 24 h | 1 and 1 | Operational: pause the chain's quotes above it |
-| Admitted hint tasks per UTC day, H | 80 (80) | Service: further hints fall back to scanning |
-| Fresh quote price snapshots per price chain per UTC day, Q | 60 (60) | Service: `503 price_unavailable` |
-| Factory receipt verifications per day | 60 (20) | Operational |
+| Admitted hint tasks per UTC day, H (`hints_per_day`) | 200 (80) | Service: further hints fall back to scanning |
+| Fresh quote price snapshots per price chain per UTC day, Q (`quote_snapshots_per_day`) | 150 (60) | Service: `503 price_unavailable` |
+| Factory receipt verifications per day | 150 (20) | Operational |
 | Safe challenge/proof sets per day | 10 (2) | Operational |
 | Extra RPC calls per endpoint per day | 150 (150) | Operational reserve |
 | Historical issued addresses per payment chain | 1,000 | Service: `422 address_capacity_reached` |
@@ -378,17 +379,20 @@ Never register extra free accounts to stack quotas. The two BlockPI chain keys s
    Store these values in the owner's secret store. §4 seals them with the complete production
    secret set. Production-attested comments are updated before first provisioning; later
    configuration changes require a reviewed upgrade.
-3. Accept the [per-account budget](../RPC.md#worst-case-pilot-budget): 17,029 shared Ankr
-   calls/day, 736,331 staging-only Infura credits/day and 249,848 production-only BlockPI RU/day.
+3. Accept the [per-account budget](../RPC.md#worst-case-pilot-budget): 20,929 shared Ankr
+   calls/day, 736,331 staging-only Infura credits/day and 372,031 production-only BlockPI RU/day
+   (372,030.5 before rounding up).
    Compare both environments' counters with the dashboards. Coordinate any Ankr key rotation
    across both environments. No staging re-seal or upgrade is required by this allocation.
 
-Production D=46, staging D=20, and every other cap stay unchanged. Any later cap change requires
-a separately reviewed and approved budget.
+Accept production D=115/H=200/Q=150/factory=150/Safe=10 and the configured
+`hints_per_day: 200`/`quote_snapshots_per_day: 150`. Staging stays
+D=20/H=80/Q=60/factory=20/Safe=2. Any later cap change requires a separately reviewed and
+approved budget.
 
 **Checks:** the production RPC allocation PR is merged and its configuration, sealed mappings
 and preflight pass before §2. Record its PR and Operations owner. Operations accepts the resulting
-budget and unchanged caps. Staging remains Ankr + Infura.
+budget and approved caps. Staging remains Ankr + Infura.
 
 ### 1.9 Sentry
 
@@ -1215,8 +1219,8 @@ pilot_watch() {
   above topup_confirmation_slow_entries_24h 1 && { echo "STOP L entries: pause the chain's quotes; rpc-health.md"; status=1; }
   above topup_confirmation_slow 0 && echo "L non-empty: recheck in ten minutes; provider lag if it stays (rpc-health.md)"
   any_at_least topup_coverage_lag_seconds '' 7200 && { echo "coverage lag over two hours: rpc-health.md"; status=1; }
-  any_at_least topup_daily_budget_used 'name="hints"' 80 && echo "H exhausted until UTC midnight: hints fall back to scanning"
-  any_at_least topup_daily_budget_used 'name="price:' 60 && echo "Q exhausted until UTC midnight: quotes return price_unavailable"
+  any_at_least topup_daily_budget_used 'name="hints"' 200 && echo "H exhausted until UTC midnight: hints fall back to scanning"
+  any_at_least topup_daily_budget_used 'name="price:' 150 && echo "Q exhausted until UTC midnight: quotes return price_unavailable"
   any_at_least topup_issued_addresses '' 700 && { echo "address count at 70%: address-capacity.md"; status=1; }
   any_at_least topup_sanctions_list_verified_age_seconds '' 21600 && { echo "sanctions list stale: sanctions-list.md"; status=1; }
   jq '{generated_at, deposits_total: ([.routes[].deposits_by_state | to_entries[].value] | add), refunds_by_status: [.routes[].refunds_by_status], reconciliation_blocks, failing_webhook_endpoints, sanctions_snapshot: .sanctions_snapshot.verified_at}' "$daily"
@@ -1233,14 +1237,14 @@ seven-day RU run rate. BlockPI payload surcharges are visible in its dashboard. 
 | Signal | Stop action | Runbook |
 |---|---|---|
 | S or L stock above 1, or S or L entries in rolling 24 h above 1 | Pause `quotes` on every route of the affected chain (below) and escalate. Keep verifying funded work and keep its reservations. Resume only when stock, entries and the day's work all fit | [Deposit reversed](deposit-reversed.md), [RPC health](rpc-health.md) |
-| D reaches 46 in a UTC day, factory 60/day, or Safe 10/day | Pause `quotes` on all three routes until 00:00 UTC (5:00 PM PDT) and coordinate Phala Cloud's intake. Start no proof batch | [RPC operations](../RPC.md#monitoring-and-stop-actions) |
+| D reaches 115 in a UTC day, factory 150/day, or Safe 10/day | Pause `quotes` on all three routes until 00:00 UTC (5:00 PM PDT) and coordinate Phala Cloud's intake. Start no proof batch | [RPC operations](../RPC.md#monitoring-and-stop-actions) |
 | Shared Ankr seven-day run rate ≥ 25,000 calls/day, staging Infura ≥ 1,500,000 credits/day, or production BlockPI seven-day run rate ≥ 1,250,000 RU/day | Add no merchant, route or test load. Investigate retry or range growth. Never add a second free account | [RPC health](rpc-health.md) |
 | Staging Infura `402`, or production BlockPI quota/throughput exhaustion | Infura verify halts until UTC midnight; BlockPI verify waits for provider recovery. Preserve pending work and do not switch endpoints | [RPC health](rpc-health.md) |
 | `TopupAddressCapacity` or 700 addresses on a chain (70%); 900 is critical | Plan the paid-provider or indexer upgrade, and stop growth before 1,000 | [Address capacity](address-capacity.md) |
 | `422 refund_attachment_limit_exceeded` (R=2 attached pending, N=1 per 24 h) | Enforced by the service. Phala Cloud contacts the operator before another payout. Never cancel an attached refund to make room | [RPC operations](../RPC.md#pilot-limits-and-operating-modes) |
 | `TopupRefundProgressAge`: attached refund pending over 1 h, or unseen by both endpoints for 24 h | The refund stays pending and reserved. Checks back off from 60 s to ten minutes after 30 min, then hourly after 24 h | [Pending refund transaction](rejected-funds-at-treasury.md#pending-refund-transaction-alert) |
 | `TopupSanctionsListStale`, `TopupSanctionsListVerifyFailed`, `TopupSanctionsRescreenFailed` | Restore verification before the 24 h freshness limit, or pause `settlement` on the routes | [Sanctions list](sanctions-list.md) |
-| H 80 or Q 60 exhausted | Automatic until UTC midnight. Review the demand, but never raise caps without a reviewed budget | [RPC health](rpc-health.md) |
+| H 200 or Q 150 exhausted | Automatic until UTC midnight. Review the demand, but never raise caps without a reviewed budget | [RPC health](rpc-health.md) |
 | Any other Sentry alert or missed Crons check-in | Follow its runbook | [Alert index](README.md#alert-and-symptom-index) |
 
 ```sh
@@ -1322,7 +1326,8 @@ is checked.
 - [ ] §1.7 Four Safes verified against Finance's expectations.
 - [ ] §1.8 Production Ankr read/BlockPI verify allocation PR merged; configuration, complete
       sealed mappings and preflight passed before §2. PR `<link>` and Operations owner `<name>`
-      recorded; staging stays Ankr + Infura; resulting budget and unchanged D=46/20 caps accepted;
+      recorded; staging stays Ankr + Infura; resulting budget and production
+      D=115/H=200/Q=150/factory=150/Safe=10 caps accepted;
       production-attested comments updated before provisioning; both BlockPI chain keys ready.
 - [ ] §1.9 Sentry scrubbing and alert rule set; synthetic alert received; owner accepts the
       pilot's external-monitoring risk and no Sentry Uptime monitor.

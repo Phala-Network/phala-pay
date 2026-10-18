@@ -63,7 +63,7 @@ pub(crate) fn collect_metrics() -> Result<Vec<prometheus::proto::MetricFamily>, 
         .map(Collector::collect)
         .map_err(|_| prometheus::Error::Msg("hint metrics initialization failed".into()))
 }
-/// Hard number of hint tasks per environment and UTC day.
+/// Default number of hint tasks per environment and UTC day, when unset in the configuration.
 pub const HINTS_PER_DAY: i32 = 80;
 
 /// A server-derived object network. No caller-supplied recipient is used.
@@ -269,7 +269,7 @@ async fn process(
         if !read.ready() || !verify.ready() {
             return Ok(Outcome::Parked);
         }
-        if !db::daily_budgets::claim(pool, "hints", HINTS_PER_DAY).await? {
+        if !db::daily_budgets::claim(pool, "hints", routes.hints_per_day()).await? {
             return Ok(Outcome::Exhausted);
         }
         count("budget_spent");

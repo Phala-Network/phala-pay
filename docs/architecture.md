@@ -727,8 +727,8 @@ Invoice model, with this service's exception profile:
   `quote.expired`. Both release the reservation atomically. With healthy endpoints, caught-up
   addresses and work within pilot allowances, expiry/cancel and unpaid reservation release
   target about 70 minutes after qualifying finality; backlog and outages can extend this.
-- Fresh quote price snapshots use the DB daily budget: at most 60 per price chain per environment
-  per UTC day. Exhaustion returns retryable `503 price_unavailable`, with no stale price. Quote
+- Fresh quote price snapshots use the configured `quote_snapshots_per_day` DB daily budget
+  per price chain per environment per UTC day (default 60, production 150). Exhaustion returns retryable `503 price_unavailable`, with no stale price. Quote
   reuse remains twelve seconds; confirmation always requests a fresh dual Multicall3 snapshot.
 - Exposure counters sum `credit_minor` across routes, which every route counts in USD cents
   (§6).

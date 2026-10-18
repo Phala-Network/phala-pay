@@ -14,13 +14,29 @@ use crate::rpc_provider::{ProviderUrl, provider_label};
 /// Construction checks everything that must agree across routes: unique versions, one finality
 /// rule across a chain's current routes, one provider list per chain, one route name per chain asset, and one destination unit
 /// across rate-lock routes.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RouteSet {
     routes: Vec<RouteFile>,
     environment: String,
+    hints_per_day: i32,
+    quote_snapshots_per_day: i32,
     rpc: BTreeMap<u64, crate::chain_rpc::ChainRpc>,
     current: BTreeMap<(u64, Address), usize>,
     chains: BTreeMap<u64, ChainEntry>,
+}
+
+impl Default for RouteSet {
+    fn default() -> Self {
+        Self {
+            routes: Vec::new(),
+            environment: String::new(),
+            hints_per_day: crate::hints::HINTS_PER_DAY,
+            quote_snapshots_per_day: crate::db::daily_budgets::QUOTE_SNAPSHOTS_PER_DAY,
+            rpc: BTreeMap::new(),
+            current: BTreeMap::new(),
+            chains: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -86,10 +102,10 @@ impl RouteSet {
         })?;
         Ok(Self {
             routes,
-            environment: String::new(),
             rpc,
             current,
             chains,
+            ..Self::default()
         })
     }
 
@@ -103,6 +119,21 @@ impl RouteSet {
     pub fn with_environment(mut self, environment: String) -> Self {
         self.environment = environment;
         self
+    }
+    /// Attach validated attested daily budgets, shared by hint workers and quote pricing.
+    pub fn with_daily_budgets(mut self, hints: i32, snapshots: i32) -> Result<Self, String> {
+        crate::config::validate_daily_budgets(hints, snapshots)?;
+        self.hints_per_day = hints;
+        self.quote_snapshots_per_day = snapshots;
+        Ok(self)
+    }
+    /// Environment-wide hint task limit per UTC day.
+    pub fn hints_per_day(&self) -> i32 {
+        self.hints_per_day
+    }
+    /// Fresh quote snapshot limit per price chain and UTC day.
+    pub fn quote_snapshots_per_day(&self) -> i32 {
+        self.quote_snapshots_per_day
     }
     /// Staging alone uses five-minute PHA sampling; default routes retain one-minute sampling.
     pub fn staging(&self) -> bool {
@@ -129,10 +160,10 @@ impl RouteSet {
         })?;
         Ok(Self {
             routes,
-            environment: String::new(),
             rpc: BTreeMap::new(),
             current,
             chains,
+            ..Self::default()
         })
     }
 

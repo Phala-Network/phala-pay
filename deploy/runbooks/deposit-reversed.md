@@ -133,7 +133,7 @@ L budgets `2×(62 + 24) = 172` head methods per role across both environments da
 172 shared Ankr calls, 6,880 staging Infura credits and 1,720 production BlockPI RU before
 retries. The complete read is already in D's allocation: 24 Ankr calls plus 2,000 staging
 Infura credits or 875 conservative production BlockPI RU per deposit.
-Production D=46 and staging D=20 remain operational caps;
+Production D=115 and staging D=20 remain operational caps;
 follow the [full arithmetic and retry caveat](../RPC.md#worst-case-pilot-budget).
 Resume new quotes only when L stock/entries, S and daily work fit. N-1 preserves compatible
 rows, but its binary does not obey the new scheduler budget; use the prior operating budget.

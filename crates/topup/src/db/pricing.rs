@@ -92,16 +92,17 @@ impl ObservationStore for TwapStore {
 }
 
 /// Atomic environment-local UTC quote snapshot budget, independent of sampler and confirm.
-pub struct PriceBudget(pub PgPool);
+pub struct PriceBudget {
+    /// Deployment's database, retaining claims across restarts.
+    pub pool: PgPool,
+    /// Configured fresh quote snapshots per price chain and UTC day.
+    pub limit: i32,
+}
 #[async_trait]
 impl topup_adapters::pricing::snapshot::SnapshotBudget for PriceBudget {
     async fn claim(&self, chain_id: u64) -> Result<bool, PriceError> {
-        super::daily_budgets::claim(
-            &self.0,
-            &format!("price:{chain_id}"),
-            super::daily_budgets::QUOTE_SNAPSHOTS_PER_DAY,
-        )
-        .await
-        .map_err(storage_error)
+        super::daily_budgets::claim(&self.pool, &format!("price:{chain_id}"), self.limit)
+            .await
+            .map_err(storage_error)
     }
 }

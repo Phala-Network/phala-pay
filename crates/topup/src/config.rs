@@ -25,12 +25,16 @@ use crate::routes::RouteSet;
 use crate::rpc_provider::ProviderUrl;
 
 /// The file as written. Maintenance keys default to empty; the two runtime-resolved public
-/// settings may be omitted. Other fields are required and unknown fields are errors.
+/// settings and daily budgets may be omitted. Other fields are required and unknown fields are errors.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigSpec {
     environment: String,
     max_attached_pending_refunds: NonZeroU32,
+    #[serde(default = "default_hints_per_day")]
+    hints_per_day: i32,
+    #[serde(default = "default_quote_snapshots_per_day")]
+    quote_snapshots_per_day: i32,
     #[serde(default)]
     public_origin: Option<String>,
     admin_key: AdminKeySpec,
@@ -65,6 +69,10 @@ pub struct Config {
     pub environment: String,
     /// Required positive concurrency limit for attached-pending refunds in this deployment.
     pub max_attached_pending_refunds: NonZeroU32,
+    /// Atomic environment-wide hint task limit per UTC day (default 80).
+    pub hints_per_day: i32,
+    /// Atomic fresh quote snapshot limit per price chain and UTC day (default 60).
+    pub quote_snapshots_per_day: i32,
     /// The API's one public origin: admin signatures and treasury challenges name it. `None` when
     /// `topup run` takes it from its environment.
     pub public_origin: Option<PublicOrigin>,
@@ -99,6 +107,8 @@ impl std::fmt::Debug for AdminKeySpec {
 struct ResolvedConfig<'a> {
     environment: &'a str,
     max_attached_pending_refunds: NonZeroU32,
+    hints_per_day: i32,
+    quote_snapshots_per_day: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     public_origin: Option<String>,
     admin_key: &'a AdminKeySpec,
@@ -122,6 +132,7 @@ impl Config {
     pub fn parse(yaml: &str) -> Result<Self, String> {
         let spec: ConfigSpec =
             serde_saphyr::from_str(yaml).map_err(|error| format!("invalid YAML: {error}"))?;
+        validate_daily_budgets(spec.hints_per_day, spec.quote_snapshots_per_day)?;
         if !is_name(&spec.environment, 64) {
             return Err(
                 "environment must be 1-64 lowercase letters, digits, `-`, or `_`, starting with a \
@@ -196,6 +207,8 @@ impl Config {
             sanctions: spec.sanctions,
             environment: spec.environment,
             max_attached_pending_refunds: spec.max_attached_pending_refunds,
+            hints_per_day: spec.hints_per_day,
+            quote_snapshots_per_day: spec.quote_snapshots_per_day,
             public_origin,
             admin_key_id: spec.admin_key.id.clone(),
             admin_key,
@@ -272,8 +285,9 @@ impl Config {
         for rpc in &self.rpc {
             clients.insert(rpc.chain_id, rpc.clients(|name| std::env::var(name).ok())?);
         }
-        RouteSet::with_rpc(self.routes.clone(), clients)
-            .map(|routes| routes.with_environment(self.environment.clone()))
+        RouteSet::with_rpc(self.routes.clone(), clients)?
+            .with_environment(self.environment.clone())
+            .with_daily_budgets(self.hints_per_day, self.quote_snapshots_per_day)
     }
 
     /// Require every explicit sealed key, with URL-safe substitution and log-safe errors.
@@ -302,6 +316,8 @@ impl Config {
         serde_json::to_string_pretty(&ResolvedConfig {
             environment: &self.environment,
             max_attached_pending_refunds: self.max_attached_pending_refunds,
+            hints_per_day: self.hints_per_day,
+            quote_snapshots_per_day: self.quote_snapshots_per_day,
             public_origin: self.public_origin.as_ref().map(ToString::to_string),
             admin_key: &self.admin_key_spec,
             maintenance_keys: &self.maintenance_key_specs,
@@ -312,6 +328,26 @@ impl Config {
         .map(|json| json + "\n")
         .map_err(|error| format!("failed to write the configuration: {error}"))
     }
+}
+
+fn default_hints_per_day() -> i32 {
+    crate::hints::HINTS_PER_DAY
+}
+
+fn default_quote_snapshots_per_day() -> i32 {
+    crate::db::daily_budgets::QUOTE_SNAPSHOTS_PER_DAY
+}
+
+pub(crate) fn validate_daily_budgets(hints: i32, snapshots: i32) -> Result<(), String> {
+    for (name, limit) in [
+        ("hints_per_day", hints),
+        ("quote_snapshots_per_day", snapshots),
+    ] {
+        if !(1..=1_000_000).contains(&limit) {
+            return Err(format!("{name} must be an integer from 1 to 1000000"));
+        }
+    }
+    Ok(())
 }
 
 /// A lowercase DNS name of at least two labels: letters, digits, and inner `-`, at most 253
@@ -420,6 +456,61 @@ mod tests {
                 .maintenance_keys
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn daily_budgets_default_validate_and_round_trip() {
+        let base = config(PROVIDERS, "https://pay.example");
+        let defaults = Config::parse(&base).expect("existing configuration");
+        assert_eq!(
+            (defaults.hints_per_day, defaults.quote_snapshots_per_day),
+            (80, 60)
+        );
+        for (hints, snapshots) in [(1, 1), (200, 150), (1_000_000, 1_000_000)] {
+            let configured =
+                format!("{base}hints_per_day: {hints}\nquote_snapshots_per_day: {snapshots}\n");
+            let parsed = Config::parse(&configured).expect("valid daily budgets");
+            let shown = parsed.resolved_json().expect("show");
+            let round_trip = Config::parse(&shown).expect("round trip");
+            assert_eq!(
+                (round_trip.hints_per_day, round_trip.quote_snapshots_per_day),
+                (hints, snapshots)
+            );
+        }
+        for name in ["hints_per_day", "quote_snapshots_per_day"] {
+            for invalid in ["0", "-1", "1000001", "2147483648", "1.5", "null", "false"] {
+                assert!(
+                    Config::parse(&format!("{base}{name}: {invalid}\n")).is_err(),
+                    "{name}: {invalid}"
+                );
+            }
+        }
+        for (yaml, expected) in [
+            (
+                include_str!(
+                    "../../../deploy/environments/phala-network/production/topup/topup.yaml"
+                ),
+                (200, 150),
+            ),
+            (
+                include_str!("../../../deploy/environments/phala-network/staging/topup/topup.yaml"),
+                (80, 60),
+            ),
+            (
+                include_str!("../../../deploy/environments/phala-cloud-template/topup/topup.yaml"),
+                (80, 60),
+            ),
+            (
+                include_str!("../../../deploy/environments/example/topup/topup.yaml"),
+                (80, 60),
+            ),
+        ] {
+            let parsed = Config::parse(yaml).expect("shipped configuration");
+            assert_eq!(
+                (parsed.hints_per_day, parsed.quote_snapshots_per_day),
+                expected
+            );
+        }
     }
 
     #[test]
