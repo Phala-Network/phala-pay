@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-10-18
+
 ### Changed (operators)
 
 - Add attested `hints_per_day` and `quote_snapshots_per_day` configuration keys, integers from
@@ -2083,7 +2085,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.9...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.10...HEAD
+[0.10.10]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.10
 [0.10.9]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.9
 [0.10.8]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.8
 [0.10.7]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.7
