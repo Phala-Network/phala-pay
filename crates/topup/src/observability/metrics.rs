@@ -241,6 +241,28 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     TextEncoder::new().encode_to_string(&families)
 }
 
+/// Attested daily limits with the same names as the durable usage gauges.
+pub fn render_daily_budget_limits(
+    routes: &crate::routes::RouteSet,
+) -> Result<String, prometheus::Error> {
+    let limits = IntGaugeVec::new(
+        Opts::new(
+            "topup_daily_budget_limit",
+            "Configured units allowed per UTC day.",
+        ),
+        &["name"],
+    )?;
+    limits
+        .with_label_values(&["hints"])
+        .set(i64::from(routes.hints_per_day()));
+    for chain in routes.rpc().keys() {
+        limits
+            .with_label_values(&[&format!("price:{chain}")])
+            .set(i64::from(routes.quote_snapshots_per_day()));
+    }
+    TextEncoder::new().encode_to_string(&limits.collect())
+}
+
 /// Durable coverage and daily budget gauges are reloaded on authenticated scrapes, including
 /// after restart; no RPC request or address-wide backfill is issued here.
 pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> {
@@ -380,6 +402,46 @@ async fn render_chain_reads_with_clock(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daily_limit_metrics_follow_attested_production_and_staging_configs() {
+        for yaml in [
+            include_str!(
+                "../../../../deploy/environments/phala-network/production/topup/topup.yaml"
+            ),
+            include_str!("../../../../deploy/environments/phala-network/staging/topup/topup.yaml"),
+        ] {
+            let config = crate::config::Config::parse(yaml).expect("shipped configuration");
+            let clients = config
+                .rpc
+                .iter()
+                .map(|rpc| {
+                    (
+                        rpc.chain_id,
+                        rpc.clients(|_| Some("fixture-key".to_owned()))
+                            .expect("valid endpoints"),
+                    )
+                })
+                .collect();
+            let routes = crate::routes::RouteSet::with_rpc(config.routes, clients)
+                .expect("valid routes")
+                .with_daily_budgets(config.hints_per_day, config.quote_snapshots_per_day)
+                .expect("validated limits");
+            let metrics = render_daily_budget_limits(&routes).expect("metrics");
+            assert!(metrics.lines().any(|line| line
+                == format!(
+                    "topup_daily_budget_limit{{name=\"hints\"}} {}",
+                    config.hints_per_day
+                )));
+            for chain in routes.rpc().keys() {
+                assert!(metrics.lines().any(|line| line
+                    == format!(
+                        "topup_daily_budget_limit{{name=\"price:{chain}\"}} {}",
+                        config.quote_snapshots_per_day
+                    )));
+            }
+        }
+    }
     #[test]
     fn latency_buckets_and_labels_are_bounded() {
         let metrics = HttpMetrics::new().unwrap();

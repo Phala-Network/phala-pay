@@ -78,6 +78,8 @@ One YAML file, parsed with unknown fields refused, holds every public setting of
 ```yaml
 environment: staging                       # the Sentry environment: also gates staging-only price licensing opt-in
 max_attached_pending_refunds: 1             # required positive deployment cap; production uses 2
+# hints_per_day: 80                       # optional; environment-wide per UTC day
+# quote_snapshots_per_day: 60             # optional; per price chain per UTC day
 public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1                     # the key id admin requests sign with
@@ -107,6 +109,21 @@ Exhaustion returns non-retryable `422 refund_attachment_limit_exceeded`, preserv
 reservation. Idempotent attachment retries do not consume quota; attached refunds keep being
 verified. Restore N-1 with its verified release configuration, which predates this required field.
 
+- **`hints_per_day`** and **`quote_snapshots_per_day`** are optional integers from 1 to
+  1,000,000, defaulting to 80 and 60 respectively. The former limits hint tasks across all
+  payment chains; the latter limits fresh quote snapshots independently per price chain.
+  Both use atomic persisted budgets per environment and UTC day; restarts, failures and a
+  configuration change do not reset usage. Lowering a limit below current usage refuses further
+  claims until the next UTC day. Hints fall back to scanning at exhaustion; quotes needing a
+  fresh snapshot return retryable `503 price_unavailable`. Sampler and deposit-confirmation
+  snapshots are independent. Production sets 200/150; staging, example and template keep the
+  defaults. `topup config show` includes both resolved values.
+  These limits do not enforce the operational deposit, factory or Safe tallies; see
+  [pilot limits](../deploy/RPC.md#pilot-limits-and-operating-modes).
+  **Rollback:** releases before these keys reject them as unknown fields. Render an older kit
+  with that release's verified configuration and operating allocation, never the newer
+  production file or `config show` output. Keep the release's compose-update path and the
+  [PROXY rollback requirements](../deploy/README.md#custom-domain).
 - **`public_origin`** is the public scheme and authority clients call (no path). The admin API's
   RFC 9421 signatures are verified against it plus the request path and query, and treasury
   challenges (EIP-4361) name it. Behind an ingress it must be the public URL (in a CVM, the
@@ -133,7 +150,8 @@ verified. Restore N-1 with its verified release configuration, which predates th
   `max_log_blocks` is positive and measured per endpoint. Every configured sealed key must be
   present in the candidate sealed environment and in the topup/restore-check compose mapping.
   `topup config check --secrets` checks them without printing their values.
-  Cadences, range limits and budgets are code constants. No in-process endpoint selection or
+  Cadences and other work bounds remain code constants; H/Q use the fields above. No in-process
+  endpoint selection or
   failover exists. The single Alloy retry layer retries HTTP 429/503 and JSON-RPC throughput
   errors; Infura HTTP 402 stops verify until the next UTC midnight.
   See [the RPC runbook](../deploy/RPC.md) and [chain reads](design/chain-reads.md).

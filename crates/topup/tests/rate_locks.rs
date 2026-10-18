@@ -2753,6 +2753,18 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
 
 #[tokio::test]
 async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable() -> Result<()> {
+    exhausted_snapshot_budget(topup::db::daily_budgets::QUOTE_SNAPSHOTS_PER_DAY).await
+}
+
+#[tokio::test]
+async fn configured_snapshot_budget_returns_price_unavailable_before_rpc() -> Result<()> {
+    for limit in [1, 150] {
+        exhausted_snapshot_budget(limit).await?;
+    }
+    Ok(())
+}
+
+async fn exhausted_snapshot_budget(limit: i32) -> Result<()> {
     support::with_database(|database| {
         Box::pin(async move {
             let pool = &database.app_pool;
@@ -2769,8 +2781,8 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
             }];
             route.validate()?;
             seed::accept_routes(pool, account.id, true, &[&route]).await?;
-            sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES ((now() AT TIME ZONE 'UTC')::date,'price:1',60)")
-                .execute(pool).await?;
+            sqlx::query("INSERT INTO daily_budgets(day,name,used) VALUES ((now() AT TIME ZONE 'UTC')::date,'price:1',$1)")
+                .bind(limit).execute(pool).await?;
             // An exhausted budget must fail before contacting either endpoint.
             let requests=Arc::new(AtomicUsize::new(0));
             let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -2784,7 +2796,8 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
             ensure!(endpoint.ready());
             let routes = Arc::new(topup::routes::RouteSet::with_rpc(vec![route], std::collections::BTreeMap::from([
                 (1, topup::chain_rpc::ChainRpc { read: endpoint.clone(), verify: endpoint }),
-            ])).map_err(anyhow::Error::msg)?);
+            ])).map_err(anyhow::Error::msg)?
+                .with_daily_budgets(topup::hints::HINTS_PER_DAY, limit).map_err(anyhow::Error::msg)?);
             let runtimes = locks::pricing::PricingRuntime::build_all(&routes, pool.clone()).map_err(anyhow::Error::msg)?;
             let admin = SigningKey::from_bytes(&[44;32]);
             let app = topup::api::router(AppState {
@@ -2804,7 +2817,7 @@ async fn exhausted_database_snapshot_budget_returns_retryable_price_unavailable(
             ensure!(response.status()==StatusCode::SERVICE_UNAVAILABLE);
             ensure!(response_json(response).await?["error"]["code"]=="price_unavailable");
             ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==0);
-            ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='price:1'").fetch_one(pool).await?==60);
+            ensure!(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='price:1'").fetch_one(pool).await?==limit);
             ensure!(requests.load(Ordering::SeqCst)==1,"the exhausted budget must refuse before any price RPC");
             server.abort();let _=server.await;
             Ok(())

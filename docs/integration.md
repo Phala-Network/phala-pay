@@ -339,8 +339,9 @@ verbatim:
 | `paused`, `chain_frozen` (400) | Crypto top-ups are temporarily unavailable. |
 | `price_unavailable`, `unavailable`, `service_restoring` (503), `rate_limit`, `customer_rate_limit` (429) | Try again in a minute (`Retry-After` says how long). |
 
-Fresh quote snapshots have a hard daily cap of 60 per price chain and environment. Exhaustion
-returns retryable `503 price_unavailable`; the service never substitutes a stale price. Manual
+Fresh quote snapshots have a configured daily cap per price chain and environment
+(default 60, production 150). Exhaustion returns retryable `503 price_unavailable`; the
+service never substitutes a stale price. Manual
 transfers are discovered every 300 seconds; admitted checkout hints use the independent instant
 processing path at route confirmation. Separate dual checkpoints run every 600 seconds, and
 full dual coverage runs every 3,600 seconds with six-hour catch-up. With healthy endpoints,
@@ -950,8 +951,8 @@ receipt visibility keeps polling within the task budget; only confirmed evidence
 raises an alert. They do not advance coverage or cause expiry, cancellation, rejection or
 credit by themselves. Each task is limited to 12 read calls and 8 verify calls including retries
 and head polling, and 90 seconds on Ethereum chains or 30 seconds on Base chains. Limits are
-3/minute and 10/day per authenticated object, four active tasks and a hard 80 tasks
-per environment per UTC day. Hint endpoints have no per-IP limit; see the operator
+3/minute and 10/day per authenticated object, four active tasks, and a per-environment daily
+task cap set by the operator (`hints_per_day`, default 80; Phala's production uses 200). Hint endpoints have no per-IP limit; see the operator
 [API admission limits](configuration.md#api-admission-limits) for the ingress protection model.
 Transfers before the address's `created_block` are ignored, as in coverage scanning.
 Browser preflight returns an empty `204` with `Access-Control-Max-Age: 600`.

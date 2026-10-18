@@ -3,6 +3,8 @@
 # request and a Deploy `upgrade`.
 environment: production
 max_attached_pending_refunds: 2
+hints_per_day: 200
+quote_snapshots_per_day: 150
 public_origin: https://pay-api.phala.com
 admin_key:
   id: admin/production-v1
@@ -15,7 +17,8 @@ maintenance_keys:
 # Independent Ankr read and BlockPI verify endpoints (deploy/RPC.md). Ankr is shared with staging;
 # BlockPI uses one mainnet key per chain from one free account. Staging retains Ankr + Infura.
 # Fast discovery uses read; coverage and money decisions require read/verify agreement.
-# Pilot caps remain unchanged; BlockPI log requests use its measured free-tier range limit.
+# Operational pilot caps: D=115 deposits/day, 150 factory verifications/day, 10 Safe proof sets/day.
+# BlockPI log requests use its measured free-tier range limit; see deploy/RPC.md for the budget.
 rpc:
   - chain_id: 1
     read:

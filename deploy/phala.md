@@ -76,8 +76,9 @@ Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed c
 BlockPI verify on Ethereum and Base, with `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
 `TOPUP_RPC_BLOCKPI_BASE_KEY` from one free account. Before production launch §2, merge and
 preflight this production allocation and its complete sealed mappings. Staging stays unchanged;
-no dRPC move, staging re-seal or staging upgrade is required by the allocation. All caps stay
-D=46 production / D=20 staging. Production-attested comments are updated before provisioning
+no dRPC move, staging re-seal or staging upgrade is required by the allocation. Production uses
+D=115/H=200/Q=150/factory=150/Safe=10; staging retains D=20/H=80/Q=60/factory=20/Safe=2.
+Production-attested comments are updated before provisioning
 ([launch §1.8](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
 The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
 key templates. Run compose-path preflight with the complete sealed env before an authorized

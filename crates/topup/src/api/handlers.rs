@@ -531,6 +531,12 @@ pub(crate) async fn metrics(
             tracing::error!(%error,"chain read metrics refresh failed");
             ApiError::internal()
         })?;
+    let limits = crate::observability::metrics::render_daily_budget_limits(&state.routes).map_err(
+        |error| {
+            tracing::error!(%error, "daily budget metrics encoding failed");
+            ApiError::internal()
+        },
+    )?;
     Ok((
         [(
             header::CONTENT_TYPE,
@@ -539,7 +545,8 @@ pub(crate) async fn metrics(
         crate::observability::metrics::render(&state.pool).map_err(|error| {
             tracing::error!(%error, "metrics encoding failed");
             ApiError::internal()
-        })? + &durable,
+        })? + &durable
+            + &limits,
     ))
 }
 
