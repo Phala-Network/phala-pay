@@ -308,7 +308,7 @@ fn new_config(route: &RouteFile, tls: &support::tls::RpcTlsProxy) -> Result<Valu
         &config.resolved_json().map_err(anyhow::Error::msg)?,
     )?)
 }
-/// The published N-1 image as a host-network container that reads N's configuration, its local
+/// The published N-1 image as a host-network container that reads its own configuration, its local
 /// RPC certificate and sealed keys. Official SLS hosts resolve to loopback, so its production
 /// refresh fails closed and keeps the fixture snapshot that the drill activates.
 fn previous_image(
@@ -526,9 +526,17 @@ async fn published_image_round_trip() -> Result<()> {
         route.pricing.sources=vec![topup_core::price::Source::Chainlink {feed:"USDC_USD".into(),chain_id:1,observation_chain_id:None}];
         route.merchant.min_amount=Bounded::at(1);route.merchant.min_deposit_atomic=Bounded::at(AtomicAmount::new(alloy_primitives::U256::ZERO));
         route.validate()?;
-        // N-1 is v0.10.0 or later and reads the current configuration schema unchanged.
+        // Keep a separate configuration for each release: N-1's strict parser predates H/Q keys.
+        let current_config=new_config(&route,&tls)?;
+        let mut previous_config=current_config.clone();
+        let previous_settings=previous_config.as_object_mut().context("configuration object")?;
+        for key in ["hints_per_day","quote_snapshots_per_day"] {
+            ensure!(previous_settings.remove(key).is_some(),"resolved configuration missing {key}");
+        }
         let current_path=directory.path().join("current.json");
-        std::fs::write(&current_path,new_config(&route,&tls)?.to_string())?;
+        let previous_path=directory.path().join("previous.json");
+        std::fs::write(&current_path,current_config.to_string())?;
+        std::fs::write(&previous_path,previous_config.to_string())?;
         let migration=Command::new("docker").args(["run","--rm","--network","host","-e",&format!("DATABASE_URL={}",database.owner_url),&image,"topup","migrate"]).output()?;
         ensure!(migration.status.success(),"published N-1 migrate: {}",String::from_utf8_lossy(&migration.stderr));
         // N-1 screens against a verified SDN snapshot; activate the fixture one before it serves.
@@ -540,17 +548,17 @@ async fn published_image_round_trip() -> Result<()> {
         seed::set_treasury(&database.app_pool,account.id,true,1,treasury).await?;seed::accept_routes(&database.app_pool,account.id,true,&[&route]).await?;
         let socket=std::net::TcpListener::bind("127.0.0.1:0")?;let port=socket.local_addr()?.port();drop(socket);let origin=format!("http://127.0.0.1:{port}");
         finalize_logged_block(&anvil,token,treasury)?;
-        let mut previous=start_service(Some(&image),&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
+        let mut previous=start_service(Some(&image),&previous_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
         let address=merchant(&origin,&key,"/v1/deposit_addresses",json!({"client_reference_id":"round-trip"})).await?;
         let forwarder:Address=address["networks"][0]["address"].as_str().context("issued network")?.parse()?;
         let da_id=topup::ids::parse(topup::ids::DEPOSIT_ADDRESS,address["id"].as_str().unwrap()).unwrap();
         let first=send(&anvil,token,"transfer(address,uint256)",&[&format!("{forwarder:#x}"),"1000000000000000000"])?;anvil.mine(16)?;
         // Scanner rounds start with the service; restart at a round boundary as N does below.
-        previous.stop()?;previous=start_service(Some(&image),&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;credited(&database,first).await?;
+        previous.stop()?;previous=start_service(Some(&image),&previous_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;credited(&database,first).await?;
         wait_until("N-1 finalized payment",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT final_at IS NOT NULL FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?)}).await?;
         previous.stop()?;
         finalize_logged_block(&anvil,token,treasury)?;
-        reconcile(Some(&image),&current_path,&database,&tls)?;
+        reconcile(Some(&image),&previous_path,&database,&tls)?;
         // Restore fixture: version 2 was previously issued but its DB row was lost.
         // Its historical payment stays absent until real reissue restores the version and
         // lowers the newly inserted created_block below the current coverage boundary.
@@ -631,7 +639,7 @@ async fn published_image_round_trip() -> Result<()> {
         // Immutable confirmation history and funds state must survive the real old binary.
         sqlx::query("UPDATE deposits SET first_slow_at=now()-interval '2 days',first_unresolved_at=now()-interval '2 days' WHERE tx_hash=$1").bind(format!("{second:#x}")).execute(&database.app_pool).await?;
         let quota_before:Vec<ConfirmationHistory>=sqlx::query_as("SELECT id,confirm_head_checks,confirm_receipt_checks,confirm_deadline_at,first_slow_at,first_unresolved_at FROM deposits ORDER BY id").fetch_all(&database.app_pool).await?;
-        let mut previous=start_service(Some(&image),&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
+        let mut previous=start_service(Some(&image),&previous_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
         let frozen=reqwest::Client::new().post(format!("{origin}/v1/quotes")).bearer_auth(&key).header("Idempotency-Key",Uuid::new_v4().to_string()).json(&json!({"client_reference_id":"frozen","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"})).send().await?;
         ensure!(frozen.status().as_u16()==400 && frozen.json::<Value>().await?["error"]["code"]=="chain_frozen","N-1 ignored N's chain-scope freeze");
         // Only after a fresh passing dual contract check, use the audited lift boundary.
@@ -651,10 +659,10 @@ async fn published_image_round_trip() -> Result<()> {
         let lifted=app.oneshot(support::signed_request(axum::http::Method::POST,"/v1/admin/reconciliation_blocks/chain:1/lift",serde_json::to_vec(&json!({"reason":"fresh dual check then audited rollback lift"}))?,"drill/admin",&ed25519_dalek::SigningKey::from_bytes(&[41;32]),Utc::now().timestamp())).await?;
         ensure!(lifted.status().is_success(),"fresh checked audited lift failed");
         let third=send(&anvil,token,"transfer(address,uint256)",&[&format!("{historical_forwarder:#x}"),"1000000000000000000"])?;anvil.mine(16)?;
-        previous.stop()?;previous=start_service(Some(&image),&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;credited(&database,third).await?;credited(&database,historical).await?;
+        previous.stop()?;previous=start_service(Some(&image),&previous_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;credited(&database,third).await?;credited(&database,historical).await?;
         send(&anvil,factory,"flush(address,bytes32[],address)",&[&format!("{treasury:#x}"),&salts,&format!("{token:#x}")])?;
         anvil.mine(16)?;
-        previous.stop()?;previous=start_service(Some(&image),&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
+        previous.stop()?;previous=start_service(Some(&image),&previous_path,&database,&kms,port,&tls,directory.path())?;ready(&mut previous,&origin).await?;
         wait_until("N-1 finality and sweep",||async {Ok(sqlx::query_scalar::<_,bool>("SELECT count(*)=4 AND bool_and(final_at IS NOT NULL AND state='swept') FROM deposits").fetch_one(&database.app_pool).await?)}).await?;
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?==1);
         wait_until("N-1 indexed flush",||async {Ok(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM flushed").fetch_one(&database.app_pool).await?>0)}).await?;
@@ -663,7 +671,7 @@ async fn published_image_round_trip() -> Result<()> {
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{pending_hint:#x}")).fetch_one(&database.app_pool).await?==0,"N-1 materialized an unmined hint");
         ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_verified_at=created_at FROM deposits WHERE tx_hash=$1").bind(format!("{second:#x}")).fetch_one(&database.app_pool).await?,"N-1 discarded N's hint verification marker");
         finalize_logged_block(&anvil,token,treasury)?;
-        reconcile(Some(&image),&current_path,&database,&tls)?;
+        reconcile(Some(&image),&previous_path,&database,&tls)?;
         let quota_after:Vec<ConfirmationHistory>=sqlx::query_as("SELECT id,confirm_head_checks,confirm_receipt_checks,confirm_deadline_at,first_slow_at,first_unresolved_at FROM deposits WHERE id=ANY($1) ORDER BY id").bind(quota_before.iter().map(|row|row.0).collect::<Vec<_>>()).fetch_all(&database.app_pool).await?;
         ensure!(quota_after==quota_before,"N-1 reset confirmation quota or history");
         let mut final_current=start_service(None,&current_path,&database,&kms,port,&tls,directory.path())?;ready(&mut final_current,&origin).await?;
