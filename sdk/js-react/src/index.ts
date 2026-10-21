@@ -8,6 +8,7 @@ export {
   type PaymentElementDepositAddress,
   type PaymentElementProps,
   type PaymentElementQuote,
+  type PaymentElementQuoteRequest,
   type PaymentElementState,
   type PaymentElementStep,
 } from "./PaymentElement.js";

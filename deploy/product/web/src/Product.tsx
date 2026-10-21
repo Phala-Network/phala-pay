@@ -371,6 +371,7 @@ function QuotePayment({
   const ready = account !== null && networks.data !== undefined;
   const choosing = step === null || step === "options" || step === "creating";
 
+  // The demo's API creates each quote with an idempotency key of its own: one per request.
   const createQuote = async (chosen: PaymentOption) => {
     const created = await quote.mutateAsync({ amount: cents, chainId: chosen.chain_id, asset: chosen.asset });
     onQuote(created);

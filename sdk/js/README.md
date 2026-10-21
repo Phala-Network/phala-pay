@@ -161,9 +161,10 @@ as usual. The QR code and manual tabs do not change.
 
 `<PaymentElement>` is the whole payment in one component, like Stripe's Payment Element with a
 deferred intent: it offers your tokens and networks, creates nothing until the payer submits, then
-calls your `createQuote` with the chosen option and shows that quote's `<Checkout>`. Your backend
-creates the quote with its API key, for the chosen `chain_id` and `asset`, and returns its checkout
-params (`pay.checkoutParams(quote)` in `@phala/pay-server`).
+calls your `createQuote` with the chosen option and an idempotency key, and shows that quote's
+`<Checkout>`. Your backend creates the quote with its API key, for the chosen `chain_id` and
+`asset`, with that key as its `Idempotency-Key`, and returns its checkout params
+(`pay.checkoutParams(quote)` in `@phala/pay-server`).
 
 ```tsx
 import { paymentOptions } from "@phala/pay";
@@ -172,7 +173,9 @@ import { PaymentElement } from "@phala/pay-react";
 <PaymentElement
   options={paymentOptions(config.assets)} // GET /v1/config's assets, from your backend
   amount={2500} // minor units of `currency` (default "usd"): "Pay $25.00 in USDC"
-  createQuote={(option) => api.createTopUp({ amount: 2500, chain_id: option.chain_id, asset: option.asset })}
+  createQuote={(option, { idempotencyKey }) =>
+    api.createTopUp({ amount: 2500, chain_id: option.chain_id, asset: option.asset, idempotencyKey })
+  }
   createDepositAddress={() => api.depositAddress()} // optional: "Use a deposit address"
   apiBase="https://pay.example.com"
   renderDetail={(option) => (option.asset === "usdc" ? "$1.00" : "Market rate")}
@@ -180,10 +183,16 @@ import { PaymentElement } from "@phala/pay-react";
 />;
 ```
 
-- `createQuote(option)` is called once per submit, with the very object of `options` the payer
-  chose; a submit while one is pending is ignored. It resolves with `{ clientSecret,
-  expectedAddress, apiBase? }`; `apiBase` falls back to the prop. A rejection shows "Could not
-  start the payment. Try again." and calls `onError(error)`; show your own message from there.
+- `createQuote(option, { idempotencyKey })` is called once per submit, with the very object of
+  `options` the payer chose; a submit while one is pending is ignored. It resolves with
+  `{ clientSecret, expectedAddress, apiBase? }`; `apiBase` falls back to the prop. A rejection
+  shows "Could not start the payment. Try again." and calls `onError(error)`; show your own
+  message from there.
+- Create the quote with `idempotencyKey` as its `Idempotency-Key`, not an order id of yours: the
+  key is a new random UUID for each quote the payer asks for (another option, or a new quote after
+  going back from one) and the same only when they retry the same option after `createQuote`
+  failed, so that a retry returns the quote a lost response created. One key per order would
+  answer another option with `400 idempotency_key_reused`, and a new quote with the expired one.
 - After the quote: the checkout, and a way back to the options ("Choose another token or
   network") until a payment is on its way, then "Start over" if it does not complete or "Start a
   new payment" once credited.

@@ -121,10 +121,14 @@ pass. Pins-based clients fail closed without every pin (`AddressMismatchError`).
 Python `TopupClient` permits a test-mode fallback to the response's treasury with a warning.
 
 **1. Backend: create a quote for the chosen token, return its checkout params.** The browser calls
-this when the payer submits, with the token and network they chose; check them against what you
-accept (`GET /v1/config`) before quoting. Only the create response carries `client_secret`;
-repeating the call with the same `idempotency_key` within 24 hours returns the same response,
-secret included, which is how a reloaded page resumes.
+this when the payer submits, with the token and network they chose and the idempotency key the
+payment element made for this quote; check them against what you accept (`GET /v1/config`) before
+quoting. Use that key, not an order id, as the quote's `idempotency_key`: the element makes a new
+one for each quote the payer asks for (another token, or a new quote after one ended) and repeats
+it only to retry a request that failed, so a retry returns the quote a lost response created.
+Repeating a key with another body is `400 idempotency_key_reused`. Only the create response
+carries `client_secret`; repeating the call with the same key within 24 hours returns the same
+response, secret included.
 
 ```python
 from phala_pay import PhalaPay
@@ -139,7 +143,8 @@ pay = PhalaPay.from_env()
 def create_topup(body: TopupRequest, team: Team = Depends(current_team)) -> dict[str, str]:
     quote = pay.quotes.create(
         client_reference_id=team.id, amount=body.amount, chain_id=body.chain_id, asset=body.asset,
-        idempotency_key=body.order_id,
+        idempotency_key=body.idempotency_key,  # from the payment element; check it is a UUID
+        metadata={"order_id": body.order_id},
     )
     return {"clientSecret": quote.client_secret, "expectedAddress": quote.address}
 ```
@@ -161,8 +166,11 @@ import "@phala/pay-react/styles.css";
   options={paymentOptions(config.assets)} // from your backend's pay.config.retrieve()
   amount={2500} // US cents, for the button: "Pay $25.00 in USDC"
   apiBase={PHALA_PAY_API_BASE}
-  createQuote={(option) =>
-    post("/topups", { amount: 2500, chain_id: option.chain_id, asset: option.asset, order_id })
+  createQuote={(option, { idempotencyKey }) =>
+    post("/topups", {
+      amount: 2500, chain_id: option.chain_id, asset: option.asset,
+      idempotency_key: idempotencyKey, order_id,
+    })
   }
   onSuccess={() => router.refresh()}
 />

@@ -27,6 +27,16 @@ export type PaymentElementQuote = Omit<CheckoutParams, "apiBase"> & { apiBase?: 
  */
 export type PaymentElementDepositAddress = DepositAddressDetails & { clientSecret?: string; apiBase?: string };
 
+/** What `createQuote` receives beside the option. */
+export interface PaymentElementQuoteRequest {
+  /**
+   * Send it as your backend's `Idempotency-Key` for this quote. It is new for each quote the payer
+   * asks for, and the same only when they retry the same option after `createQuote` failed, so a
+   * retry returns the quote a lost response created rather than a second one.
+   */
+  idempotencyKey: string;
+}
+
 /** Where the payer is: choosing, waiting for your backend, paying a quote, or at a deposit address. */
 export type PaymentElementStep = "options" | "creating" | "checkout" | "deposit_address";
 
@@ -50,10 +60,11 @@ export interface PaymentElementProps<T extends PaymentOption> {
   /** The amount's ISO currency code; default `usd`. */
   currency?: string | undefined;
   /**
-   * Called once per submit, with the chosen option: create the quote on your backend with its API
-   * key and resolve with `pay.checkoutParams(quote)`. A rejection is shown with a way to retry.
+   * Called once per submit, with the chosen option and the idempotency key to create its quote
+   * with: create the quote on your backend with its API key and that `Idempotency-Key`, and resolve
+   * with `pay.checkoutParams(quote)`. A rejection is shown with a way to retry.
    */
-  createQuote: (option: T) => Promise<PaymentElementQuote>;
+  createQuote: (option: T, request: PaymentElementQuoteRequest) => Promise<PaymentElementQuote>;
   /**
    * Offers paying from an exchange or any wallet instead: get the customer's deposit address from
    * your backend, with the chosen option to show first.
@@ -139,6 +150,9 @@ export function PaymentElement<T extends PaymentOption>({
   // The request in flight: a submit while one is, or the result of one the payer left, is ignored.
   const request = useRef(0);
   const pending = useRef(false);
+  // The idempotency key of the quote being asked for: kept while `createQuote` fails for the same
+  // option, so that its retry is the same request; dropped once a quote is created.
+  const attempt = useRef<{ option: PaymentOption; key: string } | null>(null);
   const callbacks = useRef({ onChange, onError });
   useEffect(() => {
     callbacks.current = { onChange, onError };
@@ -189,10 +203,14 @@ export function PaymentElement<T extends PaymentOption>({
     if (disabled || option === undefined) {
       return;
     }
-    start("quote", () => createQuote(option), (params): Step => ({
-      step: "checkout",
-      params: { ...params, apiBase: params.apiBase ?? apiBase ?? "" },
-    }));
+    if (attempt.current === null || !samePaymentOption(attempt.current.option, option)) {
+      attempt.current = { option, key: crypto.randomUUID() };
+    }
+    const { key } = attempt.current;
+    start("quote", () => createQuote(option, { idempotencyKey: key }), (params): Step => {
+      attempt.current = null;
+      return { step: "checkout", params: { ...params, apiBase: params.apiBase ?? apiBase ?? "" } };
+    });
   };
 
   const showDepositAddress = () => {

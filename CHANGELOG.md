@@ -20,11 +20,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - `@phala/pay-react`'s `<PaymentElement>`: a complete payment that is created only when the payer
   submits, like Stripe's Payment Element with a deferred intent. It offers your tokens and
-  networks; on submit it calls your `createQuote(option)`, which creates the quote on your backend
-  and resolves with `pay.checkoutParams(quote)`, then shows that quote's checkout, with a way back
+  networks; on submit it calls your `createQuote(option, { idempotencyKey })`, which creates the
+  quote on your backend with that key as its `Idempotency-Key` and resolves with
+  `pay.checkoutParams(quote)`, then shows that quote's checkout, with a way back
   to the options before a payment is sent or once the quote ended. A failed `createQuote` shows
   "Could not start the payment. Try again." (and calls `onError`); a submit while one is pending
-  is ignored. With `createDepositAddress`, it also offers the customer's deposit address.
+  is ignored. The key is a new random UUID for each quote the payer asks for and is repeated only
+  to retry the same option after a failure. With `createDepositAddress`, it also offers the customer's deposit address.
   `hideSubmit` with `id` lets your own `<button type="submit" form={id}>` submit it. `onChange`
   reports its step and the checkout's status; `onSuccess`, `onExpire`, `onWalletError`,
   `walletClient`, and `appearance` work as `<Checkout>`'s.

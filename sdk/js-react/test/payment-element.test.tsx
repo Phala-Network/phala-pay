@@ -10,6 +10,7 @@ const OPTIONS = [
   { chain_id: 84532, asset: "usdc", price: "$1.00" },
 ];
 const PARAMS = { clientSecret: CLIENT_SECRET, expectedAddress: ADDRESS, apiBase: API_BASE };
+type CreateQuote = (option: (typeof OPTIONS)[number], request: { idempotencyKey: string }) => Promise<typeof PARAMS>;
 
 beforeEach(() => {
   vi.spyOn(Math, "random").mockReturnValue(0.5);
@@ -23,7 +24,7 @@ afterEach(() => {
 });
 
 it("creates the quote once, on submit, with the chosen option, then shows its checkout", async () => {
-  const createQuote = vi.fn(() => Promise.resolve(PARAMS));
+  const createQuote = vi.fn<CreateQuote>(() => Promise.resolve(PARAMS));
   const onChange = vi.fn<(state: PaymentElementState) => void>();
   const { container } = render(
     <StrictMode>
@@ -38,7 +39,7 @@ it("creates the quote once, on submit, with the chosen option, then shows its ch
   fireEvent.click(pay);
   fireEvent.submit(pay.closest("form") ?? pay);
   expect(createQuote).toHaveBeenCalledTimes(1);
-  expect(createQuote.mock.calls[0]).toEqual([OPTIONS[1]]);
+  expect(createQuote.mock.calls[0]?.[0]).toBe(OPTIONS[1]);
   expect(screen.getByRole("button", { name: "Starting your payment…" })).toHaveProperty("disabled", true);
 
   expect(await screen.findByText("Waiting for your payment")).toBeDefined();
@@ -63,7 +64,7 @@ it("shows a failed quote and lets the payer try again", async () => {
 });
 
 it("shows the customer's deposit address instead, at the chosen option", async () => {
-  const createQuote = vi.fn(() => Promise.resolve(PARAMS));
+  const createQuote = vi.fn<CreateQuote>(() => Promise.resolve(PARAMS));
   const networks = OPTIONS.map(({ chain_id, asset }) => ({
     chain_id,
     address: ADDRESS,
@@ -80,7 +81,7 @@ it("shows the customer's deposit address instead, at the chosen option", async (
 });
 
 it("is submitted by the host's own button when its submit is hidden", async () => {
-  const createQuote = vi.fn(() => Promise.resolve(PARAMS));
+  const createQuote = vi.fn<CreateQuote>(() => Promise.resolve(PARAMS));
   render(
     <>
       <PaymentElement id="pay" hideSubmit options={OPTIONS} createQuote={createQuote} />
@@ -91,6 +92,37 @@ it("is submitted by the host's own button when its submit is hidden", async () =
   );
   expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Top up"]);
   fireEvent.click(screen.getByRole("button", { name: "Top up" }));
-  expect(createQuote).toHaveBeenCalledWith(OPTIONS[0]);
+  expect(createQuote.mock.calls[0]?.[0]).toBe(OPTIONS[0]);
   expect(await screen.findByText("Waiting for your payment")).toBeDefined();
+});
+
+it("creates each quote with its own idempotency key, kept only to retry a failure", async () => {
+  const createQuote = vi
+    .fn<CreateQuote>()
+    .mockRejectedValueOnce(new Error("timeout"))
+    .mockRejectedValueOnce(new Error("timeout"))
+    .mockResolvedValue(PARAMS);
+  render(<PaymentElement options={OPTIONS} createQuote={createQuote} />);
+  const key = (call: number) => createQuote.mock.calls[call]?.[1].idempotencyKey;
+
+  // A retry of the same option after a failure is the same request.
+  fireEvent.click(screen.getByRole("button", { name: "Pay in PHA" }));
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByRole("button", { name: "Pay in PHA" }));
+  await screen.findByRole("alert");
+  expect(key(1)).toBe(key(0));
+
+  // Another option is another quote.
+  fireEvent.click(screen.getByRole("radio", { name: "USDC · Base Sepolia" }));
+  fireEvent.click(screen.getByRole("button", { name: "Pay in USDC" }));
+  expect(await screen.findByText("Waiting for your payment")).toBeDefined();
+  expect(key(2)).not.toBe(key(1));
+
+  // Back from a created quote, the same option asks for a new one.
+  fireEvent.click(screen.getByRole("button", { name: "Choose another token or network" }));
+  fireEvent.click(screen.getByRole("button", { name: "Pay in USDC" }));
+  expect(await screen.findByText("Waiting for your payment")).toBeDefined();
+  expect(key(3)).not.toBe(key(2));
+  expect(new Set([key(0), key(2), key(3)]).size).toBe(3);
+  expect(key(0)).toMatch(/^[0-9a-f-]{36}$/);
 });

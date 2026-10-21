@@ -9,7 +9,9 @@ import "@phala/pay-react/styles.css";
 
 export function TopUp(props: {
   options: Option[]; // GET /v1/config
-  quote: (option: Option) => Promise<Params>;
+  quote: (option: Option, request: {
+    idempotencyKey: string; // per quote
+  }) => Promise<Params>;
   onPaid: () => void;
 }) {
   return (

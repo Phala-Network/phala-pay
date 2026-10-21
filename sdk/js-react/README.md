@@ -9,8 +9,9 @@ npm install @phala/pay-react @phala/pay react react-dom viem
 Import `PaymentElement`, `Checkout`, `DepositAddress`, `PaymentOptionPicker`, `NetworkIcon`, `AssetIcon`, and hooks from `@phala/pay-react`, and include `@phala/pay-react/styles.css` once. React 18 and 19 are supported; React is a peer dependency.
 
 `PaymentElement` is the whole payment, like Stripe's Payment Element with a deferred intent: the
-payer picks a token and network, and only on submit does your `createQuote(option)` create the
-quote on your backend (resolving with `pay.checkoutParams(quote)`); the element then shows its
+payer picks a token and network, and only on submit does your `createQuote(option, { idempotencyKey })`
+create the quote on your backend, with that key as its `Idempotency-Key` (resolving with
+`pay.checkoutParams(quote)`); the element then shows its
 checkout, with a way back to the options. `PaymentOptionPicker` is that choice on its own, one
 native radio per token on each network.
 
@@ -18,7 +19,9 @@ native radio per token on each network.
 <PaymentElement
   options={paymentOptions(config.assets)}
   amount={2500}
-  createQuote={(option) => api.createTopUp({ chain_id: option.chain_id, asset: option.asset })}
+  createQuote={(option, { idempotencyKey }) =>
+    api.createTopUp({ chain_id: option.chain_id, asset: option.asset, idempotencyKey })
+  }
   onSuccess={() => router.refresh()}
 />
 ```
