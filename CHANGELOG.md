@@ -14,6 +14,24 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Added
+
+- `@phala/pay-react`'s `<PaymentElement errorMessage>`: `(cause) => string | null | undefined`,
+  the alert to show when `createQuote` or `createDepositAddress` rejects, such as your backend's
+  reason, instead of the element's own "Could not start the payment. Try again." beside yours.
+  `null`, `undefined`, or an empty string keeps the element's text. A retry reuses the same
+  idempotency key, as before.
+
+#### Fixed
+
+- `@phala/pay-react`'s `<PaymentElement>` no longer says a deposit address takes "any amount".
+  Under "Use a deposit address" it states the chosen option's per-transfer limits when the option
+  carries them, as a `GET /v1/config` asset does: "Send at least $5.00 and up to 10,100 USDC per
+  transfer on Base from an exchange or another wallet." Without them it names the token and
+  network and says the limits are shown with the address, which `<DepositAddress>` states.
+
 ## [0.11.0] - 2026-10-21
 
 ### Changed (operators)

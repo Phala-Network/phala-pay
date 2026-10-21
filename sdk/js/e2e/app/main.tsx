@@ -33,12 +33,22 @@ const networks = chains.map((chain_id) => ({
   })),
 }));
 
-// `?picker` shows the payment option picker alone, with a detail on each option.
+// `?picker` shows the payment option picker alone, with a detail on each option. Each carries
+// its per-transfer limits, as a `GET /v1/config` asset does.
+const stablecoin = { decimals: 6, min_amount: 500, min_deposit_atomic: "0", max_deposit_atomic: "10100000000" };
 const options = [
-  { chain_id: 1, asset: "usdc", detail: "$1.00" },
-  { chain_id: 1, asset: "usdt", detail: "$1.00" },
-  { chain_id: 8453, asset: "usdc", detail: "$1.00" },
-  { chain_id: 11155111, asset: "pha", detail: "Market rate · +10% bonus" },
+  { chain_id: 1, asset: "usdc", detail: "$1.00", ...stablecoin },
+  { chain_id: 1, asset: "usdt", detail: "$1.00", ...stablecoin },
+  { chain_id: 8453, asset: "usdc", detail: "$1.00", ...stablecoin },
+  {
+    chain_id: 11155111,
+    asset: "pha",
+    detail: "Market rate · +10% bonus",
+    decimals: 18,
+    min_amount: 500,
+    min_deposit_atomic: "100000000000000000",
+    max_deposit_atomic: "10100000000000000000000",
+  },
 ];
 
 function Picker() {

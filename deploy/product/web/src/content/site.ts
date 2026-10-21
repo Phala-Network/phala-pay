@@ -36,7 +36,7 @@ export const PROPERTIES_LEAD = "Top-ups and credits for apps and platforms, such
 export const MONEY_TITLE = "Where the money goes";
 export type Station = "wallet" | "contract" | "treasury";
 export const CUSTODY_PATH: { station: Station; role: string; name: string; detail: string }[] = [
-  { station: "wallet", role: "Payer", name: "Your customer's wallet", detail: "Pays the quote, or any amount to their deposit address." },
+  { station: "wallet", role: "Payer", name: "Your customer's wallet", detail: "Pays the quote, or sends to their deposit address." },
   { station: "contract", role: "Contract", name: "A deposit address", detail: "A contract whose only destination is fixed in its address." },
   { station: "treasury", role: "You", name: "Your treasury", detail: "An address or Safe you prove you control with a signed message." },
 ];

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from
 import type { WalletClient } from "viem";
 import {
   assetSymbol,
+  networkName,
   samePaymentOption,
   type CheckoutParams,
   type CheckoutState,
@@ -16,6 +17,7 @@ import {
 import { rootProps, type Appearance } from "./appearance.js";
 import { CheckoutContent } from "./Checkout.js";
 import { DepositAddressContent } from "./DepositAddress.js";
+import { depositLimits } from "./limits.js";
 import { PaymentOptionFields } from "./PaymentOptionPicker.js";
 
 /** What `createQuote` resolves to: your backend's `pay.checkoutParams(quote)`. */
@@ -69,7 +71,9 @@ export interface PaymentElementProps<T extends PaymentOption> {
   createQuote: (option: T, request: PaymentElementQuoteRequest) => Promise<PaymentElementQuote>;
   /**
    * Offers paying from an exchange or any wallet instead: get the customer's deposit address from
-   * your backend, with the chosen option to show first.
+   * your backend, with the chosen option to show first. The offer states the chosen option's
+   * per-transfer limits when it carries them, as a `GET /v1/config` asset does (`min_amount`,
+   * `min_deposit_atomic`, `max_deposit_atomic`, `decimals`); otherwise the address shows them.
    */
   createDepositAddress?: ((option: T | undefined) => Promise<PaymentElementDepositAddress>) | undefined;
   /** The service origin, for a quote or deposit address that does not name its own. */
@@ -91,6 +95,12 @@ export interface PaymentElementProps<T extends PaymentOption> {
   onExpire?: ((quote: ClientQuote) => void) | undefined;
   /** Called when `createQuote` or `createDepositAddress` rejects, with its error. */
   onError?: ((error: unknown) => void) | undefined;
+  /**
+   * The alert to show when `createQuote` or `createDepositAddress` rejects, from its error, for
+   * example your backend's reason; `null`, `undefined`, or an empty string keeps the element's own,
+   * such as "Could not start the payment. Try again."
+   */
+  errorMessage?: ((cause: unknown) => string | null | undefined) | undefined;
   /** As `<Checkout onWalletError>`. */
   onWalletError?: ((error: WalletError, wallet: WalletClient | EthereumProvider) => void) | undefined;
   /** As `<Checkout walletClient>`. */
@@ -102,7 +112,7 @@ export interface PaymentElementProps<T extends PaymentOption> {
 }
 
 type Step =
-  | { step: "options"; failed: "quote" | "deposit_address" | null }
+  | { step: "options"; failed: string | null }
   | { step: "creating"; kind: "quote" | "deposit_address" }
   | { step: "checkout"; params: CheckoutParams }
   | { step: "deposit_address"; created: PaymentElementDepositAddress; apiBase: string | undefined; option: PaymentOption | undefined };
@@ -137,6 +147,7 @@ export function PaymentElement<T extends PaymentOption>({
   onSuccess,
   onExpire,
   onError,
+  errorMessage,
   onWalletError,
   walletClient,
   pollInterval,
@@ -155,9 +166,9 @@ export function PaymentElement<T extends PaymentOption>({
   // The idempotency key of the quote being asked for: kept while `createQuote` fails for the same
   // option and amount, so that its retry is the same request; dropped once a quote is created.
   const attempt = useRef<{ option: PaymentOption; amount: number | undefined; currency: string; key: string } | null>(null);
-  const callbacks = useRef({ onChange, onError });
+  const callbacks = useRef({ onChange, onError, errorMessage });
   useEffect(() => {
-    callbacks.current = { onChange, onError };
+    callbacks.current = { onChange, onError, errorMessage };
   });
   const step = current.step;
   useEffect(() => {
@@ -194,7 +205,7 @@ export function PaymentElement<T extends PaymentOption>({
       (error: unknown) => {
         if (mine !== request.current) return;
         pending.current = false;
-        setCurrent({ step: "options", failed: kind });
+        setCurrent({ step: "options", failed: failureMessage(kind, error, callbacks.current.errorMessage) });
         callbacks.current.onError?.(error);
       },
     );
@@ -274,9 +285,7 @@ export function PaymentElement<T extends PaymentOption>({
             )}
             {current.step === "options" && current.failed !== null && (
               <p className="pp-message" data-tone="danger" role="alert">
-                {current.failed === "quote"
-                  ? "Could not start the payment. Try again."
-                  : "Could not get your deposit address. Try again."}
+                {current.failed}
               </p>
             )}
             {createDepositAddress !== undefined && (
@@ -291,7 +300,7 @@ export function PaymentElement<T extends PaymentOption>({
                     ? "Getting your deposit address…"
                     : "Use a deposit address"}
                 </button>
-                <span className="pp-element__hint">Send any amount from an exchange or another wallet.</span>
+                <span className="pp-element__hint">{depositHint(option)}</span>
               </p>
             )}
           </form>
@@ -338,6 +347,41 @@ export function PaymentElement<T extends PaymentOption>({
       </div>
     </div>
   );
+}
+
+/** The alert for a rejected `kind` of request: the host's `errorMessage` for it, else the element's own. */
+function failureMessage(
+  kind: "quote" | "deposit_address",
+  cause: unknown,
+  errorMessage: PaymentElementProps<PaymentOption>["errorMessage"],
+): string {
+  let message: string | null | undefined;
+  try {
+    message = errorMessage?.(cause);
+  } catch (error) {
+    // A throwing callback is the host's bug: report it, and still show the element's own alert.
+    queueMicrotask(() => {
+      throw error;
+    });
+  }
+  if (typeof message === "string" && message.trim() !== "") {
+    return message;
+  }
+  return kind === "quote" ? "Could not start the payment. Try again." : "Could not get your deposit address. Try again.";
+}
+
+/**
+ * What the deposit address takes, from the chosen option's limits when it carries them (a
+ * `GET /v1/config` asset does): "Send at least $5.00 and up to 10,100 USDC per transfer on Base
+ * from an exchange or another wallet." Otherwise the address shows its limits.
+ */
+function depositHint(option: PaymentOption | undefined): string {
+  if (option === undefined) {
+    return "Send a supported token from an exchange or another wallet. Per-transfer limits apply.";
+  }
+  const limits = depositLimits(option);
+  const send = `Send ${limits ?? assetSymbol(option.asset)} on ${networkName(option.chain_id)} from an exchange or another wallet.`;
+  return limits === undefined ? `${send} Per-transfer limits are shown with the address.` : send;
 }
 
 /** `minor` units of `currency`, for example `$10.00` for 1000 cents. */

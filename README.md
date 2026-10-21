@@ -58,7 +58,7 @@ staging instance ([staging reference product](deploy/phala.md#staging-reference-
 - **Quotes**: a locked price, an exact token amount, and a single-use address to pay within a
   window. Late, partial, or extra payments are still credited, at spot.
 - **Deposit addresses**: one persistent, rotatable address per customer for every supported token
-  on every chain, credited at spot for any amount.
+  on every chain, credited at spot within per-transfer limits.
 - **Fast credit, watched to finality**: checkout transaction hints take the instant processing
   path, with credit in seconds at route confirmation (about 30 seconds after paying on Ethereum,
   about 7 seconds on Base). Unhinted transfers are discovered by a five-minute scan. Every credit

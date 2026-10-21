@@ -186,8 +186,9 @@ import { PaymentElement } from "@phala/pay-react";
 - `createQuote(option, { idempotencyKey })` is called once per submit, with the very object of
   `options` the payer chose; a submit while one is pending is ignored. It resolves with
   `{ clientSecret, expectedAddress, apiBase? }`; `apiBase` falls back to the prop. A rejection
-  shows "Could not start the payment. Try again." and calls `onError(error)`; show your own
-  message from there.
+  shows "Could not start the payment. Try again." and calls `onError(error)`. To show your own
+  reason in that alert instead, pass `errorMessage(cause)`: a non-empty string replaces the text,
+  and `null` or `undefined` keeps it. It applies to `createDepositAddress` too.
 - Create the quote with `idempotencyKey` as its `Idempotency-Key`, not an order id of yours: the
   key is a new random UUID for each quote the payer asks for (another option or amount, or a new
   quote after going back from one) and the same only when they retry after `createQuote` failed
@@ -201,7 +202,10 @@ import { PaymentElement } from "@phala/pay-react";
   new payment" once credited.
 - `createDepositAddress(option)` adds "Use a deposit address", for payers sending from an exchange
   or any wallet: it resolves with the deposit address's `address` and `networks` and, to follow its
-  payments, `clientSecret`; the element shows `<DepositAddress>` at the chosen option.
+  payments, `clientSecret`; the element shows `<DepositAddress>` at the chosen option. Under the
+  link it states the chosen option's per-transfer limits when it carries them, as a
+  `GET /v1/config` asset does: "Send at least $5.00 and up to 10,100 USDC per transfer on Base from
+  an exchange or another wallet." Without them it says the address shows its limits.
 - Your own button: pass `hideSubmit` and an `id`, and give your button `type="submit" form={id}`
   (or call `requestSubmit()` on the form with that id). The element is a `<form>`: do not nest it
   in another one.

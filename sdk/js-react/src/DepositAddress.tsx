@@ -9,10 +9,11 @@ import {
   type DepositAddressPayment,
 } from "@phala/pay";
 import { CheckoutError, pollDelay } from "@phala/pay";
-import { formatUnitsGrouped, formatWait } from "@phala/pay";
-import { depositAddressTransfer, type DepositAddressAsset, type DepositAddressDetails } from "@phala/pay";
+import { formatWait } from "@phala/pay";
+import { depositAddressTransfer, type DepositAddressDetails } from "@phala/pay";
 import { rootProps, type Appearance } from "./appearance.js";
 import { Field } from "./Field.js";
+import { depositLimits } from "./limits.js";
 import { PaymentOptionFields } from "./PaymentOptionPicker.js";
 import { QrCode } from "./QrCode.js";
 
@@ -132,28 +133,6 @@ export function DepositAddressContent({
       </p>
     </>
   );
-}
-
-/** Both independent floors apply; never interpret missing or malformed merchant props as limits. */
-function depositLimits(token: DepositAddressAsset): string | undefined {
-  const { min_amount: creditMinimum, min_deposit_atomic: minimum, max_deposit_atomic: maximum, decimals } = token;
-  if (
-    typeof creditMinimum !== "number" || !Number.isSafeInteger(creditMinimum) || creditMinimum <= 0 ||
-    typeof minimum !== "string" || minimum.length === 0 || /[^0-9]/.test(minimum) ||
-    typeof maximum !== "string" || maximum.length === 0 || /[^0-9]/.test(maximum) ||
-    !Number.isInteger(decimals) || decimals < 0 || decimals > 255
-  ) {
-    return undefined;
-  }
-  const minAtomic = BigInt(minimum);
-  const maxAtomic = BigInt(maximum);
-  if (minAtomic > maxAtomic) return undefined;
-  const credit = new Intl.NumberFormat("en", { style: "currency", currency: "USD" }).format(creditMinimum / 100);
-  const symbol = token.asset.toUpperCase();
-  const upper = `${formatUnitsGrouped(maxAtomic, decimals, "en")} ${symbol} per transfer`;
-  return minAtomic === 0n
-    ? `at least ${credit} and up to ${upper}`
-    : `at least ${credit} and ${formatUnitsGrouped(minAtomic, decimals, "en")} ${symbol}, up to ${upper}`;
 }
 
 /** The address's public view, read every `interval` while mounted; `null` without a secret. */
