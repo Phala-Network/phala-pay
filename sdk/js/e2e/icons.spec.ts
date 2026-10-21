@@ -30,8 +30,8 @@ for (const width of [390, 1280]) {
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         const icon = page.locator(".pp-icon").first();
         const bounds = await icon.boundingBox();
-        expect(bounds?.width).toBe(surface === "checkout" ? 20 : 16);
-        expect(bounds?.height).toBe(surface === "checkout" ? 20 : 16);
+        expect(bounds?.width).toBe(surface === "checkout" ? 20 : 24);
+        expect(bounds?.height).toBe(surface === "checkout" ? 20 : 24);
         expect(cspErrors).toEqual([]);
         if (screenshots !== undefined) await page.screenshot({ path: join(screenshots, `${surface}-${width}-${theme}.png`), fullPage: true });
       }

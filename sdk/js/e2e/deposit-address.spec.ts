@@ -10,8 +10,7 @@ for (const width of [320, 1280]) {
       await expect(message).toHaveText(
         "Send at least $5.00 and 0.1 PHA, up to 10,100 PHA per transfer on Sepolia. Unsupported tokens or networks are not credited. Eligible transfers are credited at the market rate after confirmation.",
       );
-      await page.getByRole("radio", { name: "Base Sepolia" }).check();
-      await page.getByRole("radio", { name: "USDC" }).check();
+      await page.getByRole("radio", { name: "USDC · Base Sepolia" }).check();
       await expect(message).toContainText("Send at least $5.00 and up to 10,100 USDC per transfer on Base Sepolia.");
       expect(await message.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -42,13 +41,13 @@ test("retains deposit selections and payments through a three-minute network out
   await expect(page.getByRole("list", { name: "Payments" })).toBeVisible();
   // A payer sending to the address gives no hint: the discovery scan, then Sepolia's 30 s.
   await expect(page.getByText(/credited at the market rate, usually within about 6 minutes\./)).toBeVisible();
-  await page.getByRole("radio", { name: "Base Sepolia" }).check();
+  await page.getByRole("radio", { name: "USDC · Base Sepolia" }).check();
   const payments = await page.getByRole("list", { name: "Payments" }).textContent();
   await page.clock.pauseAt(new Date(Date.now() + 1000));
   online = false;
   await page.clock.runFor(180000);
   await expect(page.getByRole("status")).toHaveText("Reconnecting…");
-  await expect(page.getByRole("radio", { name: "Base Sepolia" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "USDC · Base Sepolia" })).toBeChecked();
   await expect(page.getByRole("list", { name: "Payments" })).toHaveText(payments ?? "");
   online = true;
   // Fire the pending poll once, then let its real network response settle without
@@ -57,18 +56,16 @@ test("retains deposit selections and payments through a three-minute network out
   await expect(page.getByRole("status")).toHaveText("");
 });
 
-test("deposit network and token radio groups work by keyboard and pass axe", async ({ page }) => {
+test("deposit token and network radio group works by keyboard and passes axe", async ({ page }) => {
   await page.goto("/?deposit");
-  const network = page.getByRole("group", { name: "Network" });
-  const token = page.getByRole("group", { name: "Token" });
-  await network.getByRole("radio", { name: "Sepolia", exact: true }).focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(network.getByRole("radio", { name: "Base Sepolia" })).toBeChecked();
-  await expect(network.getByRole("radio", { name: "Base Sepolia" })).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(token.getByRole("radio", { name: "PHA" })).toBeFocused();
-  await page.keyboard.press("ArrowRight");
-  await expect(token.getByRole("radio", { name: "USDC" })).toBeChecked();
+  const options = page.getByRole("group", { name: "Pay with" });
+  await options.getByRole("radio", { name: "PHA · Sepolia" }).focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(options.getByRole("radio", { name: "USDC · Sepolia" })).toBeChecked();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(options.getByRole("radio", { name: "USDC · Base Sepolia", exact: true })).toBeChecked();
+  await expect(options.getByRole("radio", { name: "USDC · Base Sepolia", exact: true })).toBeFocused();
   await expect(page.getByRole("img")).toHaveAttribute(
     "aria-label",
     "Deposit address for USDC on Base Sepolia",

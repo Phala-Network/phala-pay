@@ -22,7 +22,7 @@ export {
   type DepositAddressPayment,
   type RetrieveDepositAddressOptions,
 } from "./deposit-address.js";
-export { knownChain, networkName, transactionUrl, networkIconName } from "./chains.js";
+export { addressUrl, isTestnet, knownChain, networkName, transactionUrl, networkIconName } from "./chains.js";
 export { formatAmount, formatCountdown, formatMinorAmount, formatTokenAmount, formatUnitsGrouped, formatWait, tokenAmount } from "./format.js";
 export {
   depositAddressTransfer,
@@ -35,7 +35,15 @@ export {
   type TransferRequest,
 } from "./payment.js";
 export { parseClientQuote, quoteIdFromClientSecret, type ClientQuote } from "./quote.js";
-export { assetIconName, iconMonogram, type IconName } from "./icon-names.js";
+export { assetIconName, assetName, assetSymbol, iconMonogram, type IconName } from "./icon-names.js";
+export {
+  paymentOptionLabel,
+  paymentOptions,
+  samePaymentOption,
+  type NetworkPaymentOption,
+  type PaymentNetwork,
+  type PaymentOption,
+} from "./options.js";
 export {
   INJECTED_WALLET_UUID,
   WalletError,

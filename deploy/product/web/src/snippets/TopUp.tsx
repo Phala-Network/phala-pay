@@ -1,17 +1,25 @@
 import type {
-  CheckoutParams,
+  CheckoutParams as Params,
+  PaymentOption as Option,
 } from "@phala/pay";
-import { Checkout } from "@phala/pay-react";
+import {
+  PaymentElement,
+} from "@phala/pay-react";
 import "@phala/pay-react/styles.css";
 
-export function TopUp({ checkout, onPaid }: {
-  checkout: CheckoutParams;
+export function TopUp(props: {
+  options: Option[]; // GET /v1/config
+  quote: (option: Option, request: {
+    idempotencyKey: string; // per quote
+  }) => Promise<Params>;
   onPaid: () => void;
 }) {
   return (
-    <Checkout
-      {...checkout}
-      onSuccess={onPaid}
+    <PaymentElement
+      options={props.options}
+      amount={2500}
+      createQuote={props.quote}
+      onSuccess={props.onPaid}
     />
   );
 }

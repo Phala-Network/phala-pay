@@ -3,8 +3,9 @@ import { CircleAlert, ExternalLink, Wallet } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { networkName } from "@phala/pay";
+import { AssetIcon } from "@phala/pay-react";
 import type { Asset, Network } from "./api.js";
-import { TokenIcon } from "./chains.js";
 import { ExplorerLink, TOUCH, errorMessage, wallet } from "./common.js";
 import { tokenName, tokens } from "./format.js";
 import type { PaidWith } from "./testTokens.js";
@@ -26,11 +27,6 @@ export function mintAmount(needed: bigint | undefined, decimals: number): bigint
 export interface Need {
   asset: string;
   atomic: bigint;
-}
-
-/** The network's name without "testnet", as faucets name it: `Base Sepolia`. */
-function chainName(network: Network): string {
-  return network.name.replace(/ testnet$/, "");
 }
 
 /**
@@ -66,7 +62,7 @@ function FaucetLink({ href, icon, title, children }: { href: string; icon?: Reac
 function MintButton({ token, label, mint }: { token: Asset } & ReturnType<typeof useMint>) {
   return (
     <Button type="button" variant="secondary" size="sm" className={TOUCH} onClick={() => mint.mutate(token)} disabled={mint.isPending}>
-      <TokenIcon asset={token.asset} className="size-4" />
+      <AssetIcon asset={token.asset} size={16} />
       {mint.isPending && mint.variables.asset === token.asset ? "Confirm in your wallet…" : label(token)}
     </Button>
   );
@@ -91,7 +87,7 @@ export function TestTokens({ network, need }: { network: Network; need: Need | n
   const mintable = network.assets.filter((each) => each.mintable);
   const fromFaucet = network.assets.find((each) => !each.mintable && each.faucet !== null);
   const { mint, label } = useMint(network, need);
-  const chain = chainName(network);
+  const chain = networkName(network.chain_id);
   const id = useId();
   // Two groups on one row, spaced apart: the mints from the wallet, then the faucets off the page
   // (the links name what each gives, a test token or gas); where the row is narrow, the faucets
@@ -159,7 +155,7 @@ export function FundWallet({
       <AlertDescription>
         {token.mintable
           ? "Mint enough to cover this payment, then pay again."
-          : `Get ${name} from Circle's faucet, picking ${chainName(network)} as the network there, then pay again.`}
+          : `Get ${name} from Circle's faucet, picking ${networkName(network.chain_id)} as the network there, then pay again.`}
       </AlertDescription>
       <div className="col-start-2 mt-2 flex flex-col gap-2">
         {token.mintable ? (
@@ -176,7 +172,7 @@ export function FundWallet({
           </>
         ) : (
           token.faucet !== null && (
-            <FaucetLink href={token.faucet} icon={<TokenIcon asset={token.asset} className="size-4" />}>
+            <FaucetLink href={token.faucet} icon={<AssetIcon asset={token.asset} size={16} />}>
               Circle {token.symbol} faucet
             </FaucetLink>
           )

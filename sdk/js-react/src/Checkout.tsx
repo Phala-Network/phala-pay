@@ -21,7 +21,7 @@ import {
   type EthereumProvider,
   type Wallet,
 } from "@phala/pay";
-import type { Appearance } from "./appearance.js";
+import { rootProps, type Appearance } from "./appearance.js";
 import { AssetIcon, NetworkIcon } from "./Icons.js";
 import { CopyButton, Field } from "./Field.js";
 import { ExternalGlyph, ToneGlyph } from "./Glyphs.js";
@@ -42,9 +42,9 @@ export interface CheckoutProps {
   /** Called once when the payment is credited, with the quote: its `amount_credited` is what was
    * credited, which differs from `amount` for a payment of another amount or a late one. Fulfil
    * from the `deposit.credited` webhook, not here. */
-  onSuccess?: (quote: ClientQuote) => void;
+  onSuccess?: ((quote: ClientQuote) => void) | undefined;
   /** Called once when the quote expires or is canceled without a payment. */
-  onExpire?: (quote: ClientQuote) => void;
+  onExpire?: ((quote: ClientQuote) => void) | undefined;
   /** Called whenever the checkout's status changes, like Stripe Elements' `onChange`: for example,
    * to hide your own "new payment" control while a payment is `seen` or `confirming`. */
   onChange?: (state: CheckoutState) => void;
@@ -52,10 +52,10 @@ export interface CheckoutProps {
    * it tried (the chosen browser wallet's provider, or `walletClient`): for example on
    * `insufficient_balance` (nothing was sent), to offer your own way to fund that wallet. The
    * checkout shows the error's message itself. */
-  onWalletError?: (error: WalletError, wallet: WalletClient | EthereumProvider) => void;
+  onWalletError?: ((error: WalletError, wallet: WalletClient | EthereumProvider) => void) | undefined;
   appearance?: Appearance;
   /** Milliseconds between status reads; default 3000. */
-  pollInterval?: number;
+  pollInterval?: number | undefined;
   className?: string;
   /** The wallet button's label; default "Pay with crypto". */
   buttonText?: string;
@@ -73,7 +73,16 @@ const METHODS: { id: Method; label: string }[] = [
 ];
 
 /** A checkout for one quote: pay from a browser wallet, by QR code, or manually, with live status. */
-export function Checkout({
+export function Checkout({ appearance, className, ...props }: CheckoutProps) {
+  return (
+    <div {...rootProps(appearance, className)}>
+      <CheckoutContent {...props} />
+    </div>
+  );
+}
+
+/** The checkout without its `.pp-root`, for a component that is itself inside one. */
+export function CheckoutContent({
   clientSecret,
   expectedAddress,
   apiBase,
@@ -81,12 +90,10 @@ export function Checkout({
   onExpire,
   onChange,
   onWalletError,
-  appearance,
   pollInterval,
-  className,
   buttonText = "Pay with crypto",
   walletClient,
-}: CheckoutProps) {
+}: Omit<CheckoutProps, "appearance" | "className">) {
   const { status, quote, error, reconnecting, refresh } = useCheckout({
     clientSecret,
     expectedAddress,
@@ -127,10 +134,7 @@ export function Checkout({
   }, [status, quote]);
 
   return (
-    <div
-      className={className === undefined ? "pp-root" : `pp-root ${className}`}
-      data-theme={appearance?.theme ?? "light"}
-    >
+    <>
       {status === "loading" && (
         <div className="pp-skeleton" aria-hidden="true">
           <span className="pp-skeleton__line" />
@@ -167,7 +171,7 @@ export function Checkout({
           onWalletError={onWalletError}
         />
       )}
-    </div>
+    </>
   );
 }
 

@@ -1,4 +1,5 @@
-import { formatUnits, parseUnits } from "viem";
+import { formatUnitsGrouped } from "@phala/pay";
+import { parseUnits } from "viem";
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
@@ -18,9 +19,7 @@ export function signedDollars(cents: number): string {
 
 /** The exact token amount, grouped and without trailing zeros: `1,273.9185 PHA`. */
 export function tokens(atomic: string, symbol: string, decimals = 18): string {
-  const [whole = "0", fraction] = formatUnits(BigInt(atomic), decimals).split(".");
-  const grouped = BigInt(whole).toLocaleString("en-US");
-  return `${fraction === undefined ? grouped : `${grouped}.${fraction}`} ${symbol}`;
+  return `${formatUnitsGrouped(BigInt(atomic), decimals, "en-US")} ${symbol}`;
 }
 
 /** A decimal amount typed by the visitor, in a token's atomic units; `null` unless it is above 0. */

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatUnits } from "viem";
-import { networkName } from "@phala/pay";
+import { networkName, paymentOptions, samePaymentOption, type PaymentOption } from "@phala/pay";
 import {
   retrieveDepositAddress,
   type ClientDepositAddress,
@@ -11,29 +11,29 @@ import {
 import { CheckoutError, pollDelay } from "@phala/pay";
 import { formatUnitsGrouped, formatWait } from "@phala/pay";
 import { depositAddressTransfer, type DepositAddressAsset, type DepositAddressDetails } from "@phala/pay";
-import type { Appearance } from "./appearance.js";
-import { AssetIcon, NetworkIcon } from "./Icons.js";
+import { rootProps, type Appearance } from "./appearance.js";
 import { Field } from "./Field.js";
+import { PaymentOptionFields } from "./PaymentOptionPicker.js";
 import { QrCode } from "./QrCode.js";
 
 export interface DepositAddressProps {
   /** `address` and `networks` from your backend's `POST /v1/deposit_addresses`. */
   depositAddress: DepositAddressDetails;
   /** The network shown first; the first of `networks` by default. */
-  chainId?: number;
+  chainId?: number | undefined;
   /** The token shown first, for example `pha`; the network's first token by default. */
-  asset?: string;
+  asset?: string | undefined;
   /**
    * The `client_secret` of the same response. With `apiBase`, the component follows the
    * address's payments and shows each one within about a block of arriving: received with its
    * confirmations, then credited, and states each network's typical credit time. Display only;
    * credit from your `deposit.credited` webhook.
    */
-  clientSecret?: string;
+  clientSecret?: string | undefined;
   /** The service origin, for example `https://pay.example.com`; needed with `clientSecret`. */
-  apiBase?: string;
+  apiBase?: string | undefined;
   /** Milliseconds between payment reads; default 3000. */
-  pollInterval?: number;
+  pollInterval?: number | undefined;
   /** Called after the first successful read and once per public-view content change.
    * Unlike Checkout's `onChange`, this does not report loading.
    * Display only; credit from your `deposit.credited` webhook. */
@@ -44,12 +44,21 @@ export interface DepositAddressProps {
 
 /**
  * A customer's persistent deposit address: one address for every supported token on every
- * supported network. The payer picks a network and a token; the component shows a QR code of that
+ * supported network. The payer picks a token and network; the component shows a QR code of that
  * EIP-681 transfer request, per-transfer limits, and the address and token contract to copy.
  * Eligible transfers are credited at the market rate; follow them from your backend's
  * `deposit.credited` webhook.
  */
-export function DepositAddress({
+export function DepositAddress({ appearance, className, ...props }: DepositAddressProps) {
+  return (
+    <div {...rootProps(appearance, className)}>
+      <DepositAddressContent {...props} />
+    </div>
+  );
+}
+
+/** The deposit address without its `.pp-root`, for a component that is itself inside one. */
+export function DepositAddressContent({
   depositAddress,
   chainId,
   asset,
@@ -57,24 +66,24 @@ export function DepositAddress({
   apiBase,
   pollInterval,
   onChange,
-  appearance,
-  className,
-}: DepositAddressProps) {
+}: Omit<DepositAddressProps, "appearance" | "className">) {
   const { networks } = depositAddress;
-  const id = useId();
   const { view, reconnecting } = useClientView(clientSecret, apiBase, pollInterval ?? 3000, onChange);
   const payments = view?.payments ?? [];
-  const [selectedChain, setSelectedChain] = useState(chainId ?? networks[0]?.chain_id);
-  const [selectedAsset, setSelectedAsset] = useState(asset);
-  const network = networks.find((candidate) => candidate.chain_id === selectedChain) ?? networks[0];
-  if (network === undefined) {
-    throw new TypeError("the deposit address has no network");
+  const options = paymentOptions(networks);
+  const [selected, setSelected] = useState<PaymentOption>(() => ({
+    chain_id: chainId ?? networks[0]?.chain_id ?? 0,
+    asset: asset ?? "",
+  }));
+  // The chosen token on the chosen network, else that network's first token, else the first.
+  const option =
+    options.find((each) => samePaymentOption(each, selected)) ??
+    options.find((each) => each.chain_id === selected.chain_id) ??
+    options[0];
+  if (option === undefined) {
+    throw new TypeError("the deposit address takes no token on any network");
   }
-  const token =
-    network.assets.find((candidate) => candidate.asset === selectedAsset) ?? network.assets[0];
-  if (token === undefined) {
-    throw new TypeError(`the deposit address takes no token on chain ${network.chain_id}`);
-  }
+  const { network, token } = option;
   const { token: contract, to } = depositAddressTransfer(network, token);
   const symbol = token.asset.toUpperCase();
   const name = networkName(network.chain_id);
@@ -83,51 +92,17 @@ export function DepositAddress({
     ?.find((each) => each.asset === token.asset) ?? token;
   const amount = depositLimits(currentToken) ?? symbol;
   return (
-    <div
-      className={className === undefined ? "pp-root" : `pp-root ${className}`}
-      data-theme={appearance?.theme ?? "light"}
-    >
+    <>
       <p className="pp-intro">
         {depositAddress.address === null
           ? "Reusable deposit address; varies by network"
           : "One reusable address for supported tokens and networks"}
       </p>
-      {networks.length > 1 && (
-        <fieldset className="pp-choices">
-          <legend className="pp-choices__legend">Network</legend>
-          {networks.map((each) => (
-            <label className="pp-choices__option" key={each.chain_id}>
-              <input
-                className="pp-choices__input"
-                type="radio"
-                name={`${id}-network`}
-                checked={each.chain_id === network.chain_id}
-                onChange={() => setSelectedChain(each.chain_id)}
-              />
-              <NetworkIcon chainId={each.chain_id} size={16} />
-              {networkName(each.chain_id)}
-            </label>
-          ))}
-        </fieldset>
-      )}
-      {network.assets.length > 1 && (
-        <fieldset className="pp-choices">
-          <legend className="pp-choices__legend">Token</legend>
-          {network.assets.map((each) => (
-            <label className="pp-choices__option" key={each.asset}>
-              <input
-                className="pp-choices__input"
-                type="radio"
-                name={`${id}-token`}
-                checked={each.asset === token.asset}
-                onChange={() => setSelectedAsset(each.asset)}
-              />
-              <AssetIcon asset={each.asset} size={16} />
-              {each.asset.toUpperCase()}
-            </label>
-          ))}
-        </fieldset>
-      )}
+      <PaymentOptionFields
+        options={options}
+        value={option}
+        onChange={setSelected}
+      />
       <div className="pp-qr">
         <QrCode value={token.payment_uri} label={`Deposit address for ${symbol} on ${name}`} />
       </div>
@@ -155,7 +130,7 @@ export function DepositAddress({
         Send {amount} on {name}. Unsupported tokens or networks are not credited.{" "}
         {creditMessage(networks.map((each) => each.chain_id), view)}
       </p>
-    </div>
+    </>
   );
 }
 

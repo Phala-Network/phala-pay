@@ -172,7 +172,7 @@ recompute an address offline from a treasury you pass, as the Python SDK does.
 
 ## Chain and token icons
 
-`Checkout` and `DepositAddress` include compact inline icons for Ethereum, Base, USDC, USDT,
+`PaymentElement`, `Checkout`, `DepositAddress`, and `PaymentOptionPicker` include compact inline icons for Ethereum, Base, USDC, USDT,
 PHA, and ETH. Testnets reuse their mainnet family artwork. Unknown chains
 and assets show a neutral first-letter monogram. Symbols are case-insensitive.
 

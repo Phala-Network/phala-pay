@@ -26,9 +26,9 @@ Phala Pay has the Python SDK and three lockstep JavaScript packages, all in this
   `topup_sdk` (signing, verification, address recomputation, `topup-sdk send-test-event`) and
   `topup_client`, generated from the OpenAPI document.
 - [sdk/js](../sdk/js), `@phala/pay`: the framework-free browser checkout core, retrieval and wallet
-  helpers, payment URIs, icons, formatting, and public types;
-- [sdk/js-react](../sdk/js-react), `@phala/pay-react`: `<Checkout>`, `<DepositAddress>`, hooks,
-  icons, and styles for React;
+  helpers, payment options, payment URIs, icons, formatting, and public types;
+- [sdk/js-react](../sdk/js-react), `@phala/pay-react`: `<PaymentElement>`, `<Checkout>`,
+  `<DepositAddress>`, `<PaymentOptionPicker>`, hooks, icons, and styles for React;
 - [sdk/js-server](../sdk/js-server), `@phala/pay-server`: the merchant client and API types;
   `@phala/pay-server/helpers`: offline webhook verification, address recomputation, ledger helpers,
   and `flushTransaction` / `safeBatch` builders.
@@ -87,8 +87,9 @@ Both SDKs follow the
 
 ## Quickstart
 
-The whole integration is three pieces, as with Stripe's Payment Element: the backend creates a
-quote, the browser renders the checkout with the quote's client secret, and the webhook fulfils.
+The whole integration is three pieces, as with Stripe's Payment Element with a deferred intent: the
+browser renders the payment, the backend creates a quote when the payer submits it, and the webhook
+fulfils.
 
 **Install** `@phala/pay`, `@phala/pay-react` (for React), `@phala/pay-server`, and `phala-pay`
 from npm/PyPI at your operator's service version,
@@ -119,9 +120,16 @@ valid `CREATE2` address of that treasury, which a check over the response's own 
 pass. Pins-based clients fail closed without every pin (`AddressMismatchError`). The low-level
 Python `TopupClient` permits a test-mode fallback to the response's treasury with a warning.
 
-**1. Backend: create a quote, return its client secret.** Only the create response carries
-`client_secret`; repeating the call with the same `idempotency_key` within 24 hours returns the
-same response, secret included, which is how a reloaded page resumes.
+**1. Backend: create a quote for the chosen token, return its checkout params.** The browser calls
+this when the payer submits, with the token and network they chose and the idempotency key the
+payment element made for this quote; check them against what you accept (`GET /v1/config`) before
+quoting. Use that key, not an order id, as the quote's `idempotency_key`: the element makes a new
+one for each quote the payer asks for (another token or amount, or a new quote after one ended)
+and repeats it only to retry a request that failed with the same option and amount, so a retry
+returns the quote a lost response created.
+Repeating a key with another body is `400 idempotency_key_reused`. Only the create response
+carries `client_secret`; repeating the call with the same key within 24 hours returns the same
+response, secret included.
 
 ```python
 from phala_pay import PhalaPay
@@ -135,34 +143,52 @@ pay = PhalaPay.from_env()
 @app.post("/topups")
 def create_topup(body: TopupRequest, team: Team = Depends(current_team)) -> dict[str, str]:
     quote = pay.quotes.create(
-        client_reference_id=team.id, amount=body.amount, chain_id=11155111, asset="pha",
-        idempotency_key=body.order_id,
+        client_reference_id=team.id, amount=body.amount, chain_id=body.chain_id, asset=body.asset,
+        idempotency_key=body.idempotency_key,  # from the payment element; check it is a UUID
+        metadata={"order_id": body.order_id},
     )
-    return {"client_secret": quote.client_secret, "expected_address": quote.address}
+    return {"clientSecret": quote.client_secret, "expectedAddress": quote.address}
 ```
 
-**2. Frontend: render the checkout.** The component reads the quote's public view with the client
-secret (no signature, CORS `*`) and offers a browser wallet (EIP-6963), a QR code (EIP-681), and
-manual payment, with live status until the payment is credited.
+**2. Frontend: render the payment element.** `<PaymentElement>` offers the tokens and networks you
+accept (pass `GET /v1/config`'s `assets` from your backend through `paymentOptions`), creates
+nothing until the payer submits, then calls your `createQuote` with the chosen option and shows the
+quote's checkout: a browser wallet (EIP-6963), a QR code (EIP-681), and manual payment, with live
+status until the payment is credited. It reads the quote's public view with the client secret (no
+signature, CORS `*`).
 
 ```tsx
 "use client";
-import { Checkout } from "@phala/pay-react";
+import { paymentOptions } from "@phala/pay";
+import { PaymentElement } from "@phala/pay-react";
 import "@phala/pay-react/styles.css";
 
-<Checkout
-  clientSecret={clientSecret}
-  expectedAddress={expectedAddress}
+<PaymentElement
+  options={paymentOptions(config.assets)} // from your backend's pay.config.retrieve()
+  amount={2500} // US cents, for the button: "Pay $25.00 in USDC"
   apiBase={PHALA_PAY_API_BASE}
+  createQuote={(option, { idempotencyKey }) =>
+    post("/topups", {
+      amount: 2500, chain_id: option.chain_id, asset: option.asset,
+      idempotency_key: idempotencyKey, order_id,
+    })
+  }
   onSuccess={() => router.refresh()}
-  onExpire={() => startOver()}
 />
 ```
 
-`expectedAddress` is required: it is the address your backend recomputed, and the checkout fails
-closed, showing nothing to pay, when the quote it reads names another one. Its wallet button reads
-"Pay with crypto" (`buttonText`); `appearance` themes it to match the page, a test-mode quote says
-"Test mode", and `onChange` reports every status change (§1.2). Without React,
+`createQuote` resolves with `{ clientSecret, expectedAddress }` (or `pay.checkoutParams(quote)` from
+`@phala/pay-server`, which also names `apiBase`); a rejection shows "Could not start the payment.
+Try again." and calls `onError`. `expectedAddress` is required: it is the address your backend
+recomputed, and the checkout fails closed, showing nothing to pay, when the quote it reads names
+another one. To submit with your own button (inside your own amount form, for example), pass
+`hideSubmit` and an `id`, and give your button `type="submit" form={id}`. `createDepositAddress`
+adds "Use a deposit address" for payers sending from an exchange (§1.5). `appearance` themes it to
+match the page, a test-mode quote says "Test mode", and `onChange` reports each step and every
+checkout status change (§1.2).
+
+For a quote you already created, render `<Checkout clientSecret expectedAddress apiBase>` alone;
+`<PaymentOptionPicker>` is the element's token and network choice on its own. Without React,
 `new PhalaPay({ apiBase }).checkout(clientSecret, { expectedAddress })` gives the same live
 status.
 

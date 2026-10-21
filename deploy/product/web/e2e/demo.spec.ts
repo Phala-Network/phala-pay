@@ -269,27 +269,43 @@ async function installWallet(
 }
 
 /**
- * The network, then the token, chosen by default: Sepolia, and the first of its two tokens, test
- * PHA, which earns the demo merchant's bonus; test USDC is a stablecoin.
+ * Every token on every network, one option each, the first chosen by default: test PHA on Sepolia,
+ * which earns the demo merchant's bonus; test USDC is a stablecoin.
  */
 async function expectPaymentOptions(product: Locator) {
-  await expect(product.getByRole("combobox", { name: "Network" })).toHaveValue(String(sepolia.id));
-  const token = product.getByRole("radiogroup", { name: "Token" });
-  await expect(token.getByRole("radio")).toHaveCount(2);
-  await expect(token.getByRole("radio", { name: "Test PHA", exact: true })).toBeChecked();
-  const rows = token.getByTestId("token-option");
-  await expect(rows.filter({ hasText: "PHA" })).toContainText("+10% bonus");
+  const options = product.getByRole("group", { name: "Pay with" });
+  await expect(options.getByRole("radio")).toHaveCount(4);
+  await expect(options.getByRole("radio", { name: "PHA · Sepolia", exact: true })).toBeChecked();
+  const pha = option(product, "PHA · Sepolia");
+  const usdc = option(product, "USDC · Sepolia");
+  await expect(pha).toContainText("+10% bonus");
   // A stablecoin is $1.00; a spot token is at the market rate, which a quote locks.
-  await expect(rows.filter({ hasText: "USDC" }).getByTestId("token-price")).toHaveText("$1.00");
-  await expect(rows.filter({ hasText: "PHA" }).getByTestId("token-price")).toHaveText("Market rate");
-  await expect(rows.filter({ hasText: "USDC" })).not.toContainText("bonus");
+  await expect(usdc.getByTestId("token-price")).toHaveText("$1.00");
+  await expect(pha.getByTestId("token-price")).toHaveText("Market rate");
+  await expect(usdc).not.toContainText("bonus");
 }
 
-/** Chooses a network in the product's network select. */
-async function chooseNetwork(product: Locator, name: string) {
-  const select = product.getByRole("combobox", { name: "Network" });
-  await select.selectOption({ label: name });
-  await expect(select.locator("option:checked")).toHaveText(name);
+/** The visible payment option named `name`, such as `USDC · Sepolia`: its row, with its terms. */
+function option(product: Locator, name: string): Locator {
+  return product
+    .locator("label.pp-option")
+    .filter({ visible: true })
+    .filter({ has: product.page().getByRole("radio", { name, exact: true }) });
+}
+
+/** Chooses the payment option named `name`, such as `USDC · Sepolia`. */
+async function chooseOption(product: Locator, name: string) {
+  const radio = product.getByRole("radio", { name, exact: true });
+  await radio.check();
+  await expect(radio).toBeChecked();
+}
+
+/**
+ * Leaves the quote for the payment options, whatever its state: the page's own button once
+ * credited, else the payment element's way back.
+ */
+async function startOver(product: Locator) {
+  await product.getByRole("button", { name: /^(Start a new top-up|Start over|Choose another token or network)$/ }).click();
 }
 
 /** Collects the page's console errors and CSP violations; the flows expect none. */
@@ -524,7 +540,7 @@ test("query outages show retrying states, recover, and preserve the last account
   expect(recoveredResponse.status()).toBe(200);
   await recoveredResponse.finished();
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
-  await expect(product.getByRole("combobox", { name: "Network", exact: true })).toBeEnabled();
+  await expect(product.getByRole("radio", { name: "PHA · Sepolia", exact: true })).toBeEnabled();
   await expect(trust).toContainText("Attestation verified");
   await expect(trust).not.toContainText("retrying…");
 
@@ -855,7 +871,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(confirmation).toContainText("Payment credited");
   await expect(confirmation).toContainText("$20.00");
   // Nothing pending once credited: the checkout is gone with its countdown.
-  await expect(summary).toHaveCount(0);
+  await expect(summary).toBeHidden();
   // The demo merchant's +10% PHA bonus, a line of its own: $20.00 and $2.00.
   await expect(product.getByTestId("bonus-credited")).toContainText("+$2.00", { timeout: 10_000 });
   await expect(confirmation).toContainText("Total$22.00");
@@ -972,7 +988,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
     ["cancel", "Quote canceled"],
   ] as const) {
     const before = await followed.getAttribute("data-value");
-    await product.getByRole("button", { name: "Start a new top-up" }).click();
+    await startOver(product);
     await product.getByText("$5", { exact: true }).click();
     await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
     await expect(followed).not.toHaveAttribute("data-value", before ?? "");
@@ -1122,7 +1138,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   const circle = helper.getByRole("link", { name: /^Circle USDC faucet/ });
   await expect(circle).toHaveAttribute("href", "https://faucet.circle.com");
   await expect(circle).toHaveAttribute("title", "On the faucet, pick Sepolia as the network.");
-  await product.getByRole("radio", { name: "Test USDC", exact: true }).check({ force: true });
+  await chooseOption(product, "USDC · Sepolia");
   await expect(helper.getByRole("button", { name: "Mint 1,000 test PHA" })).toBeVisible();
   await expect(circle).toBeVisible();
   await mintUsdc(env("PAYER_ADDRESS"), parseUnits("100", 6));
@@ -1148,11 +1164,8 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
 
   // Base Sepolia: its own token list and faucets; test PHA mints there, from the wallet on that
   // network, and a PHA quote there earns the bonus, at staging's rate, formatted.
-  await product.getByRole("button", { name: "Start a new top-up" }).click();
-  await chooseNetwork(product, "Base Sepolia testnet");
-  const tokens = product.getByRole("radiogroup", { name: "Token" });
-  await expect(tokens.getByRole("radio")).toHaveCount(2);
-  await expect(tokens.getByRole("radio", { name: "Test PHA", exact: true })).toBeChecked();
+  await startOver(product);
+  await chooseOption(product, "PHA · Base Sepolia");
   await expect(circle).toHaveCount(0);
   // Test USDT mints from the wallet too, through its faucet contract, as Aave's does.
   await expect(helper.getByRole("button", { name: "Mint 1,000 test USDT" })).toBeVisible();
@@ -1189,8 +1202,8 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   const usdt = { rpc: env("BASE_ANVIL_URL"), token: env("BASE_USDT_ADDRESS") };
   await helper.getByRole("button", { name: "Mint 1,000 test USDT" }).click();
   await expect.poll(() => tokenBalance(env("PAYER_ADDRESS"), usdt)).toBe(parseUnits("1000", 6));
-  await product.getByRole("button", { name: "Start a new top-up" }).click();
-  await product.getByRole("radio", { name: "Test USDT", exact: true }).check({ force: true });
+  await startOver(product);
+  await chooseOption(product, "USDT · Base Sepolia");
   await product.getByText("$5", { exact: true }).click();
   const usdtRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
@@ -1227,7 +1240,7 @@ test("a quote a wallet cannot cover sends nothing; the mint beside it funds that
   // $20 in test USDC from a wallet holding a millionth less, in USDC's 6 decimals: the checkout
   // sends nothing, and points to Circle's faucet.
   await mintUsdc(empty, 19_999_999n);
-  await product.getByRole("radio", { name: "Test USDC", exact: true }).check({ force: true });
+  await chooseOption(product, "USDC · Sepolia");
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
   await pay.click();
   await expect(
@@ -1242,8 +1255,8 @@ test("a quote a wallet cannot cover sends nothing; the mint beside it funds that
   // $500 in test PHA at 0.25 USD per PHA: 2,000 PHA, more than the default mint, which grows to
   // cover the quote; paying first is refused, and the mint beside the refusal mints to the wallet
   // that paid, not the first one announced.
-  await product.getByRole("button", { name: "Start a new top-up" }).click();
-  await product.getByRole("radio", { name: "Test PHA", exact: true }).check({ force: true });
+  await startOver(product);
+  await chooseOption(product, "PHA · Sepolia");
   await product.getByText("Custom", { exact: true }).click();
   await product.getByLabel("Custom amount (USD)").fill("500");
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
@@ -1558,12 +1571,12 @@ test("forced colors keep the chosen amount, the active tab, and keyboard focus v
   await expect(active).toHaveAttribute("aria-selected", "true");
   expect(await style(active, "backgroundColor")).not.toBe(await style(methods, "backgroundColor"));
 
-  // Keyboard focus on a select and a text field keeps an outline, which the system colours.
+  // Keyboard focus on a payment option and a text field keeps an outline, which the system colours.
   await chosen.focus();
   await page.keyboard.press("Tab");
-  const network = product.getByRole("combobox", { name: "Network" });
-  await expect(network).toBeFocused();
-  expect(await style(network, "outlineStyle")).not.toBe("none");
+  const pha = product.getByRole("radio", { name: "PHA · Sepolia", exact: true });
+  await expect(pha).toBeFocused();
+  expect(await style(pha, "outlineStyle")).not.toBe("none");
   await amounts.getByRole("radio", { name: "Custom", exact: true }).click();
   const custom = product.getByLabel("Custom amount (USD)");
   await custom.focus();
@@ -1957,7 +1970,7 @@ test("the demo's states move nothing on the page: one height in each state and o
   await settle();
   await page.evaluate(() => Object.assign(window, { shifted: [] }));
   const testTokens = page.getByRole("note", { name: "Test tokens" });
-  await expect(product.getByTestId("token-option").filter({ visible: true })).toHaveCount(3);
+  await expect(product.locator("label.pp-option").filter({ visible: true })).toHaveCount(5);
   await expect(testTokens.getByRole("button", { name: /^Mint 1,000 test / })).toHaveCount(2);
   await expect(testTokens.getByRole("link", { name: /^Circle USDC faucet/ })).toBeVisible();
   await expect(testTokens.getByRole("link", { name: /ETH faucets/ })).toBeVisible();

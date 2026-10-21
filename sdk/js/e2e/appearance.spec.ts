@@ -111,6 +111,12 @@ async function check(page: Page, name: string) {
   }
 }
 
+/** The component's accessibility violations. */
+async function axeViolations(page: Page) {
+  await page.addScriptTag({ content: axe.source });
+  return (await page.evaluate(() => axe.run(document.querySelector(".pp-root") ?? document))).violations;
+}
+
 /** The controls whose target, around their center, is under 44 × 44 px. */
 function smallTargets(page: Page): Promise<string[]> {
   return page.evaluate(() => {
@@ -212,8 +218,29 @@ for (const width of [390, 1280]) {
     test(`deposit address states at ${suffix}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`/?deposit&networks=1&theme=${theme}`);
-      await expect(page.getByRole("group", { name: "Network" })).toHaveCount(0);
+      await expect(page.getByRole("group", { name: "Pay with" }).getByRole("radio")).toHaveCount(2);
       await check(page, `deposit-single-${suffix}`);
+
+      await page.goto(`/?picker&theme=${theme}`);
+      await expect(page.getByRole("radio", { name: "USDC · Base" })).toBeChecked();
+      await check(page, `picker-${suffix}`);
+    });
+
+    test(`payment element steps at ${suffix}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await serve(page, () => waiting({ asset: "usdc", chain_id: 84532, decimals: 6, amount_atomic: "25000000" }));
+      await page.goto(checkoutUrl(theme).replace("/?", "/?element&"));
+      await expect(page.getByRole("radio", { name: "USDC · Base" })).toBeChecked();
+      expect(await axeViolations(page), "options").toEqual([]);
+      await check(page, `element-options-${suffix}`);
+      await page.getByRole("button", { name: "Pay $25.00 in USDC" }).click();
+      await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
+      expect(await axeViolations(page), "checkout").toEqual([]);
+      await check(page, `element-checkout-${suffix}`);
+      await page.getByRole("button", { name: "Choose another token or network" }).click();
+      await page.getByRole("button", { name: "Use a deposit address" }).click();
+      await expect(page.getByRole("button", { name: "Back to payment options" })).toBeVisible();
+      await check(page, `element-deposit-${suffix}`);
 
       let online = true;
       await serveDeposit(page, () => online);
@@ -295,7 +322,7 @@ function edgeContrast(locator: Locator, side: "Top" | "Bottom" = "Top"): Promise
 for (const theme of ["light", "dark"]) {
   test(`choices' edges keep 3:1 against the page, ${theme}`, async ({ page }) => {
     await page.goto(`/?deposit&theme=${theme}`);
-    const choices = page.locator(".pp-choices__input:not(:checked)");
+    const choices = page.locator(".pp-option__input:not(:checked)");
     await expect(choices.first()).toBeVisible();
     for (const ratio of await edgeContrast(choices)) expect(ratio).toBeGreaterThanOrEqual(3);
   });
@@ -337,11 +364,11 @@ for (const width of [390, 1280]) {
       await check(page, `lime-wallet-${suffix}`);
 
       await page.goto(`/?deposit&theme=${theme}`);
-      const choice = page.locator(".pp-choices__input:checked").first();
+      const choice = page.locator(".pp-option__input:checked").first();
       await expect(choice).toHaveCSS("border-top-color", primary);
       await page.addStyleTag({ content: LIME_HOST });
       await expect(choice).toHaveCSS("border-top-color", selected);
-      for (const ratio of await edgeContrast(page.locator(".pp-choices__input:checked"))) {
+      for (const ratio of await edgeContrast(page.locator(".pp-option__input:checked"))) {
         expect(ratio).toBeGreaterThanOrEqual(3);
       }
       expect(await violations(), "deposit address").toEqual([]);
@@ -352,7 +379,7 @@ for (const width of [390, 1280]) {
 
 test("keyboard focus is visible and differs from the selected state", async ({ page }) => {
   await page.goto("/?deposit");
-  await expect(page.getByRole("group", { name: "Network" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Pay with" })).toBeVisible();
   const outline = (locator: Locator) =>
     locator.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -360,7 +387,7 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
     });
 
   await page.keyboard.press("Tab");
-  const radio = page.getByRole("radio", { name: "Sepolia", exact: true });
+  const radio = page.getByRole("radio", { name: "PHA · Sepolia" });
   await expect(radio).toBeFocused();
   await expect(radio).toBeChecked();
   const focused = await outline(radio);
@@ -378,7 +405,7 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
   // In forced colors, the selection keeps a system color of its own.
   await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
   await expect.poll(() => page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
-  const borders = await page.getByRole("group", { name: "Network" }).getByRole("radio").evaluateAll((radios) =>
+  const borders = await page.getByRole("group", { name: "Pay with" }).getByRole("radio").evaluateAll((radios) =>
     radios.map((radio) => getComputedStyle(radio).borderTopColor));
   expect(new Set(borders).size).toBe(2);
   await page.emulateMedia({ forcedColors: "none", reducedMotion: "no-preference" });
