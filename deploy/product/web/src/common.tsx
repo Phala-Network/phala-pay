@@ -1,3 +1,4 @@
+import { addressUrl, transactionUrl } from "@phala/pay";
 import { ChevronRight, type LucideIcon } from "lucide-react";
 import { useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
@@ -5,8 +6,6 @@ import { Hash } from "@/components/ui/hash";
 import type { StatusTone } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
 import { ApiError } from "./api.js";
-import { networkOf } from "./chains.js";
-import { useNetworks } from "./queries.js";
 
 /** An inline text link, in the page's text colour. */
 export const LINK = "font-medium underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground";
@@ -34,7 +33,7 @@ export function wallet() {
 
 /** The SDK's components, loaded when a payment starts: they carry the chain and wallet libraries. */
 export function loadSdk() {
-  return import("@phala/pay-react");
+  return import("./sdk.js");
 }
 
 /**
@@ -68,11 +67,11 @@ export function ExplorerLink({
   value: string;
   copy?: boolean;
 }) {
-  const explorer = networkOf(useNetworks().data, chainId)?.explorer ?? null;
+  const href = chainId === undefined ? undefined : kind === "tx" ? transactionUrl(chainId, value) : addressUrl(chainId, value);
   return (
     <Hash
       value={value}
-      href={explorer === null ? undefined : `${explorer}/${kind}/${value}`}
+      href={href}
       copyLabel={copy ? `Copy ${kind === "tx" ? "transaction hash" : "address"}` : undefined}
     />
   );

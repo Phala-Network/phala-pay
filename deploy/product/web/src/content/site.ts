@@ -23,6 +23,8 @@ export const HOME_DESCRIPTION = "Open-source payments API for ERC-20 tokens on E
  * load. A demo on mainnets sets this false with its copy.
  */
 export const DEMO_TESTNET: boolean = true;
+/** The demo's payment options as the page is prerendered: their places, kept until they load. */
+export const DEMO_PAYMENT_OPTIONS = 4;
 export const DEMO_TITLE = "Try it on testnet";
 export const DEMO_STATUS = "Live on Sepolia and Base Sepolia";
 export const DEMO_LEAD = "Pay with test tokens and watch the backend follow the payment.";

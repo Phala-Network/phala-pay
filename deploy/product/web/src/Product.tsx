@@ -1,28 +1,25 @@
-import type { CheckoutStatus } from "@phala/pay";
-import type { Appearance } from "@phala/pay-react";
+import { paymentOptions, samePaymentOption, type CheckoutStatus, type NetworkPaymentOption, type PaymentOption } from "@phala/pay";
+import { PaymentOptionPicker, type Appearance, type PaymentElementStep } from "@phala/pay-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, CircleCheck, Info } from "lucide-react";
-import { Suspense, lazy, useId, useState, type FormEvent, type ReactNode } from "react";
+import { Suspense, lazy, useId, useState, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { ChoiceCard } from "@/components/ui/choice-card";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
-import { ChainIcon, TokenIcon, assetOf, networkOf, tokenFullName } from "./chains.js";
-import { DEMO_TESTNET } from "./content/site.js";
-import { ExplorerLink, TOUCH, describe, loadSdk } from "./common.js";
+import { assetOf, networkOf } from "./chains.js";
+import { DEMO_PAYMENT_OPTIONS, DEMO_TESTNET } from "./content/site.js";
+import { ExplorerLink, TOUCH, loadSdk } from "./common.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
-import { atomicAmount, dollars, percent, presetDollars, signedDollars, tokenName } from "./format.js";
+import { atomicAmount, dollars, percent, presetDollars, signedDollars } from "./format.js";
 import { FundWallet, TestTokens, type Need } from "./Funding.js";
 import { keys, useCreateQuote } from "./queries.js";
 import type { PaidWith } from "./testTokens.js";
@@ -30,7 +27,7 @@ import type { PaidWith } from "./testTokens.js";
 // The payment form's fields put each label above its control, so every control in the card (the
 // method tabs, the amounts, the network, the tokens, the pay button) starts on one left edge.
 
-const Checkout = lazy(() => loadSdk().then((sdk) => ({ default: sdk.Checkout })));
+const PaymentElement = lazy(() => loadSdk().then((sdk) => ({ default: sdk.PaymentElement })));
 
 export type Method = "quote" | "address";
 
@@ -70,14 +67,13 @@ export function Product({
 }) {
   const account = accountView.data ?? null;
   const networks = networksView.data;
-  // The network, then the token, the customer pays with, for either method: the first offered
-  // until they choose; a network's first token when they change the network.
-  const [choice, setChoice] = useState<{ chainId: number | null; asset: string | null }>({
-    chainId: null,
-    asset: null,
-  });
-  const network = networks?.find((each) => each.chain_id === choice.chainId) ?? networks?.[0];
-  const asset = network?.assets.find((each) => each.asset === choice.asset) ?? network?.assets[0];
+  // The token on its network the customer pays with, for either method: the first offered until
+  // they choose.
+  const options = networks === undefined ? [] : paymentOptions(networks);
+  const [choice, setChoice] = useState<PaymentOption | null>(null);
+  const option = options.find((each) => samePaymentOption(each, choice)) ?? options[0];
+  const network = option?.network;
+  const asset = option?.token;
   // The amount to send to the deposit address from the wallet, in the chosen token.
   const [sendAmount, setSendAmount] = useState("25");
   // The payment at hand, which the test token mint covers: the quote's, or the amount to send.
@@ -90,15 +86,8 @@ export function Product({
   }
   // Until the account loads, or while it cannot, nothing can be paid for.
   const unavailable = account === null && accountView.error !== null;
-  const picker = (
-    <PaymentOptions
-      networks={networksView}
-      network={network}
-      asset={asset}
-      onNetworkChange={(chainId) => setChoice({ chainId, asset: null })}
-      onAssetChange={(value) => setChoice({ chainId: network?.chain_id ?? null, asset: value })}
-    />
-  );
+  const choose = (chosen: PaymentOption) => setChoice({ chain_id: chosen.chain_id, asset: chosen.asset });
+  const picker = <PaymentOptions networks={networksView} options={options} option={option} onChange={choose} appearance={appearance} />;
   return (
     <Card role="region" aria-labelledby="product-title" className="flex-1 rounded-xl shadow-frame">
       {/* Whose page this is (with the testnet mark while the network is a testnet) over the
@@ -155,27 +144,21 @@ export function Product({
                   </TabsTrigger>
                 ))}
               </TabsList>
-              <TabsContent value="quote" className="pt-6">
-                {session === null || account === null ? (
-                  <AmountPicker
-                    account={account}
-                    network={network}
-                    asset={asset}
-                    ready={account !== null && networks !== undefined}
-                    picker={picker}
-                    onQuote={onQuote}
-                  />
-                ) : (
-                  <QuoteCheckout
-                    key={session.quote}
-                    session={session}
-                    account={account}
-                    network={networkOf(networks, session.chain_id)}
-                    appearance={appearance}
-                    onCredited={onCredited}
-                    onNewTopUp={onNewTopUp}
-                  />
-                )}
+              {/* Kept mounted, as the address's tab is, so that a quote being paid survives a look at
+                  the other method. */}
+              <TabsContent value="quote" forceMount hidden={method !== "quote"} className="pt-6">
+                <QuotePayment
+                  account={account}
+                  networks={networksView}
+                  options={options}
+                  option={option}
+                  onOptionChange={choose}
+                  session={session}
+                  appearance={appearance}
+                  onQuote={onQuote}
+                  onCredited={onCredited}
+                  onNewTopUp={onNewTopUp}
+                />
               </TabsContent>
               <TabsContent value="address" forceMount hidden={method !== "address"} className="pt-6">
                 {account === null ? (
@@ -229,237 +212,109 @@ function CheckoutSkeleton() {
   );
 }
 
+/** The site's network, with its tokens' terms, as the SDK's payment options carry it. */
+type SiteOption = NetworkPaymentOption<Network>;
+
 /**
- * The network, then the token, as checkouts and wallets ask for them: a network select, and the
- * network's tokens as a list with each one's price terms. Shown even with one option each, so
- * the customer sees what they pay with (a test token, on a testnet) before paying. While the
- * networks load, each field keeps its label over a placeholder of its control's size.
+ * Each token on each network with its price terms, shown even with one option, so the customer
+ * sees what they pay with (a test token, on a testnet) before paying. While the networks load, a
+ * placeholder of the options' size keeps their place.
  */
 function PaymentOptions({
-  networks: networksView,
-  network,
-  asset,
-  onNetworkChange,
-  onAssetChange,
+  networks,
+  options,
+  option,
+  onChange,
+  appearance,
 }: {
   networks: QueryView<Network[]>;
-  network: Network | undefined;
-  asset: Asset | undefined;
-  onNetworkChange: (chainId: number) => void;
-  onAssetChange: (asset: string) => void;
+  options: SiteOption[];
+  option: SiteOption | undefined;
+  onChange: (option: SiteOption) => void;
+  appearance: Appearance;
 }) {
-  const id = useId();
-  const networks = networksView.data;
-  if (networks === undefined && networksView.error !== null) {
-    return <QueryState view={networksView} />;
+  return (
+    <OptionsState networks={networks} options={options} appearance={appearance}>
+      <PaymentOptionPicker
+        options={options}
+        value={option}
+        onChange={onChange}
+        renderDetail={(each) => <TokenTerms asset={each.token} />}
+        appearance={appearance}
+      />
+    </OptionsState>
+  );
+}
+
+/** `children` once the networks offer an option; until then their placeholder, error, or absence. */
+function OptionsState({
+  networks,
+  options,
+  appearance,
+  children,
+}: {
+  networks: QueryView<Network[]>;
+  options: SiteOption[];
+  appearance: Appearance;
+  children: ReactNode;
+}) {
+  if (networks.data === undefined && networks.error !== null) {
+    return <QueryState view={networks} />;
   }
-  if (networks !== undefined && (network === undefined || asset === undefined)) {
+  if (networks.data !== undefined && options.length === 0) {
     return (
       <>
         <p className="text-sm text-muted-foreground">No network accepts payments right now.</p>
-        <QueryState view={networksView} />
+        <QueryState view={networks} />
       </>
     );
   }
   return (
     <>
-      <Field>
-        <FieldLabel htmlFor={`${id}-network`}>Network</FieldLabel>
-        {network === undefined ? (
-          <Skeleton className="h-11 sm:h-10" />
-        ) : (
-          // The network's mark sits in the select's start, where a native option cannot show one.
-          <div className="relative">
-            <NativeSelect
-              id={`${id}-network`}
-              className={cn("pl-9", TOUCH)}
-              value={network.chain_id}
-              onChange={(event) => onNetworkChange(Number(event.target.value))}
-              data-testid="network-select"
-            >
-              {networks?.map((each) => (
-                <NativeSelectOption key={each.chain_id} value={each.chain_id}>
-                  {each.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <ChainIcon
-              chainId={network.chain_id}
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 rounded"
-            />
-          </div>
-        )}
-      </Field>
-      <Field>
-        <FieldLabel id={`${id}-token`} asChild>
-          <span>Token</span>
-        </FieldLabel>
-        {network === undefined || asset === undefined ? (
-          // Two tokens' places, each a card's box around TokenOption's two lines of text, so the list
-          // is as tall as it will be when the networks arrive.
-          <div className="grid gap-2" aria-hidden="true">
-            {[0, 1].map((index) => (
-              <div key={index} className="flex min-h-13 items-center rounded-lg border px-3 py-2 text-sm leading-5">
-                <Skeleton className="h-[2lh] flex-1" />
-              </div>
-            ))}
-          </div>
-        ) : (
-          // Keyed by network: each network lists its own tokens.
-          <RadioGroup
-            key={network.chain_id}
-            value={asset.asset}
-            onValueChange={onAssetChange}
-            aria-labelledby={`${id}-token`}
-            className="auto-rows-fr"
-          >
-            {network.assets.map((each) => (
-              <TokenOption key={each.asset} id={`${id}-token-${network.chain_id}-${each.asset}`} asset={each} testnet={network.testnet} />
-            ))}
-          </RadioGroup>
-        )}
-      </Field>
-      <QueryState view={networksView} />
+      {networks.data === undefined ? <OptionsSkeleton count={DEMO_PAYMENT_OPTIONS} appearance={appearance} /> : children}
+      <QueryState view={networks} />
     </>
   );
 }
 
 /**
- * A token, in two lines that every token shares: its symbol and its price terms, then its name and
- * the demo merchant's bonus; its mark before them and its radio after.
+ * The options' places, `count` of them under their label, drawn with the SDK's own classes so that
+ * each is as tall as the option that replaces it.
  */
-function TokenOption({ id, asset, testnet }: { id: string; asset: Asset; testnet: boolean }) {
+function OptionsSkeleton({ count, appearance }: { count: number; appearance: Appearance }) {
   return (
-    <ChoiceCard htmlFor={id} data-testid="token-option" className="min-h-13 py-2 leading-5">
-      <TokenIcon asset={asset.asset} className="size-5" />
-      {/* The symbol over its full name, the price and any bonus beside them; where the full name
-          would not fit beside the bonus (under 416px), it takes its line whole, the bonus under it. */}
-      <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] gap-x-3">
-        <span className="font-medium">{asset.symbol}</span>
-        {/* A stablecoin is valued at $1.00; any other token at the market rate, which a quote
-            locks (the locked-rate line). */}
-        <span className="text-right tabular-nums" data-testid="token-price">
-          {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
-        </span>
-        <span className="text-muted-foreground max-[26rem]:col-span-2">
-          {testnet ? `Test ${tokenFullName(asset.asset)}` : tokenFullName(asset.asset)}
-        </span>
-        {asset.bonus_bps > 0 ? (
-          <span className="text-right text-success max-[26rem]:col-span-2 max-[26rem]:text-left" data-testid="token-bonus">
-            +{percent(asset.bonus_bps)} bonus
-          </span>
-        ) : (
-          <span />
-        )}
-      </span>
-      <RadioGroupItem value={asset.asset} id={id} aria-label={tokenName(asset.symbol, testnet)} />
-    </ChoiceCard>
+    <div className="pp-root" data-theme={appearance.theme ?? "light"} aria-hidden="true">
+      <fieldset className="pp-options" disabled>
+        <legend className="pp-options__legend">Pay with</legend>
+        {Array.from({ length: count }, (_, index) => (
+          <div key={index} className="pp-option rounded-lg ring-1 ring-border">
+            <Skeleton className="h-[2lh] flex-1" />
+          </div>
+        ))}
+      </fieldset>
+    </div>
   );
 }
 
-function AmountPicker({
-  account,
-  network,
-  asset,
-  ready,
-  picker,
-  onQuote,
-}: {
-  account: Account | null;
-  network: Network | undefined;
-  asset: Asset | undefined;
-  /** Whether the account and its networks have loaded: until then the form is disabled. */
-  ready: boolean;
-  /** The network and token choice. */
-  picker: ReactNode;
-  onQuote: (created: CreatedQuote) => void;
-}) {
-  const [preset, setPreset] = useState<number | "custom">(2000);
-  const [custom, setCustom] = useState("");
-  const [invalid, setInvalid] = useState<string | null>(null);
-  const quote = useCreateQuote();
-  const id = useId();
-  const min = Math.max(account?.min_amount ?? 100, asset?.min_amount ?? 0);
-  const max = account?.max_amount ?? 100_000;
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    const cents = preset === "custom" ? Math.round(Number(custom) * 100) : preset;
-    if (!Number.isSafeInteger(cents) || cents < min || cents > max) {
-      setInvalid(`Enter an amount between ${dollars(min)} and ${dollars(max)}.`);
-      return;
-    }
-    if (network === undefined || asset === undefined) {
-      return;
-    }
-    setInvalid(null);
-    // The checkout's code loads while the quote is created.
-    loadSdk().catch(() => undefined);
-    quote.mutate({ amount: cents, chainId: network.chain_id, asset: asset.asset }, { onSuccess: onQuote });
-  };
-  const options = [
-    ...(account?.presets ?? [500, 2000, 5000]).map((cents) => ({ value: String(cents), label: presetDollars(cents) })),
-    { value: "custom", label: "Custom" },
-  ];
-  const error = invalid ?? (quote.error === null ? null : `Could not create the quote: ${describe(quote.error)}.`);
-  const minutes = Math.round((asset?.quote_ttl_seconds ?? 900) / 60);
-
+/**
+ * A token's terms at the end of its option: its price (a stablecoin is valued at $1.00; any other
+ * token at the market rate, which a quote locks), over the demo merchant's bonus.
+ */
+function TokenTerms({ asset }: { asset: Asset | undefined }) {
+  if (asset === undefined) {
+    return null;
+  }
   return (
-    <form onSubmit={submit} className="flex flex-col gap-5">
-      <Field>
-        <FieldLabel id={`${id}-amount-label`} asChild>
-          <span>Amount</span>
-        </FieldLabel>
-        <SegmentedControl
-          value={String(preset)}
-          onValueChange={(value) => setPreset(value === "custom" ? "custom" : Number(value))}
-          aria-labelledby={`${id}-amount-label`}
-          disabled={!ready}
-        >
-          {options.map((option) => (
-            <SegmentedControlItem key={option.value} value={option.value} className="tabular-nums">
-              {option.label}
-            </SegmentedControlItem>
-          ))}
-        </SegmentedControl>
-      </Field>
-      {preset === "custom" && (
-        <Field>
-          <FieldLabel htmlFor={`${id}-amount`}>
-            Custom<span className="sr-only"> amount (USD)</span>
-          </FieldLabel>
-          <InputGroup className={TOUCH}>
-            <InputGroupAddon>
-              <InputGroupText>$</InputGroupText>
-            </InputGroupAddon>
-            <InputGroupInput
-              id={`${id}-amount`}
-              inputMode="decimal"
-              placeholder="25.00"
-              className="h-full tabular-nums"
-              aria-invalid={invalid !== null}
-              value={custom}
-              onChange={(event) => setCustom(event.target.value)}
-            />
-          </InputGroup>
-        </Field>
+    <span className="flex flex-col items-end">
+      <span className="tabular-nums" data-testid="token-price">
+        {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
+      </span>
+      {asset.bonus_bps > 0 && (
+        <span className="text-success" data-testid="token-bonus">
+          +{percent(asset.bonus_bps)} bonus
+        </span>
       )}
-      {picker}
-      <div className="flex flex-col gap-2 pt-1">
-        <Button type="submit" size="lg" className="w-full" disabled={quote.isPending || !ready || asset === undefined}>
-          {quote.isPending ? "Creating quote…" : "Pay with crypto"}
-        </Button>
-        <p className="text-sm text-pretty text-muted-foreground">
-          Price locked for {minutes} minutes; other amounts at the market rate.
-        </p>
-      </div>
-      {error !== null && (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-    </form>
+    </span>
   );
 }
 
@@ -468,83 +323,194 @@ function AmountPicker({
 const PAYABLE: ReadonlySet<CheckoutStatus> = new Set(["loading", "waiting", "seen", "confirming"]);
 
 /**
- * The quote's checkout: the SDK's `<Checkout>`, whose summary states the quote's amount; once
- * credited, one confirmation of what the balance gained.
+ * An exact-amount payment: the amount, then the SDK's `<PaymentElement>`, which offers the tokens,
+ * has the quote created when the customer pays (this page's own button submits it), and then shows
+ * its checkout; once credited, one confirmation of what the balance gained.
  */
-function QuoteCheckout({
-  session,
+function QuotePayment({
   account,
-  network,
+  networks,
+  options,
+  option,
+  onOptionChange,
+  session,
   appearance,
+  onQuote,
   onCredited,
   onNewTopUp,
 }: {
-  session: CreatedQuote;
-  account: Account;
-  network: Network | undefined;
+  account: Account | null;
+  networks: QueryView<Network[]>;
+  options: SiteOption[];
+  option: SiteOption | undefined;
+  onOptionChange: (option: PaymentOption) => void;
+  session: CreatedQuote | null;
   appearance: Appearance;
+  onQuote: (created: CreatedQuote) => void;
   onCredited: () => void;
   onNewTopUp: () => void;
 }) {
-  const [status, setStatus] = useState<CheckoutStatus>("loading");
-  const queryClient = useQueryClient();
+  const [preset, setPreset] = useState<number | "custom">(2000);
+  const [custom, setCustom] = useState("");
+  const [invalid, setInvalid] = useState<string | null>(null);
+  const [step, setStep] = useState<PaymentElementStep>("options");
+  // Each top-up's element: a new one starts from the options.
+  const [round, setRound] = useState(0);
+  const [status, setStatus] = useState<CheckoutStatus | null>(null);
   // The wallet that held too little for the quote, so the checkout sent nothing.
   const [short, setShort] = useState<PaidWith | null>(null);
-  const token = assetOf(network, session.asset);
-  const bps = token?.bonus_bps ?? 0;
-  const symbol = session.asset.toUpperCase();
+  const quote = useCreateQuote();
+  const queryClient = useQueryClient();
+  const id = useId();
+  const asset = option?.token;
+  const min = Math.max(account?.min_amount ?? 100, asset?.min_amount ?? 0);
+  const max = account?.max_amount ?? 100_000;
+  const cents = preset === "custom" ? Math.round(Number(custom) * 100) : preset;
+  const valid = Number.isSafeInteger(cents) && cents >= min && cents <= max;
+  const ready = account !== null && networks.data !== undefined;
+  const choosing = step === "options" || step === "creating";
+
+  const createQuote = async (chosen: PaymentOption) => {
+    const created = await quote.mutateAsync({ amount: cents, chainId: chosen.chain_id, asset: chosen.asset });
+    onQuote(created);
+    return { clientSecret: created.client_secret, expectedAddress: created.expected_address, apiBase: account?.api_base ?? "" };
+  };
+  const amounts = [
+    ...(account?.presets ?? [500, 2000, 5000]).map((each) => ({ value: String(each), label: presetDollars(each) })),
+    { value: "custom", label: "Custom" },
+  ];
+  const minutes = Math.round((asset?.quote_ttl_seconds ?? 900) / 60);
+  const paying = session === null ? undefined : options.find((each) => samePaymentOption(each, session));
+  const bps = paying?.token.bonus_bps ?? 0;
+
   return (
-    <div className="flex flex-col gap-3">
-      {/* While the quote is payable: the demo merchant's bonus, and from lg the way out beside it
-          (on a phone the bonus has its line, and the way out is at the checkout's foot). */}
-      {PAYABLE.has(status) && (
-        <div className="flex items-center gap-3">
-          {bps > 0 && (
-            <p className="flex min-w-0 items-start gap-2 text-sm text-pretty text-muted-foreground">
-              <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              <span>
-                <span className="text-success">+{percent(bps)} {symbol} bonus</span>, the demo merchant's promotion
-              </span>
-            </p>
+    // The form's fields apart; the checkout close to the bonus over it, as the receipt under it.
+    <div className={cn("flex flex-col", choosing ? "gap-5" : "gap-3")}>
+      {choosing && (
+        <>
+          <Field>
+            <FieldLabel id={`${id}-amount-label`} asChild>
+              <span>Amount</span>
+            </FieldLabel>
+            <SegmentedControl
+              value={String(preset)}
+              onValueChange={(value) => setPreset(value === "custom" ? "custom" : Number(value))}
+              aria-labelledby={`${id}-amount-label`}
+              disabled={!ready || step === "creating"}
+            >
+              {amounts.map((each) => (
+                <SegmentedControlItem key={each.value} value={each.value} className="tabular-nums">
+                  {each.label}
+                </SegmentedControlItem>
+              ))}
+            </SegmentedControl>
+          </Field>
+          {preset === "custom" && (
+            <Field>
+              <FieldLabel htmlFor={`${id}-amount`}>
+                Custom<span className="sr-only"> amount (USD)</span>
+              </FieldLabel>
+              <InputGroup className={TOUCH}>
+                <InputGroupAddon>
+                  <InputGroupText>$</InputGroupText>
+                </InputGroupAddon>
+                <InputGroupInput
+                  id={`${id}-amount`}
+                  inputMode="decimal"
+                  placeholder="25.00"
+                  className="h-full tabular-nums"
+                  aria-invalid={invalid !== null}
+                  value={custom}
+                  onChange={(event) => setCustom(event.target.value)}
+                />
+              </InputGroup>
+            </Field>
           )}
-          <Button type="button" variant="ghost" size="sm" className="ml-auto hidden shrink-0 lg:inline-flex" onClick={onNewTopUp}>
-            Start a new top-up
+        </>
+      )}
+      {/* While the quote is payable: the demo merchant's bonus on its token. */}
+      {step === "checkout" && session !== null && bps > 0 && PAYABLE.has(status ?? "loading") && (
+        <p className="flex min-w-0 items-start gap-2 text-sm text-pretty text-muted-foreground">
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <span>
+            <span className="text-success">+{percent(bps)} {session.asset.toUpperCase()} bonus</span>, the demo merchant's promotion
+          </span>
+        </p>
+      )}
+      {/* Once credited, the confirmation takes the checkout's place, as its next action does. */}
+      <div hidden={status === "credited"}>
+        <OptionsState networks={networks} options={options} appearance={appearance}>
+          <Suspense fallback={<OptionsSkeleton count={options.length} appearance={appearance} />}>
+            <PaymentElement
+              key={round}
+              id={`${id}-payment`}
+              hideSubmit
+              options={options}
+              value={option}
+              onOptionChange={onOptionChange}
+              amount={valid ? cents : undefined}
+              createQuote={createQuote}
+              disabled={!ready}
+              renderDetail={(each) => <TokenTerms asset={assetOf(networkOf(networks.data, each.chain_id), each.asset)} />}
+              appearance={appearance}
+              onChange={(state) => {
+                setStep(state.step);
+                setStatus(state.checkout?.status ?? null);
+                if (state.step === "options") {
+                  setShort(null);
+                  onNewTopUp();
+                  // Back from a quote, a new top-up starts from the default amount.
+                  if (step === "checkout") {
+                    setPreset(2000);
+                    setCustom("");
+                    setInvalid(null);
+                  }
+                }
+                if (state.checkout !== null) {
+                  void queryClient.invalidateQueries({ queryKey: keys.timelines });
+                }
+              }}
+              onWalletError={(error, wallet) => setShort(error.code === "insufficient_balance" ? wallet : null)}
+              onSuccess={onCredited}
+            />
+          </Suspense>
+        </OptionsState>
+      </div>
+      {choosing && (
+        <div className="flex flex-col gap-2">
+          <Button
+            type="submit"
+            form={`${id}-payment`}
+            size="lg"
+            className="w-full"
+            disabled={step === "creating" || !ready || option === undefined}
+            onClick={(event) => {
+              // An amount out of range stops the submit here, before a quote is asked for.
+              setInvalid(valid ? null : `Enter an amount between ${dollars(min)} and ${dollars(max)}.`);
+              if (!valid) event.preventDefault();
+            }}
+          >
+            {step === "creating" ? "Creating quote…" : "Pay with crypto"}
           </Button>
+          <p className="text-sm text-pretty text-muted-foreground">
+            Price locked for {minutes} minutes; other amounts at the market rate.
+          </p>
         </div>
       )}
-      {status === "credited" ? (
-        <Credited session={session} account={account} bps={bps} />
-      ) : (
-        <Suspense fallback={<CheckoutSkeleton />}>
-          <Checkout
-            clientSecret={session.client_secret}
-            expectedAddress={session.expected_address}
-            apiBase={account.api_base}
-            appearance={appearance}
-            onChange={(state) => {
-              setStatus(state.status);
-              void queryClient.invalidateQueries({ queryKey: keys.timelines });
-            }}
-            onWalletError={(error, wallet) => setShort(error.code === "insufficient_balance" ? wallet : null)}
-            onSuccess={onCredited}
-          />
-        </Suspense>
+      {choosing && invalid !== null && (
+        <Alert variant="destructive">
+          <CircleAlert aria-hidden="true" />
+          <AlertDescription>{invalid}</AlertDescription>
+        </Alert>
       )}
-      {short !== null && status === "waiting" && network !== undefined && token !== undefined && (
-        <FundWallet network={network} token={token} needed={BigInt(session.amount_atomic)} wallet={short} />
+      {short !== null && status === "waiting" && session !== null && paying !== undefined && (
+        <FundWallet network={paying.network} token={paying.token} needed={BigInt(session.amount_atomic)} wallet={short} />
       )}
-      {/* The next action: once credited, the card's own button; while paying, a quiet way out at
-          the checkout's foot. */}
-      {status === "credited" ? (
-        <Button type="button" variant="secondary" size="lg" className="w-full" onClick={onNewTopUp}>
+      {status === "credited" && session !== null && account !== null && <Credited session={session} account={account} bps={bps} />}
+      {status === "credited" && (
+        <Button type="button" variant="secondary" size="lg" className="w-full" onClick={() => setRound((each) => each + 1)}>
           Start a new top-up
         </Button>
-      ) : (
-        <div className={cn("justify-end border-t pt-2", PAYABLE.has(status) ? "flex lg:hidden" : "flex")}>
-          <Button type="button" variant="ghost" size="sm" className={TOUCH} onClick={onNewTopUp}>
-            Start a new top-up
-          </Button>
-        </div>
       )}
     </div>
   );

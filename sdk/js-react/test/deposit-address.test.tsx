@@ -84,17 +84,20 @@ describe("DepositAddress", () => {
   it("supports native radio keyboard selection and has no accessibility violations", async () => {
     const user = userEvent.setup();
     const { container } = render(<DepositAddress depositAddress={details()} />);
-    const first = screen.getByRole("radio", { name: "Sepolia" });
+    expect(screen.getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"))).toEqual([
+      "PHA · Sepolia",
+      "USDC · Sepolia",
+      "USDC · Base Sepolia",
+    ]);
+    const first = screen.getByRole("radio", { name: "PHA · Sepolia" });
     first.focus();
-    await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("radio", { name: "Base Sepolia" })).toBe(document.activeElement);
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "USDC · Sepolia" })).toBe(document.activeElement);
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "USDC · Base Sepolia" })).toBe(document.activeElement);
     expect(screen.getByRole("img").getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
-    await user.keyboard("{ArrowRight}");
+    await user.keyboard("{ArrowDown}");
     expect(first).toBe(document.activeElement);
-    await user.tab();
-    expect(screen.getByRole("radio", { name: "PHA" })).toBe(document.activeElement);
-    await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("radio", { name: "USDC" })).toBe(document.activeElement);
     const result = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
     expect(result.violations).toEqual([]);
     expect(container.querySelector("style, [style]")).toBeNull();
@@ -115,15 +118,20 @@ describe("DepositAddress", () => {
     expect(screen.getByText(/credited at the market rate after confirmation\./)).toBeDefined();
     expect(screen.queryByText(/seconds|minutes/)).toBeNull();
 
-    fireEvent.click(screen.getByRole("radio", { name: "USDC" }));
+    fireEvent.click(screen.getByRole("radio", { name: "USDC · Sepolia" }));
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for USDC on Sepolia");
     expect(screen.getByText(shownValue(USDC))).toBeDefined();
 
-    fireEvent.click(screen.getByRole("radio", { name: "Base Sepolia" }));
+    fireEvent.click(screen.getByRole("radio", { name: "USDC · Base Sepolia" }));
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
     expect(screen.getByText("Base Sepolia (chain ID 84532)")).toBeDefined();
-    // One token on this network: no token tabs.
-    expect(screen.queryByRole("group", { name: "Token" })).toBeNull();
+  });
+
+  it("shows what the payer sends with even when there is one option", () => {
+    render(<DepositAddress depositAddress={details({ networks: [network(84532, [asset(84532, "usdc", USDC)])] })} />);
+    const group = screen.getByRole("group", { name: "Pay with" });
+    expect(group.querySelectorAll("input[type=radio]")).toHaveLength(1);
+    expect(screen.getByRole("radio", { name: "USDC · Base Sepolia" })).toHaveProperty("checked", true);
   });
 
   it("shows each network's own address when they differ", () => {
@@ -477,12 +485,12 @@ describe("DepositAddress payments", () => {
       : Promise.reject(new TypeError("offline")));
     const { unmount } = render(<DepositAddress depositAddress={details()} clientSecret={SECRET} apiBase="https://pay.example" pollInterval={1000} />);
     await act(() => vi.advanceTimersByTimeAsync(0));
-    fireEvent.click(screen.getByRole("radio", { name: "Base Sepolia" }));
+    fireEvent.click(screen.getByRole("radio", { name: "USDC · Base Sepolia" }));
     const payments = screen.getByRole("list", { name: "Payments" }).textContent;
     online = false;
     await act(() => vi.advanceTimersByTimeAsync(180000));
     expect(screen.getByRole("status").textContent).toBe("Reconnecting…");
-    expect(screen.getByRole("radio", { name: "Base Sepolia" })).toHaveProperty("checked", true);
+    expect(screen.getByRole("radio", { name: "USDC · Base Sepolia" })).toHaveProperty("checked", true);
     expect(screen.getByRole("list", { name: "Payments" }).textContent).toBe(payments);
     online = true;
     await act(() => vi.advanceTimersByTimeAsync(30000));
@@ -582,9 +590,9 @@ describe("DepositAddress payments", () => {
       network(11155111, [pha, usdc]), network(84532, [base]),
     ] })} />);
     expect(screen.getByText(/Send at least \$5\.00 and 0\.100000000000000001 PHA, up to 10,100 PHA per transfer on Sepolia\./)).toBeDefined();
-    fireEvent.click(screen.getByRole("radio", { name: "USDC" }));
+    fireEvent.click(screen.getByRole("radio", { name: "USDC · Sepolia" }));
     expect(screen.getByText(/Send at least \$5\.00 and 10 USDC, up to 10,100 USDC per transfer on Sepolia\./)).toBeDefined();
-    fireEvent.click(screen.getByRole("radio", { name: "Base Sepolia" }));
+    fireEvent.click(screen.getByRole("radio", { name: "USDC · Base Sepolia" }));
     expect(screen.getByText(/Send at least \$5\.00 and up to 50 USDC per transfer on Base Sepolia\./)).toBeDefined();
     expect(screen.queryByText(/Any amount/)).toBeNull();
   });

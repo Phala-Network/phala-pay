@@ -57,6 +57,9 @@ connects a wallet with wagmi, RainbowKit, ConnectKit, or AppKit, pass it in inst
 3. Credit the account when your webhook endpoint receives `deposit.credited`. `onSuccess` is for the
    UI only: the browser is not a trusted source of payment.
 
+To let the payer choose the token and network first and create the quote only when they submit,
+render [`<PaymentElement>`](#the-payment-element) instead.
+
 The component reads `GET /v1/quotes/{id}?client_secret=…` about every three seconds. That endpoint is
 public (`Access-Control-Allow-Origin: *`) and shows only what the payer needs: the amount, the
 token, the chain, the deposit address, the EIP-681 payment request, the expiry, and the payment
@@ -154,12 +157,72 @@ export function TopUp(props: { clientSecret: string; expectedAddress: string }) 
 While no wallet is connected (`walletClient` is `undefined`), the tab lists the browser's wallets
 as usual. The QR code and manual tabs do not change.
 
+### The payment element
+
+`<PaymentElement>` is the whole payment in one component, like Stripe's Payment Element with a
+deferred intent: it offers your tokens and networks, creates nothing until the payer submits, then
+calls your `createQuote` with the chosen option and shows that quote's `<Checkout>`. Your backend
+creates the quote with its API key, for the chosen `chain_id` and `asset`, and returns its checkout
+params (`pay.checkoutParams(quote)` in `@phala/pay-server`).
+
+```tsx
+import { paymentOptions } from "@phala/pay";
+import { PaymentElement } from "@phala/pay-react";
+
+<PaymentElement
+  options={paymentOptions(config.assets)} // GET /v1/config's assets, from your backend
+  amount={2500} // minor units of `currency` (default "usd"): "Pay $25.00 in USDC"
+  createQuote={(option) => api.createTopUp({ amount: 2500, chain_id: option.chain_id, asset: option.asset })}
+  createDepositAddress={() => api.depositAddress()} // optional: "Use a deposit address"
+  apiBase="https://pay.example.com"
+  renderDetail={(option) => (option.asset === "usdc" ? "$1.00" : "Market rate")}
+  onSuccess={() => router.refresh()}
+/>;
+```
+
+- `createQuote(option)` is called once per submit, with the very object of `options` the payer
+  chose; a submit while one is pending is ignored. It resolves with `{ clientSecret,
+  expectedAddress, apiBase? }`; `apiBase` falls back to the prop. A rejection shows "Could not
+  start the payment. Try again." and calls `onError(error)`; show your own message from there.
+- After the quote: the checkout, and a way back to the options ("Choose another token or
+  network") until a payment is on its way, then "Start over" if it does not complete or "Start a
+  new payment" once credited.
+- `createDepositAddress(option)` adds "Use a deposit address", for payers sending from an exchange
+  or any wallet: it resolves with the deposit address's `address` and `networks` and, to follow its
+  payments, `clientSecret`; the element shows `<DepositAddress>` at the chosen option.
+- Your own button: pass `hideSubmit` and an `id`, and give your button `type="submit" form={id}`
+  (or call `requestSubmit()` on the form with that id). The element is a `<form>`: do not nest it
+  in another one.
+- `value` and `onOptionChange` control the choice (`defaultValue` sets the first one otherwise);
+  `onChange({ step, checkout })` reports each step (`options`, `creating`, `checkout`,
+  `deposit_address`) and, while paying, each checkout status change; `onSuccess`, `onExpire`,
+  `onWalletError`, `walletClient`, `pollInterval`, and `appearance` are `<Checkout>`'s.
+
+### Payment options
+
+`<PaymentOptionPicker>` is the element's choice on its own: one native radio per token on each
+network, with both icons, the network's name, a "Testnet" badge on a test network, and
+`renderDetail`'s text at its end, shown even with one option. It is controlled (`value`,
+`onChange`), and `onChange` receives the very object of `options` the payer chose.
+
+```tsx
+<PaymentOptionPicker options={options} value={option} onChange={setOption} label="Pay with" />
+```
+
+`paymentOptions(source)` builds the options, in order and each once: from a flat list such as
+`GET /v1/config`'s `assets` (the same objects), or from networks with their tokens such as a
+deposit address's `networks` (each option then carries its `network` and `token`).
+`samePaymentOption(a, b)` compares by chain and case-insensitive asset code;
+`paymentOptionLabel(option)` is `USDC · Ethereum`; `assetName("usdc")` is `USD Coin`,
+`assetSymbol` the upper-case code, `networkName(chainId)` the chain's name, `isTestnet(chainId)`
+whether it is a known test network, and `transactionUrl` / `addressUrl` its block explorer links.
+
 ### A customer's deposit address
 
 For top-ups within your deposit limits, your backend creates the customer's persistent deposit address with
 `POST /v1/deposit_addresses` (its API key) and passes its `address` and `networks` to the page:
-one address for all supported tokens and networks. `<DepositAddress>` lets the payer pick a
-network and a token and shows a QR code of that token's transfer request, the token contract, and
+one address for all supported tokens and networks. `<DepositAddress>` lets the payer pick a token
+on a network (one option each, shown even when there is only one) and shows a QR code of that token's transfer request, the token contract, and
 the address to copy, with the selected token’s per-transfer USD credit minimum (`min_amount`,
 in cents) and token maximum (`max_deposit_atomic`). A positive `min_deposit_atomic` adds the
 independent token minimum; a zero atomic minimum is omitted. Atomic-unit strings are formatted
@@ -227,19 +290,19 @@ the theme (or map the colors) that suits its background.
 | `--pp-color-text`               | `#18181b`         | `#fafafa`    | Text                                                |
 | `--pp-color-text-muted`         | `#52525b`         | `#a1a1aa`    | Labels, hints, in-progress status icon              |
 | `--pp-color-border`             | `#e4e4e7`         | `#27272a`    | Dividers and the QR code's frame                    |
-| `--pp-color-input`              | `#8a8a93`         | `#71717a`    | Edges of the network and token choices              |
+| `--pp-color-input`              | `#8a8a93`         | `#71717a`    | Edges of the payment options                        |
 | `--pp-color-primary`            | `#171717`         | `#fafafa`    | Pay button                                          |
 | `--pp-color-primary-foreground` | `#fafafa`         | `#18181b`    | Text on the primary color                           |
-| `--pp-color-selected`           | primary           | primary      | Selected tab's underline, checked choice's border   |
+| `--pp-color-selected`           | primary           | primary      | Selected tab's underline, checked option's border   |
 | `--pp-color-focus`              | `#2563eb`         | `#60a5fa`    | Keyboard focus ring                                 |
 | `--pp-color-success`            | `#15803d`         | `#4ade80`    | Credited icon                                       |
-| `--pp-color-warning`            | `#b45309`         | `#fbbf24`    | "Test mode"                                         |
+| `--pp-color-warning`            | `#b45309`         | `#fbbf24`    | "Test mode", an option's "Testnet"                  |
 | `--pp-color-danger`             | `#dc2626`         | `#f87171`    | Failure icon, wallet errors                         |
 | `--pp-font-family`              | inherited         | inherited    | Font                                                |
 | `--pp-font-family-mono`         | `ui-monospace, …` | same         | Addresses, amounts to copy, hashes                  |
 | `--pp-font-size`                | `14px`            | `14px`       | Root text size; other text sizes are relative to it |
 | `--pp-radius`                   | `8px`             | `8px`        | Corner radius of controls and the status row        |
-| `--pp-control-height`           | `44px`            | `44px`       | Minimum height of the pay button, tabs, and choices |
+| `--pp-control-height`           | `44px`            | `44px`       | Minimum height of buttons, tabs, and options        |
 
 Import the static stylesheet once in your application entry point:
 
@@ -340,7 +403,7 @@ holding less of the token than that sends nothing: `WalletError` with `code`
 
 ## React components
 
-Install `@phala/pay-react` for `Checkout`, `DepositAddress`, hooks, icons, and styles:
+Install `@phala/pay-react` for `PaymentElement`, `Checkout`, `DepositAddress`, `PaymentOptionPicker`, hooks, icons, and styles:
 
 ```sh
 npm install @phala/pay-react react react-dom @phala/pay viem

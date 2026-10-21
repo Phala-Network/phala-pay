@@ -1,6 +1,7 @@
 // The hero's integration, as sdk/js-server/README.md and docs/integration.md#quickstart write it: the
-// server creates a quote (amount in US cents) and returns only its checkout params to the signed-in
-// browser, which spreads them into <Checkout>; the account is credited from the signed webhook. The
+// browser's <PaymentElement> offers the tokens, and when the payer submits, the server creates a
+// quote (amount in US cents) for the chosen one and returns only its checkout params, which the
+// element pays; the account is credited from the signed webhook. The
 // code is src/snippets/, compiled by the typecheck against the SDK packages and shown as written,
 // highlighted at build time. Only Vite loads this module (`?highlight`); the copy that Node scripts
 // read stays in site.ts.

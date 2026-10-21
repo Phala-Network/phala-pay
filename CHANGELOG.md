@@ -14,6 +14,39 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Added
+
+- `@phala/pay-react`'s `<PaymentElement>`: a complete payment that is created only when the payer
+  submits, like Stripe's Payment Element with a deferred intent. It offers your tokens and
+  networks; on submit it calls your `createQuote(option)`, which creates the quote on your backend
+  and resolves with `pay.checkoutParams(quote)`, then shows that quote's checkout, with a way back
+  to the options before a payment is sent or once the quote ended. A failed `createQuote` shows
+  "Could not start the payment. Try again." (and calls `onError`); a submit while one is pending
+  is ignored. With `createDepositAddress`, it also offers the customer's deposit address.
+  `hideSubmit` with `id` lets your own `<button type="submit" form={id}>` submit it. `onChange`
+  reports its step and the checkout's status; `onSuccess`, `onExpire`, `onWalletError`,
+  `walletClient`, and `appearance` work as `<Checkout>`'s.
+- `@phala/pay-react`'s `<PaymentOptionPicker>`: the token and network to pay with as one choice, a
+  fieldset of native radios with each option's token and network icons and a "Testnet" badge,
+  shown however few options there are. It calls `onChange` with the very object of `options` the
+  payer chose; `renderDetail` adds text such as a price at an option's end.
+- `@phala/pay`'s `paymentOptions(source)` flattens `GET /v1/config`'s `assets`, or a deposit
+  address's `networks` with their tokens, into options in order and without duplicates;
+  `samePaymentOption`, `paymentOptionLabel` (`USDC · Ethereum`), `assetName` (`USD Coin`),
+  `assetSymbol`, `isTestnet`, and `addressUrl` (an explorer link, as `transactionUrl`).
+
+#### Changed
+
+- `<DepositAddress>` shows its tokens and networks as one `<PaymentOptionPicker>` ("Pay with", one
+  radio per token on each network, named for example "USDC · Base"), always, even with one
+  option, instead of separate "Network" and "Token" groups shown only with more than one choice.
+  The `.pp-choices*` classes are replaced by `.pp-options`, `.pp-option*`; a stylesheet that
+  targeted them should use the `--pp-*` properties instead.
+- `<Checkout>` and `<DepositAddress>` accept `undefined` for their optional props, so a host with
+  `exactOptionalPropertyTypes` can pass its own optional values through.
+
 ## [0.10.10] - 2026-10-18
 
 ### Changed (operators)

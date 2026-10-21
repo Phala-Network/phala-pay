@@ -23,8 +23,22 @@ export function networkName(chainId: number): string {
   return knownChain(chainId)?.name ?? `Chain ${chainId}`;
 }
 
+/** Whether the chain is a known test network, such as Sepolia; false for an unknown chain. */
+export function isTestnet(chainId: number): boolean {
+  return knownChain(chainId)?.testnet === true;
+}
+
 /** The block explorer link for a transaction, when the chain is known. */
 export function transactionUrl(chainId: number, hash: string): string | undefined {
+  return explorerUrl(chainId, "tx", hash);
+}
+
+/** The block explorer link for an address or token contract, when the chain is known. */
+export function addressUrl(chainId: number, address: string): string | undefined {
+  return explorerUrl(chainId, "address", address);
+}
+
+function explorerUrl(chainId: number, kind: "tx" | "address", value: string): string | undefined {
   const explorer = knownChain(chainId)?.blockExplorers?.default.url;
-  return explorer === undefined ? undefined : `${explorer}/tx/${hash}`;
+  return explorer === undefined ? undefined : `${explorer}/${kind}/${value}`;
 }

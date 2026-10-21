@@ -1,0 +1,96 @@
+import axe from "axe-core";
+import { StrictMode } from "react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { PaymentElement, type PaymentElementState } from "../src/index.js";
+import { ADDRESS, API_BASE, CLIENT_SECRET, TOKEN, quote } from "./fixtures.js";
+
+const OPTIONS = [
+  { chain_id: 11155111, asset: "pha", price: "Market rate" },
+  { chain_id: 84532, asset: "usdc", price: "$1.00" },
+];
+const PARAMS = { clientSecret: CLIENT_SECRET, expectedAddress: ADDRESS, apiBase: API_BASE };
+
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const served = quote({ expires_at: Math.floor(Date.now() / 1000) + 900 });
+  vi.stubGlobal("fetch", () => Promise.resolve(Response.json(served)));
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+it("creates the quote once, on submit, with the chosen option, then shows its checkout", async () => {
+  const createQuote = vi.fn(() => Promise.resolve(PARAMS));
+  const onChange = vi.fn<(state: PaymentElementState) => void>();
+  const { container } = render(
+    <StrictMode>
+      <PaymentElement options={OPTIONS} amount={1000} createQuote={createQuote} onChange={onChange} renderDetail={(option) => option.price} />
+    </StrictMode>,
+  );
+  expect(createQuote).not.toHaveBeenCalled();
+  expect((await axe.run(container, { rules: { "color-contrast": { enabled: false } } })).violations).toEqual([]);
+  fireEvent.click(screen.getByRole("radio", { name: "USDC · Base Sepolia" }));
+  const pay = screen.getByRole("button", { name: "Pay $10.00 in USDC" });
+  fireEvent.click(pay);
+  fireEvent.click(pay);
+  fireEvent.submit(pay.closest("form") ?? pay);
+  expect(createQuote).toHaveBeenCalledTimes(1);
+  expect(createQuote.mock.calls[0]).toEqual([OPTIONS[1]]);
+  expect(screen.getByRole("button", { name: "Starting your payment…" })).toHaveProperty("disabled", true);
+
+  expect(await screen.findByText("Waiting for your payment")).toBeDefined();
+  await waitFor(() => expect(onChange.mock.lastCall?.[0].checkout?.status).toBe("waiting"));
+  fireEvent.click(screen.getByRole("button", { name: "Choose another token or network" }));
+  expect(screen.getByRole("radio", { name: "USDC · Base Sepolia" })).toHaveProperty("checked", true);
+  expect(onChange).toHaveBeenLastCalledWith({ step: "options", checkout: null });
+});
+
+it("shows a failed quote and lets the payer try again", async () => {
+  const error = new Error("backend down");
+  const createQuote = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(PARAMS);
+  const onError = vi.fn();
+  render(<PaymentElement options={OPTIONS} createQuote={createQuote} onError={onError} />);
+  fireEvent.click(screen.getByRole("button", { name: "Pay in PHA" }));
+  expect((await screen.findByRole("alert")).textContent).toBe("Could not start the payment. Try again.");
+  expect(onError).toHaveBeenCalledWith(error);
+  fireEvent.click(screen.getByRole("button", { name: "Pay in PHA" }));
+  expect(await screen.findByText("Waiting for your payment")).toBeDefined();
+  expect(createQuote).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("shows the customer's deposit address instead, at the chosen option", async () => {
+  const createQuote = vi.fn(() => Promise.resolve(PARAMS));
+  const networks = OPTIONS.map(({ chain_id, asset }) => ({
+    chain_id,
+    address: ADDRESS,
+    assets: [{ asset, contract: TOKEN, decimals: 18, payment_uri: `ethereum:${TOKEN}@${chain_id}/transfer?address=${ADDRESS}` }],
+  }));
+  const createDepositAddress = vi.fn(() => Promise.resolve({ address: ADDRESS, networks }));
+  render(<PaymentElement options={OPTIONS} defaultValue={OPTIONS[1]} createQuote={createQuote} createDepositAddress={createDepositAddress} />);
+  fireEvent.click(screen.getByRole("button", { name: "Use a deposit address" }));
+  expect(createDepositAddress).toHaveBeenCalledWith(OPTIONS[1]);
+  expect((await screen.findByRole("img")).getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
+  expect(createQuote).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Back to payment options" }));
+  expect(screen.getByRole("button", { name: "Pay in USDC" })).toBeDefined();
+});
+
+it("is submitted by the host's own button when its submit is hidden", async () => {
+  const createQuote = vi.fn(() => Promise.resolve(PARAMS));
+  render(
+    <>
+      <PaymentElement id="pay" hideSubmit options={OPTIONS} createQuote={createQuote} />
+      <button type="submit" form="pay">
+        Top up
+      </button>
+    </>,
+  );
+  expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Top up"]);
+  fireEvent.click(screen.getByRole("button", { name: "Top up" }));
+  expect(createQuote).toHaveBeenCalledWith(OPTIONS[0]);
+  expect(await screen.findByText("Waiting for your payment")).toBeDefined();
+});

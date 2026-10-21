@@ -6,7 +6,25 @@ React components for Phala Pay. The framework-free checkout core is [`@phala/pay
 npm install @phala/pay-react @phala/pay react react-dom viem
 ```
 
-Import `Checkout`, `DepositAddress`, `NetworkIcon`, `AssetIcon`, and hooks from `@phala/pay-react`, and include `@phala/pay-react/styles.css` once. React 18 and 19 are supported; React is a peer dependency.
+Import `PaymentElement`, `Checkout`, `DepositAddress`, `PaymentOptionPicker`, `NetworkIcon`, `AssetIcon`, and hooks from `@phala/pay-react`, and include `@phala/pay-react/styles.css` once. React 18 and 19 are supported; React is a peer dependency.
+
+`PaymentElement` is the whole payment, like Stripe's Payment Element with a deferred intent: the
+payer picks a token and network, and only on submit does your `createQuote(option)` create the
+quote on your backend (resolving with `pay.checkoutParams(quote)`); the element then shows its
+checkout, with a way back to the options. `PaymentOptionPicker` is that choice on its own, one
+native radio per token on each network.
+
+```tsx
+<PaymentElement
+  options={paymentOptions(config.assets)}
+  amount={2500}
+  createQuote={(option) => api.createTopUp({ chain_id: option.chain_id, asset: option.asset })}
+  onSuccess={() => router.refresh()}
+/>
+```
+
+See the [payment element guide](../js/README.md#the-payment-element) for its other props, your own
+submit button, and the deposit-address path.
 
 `Checkout` and `DepositAddress` retain their last view and payer selection during temporary
 network/5xx outages, show a neutral reconnecting message, and resume polling without creating a
