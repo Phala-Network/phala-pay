@@ -212,10 +212,17 @@ import { PaymentElement } from "@phala/pay-react";
 
 ### Payment options
 
-`<PaymentOptionPicker>` is the element's choice on its own: one native radio per token on each
-network, with both icons, the network's name, a "Testnet" badge on a test network, and
-`renderDetail`'s text at its end, shown even with one option. It is controlled (`value`,
-`onChange`), and `onChange` receives the very object of `options` the payer chose.
+`<PaymentOptionPicker>` is the element's choice on its own, as exchanges and wallets ask for it:
+a "Token" field, then a "Network" field listing only the networks that take the chosen token,
+side by side where the container is 480px or wider and stacked below that. Each is a select-only
+combobox (WAI-ARIA Authoring Practices): a quiet field showing the chosen item's icon and name,
+whose listbox opens under it, by pointer or keyboard (arrows, Home, End, Page Up and Down,
+typing the name, Enter or Space to choose, Escape to close). Changing the token keeps the network
+when it takes the new token, else takes the first that does. A test network shows a muted
+"Testnet" after its name; `renderDetail(option)` is one muted line under the fields, about the
+chosen option. Both fields show even with one option. It is controlled (`value`, `onChange`), and
+`onChange` receives the very object of `options` the payer chose; `label` (default "Pay with")
+names the group for assistive technology.
 
 ```tsx
 <PaymentOptionPicker options={options} value={option} onChange={setOption} label="Pay with" />
@@ -234,7 +241,7 @@ whether it is a known test network, and `transactionUrl` / `addressUrl` its bloc
 For top-ups within your deposit limits, your backend creates the customer's persistent deposit address with
 `POST /v1/deposit_addresses` (its API key) and passes its `address` and `networks` to the page:
 one address for all supported tokens and networks. `<DepositAddress>` lets the payer pick a token
-on a network (one option each, shown even when there is only one) and shows a QR code of that token's transfer request, the token contract, and
+and its network (the payment options' two fields, shown even when there is only one of each) and shows a QR code of that token's transfer request, the token contract, and
 the address to copy, with the selected token’s per-transfer USD credit minimum (`min_amount`,
 in cents) and token maximum (`max_deposit_atomic`). A positive `min_deposit_atomic` adds the
 independent token minimum; a zero atomic minimum is omitted. Atomic-unit strings are formatted
@@ -298,23 +305,23 @@ the theme (or map the colors) that suits its background.
 
 | CSS custom property             | Light default     | Dark default | Use                                                 |
 | ------------------------------- | ----------------- | ------------ | --------------------------------------------------- |
-| `--pp-color-surface`            | `#f4f4f5`         | `#18181b`    | Status row, loading placeholder, copy button hover  |
+| `--pp-color-surface`            | `#f4f4f5`         | `#18181b`    | Status row, placeholders, listboxes, copy hover     |
 | `--pp-color-text`               | `#18181b`         | `#fafafa`    | Text                                                |
 | `--pp-color-text-muted`         | `#52525b`         | `#a1a1aa`    | Labels, hints, in-progress status icon              |
 | `--pp-color-border`             | `#e4e4e7`         | `#27272a`    | Dividers and the QR code's frame                    |
-| `--pp-color-input`              | `#8a8a93`         | `#71717a`    | Edges of the payment options                        |
+| `--pp-color-input`              | `#8a8a93`         | `#71717a`    | Edges of the token and network fields               |
 | `--pp-color-primary`            | `#171717`         | `#fafafa`    | Pay button                                          |
 | `--pp-color-primary-foreground` | `#fafafa`         | `#18181b`    | Text on the primary color                           |
-| `--pp-color-selected`           | primary           | primary      | Selected tab's underline, checked option's border   |
+| `--pp-color-selected`           | primary           | primary      | Selected tab's underline                            |
 | `--pp-color-focus`              | `#2563eb`         | `#60a5fa`    | Keyboard focus ring                                 |
 | `--pp-color-success`            | `#15803d`         | `#4ade80`    | Credited icon                                       |
-| `--pp-color-warning`            | `#b45309`         | `#fbbf24`    | "Test mode", an option's "Testnet"                  |
+| `--pp-color-warning`            | `#b45309`         | `#fbbf24`    | "Test mode"                                         |
 | `--pp-color-danger`             | `#dc2626`         | `#f87171`    | Failure icon, wallet errors                         |
 | `--pp-font-family`              | inherited         | inherited    | Font                                                |
 | `--pp-font-family-mono`         | `ui-monospace, …` | same         | Addresses, amounts to copy, hashes                  |
 | `--pp-font-size`                | `14px`            | `14px`       | Root text size; other text sizes are relative to it |
 | `--pp-radius`                   | `8px`             | `8px`        | Corner radius of controls and the status row        |
-| `--pp-control-height`           | `44px`            | `44px`       | Minimum height of buttons, tabs, and options        |
+| `--pp-control-height`           | `44px`            | `44px`       | Minimum height of buttons, tabs, and fields         |
 
 Import the static stylesheet once in your application entry point:
 
@@ -362,8 +369,8 @@ group by group with what their wallet shows; selecting and copying it gives the 
 spaces. The QR code keeps the standard quiet zone of four modules inside 8px of white, so it scans
 on a dark page too. The status row's text stays the body color on a neutral surface; its icon
 carries the tone. Transitions and the loading placeholder's pulse stop under
-`prefers-reduced-motion: reduce`, and the selected choice and tab keep a system color in
-forced-colors mode.
+`prefers-reduced-motion: reduce`, and the selected tab and a listbox's active option keep a system
+color in forced-colors mode.
 
 ### Content Security Policy
 
