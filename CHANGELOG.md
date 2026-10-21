@@ -40,7 +40,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   fields side by side (stacked under a 480px-wide container), as exchanges and wallets ask for
   them. Each is a WAI-ARIA combobox with a listbox of icons and names, by pointer or keyboard; the
   network's listbox offers only the networks that take the chosen token, and changing the token
-  keeps the network where it can. A test network shows a muted "Testnet" after its name. Both
+  keeps the network where it can. The open listbox is in the top layer (the Popover API, where
+  the browser has it), so `overflow: hidden` cards and modals do not clip it, and it opens upward
+  when there is more room above; it is placed through the CSSOM, which `style-src 'self'` allows.
+  A press elsewhere closes it, and a field's label focuses it. A test network shows a muted
+  "Testnet" after its name. Both
   fields show however few options there are. It calls `onChange` with the very object of
   `options` the payer chose; `renderDetail` adds one line under the fields about the chosen
   option, such as its price.

@@ -82,6 +82,10 @@ function App() {
         <Element />
       ) : params.has("picker") ? (
         <Picker />
+      ) : params.has("modal") ? (
+        <div className="modal" role="dialog" aria-label="Top up">
+          <Picker />
+        </div>
       ) : params.has("deposit") ? (
         <DepositAddress
           depositAddress={{ address, networks }} appearance={appearance}

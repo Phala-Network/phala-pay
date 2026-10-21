@@ -88,7 +88,8 @@ async function installWallet(page: Page) {
  */
 async function check(page: Page, name: string) {
   await expect(page.locator(".pp-root")).toBeVisible();
-  await expect.soft(page.locator(".pp-root style, .pp-root [style]")).toHaveCount(0);
+  // An open listbox's place is the one style set, through the CSSOM.
+  await expect.soft(page.locator(".pp-root style, .pp-root [style]:not(.pp-select__listbox:popover-open)")).toHaveCount(0);
   expect.soft(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${name}: page overflow`).toBe(true);
   expect.soft(await page.evaluate(() => {
     const root = document.querySelector(".pp-root");
@@ -441,3 +442,32 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
   await page.addStyleTag({ content: ".pp-root[data-theme] { --pp-font-size: 22px; }" });
   expect(await page.locator(".pp-copy svg").first().boundingBox()).toMatchObject({ width: 16, height: 16 });
 });
+
+for (const theme of ["light", "dark"]) {
+  test(`a listbox opens over a clipping dialog near the window's foot, upward, ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 640 });
+    await page.goto(`/?modal&theme=${theme}`);
+    const field = page.getByRole("combobox", { name: "Network" });
+    await field.click();
+    const listbox = page.getByRole("listbox", { name: "Network" });
+    await expect(listbox).toBeVisible();
+    const [fieldBox, listBox, dialogBox] = await Promise.all([field, listbox, page.getByRole("dialog")].map((each) => each.boundingBox()));
+    // No room under the field: the listbox is over it, inside the window, past the dialog's edge.
+    expect((listBox?.y ?? 0) + (listBox?.height ?? 0)).toBeLessThanOrEqual((fieldBox?.y ?? 0) + 1);
+    expect(listBox?.y ?? -1).toBeGreaterThanOrEqual(0);
+    expect(listBox?.y ?? 0).toBeLessThan(dialogBox?.y ?? 0);
+    // Not clipped: each option is what is under its own centre, and takes a press.
+    for (const option of await listbox.getByRole("option").all()) {
+      expect(await option.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+      })).toBe(true);
+    }
+    expect(await axeViolations(page)).toEqual([]);
+    if (screenshots !== undefined) await page.screenshot({ path: join(screenshots, `modal-open-${theme}.png`) });
+    await listbox.getByRole("option", { name: "Ethereum", exact: true }).click();
+    await expect(field).toHaveText("Ethereum");
+    await expect(listbox).toBeHidden();
+    await expect(page.locator(".pp-root [style]")).toHaveCount(0);
+  });
+}

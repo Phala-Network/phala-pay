@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { CheckGlyph, ChevronGlyph } from "./Glyphs.js";
 
 export interface SelectItem {
@@ -9,11 +9,19 @@ export interface SelectItem {
   icon: ReactNode;
 }
 
+// Where the browser has popovers, the open listbox is in the top layer: no `overflow: hidden`
+// ancestor (a card, a modal) clips it, while it stays in place in the document, inheriting the
+// theme, and inside any dialog it is in. Elsewhere it is positioned under the field in the page.
+const POPOVER = typeof HTMLElement !== "undefined" && "showPopover" in HTMLElement.prototype;
+const GAP = 4;
+const MARGIN = 8;
+
 /**
  * A select-only combobox, as the WAI-ARIA Authoring Practices describe it: a focusable field that
- * shows the chosen item, and a listbox of items with icons that opens under it. Focus stays on the
- * field; the active item is its `aria-activedescendant`. Arrows, Home, End, Page Up and Down move,
- * typing finds an item, Enter, Space, or Tab chooses, Escape closes.
+ * shows the chosen item, and a listbox of items with icons that opens under it, or over it where
+ * there is more room above. Focus stays on the field; the active item is its
+ * `aria-activedescendant`. Arrows, Home, End, Page Up and Down move, typing finds an item, Enter,
+ * Space, or Tab chooses, Escape, a press elsewhere, or leaving the field closes.
  */
 export function Select({
   label,
@@ -41,9 +49,53 @@ export function Select({
   const selected = items[selectedIndex];
   const last = items.length - 1;
   const optionId = (index: number) => `${id}-option-${index}`;
+  const field = useRef<HTMLDivElement>(null);
+
+  const list = useRef<HTMLUListElement>(null);
+  // The open listbox in the top layer, beside the field, on whichever side has room; kept there as
+  // the page scrolls or resizes. Its place is set through the CSSOM, which `style-src 'self'`
+  // allows, as no style attribute in the markup would be.
+  useLayoutEffect(() => {
+    const box = list.current;
+    const control = field.current;
+    if (!POPOVER || !open || box === null || control === null) return;
+    box.setAttribute("popover", "manual");
+    box.showPopover();
+    const place = () => {
+      const rect = control.getBoundingClientRect();
+      const below = window.innerHeight - rect.bottom - GAP - MARGIN;
+      const above = rect.top - GAP - MARGIN;
+      const up = box.scrollHeight > below && above > below;
+      box.style.setProperty("left", `${rect.left}px`);
+      box.style.setProperty("width", `${rect.width}px`);
+      box.style.setProperty("top", up ? "auto" : `${rect.bottom + GAP}px`);
+      box.style.setProperty("bottom", up ? `${window.innerHeight - rect.top + GAP}px` : "auto");
+      box.style.setProperty("--pp-select-room", `${Math.max(up ? above : below, 0)}px`);
+      box.dataset["side"] = up ? "top" : "bottom";
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+      box.hidePopover();
+      // Closed, it keeps no place of its own.
+      box.removeAttribute("style");
+    };
+  }, [open]);
+
+  // A press anywhere else closes it, as a tap on a blank part of a phone's page does not blur.
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!(event.target instanceof Node) || field.current?.parentElement?.contains(event.target) !== true) setOpen(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [open]);
 
   // The active item stays in view as it moves.
-  const list = useRef<HTMLUListElement>(null);
   useEffect(() => {
     const box = list.current;
     const item = box?.children[active];
@@ -55,6 +107,7 @@ export function Select({
   }, [open, active]);
 
   const show = (index: number) => {
+    if (items.length === 0) return;
     setActive(Math.min(Math.max(index, 0), last));
     setOpen(true);
   };
@@ -109,11 +162,13 @@ export function Select({
 
   return (
     <div className="pp-select">
-      <span className="pp-select__label" id={`${id}-label`}>
+      {/* A press on the label focuses its field, as a label does. */}
+      <span className="pp-select__label" id={`${id}-label`} onClick={() => field.current?.focus()}>
         {label}
       </span>
       <div className="pp-select__control">
         <div
+          ref={field}
           role="combobox"
           id={`${id}-combobox`}
           className="pp-select__trigger"
@@ -122,7 +177,7 @@ export function Select({
           aria-controls={`${id}-listbox`}
           aria-expanded={open}
           aria-haspopup="listbox"
-          aria-activedescendant={open ? optionId(active) : undefined}
+          aria-activedescendant={open && items.length > 0 ? optionId(active) : undefined}
           aria-disabled={disabled || undefined}
           aria-describedby={describedBy}
           onClick={() => {

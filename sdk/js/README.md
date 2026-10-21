@@ -216,8 +216,12 @@ import { PaymentElement } from "@phala/pay-react";
 a "Token" field, then a "Network" field listing only the networks that take the chosen token,
 side by side where the container is 480px or wider and stacked below that. Each is a select-only
 combobox (WAI-ARIA Authoring Practices): a quiet field showing the chosen item's icon and name,
-whose listbox opens under it, by pointer or keyboard (arrows, Home, End, Page Up and Down,
-typing the name, Enter or Space to choose, Escape to close). Changing the token keeps the network
+whose listbox opens under it (over it where there is more room above), by pointer or keyboard
+(arrows, Home, End, Page Up and Down, typing the name, Enter or Space to choose, Escape or a
+press elsewhere to close); its label focuses it. Where the browser has popovers, the open listbox
+is in the top layer, so a card or modal with `overflow: hidden` does not clip it, while it stays
+inside your dialog in the document (a modal library does not take a press on it for one outside
+the dialog). Changing the token keeps the network
 when it takes the new token, else takes the first that does. A test network shows a muted
 "Testnet" after its name; `renderDetail(option)` is one muted line under the fields, about the
 chosen option. Both fields show even with one option. It is controlled (`value`, `onChange`), and
@@ -374,8 +378,10 @@ color in forced-colors mode.
 
 ### Content Security Policy
 
-The components inject no style elements or style attributes. Serve the bundled CSS from your
-own origin with `style-src 'self'`; no `unsafe-inline` style permission is needed. Allow the
+The components inject no style elements or style attributes in their markup. Serve the bundled
+CSS from your own origin with `style-src 'self'`; no `unsafe-inline` style permission is needed.
+An open token or network listbox is placed beside its field through the CSSOM
+(`element.style.setProperty`), which that policy allows. Allow the
 payment service origin in `connect-src` for public status reads and `img-src data:` for browser
 wallet icons. Configure script and font sources for your application's own bundles.
 

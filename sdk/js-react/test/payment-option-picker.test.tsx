@@ -118,3 +118,31 @@ it("shows a single option, and takes the host's label or disabled state", () => 
   fireEvent.click(token());
   expect(token().getAttribute("aria-expanded")).toBe("false");
 });
+
+it("closes on a press elsewhere, and its label focuses its field", () => {
+  render(
+    <>
+      <p>Elsewhere</p>
+      <Picker onChange={() => undefined} />
+    </>,
+  );
+  fireEvent.click(token());
+  expect(token().getAttribute("aria-expanded")).toBe("true");
+  fireEvent.pointerDown(within(listbox(token())).getByRole("option", { name: "USDT" }));
+  expect(token().getAttribute("aria-expanded")).toBe("true");
+  fireEvent.pointerDown(screen.getByText("Elsewhere"));
+  expect(token().getAttribute("aria-expanded")).toBe("false");
+
+  fireEvent.click(screen.getByText("Network"));
+  expect(network()).toBe(document.activeElement);
+});
+
+it("opens nothing and names no active option without options", async () => {
+  const user = userEvent.setup();
+  render(<PaymentOptionPicker options={[]} value={null} onChange={() => undefined} />);
+  token().focus();
+  await user.keyboard("{ArrowDown}");
+  expect(token().getAttribute("aria-expanded")).toBe("false");
+  expect(token().hasAttribute("aria-activedescendant")).toBe(false);
+  expect(token().textContent).toBe("Choose");
+});
