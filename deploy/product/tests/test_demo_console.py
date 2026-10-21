@@ -56,9 +56,9 @@ DEPOSIT = "dep_" + "0d" * 16
 REFUND = "re_" + "0e" * 16
 ADDRESS_ID = "da_" + "0a" * 16
 TOKEN = "0x" + "44" * 20
-BASE_TOKEN = "0x" + "77" * 20
-BASE_USDT = "0x" + "66" * 20
-BASE_FAUCET = "0x" + "99" * 20
+BASE_USDC = "0x" + "77" * 20
+USDT = "0x" + "66" * 20
+FAUCET = "0x" + "99" * 20
 TREASURY = "0x" + "cc" * 20
 CONFIG = ProductConfig(
     service_url="https://service.test",
@@ -70,17 +70,17 @@ CONFIG = ProductConfig(
             name="Sepolia",
             rpc_url="https://rpc.sepolia.test",
             treasury=TREASURY,
-            test_tokens=(MintableToken("PHA", TOKEN),),
+            test_tokens=(
+                MintableToken("PHA", TOKEN),
+                MintableToken("USDT", USDT, minter=FAUCET),
+            ),
         ),
         ChainConfig(
             chain_id=84532,
             name="Base Sepolia",
             rpc_url="https://rpc.base-sepolia.test",
             treasury=TREASURY,
-            test_tokens=(
-                MintableToken("PHA", BASE_TOKEN),
-                MintableToken("USDT", BASE_USDT, minter=BASE_FAUCET),
-            ),
+            test_tokens=(),
         ),
     ),
     factory="0x" + "aa" * 20,
@@ -580,8 +580,7 @@ def test_a_second_chain_appears_once_the_service_serves_it(
     demo: tuple[DemoConsole, Service],
 ) -> None:
     console, service = demo
-    service.assets.append(_config_asset("pha", 84532, BASE_TOKEN))
-    service.assets.append(_config_asset("usdt", 84532, BASE_USDT, "stablecoin"))
+    service.assets.append(_config_asset("usdc", 84532, BASE_USDC, "stablecoin"))
     response = console.handle("GET", "/api/assets", WEBSITE, b"")
     networks = json.loads(response.body)["networks"]
     # In the config's order, each with its own explorer and gas faucet.
@@ -592,22 +591,30 @@ def test_a_second_chain_appears_once_the_service_serves_it(
     base = networks[1]
     assert base["explorer"] == "https://sepolia.basescan.org"
     assert base["faucet"] == "https://docs.base.org/get-started/get-funds#testnet-base-sepolia"
-    # Test USDT mints through its faucet contract (Aave's on staging), from the visitor's wallet.
+    # Base offers only USDC, obtained from Circle, with no wallet mint or bonus.
     assert [
         (a["asset"], a["mintable"], a["minter"], a["faucet"], a["bonus_bps"])
         for a in base["assets"]
     ] == [
-        ("pha", True, None, None, 1000),
-        ("usdt", True, BASE_FAUCET, None, 0),
+        ("usdc", False, None, "https://faucet.circle.com", 0),
     ]
     cookie = _account(console)
     status, _ = _post(
-        console, cookie, "quotes", {"amount": 2500, "chain_id": 84532, "asset": "pha"}
+        console, cookie, "quotes", {"amount": 2500, "chain_id": 84532, "asset": "usdc"}
     )
     assert status == HTTPStatus.OK
     assert json.loads(service.requests[-1].content)["chain_id"] == 84532
     _, account = _get(console, cookie, "account")
     assert account["payments"][0]["chain_id"] == 84532
+
+
+def test_sepolia_keeps_its_usdt_faucet(demo: tuple[DemoConsole, Service]) -> None:
+    console, service = demo
+    service.assets.append(_config_asset("usdt", 11155111, USDT, "stablecoin"))
+    response = console.handle("GET", "/api/assets", WEBSITE, b"")
+    sepolia = json.loads(response.body)["networks"][0]
+    usdt = next(asset for asset in sepolia["assets"] if asset["asset"] == "usdt")
+    assert (usdt["mintable"], usdt["minter"], usdt["bonus_bps"]) == (True, FAUCET, 0)
 
 
 def test_a_quote_is_for_an_offered_network_and_token_and_returns_its_locked_rate(
@@ -617,7 +624,7 @@ def test_a_quote_is_for_an_offered_network_and_token_and_returns_its_locked_rate
     cookie = _account(console)
     for pair in (
         {"chain_id": 1, "asset": "pha"},  # the service's, on a chain without the product's pins
-        {"chain_id": 84532, "asset": "pha"},  # the product's, not served there yet
+        {"chain_id": 84532, "asset": "usdc"},  # the product's, not served there yet
         {"chain_id": 11155111, "asset": "dai"},  # no such token
         {"chain_id": "11155111", "asset": "pha"},
         {"asset": "pha"},
@@ -985,18 +992,19 @@ def test_sweep_group_failure_is_scoped_to_chain_and_token(
     clock: Clock,
 ) -> None:
     console, service = demo
-    service.assets.append(_config_asset("pha", 84532, TOKEN))
+    usdc = "0x" + "55" * 20
+    service.assets.append(_config_asset("usdc", 84532, usdc, "stablecoin"))
     cookie = _account(console)
     _, first = _get(console, cookie, "sweeps")
-    service.fail_sweeps.add((11155111, TOKEN.lower()))
+    service.fail_sweeps.add((11155111, usdc.lower()))
     clock.now += 11
     _get(console, cookie, "sweeps")
     console.drain()
     _, view = _get(console, cookie, "sweeps")
     groups = {(group["chain_id"], group["asset"]): group for group in view["groups"]}
-    assert groups[(11155111, "pha")]["stale"] is True
-    assert groups[(84532, "pha")] == first["groups"][2]
-    assert groups[(11155111, "usdc")] == first["groups"][1]
+    assert groups[(11155111, "usdc")]["stale"] is True
+    assert groups[(84532, "usdc")] == first["groups"][2]
+    assert groups[(11155111, "pha")] == first["groups"][0]
 
 
 def test_requests_need_the_cookie_and_posts_need_json(demo: tuple[DemoConsole, Service]) -> None:
@@ -1182,7 +1190,7 @@ def test_the_config_validates_its_chains() -> None:
         replace(sepolia, test_tokens=(MintableToken("PHA", TOKEN), MintableToken("PHA", TOKEN)))
     # The deposit driver mints the first test token itself.
     with pytest.raises(ValueError, match="must mint itself"):
-        replace(sepolia, test_tokens=(MintableToken("USDT", TOKEN, minter=BASE_FAUCET),))
+        replace(sepolia, test_tokens=(MintableToken("USDT", TOKEN, minter=FAUCET),))
     bonuses: list[dict[str, Any]] = [
         {"PHA": 1000},
         {"pha": 0},

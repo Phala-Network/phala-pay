@@ -181,8 +181,8 @@ implementation runtime code hashes of `reference.json`, `implementation()`, the 
 
 ## Base Sepolia
 
-The committed Base Sepolia routes ([staging routes](phala.md#staging-routes) on Base Sepolia, in the
-same file) use the same deployment, **deployed on Base Sepolia (84532)
+The committed Base Sepolia USDC route ([staging routes](phala.md#staging-routes)) uses the same
+deployment, **deployed on Base Sepolia (84532)
 and verified**: `verify-deployment.sh --rpc base-sepolia/a=… --rpc base-sepolia/b=…` passes on both
 staging providers (September 2026), and every runtime code hash equals Sepolia's. Preflight
 re-checks it on every Deploy; the Verify contracts workflow runs the same deployment checker
@@ -193,7 +193,7 @@ on every deployed routed chain in both environment configurations, through keyle
 | `ForwarderFactory` | `0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747` |
 | forwarder implementation | `0x49F2F1F1a25269Ea0C6FF2AB1C7B09dCBE9c5bA9` |
 | sanctions-oracle stand-in (`MockSanctionsOracle`; Base Sepolia has no Chainalysis oracle) | `0x8A0C93d85a05aD30741C193068abF2e5E16e7b35` |
-| test PHA (`MockERC20`, 18 decimals, public `mint`) | `0x1a6F260377e42ead1418C7C1afDFD5DE371A9284` |
+| former test PHA (`MockERC20`, 18 decimals, public `mint`; no supported route) | `0x1a6F260377e42ead1418C7C1afDFD5DE371A9284` |
 | a second `MockERC20`, the unsupported-token test contract | `0xC60dE2C49c2b546F968C68a51370250148C52e4b` |
 | Circle's testnet USDC (`FiatTokenProxy` to `FiatTokenV2_2` `0xd74cc5d436923b8ba2c179b4bca2841d8a52c5b5`, 6 decimals) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 

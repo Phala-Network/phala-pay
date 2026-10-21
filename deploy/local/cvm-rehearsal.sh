@@ -317,7 +317,6 @@ PRIVATE_KEY="$ANVIL_PRIVATE_KEY" \
     die "the Base Sepolia factory is not the Sepolia one"
 "$root/deploy/sandbox/deploy-test-contracts.sh" --anvil-unlocked "$owner" --rpc-url "$base_rpc_url" \
     >"$tmp/base-test-contracts.json"
-base_token=$(jq -er .test_token "$tmp/base-test-contracts.json")
 base_oracle=$(jq -er .sanctions_oracle "$tmp/base-test-contracts.json")
 # rehearsal_token CONTRACT RPC_URL: deploys six-decimal USDC/USDT fixtures matching the routes.
 rehearsal_token() {
@@ -325,17 +324,16 @@ rehearsal_token() {
         --unlocked --from "$owner" --broadcast --json) | jq -er .deployedTo
 }
 base_second_token=$(rehearsal_token UsdcLikeToken "$base_rpc_url")
-base_third_token=$(rehearsal_token UsdtLikeToken "$base_rpc_url")
-printf 'base-sepolia: token=%s second_token=%s third_token=%s sanctions_oracle=%s\n' \
-    "$base_token" "$base_second_token" "$base_third_token" "$base_oracle"
+printf 'base-sepolia: usdc=%s sanctions_oracle=%s\n' \
+    "$base_second_token" "$base_oracle"
 
 echo "== installing hermetic mainnet price fixtures"
 install_anvil_price_fixtures "$mainnet_price_rpc_url" "$base_mainnet_price_rpc_url"
 
 echo "== writing the configuration and rendering the staging compose"
-# Phala's staging configuration with this network's addresses: on each chain the test token stands
-# in for PHA, the reference product's asset, a six-decimal mock token for USDC, and a USDT-like one
-# for USDT. Each role has its own certificate-verified relay and sealed fixture key.
+# Phala's staging configuration with this network's addresses: Sepolia takes the test PHA,
+# a six-decimal mock USDC, and a USDT-like token; Base Sepolia takes only mock USDC. Each role
+# has its own certificate-verified relay and sealed fixture key.
 second_token=$(rehearsal_token UsdcLikeToken "$rpc_url")
 third_token=$(rehearsal_token UsdtLikeToken "$rpc_url")
 # The owner's admin key, in the PEM form deploy/runbooks/sign-admin-request.sh signs with.
@@ -351,15 +349,12 @@ write_config() {
         jq --arg id "$1" --arg key "$admin_public_key" --arg factory "$factory" \
             --arg implementation "$implementation" \
             --argjson assets "$(jq -n --arg pha "$token" --arg usdc "$second_token" \
-                --arg usdt "$third_token" --arg base_pha "$base_token" \
-                --arg base_usdc "$base_second_token" --arg base_usdt "$base_third_token" \
+                --arg usdt "$third_token" --arg base_usdc "$base_second_token" \
                 --arg oracle "$oracle" --arg base_oracle "$base_oracle" '{
                     "phala-cloud-sepolia-pha-usd": [$pha, $oracle],
                     "phala-cloud-sepolia-usdc-usd": [$usdc, $oracle],
                     "phala-cloud-sepolia-usdt-usd": [$usdt, $oracle],
-                    "phala-cloud-base-sepolia-pha-usd": [$base_pha, $base_oracle],
-                    "phala-cloud-base-sepolia-usdc-usd": [$base_usdc, $base_oracle],
-                    "phala-cloud-base-sepolia-usdt-usd": [$base_usdt, $base_oracle]}')" '
+                    "phala-cloud-base-sepolia-usdc-usd": [$base_usdc, $base_oracle]}')" '
             .admin_key = {id: $id, public_key: $key}
             | .routes |= map(($assets[.route] // error("no rehearsal token for \(.route)")) as $asset
                 | .chain.forwarder_factory = $factory | .chain.implementation = $implementation

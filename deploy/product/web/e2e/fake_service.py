@@ -1,8 +1,8 @@
 """A stand-in for the Phala Pay service in the demo's end-to-end test.
 
 It answers the merchant API the demo uses, in the shapes of crates/topup/openapi.json: the config
-(the tokens of each chain in `--chains`: test PHA on Sepolia and Base Sepolia, a 6-decimal test
-USDC priced as a stablecoin on Sepolia, and a 6-decimal test USDT on Base Sepolia), quotes and
+(the tokens of each chain in `--chains`: test PHA and a 6-decimal test USDT on Sepolia, and a
+6-decimal test USDC priced as a stablecoin on Sepolia and Base Sepolia), quotes and
 their public view, deposit addresses and their public view, deposits, refunds (`mark_paid`
 verified on chain), forwarders, the balance, sweeps, attestation, and the TLS evidence. It follows
 real payments on each chain's Anvil the way the service does, compressed in time (one block a
