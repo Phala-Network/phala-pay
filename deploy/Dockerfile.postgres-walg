@@ -1,5 +1,5 @@
 # Rebuild both Go binaries instead of inheriting old toolchains in upstream release binaries.
-FROM golang:1.27.2-trixie@sha256:e58d6f83b3416618d8bcac2b3dde1b7f7e3c4a77d25e88637f8bbae81536c48d AS go-build
+FROM golang:1.27.3-trixie@sha256:604106102d33b1084e37ca08adf98ac0813624ae8595bd0d7f3965ecebded09c AS go-build
 ARG TARGETARCH
 ARG SOURCE_DATE_EPOCH=0
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOEXPERIMENT=jsonv2

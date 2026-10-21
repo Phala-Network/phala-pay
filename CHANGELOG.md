@@ -14,6 +14,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Security
+
+- Update the Rust and Python TLS trust dependencies and rebuild smokescreen, gosu, and WAL-G
+  with Go 1.27.3 to reject distrusted emSign certificate paths. Update aiohttp and the website's
+  Vite and Hono dependencies for their published security fixes.
+
 ## [0.10.10] - 2026-10-18
 
 ### Changed (operators)
