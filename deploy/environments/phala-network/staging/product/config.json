@@ -20,10 +20,7 @@
       "name": "Base Sepolia",
       "rpc_url": "https://base-sepolia-rpc.publicnode.com",
       "treasury": "0x26430107887d4a691B340BdB887096B83E7a5844",
-      "test_tokens": [
-        {"symbol": "PHA", "address": "0x1a6F260377e42ead1418C7C1afDFD5DE371A9284"},
-        {"symbol": "USDT", "address": "0x0a215D8ba66387DCA84B284D18c3B4ec3de6E54a", "minter": "0xD9145b5F45Ad4519c7ACcD6E0A4A82e83bB8A6Dc"}
-      ]
+      "test_tokens": []
     }
   ],
   "bonus_bps": {"pha": 1000},

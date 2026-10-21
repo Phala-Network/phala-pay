@@ -601,7 +601,8 @@ Automated:
   and `/healthz` unaffected. Config check and compose-path preflight reject missing keys.
 - Rollback drill N-1 → N → N-1 → N passes (§6).
 
-Staging (48 h, real USDC/USDT/PHA payments on Sepolia and Base Sepolia, checkout and manual):
+Staging (48 h, real PHA/USDC/USDT payments on Sepolia and only USDC on Base Sepolia, checkout
+and manual):
 
 - Checkout hints use the independent fast path and credit in seconds at route confirmation;
   unhinted transfers are discovered in 0–5 min plus confirmation/processing. Verify the §5.3

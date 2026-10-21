@@ -33,10 +33,8 @@ mod tests {
         include_str!("../../../deploy/environments/phala-network/staging/topup/topup.yaml");
     const DEPLOY_ROUTE: &str = "phala-cloud-sepolia-pha-usd";
     const DEPLOY_USDC_ROUTE: &str = "phala-cloud-sepolia-usdc-usd";
-    const DEPLOY_BASE_PHA_ROUTE: &str = "phala-cloud-base-sepolia-pha-usd";
     const DEPLOY_BASE_USDC_ROUTE: &str = "phala-cloud-base-sepolia-usdc-usd";
     const DEPLOY_USDT_ROUTE: &str = "phala-cloud-sepolia-usdt-usd";
-    const DEPLOY_BASE_USDT_ROUTE: &str = "phala-cloud-base-sepolia-usdt-usd";
 
     /// A route of Phala's staging configuration, by name.
     fn staging(name: &str) -> Result<RouteFile, String> {
@@ -183,93 +181,90 @@ mod tests {
     }
 
     #[test]
-    fn staging_usdt_routes_are_stablecoin_routes_beside_usdc() {
-        for (usdt_route, usdc_route) in [
-            (DEPLOY_USDT_ROUTE, DEPLOY_USDC_ROUTE),
-            (DEPLOY_BASE_USDT_ROUTE, DEPLOY_BASE_USDC_ROUTE),
-        ] {
-            let usdt = staging(usdt_route).expect("USDT route must pass");
-            let usdc = staging(usdc_route).expect("USDC route must pass");
-            assert!(!usdt.livemode, "{usdt_route} is a test route");
-            assert_eq!(
-                usdt.chain, usdc.chain,
-                "one chain has one set of chain settings"
-            );
-            assert_eq!(
-                (usdt.asset.symbol.as_str(), usdt.asset.decimals),
-                ("usdt", 6)
-            );
-            assert_eq!(
-                usdt.pricing.mode,
-                topup_core::route::PricingMode::Stablecoin
-            );
-            assert!(
-                usdt.pricing
-                    .sources
-                    .iter()
-                    .all(|s| s.asset() == usdt.asset.symbol)
-            );
-            assert!(usdt.pricing.check.is_empty());
-            assert_eq!(usdt.merchant.quote_spread_bps.default.value(), 0);
-            assert_eq!(
-                (
-                    usdt.merchant.max_deposit_atomic.default,
-                    usdt.merchant.min_refund_atomic.default
-                ),
-                (
-                    usdc.merchant.max_deposit_atomic.default,
-                    usdc.merchant.min_refund_atomic.default
-                ),
-                "a dollar stablecoin has the USDC route's limits"
-            );
-        }
+    fn staging_sepolia_usdt_is_a_stablecoin_route_beside_usdc() {
+        let usdt = staging(DEPLOY_USDT_ROUTE).expect("USDT route must pass");
+        let usdc = staging(DEPLOY_USDC_ROUTE).expect("USDC route must pass");
+        assert!(!usdt.livemode, "Sepolia is a test route");
+        assert_eq!(
+            usdt.chain, usdc.chain,
+            "one chain has one set of chain settings"
+        );
+        assert_eq!(
+            (usdt.asset.symbol.as_str(), usdt.asset.decimals),
+            ("usdt", 6)
+        );
+        assert_eq!(
+            usdt.pricing.mode,
+            topup_core::route::PricingMode::Stablecoin
+        );
+        assert!(
+            usdt.pricing
+                .sources
+                .iter()
+                .all(|s| s.asset() == usdt.asset.symbol)
+        );
+        assert!(usdt.pricing.check.is_empty());
+        assert_eq!(usdt.merchant.quote_spread_bps.default.value(), 0);
+        assert_eq!(
+            (
+                usdt.merchant.max_deposit_atomic.default,
+                usdt.merchant.min_refund_atomic.default
+            ),
+            (
+                usdc.merchant.max_deposit_atomic.default,
+                usdc.merchant.min_refund_atomic.default
+            ),
+            "a dollar stablecoin has the USDC route's limits"
+        );
     }
 
     #[test]
     fn base_sepolia_routes_credit_at_the_op_stack_depth_on_their_own_providers() {
-        let pha = staging(DEPLOY_BASE_PHA_ROUTE).expect("Base PHA route");
         let usdc = staging(DEPLOY_BASE_USDC_ROUTE).expect("Base USDC route");
-        assert!(!pha.livemode, "Base Sepolia is a test route");
-        assert_eq!(
-            pha.chain, usdc.chain,
-            "one chain has one set of chain settings"
-        );
+        assert!(!usdc.livemode, "Base Sepolia is a test route");
         // An OP-stack chain credits at the family's depth on the unsafe head (design D1).
         assert_eq!(
-            pha.chain.confirmations,
+            usdc.chain.confirmations,
             topup_core::route::ChainFamily::OpStack.default_confirmations()
         );
-        assert_eq!(pha.chain.rpc_providers, ["read", "verify"]);
+        assert_eq!(usdc.chain.rpc_providers, ["read", "verify"]);
         let sepolia = staging(DEPLOY_ROUTE).expect("staging route must pass");
-        assert_eq!(pha.chain.contracts, sepolia.chain.contracts);
+        assert_eq!(usdc.chain.contracts, sepolia.chain.contracts);
         assert_eq!(
             usdc.pricing.mode,
             topup_core::route::PricingMode::Stablecoin
         );
         assert_eq!(usdc.merchant.quote_spread_bps.default.value(), 0);
 
-        // All six staging routes load together: two chains, each in address mode.
-        let usdc_sepolia = staging(DEPLOY_USDC_ROUTE).expect("USDC route");
-        let usdt_sepolia = staging(DEPLOY_USDT_ROUTE).expect("USDT route");
-        let usdt = staging(DEPLOY_BASE_USDT_ROUTE).expect("Base USDT route");
-        let routes = topup::routes::RouteSet::new(vec![
-            sepolia,
-            usdc_sepolia,
-            usdt_sepolia,
-            pha,
-            usdc,
-            usdt,
-        ])
-        .expect("the staging routes load");
-        assert_eq!(routes.current_in(false).count(), 6);
-        let chains = topup::scanner::chain_routes(&routes);
-        assert_eq!(
-            chains
-                .iter()
-                .map(|chain| chain.chain.chain_id)
-                .collect::<Vec<_>>(),
-            [84_532, 11_155_111]
-        );
+        // Base keeps its scanner with USDC alone; Sepolia retains all three tokens.
+        for yaml in [
+            STAGING,
+            include_str!("../../../deploy/environments/phala-cloud-template/topup/topup.yaml"),
+        ] {
+            let config = topup::config::Config::parse(yaml).expect("staging or template config");
+            let routes = topup::routes::RouteSet::new(config.routes).expect("the routes load");
+            assert_eq!(routes.current_in(false).count(), 4);
+            for (chain_id, expected) in [
+                (84_532, vec!["usdc"]),
+                (11_155_111, vec!["pha", "usdc", "usdt"]),
+            ] {
+                let mut assets = routes
+                    .current_in(false)
+                    .filter(|route| route.chain.chain_id == chain_id)
+                    .map(|route| route.asset.symbol.as_str())
+                    .collect::<Vec<_>>();
+                assets.sort_unstable();
+                assert_eq!(assets, expected);
+            }
+            let chains = topup::scanner::chain_routes(&routes);
+            assert_eq!(
+                chains
+                    .iter()
+                    .map(|chain| chain.chain.chain_id)
+                    .collect::<Vec<_>>(),
+                [84_532, 11_155_111]
+            );
+        }
     }
 
     #[test]

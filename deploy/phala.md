@@ -40,7 +40,8 @@ instance, is responsible for its compliance, as every operator is for its own (a
 
 ## Staging routes
 
-Staging serves six test-mode routes, three on Sepolia and three on Base Sepolia, all on the
+Staging serves four test-mode routes: PHA, USDC and USDT on Sepolia, and only USDC on Base Sepolia,
+matching Base's USDC-only production catalog. All use the
 deterministic factory ([Contracts](README.md#contracts)); any test key quotes on all of them, and
 `GET /v1/config` lists each chain's assets:
 
@@ -49,24 +50,42 @@ deterministic factory ([Contracts](README.md#contracts)); any test key quotes on
 | `phala-cloud-sepolia-pha-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | test PHA `0x8F40e7E99678F44c88158f049E62817580ab113B` (`MockERC20`, 18 decimals) | volatile: Kraken `PHAUSD`, checked against Binance `PHAUSDT` × mainnet USDT/USD | `mint(address,uint256)` is public |
 | `phala-cloud-sepolia-usdc-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | Circle's testnet USDC `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` ([Circle's list](https://developers.circle.com/stablecoins/usdc-contract-addresses), 6 decimals) | stablecoin: 1.00 while every fresh USDC/USD rate is within 1% | [Circle's faucet](https://faucet.circle.com) (Ethereum Sepolia) |
 | `phala-cloud-sepolia-usdt-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | Aave's testnet USDT `0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0` ([Aave's address book](https://github.com/bgd-labs/aave-address-book), 6 decimals) | stablecoin: 1.00 while every fresh USDT/USD rate is within 1% | Aave's faucet contract `0xC959483DBa39aa9E78757139af0e9a2EDEb3f42D`: `mint(token, to, amount)` is public, up to 10 000 per call |
-| `phala-cloud-base-sepolia-pha-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | test PHA `0x1a6F260377e42ead1418C7C1afDFD5DE371A9284` (the same `MockERC20`, 18 decimals) | as on Sepolia | `mint(address,uint256)` is public |
 | `phala-cloud-base-sepolia-usdc-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | Circle's testnet USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e` ([Circle's list](https://developers.circle.com/stablecoins/usdc-contract-addresses), 6 decimals) | as on Sepolia | [Circle's faucet](https://faucet.circle.com) (Base Sepolia) |
-| `phala-cloud-base-sepolia-usdt-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | Aave's testnet USDT `0x0a215D8ba66387DCA84B284D18c3B4ec3de6E54a` ([Aave's address book](https://github.com/bgd-labs/aave-address-book), 6 decimals) | as on Sepolia | Aave's faucet contract `0xD9145b5F45Ad4519c7ACcD6E0A4A82e83bB8A6Dc`: `mint(token, to, amount)` is public, up to 1 000 000 per call, once an hour per recipient |
 
 | Chain | `confirmations` | RPC providers | Sanctions oracle (a `MockSanctionsOracle`) |
 |---|---|---|---|
 | Sepolia (11155111) | `2`, Ethereum L1's default | `ankr-sepolia`, `infura-sepolia` | `0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6` |
 | Base Sepolia (84532) | `3`, the OP-stack default: the payment's block and two more on the sequencer's unsafe head, credited about 7 s after paying (architecture §8) | `ankr-base-sepolia`, `infura-base-sepolia` | `0x8A0C93d85a05aD30741C193068abF2e5E16e7b35` |
 
-Tether publishes no testnet USDT, so the USDT routes take Aave's, the testnet USDT of Aave's
-markets on both chains. Aave's app no longer lists its Sepolia market, but both faucet contracts
-stay public, and the demo's mint button calls them from the visitor's wallet. It is a plain ERC-20
+Tether publishes no testnet USDT, so the Sepolia USDT route takes Aave's testnet USDT.
+Aave's app no longer lists its Sepolia market, but its faucet contract
+stays public, and the demo's mint button calls it from the visitor's wallet. It is a plain ERC-20
 whose `transfer` returns `true`; Tether's no-return `transfer` is covered by the contract tests and
 the demo's end-to-end test. [examples/phala-cloud-usdt.yaml](../examples/phala-cloud-usdt.yaml) is
 the mainnet template, and Tether's fee switch and blacklist are handled as
 [USDT fee switch and blacklist](runbooks/usdt-issuer-controls.md) says. USDC moves one or two
 transfers a block on both chains; dual coverage therefore queries recipient-topic logs in chunks
 of at most 1,000 addresses, without a contract filter. See [chain RPC operations](RPC.md).
+
+### Retiring Base Sepolia PHA and USDT
+
+Before deploying this catalog, follow [route retirement](runbooks/route-retirement.md) for
+`phala-cloud-base-sepolia-pha-usd` and `phala-cloud-base-sepolia-usdt-usd`. Keep `quotes` paused
+on both routes and sweep all credited deposits. Require zero open rate-lock exposure,
+`detected`, `confirmed`, `credited`, and `credited_undelivered` in the daily report before the
+staging topup upgrade. Do not remove rows or bypass this drain gate.
+
+Then upgrade staging topup and the reference product with the same release's reviewed configs;
+verify `GET /v1/config`, the demo's token choices, and its faucets. The Phala Cloud template
+ships the same four routes. Base Sepolia's scanner remains running for USDC. Existing addresses
+and records remain in the database, but PHA and USDT sent to previously issued Base Sepolia
+addresses are no longer supported, and their sweeps and reversals are no longer recorded after
+removal. Use only USDC on Base Sepolia, including at existing deposit addresses.
+
+Retain the verified N-1 kit, images and configuration under the
+[rollback policy](README.md#rollback-compatibility). Restore the prior compose with Deploy
+`upgrade` to load these routes again; their database state and pauses survive. Resume `quotes`
+only if abandoning the retirement. No schema or compatibility-floor change is needed.
 
 ### RPC providers
 

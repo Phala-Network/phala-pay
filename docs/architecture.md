@@ -1566,6 +1566,9 @@ id; the service derives `get_key("client-secret/v1")` itself, the key of client 
 Startup refuses to run without the dstack
 socket, two RPC providers, or the on-chain contract checks of §4.
 
+Phala's [staging catalog](../deploy/phala.md#staging-routes) has PHA, USDC and USDT on Sepolia,
+and only USDC on Base Sepolia; its demo and Phala Cloud template use the same catalog.
+
 All enabled versions are loaded at startup. The highest enabled version of a route is current for
 new API operations, while older versions remain available for historical deposits. A chain is
 scanned only while it has a loaded route, and its quotes expire only by its scanner's cursor
