@@ -61,51 +61,12 @@ rpc:
       max_log_blocks: 3000
 
 routes:
-  # Staging route on Base Sepolia, the PHA route of Sepolia on a second chain: a test-mode route
-  # (`livemode: false`) any account can quote on and pay its own treasury through. Test PHA here is
-  # the same MockERC20 as on Sepolia (18 decimals, public `mint`). Route files carry no treasury
-  # (design D10); the factory and implementation are the deterministic deployment of
-  # deploy/CONTRACTS.md, the same address on every chain.
-  - route: phala-cloud-base-sepolia-pha-usd
-    version: 1
-    livemode: false
-
-    chain:
-      chain_id: 84532
-      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
-      # Base Sepolia is an OP-stack chain (design D1, architecture §8): credited at depth 3 on the
-      # sequencer's unsafe head, 4 s after inclusion (about 7 s after paying), and watched to
-      # finality like Sepolia's depth 2. `3` is the family default, written out here; an account
-      # may require more, `safe`, or `finalized`, never less.
-      confirmations: 3
-      sanctions_oracle: "0x8A0C93d85a05aD30741C193068abF2e5E16e7b35" # no Chainalysis oracle on Base Sepolia
-
-    asset:
-      symbol: pha
-      contract: "0x1a6F260377e42ead1418C7C1afDFD5DE371A9284"
-      decimals: 18
-      # No transfer since it was deployed (the last 100 000 blocks, Sep 2026): one token-wide log
-      # request per range. The USDC route still puts the whole chain in address mode (architecture §8).
-
-    price:
-      mode: volatile
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
-      allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: uniswap_v2_twap, twap: { max_sample_age_s: 900, max_sample_jump_bps: 1100 }, observation_chain_id: 84532 }]
-      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
-      fx:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 84532 }
-
-    merchant:
-      min_amount: { default: 100 }
-      max_deposit_atomic: { default: "200000000000000000000000" }
-      min_refund_atomic: { default: "20000000000000000000" }
-  # Staging route on Base Sepolia for Circle's testnet USDC (https://faucet.circle.com), beside the
-  # PHA route: a test-mode route (`livemode: false`) any account can quote on and pay its own
-  # treasury through. The token is the one Circle lists for Base Sepolia
+  # Base Sepolia supports only Circle's testnet USDC (https://faucet.circle.com): a test-mode
+  # route (`livemode: false`) any account can quote on and pay its own treasury through.
+  # The token is the one Circle lists for Base Sepolia
   # (https://developers.circle.com/stablecoins/usdc-contract-addresses): FiatTokenV2_2 behind
-  # Circle's proxy, a plain ERC-20 with no transfer fee or rebasing. The chain section is the PHA
-  # route's: one chain has one set of chain settings. Route files carry no treasury (design D10).
+  # Circle's proxy, a plain ERC-20 with no transfer fee or rebasing. Route files carry no treasury
+  # (design D10).
   - route: phala-cloud-base-sepolia-usdc-usd
     version: 1
     livemode: false
@@ -135,50 +96,9 @@ routes:
       peg_band_bps: 100
 
     merchant:
-      min_amount: { default: 100 } # USD 1.00, as on the PHA route
-      max_deposit_atomic: { default: "10000000000" } # 10,000 USDC, about the PHA route's 200,000 PHA
-      min_refund_atomic: { default: "1000000" } # 1 USDC, about the PHA route's 20 PHA
-      quote_spread_bps: { default: 0 } # valued at a fixed 1.00 USD: no price move within the quote window for a spread to cover
-  # Staging route on Base Sepolia for Aave's testnet USDT, beside the PHA and USDC routes: a
-  # test-mode route (`livemode: false`) any account can quote on and pay its own treasury through.
-  # Tether publishes no testnet USDT; the token is the one Aave's address book lists for its Base
-  # Sepolia market (bgd-labs/aave-address-book, `AaveV3BaseSepolia.USDT_UNDERLYING`), a plain
-  # 6-decimal ERC-20 with no transfer fee or rebasing that its faucet,
-  # `0xD9145b5F45Ad4519c7ACcD6E0A4A82e83bB8A6Dc`, mints to anyone (`mint(token, to, amount)`).
-  # The chain section is the PHA route's: one chain has one set of chain settings. Route files carry
-  # no treasury (design D10).
-  - route: phala-cloud-base-sepolia-usdt-usd
-    version: 1
-    livemode: false
-
-    chain:
-      chain_id: 84532
-      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
-      # Base Sepolia is an OP-stack chain (design D1, architecture §8): credited at depth 3 on the
-      # sequencer's unsafe head, 4 s after inclusion (about 7 s after paying), and watched to
-      # finality like Sepolia's depth 2. `3` is the family default, written out here; an account
-      # may require more, `safe`, or `finalized`, never less.
-      confirmations: 3
-      sanctions_oracle: "0x8A0C93d85a05aD30741C193068abF2e5E16e7b35" # no Chainalysis oracle on Base Sepolia
-
-    asset:
-      symbol: usdt
-      contract: "0x0a215D8ba66387DCA84B284D18c3B4ec3de6E54a"
-      decimals: 6
-      # 2 transfers in 2 000 blocks (Oct 2026): one token-wide log request per range. The USDC route
-      # still puts the whole chain in address mode (architecture §8).
-
-    price:
-      mode: stablecoin
-      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
-      sources:
-        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 84532 }
-      peg_band_bps: 100
-
-    merchant:
-      min_amount: { default: 100 } # USD 1.00, as on the PHA route
-      max_deposit_atomic: { default: "10000000000" } # 10,000 USDT, as on the USDC route
-      min_refund_atomic: { default: "1000000" } # 1 USDT, as on the USDC route
+      min_amount: { default: 100 } # USD 1.00
+      max_deposit_atomic: { default: "10000000000" } # 10,000 USDC
+      min_refund_atomic: { default: "1000000" } # 1 USDC
       quote_spread_bps: { default: 0 } # valued at a fixed 1.00 USD: no price move within the quote window for a spread to cover
   # Staging route on Sepolia: a test-mode route (`livemode: false`) any account can quote on and pay
   # its own treasury through; the staging reference-product CVM uses it (deploy/phala.md, "Staging

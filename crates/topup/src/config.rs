@@ -672,7 +672,7 @@ mod tests {
             resolved["environment"] = serde_json::json!("production");
             let routes = resolved["routes"].as_array_mut().unwrap();
             routes.retain(|r| r["price"]["mode"] == "stablecoin");
-            assert_eq!(routes.len(), 4);
+            assert_eq!(routes.len(), 3);
             let production = Config::parse(&serde_json::to_string(&resolved).unwrap()).unwrap();
             for route in production.routes {
                 assert!(!route.pricing.allow_unclear_sources);

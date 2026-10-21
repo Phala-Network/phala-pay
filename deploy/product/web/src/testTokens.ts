@@ -16,8 +16,8 @@ import {
 import { readContract, waitForTransactionReceipt } from "viem/actions";
 import { tokens } from "./format.js";
 
-// Staging's test PHA, on each network, is a MockERC20 whose `mint(address,uint256)` is public, and
-// its test USDT is Aave's, which Aave's faucet contract mints to anyone with
+// Staging's Sepolia test PHA is a MockERC20 whose `mint(address,uint256)` is public, and its
+// Sepolia test USDT is Aave's, which Aave's faucet contract mints to anyone with
 // `mint(token, to, amount)`: the visitor's own wallet mints either, so the demo holds no faucet key.
 // Gas is the testnet's ETH from any public faucet. The same wallet pays to the deposit address,
 // sends a sweep (a flush is permissionless), and may pay a refund, which fails verification unless

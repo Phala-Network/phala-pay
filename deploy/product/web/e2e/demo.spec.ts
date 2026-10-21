@@ -18,7 +18,7 @@ import {
   type Hash,
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
-import type { Network, Timeline } from "../src/api.js";
+import type { Timeline } from "../src/api.js";
 import { DOCS, docPath } from "../src/content/docs.js";
 import { tokens } from "../src/format.js";
 import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
@@ -127,15 +127,19 @@ async function payFromTreasury(to: string, amount: bigint): Promise<Hash> {
 }
 
 /** The test USDC's public mint, from the test (the page offers Circle's faucet instead). */
-async function mintUsdc(to: string, amount: bigint): Promise<void> {
-  const chain = createTestClient({ mode: "anvil", chain: sepolia, transport: http(env("ANVIL_URL")) })
+async function mintUsdc(to: string, amount: bigint, onBase = false): Promise<void> {
+  const chain = createTestClient({
+    mode: "anvil",
+    chain: onBase ? baseSepolia : sepolia,
+    transport: http(env(onBase ? "BASE_ANVIL_URL" : "ANVIL_URL")),
+  })
     .extend(walletActions)
     .extend(publicActions);
   const payer = getAddress(env("PAYER_ADDRESS"));
   await chain.waitForTransactionReceipt({
     hash: await chain.sendTransaction({
       account: payer,
-      to: getAddress(env("USDC_ADDRESS")),
+      to: getAddress(env(onBase ? "BASE_USDC_ADDRESS" : "USDC_ADDRESS")),
       data: encodeFunctionData({
         abi: parseAbi(["function mint(address account, uint256 amount)"]),
         functionName: "mint",
@@ -1027,7 +1031,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   // Its networks and tokens, named as the product's selectors name them.
   // One address on both networks (the treasury is the same), each with its tokens.
   const tokensOnNetwork = scenes.getByTestId("deposit-address-network");
-  await expect(tokensOnNetwork).toHaveText(["Test PHA, Test USDC", "Test PHA, Test USDT"]);
+  await expect(tokensOnNetwork).toHaveText(["Test PHA, Test USDC, Test USDT", "Test USDC"]);
   await expect(tokensOnNetwork.first().locator("xpath=..")).toContainText("Sepolia testnet");
   await expect(tokensOnNetwork.last().locator("xpath=..")).toContainText("Base Sepolia testnet");
   const address = (await scenes.getByTestId("deposit-address").getByRole("link").getAttribute("href"))?.split("/").at(-1) ?? "";
@@ -1113,7 +1117,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   expect(problems).toEqual([]);
 });
 
-test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Base Sepolia with one; the faucets follow", async ({
+test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and USDT; the faucets follow", async ({
   page,
 }, testInfo) => {
   test.setTimeout(180_000);
@@ -1162,52 +1166,49 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   await expect(scenes.getByTestId("payment").first()).toContainText("5 USDC");
   await expect(scenes.getByTestId("payment").first()).toContainText("at $1.00 / USDC");
 
-  // Base Sepolia: its own token list and faucets; test PHA mints there, from the wallet on that
-  // network, and a PHA quote there earns the bonus, at staging's rate, formatted.
+  // Base Sepolia offers only USDC and Circle's faucet; no token can mint from the helper.
   await startOver(product);
-  await chooseOption(product, "PHA · Base Sepolia");
-  await expect(circle).toHaveCount(0);
-  // Test USDT mints from the wallet too, through its faucet contract, as Aave's does.
-  await expect(helper.getByRole("button", { name: "Mint 1,000 test USDT" })).toBeVisible();
+  await chooseOption(product, "USDC · Base Sepolia");
+  await expect(product.getByRole("radio", { name: "PHA · Base Sepolia", exact: true })).toHaveCount(0);
+  await expect(product.getByRole("radio", { name: "USDT · Base Sepolia", exact: true })).toHaveCount(0);
+  await expect(circle).toHaveAttribute("title", "On the faucet, pick Base Sepolia as the network.");
+  await expect(helper.getByRole("button", { name: /Mint/ })).toHaveCount(0);
   await expect(helper.getByRole("link", { name: /^Base Sepolia ETH faucets/ })).toHaveAttribute(
     "href",
     "https://docs.base.org/get-started/get-funds#testnet-base-sepolia",
   );
-  await helper.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
-  await expect(helper).toContainText("Minted:");
-  const base = { rpc: env("BASE_ANVIL_URL"), token: env("BASE_TOKEN_ADDRESS") };
-  expect(await tokenBalance(env("PAYER_ADDRESS"), base)).toBe(parseEther("1000"));
-  await expect(helper.locator("p", { hasText: "Minted:" }).getByRole("link")).toHaveAttribute(
-    "href",
-    /^https:\/\/sepolia\.basescan\.org\/tx\//,
-  );
+  await mintUsdc(env("PAYER_ADDRESS"), parseUnits("100", 6), true);
   const baseRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
-  expect((await baseRequest).postDataJSON()).toEqual({ amount: 2000, chain_id: baseSepolia.id, asset: "pha" });
-  await expect(product.locator(".pp-summary")).toContainText("$20.00");
+  expect((await baseRequest).postDataJSON()).toEqual({ amount: 2000, chain_id: baseSepolia.id, asset: "usdc" });
+  await expect(product.locator(".pp-summary")).toContainText("20 USDC");
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
-    "1 PHA = $0.06041",
+    "1 USDC = $1.00",
   );
   await expect(product.getByTestId("testnet-notice")).toBeVisible();
   await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$20.00", { timeout: 60_000 });
-  await expect(product.getByTestId("bonus-credited")).toContainText("+$2.00", { timeout: 10_000 });
-  await expect(product.getByTestId("balance")).toHaveText("$27.00", { timeout: 10_000 });
+  await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
+  await expect(product.getByTestId("balance")).toHaveText("$25.00", { timeout: 10_000 });
+  expect(await tokenBalance(env("PAYER_ADDRESS"), {
+    rpc: env("BASE_ANVIL_URL"), token: env("BASE_USDC_ADDRESS"),
+  })).toBe(parseUnits("80", 6));
   await page.getByRole("button", { name: "Dark theme" }).click();
-  await page.screenshot({ path: testInfo.outputPath("base-bonus-dark.png") });
+  await page.screenshot({ path: testInfo.outputPath("base-usdc-dark.png") });
   await page.getByRole("button", { name: "Dark theme" }).click();
 
-  // $5 in test USDT on Base Sepolia, minted through the faucet, at $1.00 with no bonus. Its
-  // `transfer` returns nothing, as Tether's does on Ethereum, and the checkout pays it all the same.
-  const usdt = { rpc: env("BASE_ANVIL_URL"), token: env("BASE_USDT_ADDRESS") };
+  // Sepolia retains USDT and its faucet. `transfer` returns nothing, as Tether's does on
+  // Ethereum, and the checkout pays it all the same.
+  await startOver(product);
+  await chooseOption(product, "USDT · Sepolia");
+  const usdt = { token: env("USDT_ADDRESS") };
   await helper.getByRole("button", { name: "Mint 1,000 test USDT" }).click();
   await expect.poll(() => tokenBalance(env("PAYER_ADDRESS"), usdt)).toBe(parseUnits("1000", 6));
-  await startOver(product);
-  await chooseOption(product, "USDT · Base Sepolia");
+
   await product.getByText("$5", { exact: true }).click();
   const usdtRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
-  expect((await usdtRequest).postDataJSON()).toEqual({ amount: 500, chain_id: baseSepolia.id, asset: "usdt" });
+  expect((await usdtRequest).postDataJSON()).toEqual({ amount: 500, chain_id: sepolia.id, asset: "usdt" });
   await expect(product.locator(".pp-summary")).toContainText("5 USDT");
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
     "1 USDT = $1.00",
@@ -1215,7 +1216,7 @@ test("networks and tokens: USDC and USDT at $1.00 without a bonus, and PHA on Ba
   await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$5.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
-  await expect(product.getByTestId("balance")).toHaveText("$32.00", { timeout: 10_000 });
+  await expect(product.getByTestId("balance")).toHaveText("$30.00", { timeout: 10_000 });
   expect(await tokenBalance(env("PAYER_ADDRESS"), usdt)).toBe(parseUnits("995", 6));
   expect(problems).toEqual([]);
 });
@@ -1443,7 +1444,7 @@ test("prerendered marketing works without JavaScript; comparison chrome stays in
     await expect(staticPage.getByRole("heading", { level: 2 })).toHaveCount(6);
     // The answers fold natively, without script.
     const question = staticPage.locator("summary", { hasText: "Which chains and tokens are supported?" });
-    const answer = staticPage.getByText("The live demo uses test tokens on Sepolia and Base Sepolia.", { exact: false });
+    const answer = staticPage.getByText("The live demo uses test PHA, USDC and USDT on Sepolia, and only test USDC on Base Sepolia.", { exact: false });
     await expect(answer).toBeHidden();
     await question.click();
     await expect(answer).toBeVisible();
@@ -1784,35 +1785,6 @@ async function expectNothingClipped(page: Page, state: string): Promise<void> {
   await openTab(scenes, "Credits");
 }
 
-/**
- * The demo's networks in the live demo's largest shape: the network listing the most tokens (here
- * Sepolia, with test PHA and USDC) also lists a test USDT that mints from the wallet, as live
- * Sepolia does. Its token list then has three rows, and its test tokens two mint buttons beside
- * both faucets. Only the layout is measured in this shape: nothing pays with the added token.
- */
-async function withLiveNetworkShape(page: Page): Promise<void> {
-  await page.route(/\/api\/assets$/, async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { networks: Network[] };
-    const largest = body.networks.reduce((most, each) => (each.assets.length > most.assets.length ? each : most));
-    const stablecoin = largest.assets.find((each) => each.pricing === "stablecoin");
-    if (stablecoin === undefined || largest.assets.some((each) => each.asset === "usdt")) {
-      throw new Error(`${largest.name} has no stablecoin to model a test USDT on, or has one already`);
-    }
-    largest.assets.push({
-      ...stablecoin,
-      asset: "usdt",
-      symbol: "USDT",
-      contract: getAddress(`0x${"7".repeat(40)}`),
-      mintable: true,
-      minter: getAddress(`0x${"8".repeat(40)}`),
-      faucet: null,
-      bonus_bps: 0,
-    });
-    await route.fulfill({ response, json: body });
-  });
-}
-
 test("the demo is a section like the others: their padding, label, heading, and introduction; a link to it opens at its heading", async ({ page }) => {
   await page.goto(env("SITE_URL"));
   for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800], [1024, 768], [390, 844]] as const) {
@@ -1897,9 +1869,7 @@ test("a credit whose bonus the ledger has not applied yet shows the bonus pendin
 test("the demo's states move nothing on the page: one height in each state and on each tab, no layout shift, nothing clipped", async ({ page }) => {
   test.setTimeout(600_000);
   await installWallet(page);
-  // Measured in the live demo's largest shape (three tokens, two mints, two faucets), which the
-  // stand-in service's two tokens per network would understate.
-  await withLiveNetworkShape(page);
+  // The fixture matches staging: Sepolia has three tokens, two mints and two faucets.
   // Every layout shift as the browser reports it, but one within half a second of a click (the
   // click's), by what moved: anything but an entry of the backend's live logs (its open tab, its
   // stepper), where an entry arriving moves the entries after it, as a log grows.
@@ -1970,7 +1940,7 @@ test("the demo's states move nothing on the page: one height in each state and o
   await settle();
   await page.evaluate(() => Object.assign(window, { shifted: [] }));
   const testTokens = page.getByRole("note", { name: "Test tokens" });
-  await expect(product.locator("label.pp-option").filter({ visible: true })).toHaveCount(5);
+  await expect(product.locator("label.pp-option").filter({ visible: true })).toHaveCount(4);
   await expect(testTokens.getByRole("button", { name: /^Mint 1,000 test / })).toHaveCount(2);
   await expect(testTokens.getByRole("link", { name: /^Circle USDC faucet/ })).toBeVisible();
   await expect(testTokens.getByRole("link", { name: /ETH faucets/ })).toBeVisible();

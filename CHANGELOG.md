@@ -14,6 +14,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed (operators)
+
+- Make staging and the Phala Cloud template USDC-only on Base Sepolia, matching Base's
+  production catalog; Sepolia keeps PHA, USDC and USDT. Remove Base Sepolia PHA/USDT from the
+  reference demo and its test-token faucets. Before upgrading staging, keep the retiring routes'
+  quotes paused and drain every open lock and in-flight deposit, including credited deposits
+  awaiting sweeps ([retirement steps](deploy/phala.md#retiring-base-sepolia-pha-and-usdt)).
+
 ### Security
 
 - Update the Rust and Python TLS trust dependencies and rebuild smokescreen, gosu, and WAL-G
