@@ -63,6 +63,30 @@ it("shows a failed quote and lets the payer try again", async () => {
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+it("shows the host's message for a failure, else its own", async () => {
+  const createQuote = vi
+    .fn<CreateQuote>()
+    .mockRejectedValueOnce(new Error("amount_too_small"))
+    .mockRejectedValueOnce(new Error("timeout"))
+    .mockResolvedValue(PARAMS);
+  const createDepositAddress = vi.fn().mockRejectedValue(new Error("treasury_not_set"));
+  const errorMessage = (cause: unknown) =>
+    cause instanceof Error && cause.message === "amount_too_small" ? "The minimum top-up is $5.00." : null;
+  render(
+    <PaymentElement options={OPTIONS} createQuote={createQuote} createDepositAddress={createDepositAddress} errorMessage={errorMessage} />,
+  );
+  const pay = screen.getByRole("button", { name: "Pay in PHA" });
+  fireEvent.click(pay);
+  expect((await screen.findByRole("alert")).textContent).toBe("The minimum top-up is $5.00.");
+  fireEvent.click(pay);
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Could not start the payment. Try again."));
+  fireEvent.click(screen.getByRole("button", { name: "Use a deposit address" }));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Could not get your deposit address. Try again."));
+  // Only one alert at a time, and the retry is the same request.
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(createQuote.mock.calls[1]?.[1].idempotencyKey).toBe(createQuote.mock.calls[0]?.[1].idempotencyKey);
+});
+
 it("shows the customer's deposit address instead, at the chosen option", async () => {
   const createQuote = vi.fn<CreateQuote>(() => Promise.resolve(PARAMS));
   const networks = OPTIONS.map(({ chain_id, asset }) => ({
@@ -72,12 +96,29 @@ it("shows the customer's deposit address instead, at the chosen option", async (
   }));
   const createDepositAddress = vi.fn(() => Promise.resolve({ address: ADDRESS, networks }));
   render(<PaymentElement options={OPTIONS} defaultValue={OPTIONS[1]} createQuote={createQuote} createDepositAddress={createDepositAddress} />);
+  // Options without limits never promise any amount.
+  expect(screen.getByText(/from an exchange or another wallet/).textContent).toBe(
+    "Send USDC on Base Sepolia from an exchange or another wallet. Per-transfer limits are shown with the address.",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Use a deposit address" }));
   expect(createDepositAddress).toHaveBeenCalledWith(OPTIONS[1]);
   expect((await screen.findByRole("img")).getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
   expect(createQuote).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Back to payment options" }));
   expect(screen.getByRole("button", { name: "Pay in USDC" })).toBeDefined();
+});
+
+it("states the chosen option's per-transfer limits for a deposit address", () => {
+  const terms = { decimals: 18, min_amount: 500, min_deposit_atomic: "0", max_deposit_atomic: "10100000000000000000000" };
+  const options = [
+    { chain_id: 11155111, asset: "pha", ...terms, min_deposit_atomic: "100000000000000000" },
+    { chain_id: 84532, asset: "usdc", ...terms, decimals: 6, max_deposit_atomic: "10100000000" },
+  ];
+  render(<PaymentElement options={options} createQuote={vi.fn()} createDepositAddress={vi.fn()} />);
+  const hint = () => screen.getByText(/from an exchange or another wallet/).textContent;
+  expect(hint()).toBe("Send at least $5.00 and 0.1 PHA, up to 10,100 PHA per transfer on Sepolia from an exchange or another wallet.");
+  choose("Token", "USDC");
+  expect(hint()).toBe("Send at least $5.00 and up to 10,100 USDC per transfer on Base Sepolia from an exchange or another wallet.");
 });
 
 it("is submitted by the host's own button when its submit is hidden", async () => {

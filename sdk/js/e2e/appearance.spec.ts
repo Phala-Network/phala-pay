@@ -234,6 +234,9 @@ for (const width of [390, 1280]) {
       await serve(page, () => waiting({ asset: "usdc", chain_id: 84532, decimals: 6, amount_atomic: "25000000" }));
       await page.goto(checkoutUrl(theme).replace("/?", "/?element&"));
       await expect(page.getByRole("combobox", { name: "Network" })).toHaveText("Base");
+      await expect(page.getByText(/from an exchange or another wallet/)).toHaveText(
+        "Send at least $5.00 and up to 10,100 USDC per transfer on Base from an exchange or another wallet.",
+      );
       expect(await axeViolations(page), "options").toEqual([]);
       await check(page, `element-options-${suffix}`);
       await page.getByRole("button", { name: "Pay $25.00 in USDC" }).click();
