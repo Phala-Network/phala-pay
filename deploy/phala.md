@@ -339,7 +339,7 @@ billing page, framed as the merchant's app); then what the merchant's backend se
 payment's live event stream, then tabs for payments, refunds, sweeps, API requests and webhooks,
 and the attestation). The billing page has both ways to collect a payment: a **quote** (a locked price and an exact amount, paid through
 `@phala/pay`'s `<Checkout expectedAddress>`) and the visitor's single **deposit address** (every
-token on every network, any amount credited at spot, its payments read by the browser with the
+token on every network, credited at spot within per-transfer limits, its payments read by the browser with the
 address's `client_secret`). An order id set as `metadata` arrives in the `deposit.credited` event.
 A timeline built only from real data (chain block times, the service's objects read with the
 product key, this product's verified webhooks and ledger rows) shows each payment received, credited

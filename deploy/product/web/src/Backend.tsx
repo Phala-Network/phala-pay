@@ -493,7 +493,7 @@ function AddressView({
         </DataItem>
       </DataList>
       {view.payments.length === 0 ? (
-        <Empty>No payments yet. Send any amount of a supported token to the address.</Empty>
+        <Empty>No payments yet. Send a supported token to the address; per-transfer limits apply.</Empty>
       ) : (
         <ul className="flex flex-col divide-y border-y text-sm" aria-label="Payments the product sees" aria-live="polite">
           {recent.shown.map((payment) => {

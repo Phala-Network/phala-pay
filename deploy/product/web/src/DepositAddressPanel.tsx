@@ -67,8 +67,8 @@ export function DepositAddressPanel({
             {show.isPending ? "Getting your address…" : "Show my deposit address"}
           </Button>
           <p className="text-sm text-pretty text-muted-foreground">
-            Your workspace's own address, for any amount at any time: one address for every token on every network,
-            credited at the market rate when a payment arrives.
+            Your workspace's own address, at any time: one address for every token on every network, credited at
+            the market rate when a payment arrives. Per-transfer limits apply.
           </p>
         </div>
         {show.error !== null && (

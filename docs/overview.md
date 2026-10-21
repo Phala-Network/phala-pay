@@ -34,8 +34,8 @@ A **quote** locks a price: the customer receives an exact amount and a single-us
 pays within the window.
 
 Each customer can also have one persistent, rotatable **deposit address** for every supported
-token on every chain (the same address wherever the treasury is the same). Any amount sent to it
-is credited at spot, like the stable bank-transfer details of Stripe's customer balance.
+token on every chain (the same address wherever the treasury is the same). A transfer to it within
+the per-transfer limits is credited at spot, like the stable bank-transfer details of Stripe's customer balance.
 
 ## Routes
 
