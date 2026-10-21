@@ -14,19 +14,28 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-21
+
 ### Changed (operators)
 
-- Make staging and the Phala Cloud template USDC-only on Base Sepolia, matching Base's
-  production catalog; Sepolia keeps PHA, USDC and USDT. Remove Base Sepolia PHA/USDT from the
+- **Breaking**: make staging and the Phala Cloud template USDC-only on Base Sepolia, matching
+  Base's production catalog; Sepolia keeps PHA, USDC and USDT. Remove Base Sepolia PHA/USDT from the
   reference demo and its test-token faucets. Before upgrading staging, keep the retiring routes'
   quotes paused and drain every open lock and in-flight deposit, including credited deposits
-  awaiting sweeps ([retirement steps](deploy/phala.md#retiring-base-sepolia-pha-and-usdt)).
+  awaiting sweeps ([retirement steps](deploy/phala.md#retiring-base-sepolia-pha-and-usdt)). Require
+  zero open exposure and zero detected, confirmed, credited and credited-undelivered counts for
+  both retiring routes. Then upgrade staging topup and the reference product together and verify
+  `/v1/config`, the demo choices and faucets. Retain the verified N-1 kit, images and config for
+  rollback; route state and pauses survive. After removal, PHA/USDT sent to old Base Sepolia
+  addresses are unsupported, and their later sweeps and reversals are no longer recorded.
 
 ### Security
 
 - Update the Rust and Python TLS trust dependencies and rebuild smokescreen, gosu, and WAL-G
   with Go 1.27.3 to reject distrusted emSign certificate paths. Update aiohttp and the website's
-  Vite and Hono dependencies for their published security fixes.
+  Vite and Hono dependencies for their published security fixes. The service image (which
+  contains smokescreen) and `postgres-walg` image are rebuilt, changing their image digests and
+  the rendered compose hashes.
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
@@ -63,9 +72,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 #### Changed
 
-- `<DepositAddress>` asks for the token and network with `<PaymentOptionPicker>`'s "Token" and
-  "Network" fields, always, even with one option, instead of separate "Network" and "Token" radio
-  groups shown only with more than one choice. The `.pp-choices*` classes are replaced by
+- **Breaking**: `<DepositAddress>` asks for the token and network with `<PaymentOptionPicker>`'s
+  "Token" and "Network" fields, always, even with one option, instead of separate "Network" and
+  "Token" radio groups shown only with more than one choice. The `.pp-choices*` classes are replaced by
   `.pp-options*` and `.pp-select*`; a stylesheet that targeted them should use the `--pp-*`
   properties instead. `--pp-color-selected` now colors only the selected tab; listboxes use
   `--pp-color-surface`.
@@ -2143,7 +2152,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.10.10...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.0
 [0.10.10]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.10
 [0.10.9]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.9
 [0.10.8]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.10.8
