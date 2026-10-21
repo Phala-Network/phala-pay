@@ -353,7 +353,8 @@ function QuotePayment({
   const [preset, setPreset] = useState<number | "custom">(2000);
   const [custom, setCustom] = useState("");
   const [invalid, setInvalid] = useState<string | null>(null);
-  const [step, setStep] = useState<PaymentElementStep>("options");
+  // The element's step, `null` until its code has loaded and it can be submitted.
+  const [step, setStep] = useState<PaymentElementStep | null>(null);
   // Each top-up's element: a new one starts from the options.
   const [round, setRound] = useState(0);
   const [status, setStatus] = useState<CheckoutStatus | null>(null);
@@ -368,7 +369,7 @@ function QuotePayment({
   const cents = preset === "custom" ? Math.round(Number(custom) * 100) : preset;
   const valid = Number.isSafeInteger(cents) && cents >= min && cents <= max;
   const ready = account !== null && networks.data !== undefined;
-  const choosing = step === "options" || step === "creating";
+  const choosing = step === null || step === "options" || step === "creating";
 
   const createQuote = async (chosen: PaymentOption) => {
     const created = await quote.mutateAsync({ amount: cents, chainId: chosen.chain_id, asset: chosen.asset });
@@ -483,7 +484,7 @@ function QuotePayment({
             form={`${id}-payment`}
             size="lg"
             className="w-full"
-            disabled={step === "creating" || !ready || option === undefined}
+            disabled={step === null || step === "creating" || !ready || option === undefined}
             onClick={(event) => {
               // An amount out of range stops the submit here, before a quote is asked for.
               setInvalid(valid ? null : `Enter an amount between ${dollars(min)} and ${dollars(max)}.`);
