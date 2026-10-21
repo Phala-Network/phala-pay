@@ -189,10 +189,13 @@ import { PaymentElement } from "@phala/pay-react";
   shows "Could not start the payment. Try again." and calls `onError(error)`; show your own
   message from there.
 - Create the quote with `idempotencyKey` as its `Idempotency-Key`, not an order id of yours: the
-  key is a new random UUID for each quote the payer asks for (another option, or a new quote after
-  going back from one) and the same only when they retry the same option after `createQuote`
-  failed, so that a retry returns the quote a lost response created. One key per order would
-  answer another option with `400 idempotency_key_reused`, and a new quote with the expired one.
+  key is a new random UUID for each quote the payer asks for (another option or amount, or a new
+  quote after going back from one) and the same only when they retry after `createQuote` failed
+  with the same option, `amount`, and `currency`, so that a retry returns the quote a lost response
+  created. One key per order would answer another option with `400 idempotency_key_reused`, and a
+  new quote with the expired one. If your quote varies by anything else between attempts (a field
+  of your own form, say), pass it as `amount` or give the element a new `key` when it changes, or
+  a retry would reuse a key with another body.
 - After the quote: the checkout, and a way back to the options ("Choose another token or
   network") until a payment is on its way, then "Start over" if it does not complete or "Start a
   new payment" once credited.

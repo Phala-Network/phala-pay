@@ -124,8 +124,9 @@ Python `TopupClient` permits a test-mode fallback to the response's treasury wit
 this when the payer submits, with the token and network they chose and the idempotency key the
 payment element made for this quote; check them against what you accept (`GET /v1/config`) before
 quoting. Use that key, not an order id, as the quote's `idempotency_key`: the element makes a new
-one for each quote the payer asks for (another token, or a new quote after one ended) and repeats
-it only to retry a request that failed, so a retry returns the quote a lost response created.
+one for each quote the payer asks for (another token or amount, or a new quote after one ended)
+and repeats it only to retry a request that failed with the same option and amount, so a retry
+returns the quote a lost response created.
 Repeating a key with another body is `400 idempotency_key_reused`. Only the create response
 carries `client_secret`; repeating the call with the same key within 24 hours returns the same
 response, secret included.

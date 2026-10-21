@@ -31,8 +31,10 @@ export type PaymentElementDepositAddress = DepositAddressDetails & { clientSecre
 export interface PaymentElementQuoteRequest {
   /**
    * Send it as your backend's `Idempotency-Key` for this quote. It is new for each quote the payer
-   * asks for, and the same only when they retry the same option after `createQuote` failed, so a
-   * retry returns the quote a lost response created rather than a second one.
+   * asks for, and the same only when they retry after `createQuote` failed with the same option,
+   * `amount`, and `currency`, so a retry returns the quote a lost response created rather than a
+   * second one. A host that varies any other field of the quote between attempts must pass it as
+   * `amount` or remount the element (a new `key`), or the retry reuses a key with another body.
    */
   idempotencyKey: string;
 }
@@ -151,8 +153,8 @@ export function PaymentElement<T extends PaymentOption>({
   const request = useRef(0);
   const pending = useRef(false);
   // The idempotency key of the quote being asked for: kept while `createQuote` fails for the same
-  // option, so that its retry is the same request; dropped once a quote is created.
-  const attempt = useRef<{ option: PaymentOption; key: string } | null>(null);
+  // option and amount, so that its retry is the same request; dropped once a quote is created.
+  const attempt = useRef<{ option: PaymentOption; amount: number | undefined; currency: string; key: string } | null>(null);
   const callbacks = useRef({ onChange, onError });
   useEffect(() => {
     callbacks.current = { onChange, onError };
@@ -203,8 +205,13 @@ export function PaymentElement<T extends PaymentOption>({
     if (disabled || option === undefined) {
       return;
     }
-    if (attempt.current === null || !samePaymentOption(attempt.current.option, option)) {
-      attempt.current = { option, key: crypto.randomUUID() };
+    const same =
+      attempt.current !== null &&
+      samePaymentOption(attempt.current.option, option) &&
+      attempt.current.amount === amount &&
+      attempt.current.currency === currency;
+    if (attempt.current === null || !same) {
+      attempt.current = { option, amount, currency, key: crypto.randomUUID() };
     }
     const { key } = attempt.current;
     start("quote", () => createQuote(option, { idempotencyKey: key }), (params): Step => {

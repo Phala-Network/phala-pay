@@ -26,7 +26,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   to the options before a payment is sent or once the quote ended. A failed `createQuote` shows
   "Could not start the payment. Try again." (and calls `onError`); a submit while one is pending
   is ignored. The key is a new random UUID for each quote the payer asks for and is repeated only
-  to retry the same option after a failure. With `createDepositAddress`, it also offers the customer's deposit address.
+  to retry, after a failure, with the same option, `amount`, and `currency`. With `createDepositAddress`, it also offers the customer's deposit address.
   `hideSubmit` with `id` lets your own `<button type="submit" form={id}>` submit it. `onChange`
   reports its step and the checkout's status; `onSuccess`, `onExpire`, `onWalletError`,
   `walletClient`, and `appearance` work as `<Checkout>`'s.

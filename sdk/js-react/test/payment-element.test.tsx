@@ -126,3 +126,15 @@ it("creates each quote with its own idempotency key, kept only to retry a failur
   expect(new Set([key(0), key(2), key(3)]).size).toBe(3);
   expect(key(0)).toMatch(/^[0-9a-f-]{36}$/);
 });
+
+it("asks with a new idempotency key once the amount changed after a failure", async () => {
+  const createQuote = vi.fn<CreateQuote>().mockRejectedValueOnce(new Error("amount_too_small")).mockResolvedValue(PARAMS);
+  const { rerender } = render(<PaymentElement options={OPTIONS} amount={300} createQuote={createQuote} />);
+  fireEvent.click(screen.getByRole("button", { name: "Pay $3.00 in PHA" }));
+  await screen.findByRole("alert");
+  rerender(<PaymentElement options={OPTIONS} amount={2000} createQuote={createQuote} />);
+  fireEvent.click(screen.getByRole("button", { name: "Pay $20.00 in PHA" }));
+  expect(await screen.findByText("Waiting for your payment")).toBeDefined();
+  const [first, second] = createQuote.mock.calls.map((call) => call[1].idempotencyKey);
+  expect(second).not.toBe(first);
+});
