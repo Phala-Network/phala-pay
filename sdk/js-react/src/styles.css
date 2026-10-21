@@ -150,30 +150,39 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 /* Deposit address */
 .pp-intro { margin: 0 0 1em; color: var(--pp-color-text-muted); }
 
-/* Payment options: native radios, one option per row, each drawn as a card. The radio covers its
-   option, so that its own border shows the selection and its outline the focus. */
-.pp-options { display: grid; gap: 0.5em; min-width: 0; margin: 0 0 1em; padding: 0; border: 0; }
+/* Payment options: the token, then the network it is on, as two select-only fields, side by side
+   where the container is 480px or wider. */
+.pp-options { min-width: 0; margin: 0 0 1em; container-type: inline-size; }
 .pp-options:last-child { margin-bottom: 0; }
-.pp-options__legend { margin-bottom: 0.375em; padding: 0; font-weight: 500; }
-.pp-option { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 0.25em 0.75em;
-  min-height: var(--pp-control-height); padding: 0.5em 0.75em; border-radius: var(--pp-radius); line-height: 1.25;
-  cursor: pointer; }
-.pp-option__input { position: absolute; inset: 0; margin: 0; appearance: none;
-  border: 1px solid var(--pp-color-input); border-radius: inherit; background: none; cursor: inherit;
-  transition: border-color 150ms; }
-.pp-option__input:hover:enabled { border-color: var(--pp-color-text-muted); }
-.pp-option__input:checked { border: 2px solid var(--pp-color-selected); }
-/* The token's icon beside its symbol over its network; a detail beside them, or under them where
-   both do not fit. */
-.pp-option__main { display: grid; flex: 1 1 9em; grid-template-columns: auto minmax(0, 1fr); align-items: center;
-  column-gap: 0.625em; min-width: 0; }
-.pp-option__main > .pp-icon { grid-row: span 2; }
-.pp-option__asset { font-weight: 500; }
-.pp-option__network { display: flex; flex-wrap: wrap; align-items: center; column-gap: 0.375em;
-  color: var(--pp-color-text-muted); }
-.pp-option__badge { color: var(--pp-color-warning); font-weight: 500; }
-.pp-option__detail { margin-inline-start: auto; color: var(--pp-color-text-muted); text-align: end; }
-.pp-options:disabled .pp-option { cursor: not-allowed; opacity: 0.5; }
+.pp-options__fields { display: grid; gap: 0.75em; }
+@container (min-width: 480px) { .pp-options__fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.pp-options__detail { margin: 0.5em 0 0; color: var(--pp-color-text-muted); }
+
+/* Select-only field: a quiet input showing the chosen item, its listbox opening under it. */
+.pp-select { display: grid; gap: 0.375em; min-width: 0; }
+.pp-select__label { font-weight: 500; }
+.pp-select__control { position: relative; }
+.pp-select__trigger { display: flex; align-items: center; gap: 0.5em; min-height: var(--pp-control-height);
+  padding: 0 0.75em; border: 1px solid var(--pp-color-input); border-radius: var(--pp-radius); cursor: pointer;
+  user-select: none; transition: border-color 150ms; }
+.pp-select__trigger:hover:not([aria-disabled="true"]) { border-color: var(--pp-color-text-muted); }
+.pp-select__trigger[aria-disabled="true"] { cursor: not-allowed; opacity: 0.5; }
+.pp-select__value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-select__suffix, .pp-select__placeholder { color: var(--pp-color-text-muted); white-space: nowrap; }
+.pp-select__chevron { flex: none; margin-inline-start: auto; color: var(--pp-color-text-muted); }
+.pp-select__listbox { position: absolute; z-index: 10; top: calc(100% + 4px); right: 0; left: 0; max-height: 16em;
+  margin: 0; padding: 0.25em; overflow-y: auto; list-style: none; border: 1px solid var(--pp-color-border);
+  border-radius: var(--pp-radius); background: var(--pp-color-surface); box-shadow: 0 8px 24px rgb(0 0 0 / 0.16); }
+.pp-select__listbox[hidden] { display: none; }
+/* In the top layer (where the browser has popovers), placed beside the field by the component, as
+   tall as the room on that side allows. */
+.pp-select__listbox:popover-open { position: fixed; inset: auto; margin: 0; color: var(--pp-color-text);
+  max-height: min(16em, var(--pp-select-room, 16em)); }
+.pp-select__option { display: flex; align-items: center; gap: 0.5em; min-height: 2.5em; padding: 0 0.5em;
+  border-radius: calc(var(--pp-radius) - 2px); cursor: pointer; }
+.pp-select__option[data-active] { background: color-mix(in srgb, var(--pp-color-text) 9%, transparent); }
+.pp-select__option[aria-selected="true"] { font-weight: 500; }
+.pp-select__check { display: flex; margin-inline-start: auto; color: var(--pp-color-text-muted); }
 
 /* Payment element: the options, the submit button, and a secondary way to pay; then the step it
    leads to, under a way back. A new step takes the focus without a ring of its own. */
@@ -199,7 +208,8 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 /* Forced colors would draw every border in one color: the selected choice and tab keep a
    Highlight one, in system colors throughout. */
 @media (forced-colors: active) {
-  .pp-option__input:checked { border-color: Highlight; forced-color-adjust: none; }
+  .pp-select__trigger[aria-expanded="true"] { border-color: Highlight; }
+  .pp-select__option[data-active] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
   .pp-tabs__tab { border-bottom-color: Canvas; color: CanvasText; forced-color-adjust: none; }
   .pp-tabs__tab:hover { border-bottom-color: GrayText; }
   .pp-tabs__tab[aria-selected="true"] { border-bottom-color: Highlight; }
@@ -207,5 +217,5 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 }
 @media (prefers-reduced-motion: reduce) {
   .pp-skeleton__line { animation: none; }
-  .pp-tabs__tab, .pp-button, .pp-copy, .pp-copy::before, .pp-option__input { transition: none; }
+  .pp-tabs__tab, .pp-button, .pp-copy, .pp-copy::before, .pp-select__trigger { transition: none; }
 }

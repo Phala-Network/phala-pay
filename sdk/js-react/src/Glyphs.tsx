@@ -19,6 +19,10 @@ export function CheckGlyph() {
   return <Glyph><path d="m5 12.5 4.5 4.5L19 7.5" /></Glyph>;
 }
 
+export function ChevronGlyph() {
+  return <Glyph className="pp-select__chevron"><path d="m7 10 5 5 5-5" /></Glyph>;
+}
+
 export function CrossGlyph() {
   return <Glyph><path d="m7 7 10 10M17 7 7 17" /></Glyph>;
 }

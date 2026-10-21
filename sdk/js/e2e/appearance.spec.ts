@@ -88,7 +88,8 @@ async function installWallet(page: Page) {
  */
 async function check(page: Page, name: string) {
   await expect(page.locator(".pp-root")).toBeVisible();
-  await expect.soft(page.locator(".pp-root style, .pp-root [style]")).toHaveCount(0);
+  // An open listbox's place is the one style set, through the CSSOM.
+  await expect.soft(page.locator(".pp-root style, .pp-root [style]:not(.pp-select__listbox:popover-open)")).toHaveCount(0);
   expect.soft(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${name}: page overflow`).toBe(true);
   expect.soft(await page.evaluate(() => {
     const root = document.querySelector(".pp-root");
@@ -218,19 +219,21 @@ for (const width of [390, 1280]) {
     test(`deposit address states at ${suffix}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`/?deposit&networks=1&theme=${theme}`);
-      await expect(page.getByRole("group", { name: "Pay with" }).getByRole("radio")).toHaveCount(2);
+      await expect(page.getByRole("combobox", { name: "Network" })).toHaveText("Sepolia Testnet");
       await check(page, `deposit-single-${suffix}`);
 
       await page.goto(`/?picker&theme=${theme}`);
-      await expect(page.getByRole("radio", { name: "USDC · Base" })).toBeChecked();
+      await expect(page.getByRole("combobox", { name: "Network" })).toHaveText("Base");
       await check(page, `picker-${suffix}`);
+      await page.getByRole("combobox", { name: "Network" }).click();
+      await check(page, `picker-open-${suffix}`);
     });
 
     test(`payment element steps at ${suffix}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await serve(page, () => waiting({ asset: "usdc", chain_id: 84532, decimals: 6, amount_atomic: "25000000" }));
       await page.goto(checkoutUrl(theme).replace("/?", "/?element&"));
-      await expect(page.getByRole("radio", { name: "USDC · Base" })).toBeChecked();
+      await expect(page.getByRole("combobox", { name: "Network" })).toHaveText("Base");
       expect(await axeViolations(page), "options").toEqual([]);
       await check(page, `element-options-${suffix}`);
       await page.getByRole("button", { name: "Pay $25.00 in USDC" }).click();
@@ -320,11 +323,11 @@ function edgeContrast(locator: Locator, side: "Top" | "Bottom" = "Top"): Promise
 }
 
 for (const theme of ["light", "dark"]) {
-  test(`choices' edges keep 3:1 against the page, ${theme}`, async ({ page }) => {
+  test(`fields' edges keep 3:1 against the page, ${theme}`, async ({ page }) => {
     await page.goto(`/?deposit&theme=${theme}`);
-    const choices = page.locator(".pp-option__input:not(:checked)");
-    await expect(choices.first()).toBeVisible();
-    for (const ratio of await edgeContrast(choices)) expect(ratio).toBeGreaterThanOrEqual(3);
+    const fields = page.getByRole("combobox");
+    await expect(fields).toHaveCount(2);
+    for (const ratio of await edgeContrast(fields)) expect(ratio).toBeGreaterThanOrEqual(3);
   });
 }
 
@@ -363,14 +366,10 @@ for (const width of [390, 1280]) {
       expect(await violations(), "checkout").toEqual([]);
       await check(page, `lime-wallet-${suffix}`);
 
+      // The fields' edges are the input color, which a light primary color leaves at 3:1.
       await page.goto(`/?deposit&theme=${theme}`);
-      const choice = page.locator(".pp-option__input:checked").first();
-      await expect(choice).toHaveCSS("border-top-color", primary);
       await page.addStyleTag({ content: LIME_HOST });
-      await expect(choice).toHaveCSS("border-top-color", selected);
-      for (const ratio of await edgeContrast(page.locator(".pp-option__input:checked"))) {
-        expect(ratio).toBeGreaterThanOrEqual(3);
-      }
+      for (const ratio of await edgeContrast(page.getByRole("combobox"))) expect(ratio).toBeGreaterThanOrEqual(3);
       expect(await violations(), "deposit address").toEqual([]);
       await check(page, `lime-deposit-${suffix}`);
     });
@@ -387,27 +386,28 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
     });
 
   await page.keyboard.press("Tab");
-  const radio = page.getByRole("radio", { name: "PHA · Sepolia" });
-  await expect(radio).toBeFocused();
-  await expect(radio).toBeChecked();
-  const focused = await outline(radio);
+  const token = page.getByRole("combobox", { name: "Token" });
+  await expect(token).toBeFocused();
+  const focused = await outline(token);
   expect(focused.style).toBe("solid");
   expect(focused.width).toBe("2px");
   expect(focused.color).not.toBe(focused.border);
-  if (screenshots !== undefined) await page.locator(".pp-root").screenshot({ caret: "initial", path: join(screenshots, "focus-radio.png") });
+  if (screenshots !== undefined) await page.locator(".pp-root").screenshot({ caret: "initial", path: join(screenshots, "focus-field.png") });
 
-  // Selected without focus: the selection alone, without the focus ring.
+  // Unfocused: the field alone, without the focus ring.
   await page.keyboard.press("Tab");
-  await expect(radio).not.toBeFocused();
-  const selected = await outline(radio);
-  expect(selected.style).toBe("none");
+  await expect(token).not.toBeFocused();
+  expect((await outline(token)).style).toBe("none");
 
-  // In forced colors, the selection keeps a system color of its own.
+  // In forced colors, the listbox's active option keeps a system color of its own.
   await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
   await expect.poll(() => page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
-  const borders = await page.getByRole("group", { name: "Pay with" }).getByRole("radio").evaluateAll((radios) =>
-    radios.map((radio) => getComputedStyle(radio).borderTopColor));
-  expect(new Set(borders).size).toBe(2);
+  await token.focus();
+  await page.keyboard.press("ArrowDown");
+  const backgrounds = await page.getByRole("listbox", { name: "Token" }).getByRole("option").evaluateAll((options) =>
+    options.map((option) => getComputedStyle(option).backgroundColor));
+  expect(new Set(backgrounds).size).toBe(2);
+  await page.keyboard.press("Escape");
   await page.emulateMedia({ forcedColors: "none", reducedMotion: "no-preference" });
 
   const tabs = new URLSearchParams({ client_secret: CLIENT_SECRET, expected_address: ADDRESS, api_base: API_BASE });
@@ -442,3 +442,32 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
   await page.addStyleTag({ content: ".pp-root[data-theme] { --pp-font-size: 22px; }" });
   expect(await page.locator(".pp-copy svg").first().boundingBox()).toMatchObject({ width: 16, height: 16 });
 });
+
+for (const theme of ["light", "dark"]) {
+  test(`a listbox opens over a clipping dialog near the window's foot, upward, ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 640 });
+    await page.goto(`/?modal&theme=${theme}`);
+    const field = page.getByRole("combobox", { name: "Network" });
+    await field.click();
+    const listbox = page.getByRole("listbox", { name: "Network" });
+    await expect(listbox).toBeVisible();
+    const [fieldBox, listBox, dialogBox] = await Promise.all([field, listbox, page.getByRole("dialog")].map((each) => each.boundingBox()));
+    // No room under the field: the listbox is over it, inside the window, past the dialog's edge.
+    expect((listBox?.y ?? 0) + (listBox?.height ?? 0)).toBeLessThanOrEqual((fieldBox?.y ?? 0) + 1);
+    expect(listBox?.y ?? -1).toBeGreaterThanOrEqual(0);
+    expect(listBox?.y ?? 0).toBeLessThan(dialogBox?.y ?? 0);
+    // Not clipped: each option is what is under its own centre, and takes a press.
+    for (const option of await listbox.getByRole("option").all()) {
+      expect(await option.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+      })).toBe(true);
+    }
+    expect(await axeViolations(page)).toEqual([]);
+    if (screenshots !== undefined) await page.screenshot({ path: join(screenshots, `modal-open-${theme}.png`) });
+    await listbox.getByRole("option", { name: "Ethereum", exact: true }).click();
+    await expect(field).toHaveText("Ethereum");
+    await expect(listbox).toBeHidden();
+    await expect(page.locator(".pp-root [style]")).toHaveCount(0);
+  });
+}

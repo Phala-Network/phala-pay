@@ -12,8 +12,8 @@ Import `PaymentElement`, `Checkout`, `DepositAddress`, `PaymentOptionPicker`, `N
 payer picks a token and network, and only on submit does your `createQuote(option, { idempotencyKey })`
 create the quote on your backend, with that key as its `Idempotency-Key` (resolving with
 `pay.checkoutParams(quote)`); the element then shows its
-checkout, with a way back to the options. `PaymentOptionPicker` is that choice on its own, one
-native radio per token on each network.
+checkout, with a way back to the options. `PaymentOptionPicker` is that choice on its own: a
+"Token" field, then a "Network" field of the networks that take it, each a select-only combobox.
 
 ```tsx
 <PaymentElement

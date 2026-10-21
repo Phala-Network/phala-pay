@@ -1,3 +1,4 @@
+import { fireEvent, screen, within } from "@testing-library/react";
 import type { ClientQuote } from "../../js/src/index.js";
 
 export const TOKEN = "0x8F40e7E99678F44c88158f049E62817580ab113B";
@@ -61,4 +62,20 @@ export function fakeFetch(...responses: (ClientQuote | number | Error | (() => R
 export function shownValue(value: string) {
   return (_: string, element: Element | null) =>
     element?.classList.contains("pp-field__text") === true && element.textContent === value;
+}
+
+/** Chooses `name` in the payment options' `field`, as a pointer does. */
+export function choose(field: "Token" | "Network", name: string) {
+  const combobox = screen.getByRole("combobox", { name: field });
+  fireEvent.click(combobox);
+  const listbox = document.getElementById(combobox.getAttribute("aria-controls") ?? "");
+  if (listbox === null) throw new Error(`no listbox for ${field}`);
+  fireEvent.click(within(listbox).getByRole("option", { name }));
+}
+
+/** The payment option chosen, as `USDC · Base Sepolia`. */
+export function chosen(): string {
+  const value = (field: string) =>
+    screen.getByRole("combobox", { name: field }).querySelector(".pp-select__value")?.textContent ?? "";
+  return `${value("Token")} · ${value("Network")}`;
 }

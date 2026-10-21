@@ -3,7 +3,7 @@ import { StrictMode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PaymentElement, type PaymentElementState } from "../src/index.js";
-import { ADDRESS, API_BASE, CLIENT_SECRET, TOKEN, quote } from "./fixtures.js";
+import { ADDRESS, API_BASE, CLIENT_SECRET, TOKEN, choose, chosen, quote } from "./fixtures.js";
 
 const OPTIONS = [
   { chain_id: 11155111, asset: "pha", price: "Market rate" },
@@ -33,7 +33,7 @@ it("creates the quote once, on submit, with the chosen option, then shows its ch
   );
   expect(createQuote).not.toHaveBeenCalled();
   expect((await axe.run(container, { rules: { "color-contrast": { enabled: false } } })).violations).toEqual([]);
-  fireEvent.click(screen.getByRole("radio", { name: "USDC · Base Sepolia" }));
+  choose("Token", "USDC");
   const pay = screen.getByRole("button", { name: "Pay $10.00 in USDC" });
   fireEvent.click(pay);
   fireEvent.click(pay);
@@ -45,7 +45,7 @@ it("creates the quote once, on submit, with the chosen option, then shows its ch
   expect(await screen.findByText("Waiting for your payment")).toBeDefined();
   await waitFor(() => expect(onChange.mock.lastCall?.[0].checkout?.status).toBe("waiting"));
   fireEvent.click(screen.getByRole("button", { name: "Choose another token or network" }));
-  expect(screen.getByRole("radio", { name: "USDC · Base Sepolia" })).toHaveProperty("checked", true);
+  expect(chosen()).toBe("USDC · Base Sepolia");
   expect(onChange).toHaveBeenLastCalledWith({ step: "options", checkout: null });
 });
 
@@ -113,7 +113,7 @@ it("creates each quote with its own idempotency key, kept only to retry a failur
   expect(key(1)).toBe(key(0));
 
   // Another option is another quote.
-  fireEvent.click(screen.getByRole("radio", { name: "USDC · Base Sepolia" }));
+  choose("Token", "USDC");
   fireEvent.click(screen.getByRole("button", { name: "Pay in USDC" }));
   expect(await screen.findByText("Waiting for your payment")).toBeDefined();
   expect(key(2)).not.toBe(key(1));

@@ -3,3 +3,9 @@
 body { margin: 0; padding: 16px; }
 body:has([data-theme="dark"]) { background: #101010; }
 main { max-width: 400px; }
+/* `?modal`: a dialog as a host's modal is, centred by a transform and clipping its content, with
+   the payment options at its foot, near the bottom of the window. */
+.modal { position: fixed; right: 16px; bottom: 16px; left: 16px; display: flex; flex-direction: column;
+  justify-content: flex-end; max-width: 400px; height: 120px; padding: 16px; overflow: hidden;
+  border: 1px solid #a1a1aa; border-radius: 12px; background: #ffffff; transform: translateZ(0); }
+body:has([data-theme="dark"]) .modal { background: #18181b; }

@@ -273,35 +273,54 @@ async function installWallet(
 }
 
 /**
- * Every token on every network, one option each, the first chosen by default: test PHA on Sepolia,
- * which earns the demo merchant's bonus; test USDC is a stablecoin.
+ * The token, then the network, chosen by default: test PHA, which earns the demo merchant's bonus,
+ * on Sepolia. Every token is offered, and the networks that take the chosen one: PHA and USDT only
+ * Sepolia, USDC both. Test USDC is a stablecoin.
  */
 async function expectPaymentOptions(product: Locator) {
-  const options = product.getByRole("group", { name: "Pay with" });
-  await expect(options.getByRole("radio")).toHaveCount(4);
-  await expect(options.getByRole("radio", { name: "PHA · Sepolia", exact: true })).toBeChecked();
-  const pha = option(product, "PHA · Sepolia");
-  const usdc = option(product, "USDC · Sepolia");
-  await expect(pha).toContainText("+10% bonus");
-  // A stablecoin is $1.00; a spot token is at the market rate, which a quote locks.
-  await expect(usdc.getByTestId("token-price")).toHaveText("$1.00");
-  await expect(pha.getByTestId("token-price")).toHaveText("Market rate");
-  await expect(usdc).not.toContainText("bonus");
+  await expect(product.getByRole("group", { name: "Pay with" })).toBeVisible();
+  await expectChosen(product, "PHA · Sepolia");
+  const price = product.getByTestId("token-price").filter({ visible: true });
+  const bonus = product.getByTestId("token-bonus").filter({ visible: true });
+  // A spot token is at the market rate, which a quote locks; a stablecoin is $1.00.
+  await expect(price).toHaveText("Market rate");
+  await expect(bonus).toHaveText("+10% bonus");
+  await expectOffered(product, "Token", ["PHA", "USDC", "USDT"]);
+  await expectOffered(product, "Network", ["Sepolia"]);
+  await chooseOption(product, "USDC · Sepolia");
+  await expectOffered(product, "Network", ["Sepolia", "Base Sepolia"]);
+  await expect(price).toHaveText("$1.00 per USDC");
+  await expect(bonus).toHaveCount(0);
+  await chooseOption(product, "PHA · Sepolia");
 }
 
-/** The visible payment option named `name`, such as `USDC · Sepolia`: its row, with its terms. */
-function option(product: Locator, name: string): Locator {
-  return product
-    .locator("label.pp-option")
-    .filter({ visible: true })
-    .filter({ has: product.page().getByRole("radio", { name, exact: true }) });
+/** The items `field` ("Token" or "Network") offers, opened and closed again. */
+async function expectOffered(product: Locator, field: string, names: string[]) {
+  const combobox = product.getByRole("combobox", { name: field, exact: true });
+  await combobox.click();
+  await expect(product.getByRole("listbox", { name: field, exact: true }).getByRole("option")).toHaveText(names);
+  await combobox.press("Escape");
+  await expect(combobox).toHaveAttribute("aria-expanded", "false");
 }
 
-/** Chooses the payment option named `name`, such as `USDC · Sepolia`. */
+/** The token and network chosen, as `USDC · Sepolia`. */
+async function expectChosen(product: Locator, name: string) {
+  const [token = "", network = ""] = name.split(" · ");
+  await expect(product.getByRole("combobox", { name: "Token", exact: true }).locator(".pp-select__value")).toHaveText(token);
+  await expect(product.getByRole("combobox", { name: "Network", exact: true }).locator(".pp-select__value")).toHaveText(network);
+}
+
+/** Chooses a token, then its network, as `USDC · Sepolia`, in the visible payment options. */
 async function chooseOption(product: Locator, name: string) {
-  const radio = product.getByRole("radio", { name, exact: true });
-  await radio.check();
-  await expect(radio).toBeChecked();
+  const [token = "", network = ""] = name.split(" · ");
+  for (const [field, value] of [["Token", token], ["Network", network]] as const) {
+    const combobox = product.getByRole("combobox", { name: field, exact: true });
+    if ((await combobox.locator(".pp-select__value").textContent()) !== value) {
+      await combobox.click();
+      await product.getByRole("listbox", { name: field, exact: true }).getByRole("option", { name: value, exact: true }).click();
+    }
+  }
+  await expectChosen(product, name);
 }
 
 /**
@@ -544,7 +563,7 @@ test("query outages show retrying states, recover, and preserve the last account
   expect(recoveredResponse.status()).toBe(200);
   await recoveredResponse.finished();
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
-  await expect(product.getByRole("radio", { name: "PHA · Sepolia", exact: true })).toBeEnabled();
+  await expect(product.getByRole("combobox", { name: "Token", exact: true })).not.toHaveAttribute("aria-disabled");
   await expect(trust).toContainText("Attestation verified");
   await expect(trust).not.toContainText("retrying…");
 
@@ -1169,8 +1188,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   // Base Sepolia offers only USDC and Circle's faucet; no token can mint from the helper.
   await startOver(product);
   await chooseOption(product, "USDC · Base Sepolia");
-  await expect(product.getByRole("radio", { name: "PHA · Base Sepolia", exact: true })).toHaveCount(0);
-  await expect(product.getByRole("radio", { name: "USDT · Base Sepolia", exact: true })).toHaveCount(0);
+  await expectOffered(product, "Network", ["Sepolia", "Base Sepolia"]);
   await expect(circle).toHaveAttribute("title", "On the faucet, pick Base Sepolia as the network.");
   await expect(helper.getByRole("button", { name: /Mint/ })).toHaveCount(0);
   await expect(helper.getByRole("link", { name: /^Base Sepolia ETH faucets/ })).toHaveAttribute(
@@ -1572,12 +1590,12 @@ test("forced colors keep the chosen amount, the active tab, and keyboard focus v
   await expect(active).toHaveAttribute("aria-selected", "true");
   expect(await style(active, "backgroundColor")).not.toBe(await style(methods, "backgroundColor"));
 
-  // Keyboard focus on a payment option and a text field keeps an outline, which the system colours.
+  // Keyboard focus on the token field and a text field keeps an outline, which the system colours.
   await chosen.focus();
   await page.keyboard.press("Tab");
-  const pha = product.getByRole("radio", { name: "PHA · Sepolia", exact: true });
-  await expect(pha).toBeFocused();
-  expect(await style(pha, "outlineStyle")).not.toBe("none");
+  const token = product.getByRole("combobox", { name: "Token", exact: true });
+  await expect(token).toBeFocused();
+  expect(await style(token, "outlineStyle")).not.toBe("none");
   await amounts.getByRole("radio", { name: "Custom", exact: true }).click();
   const custom = product.getByLabel("Custom amount (USD)");
   await custom.focus();
@@ -1940,7 +1958,7 @@ test("the demo's states move nothing on the page: one height in each state and o
   await settle();
   await page.evaluate(() => Object.assign(window, { shifted: [] }));
   const testTokens = page.getByRole("note", { name: "Test tokens" });
-  await expect(product.locator("label.pp-option").filter({ visible: true })).toHaveCount(4);
+  await expect(product.getByRole("combobox")).toHaveCount(2);
   await expect(testTokens.getByRole("button", { name: /^Mint 1,000 test / })).toHaveCount(2);
   await expect(testTokens.getByRole("link", { name: /^Circle USDC faucet/ })).toBeVisible();
   await expect(testTokens.getByRole("link", { name: /ETH faucets/ })).toBeVisible();

@@ -30,10 +30,21 @@ for (const width of [390, 1280]) {
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         const icon = page.locator(".pp-icon").first();
         const bounds = await icon.boundingBox();
-        expect(bounds?.width).toBe(surface === "checkout" ? 20 : 24);
-        expect(bounds?.height).toBe(surface === "checkout" ? 20 : 24);
+        expect(bounds?.width).toBe(20);
+        expect(bounds?.height).toBe(20);
         expect(cspErrors).toEqual([]);
         if (screenshots !== undefined) await page.screenshot({ path: join(screenshots, `${surface}-${width}-${theme}.png`), fullPage: true });
+        if (surface === "deposit") {
+          // The open listbox is placed through the CSSOM, which the policy allows: it opens under its field.
+          const field = page.getByRole("combobox", { name: "Token" });
+          await field.click();
+          const listbox = page.getByRole("listbox", { name: "Token" });
+          await expect(listbox).toBeVisible();
+          const [fieldBox, listBox] = await Promise.all([field.boundingBox(), listbox.boundingBox()]);
+          expect(listBox?.y ?? 0).toBeGreaterThanOrEqual((fieldBox?.y ?? 0) + (fieldBox?.height ?? 0));
+          expect(Math.round(listBox?.width ?? 0)).toBe(Math.round(fieldBox?.width ?? -1));
+          expect(cspErrors).toEqual([]);
+        }
       }
     });
   }

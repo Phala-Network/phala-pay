@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
 import { assetOf, networkOf } from "./chains.js";
-import { DEMO_PAYMENT_OPTIONS, DEMO_TESTNET } from "./content/site.js";
+import { DEMO_TESTNET } from "./content/site.js";
 import { ExplorerLink, TOUCH, loadSdk } from "./common.js";
 import { QueryState, type QueryView } from "./queryView.js";
 import { DepositAddressPanel } from "./DepositAddressPanel.js";
@@ -271,48 +271,56 @@ function OptionsState({
   }
   return (
     <>
-      {networks.data === undefined ? <OptionsSkeleton count={DEMO_PAYMENT_OPTIONS} appearance={appearance} /> : children}
+      {networks.data === undefined ? <OptionsSkeleton appearance={appearance} /> : children}
       <QueryState view={networks} />
     </>
   );
 }
 
 /**
- * The options' places, `count` of them under their label, drawn with the SDK's own classes so that
- * each is as tall as the option that replaces it.
+ * The options' places: the token and network fields and the line of terms under them, drawn with the
+ * SDK's own classes so that each is as tall as what replaces it.
  */
-function OptionsSkeleton({ count, appearance }: { count: number; appearance: Appearance }) {
+function OptionsSkeleton({ appearance }: { appearance: Appearance }) {
   return (
     <div className="pp-root" data-theme={appearance.theme ?? "light"} aria-hidden="true">
-      <fieldset className="pp-options" disabled>
-        <legend className="pp-options__legend">Pay with</legend>
-        {Array.from({ length: count }, (_, index) => (
-          <div key={index} className="pp-option rounded-lg ring-1 ring-border">
-            <Skeleton className="h-[2lh] flex-1" />
-          </div>
-        ))}
-      </fieldset>
+      <div className="pp-options">
+        <div className="pp-options__fields">
+          {["Token", "Network"].map((label) => (
+            <div key={label} className="pp-select">
+              <span className="pp-select__label">{label}</span>
+              <div className="pp-select__trigger">
+                <Skeleton className="h-5 w-24" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="pp-options__detail">
+          <Skeleton className="h-[1lh] w-32" />
+        </div>
+      </div>
     </div>
   );
 }
 
 /**
- * A token's terms at the end of its option: its price (a stablecoin is valued at $1.00; any other
- * token at the market rate, which a quote locks), over the demo merchant's bonus.
+ * The chosen token's terms, one line under the fields: its price (a stablecoin is valued at $1.00;
+ * any other token at the market rate, which a quote locks), then the demo merchant's bonus.
  */
 function TokenTerms({ asset }: { asset: Asset | undefined }) {
   if (asset === undefined) {
     return null;
   }
   return (
-    <span className="flex flex-col items-end">
-      <span className="tabular-nums" data-testid="token-price">
-        {asset.pricing === "stablecoin" ? "$1.00" : "Market rate"}
-      </span>
+    <span className="tabular-nums">
+      <span data-testid="token-price">{asset.pricing === "stablecoin" ? `$1.00 per ${asset.symbol}` : "Market rate"}</span>
       {asset.bonus_bps > 0 && (
-        <span className="text-success" data-testid="token-bonus">
-          +{percent(asset.bonus_bps)} bonus
-        </span>
+        <>
+          {" · "}
+          <span className="text-success" data-testid="token-bonus">
+            +{percent(asset.bonus_bps)} bonus
+          </span>
+        </>
       )}
     </span>
   );
@@ -442,7 +450,7 @@ function QuotePayment({
       {/* Once credited, the confirmation takes the checkout's place, as its next action does. */}
       <div hidden={status === "credited"}>
         <OptionsState networks={networks} options={options} appearance={appearance}>
-          <Suspense fallback={<OptionsSkeleton count={options.length} appearance={appearance} />}>
+          <Suspense fallback={<OptionsSkeleton appearance={appearance} />}>
             <PaymentElement
               key={round}
               id={`${id}-payment`}
