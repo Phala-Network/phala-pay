@@ -204,9 +204,9 @@ function RefundItem({ refund, token }: { refund: Refund; token: RefundToken }) {
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger
           className="group/trigger grid min-h-11 w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
-          aria-label={`Refund ${refund.id}, ${tokens(refund.amount_atomic, symbol, decimals)}, ${statusLabel(refund.status)}`}
         >
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+            <span className="sr-only">Refund </span>
             <span className="font-medium tabular-nums">{tokens(refund.amount_atomic, symbol, decimals)}</span>
             <Hash value={refund.id} />
           </span>
