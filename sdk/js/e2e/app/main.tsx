@@ -49,6 +49,7 @@ const options = [
     min_deposit_atomic: "100000000000000000",
     max_deposit_atomic: "10100000000000000000000",
   },
+  { chain_id: 1, asset: "eth", detail: "Market rate", decimals: 18, min_amount: 500, min_deposit_atomic: "0", max_deposit_atomic: "5000000000000000000" },
 ];
 
 function Picker() {
@@ -65,10 +66,12 @@ function Picker() {
 }
 
 // `?element` shows the payment element, whose quote is the page's `client_secret`, and whose
-// deposit address is the page's.
+// deposit address is the page's. `?host` hides its submit for the page's summary and button.
 function Element() {
+  const host = params.has("host");
   return (
     <PaymentElement
+      hideSubmit={host}
       options={options}
       defaultValue={options[2]}
       amount={2500}
@@ -80,7 +83,17 @@ function Element() {
       })}
       createDepositAddress={() => Promise.resolve({ address, networks })}
       appearance={appearance}
-    />
+    >
+      {host && (
+        <>
+          <dl className="host-summary">
+            <dt>Total</dt>
+            <dd>$25.00</dd>
+          </dl>
+          <button type="submit" className="host-button">Continue to pay $25.00</button>
+        </>
+      )}
+    </PaymentElement>
   );
 }
 

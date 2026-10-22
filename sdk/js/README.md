@@ -200,15 +200,24 @@ import { PaymentElement } from "@phala/pay-react";
 - After the quote: the checkout, and a way back to the options ("Choose another token or
   network") until a payment is on its way, then "Start over" if it does not complete or "Start a
   new payment" once credited.
-- `createDepositAddress(option)` adds "Use a deposit address", for payers sending from an exchange
-  or any wallet: it resolves with the deposit address's `address` and `networks` and, to follow its
-  payments, `clientSecret`; the element shows `<DepositAddress>` at the chosen option. Under the
-  link it states the chosen option's per-transfer limits when it carries them, as a
-  `GET /v1/config` asset does: "Send at least $5.00 and up to 10,100 USDC per transfer on Base from
-  an exchange or another wallet." Without them it says the address shows its limits.
-- Your own button: pass `hideSubmit` and an `id`, and give your button `type="submit" form={id}`
-  (or call `requestSubmit()` on the form with that id). The element is a `<form>`: do not nest it
-  in another one.
+- `createDepositAddress(option)` adds one quiet line at the end of the form, "Paying from an
+  exchange? Use a deposit address", for payers sending from an exchange or any wallet: it resolves
+  with the deposit address's `address` and `networks` and, to follow its payments, `clientSecret`;
+  the element shows `<DepositAddress>` at the chosen option, which states the per-transfer limits.
+- Your own content: `children` go inside the form, under the token and network and above the
+  element's button, while the payer chooses. With `hideSubmit`, put your summary and your
+  `type="submit"` button there, and the deposit-address line follows your button:
+
+  ```tsx
+  <PaymentElement hideSubmit options={options} createQuote={createQuote} createDepositAddress={createDepositAddress}>
+    <OrderSummary />
+    <Button type="submit">Continue to pay $25.00</Button>
+  </PaymentElement>
+  ```
+
+  A button elsewhere on the page can submit it too: pass `hideSubmit` and an `id`, and give your
+  button `type="submit" form={id}` (or call `requestSubmit()` on the form with that id). The
+  element is a `<form>`: do not nest it in another one.
 - `value` and `onOptionChange` control the choice (`defaultValue` sets the first one otherwise);
   `onChange({ step, checkout })` reports each step (`options`, `creating`, `checkout`,
   `deposit_address`) and, while paying, each checkout status change; `onSuccess`, `onExpire`,
