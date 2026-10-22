@@ -18,7 +18,7 @@ github_read() (
         if ((read_status == 0)); then
             if [[ "$1" == api ]]; then
                 # gh api --include writes response headers, a blank line, then the body.
-                sed '1,/^\r\{0,1\}$/d' "$read_tmp/out"
+                sed '1,/^[[:space:]]*$/d' "$read_tmp/out"
             else
                 cat "$read_tmp/out"
             fi
@@ -31,7 +31,10 @@ github_read() (
         fi
         echo "github-read: gh $1 $2 failed (HTTP ${http_status:-unknown}, exit $read_status, attempt $attempt/4)" >&2
         # OCI digest resolution and local bundle writes are outside the GitHub fetch.
-        if [[ "$1" == attestation ]] && ! grep -q 'failed to fetch attestations:' "$read_tmp/err"; then
+        if [[ "$1" == attestation ]] && {
+            ! grep -q 'failed to fetch attestations:' "$read_tmp/err" ||
+            grep -Eq 'failed to (decompress with snappy|unmarshal to bundle|create new bundle)' "$read_tmp/err"
+        }; then
             return "$read_status"
         fi
         delay=$((1 << (attempt - 1)))
@@ -44,9 +47,7 @@ github_read() (
             ((10#$retry_after <= delay)) || delay=$((10#$retry_after))
         elif [[ "$http_status" =~ ^5[0-9][0-9]$ ]]; then
             :
-        elif [[ -z "$http_status" ]] &&
-            ! grep -Eq 'failed to (decompress with snappy|unmarshal to bundle|create new bundle)' "$read_tmp/err" &&
-            { ((read_status == 124)) ||
+        elif [[ -z "$http_status" ]] && { ((read_status == 124)) ||
             grep -Eq '(dial tcp|TLS handshake timeout|i/o timeout|connection reset by peer|unexpected EOF|: EOF|network is unreachable)' "$read_tmp/err"; }; then
             :
         else
