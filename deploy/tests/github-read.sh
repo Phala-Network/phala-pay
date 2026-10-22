@@ -63,6 +63,9 @@ STUB_HTTP='' STUB_ERROR='Get "https://api.github.com/repos/example/repo": dial t
 STUB_HTTP='' STUB_ERROR='failed to fetch attestations: Get "https://api.github.com": unexpected EOF' \
     run attestation download artifact || fail 'did not retry attestation API transport failure'
 [[ $(cat "$tmp/count") == 2 ]] || fail 'wrong attestation API retry count'
+! STUB_HTTP='' STUB_ERROR='failed to fetch attestations: failed to unmarshal to bundle: unexpected EOF' \
+    run attestation download artifact || fail 'accepted a malformed bundle'
+[[ $(cat "$tmp/count") == 1 ]] || fail 'mistook malformed bundle data for a transport EOF'
 STUB_HTTP=429 STUB_RETRY_AFTER=08 run api repos/example/repo || fail 'did not recover from 429 with Retry-After'
 [[ $(cat "$tmp/sleep") == 8 ]] || fail 'ignored Retry-After'
 ! STUB_HTTP=429 run api repos/example/repo || fail 'retried 429 without Retry-After'

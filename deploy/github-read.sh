@@ -44,7 +44,9 @@ github_read() (
             ((10#$retry_after <= delay)) || delay=$((10#$retry_after))
         elif [[ "$http_status" =~ ^5[0-9][0-9]$ ]]; then
             :
-        elif [[ -z "$http_status" ]] && { ((read_status == 124)) ||
+        elif [[ -z "$http_status" ]] &&
+            ! grep -Eq 'failed to (decompress with snappy|unmarshal to bundle|create new bundle)' "$read_tmp/err" &&
+            { ((read_status == 124)) ||
             grep -Eq '(dial tcp|TLS handshake timeout|i/o timeout|connection reset by peer|unexpected EOF|: EOF|network is unreachable)' "$read_tmp/err"; }; then
             :
         else
