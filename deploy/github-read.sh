@@ -30,6 +30,10 @@ github_read() (
             http_status=$(sed -nE 's/.*(HTTP |returned status code )([0-9]{3})([^0-9].*|$)/\2/p' "$read_tmp/err")
         fi
         echo "github-read: gh $1 $2 failed (HTTP ${http_status:-unknown}, exit $read_status, attempt $attempt/4)" >&2
+        # OCI digest resolution and local bundle writes are outside the GitHub fetch.
+        if [[ "$1" == attestation ]] && ! grep -q 'failed to fetch attestations:' "$read_tmp/err"; then
+            return "$read_status"
+        fi
         delay=$((1 << (attempt - 1)))
         if [[ "$http_status" == 429 ]]; then
             # Retry only with a server-provided delay. gh download does not expose headers.

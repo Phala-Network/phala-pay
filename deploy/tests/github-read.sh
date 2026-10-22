@@ -20,7 +20,11 @@ if [[ -n "$STUB_HTTP" ]]; then
         [[ -z "$STUB_RETRY_AFTER" ]] || printf 'retry-after: %s\r\n' "$STUB_RETRY_AFTER"
         printf '\r\npartial response\n'
     fi
-    echo "gh: HTTP $STUB_HTTP: Server Error" >&2
+    if [[ "$1" == attestation ]]; then
+        echo "Failed to download the artifact's bundle(s): failed to fetch attestations: HTTP $STUB_HTTP: Server Error" >&2
+    else
+        echo "gh: HTTP $STUB_HTTP: Server Error" >&2
+    fi
 else
     echo partial
     echo "$STUB_ERROR" >&2
@@ -53,6 +57,12 @@ run attestation download artifact || fail 'did not recover an attestation fetch'
 STUB_HTTP='' STUB_ERROR='Get "https://api.github.com/repos/example/repo": dial tcp: i/o timeout' \
     run api repos/example/repo || fail 'did not retry a transport failure'
 [[ $(cat "$tmp/count") == 2 ]] || fail 'wrong transport retry count'
+! STUB_HTTP='' STUB_ERROR='failed to digest artifact: dial tcp: i/o timeout' \
+    run attestation download artifact || fail 'retried a registry digest failure'
+[[ $(cat "$tmp/count") == 1 ]] || fail 'retried outside the GitHub fetch'
+STUB_HTTP='' STUB_ERROR='failed to fetch attestations: Get "https://api.github.com": unexpected EOF' \
+    run attestation download artifact || fail 'did not retry attestation API transport failure'
+[[ $(cat "$tmp/count") == 2 ]] || fail 'wrong attestation API retry count'
 STUB_HTTP=429 STUB_RETRY_AFTER=08 run api repos/example/repo || fail 'did not recover from 429 with Retry-After'
 [[ $(cat "$tmp/sleep") == 8 ]] || fail 'ignored Retry-After'
 ! STUB_HTTP=429 run api repos/example/repo || fail 'retried 429 without Retry-After'
