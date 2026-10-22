@@ -294,7 +294,7 @@ main() {
     kit=$work/kit
     mkdir -p "$assets" "$kit" "$work/cli"
     if [[ "$provenance" == gh ]]; then
-        for tool in verify-release.sh deadline.sh; do
+        for tool in verify-release.sh deadline.sh github-read.sh; do
             "$timeout_cli" --foreground --kill-after=2 60 gh api -H 'Accept: application/vnd.github.raw' \
                 "repos/$repository/contents/deploy/$tool?ref=$release" >"$work/$tool" ||
                 die "could not download $release verification helper $tool"

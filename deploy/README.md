@@ -207,6 +207,12 @@ the first failure: the tag's commit must be in `main`'s history, the assets must
 `SHA256SUMS`, and every asset and image must have a provenance attestation of `release.yml` at the
 tag, on a GitHub-hosted runner, for that commit (`gh attestation verify --source-digest`). Each
 image must also have an SPDX 2.3 SBOM attestation under the same identity and source constraints.
+GitHub metadata reads and attestation downloads retry transport failures and HTTP 5xx up to four
+attempts with exponential backoff, within the 600-second verification budget. Metadata HTTP 429
+responses retry only with a numeric `Retry-After` header; attestation downloads fail on 429 because
+`gh` does not expose its retry headers. Attestations are downloaded separately and verified once
+using `gh attestation verify --bundle`; checksum, signature, digest, and policy rejections fail
+immediately.
 
 ### Deploy
 

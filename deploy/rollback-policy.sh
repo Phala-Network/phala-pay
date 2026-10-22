@@ -6,12 +6,15 @@ notes=${2:?current changelog section required}
 # With a release version, read only Unreleased and that dated section from the full changelog.
 # Release PRs move the declaration before tagging; older release notes must not authorize it.
 release=${3:-}
-[[ -z "$release" || "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || exit 64
-[[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 64
+[[ -z "$release" || "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] ||
+    { echo "Invalid current release version: $release" >&2; exit 64; }
+[[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    { echo "Invalid previous stable release tag: $previous" >&2; exit 64; }
 version=${previous#v}
-[[ $(printf '%s\n' "$version" 0.9.0 | sort -V | head -n 1) == 0.9.0 ]] || exit 64
+[[ $(printf '%s\n' "$version" 0.9.0 | sort -V | head -n 1) == 0.9.0 ]] ||
+    { echo "Previous stable release $previous is below the supported minimum v0.9.0" >&2; exit 64; }
 declaration="no rollback to $version; restore required"
-if awk -v release="$release" '
+declarations=$(awk -v release="$release" '
     BEGIN { section = (release == "") }
     /^## / {
         section = (release == "" || $0 == "## [Unreleased]" ||
@@ -20,12 +23,14 @@ if awk -v release="$release" '
     }
     /^### / { active = (section && $0 == "### Breaking (operators)"); next }
     active
-' "$notes" |
-    grep -Fq "$declaration"; then
+' "$notes") || { echo "Cannot read rollback declarations from $notes" >&2; exit 1; }
+if grep -Fq "$declaration" <<<"$declarations"; then
     source=crates/topup/src/db/migrations.rs
     floor_pattern='^const COMPATIBILITY_FLOOR: i64 = ([0-9]+);$'
-    current_line=$(grep '^const COMPATIBILITY_FLOOR:' "$source")
-    previous_line=$(git show "$previous:$source" | grep '^const COMPATIBILITY_FLOOR:')
+    current_line=$(grep '^const COMPATIBILITY_FLOOR:' "$source") ||
+        { echo "Cannot read current compatibility floor from $source" >&2; exit 1; }
+    previous_line=$(git show "$previous:$source" | grep '^const COMPATIBILITY_FLOOR:') ||
+        { echo "Cannot read N-1 compatibility floor from $previous:$source" >&2; exit 1; }
     [[ "$current_line" =~ $floor_pattern ]] || { echo 'Invalid current compatibility floor' >&2; exit 1; }
     current_floor=${BASH_REMATCH[1]}
     [[ "$previous_line" =~ $floor_pattern ]] || { echo 'Invalid N-1 compatibility floor' >&2; exit 1; }

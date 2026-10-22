@@ -78,10 +78,12 @@ case "$*" in
     --version) echo "gh version $STUB_GH_VERSION (2026-09-15)" ;;
     "auth status") ;;
     *contents/deploy/deadline.sh\?ref=v9.9.9) cat "$STUB_ROOT/deploy/deadline.sh" ;;
+    *contents/deploy/github-read.sh\?ref=v9.9.9) cat "$STUB_ROOT/deploy/github-read.sh" ;;
     *contents/deploy/verify-release.sh\?ref=v9.9.9) cat "$STUB_ROOT/deploy/verify-release.sh" ;;
-    "api repos/Phala-Network/phala-pay/git/ref/tags/v9.9.9 "*) echo "commit $STUB_COMMIT" ;;
-    "api repos/Phala-Network/phala-pay/compare/$STUB_COMMIT...main "*) echo ahead ;;
+    "api repos/Phala-Network/phala-pay/git/ref/tags/v9.9.9 "*) printf 'HTTP/2 200 OK\r\n\r\ncommit %s\n' "$STUB_COMMIT" ;;
+    "api repos/Phala-Network/phala-pay/compare/$STUB_COMMIT...main "*) printf 'HTTP/2 200 OK\r\n\r\nahead\n' ;;
     "release download v9.9.9 "*) cp "$STUB_ASSETS"/* "${@: -2:1}" ;;
+    "attestation download "*) echo '{}' >sha256:stub.jsonl ;;
     "attestation verify "*) [[ "$3" != *"$STUB_REFUSE"* ]] ;;
     *) exit 1 ;;
 esac
