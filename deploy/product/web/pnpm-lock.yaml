@@ -216,7 +216,7 @@ importers:
     devDependencies:
       '@axe-core/playwright':
         specifier: ^4.14.0
-        version: 4.14.0(playwright-core@1.63.0)
+        version: 4.14.0(playwright-core@1.64.1)
       '@cloudflare/vite-plugin':
         specifier: 2.0.0-beta.sha-ad79608dd
         version: 2.0.0-beta.sha-ad79608dd(@types/node@24.19.0)(vite@8.3.3(@types/node@24.19.0)(esbuild@0.28.1)(jiti@2.7.0))(workerd@1.20260926.1)
@@ -225,13 +225,13 @@ importers:
         version: 10.0.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))
       '@mermaid-js/mermaid-cli':
         specifier: 12.0.0
-        version: 12.0.0(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(playwright-core@1.63.0)(puppeteer@25.12.0)(tailwindcss@4.3.3)
+        version: 12.0.0(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(playwright-core@1.64.1)(puppeteer@25.12.0)(tailwindcss@4.3.3)
       '@phala/pay-server':
         specifier: file:../../../sdk/js-server
         version: file:../../../sdk/js-server(typescript@6.0.3)(zod@4.6.5)
       '@playwright/test':
-        specifier: 1.63.0
-        version: 1.63.0
+        specifier: 1.64.1
+        version: 1.64.1
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.3(@types/node@24.19.0)(esbuild@0.28.1)(jiti@2.7.0))
@@ -1371,8 +1371,8 @@ packages:
     peerDependencies:
       viem: ^2.21.0
 
-  '@playwright/test@1.63.0':
-    resolution: {integrity: sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ==}
+  '@playwright/test@1.64.1':
+    resolution: {integrity: sha512-IaYGml/nSOiZWROfPtuIL7neuu9qDOZ3TNvNljUIrhDMxiGTgPjzj/g9p9RxpS2tSepPDRY+UwAaEeiKtUvIAg==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -4294,13 +4294,13 @@ packages:
     resolution: {integrity: sha512-nDywThFk1i4BQK4twPQ6TA4RT8bDY96yeuCVBWL3ePARCiEKDRSrNGbFIgUJpLp+XeIR65v8ra7WuJOFUBtkMA==}
     engines: {node: '>=8'}
 
-  playwright-core@1.63.0:
-    resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
+  playwright-core@1.64.1:
+    resolution: {integrity: sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==}
     engines: {node: '>=20'}
     hasBin: true
 
-  playwright@1.63.0:
-    resolution: {integrity: sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==}
+  playwright@1.64.1:
+    resolution: {integrity: sha512-HCrVhHr5QQuwYoswEUGTb7gGp522yflbv/ST8nF4sFWGuLjQCt17Q/EubpGGSNKYn1tsTCPZxqHhHCfVURu7UA==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -5065,10 +5065,10 @@ snapshots:
       package-manager-detector: 1.9.0
       tinyexec: 1.3.1
 
-  '@axe-core/playwright@4.14.0(playwright-core@1.63.0)':
+  '@axe-core/playwright@4.14.0(playwright-core@1.64.1)':
     dependencies:
       axe-core: 4.14.0
-      playwright-core: 1.63.0
+      playwright-core: 1.64.1
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -5864,12 +5864,12 @@ snapshots:
       mermaid: 12.2.0
     optional: true
 
-  '@mermaid-js/mermaid-cli@12.0.0(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(playwright-core@1.63.0)(puppeteer@25.12.0)(tailwindcss@4.3.3)':
+  '@mermaid-js/mermaid-cli@12.0.0(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(playwright-core@1.64.1)(puppeteer@25.12.0)(tailwindcss@4.3.3)':
     dependencies:
       '@fontsource-variable/recursive': 5.3.0
       '@fontsource/open-sans': 5.3.0
       '@fortawesome/fontawesome-free': 7.3.1
-      '@mermaid-js/mermaid-zenuml': 1.0.1(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(mermaid@12.2.0)(playwright-core@1.63.0)(tailwindcss@4.3.3)
+      '@mermaid-js/mermaid-zenuml': 1.0.1(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(mermaid@12.2.0)(playwright-core@1.64.1)(tailwindcss@4.3.3)
       chalk: 6.0.1
       commander: 15.0.0
       import-meta-resolve: 4.2.0
@@ -5886,9 +5886,9 @@ snapshots:
       - playwright-core
       - tailwindcss
 
-  '@mermaid-js/mermaid-zenuml@1.0.1(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(mermaid@12.2.0)(playwright-core@1.63.0)(tailwindcss@4.3.3)':
+  '@mermaid-js/mermaid-zenuml@1.0.1(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(mermaid@12.2.0)(playwright-core@1.64.1)(tailwindcss@4.3.3)':
     dependencies:
-      '@zenuml/core': 3.50.1(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(playwright-core@1.63.0)(tailwindcss@4.3.3)
+      '@zenuml/core': 3.50.1(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(playwright-core@1.64.1)(tailwindcss@4.3.3)
       mermaid: 12.2.0
     transitivePeerDependencies:
       - '@babel/core'
@@ -6018,9 +6018,9 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  '@playwright/test@1.63.0':
+  '@playwright/test@1.64.1':
     dependencies:
-      playwright: 1.63.0
+      playwright: 1.64.1
 
   '@poppinss/colors@4.1.6':
     dependencies:
@@ -7305,7 +7305,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.3.3(@types/node@24.19.0)(esbuild@0.28.1)(jiti@2.7.0)
 
-  '@zenuml/core@3.50.1(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(playwright-core@1.63.0)(tailwindcss@4.3.3)':
+  '@zenuml/core@3.50.1(@babel/core@7.29.7(supports-color@10.2.2))(@babel/template@7.29.7)(@types/react@18.3.31)(playwright-core@1.64.1)(tailwindcss@4.3.3)':
     dependencies:
       '@floating-ui/react': 0.27.20(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@headlessui/react': 2.2.10(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -7324,7 +7324,7 @@ snapshots:
       tailwind-merge: 3.7.0
     optionalDependencies:
       '@napi-rs/canvas': 0.1.100
-      playwright-core: 1.63.0
+      playwright-core: 1.64.1
     transitivePeerDependencies:
       - '@babel/core'
       - '@babel/template'
@@ -9117,11 +9117,11 @@ snapshots:
     dependencies:
       find-up: 3.0.0
 
-  playwright-core@1.63.0: {}
+  playwright-core@1.64.1: {}
 
-  playwright@1.63.0:
+  playwright@1.64.1:
     dependencies:
-      playwright-core: 1.63.0
+      playwright-core: 1.64.1
 
   points-on-curve@0.2.0: {}
 

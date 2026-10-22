@@ -41,7 +41,7 @@
     "@eslint/js": "^10.0.1",
     "@mermaid-js/mermaid-cli": "12.0.0",
     "@phala/pay-server": "file:../../../sdk/js-server",
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/hast": "^3.0.5",
     "@types/node": "^24.19.0",
