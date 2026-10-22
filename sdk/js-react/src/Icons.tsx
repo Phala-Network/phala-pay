@@ -13,13 +13,14 @@ export interface IconProps {
 export interface NetworkIconProps extends IconProps { chainId: number }
 export interface AssetIconProps extends IconProps { asset: string }
 
-function Icon({ name, label, size = 18, decorative = true }: IconProps & {
+function Icon({ name, label, kind, size = 18, decorative = true }: IconProps & {
   name: IconName | undefined;
   label: string;
+  kind: "asset" | "network";
 }) {
   const pixels = Number.isFinite(size) && size > 0 ? size : 18;
   return (
-    <svg className="pp-icon" xmlns="http://www.w3.org/2000/svg" width={pixels} height={pixels}
+    <svg className={`pp-icon pp-icon--${kind}`} xmlns="http://www.w3.org/2000/svg" width={pixels} height={pixels}
       viewBox="0 0 24 24" fill="none" focusable="false" aria-hidden={decorative ? true : undefined}
       role={decorative ? undefined : "img"} aria-label={decorative ? undefined : label || "Unknown asset"}>
       {name === undefined ? <>
@@ -30,12 +31,12 @@ function Icon({ name, label, size = 18, decorative = true }: IconProps & {
   );
 }
 
-/** Branded network icon; testnets reuse their mainnet family artwork. */
+/** Branded network logo; testnets reuse their mainnet family artwork. */
 export function NetworkIcon({ chainId, ...props }: NetworkIconProps) {
-  return <Icon {...props} name={networkIconName(chainId)} label={networkName(chainId)} />;
+  return <Icon {...props} kind="network" name={networkIconName(chainId)} label={networkName(chainId)} />;
 }
 
-/** Branded token icon, or a neutral first-letter monogram for unknown symbols. */
+/** Branded token coin, or a neutral first-letter monogram for unknown symbols. */
 export function AssetIcon({ asset, ...props }: AssetIconProps) {
-  return <Icon {...props} name={assetIconName(asset)} label={asset.trim().toUpperCase()} />;
+  return <Icon {...props} kind="asset" name={assetIconName(asset)} label={asset.trim().toUpperCase()} />;
 }

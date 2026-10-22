@@ -9,3 +9,9 @@ main { max-width: 400px; }
   justify-content: flex-end; max-width: 400px; height: 120px; padding: 16px; overflow: hidden;
   border: 1px solid #a1a1aa; border-radius: 12px; background: #ffffff; transform: translateZ(0); }
 body:has([data-theme="dark"]) .modal { background: #18181b; }
+/* `?element&host`: the host's summary and its own button, inside the element. */
+.host-summary { display: flex; justify-content: space-between; margin: 0; padding-top: 12px;
+  border-top: 1px solid var(--pp-color-border); font-weight: 600; }
+.host-summary dd { margin: 0; }
+.host-button { min-height: 44px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font: inherit;
+  font-weight: 500; cursor: pointer; }

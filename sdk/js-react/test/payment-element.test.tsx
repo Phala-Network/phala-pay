@@ -96,10 +96,8 @@ it("shows the customer's deposit address instead, at the chosen option", async (
   }));
   const createDepositAddress = vi.fn(() => Promise.resolve({ address: ADDRESS, networks }));
   render(<PaymentElement options={OPTIONS} defaultValue={OPTIONS[1]} createQuote={createQuote} createDepositAddress={createDepositAddress} />);
-  // Options without limits never promise any amount.
-  expect(screen.getByText(/from an exchange or another wallet/).textContent).toBe(
-    "Send USDC on Base Sepolia from an exchange or another wallet. Per-transfer limits are shown with the address.",
-  );
+  // One quiet line, with no amount: the address states its own limits.
+  expect(screen.getByText(/Paying from an exchange\?/).textContent).toBe("Paying from an exchange? Use a deposit address");
   fireEvent.click(screen.getByRole("button", { name: "Use a deposit address" }));
   expect(createDepositAddress).toHaveBeenCalledWith(OPTIONS[1]);
   expect((await screen.findByRole("img")).getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
@@ -108,17 +106,19 @@ it("shows the customer's deposit address instead, at the chosen option", async (
   expect(screen.getByRole("button", { name: "Pay in USDC" })).toBeDefined();
 });
 
-it("states the chosen option's per-transfer limits for a deposit address", () => {
-  const terms = { decimals: 18, min_amount: 500, min_deposit_atomic: "0", max_deposit_atomic: "10100000000000000000000" };
-  const options = [
-    { chain_id: 11155111, asset: "pha", ...terms, min_deposit_atomic: "100000000000000000" },
-    { chain_id: 84532, asset: "usdc", ...terms, decimals: 6, max_deposit_atomic: "10100000000" },
-  ];
-  render(<PaymentElement options={options} createQuote={vi.fn()} createDepositAddress={vi.fn()} />);
-  const hint = () => screen.getByText(/from an exchange or another wallet/).textContent;
-  expect(hint()).toBe("Send at least $5.00 and 0.1 PHA, up to 10,100 PHA per transfer on Sepolia from an exchange or another wallet.");
-  choose("Token", "USDC");
-  expect(hint()).toBe("Send at least $5.00 and up to 10,100 USDC per transfer on Base Sepolia from an exchange or another wallet.");
+it("places the host's summary and button before the deposit-address line, only while choosing", async () => {
+  const createQuote = vi.fn<CreateQuote>(() => Promise.resolve(PARAMS));
+  render(
+    <PaymentElement hideSubmit options={OPTIONS} createQuote={createQuote} createDepositAddress={vi.fn()}>
+      <p>Total $10.00</p>
+      <button type="submit">Top up</button>
+    </PaymentElement>,
+  );
+  expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Top up", "Use a deposit address"]);
+  fireEvent.click(screen.getByRole("button", { name: "Top up" }));
+  expect(createQuote.mock.calls[0]?.[0]).toBe(OPTIONS[0]);
+  expect(await screen.findByText("Waiting for your payment")).toBeDefined();
+  expect(screen.queryByText("Total $10.00")).toBeNull();
 });
 
 it("is submitted by the host's own button when its submit is hidden", async () => {

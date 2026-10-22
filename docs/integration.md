@@ -181,9 +181,10 @@ import "@phala/pay-react/styles.css";
 `@phala/pay-server`, which also names `apiBase`); a rejection shows "Could not start the payment.
 Try again." and calls `onError`. `expectedAddress` is required: it is the address your backend
 recomputed, and the checkout fails closed, showing nothing to pay, when the quote it reads names
-another one. To submit with your own button (inside your own amount form, for example), pass
-`hideSubmit` and an `id`, and give your button `type="submit" form={id}`. `createDepositAddress`
-adds "Use a deposit address" for payers sending from an exchange (§1.5). `appearance` themes it to
+another one. To submit with your own button, pass `hideSubmit` and put your summary and
+`type="submit"` button in the element's `children` (or give a button elsewhere `type="submit"
+form={id}` with the element's `id`). `createDepositAddress` adds one line after the button, "Paying
+from an exchange? Use a deposit address" (§1.5). `appearance` themes it to
 match the page, a test-mode quote says "Test mode", and `onChange` reports each step and every
 checkout status change (§1.2).
 

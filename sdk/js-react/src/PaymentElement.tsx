@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from
 import type { WalletClient } from "viem";
 import {
   assetSymbol,
-  networkName,
   samePaymentOption,
   type CheckoutParams,
   type CheckoutState,
@@ -17,7 +16,6 @@ import {
 import { rootProps, type Appearance } from "./appearance.js";
 import { CheckoutContent } from "./Checkout.js";
 import { DepositAddressContent } from "./DepositAddress.js";
-import { depositLimits } from "./limits.js";
 import { PaymentOptionFields } from "./PaymentOptionPicker.js";
 
 /** What `createQuote` resolves to: your backend's `pay.checkoutParams(quote)`. */
@@ -70,18 +68,23 @@ export interface PaymentElementProps<T extends PaymentOption> {
    */
   createQuote: (option: T, request: PaymentElementQuoteRequest) => Promise<PaymentElementQuote>;
   /**
-   * Offers paying from an exchange or any wallet instead: get the customer's deposit address from
-   * your backend, with the chosen option to show first. The offer states the chosen option's
-   * per-transfer limits when it carries them, as a `GET /v1/config` asset does (`min_amount`,
-   * `min_deposit_atomic`, `max_deposit_atomic`, `decimals`); otherwise the address shows them.
+   * Offers paying from an exchange or any wallet instead, as one line at the end of the form:
+   * "Paying from an exchange? Use a deposit address". Get the customer's deposit address from your
+   * backend, with the chosen option to show first; the address then states its per-transfer limits.
    */
   createDepositAddress?: ((option: T | undefined) => Promise<PaymentElementDepositAddress>) | undefined;
   /** The service origin, for a quote or deposit address that does not name its own. */
   apiBase?: string | undefined;
   /** The form's id: a button elsewhere on your page with `type="submit" form={id}` submits it. */
   id?: string | undefined;
-  /** Hides the element's own submit button, when your button (see `id`) submits it. */
+  /** Hides the element's own submit button, when your button (see `id`, or `children`) submits it. */
   hideSubmit?: boolean | undefined;
+  /**
+   * Your content inside the form, under the token and network, while the payer chooses: a summary
+   * above the element's button, or with `hideSubmit` your summary and your `type="submit"` button,
+   * which then comes before the deposit-address line.
+   */
+  children?: ReactNode;
   disabled?: boolean | undefined;
   /** The options' visible label; default "Pay with". */
   label?: ReactNode | undefined;
@@ -140,6 +143,7 @@ export function PaymentElement<T extends PaymentOption>({
   apiBase,
   id,
   hideSubmit = false,
+  children,
   disabled = false,
   label,
   renderDetail,
@@ -278,6 +282,7 @@ export function PaymentElement<T extends PaymentOption>({
               label={label}
               renderDetail={renderDetail}
             />
+            {children}
             {!hideSubmit && (
               <button type="submit" className="pp-button" disabled={disabled || option === undefined || current.step === "creating"}>
                 <span>{current.step === "creating" && current.kind === "quote" ? "Starting your payment…" : submitText}</span>
@@ -290,6 +295,7 @@ export function PaymentElement<T extends PaymentOption>({
             )}
             {createDepositAddress !== undefined && (
               <p className="pp-element__alternative">
+                Paying from an exchange?{" "}
                 <button
                   type="button"
                   className="pp-text-button"
@@ -300,7 +306,6 @@ export function PaymentElement<T extends PaymentOption>({
                     ? "Getting your deposit address…"
                     : "Use a deposit address"}
                 </button>
-                <span className="pp-element__hint">{depositHint(option)}</span>
               </p>
             )}
           </form>
@@ -368,20 +373,6 @@ function failureMessage(
     return message;
   }
   return kind === "quote" ? "Could not start the payment. Try again." : "Could not get your deposit address. Try again.";
-}
-
-/**
- * What the deposit address takes, from the chosen option's limits when it carries them (a
- * `GET /v1/config` asset does): "Send at least $5.00 and up to 10,100 USDC per transfer on Base
- * from an exchange or another wallet." Otherwise the address shows its limits.
- */
-function depositHint(option: PaymentOption | undefined): string {
-  if (option === undefined) {
-    return "Send a supported token from an exchange or another wallet. Per-transfer limits apply.";
-  }
-  const limits = depositLimits(option);
-  const send = `Send ${limits ?? assetSymbol(option.asset)} on ${networkName(option.chain_id)} from an exchange or another wallet.`;
-  return limits === undefined ? `${send} Per-transfer limits are shown with the address.` : send;
 }
 
 /** `minor` units of `currency`, for example `$10.00` for 1000 cents. */
