@@ -42,22 +42,22 @@ topup-sdk = "topup_sdk.__main__:main"
 dev = [
     "mypy==2.4.0",
     "pytest==9.1.1",
-    "ruff==0.16.10",
+    "ruff==0.17.1",
 ]
 codegen = [
     "openapi-python-client==0.29.1",
-    "ruff==0.16.10",
+    "ruff==0.17.1",
 ]
 product = [
     "anyio==4.15.1",
-    "cachetools==7.2.1",
+    "cachetools==7.2.3",
     "granian==2.8.4",
-    "starlette==1.7.0",
+    "starlette==1.9.0",
     "web3==8.0.0",
 ]
 # The FastAPI example (sdk/examples/fastapi_app.py) and its test.
 examples = [
-    "fastapi==0.142.2",
+    "fastapi==0.148.0",
 ]
 
 [build-system]
