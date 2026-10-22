@@ -19,6 +19,25 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Update the website's Mermaid diagram tooling to KaTeX 0.18.10 for CVE-2026-103923 and remove
   its Trivy exception.
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Added
+
+- `@phala/pay-react`'s `<PaymentElement>` takes `children`: your content inside its form, under
+  the token and network, while the payer chooses. With `hideSubmit`, your summary and your
+  `type="submit"` button go there, and the deposit-address line comes after your button.
+
+#### Changed
+
+- Token icons are one set: each token is its `@web3icons/core` `background` tile, drawn by
+  `AssetIcon` as a same-size coin with its glyph inset alike, instead of mixed shapes (a circle, a
+  bare diamond, and a PHA glyph edge to edge on a dark disc). Network icons stay their `branded`
+  logos. The vendored icons are from `@web3icons/core@4.0.58`. `assetIcon()` markup is the square
+  tile; round it with `border-radius: 50%`.
+- `<PaymentElement>`'s deposit-address offer is one quiet line at the end of the form: "Paying from
+  an exchange? Use a deposit address". The per-transfer limits under it (0.11.1) moved to the
+  deposit address itself, which states them. The element's parts are evenly spaced.
+
 ## [0.11.1] - 2026-10-22
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)

@@ -189,9 +189,13 @@ styles, data URI allowance, or extra CSP directives, including with `style-src '
 
 Framework-free hosts can call `networkIcon(chainId)` or `assetIcon(symbol)` from `@phala/pay`
 for decorative SVG markup. Keep the
-name visible alongside it; when used alone, supply an accessible label on the host wrapper.
+name visible alongside it; when used alone, supply an accessible label on the host wrapper. A
+token's markup is its square brand tile; `AssetIcon` draws it as a coin, and so does
+`border-radius: 50%` on your wrapper's `svg`.
 
-Only six branded SVGs from `@web3icons/core@4.0.57` are vendored, under the MIT license in
+Only six SVGs from `@web3icons/core@4.0.58` are vendored: the `background` variant of each token
+(one shape, the glyph inset alike) and the `branded` logo of each network. They are under the MIT
+license in
 `THIRD_PARTY_NOTICES`. Regenerate both the markup and JSX modules with
 `npx -y pnpm@12.6.0 run icons:generate`; the script packs the pinned package into a temporary
 directory, rejects unexpected SVG tags/attributes, and cleans up. No web3icons runtime package

@@ -49,6 +49,8 @@
 .pp-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
   clip-path: inset(50%); white-space: nowrap; border: 0; }
 .pp-icon { display: inline-block; flex: none; vertical-align: middle; }
+/* A token is a coin: its square brand tile, drawn as a circle. */
+.pp-icon--asset { border-radius: 50%; }
 
 /* Checkout summary */
 .pp-summary { margin-bottom: 1em; }
@@ -184,11 +186,15 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 .pp-select__option[aria-selected="true"] { font-weight: 500; }
 .pp-select__check { display: flex; margin-inline-start: auto; color: var(--pp-color-text-muted); }
 
-/* Payment element: the options, the submit button, and a secondary way to pay; then the step it
-   leads to, under a way back. A new step takes the focus without a ring of its own. */
+/* Payment element: the options, the host's content, the submit button, and one quiet line with a
+   secondary way to pay, 1em apart; then the step it leads to, under a way back. A new step takes
+   the focus without a ring of its own. */
 .pp-root .pp-element__step:focus-visible { outline: none; }
-.pp-element__alternative { display: flex; flex-direction: column; align-items: flex-start; gap: 0.125em; margin: 0.25em 0 0; }
-.pp-element__hint { color: var(--pp-color-text-muted); }
+.pp-element { display: grid; gap: 1em; }
+.pp-element > .pp-options, .pp-element > .pp-message { margin: 0; }
+/* The line's 44px target overhangs its text, so that the text keeps the form's rhythm. */
+.pp-element__alternative { margin-block: -0.875em; color: var(--pp-color-text-muted); font-size: 0.875em;
+  text-align: center; }
 .pp-element__back { margin: 0 0 0.5em; }
 .pp-text-button { display: inline-flex; align-items: center; min-height: var(--pp-control-height); padding: 0;
   appearance: none; border: 0; background: none; color: var(--pp-color-text); font: inherit; font-weight: 500;
