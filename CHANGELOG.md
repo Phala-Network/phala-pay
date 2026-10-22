@@ -14,6 +14,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Security
+
+- Update the website's Mermaid diagram tooling to KaTeX 0.18.10 for CVE-2026-103923 and remove
+  its Trivy exception.
+
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Added

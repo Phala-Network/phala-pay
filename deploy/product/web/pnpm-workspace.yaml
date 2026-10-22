@@ -11,4 +11,7 @@ allowBuilds:
 overrides:
   # React's exact npm dependency must use the same local core as the demo's direct dependency.
   '@phala/pay': file:../../../sdk/js
+  # The CLI still requires vulnerable KaTeX ^0.16.25; use the fixed CSS/fonts with Mermaid 12.2.
+  # Remove when @mermaid-js/mermaid-cli depends on katex >=0.18.2.
+  '@mermaid-js/mermaid-cli@12.0.0>katex': ^0.18.2
   undici@7.29.0: 7.30.0
