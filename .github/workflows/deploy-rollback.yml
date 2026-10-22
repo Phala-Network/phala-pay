@@ -59,10 +59,23 @@ jobs:
       - name: Resolve and verify the previous stable release
         timeout-minutes: 10
         run: |
-          previous=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
-            jq -r --arg current "$GITHUB_REF_NAME" '[.[] | select(.draft == false and .prerelease == false and .tag_name != $current)] | .[0].tag_name')
-          [[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          mode=$(deploy/rollback-policy.sh "$previous" CHANGELOG.md "$(scripts/version.sh)")
+          set -euo pipefail
+          trap 'status=$?; echo "::error::Rollback release resolution failed at line $LINENO (exit $status)" >&2; exit "$status"' ERR
+          source deploy/deadline.sh
+          source deploy/github-read.sh
+          stage_start rollback-release-resolution 600
+          releases=$(github_read api "repos/$GITHUB_REPOSITORY/releases?per_page=100")
+          previous=$(jq -er --arg current "$GITHUB_REF_NAME" \
+            '[.[] | select(.draft == false and .prerelease == false and .tag_name != $current)] | .[0].tag_name // empty | select(. != "")' \
+            <<<"$releases") || { echo '::error::Release lookup returned no previous stable tag or invalid release data' >&2; exit 1; }
+          [[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+            { printf '::error::Invalid previous stable release tag: %q\n' "$previous" >&2; exit 1; }
+          echo "Previous stable release: $previous" >&2
+          current=$(scripts/version.sh) || { echo '::error::Cannot determine the current version' >&2; exit 1; }
+          mode=$(deploy/rollback-policy.sh "$previous" CHANGELOG.md "$current") ||
+            { echo "::error::Rollback policy failed for $previous and current version $current" >&2; exit 1; }
+          [[ "$mode" =~ ^(declared|rollback)$ ]] ||
+            { printf '::error::Invalid rollback policy mode: %q\n' "$mode" >&2; exit 1; }
           echo "ROLLBACK_MODE=$mode" >>"$GITHUB_ENV"
           if [[ "$mode" == declared ]]; then
             {
@@ -74,8 +87,9 @@ jobs:
             } >>"$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          deploy/verify-release.sh "$previous" "$RUNNER_TEMP/previous-release"
-          echo "PREVIOUS_IMAGE=$(jq -r '.["phala-pay"]' "$RUNNER_TEMP/previous-release/images.json")" >>"$GITHUB_ENV"
+          stage_call 600 deploy/verify-release.sh "$previous" "$RUNNER_TEMP/previous-release"
+          previous_image=$(jq -er '.["phala-pay"]' "$RUNNER_TEMP/previous-release/images.json")
+          echo "PREVIOUS_IMAGE=$previous_image" >>"$GITHUB_ENV"
           tar -xOf "$RUNNER_TEMP/previous-release/phala-pay-deploy-$previous.tar.gz" \
             "phala-pay-deploy-$previous/deploy/environments/example/topup/topup.yaml" >"$RUNNER_TEMP/previous-topup.yaml"
       - name: Current migration then previous release image startup

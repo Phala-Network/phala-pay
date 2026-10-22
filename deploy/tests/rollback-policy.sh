@@ -92,6 +92,13 @@ NOTES
 # N-1 below the supported minimum is rejected even with an operator declaration.
 printf '%s\n' '### Breaking (operators)' '- no rollback to 0.8.9; restore required' >"$notes"
 expect_failure 64 v0.8.9 "$notes" 0.10.0
+grep -q 'below the supported minimum' "$tmp/error"
+expect_failure 64 invalid "$notes" 0.10.0
+grep -q 'Invalid previous stable release tag' "$tmp/error"
+expect_failure 64 v0.9.2 "$notes" invalid
+grep -q 'Invalid current release version' "$tmp/error"
+expect_failure 1 v0.9.2 "$tmp/missing-notes" 0.10.0
+grep -q 'Cannot read rollback declarations' "$tmp/error"
 
 # Unreleased declarations remain valid before the release PR moves them to a dated section.
 cat >"$notes" <<'NOTES'

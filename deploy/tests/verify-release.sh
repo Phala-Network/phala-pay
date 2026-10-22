@@ -15,11 +15,20 @@ cat >"$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >>"$STUB_LOG"
 case "$1 $2" in
-    "api repos/Phala-Network/phala-pay/git/ref/tags/v9.9.9") echo "$STUB_REF" ;;
-    "api repos/Phala-Network/phala-pay/git/tags/$STUB_TAG") echo "commit $STUB_COMMIT" ;;
-    "api repos/Phala-Network/phala-pay/compare/$STUB_COMMIT...main") echo "$STUB_COMPARE" ;;
+    "api repos/Phala-Network/phala-pay/git/ref/tags/v9.9.9") printf 'HTTP/2 200 OK\r\n\r\n%s\n' "$STUB_REF" ;;
+    "api repos/Phala-Network/phala-pay/git/tags/$STUB_TAG") printf 'HTTP/2 200 OK\r\n\r\ncommit %s\n' "$STUB_COMMIT" ;;
+    "api repos/Phala-Network/phala-pay/compare/$STUB_COMMIT...main")
+        if [[ "${STUB_COMPARE_FAILURE:-}" == true ]]; then
+            echo 'HTTP/2 404 Not Found'; echo 'gh: Not Found (HTTP 404)' >&2; exit 1
+        fi
+        printf 'HTTP/2 200 OK\r\n\r\n%s\n' "$STUB_COMPARE" ;;
     "release download") cp "$STUB_ASSETS"/* "${@: -2:1}" ;;
-    "attestation verify") [[ "$3" != *"$STUB_REFUSE"* && "$*" != *"$STUB_PREDICATE_REFUSE"* ]] ;;
+    "attestation download")
+        [[ "${STUB_NO_ATTESTATIONS:-}" != true ]] || exit 0
+        echo '{}' >sha256:stub.jsonl ;;
+    "attestation verify")
+        [[ "$*" == *'--bundle '* && -s "${@: -1}" ]] || exit 1
+        [[ "$3" != *"$STUB_REFUSE"* && "$*" != *"$STUB_PREDICATE_REFUSE"* ]] ;;
     *) exit 1 ;;
 esac
 STUB
@@ -78,8 +87,19 @@ called_at=$commit run lightweight STUB_REF="commit $commit" ||
 ! grep -q '^release download' "$STUB_LOG" || fail "downloaded a release Deploy is not called at"
 ! run outside STUB_COMPARE=diverged || fail "accepted a commit outside main"
 ! grep -q '^release download' "$STUB_LOG" || fail "downloaded a release whose commit is outside main"
+! run compare-failed STUB_COMPARE_FAILURE=true || fail 'accepted a failed main-history lookup'
+grep -q 'HTTP 404' "$tmp/compare-failed.err" || fail 'hid the main-history API error'
+! grep -q "is not in .* main" "$tmp/compare-failed.err" || fail 'misreported an API failure as a policy rejection'
+! run missing-attestations STUB_NO_ATTESTATIONS=true || fail 'accepted missing attestation bundles'
+grep -q 'no attestation bundle' "$tmp/missing-attestations.err" || fail 'missing bundle has no diagnostic'
+! grep -q '^attestation verify' "$STUB_LOG" || fail 'verified without a downloaded bundle'
 ! run unattested STUB_REFUSE=SHA256SUMS || fail "accepted an unattested SHA256SUMS"
+[[ $(grep -c '^attestation verify .*SHA256SUMS ' "$STUB_LOG") == 1 ]] || fail 'retried a verification rejection'
 ! run no-sbom STUB_PREDICATE_REFUSE=https://spdx.dev/Document/v2.3 || fail "accepted missing SBOM attestation"
+[[ $(grep -c '^attestation verify .*--predicate-type https://spdx.dev/Document/v2.3' "$STUB_LOG") == 1 ]] ||
+    fail 'retried an SBOM rejection'
 echo tampered >"$tmp/assets/phala-cloud-template.yml"
 ! run tampered || fail "accepted an asset that does not match SHA256SUMS"
+! grep -q '^attestation download' "$STUB_LOG" || fail 'fetched attestations after a checksum rejection'
+[[ -z $(find "$tmp" -type d -name '.attestations.*' -print) ]] || fail 'left temporary bundles'
 echo "release verifier test passed"

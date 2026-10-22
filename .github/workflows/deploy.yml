@@ -211,7 +211,7 @@ jobs:
           [[ "$WORKFLOW_REPOSITORY" == Phala-Network/phala-pay && "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] ||
             { echo "::error::Deploy must be Phala-Network/phala-pay's, called at a release"; exit 1; }
           # verify-release.sh and every script it sources (deploy/tests/release-tools.sh checks the list).
-          for tool in verify-release.sh deadline.sh; do
+          for tool in verify-release.sh deadline.sh github-read.sh; do
             gh api -H 'Accept: application/vnd.github.raw' \
               "repos/$WORKFLOW_REPOSITORY/contents/deploy/$tool?ref=$WORKFLOW_SHA" >"$WORK/$tool"
           done

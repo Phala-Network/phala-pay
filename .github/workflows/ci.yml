@@ -529,6 +529,8 @@ jobs:
           deploy/tests/render.sh
           deploy/tests/render-route.sh
           deploy/tests/verify-release.sh
+          deploy/tests/github-read.sh
+          deploy/tests/rollback-release.sh
           deploy/tests/release-tools.sh
           python3 .github/security/test-exceptions.py
           PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_upgrade_monitor.py

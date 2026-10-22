@@ -515,7 +515,7 @@ into a directory and stops at the first failure:
 
 ```sh
 version=v0.11.2   # the release you adopt
-for tool in verify-release.sh deadline.sh; do
+for tool in verify-release.sh deadline.sh github-read.sh; do
   gh api -H 'Accept: application/vnd.github.raw' \
     "repos/Phala-Network/phala-pay/contents/deploy/$tool?ref=$version" >"$tool"
 done
