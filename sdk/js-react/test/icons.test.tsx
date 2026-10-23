@@ -2,18 +2,19 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { assetIcon, networkIcon } from "../../js/src/index.js";
 import { AssetIcon, NetworkIcon } from "../src/index.js";
-import { ICON_SVG } from "../../js/src/icon-svg.js";
+import { ICON_IMAGES } from "../../js/src/icon-images.js";
 
 afterEach(cleanup);
 
 describe("icon mappings", () => {
-  it("maps supported symbols case-insensitively to the branded SVGs", () => {
+  it("maps supported symbols case-insensitively to the CoinMarketCap logos", () => {
+    const image = (svg: string) => new DOMParser().parseFromString(svg, "image/svg+xml").querySelector("image")?.getAttribute("href");
     for (const asset of ["usdc", "usdt", "pha", "eth"] as const) {
-      expect(assetIcon(asset.toUpperCase())).toBe(ICON_SVG[asset]);
-      expect(assetIcon(` ${asset} `)).toBe(ICON_SVG[asset]);
+      expect(image(assetIcon(asset.toUpperCase()))).toBe(ICON_IMAGES[asset]);
+      expect(assetIcon(` ${asset} `)).toBe(assetIcon(asset));
     }
-    expect(networkIcon(1)).toBe(ICON_SVG.ethereum);
-    expect(networkIcon(8453)).toBe(ICON_SVG.base);
+    expect(image(networkIcon(1))).toBe(ICON_IMAGES.ethereum);
+    expect(image(networkIcon(8453))).toBe(ICON_IMAGES.base);
   });
 
   it("uses mainnet artwork for every registered testnet", () => {
@@ -28,15 +29,20 @@ describe("icon mappings", () => {
     expect(networkIcon(999)).toContain('>C</text>');
   });
 
-  it("contains no active content, references, or inline styles", () => {
-    for (const svg of [...Object.values(ICON_SVG), assetIcon("<"), networkIcon(84532)]) {
+  it("contains no active content, external references, or inline styles", () => {
+    for (const svg of [...["usdc", "usdt", "pha", "eth"].map(assetIcon), networkIcon(1), networkIcon(84532), assetIcon("<"), networkIcon(999)]) {
       const host = document.createElement("div");
       host.innerHTML = svg;
       for (const element of host.querySelectorAll("*")) {
-        expect(["svg", "path", "circle", "text", "span"]).toContain(element.localName);
+        expect(["svg", "image", "circle", "text"]).toContain(element.localName);
         for (const attribute of element.attributes) {
-          expect(attribute.name).not.toMatch(/^(style|on.*|.*href)$/i);
+          expect(attribute.name).not.toMatch(/^(style|on.*)$/i);
           expect(attribute.value).not.toMatch(/url\s*\(/i);
+          // The only reference is an embedded PNG: no network request, no script.
+          if (/href$/i.test(attribute.name)) {
+            expect(`${element.localName} ${attribute.name}`).toBe("image href");
+            expect(attribute.value).toMatch(/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/);
+          }
         }
       }
     }
@@ -53,6 +59,8 @@ describe("React icons", () => {
       expect(svg.getAttribute("width")).toBe("18");
       expect(svg.hasAttribute("style")).toBe(false);
     }
+    const images = Array.from(container.querySelectorAll("image"), (image) => image.getAttribute("href"));
+    expect(images).toEqual([ICON_IMAGES.ethereum, ICON_IMAGES.pha]);
   });
 
   it("labels standalone assets and networks, including testnets and unknowns", () => {

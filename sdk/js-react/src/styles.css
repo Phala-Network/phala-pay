@@ -48,9 +48,8 @@
 .pp-root :focus-visible { outline: 2px solid var(--pp-color-focus); outline-offset: 2px; }
 .pp-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
   clip-path: inset(50%); white-space: nowrap; border: 0; }
-.pp-icon { display: inline-block; flex: none; vertical-align: middle; }
-/* A token is a coin: its square brand tile, drawn as a circle. */
-.pp-icon--asset { border-radius: 50%; }
+/* Tokens and networks are round, as CoinMarketCap draws them; some of its images are square. */
+.pp-icon { display: inline-block; flex: none; vertical-align: middle; border-radius: 50%; }
 
 /* Checkout summary */
 .pp-summary { margin-bottom: 1em; }

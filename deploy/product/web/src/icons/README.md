@@ -5,4 +5,5 @@ MIT-licensed (see [LICENCE-octicons](LICENCE-octicons)); it links to the reposit
 logo guidelines allow.
 
 Chain and token marks come from the SDK (`NetworkIcon` and `AssetIcon` from `@phala/pay-react`),
-inline SVG that needs no image source in the page's CSP.
+inline SVG embedding CoinMarketCap's logos as `data:` images, which the page's CSP allows with
+`img-src data:` (`public/_headers`).

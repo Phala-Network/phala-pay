@@ -1,65 +1,54 @@
-// Vendor only the selected web3icons SVGs. No web3icons runtime dependency is needed.
-// Tokens use the `background` variant (one full-bleed brand tile, glyph inset 4px) so every
-// coin shares one shape; networks use the `branded` logo as drawn by the project.
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { URL, pathToFileURL } from "node:url";
+// Vendor CoinMarketCap's token and network logos as PNG data URIs, so the SDK makes no runtime
+// image requests. Each network is the CoinMarketCap asset that CoinMarketCap itself shows for the
+// chain (its `platformCryptoId`): Ethereum 1027, Base 27716. Testnets reuse these (src/chains.ts).
+// The 64px images stay sharp at the 16 to 24px icon sizes on 2x displays. Each download
+// must match its pinned SHA-256: when one changes upstream, review the new image, then update its pin.
+/* global fetch, AbortSignal */
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { URL } from "node:url";
 
-const version = "4.0.58";
+const size = 64;
 const icons = {
-  usdc: "tokens/background/USDC",
-  usdt: "tokens/background/USDT",
-  pha: "tokens/background/PHA",
-  eth: "tokens/background/ETH",
-  ethereum: "networks/branded/ethereum",
-  base: "networks/branded/base",
+  usdc: { id: 3408, sha256: "6f2390c4bf94ba36584793958432d5069f2bec31dfa7cb9b93c0c76cf965a901" },
+  usdt: { id: 825, sha256: "2d5a29e2c8a731b9c0891dfa54c3bf753ad5bba2911e71ebca654c273cf08748" },
+  pha: { id: 6841, sha256: "52fda701ccfd0644fb934c717df8ae139aac8ebc71f59fe78924f5b0e42fe5de" },
+  eth: { id: 1027, sha256: "eebe29898b8b7de5c9e47daab474152be8095e3ab42d768b84b085c5a12b95c6" },
+  ethereum: { id: 1027, sha256: "eebe29898b8b7de5c9e47daab474152be8095e3ab42d768b84b085c5a12b95c6" },
+  base: { id: 27716, sha256: "ab304d91e519a4986184b4d3c5931ee9fc1da404d52163ed4292ac89ddaf4957" },
 };
 const root = new URL("../", import.meta.url);
-const header = `/** Generated from @web3icons/core@${version} by scripts/generate-icons.mjs.
- * SPDX-License-Identifier: MIT; Copyright (c) 2024 0xa3k5.
- * See THIRD_PARTY_NOTICES for the full license. Do not edit.
+const header = `/** Generated from CoinMarketCap's ${size}x${size} logos by scripts/generate-icons.mjs. Do not edit.
+ * The logos are trademarks of their owners; see THIRD_PARTY_NOTICES.
  */
 `;
-const work = mkdtempSync(join(tmpdir(), "phala-pay-icons-"));
-try {
-  const archive = execFileSync("npm", ["pack", `@web3icons/core@${version}`, "--pack-destination", work, "--silent"], { encoding: "utf8" }).trim();
-  execFileSync("tar", ["-xzf", join(work, archive), "-C", work]);
-  const markup = [];
-  const jsx = [];
-  for (const [name, source] of Object.entries(icons)) {
-    const [kind, variant, symbol] = source.split("/");
-    const file = join(work, "package", "dist", "svgs", kind, variant, `${symbol}.svg.js`);
-    let { default: svg } = await import(pathToFileURL(file).href);
-    // `background` icons wrap their paths in a clip equal to the 24x24 viewBox. It is a no-op,
-    // so unwrap it rather than ship duplicate element ids into host pages.
-    const clip = typeof svg === "string" && svg.match(/^(<svg\s[^>]+>)\s*<g clip-path="url\(#([\w-]+)\)">([\s\S]*?)<\/g>\s*<defs>\s*<clipPath id="([\w-]+)">\s*<path fill="#fff" d="M0 0h24v24H0z"\/>\s*<\/clipPath>\s*<\/defs>\s*<\/svg>\s*$/);
-    if (clip) {
-      if (clip[2] !== clip[4]) throw new Error(`Unexpected clip reference: ${source}`);
-      svg = `${clip[1]}${clip[3]}</svg>`;
-    }
-    // Strict allowlist: these assets need only an SVG root and self-closing paths.
-    // Reject styles, scripts, handlers, references, entities and unexpected syntax.
-    if (typeof svg !== "string" || !/^<svg\s[^>]+>\s*(?:<path\s[^>]+\/>\s*)+<\/svg>\s*$/.test(svg)) {
-      throw new Error(`Unexpected SVG structure: ${source}`);
-    }
-    for (const tag of svg.matchAll(/<(svg|path)\s([^>]+)>/g)) {
-      const allowed = tag[1] === "svg" ? ["xmlns", "width", "height", "fill", "viewBox", "class"] : ["fill", "d", "fill-rule", "clip-rule"];
-      let rest = tag[2].replace(/\/$/, "");
-      for (const attr of rest.matchAll(/([\w-]+)="([^"]*)"/g)) {
-        if (!allowed.includes(attr[1]) || /[<>&]|url\s*\(/i.test(attr[2])) throw new Error(`Unsafe SVG attribute: ${source}`);
-        if (attr[1] === "xmlns" && attr[2] !== "http://www.w3.org/2000/svg") throw new Error("Unexpected SVG namespace");
-      }
-      rest = rest.replace(/[\w-]+="[^"]*"/g, "").trim();
-      if (rest !== "") throw new Error(`Unexpected SVG attributes: ${source}`);
-    }
-    const body = svg.match(/<svg[^>]+>([\s\S]*)<\/svg>/)[1].trim().replace(/\s*\n\s*/g, "");
-    markup.push(`  ${name}: ${JSON.stringify(`<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`)},`);
-    jsx.push(`  ${name}: <>${body.replaceAll("fill-rule", "fillRule").replaceAll("clip-rule", "clipRule")}</>,`);
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+async function download(url) {
+  let response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  } catch (cause) {
+    throw new Error(`Could not download ${url}`, { cause });
   }
-  writeFileSync(new URL("src/icon-svg.ts", root), header + `\nexport const ICON_SVG: Record<${Object.keys(icons).map((key) => JSON.stringify(key)).join(" | ")}, string> = {\n${markup.join("\n")}\n};\n`);
-  writeFileSync(new URL("../js-react/src/icon-paths.tsx", root), header + `\nexport const ICON_PATHS = {\n${jsx.join("\n")}\n};\n`);
-} finally {
-  rmSync(work, { recursive: true, force: true });
+  if (!response.ok) throw new Error(`Could not download ${url}: HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
 }
+
+const images = [];
+for (const [name, { id, sha256 }] of Object.entries(icons)) {
+  const url = `https://s2.coinmarketcap.com/static/img/coins/${size}x${size}/${id}.png`;
+  const bytes = await download(url);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== sha256) throw new Error(`${url} changed: SHA-256 ${actual}, pinned ${sha256}`);
+  // A PNG signature and an IHDR chunk of the expected size; the pin already fixes the content.
+  if (!bytes.subarray(0, 8).equals(PNG) || bytes.toString("latin1", 12, 16) !== "IHDR"
+    || bytes.readUInt32BE(16) !== size || bytes.readUInt32BE(20) !== size) {
+    throw new Error(`${url} is not a ${size}x${size} PNG`);
+  }
+  images.push(`  ${name}: "data:image/png;base64,${bytes.toString("base64")}",`);
+}
+const output = header + `\nexport const ICON_IMAGES: Record<${Object.keys(icons).map((key) => JSON.stringify(key)).join(" | ")}, string> = {\n${images.join("\n")}\n};\n`;
+writeFileSync(new URL("src/icon-images.ts", root), output);
+writeFileSync(new URL("../js-react/src/icon-images.ts", root), output);
