@@ -33,6 +33,20 @@ for (const width of [390, 1280]) {
         const bounds = await icon.boundingBox();
         expect(bounds?.width).toBe(20);
         expect(bounds?.height).toBe(20);
+        // Every logo has a faint ring inside its edge in the surrounding text color, so that a disc
+        // the color of the page (PHA's black on dark, Ethereum's white on light) keeps its edge.
+        const rings = await page.locator(".pp-icon:has(image)").evaluateAll((icons) => icons.map((icon) => {
+          const style = getComputedStyle(icon);
+          return { style: style.outlineStyle, width: style.outlineWidth, offset: style.outlineOffset,
+            color: style.outlineColor, text: style.color };
+        }));
+        expect(rings.length).toBeGreaterThan(0);
+        for (const ring of rings) {
+          expect(ring).toMatchObject({ style: "solid", width: "1px", offset: "-1px" });
+          const [color, text] = [ring.color, ring.text].map(channels);
+          for (const [index, value] of (text ?? []).slice(0, 3).entries()) expect(color?.[index]).toBeCloseTo(value, 2);
+          expect(color?.[3]).toBeCloseTo(0.12, 2);
+        }
         expect(cspErrors).toEqual([]);
         if (screenshots !== undefined) await page.screenshot({ path: join(screenshots, `${surface}-${width}-${theme}.png`), fullPage: true });
         if (surface === "deposit") {
@@ -49,4 +63,11 @@ for (const width of [390, 1280]) {
       }
     });
   }
+}
+
+/** A computed `rgb()`, `rgba()`, or `color(srgb …)` (which `color-mix()` computes to) as 0–1 channels and alpha. */
+function channels(color: string): number[] {
+  const [r = 0, g = 0, b = 0, alpha = 1] = color.match(/[\d.]+/g)?.map(Number) ?? [];
+  const scale = color.startsWith("color(") ? 1 : 255;
+  return [r / scale, g / scale, b / scale, alpha];
 }

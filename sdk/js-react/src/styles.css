@@ -50,6 +50,10 @@
   clip-path: inset(50%); white-space: nowrap; border: 0; }
 /* Tokens and networks are round, as CoinMarketCap draws them; some of its images are square. */
 .pp-icon { display: inline-block; flex: none; vertical-align: middle; border-radius: 50%; }
+/* A faint ring over a logo's edge keeps a disc in the page's color (PHA's black on a dark page,
+   Ethereum's white on a light one) round. An outline, as it is drawn over the image. */
+.pp-icon:has(image) { outline: 1px solid var(--pp-color-icon-ring, color-mix(in srgb, currentColor 12%, transparent));
+  outline-offset: -1px; }
 
 /* Checkout summary */
 .pp-summary { margin-bottom: 1em; }
@@ -211,7 +215,7 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 .pp-payments__item[data-tone="danger"] .pp-payments__dot { background: var(--pp-color-danger); }
 
 /* Forced colors would draw every border in one color: the selected choice and tab keep a
-   Highlight one, in system colors throughout. */
+   Highlight one, and a logo's ring stays faint in GrayText, in system colors throughout. */
 @media (forced-colors: active) {
   .pp-select__trigger[aria-expanded="true"] { border-color: Highlight; }
   .pp-select__option[data-active] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
@@ -219,6 +223,7 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
   .pp-tabs__tab:hover { border-bottom-color: GrayText; }
   .pp-tabs__tab[aria-selected="true"] { border-bottom-color: Highlight; }
   .pp-root .pp-tabs__tab:focus-visible { outline-color: Highlight; }
+  .pp-icon:has(image) { outline-color: GrayText; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pp-skeleton__line { animation: none; }
