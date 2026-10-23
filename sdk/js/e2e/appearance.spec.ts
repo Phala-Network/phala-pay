@@ -422,6 +422,16 @@ test("keyboard focus is visible and differs from the selected state", async ({ p
   const backgrounds = await page.getByRole("listbox", { name: "Token" }).getByRole("option").evaluateAll((options) =>
     options.map((option) => getComputedStyle(option).backgroundColor));
   expect(new Set(backgrounds).size).toBe(2);
+  // A logo's ring is a system color too: GrayText, whatever the color around it.
+  const rings = await page.locator(".pp-icon:has(image)").evaluateAll((icons) => {
+    const probe = document.body.appendChild(document.createElement("span"));
+    probe.style.setProperty("color", "GrayText");
+    const grayText = getComputedStyle(probe).color;
+    probe.remove();
+    return icons.map((icon) => getComputedStyle(icon).outlineColor === grayText);
+  });
+  expect(rings.length).toBeGreaterThan(0);
+  expect(rings).not.toContain(false);
   await page.keyboard.press("Escape");
   await page.emulateMedia({ forcedColors: "none", reducedMotion: "no-preference" });
 

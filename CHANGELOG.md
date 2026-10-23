@@ -14,6 +14,16 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Fixed
+
+- A token or network logo whose disc is the color of its background no longer loses its edge
+  (PHA's black disc on a dark theme, Ethereum's white disc on a light one): `NetworkIcon` and
+  `AssetIcon` draw a faint 1px ring inside the logo's edge, the new optional
+  `--pp-color-icon-ring` (default: the surrounding text color at 12% opacity), and `GrayText` in
+  forced-colors mode. It is in the static stylesheet, over the unchanged logo.
+
 ## [0.11.3] - 2026-10-23
 
 ### Changed (operators)

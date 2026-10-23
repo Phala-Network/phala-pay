@@ -334,6 +334,7 @@ the theme (or map the colors) that suits its background.
 | `--pp-color-success`            | `#15803d`         | `#4ade80`    | Credited icon                                       |
 | `--pp-color-warning`            | `#b45309`         | `#fbbf24`    | "Test mode"                                         |
 | `--pp-color-danger`             | `#dc2626`         | `#f87171`    | Failure icon, wallet errors                         |
+| `--pp-color-icon-ring`          | text color at 12% | same         | Faint ring over a token or network logo's edge      |
 | `--pp-font-family`              | inherited         | inherited    | Font                                                |
 | `--pp-font-family-mono`         | `ui-monospace, …` | same         | Addresses, amounts to copy, hashes                  |
 | `--pp-font-size`                | `14px`            | `14px`       | Root text size; other text sizes are relative to it |
@@ -356,7 +357,10 @@ follow your page's text size. Keep `--pp-color-focus` distinct from `--pp-color-
 least 3:1 contrast to the background: it is how a keyboard user tells the focused choice from the
 selected one. Keep `--pp-color-input` at 3:1 or more against the background too, as WCAG 1.4.11
 asks of the edge that shows where a control is; `--pp-color-border` draws only dividers and may be
-fainter.
+fainter. `--pp-color-icon-ring` is a 1px outline drawn inside each logo's edge, so that a logo
+whose disc is the color of its background (PHA's black on a dark card, Ethereum's white on a light
+one) stays round; it defaults to the surrounding text color at 12% opacity, so it follows the theme
+and also applies to `AssetIcon` and `NetworkIcon` outside the components.
 
 ```css
 .pp-root[data-theme] {
@@ -386,8 +390,8 @@ group by group with what their wallet shows; selecting and copying it gives the 
 spaces. The QR code keeps the standard quiet zone of four modules inside 8px of white, so it scans
 on a dark page too. The status row's text stays the body color on a neutral surface; its icon
 carries the tone. Transitions and the loading placeholder's pulse stop under
-`prefers-reduced-motion: reduce`, and the selected tab and a listbox's active option keep a system
-color in forced-colors mode.
+`prefers-reduced-motion: reduce`, and the selected tab, a listbox's active option, and a logo's ring keep
+a system color in forced-colors mode.
 
 ### Content Security Policy
 
