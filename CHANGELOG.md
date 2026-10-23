@@ -14,6 +14,28 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-10-23
+
+### Changed (operators)
+
+- Update the service and local dstack simulator's Rust builder images to 1.99.0 and the
+  reference product's uv/Python image to uv 0.13.5 on Python 3.14. Rebuilding the service and
+  reference-product images changes their image digests and rendered compose hashes.
+- Refresh grouped Rust, Python, JavaScript SDK, website, and API-reference dependencies, plus
+  CI and deployment Actions.
+
+### Fixed (operators)
+
+- Rollback release resolution reports missing or invalid release tags, version errors, and
+  policy failures explicitly. GitHub API and attestation-download reads retry transient
+  transport and server errors within the existing deadlines. Each downloaded attestation bundle
+  is verified once; a verification rejection still fails immediately.
+
+### Security
+
+- Update the website's DOMPurify to 3.4.17 and ip-address to 10.7.4, and Python's
+  opentelemetry-api to 1.45.1, for their published security advisories.
+
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Changed
@@ -2211,7 +2233,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.11.2...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.11.3...HEAD
+[0.11.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.3
 [0.11.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.2
 [0.11.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.1
 [0.11.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.0
