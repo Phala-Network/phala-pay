@@ -14,6 +14,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-10-23
+
+### Security
+
+- Update Rust's `ctutils` to 0.4.5 for RUSTSEC-2026-0385, fixing non-constant-time mask
+  generation and `u128` comparisons ([#532](https://github.com/Phala-Network/phala-pay/pull/532)).
+
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Fixed
@@ -22,7 +29,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   (PHA's black disc on a dark theme, Ethereum's white disc on a light one): `NetworkIcon` and
   `AssetIcon` draw a faint 1px ring inside the logo's edge, the new optional
   `--pp-color-icon-ring` (default: the surrounding text color at 12% opacity), and `GrayText` in
-  forced-colors mode. It is in the static stylesheet, over the unchanged logo.
+  forced-colors mode. It is in the static stylesheet, over the unchanged logo
+  ([#531](https://github.com/Phala-Network/phala-pay/pull/531)).
 
 ## [0.11.3] - 2026-10-23
 
@@ -2243,7 +2251,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.11.3...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.4
 [0.11.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.3
 [0.11.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.2
 [0.11.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.1
