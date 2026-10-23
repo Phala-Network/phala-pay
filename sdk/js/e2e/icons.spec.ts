@@ -5,7 +5,7 @@ import { ADDRESS, API_BASE, CLIENT_SECRET, quote } from "../test/fixtures.js";
 
 for (const width of [390, 1280]) {
   for (const theme of ["light", "dark"]) {
-    test(`icons at ${width}px, ${theme}, under strict style CSP`, async ({ page }) => {
+    test(`icons at ${width}px, ${theme}, under the documented CSP`, async ({ page }) => {
       const cspErrors: string[] = [];
       page.on("console", (message) => {
         if (message.type() === "error" && /content security policy/i.test(message.text())) cspErrors.push(message.text());
@@ -13,7 +13,7 @@ for (const width of [390, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await page.route((url) => url.pathname === "/", async (route) => {
         const response = await route.fetch();
-        await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": "style-src 'self'" } });
+        await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": "style-src 'self'; img-src 'self' data:" } });
       });
       await page.route(`${API_BASE}/**`, async (route) => {
         await route.fulfill({ json: quote({ expires_at: Math.floor(Date.now() / 1000) + 900 }) });
@@ -26,7 +26,8 @@ for (const width of [390, 1280]) {
         await page.goto(`/?${params}`);
         if (surface === "checkout") await expect(page.getByRole("status")).toContainText("Waiting for your payment");
         await expect(page.locator(".pp-icon").first()).toBeVisible();
-        await expect(page.locator(".pp-root style, .pp-root [style], .pp-icon image, .pp-icon use")).toHaveCount(0);
+        await expect(page.locator(".pp-root style, .pp-root [style], .pp-icon use")).toHaveCount(0);
+        await expect(page.locator(".pp-icon image").first()).toHaveAttribute("href", /^data:image\/png;base64,/);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         const icon = page.locator(".pp-icon").first();
         const bounds = await icon.boundingBox();

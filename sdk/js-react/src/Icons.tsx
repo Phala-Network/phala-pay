@@ -2,7 +2,7 @@
 
 import { networkName, networkIconName } from "@phala/pay";
 import { assetIconName, iconMonogram, type IconName } from "@phala/pay";
-import { ICON_PATHS } from "./icon-paths.js";
+import { ICON_IMAGES } from "./icon-images.js";
 
 export interface IconProps {
   /** Width and height in pixels; default 18. No inline styles are injected. */
@@ -26,7 +26,7 @@ function Icon({ name, label, kind, size = 18, decorative = true }: IconProps & {
       {name === undefined ? <>
         <circle cx="12" cy="12" r="11" fill="currentColor" opacity="0.12" />
         <text x="12" y="16" textAnchor="middle" fontFamily="sans-serif" fontSize="12" fill="currentColor">{iconMonogram(label)}</text>
-      </> : ICON_PATHS[name]}
+      </> : <image href={ICON_IMAGES[name]} width="24" height="24" />}
     </svg>
   );
 }

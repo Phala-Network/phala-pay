@@ -395,8 +395,9 @@ The components inject no style elements or style attributes in their markup. Ser
 CSS from your own origin with `style-src 'self'`; no `unsafe-inline` style permission is needed.
 An open token or network listbox is placed beside its field through the CSSOM
 (`element.style.setProperty`), which that policy allows. Allow the
-payment service origin in `connect-src` for public status reads and `img-src data:` for browser
-wallet icons. Configure script and font sources for your application's own bundles.
+payment service origin in `connect-src` for public status reads and `img-src data:` for the
+token and network logos and browser wallet icons, which are `data:` images. Configure script and
+font sources for your application's own bundles.
 
 Public SDK reads accept `signal` and `requestTimeout` (milliseconds, default 10000). Each request
 combines caller cancellation with `AbortSignal.timeout` through `AbortSignal.any`, including the

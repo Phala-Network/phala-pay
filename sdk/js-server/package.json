@@ -21,8 +21,7 @@
     }
   },
   "files": [
-    "dist",
-    "THIRD_PARTY_NOTICES"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"

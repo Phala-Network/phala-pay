@@ -1,6 +1,6 @@
-import type { ICON_SVG } from "./icon-svg.js";
+import type { ICON_IMAGES } from "./icon-images.js";
 
-export type IconName = keyof typeof ICON_SVG;
+export type IconName = keyof typeof ICON_IMAGES;
 
 /** The tokens the SDK knows, by lowercase code: their icon and full name. */
 const ASSETS: Readonly<Record<string, { icon: IconName; name: string }>> = {

@@ -185,21 +185,20 @@ import { NetworkIcon, AssetIcon } from "@phala/pay-react";
 
 Import `@phala/pay-react/styles.css` for alignment. The default
 size is 18px. Icons use SVG width/height attributes and React elements, so they need no inline
-styles, data URI allowance, or extra CSP directives, including with `style-src 'self'`.
+styles, including with `style-src 'self'`. Each logo is a PNG embedded as a `data:` URI in an SVG
+`<image>`, so the page requests nothing for it; allow it with `img-src data:` in your CSP.
 
 Framework-free hosts can call `networkIcon(chainId)` or `assetIcon(symbol)` from `@phala/pay`
 for decorative SVG markup. Keep the
-name visible alongside it; when used alone, supply an accessible label on the host wrapper. A
-token's markup is its square brand tile; `AssetIcon` draws it as a coin, and so does
-`border-radius: 50%` on your wrapper's `svg`.
+name visible alongside it; when used alone, supply an accessible label on the host wrapper. Some
+logos are square images; `NetworkIcon` and `AssetIcon` draw every logo round, as CoinMarketCap
+does, and so does `border-radius: 50%` on your wrapper's `svg`.
 
-Only six SVGs from `@web3icons/core@4.0.58` are vendored: the `background` variant of each token
-(one shape, the glyph inset alike) and the `branded` logo of each network. They are under the MIT
-license in
-`THIRD_PARTY_NOTICES`. Regenerate both the markup and JSX modules with
-`npx -y pnpm@12.6.0 run icons:generate`; the script packs the pinned package into a temporary
-directory, rejects unexpected SVG tags/attributes, and cleans up. No web3icons runtime package
-is installed.
+The logos are CoinMarketCap's 64px images: each token's own, and for a network the asset
+CoinMarketCap shows for it (Ethereum's is ETH's). They are vendored, not fetched at runtime, and
+are trademarks of their owners (`THIRD_PARTY_NOTICES`). Regenerate the core and React modules with
+`npx -y pnpm@12.6.0 run icons:generate` in `sdk/js`; the script downloads each image, rejects one
+whose SHA-256 differs from its pin, and checks that it is a 64x64 PNG.
 
 ## Development
 

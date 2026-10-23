@@ -14,6 +14,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Changed
+
+- Token and network icons are CoinMarketCap's logos instead of `@web3icons/core`'s: USDC, USDT,
+  PHA, and ETH, and Ethereum and Base as CoinMarketCap shows them. Each is a 64px PNG embedded as a
+  `data:` URI in the same inline SVG, so a page requests nothing for it, but its Content Security
+  Policy must allow `img-src data:`, as the SDK already asked for browser wallet icons.
+  `NetworkIcon` and `AssetIcon` keep their props and sizes and draw every logo round, networks
+  too; `assetIcon()` and `networkIcon()` markup is the image as CoinMarketCap publishes it, round
+  it with `border-radius: 50%`. The logos are trademarks of their owners (`THIRD_PARTY_NOTICES`);
+  `@phala/pay-server`, which has no icons, no longer ships a notice.
+
 ## [0.11.2] - 2026-10-22
 
 ### Security
