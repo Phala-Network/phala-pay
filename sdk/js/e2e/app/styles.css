@@ -15,3 +15,5 @@ body:has([data-theme="dark"]) .modal { background: #18181b; }
 .host-summary dd { margin: 0; }
 .host-button { min-height: 44px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font: inherit;
   font-weight: 500; cursor: pointer; }
+/* The events line names transaction hashes. */
+[data-testid="events"] { overflow-wrap: anywhere; }

@@ -123,6 +123,8 @@ function smallTargets(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const small: string[] = [];
     for (const control of document.querySelectorAll<HTMLElement>(".pp-root button, .pp-root input")) {
+      // A control inside a collapsed (`hidden`) region is no target.
+      if (control.getClientRects().length === 0) continue;
       control.scrollIntoView({ block: "center", inline: "center" });
       const box = control.getBoundingClientRect();
       const [x, y, reach] = [box.left + box.width / 2, box.top + box.height / 2, 21.5];
@@ -268,6 +270,73 @@ for (const width of [390, 1280]) {
       online = false;
       await expect(page.getByRole("status")).toHaveText("Reconnecting…", { timeout: 15_000 });
       await check(page, `deposit-reconnecting-${suffix}`);
+    });
+
+    test(`deposit mode steps at ${suffix}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      let payments: unknown[] = [];
+      await page.route(`${API_BASE}/v1/deposit_addresses/**`, async (route) => {
+        const headers = {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "POST, OPTIONS",
+          "access-control-allow-headers": "Content-Type",
+        };
+        if (route.request().method() !== "GET") {
+          await route.fulfill({ status: route.request().method() === "OPTIONS" ? 204 : 202, headers, body: "" });
+          return;
+        }
+        await route.fulfill({
+          headers,
+          json: {
+            id: `da_${"0d".repeat(16)}`, object: "deposit_address", livemode: false, status: "active",
+            networks: [11155111, 84532].map((chain_id) => ({ chain_id, address: ADDRESS, typical_credit_seconds: 30 })),
+            payments,
+          },
+        });
+      });
+      const url = (option: string) =>
+        `/?${new URLSearchParams({ deposit_mode: "", option, theme, to: ADDRESS, client_secret: DEPOSIT_SECRET, api_base: API_BASE })}`;
+      const row = (status: string) => ({
+        status, chain_id: 11155111, asset: "pha", decimals: 18, amount_atomic: "12500000000000000000", tx_hash: HASH,
+        confirmations: status === "seen" ? 1 : null, created: Math.floor(Date.now() / 1000),
+      });
+
+      // No wallet in the browser: the QR code and the address are the way to pay.
+      await page.goto(url("usdc"));
+      await expect(page.getByText(/Paying from an exchange\?/)).toHaveCount(0);
+      await check(page, `deposit-mode-options-${suffix}`);
+      await page.getByRole("button", { name: "Pay $25.00 in USDC" }).click();
+      await expect(page.getByText("25 USDC", { exact: true })).toBeVisible();
+      expect(await axeViolations(page), "no wallet").toEqual([]);
+      await check(page, `deposit-mode-no-wallet-${suffix}`);
+
+      // A wallet: it pays, and the QR code and the address wait behind one quiet control.
+      await installWallet(page);
+      await page.goto(url("pha"));
+      await page.getByRole("button", { name: "Pay $25.00 in PHA" }).click();
+      const pay = page.getByRole("button", { name: "Pay with Test Wallet" });
+      await expect(pay).toBeVisible();
+      await check(page, `deposit-mode-wallet-${suffix}`);
+      const more = page.getByRole("button", { name: "Pay from an exchange or another wallet" });
+      await more.click();
+      await expect(more).toHaveAttribute("aria-expanded", "true");
+      expect(await axeViolations(page), "expanded").toEqual([]);
+      await check(page, `deposit-mode-expanded-${suffix}`);
+      await more.click();
+
+      const status = page.getByRole("status");
+      await pay.click();
+      await expect(status).toHaveText(/^Sent, waiting for it on chain…/);
+      await expect(pay).toHaveCount(0);
+      await check(page, `deposit-mode-sent-${suffix}`);
+      payments = [row("seen")];
+      await expect(status).toHaveText(/^Received, 1 confirmation\. Crediting in about 30 seconds/);
+      await check(page, `deposit-mode-seen-${suffix}`);
+      payments = [row("credited")];
+      await expect(status).toHaveText(/^Payment credited/);
+      await expect(page.getByTestId("events")).toHaveText(`success:${HASH}`);
+      expect(await axeViolations(page), "credited").toEqual([]);
+      await check(page, `deposit-mode-credited-${suffix}`);
     });
 
     test(`QR codes decode from the screen at ${suffix}`, async ({ page }) => {

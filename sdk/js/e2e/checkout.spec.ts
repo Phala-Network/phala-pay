@@ -335,6 +335,74 @@ test("fails closed when the quote's address is not the expected one", async ({ p
   await expect(page.getByRole("button", { name: /Pay with crypto/ })).toHaveCount(0);
 });
 
+test("deposit-address mode pays the exact amount from a wallet and follows it to credited", async ({ page }) => {
+  const to = privateKeyToAccount(generatePrivateKey()).address;
+  const token = env("TOKEN_ADDRESS");
+  const id = `da_${crypto.randomUUID().replaceAll("-", "")}`;
+  const secret = `${id}_secret_${"5e".repeat(24)}`;
+  const amount = parseEther("12.5");
+  const hints: { transaction_hash: string; chain_id: number }[] = [];
+  let reads = 0;
+  await page.route(`${API_BASE}/v1/deposit_addresses/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const cors = {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "Content-Type",
+    };
+    if (url.pathname === `/v1/deposit_addresses/${id}/transactions`) {
+      if (request.method() !== "OPTIONS") hints.push(request.postDataJSON() as (typeof hints)[number]);
+      await route.fulfill(request.method() === "OPTIONS" ? { status: 204, headers: cors, body: "" } : { status: 202, headers: cors, json: {} });
+      return;
+    }
+    if (url.pathname !== `/v1/deposit_addresses/${id}` || url.searchParams.get("client_secret") !== secret) {
+      await route.fulfill({ status: 404, headers: cors, json: { error: { type: "invalid_request_error", code: "resource_missing" } } });
+      return;
+    }
+    // The payment the service would see: the hinted transaction, once the address holds the token.
+    const balance = await chain().readContract({ address: getAddress(token), abi: erc20Abi, functionName: "balanceOf", args: [to] });
+    const hint = hints[0];
+    const payments =
+      hint === undefined || balance === 0n
+        ? []
+        : [{
+            status: reads++ === 0 ? "seen" : "credited", chain_id: hint.chain_id, asset: "pha", decimals: 18,
+            amount_atomic: balance.toString(), tx_hash: hint.transaction_hash, confirmations: null,
+            created: Math.floor(Date.now() / 1000),
+          }];
+    await route.fulfill({
+      headers: cors,
+      json: {
+        id, object: "deposit_address", livemode: false, status: "active",
+        networks: [{ chain_id: sepolia.id, address: to, typical_credit_seconds: 30 }], payments,
+      },
+    });
+  });
+  await installWallet(page);
+  await page.goto(`/?${new URLSearchParams({ deposit_mode: "", to, token, client_secret: secret, api_base: API_BASE })}`);
+  await page.getByRole("button", { name: "Pay $25.00 in PHA" }).click();
+  await expect(page.getByText("12.5 PHA", { exact: true })).toBeVisible();
+
+  // The QR code asks for exactly the amount (EIP-681 `uint256`) behind one quiet control.
+  await page.getByRole("button", { name: "Pay from an exchange or another wallet" }).click();
+  const qr = page.getByRole("img", { name: "Payment request for 12.5 PHA on Sepolia" });
+  const [viewBox, path] = await Promise.all([qr.getAttribute("viewBox"), qr.locator("path").getAttribute("d")]);
+  expect(decodeQr(Number(viewBox?.split(" ")[2]), path ?? "")).toBe(
+    `ethereum:${token}@${sepolia.id}/transfer?address=${to}&uint256=${amount}`,
+  );
+
+  const pay = page.getByRole("button", { name: "Pay with Test Wallet" });
+  await pay.click();
+  await expect(page.getByRole("status")).toHaveText(/^Payment credited/);
+  await expect(pay).toHaveCount(0);
+  expect(await chain().readContract({ address: getAddress(token), abi: erc20Abi, functionName: "balanceOf", args: [to] })).toBe(amount);
+  expect(hints).toHaveLength(1);
+  expect(hints[0]?.chain_id).toBe(sepolia.id);
+  await expect(page.getByTestId("events")).toHaveText(`success:${hints[0]?.transaction_hash ?? ""}`);
+  await expect(page.getByRole("button", { name: "Start a new payment" })).toBeVisible();
+});
+
 /** Rasterizes the SVG path (one unit per module) and decodes it. */
 function decodeQr(size: number, path: string): string | undefined {
   const scale = 4;

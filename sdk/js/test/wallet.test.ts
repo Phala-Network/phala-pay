@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   INJECTED_WALLET_UUID,
   WalletError,
+  payDepositAddressWithWallet,
   payWithWallet,
   retrieveQuote,
   watchWallets,
@@ -183,6 +184,64 @@ describe("payWithWallet", () => {
     const tampered = quote({ payment_uri: quote({ address: TOKEN }).payment_uri });
     await expect(payWithWallet(provider, tampered)).rejects.toThrow(TypeError);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("payDepositAddressWithWallet", () => {
+  const SECRET = `da_${"0d".repeat(16)}_secret_${"ab".repeat(24)}`;
+  const usdc = {
+    asset: "usdc",
+    contract: TOKEN,
+    decimals: 6,
+    payment_uri: `ethereum:${TOKEN}@11155111/transfer?address=${ADDRESS}`,
+  };
+  const network = { chain_id: 11155111, address: ADDRESS, assets: [usdc] };
+
+  it("sends exactly the amount to the address, then hints the transaction with its chain", async () => {
+    const { provider, calls } = mockProvider(1, [1, 11155111]);
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response("{}", { status: 202 })));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(
+        payDepositAddressWithWallet(provider, {
+          network,
+          asset: usdc,
+          amountAtomic: 100_000_000n,
+          clientSecret: SECRET,
+          apiBase: API_BASE,
+        }),
+      ).resolves.toBe(HASH);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(calls.map((c) => c.method)).toContain("wallet_switchEthereumChain");
+    const { tx, decoded } = sentTransfer(calls);
+    expect(tx.to.toLowerCase()).toBe(TOKEN.toLowerCase());
+    expect(decoded).toEqual({ functionName: "transfer", args: [ADDRESS, 100_000_000n] });
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url instanceof URL ? url.href : url).toBe(`${API_BASE}/v1/deposit_addresses/da_${"0d".repeat(16)}/transactions?client_secret=${SECRET}`);
+    expect(init?.body).toBe(JSON.stringify({ transaction_hash: HASH, chain_id: 11155111 }));
+  });
+
+  it("sends nothing for a short balance, a non-positive amount, or a URI for another address", async () => {
+    const short = mockProvider(11155111, [11155111]);
+    short.wallet.balance = 99_999_999n;
+    await expect(
+      payDepositAddressWithWallet(short.provider, { network, asset: usdc, amountAtomic: 100_000_000n }),
+    ).rejects.toMatchObject({
+      code: "insufficient_balance",
+      message: "Your wallet holds 99.999999 USDC, less than the 100 USDC to pay. Nothing was sent.",
+    });
+    const other = { ...network, address: TOKEN };
+    for (const options of [
+      { network, asset: usdc, amountAtomic: 0n },
+      { network: other, asset: usdc, amountAtomic: 1n },
+    ]) {
+      const { provider, calls } = mockProvider(11155111, [11155111]);
+      await expect(payDepositAddressWithWallet(provider, options)).rejects.toThrow(TypeError);
+      expect(calls).toHaveLength(0);
+    }
+    expect(short.calls.map((c) => c.method)).not.toContain("eth_sendTransaction");
   });
 });
 

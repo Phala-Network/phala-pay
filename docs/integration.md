@@ -188,6 +188,42 @@ from an exchange? Use a deposit address" (§1.5). `appearance` themes it to
 match the page, a test-mode quote says "Test mode", and `onChange` reports each step and every
 checkout status change (§1.2).
 
+**Deposit-address mode.** To give each customer one fixed address rather than a new quote per
+payment, leave out `createQuote` and pass `createDepositAddress`: submit calls it once and the
+element shows the customer's address (§1.5) as the way to pay. Your backend returns the active
+address, recomputed from your pins, with a new `client_secret` (call it only on submit; each call
+issues a secret). `depositAmountAtomic(option)` makes the address ask for that token amount: the
+element states it once, pays it from the payer's wallet first (exactly that amount, then a
+transaction-hash hint, so it is found within about a block), and offers the QR code (EIP-681 with
+`uint256`) and the address behind "Pay from an exchange or another wallet". It follows that
+payment on one status line, reports it in `onChange` as `payment`, and calls
+`onDepositSuccess(payment)` once it is credited; fulfil from the webhook as for quotes. Any
+amount within the per-transfer limits is credited at the market rate, so keep your own amount
+within them.
+
+```python
+@app.post("/deposit-address")
+def deposit_address(team: Team = Depends(current_team)) -> dict[str, object]:
+    address = pay.deposit_addresses.create(client_reference_id=team.id)
+    return {
+        "address": address.address,
+        "networks": [network.to_dict() for network in address.networks],
+        "clientSecret": address.client_secret,
+    }
+```
+
+```tsx
+<PaymentElement
+  options={paymentOptions(config.assets)}
+  amount={2500}
+  apiBase={PHALA_PAY_API_BASE}
+  createDepositAddress={() => post("/deposit-address")}
+  // $25.00 of a $1 stablecoin: cents × 10^(decimals − 2)
+  depositAmountAtomic={(option) => (2500n * 10n ** BigInt(option.decimals)) / 100n}
+  onDepositSuccess={() => router.refresh()}
+/>
+```
+
 For a quote you already created, render `<Checkout clientSecret expectedAddress apiBase>` alone;
 `<PaymentOptionPicker>` is the element's token and network choice on its own. Without React,
 `new PhalaPay({ apiBase }).checkout(clientSecret, { expectedAddress })` gives the same live

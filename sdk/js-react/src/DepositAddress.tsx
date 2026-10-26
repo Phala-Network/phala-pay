@@ -1,8 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { formatUnits } from "viem";
-import { networkName, paymentOptions, samePaymentOption, type PaymentOption } from "@phala/pay";
+import { useEffect, useId, useRef, useState } from "react";
+import { formatUnits, type WalletClient } from "viem";
+import {
+  WalletError,
+  formatUnitsGrouped,
+  networkName,
+  payDepositAddressWithWallet,
+  paymentOptions,
+  samePaymentOption,
+  transactionUrl,
+  type DepositAddressAsset,
+  type DepositAddressNetwork,
+  type EthereumProvider,
+  type PaymentOption,
+} from "@phala/pay";
 import {
   retrieveDepositAddress,
   type ClientDepositAddress,
@@ -13,9 +25,12 @@ import { formatWait } from "@phala/pay";
 import { depositAddressTransfer, type DepositAddressDetails } from "@phala/pay";
 import { rootProps, type Appearance } from "./appearance.js";
 import { Field } from "./Field.js";
+import { ExternalGlyph, ToneGlyph } from "./Glyphs.js";
+import { AssetIcon, NetworkIcon } from "./Icons.js";
 import { depositLimits } from "./limits.js";
 import { PaymentOptionFields } from "./PaymentOptionPicker.js";
 import { QrCode } from "./QrCode.js";
+import { useWallets, type WalletChoice } from "./wallets.js";
 
 export interface DepositAddressProps {
   /** `address` and `networks` from your backend's `POST /v1/deposit_addresses`. */
@@ -39,6 +54,41 @@ export interface DepositAddressProps {
    * Unlike Checkout's `onChange`, this does not report loading.
    * Display only; credit from your `deposit.credited` webhook. */
   onChange?: (state: ClientDepositAddress) => void;
+  /**
+   * The amount to pay, in the smallest unit of the token at `chainId` and `asset`, which then stay
+   * fixed. The component states the amount once, offers to pay it from a browser wallet (or
+   * `walletClient`), and, as a secondary way, a QR code that requests exactly this amount (EIP-681
+   * `uint256`) and the address to copy. With `clientSecret` and `apiBase`, it follows that payment:
+   * the one the wallet sent, by its transaction hash, else the newest one that arrived after the
+   * address was first read, and reports it on one status line.
+   */
+  amountAtomic?: bigint | undefined;
+  /** With `amountAtomic`: the wallet button's label; default "Pay with <wallet name>". */
+  buttonText?: string | undefined;
+  /** With `amountAtomic`: as `<Checkout walletClient>`. */
+  walletClient?: WalletClient | undefined;
+  /** With `amountAtomic`: as `<Checkout onWalletError>`. */
+  onWalletError?: ((error: WalletError, wallet: WalletClient | EthereumProvider) => void) | undefined;
+  /**
+   * With `amountAtomic`: called with the payment the component follows whenever its status or
+   * confirmations change, and with `null` before there is one. Display only.
+   */
+  onPaymentChange?: ((payment: DepositAddressPayment | null) => void) | undefined;
+  /**
+   * With `amountAtomic`: called with the transaction hash and chain once the wallet has sent the
+   * payment. Keep them to resume following it after a reload, with `txHash`.
+   */
+  onSent?: ((txHash: string, chainId: number) => void) | undefined;
+  /**
+   * With `amountAtomic`: a payment already sent on `chainId` (from `onSent`), for example before a
+   * reload. The component follows it, by this hash, instead of offering to pay.
+   */
+  txHash?: string | undefined;
+  /**
+   * With `amountAtomic`: called once when the payment it follows is credited. Its `amount_atomic`
+   * is what arrived. Fulfil from your `deposit.credited` webhook, not here.
+   */
+  onSuccess?: ((payment: DepositAddressPayment) => void) | undefined;
   appearance?: Appearance;
   className?: string;
 }
@@ -47,6 +97,7 @@ export interface DepositAddressProps {
  * A customer's persistent deposit address: one address for every supported token on every
  * supported network. The payer picks a token and network; the component shows a QR code of that
  * EIP-681 transfer request, per-transfer limits, and the address and token contract to copy.
+ * With `amountAtomic`, it asks for that amount of one token instead, paid from a wallet first.
  * Eligible transfers are credited at the market rate; follow them from your backend's
  * `deposit.credited` webhook.
  */
@@ -67,6 +118,8 @@ export function DepositAddressContent({
   apiBase,
   pollInterval,
   onChange,
+  amountAtomic,
+  ...payment
 }: Omit<DepositAddressProps, "appearance" | "className">) {
   const { networks } = depositAddress;
   const { view, reconnecting } = useClientView(clientSecret, apiBase, pollInterval ?? 3000, onChange);
@@ -76,6 +129,26 @@ export function DepositAddressContent({
     chain_id: chainId ?? networks[0]?.chain_id ?? 0,
     asset: asset ?? "",
   }));
+  if (amountAtomic !== undefined) {
+    const fixed = options.find(
+      (each) => each.chain_id === (chainId ?? networks[0]?.chain_id) && (asset === undefined || each.asset === asset),
+    );
+    if (fixed === undefined) {
+      throw new TypeError("the deposit address does not take the token on the network to pay");
+    }
+    return (
+      <DepositPayment
+        network={fixed.network}
+        token={fixed.token}
+        amountAtomic={amountAtomic}
+        view={view}
+        reconnecting={reconnecting}
+        clientSecret={clientSecret}
+        apiBase={apiBase}
+        {...payment}
+      />
+    );
+  }
   // The chosen token on the chosen network, else that network's first token, else the first.
   const option =
     options.find((each) => samePaymentOption(each, selected)) ??
@@ -133,6 +206,255 @@ export function DepositAddressContent({
       </p>
     </>
   );
+}
+
+type PaymentStep =
+  | { kind: "idle" }
+  | { kind: "pending"; wallet: string }
+  | { kind: "failed"; message: string }
+  | { kind: "sent"; hash: string };
+
+/** One amount of one token to the address: wallet first, then a QR code and the address. */
+function DepositPayment({
+  network,
+  token,
+  amountAtomic,
+  view,
+  reconnecting,
+  clientSecret,
+  apiBase,
+  buttonText,
+  walletClient,
+  onWalletError,
+  onPaymentChange,
+  onSuccess,
+  onSent,
+  txHash,
+}: Pick<
+  DepositAddressProps,
+  | "clientSecret"
+  | "apiBase"
+  | "buttonText"
+  | "walletClient"
+  | "onWalletError"
+  | "onPaymentChange"
+  | "onSuccess"
+  | "onSent"
+  | "txHash"
+> & {
+  network: DepositAddressNetwork;
+  token: DepositAddressAsset;
+  amountAtomic: bigint;
+  view: ClientDepositAddress | null;
+  reconnecting: boolean;
+}) {
+  const wallets = useWallets(walletClient);
+  const [step, setStep] = useState<PaymentStep>(() =>
+    txHash !== undefined && /^0x[0-9a-fA-F]{64}$/.test(txHash) ? { kind: "sent", hash: txHash } : { kind: "idle" },
+  );
+  const [open, setOpen] = useState(false);
+  const manualId = useId();
+  const { to } = depositAddressTransfer(network, token);
+  const symbol = token.asset.toUpperCase();
+  const name = networkName(network.chain_id);
+  const amount = `${formatUnitsGrouped(amountAtomic, token.decimals)} ${symbol}`;
+
+  // The payments already there when the address was first read are not this one.
+  const [earlier, setEarlier] = useState<ReadonlySet<string> | null>(null);
+  if (view !== null && earlier === null) {
+    setEarlier(new Set(view.payments.map(paymentKey)));
+  }
+  const sent = step.kind === "sent" ? step.hash.toLowerCase() : null;
+  const tracked = view?.payments.find((each) =>
+    sent === null
+      ? earlier !== null && !earlier.has(paymentKey(each))
+      : each.chain_id === network.chain_id && each.tx_hash.toLowerCase() === sent,
+  );
+
+  const callbacks = useRef({ onPaymentChange, onSuccess });
+  const current = useRef(tracked);
+  useEffect(() => {
+    callbacks.current = { onPaymentChange, onSuccess };
+    current.current = tracked;
+  });
+  const status = tracked === undefined ? "" : `${paymentKey(tracked)} ${tracked.status} ${tracked.confirmations ?? ""}`;
+  const credited = useRef(new Set<string>());
+  useEffect(() => {
+    const payment = current.current ?? null;
+    callbacks.current.onPaymentChange?.(payment);
+    if (payment?.status === "credited" && !credited.current.has(paymentKey(payment))) {
+      credited.current.add(paymentKey(payment));
+      callbacks.current.onSuccess?.(payment);
+    }
+  }, [status]);
+
+  const pay = async ({ name: walletName, wallet }: WalletChoice) => {
+    setStep({ kind: "pending", wallet: walletName });
+    try {
+      const hash = await payDepositAddressWithWallet(wallet, {
+        network,
+        asset: token,
+        amountAtomic,
+        clientSecret,
+        apiBase,
+      });
+      setStep({ kind: "sent", hash });
+      onSent?.(hash, network.chain_id);
+    } catch (error) {
+      setStep({ kind: "failed", message: error instanceof WalletError ? error.message : "The payment could not be sent" });
+      if (error instanceof WalletError) {
+        onWalletError?.(error, wallet);
+      }
+    }
+  };
+
+  const tone = step.kind === "failed" ? "danger" : tracked === undefined ? "neutral" : paymentTone(tracked);
+  const message =
+    step.kind === "failed"
+      ? step.message
+      : step.kind === "pending"
+        ? `Confirm the payment in ${step.wallet}…`
+        : tracked !== undefined
+          ? trackedMessage(tracked, network, token, amountAtomic, view)
+          : sent !== null
+            ? "Sent, waiting for it on chain…"
+            : "";
+  const url = step.kind === "sent" ? transactionUrl(network.chain_id, step.hash) : undefined;
+  // Once a payment is on its way, the ways to pay give way to its status.
+  const underway = sent !== null || tracked !== undefined;
+  const manual = (
+    <>
+      <div className="pp-qr">
+        <QrCode value={`${token.payment_uri}&uint256=${amountAtomic}`} label={`Payment request for ${amount} on ${name}`} />
+        <p className="pp-qr__caption">Send exactly this amount in {symbol} on {name}, in one transfer.</p>
+      </div>
+      <dl className="pp-fields">
+        <Field label="Deposit address" value={to} copy />
+      </dl>
+    </>
+  );
+  return (
+    <>
+      <div className="pp-summary">
+        <p className="pp-summary__amount">
+          <AssetIcon asset={token.asset} size={20} />
+          {amount}
+        </p>
+        <p className="pp-summary__meta">
+          <span className="pp-summary__network">
+            <NetworkIcon chainId={network.chain_id} size={16} />
+            {name}
+          </span>
+        </p>
+      </div>
+      {!underway && wallets.length > 0 && (
+        <div className="pp-wallets">
+          {wallets.map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              className="pp-button"
+              disabled={step.kind === "pending"}
+              onClick={() => void pay(choice)}
+            >
+              {choice.icon !== "" && <img className="pp-button__icon" src={choice.icon} alt="" />}
+              {buttonText === undefined ? (
+                <span>Pay with {choice.name}</span>
+              ) : (
+                <>
+                  <span>{buttonText}</span>
+                  {walletClient === undefined && (
+                    <>
+                      {" "}
+                      <span className="pp-button__detail">{choice.name}</span>
+                    </>
+                  )}
+                </>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="pp-message pp-deposit__status" data-tone={tone} role="status">
+        {(message !== "" || reconnecting) && (
+          <>
+            {message !== "" && <ToneGlyph tone={tone} />}
+            <span>
+              {message}
+              {reconnecting && (message === "" ? "Reconnecting…" : " (reconnecting…)")}
+              {url !== undefined && (
+                <>
+                  {" "}
+                  <a className="pp-deposit__tx" href={url} target="_blank" rel="noreferrer">
+                    View transaction
+                    <ExternalGlyph />
+                  </a>
+                </>
+              )}
+            </span>
+          </>
+        )}
+      </p>
+      {underway ? null : wallets.length === 0 ? (
+        <div className="pp-deposit__manual">{manual}</div>
+      ) : (
+        <>
+          <p className="pp-deposit__more">
+            <button
+              type="button"
+              className="pp-text-button"
+              aria-expanded={open}
+              aria-controls={manualId}
+              onClick={() => setOpen(!open)}
+            >
+              Pay from an exchange or another wallet
+            </button>
+          </p>
+          <div className="pp-deposit__manual" id={manualId} hidden={!open}>
+            {manual}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * The status of the payment asked for, as the checkout states a quote's; a payment of another
+ * amount, token, or network is named in full, as it is what arrived.
+ */
+function trackedMessage(
+  payment: DepositAddressPayment,
+  network: DepositAddressNetwork,
+  token: DepositAddressAsset,
+  amountAtomic: bigint,
+  view: ClientDepositAddress | null,
+): string {
+  if (payment.chain_id !== network.chain_id || payment.asset !== token.asset || BigInt(payment.amount_atomic) !== amountAtomic) {
+    return paymentMessage(payment);
+  }
+  switch (payment.status) {
+    case "seen": {
+      const seconds = view?.networks.find((each) => each.chain_id === payment.chain_id)?.typical_credit_seconds;
+      const received =
+        payment.confirmations === null
+          ? "Received"
+          : `Received, ${payment.confirmations} confirmation${payment.confirmations === 1 ? "" : "s"}`;
+      return seconds === undefined ? `${received}, crediting shortly` : `${received}. Crediting in ${formatWait(seconds)}`;
+    }
+    case "confirming":
+      return "Confirmed on chain, crediting…";
+    case "credited":
+      return "Payment credited";
+    case "rejected":
+      return "This payment cannot be credited. Contact support with your transaction.";
+    case "reversed":
+      return "Payment reversed: a chain reorganization replaced it and its credit was removed.";
+  }
+}
+
+function paymentKey(payment: DepositAddressPayment): string {
+  return `${payment.chain_id}:${payment.tx_hash.toLowerCase()}`;
 }
 
 /** The address's public view, read every `interval` while mounted; `null` without a secret. */

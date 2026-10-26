@@ -14,19 +14,14 @@ import {
 } from "@phala/pay";
 import { quoteTransfer } from "@phala/pay";
 import type { ClientQuote } from "@phala/pay";
-import {
-  WalletError,
-  payWithWallet,
-  watchWallets,
-  type EthereumProvider,
-  type Wallet,
-} from "@phala/pay";
+import { WalletError, payWithWallet, type EthereumProvider } from "@phala/pay";
 import { rootProps, type Appearance } from "./appearance.js";
 import { AssetIcon, NetworkIcon } from "./Icons.js";
 import { CopyButton, Field } from "./Field.js";
 import { ExternalGlyph, ToneGlyph } from "./Glyphs.js";
 import { QrCode } from "./QrCode.js";
 import { useCheckout } from "./useCheckout.js";
+import { useWallets, type WalletChoice } from "./wallets.js";
 
 export interface CheckoutProps {
   /** The quote's `client_secret`, from your backend's `POST /v1/quotes`. */
@@ -304,12 +299,8 @@ function PaymentOptions({
   onWalletError: CheckoutProps["onWalletError"];
 }) {
   const [selectedMethod, setMethod] = useState<Method | null>(null);
-  const [discovered, setDiscovered] = useState<Wallet[]>([]);
-  useEffect(
-    () => (walletClient === undefined ? watchWallets(setDiscovered) : undefined),
-    [walletClient],
-  );
-  const method = selectedMethod ?? (walletClient !== undefined || discovered.length > 0 ? "wallet" : "qr");
+  const wallets = useWallets(walletClient);
+  const method = selectedMethod ?? (wallets.length > 0 ? "wallet" : "qr");
   const id = useId();
   const tabs = useRef<(HTMLButtonElement | null)[]>([]);
   const amount = `${formatTokenAmount(quote)} ${quote.asset.toUpperCase()}`;
@@ -372,8 +363,8 @@ function PaymentOptions({
           <WalletPanel
             quote={quote}
             buttonText={buttonText}
-            walletClient={walletClient}
-            discovered={discovered}
+            wallets={wallets}
+            named={walletClient === undefined}
             onSent={onSent}
             onWalletError={onWalletError}
           />
@@ -400,25 +391,22 @@ type WalletStep =
 function WalletPanel({
   quote,
   buttonText,
-  walletClient,
-  discovered,
+  wallets,
+  named,
   onSent,
   onWalletError,
 }: {
   quote: ClientQuote;
-  discovered: Wallet[];
+  wallets: WalletChoice[];
   buttonText: string;
-  walletClient: WalletClient | undefined;
+  /** Whether each button names its wallet: not for the page's own wallet client. */
+  named: boolean;
   onSent: (hash: Hash) => void;
   onWalletError: CheckoutProps["onWalletError"];
 }) {
   const [step, setStep] = useState<WalletStep>({ kind: "idle" });
-  const wallets: { id: string; name: string; icon: string; wallet: WalletClient | EthereumProvider }[] =
-    walletClient === undefined
-      ? discovered.map(({ info: { uuid, name, icon }, provider }) => ({ id: uuid, name, icon, wallet: provider }))
-      : [{ id: "client", name: "your wallet", icon: "", wallet: walletClient }];
 
-  const pay = async ({ name, wallet }: (typeof wallets)[number]) => {
+  const pay = async ({ name, wallet }: WalletChoice) => {
     setStep({ kind: "pending", wallet: name });
     try {
       onSent(await payWithWallet(wallet, quote));
@@ -453,7 +441,7 @@ function WalletPanel({
         >
           {choice.icon !== "" && <img className="pp-button__icon" src={choice.icon} alt="" />}
           <span>{buttonText}</span>
-          {walletClient === undefined && (
+          {named && (
             <>
               {" "}
               <span className="pp-button__detail">{choice.name}</span>
