@@ -14,11 +14,11 @@ RUN git init -q . && \
 
 # Keep the upstream release's encryption and compression support, using signed Debian packages.
 RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && \
-    printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261003T000000Z/ trixie main' \
-        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261003T000000Z/ trixie-security main' \
+    printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261026T000000Z/ trixie main' \
+        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261026T000000Z/ trixie-security main' \
         >/etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
-        libsodium-dev=1.0.18-1+deb13u1 libbrotli-dev=1.1.0-2+b7 liblzo2-dev=2.10-3+b1
+        libsodium-dev=1.0.18-1+deb13u1 libbrotli-dev=1.1.0-2+deb13u1 liblzo2-dev=2.10-3+b1
 
 WORKDIR /src/wal-g
 # WAL-G v3.0.9, with only the security updates required by the final-image scan.
@@ -36,14 +36,14 @@ FROM postgres:18.6-trixie@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5
 ARG SOURCE_DATE_EPOCH=0
 # Debian signatures authenticate the HTTP snapshot, including its pinned package indexes.
 RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && \
-    printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261003T000000Z/ trixie main' \
-        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261003T000000Z/ trixie-security main' \
+    printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261026T000000Z/ trixie main' \
+        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261026T000000Z/ trixie-security main' \
         >/etc/apt/sources.list
 
 # ca-certificates: WAL-G verifies the object store's TLS certificate (R2/S3 over HTTPS).
 # liburi-perl: the entrypoint parses AWS_ENDPOINT with Perl's standard URI module (RFC 3986).
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libsodium23=1.0.18-1+deb13u1 libbrotli1=1.1.0-2+b7 liblzo2-2=2.10-3+b1 \
+    apt-get install -y --no-install-recommends libsodium23=1.0.18-1+deb13u1 libbrotli1=1.1.0-2+deb13u1 liblzo2-2=2.10-3+b1 \
         ca-certificates=20250419 jq=1.7.1-6+deb13u4 libjq1=1.7.1-6+deb13u4 liburi-perl=5.30-1 \
         libpcre2-8-0=10.46-1~deb13u3 libssl3t64=3.5.7-1~deb13u3 \
         openssl=3.5.7-1~deb13u3 openssl-provider-legacy=3.5.7-1~deb13u3 && \

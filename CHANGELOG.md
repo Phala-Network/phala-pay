@@ -14,6 +14,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Security
+
+- Update the website and JS SDK toolchains' Zod, Undici, body-parser, and fast-uri dependency
+  paths for their published advisories. Upgrade Puppeteer to remove its Zod 3 dependency;
+  Mermaid and KaTeX remain installed and generated diagrams are unchanged.
+- Update WAL-G's Brotli build and runtime packages to Debian's fixed `1.1.0-2+deb13u1`, using
+  the signed October 26 snapshot, for CVE-2026-111497. Rebuilt images have new digests.
+- Time-box the upstream-blocked crypto-bigint and deployment CLI Zod 3 exceptions until
+  November 24, 2026, at 4 p.m. PST, with CI-enforced expiry and exposure reviews
+  ([#536](https://github.com/Phala-Network/phala-pay/issues/536),
+  [#537](https://github.com/Phala-Network/phala-pay/issues/537)).
+
 ## [0.11.4] - 2026-10-23
 
 ### Security

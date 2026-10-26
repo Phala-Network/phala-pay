@@ -5,6 +5,7 @@ all-features = true
 yanked = "deny"
 ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste is a transitive Alloy dependency and the advisory has no safe upgrade" },
+    { id = "RUSTSEC-2026-0387", reason = "No compatible Alloy/k256 upgrade; startup-only secret-scalar validation inside the TEE. Expires 2026-11-25T00:00:00Z; exposure review and expiry enforced via .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/536" },
 ]
 
 [licenses]

@@ -14,6 +14,7 @@ test:
 
 # CI's lint job runs exactly this.
 lint:
+	python3 .github/security/check-exceptions.py
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --locked --all-features -- -D warnings
 	cargo clippy --workspace --all-targets --locked -- -D warnings
