@@ -142,6 +142,9 @@ Vulnerability exceptions belong only in
 YAML). Each entry needs an advisory `id`, a specific `statement` explaining exposure and mitigation,
 and an `expired_at` UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`). Prefer a `paths` restriction where possible. CI rejects
 missing reasons, expired exceptions, and expiries over 30 days; do not use blanket exclusions.
+RustSec exceptions also need a matching `ignore` in [deny.toml](deny.toml), with a tracking issue;
+`make lint` enforces their expiry from the same policy file. The existing compile-time `paste`
+exception described below predates this expiry policy.
 
 Slither 0.11.6 analyzes production contracts with every finding level enforced. Suppress only an
 individual finding using `slither-disable-next-line <detector>` and an adjacent reason; dependency,
