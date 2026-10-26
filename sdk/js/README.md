@@ -206,18 +206,20 @@ import { PaymentElement } from "@phala/pay-react";
   the element shows `<DepositAddress>` at the chosen option, which states the per-transfer limits.
 - **Deposit-address mode.** Without `createQuote`, submit calls `createDepositAddress(option)` once
   and shows that address as the way to pay, with no secondary line: the customer's one fixed address
-  instead of a new quote per payment. `depositAmountAtomic(option)` names the token amount to ask
-  for in the option's smallest unit (`undefined` for any amount). The address view then states the
-  amount and network once, pays it with `Pay with <wallet name>` (`payDepositAddressWithWallet`:
-  exactly that amount, then a transaction-hash hint), and keeps a QR code that requests the amount
-  (EIP-681 `uint256`) and the address to copy behind "Pay from an exchange or another wallet". It
-  follows the payment the wallet sent, by its hash, or else the newest one that arrives after the
-  address was first read, on one status line; `onChange` reports it as `payment`, and
-  `onDepositSuccess(payment)` is called once when it is credited. An address that does not take the
-  chosen token on the chosen network is a `createDepositAddress` failure. To resume after a reload,
-  keep `onDepositSent(txHash, chainId)`'s values and pass them back as `depositTxHash`, with that
-  option as `value` or `defaultValue`: the element calls `createDepositAddress` at once and shows
-  that payment's status (no way to pay again) until it is credited.
+  instead of a new quote per payment. `depositAmountAtomic(option, token)` names the token amount to
+  ask for in the token's smallest unit (`undefined` for any amount); it is called once the address
+  is created, with its token for the chosen option, whose `decimals` give the unit. The address view
+  then states the amount and network once, pays it with `Pay with <wallet name>`
+  (`payDepositAddressWithWallet`: exactly that amount, then a transaction-hash hint), and keeps a QR
+  code that requests the amount (EIP-681 `uint256`) and the address to copy behind "Pay from an
+  exchange or another wallet". It follows the payment the wallet sent, by its hash, or else the
+  newest one that arrives after the address was first read, on one status line; `onChange` reports
+  it as `payment`, and `onDepositSuccess(payment)` is called once when it is credited. An address
+  that does not take the chosen token on the chosen network is a `createDepositAddress` failure. To
+  resume after a reload, keep `onDepositSent(txHash, chainId)`'s values and pass them back as
+  `depositTxHash`, with that option as `value` or `defaultValue`: the element calls
+  `createDepositAddress` at once and shows that payment's status (no way to pay again) until it is
+  credited.
 
   ```tsx
   <PaymentElement
@@ -226,7 +228,7 @@ import { PaymentElement } from "@phala/pay-react";
     // POST /v1/deposit_addresses on your backend: { address, networks, clientSecret }
     createDepositAddress={() => api.depositAddress()}
     // 25 of a $1 stablecoin: cents × 10^(decimals − 2)
-    depositAmountAtomic={(option) => (2500n * 10n ** BigInt(option.decimals)) / 100n}
+    depositAmountAtomic={(option, token) => (2500n * 10n ** BigInt(token.decimals)) / 100n}
     apiBase="https://pay.example.com"
     onDepositSuccess={() => router.refresh()}
   />

@@ -99,19 +99,22 @@ function Element() {
 
 // `?element&deposit_mode` shows the payment element without quotes: submit shows the customer's
 // deposit address (`to`, else the page's), which asks for 12.5 of the token (`token`, else the
-// page's) on Sepolia or 25 USDC on Base Sepolia, and follows its payments with the page's
-// `client_secret`.
+// page's) on Sepolia or 25 USDC on Base Sepolia, in the units of the address's token (18 and 6
+// decimals), and follows its payments with the page's `client_secret`.
 const depositOptions = [
-  { chain_id: 11155111, asset: "pha", decimals: 18 },
-  { chain_id: 84532, asset: "usdc", decimals: 6 },
+  { chain_id: 11155111, asset: "pha" },
+  { chain_id: 84532, asset: "usdc" },
 ];
 function DepositMode({ onEvent }: { onEvent: (event: string) => void }) {
   const to = params.get("to") ?? address;
   const contract = params.get("token") ?? token;
-  const depositNetworks = depositOptions.map(({ chain_id, asset, decimals }) => ({
+  const depositNetworks = depositOptions.map(({ chain_id, asset }) => ({
     chain_id,
     address: to,
-    assets: [{ asset, contract, decimals, payment_uri: `ethereum:${contract}@${chain_id}/transfer?address=${to}` }],
+    assets: [{
+      asset, contract, decimals: asset === "usdc" ? 6 : 18,
+      payment_uri: `ethereum:${contract}@${chain_id}/transfer?address=${to}`,
+    }],
   }));
   return (
     <PaymentElement
@@ -126,7 +129,7 @@ function DepositMode({ onEvent }: { onEvent: (event: string) => void }) {
           ...(params.has("api_base") ? { apiBase: params.get("api_base") ?? "" } : {}),
         })
       }
-      depositAmountAtomic={(option) => (option.asset === "usdc" ? 25_000_000n : 12_500_000_000_000_000_000n)}
+      depositAmountAtomic={(option, { decimals }) => (option.asset === "usdc" ? 250n : 125n) * 10n ** BigInt(decimals - 1)}
       walletClient={walletClient}
       pollInterval={500}
       onDepositSuccess={(payment) => onEvent(`success:${payment.tx_hash}`)}
