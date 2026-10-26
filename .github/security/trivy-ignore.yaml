@@ -3,7 +3,7 @@
     {
       "id": "CVE-2023-54404",
       "purls": ["pkg:npm/zod@3.25.76"],
-      "paths": ["deploy/tools/package-lock.json"],
+      "paths": ["package-lock.json", "deploy/tools/package-lock.json"],
       "statement": "The operator-invoked Phala Cloud CLI (phala 1.1.22 / @phala/cloud 0.4.0) still requires Zod ^3.24.1; no patched 3.x release or supported parent upgrade exists. It validates operator-controlled configuration and authenticated Phala Cloud API responses, never untrusted application requests, and is absent from the deployed service/reference-product images. The vulnerable attacker-supplied container-validation path is unused by this deployment tooling. Remove when a supported CLI/SDK upgrade resolves patched Zod (>=4.6.6); reassess if inputs or the operator/API trust boundary change. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/537.",
       "expired_at": "2026-11-25T00:00:00Z"
     },
