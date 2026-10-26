@@ -328,6 +328,8 @@ for (const width of [390, 1280]) {
       await pay.click();
       await expect(status).toHaveText(/^Sent, waiting for it on chain…/);
       await expect(pay).toHaveCount(0);
+      // Sent: no way back to pay again until the payment settles.
+      await expect(page.getByRole("button", { name: "Back to payment options" })).toHaveCount(0);
       await check(page, `deposit-mode-sent-${suffix}`);
       payments = [row("seen")];
       await expect(status).toHaveText(/^Received, 1 confirmation\. Crediting in about 30 seconds/);
@@ -497,6 +499,8 @@ for (const width of [390, 1280]) {
     const view = page.getByRole("link", { name: "View transaction" });
     await expect(view).toBeVisible();
     expect(await glyphOnItsLine(view), "deposit status").toBe(true);
+    // One plain line while in progress: no mark before it.
+    await expect(page.locator(".pp-deposit__status > svg")).toHaveCount(0);
     await check(page, `preflight-deposit-sent-${width}`);
 
     await page.goto(checkoutUrl("light"));

@@ -335,7 +335,9 @@ describe("without createQuote", () => {
     // The ways to pay give way to the payment's status.
     expect(screen.queryByRole("button", { name: "Pay with your wallet" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Pay from an exchange or another wallet" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Back to payment options" })).not.toBeNull();
+    // No way back to pay again while the sent payment has not settled; one plain status line.
+    expect(screen.queryByRole("button", { name: "Back to payment options" })).toBeNull();
+    expect(screen.getByRole("status").querySelector("svg:not(.pp-tx__external)")).toBeNull();
 
     payments.unshift(row(HASH, "seen"));
     await waitFor(() =>
@@ -355,6 +357,7 @@ describe("without createQuote", () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(onDepositSuccess).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Start a new payment" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Back to payment options" })).toBeNull();
   });
 
   it("follows a payment sent by QR code or by hand once it arrives", async () => {
@@ -407,10 +410,33 @@ describe("without createQuote", () => {
     // The earlier credited payment is not this one.
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(onDepositSuccess).not.toHaveBeenCalled();
-    payments.unshift(row(HASH, "credited"));
+    // No way back to pay again until the resumed payment settles.
+    expect(screen.queryByRole("button", { name: /^(Back to payment options|Start)/ })).toBeNull();
+    payments.unshift(row(HASH, "seen"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/^Received/));
+    expect(screen.queryByRole("button", { name: /^(Back to payment options|Start)/ })).toBeNull();
+    payments[0] = row(HASH, "credited");
     await waitFor(() => expect(onDepositSuccess).toHaveBeenCalledTimes(1));
     expect(onDepositSuccess.mock.calls[0]?.[0].tx_hash).toBe(HASH);
     expect(screen.getByRole("status").textContent).toBe("Payment credited View transaction");
+    fireEvent.click(screen.getByRole("button", { name: "Start a new payment" }));
+    expect(screen.getByRole("button", { name: "Pay in USDC" })).toBeDefined();
+  });
+
+  it("offers a way back once a sent payment is rejected", async () => {
+    serve([row(HASH, "rejected")]);
+    render(
+      <PaymentElement
+        options={OPTIONS}
+        defaultValue={OPTIONS[1]}
+        createDepositAddress={() => Promise.resolve(created)}
+        depositAmountAtomic={amountOf}
+        depositTxHash={{ txHash: HASH, chainId: 84532 }}
+        pollInterval={20}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "Start over" })).toBeDefined();
+    expect(screen.getByRole("status").textContent).toMatch(/^This payment cannot be credited/);
   });
 
   it("computes the amount in the units of the address's token, once it is created", async () => {

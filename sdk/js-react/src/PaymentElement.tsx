@@ -162,6 +162,7 @@ type Step =
 // While a payment is on its way, the checkout stays: leaving it would hide the payment's progress.
 const UNDERWAY = new Set(["seen", "confirming"]);
 const FINISHED = new Set(["credited", "rejected", "reversed", "expired", "canceled", "error"]);
+const SETTLED = new Set(["credited", "rejected", "reversed"]);
 
 /**
  * A complete payment, created only when the payer submits, like Stripe's Payment Element with a
@@ -207,6 +208,8 @@ export function PaymentElement<T extends PaymentOption>({
   const [chosen, setChosen] = useState<PaymentOption | null>(defaultValue === undefined ? (options[0] ?? null) : defaultValue);
   const [checkout, setCheckout] = useState<CheckoutState | null>(null);
   const [payment, setPayment] = useState<DepositAddressPayment | null>(null);
+  // Whether the wallet sent the deposit-address payment in this view.
+  const [sent, setSent] = useState(false);
   const selected = value === undefined ? chosen : value;
   const option = options.find((each) => samePaymentOption(each, selected));
 
@@ -256,6 +259,7 @@ export function PaymentElement<T extends PaymentOption>({
         pending.current = false;
         setCheckout(null);
         setPayment(null);
+        setSent(false);
         setCurrent(done(result));
       },
       (error: unknown) => {
@@ -332,6 +336,7 @@ export function PaymentElement<T extends PaymentOption>({
     pending.current = false;
     setCheckout(null);
     setPayment(null);
+    setSent(false);
     setCurrent({ step: "options", failed: null });
   };
 
@@ -343,7 +348,15 @@ export function PaymentElement<T extends PaymentOption>({
       : FINISHED.has(status)
         ? "Start over"
         : "Choose another token or network";
-  const depositBackText = payment === null ? "Back to payment options" : backText;
+  // Once a payment is sent (or resumed), there is no way back until it settles: going back and
+  // paying again would pay twice.
+  const depositSent = sent || (current.step === "deposit_address" && current.txHash !== undefined);
+  const depositBackText =
+    payment !== null && SETTLED.has(payment.status)
+      ? backText
+      : payment === null && !depositSent
+        ? "Back to payment options"
+        : null;
   const primary = createQuote === undefined ? "deposit_address" : "quote";
   const symbol = option === undefined ? null : assetSymbol(option.asset);
   const submitText =
@@ -445,7 +458,10 @@ export function PaymentElement<T extends PaymentOption>({
               onWalletError={onWalletError}
               onPaymentChange={setPayment}
               onSuccess={onDepositSuccess}
-              onSent={onDepositSent}
+              onSent={(txHash, chainId) => {
+                setSent(true);
+                onDepositSent?.(txHash, chainId);
+              }}
               txHash={current.txHash}
             />
           </>

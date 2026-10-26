@@ -401,6 +401,7 @@ test("deposit-address mode pays the exact amount from a wallet and follows it to
   expect(hints[0]?.chain_id).toBe(sepolia.id);
   await expect(page.getByTestId("events")).toHaveText(`success:${hints[0]?.transaction_hash ?? ""}`);
   await expect(page.getByRole("button", { name: "Start a new payment" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to payment options" })).toHaveCount(0);
 });
 
 /** Rasterizes the SVG path (one unit per module) and decodes it. */
