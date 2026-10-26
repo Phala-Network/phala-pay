@@ -89,6 +89,12 @@ export interface PaymentElementProps<T extends PaymentOption> {
    * the secondary way), follows that payment, and reports it in `onChange` and `onDepositSuccess`.
    */
   depositAmountAtomic?: ((option: T) => bigint | undefined) | undefined;
+  /**
+   * A deposit-address payment already sent from a wallet, from `onDepositSent`, to resume after a
+   * reload: the element calls `createDepositAddress` with the chosen option at once (set `value` or
+   * `defaultValue` to the option it was paid in, on `chainId`) and follows that transaction.
+   */
+  depositTxHash?: { txHash: string; chainId: number } | undefined;
   /** The service origin, for a quote or deposit address that does not name its own. */
   apiBase?: string | undefined;
   /** The form's id: a button elsewhere on your page with `type="submit" form={id}` submits it. */
@@ -117,6 +123,8 @@ export interface PaymentElementProps<T extends PaymentOption> {
    * Fulfil from the `deposit.credited` webhook.
    */
   onDepositSuccess?: ((payment: DepositAddressPayment) => void) | undefined;
+  /** Called once the wallet has sent the deposit-address payment: keep both for `depositTxHash`. */
+  onDepositSent?: ((txHash: string, chainId: number) => void) | undefined;
   /** Called when `createQuote` or `createDepositAddress` rejects, with its error. */
   onError?: ((error: unknown) => void) | undefined;
   /**
@@ -145,6 +153,7 @@ type Step =
       apiBase: string | undefined;
       option: PaymentOption | undefined;
       amountAtomic: bigint | undefined;
+      txHash: string | undefined;
     };
 
 // While a payment is on its way, the checkout stays: leaving it would hide the payment's progress.
@@ -170,6 +179,7 @@ export function PaymentElement<T extends PaymentOption>({
   createQuote,
   createDepositAddress,
   depositAmountAtomic,
+  depositTxHash,
   apiBase,
   id,
   hideSubmit = false,
@@ -181,6 +191,7 @@ export function PaymentElement<T extends PaymentOption>({
   onSuccess,
   onExpire,
   onDepositSuccess,
+  onDepositSent,
   onError,
   errorMessage,
   onWalletError,
@@ -225,6 +236,7 @@ export function PaymentElement<T extends PaymentOption>({
   }, [step]);
   useEffect(() => () => {
     request.current += 1;
+    pending.current = false;
   }, []);
 
   const start = <R,>(kind: "quote" | "deposit_address", create: () => Promise<R>, done: (result: R) => Step) => {
@@ -276,7 +288,7 @@ export function PaymentElement<T extends PaymentOption>({
     });
   };
 
-  const showDepositAddress = () => {
+  const showDepositAddress = (txHash?: string) => {
     if (disabled || createDepositAddress === undefined) {
       return;
     }
@@ -298,8 +310,17 @@ export function PaymentElement<T extends PaymentOption>({
       apiBase: created.apiBase ?? apiBase,
       option,
       amountAtomic,
+      txHash,
     }));
   };
+
+  // A payment sent before a reload: back to its address at once, following it.
+  const resume = depositTxHash !== undefined && option?.chain_id === depositTxHash.chainId ? depositTxHash.txHash : undefined;
+  const resumeOnMount = useRef(resume);
+  const showOnMount = useRef(showDepositAddress);
+  useEffect(() => {
+    if (resumeOnMount.current !== undefined) showOnMount.current(resumeOnMount.current);
+  }, []);
 
   const back = () => {
     request.current += 1;
@@ -365,7 +386,7 @@ export function PaymentElement<T extends PaymentOption>({
                 <button
                   type="button"
                   className="pp-text-button"
-                  onClick={showDepositAddress}
+                  onClick={() => showDepositAddress()}
                   disabled={disabled || current.step === "creating"}
                 >
                   {current.step === "creating" && current.kind === "deposit_address"
@@ -419,6 +440,8 @@ export function PaymentElement<T extends PaymentOption>({
               onWalletError={onWalletError}
               onPaymentChange={setPayment}
               onSuccess={onDepositSuccess}
+              onSent={onDepositSent}
+              txHash={current.txHash}
             />
           </>
         )}

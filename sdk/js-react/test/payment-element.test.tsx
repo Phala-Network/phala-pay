@@ -295,12 +295,14 @@ describe("without createQuote", () => {
     const walletClient = createWalletClient({ account: ACCOUNT, transport: custom(provider) });
     const onChange = vi.fn<(state: PaymentElementState) => void>();
     const onDepositSuccess = vi.fn<(payment: DepositAddressPayment) => void>();
+    const onDepositSent = vi.fn<(txHash: string, chainId: number) => void>();
     render(
       <PaymentElement
         options={OPTIONS}
         defaultValue={OPTIONS[1]}
         createDepositAddress={() => Promise.resolve(created)}
         depositAmountAtomic={amountOf}
+        onDepositSent={onDepositSent}
         walletClient={walletClient}
         onChange={onChange}
         onDepositSuccess={onDepositSuccess}
@@ -328,6 +330,7 @@ describe("without createQuote", () => {
       args: [ADDRESS, 10_000_000n],
     });
     expect(hints).toEqual([JSON.stringify({ transaction_hash: HASH, chain_id: 84532 })]);
+    expect(onDepositSent).toHaveBeenCalledExactlyOnceWith(HASH, 84532);
     // The ways to pay give way to the payment's status.
     expect(screen.queryByRole("button", { name: "Pay with your wallet" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Pay from an exchange or another wallet" })).toBeNull();
@@ -376,6 +379,37 @@ describe("without createQuote", () => {
     await waitFor(() => expect(onDepositSuccess).toHaveBeenCalledTimes(1));
     expect(onDepositSuccess.mock.calls[0]?.[0].tx_hash).toBe(HASH);
     expect(screen.getByRole("status").textContent).toBe("4 USDC on Base Sepolia credited");
+  });
+
+  it("resumes following a sent payment after a reload, without offering to pay again", async () => {
+    const payments: DepositAddressPayment[] = [row(EARLIER, "credited")];
+    serve(payments);
+    const createDepositAddress = vi.fn(() => Promise.resolve(created));
+    const onDepositSuccess = vi.fn<(payment: DepositAddressPayment) => void>();
+    render(
+      <StrictMode>
+        <PaymentElement
+          options={OPTIONS}
+          defaultValue={OPTIONS[1]}
+          createDepositAddress={createDepositAddress}
+          depositAmountAtomic={amountOf}
+          depositTxHash={{ txHash: HASH, chainId: 84532 }}
+          onDepositSuccess={onDepositSuccess}
+          pollInterval={20}
+        />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/^Sent, waiting for it on chain…/));
+    expect(createDepositAddress).toHaveBeenLastCalledWith(OPTIONS[1]);
+    expect(screen.queryByRole("button", { name: /^Pay / })).toBeNull();
+    expect(screen.queryByRole("img", { name: /Payment request/ })).toBeNull();
+    // The earlier credited payment is not this one.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(onDepositSuccess).not.toHaveBeenCalled();
+    payments.unshift(row(HASH, "credited"));
+    await waitFor(() => expect(onDepositSuccess).toHaveBeenCalledTimes(1));
+    expect(onDepositSuccess.mock.calls[0]?.[0].tx_hash).toBe(HASH);
+    expect(screen.getByRole("status").textContent).toBe("Payment credited View transaction");
   });
 
   it("refuses an address that does not take the token to pay", async () => {

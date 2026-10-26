@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { formatUnits, type Hash, type WalletClient } from "viem";
+import { formatUnits, type WalletClient } from "viem";
 import {
   WalletError,
   formatUnitsGrouped,
@@ -74,6 +74,16 @@ export interface DepositAddressProps {
    * confirmations change, and with `null` before there is one. Display only.
    */
   onPaymentChange?: ((payment: DepositAddressPayment | null) => void) | undefined;
+  /**
+   * With `amountAtomic`: called with the transaction hash and chain once the wallet has sent the
+   * payment. Keep them to resume following it after a reload, with `txHash`.
+   */
+  onSent?: ((txHash: string, chainId: number) => void) | undefined;
+  /**
+   * With `amountAtomic`: a payment already sent on `chainId` (from `onSent`), for example before a
+   * reload. The component follows it, by this hash, instead of offering to pay.
+   */
+  txHash?: string | undefined;
   /**
    * With `amountAtomic`: called once when the payment it follows is credited. Its `amount_atomic`
    * is what arrived. Fulfil from your `deposit.credited` webhook, not here.
@@ -202,7 +212,7 @@ type PaymentStep =
   | { kind: "idle" }
   | { kind: "pending"; wallet: string }
   | { kind: "failed"; message: string }
-  | { kind: "sent"; hash: Hash };
+  | { kind: "sent"; hash: string };
 
 /** One amount of one token to the address: wallet first, then a QR code and the address. */
 function DepositPayment({
@@ -218,9 +228,19 @@ function DepositPayment({
   onWalletError,
   onPaymentChange,
   onSuccess,
+  onSent,
+  txHash,
 }: Pick<
   DepositAddressProps,
-  "clientSecret" | "apiBase" | "buttonText" | "walletClient" | "onWalletError" | "onPaymentChange" | "onSuccess"
+  | "clientSecret"
+  | "apiBase"
+  | "buttonText"
+  | "walletClient"
+  | "onWalletError"
+  | "onPaymentChange"
+  | "onSuccess"
+  | "onSent"
+  | "txHash"
 > & {
   network: DepositAddressNetwork;
   token: DepositAddressAsset;
@@ -229,7 +249,9 @@ function DepositPayment({
   reconnecting: boolean;
 }) {
   const wallets = useWallets(walletClient);
-  const [step, setStep] = useState<PaymentStep>({ kind: "idle" });
+  const [step, setStep] = useState<PaymentStep>(() =>
+    txHash !== undefined && /^0x[0-9a-fA-F]{64}$/.test(txHash) ? { kind: "sent", hash: txHash } : { kind: "idle" },
+  );
   const [open, setOpen] = useState(false);
   const manualId = useId();
   const { to } = depositAddressTransfer(network, token);
@@ -277,6 +299,7 @@ function DepositPayment({
         apiBase,
       });
       setStep({ kind: "sent", hash });
+      onSent?.(hash, network.chain_id);
     } catch (error) {
       setStep({ kind: "failed", message: error instanceof WalletError ? error.message : "The payment could not be sent" });
       if (error instanceof WalletError) {

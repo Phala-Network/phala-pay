@@ -214,7 +214,10 @@ import { PaymentElement } from "@phala/pay-react";
   follows the payment the wallet sent, by its hash, or else the newest one that arrives after the
   address was first read, on one status line; `onChange` reports it as `payment`, and
   `onDepositSuccess(payment)` is called once when it is credited. An address that does not take the
-  chosen token on the chosen network is a `createDepositAddress` failure.
+  chosen token on the chosen network is a `createDepositAddress` failure. To resume after a reload,
+  keep `onDepositSent(txHash, chainId)`'s values and pass them back as `depositTxHash`, with that
+  option as `value` or `defaultValue`: the element calls `createDepositAddress` at once and shows
+  that payment's status (no way to pay again) until it is credited.
 
   ```tsx
   <PaymentElement
@@ -333,6 +336,8 @@ at once when the browser has no wallet). With `clientSecret` and `apiBase` it fo
 (the wallet's transaction by its hash, else the newest payment that arrives after the address was
 first read) on one status line, calls `onPaymentChange(payment)` as it changes and `onSuccess(payment)`
 once it is credited, and replaces the ways to pay with that status once it is on its way.
+`onSent(txHash, chainId)` reports the wallet's transaction; pass it back as `txHash` after a
+reload to follow that payment again.
 
 `depositAddressTransfer(network, asset)` reads and checks one token's amount-less EIP-681
 `payment_uri` without React; `payDepositAddressWithWallet(wallet, { network, asset, amountAtomic,
