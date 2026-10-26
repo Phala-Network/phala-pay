@@ -14,6 +14,17 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Fixed
+
+- `<PaymentElement>`'s deposit-address mode no longer offers "Back to payment options" once the
+  wallet has sent the payment (or one is resumed with `depositTxHash`), until it is credited,
+  rejected, or reversed: going back and paying again would pay twice. Once it settles, "Start a new
+  payment" (or "Start over") returns.
+- The deposit address's status line is one plain line while a payment is in progress, without the
+  dot that read as a list bullet; credited and failed payments keep their mark.
+
 ## [0.12.0] - 2026-10-26
 
 ### Security

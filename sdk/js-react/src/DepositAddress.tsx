@@ -378,7 +378,8 @@ function DepositPayment({
       <p className="pp-message pp-deposit__status" data-tone={tone} role="status">
         {(message !== "" || reconnecting) && (
           <>
-            {message !== "" && <ToneGlyph tone={tone} />}
+            {/* One plain line while in progress; a mark only for its outcome. */}
+            {message !== "" && tone !== "neutral" && <ToneGlyph tone={tone} />}
             <span>
               {message}
               {reconnecting && (message === "" ? "Reconnecting…" : " (reconnecting…)")}
