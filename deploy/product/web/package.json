@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
-    "@cloudflare/vite-plugin": "2.0.0-beta.sha-ad79608dd",
+    "@cloudflare/vite-plugin": "2.0.0-beta.v.4",
     "@eslint/js": "^10.0.1",
     "@mermaid-js/mermaid-cli": "12.0.0",
     "@phala/pay-server": "file:../../../sdk/js-server",
