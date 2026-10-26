@@ -47,9 +47,11 @@ export {
 export {
   INJECTED_WALLET_UUID,
   WalletError,
+  payDepositAddressWithWallet,
   payWithWallet,
   watchWallets,
   type EthereumProvider,
+  type PayDepositAddressOptions,
   type Wallet,
   type WalletErrorCode,
   type WalletInfo,

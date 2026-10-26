@@ -14,6 +14,26 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Added
+
+- Deposit-address mode for `<PaymentElement>`: `createQuote` is now optional, and without it submit
+  calls `createDepositAddress(option)` once and shows the customer's one fixed deposit address as
+  the way to pay, with no "Use a deposit address" line. The new `depositAmountAtomic(option)` makes
+  the address ask for an exact token amount, paid from a wallet first; the state passed to
+  `onChange` gains `payment`, and the new `onDepositSuccess(payment)` is called once when that
+  payment is credited. Hosts that pass `createQuote` see no change.
+- `<DepositAddress amountAtomic>`: the amount and network stated once, a "Pay with" button naming
+  the wallet, and "Pay from an exchange or another wallet" revealing a QR code that requests exactly
+  the amount (EIP-681 `uint256`) and the address to copy. It follows the wallet's transaction by its
+  hash, or else the newest payment that arrives after the address was first read, on one status
+  line, with the new `onPaymentChange` and `onSuccess`, and `buttonText`, `walletClient`, and
+  `onWalletError` as `<Checkout>`'s.
+- `payDepositAddressWithWallet(wallet, { network, asset, amountAtomic, clientSecret?, apiBase? })`
+  in `@phala/pay`: pays an amount of a token to a deposit address as `payWithWallet` pays a quote,
+  then hints the transaction (with its `chain_id`) without waiting on the hint.
+
 ## [0.11.4] - 2026-10-23
 
 ### Security

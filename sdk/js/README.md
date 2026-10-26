@@ -204,6 +204,31 @@ import { PaymentElement } from "@phala/pay-react";
   exchange? Use a deposit address", for payers sending from an exchange or any wallet: it resolves
   with the deposit address's `address` and `networks` and, to follow its payments, `clientSecret`;
   the element shows `<DepositAddress>` at the chosen option, which states the per-transfer limits.
+- **Deposit-address mode.** Without `createQuote`, submit calls `createDepositAddress(option)` once
+  and shows that address as the way to pay, with no secondary line: the customer's one fixed address
+  instead of a new quote per payment. `depositAmountAtomic(option)` names the token amount to ask
+  for in the option's smallest unit (`undefined` for any amount). The address view then states the
+  amount and network once, pays it with `Pay with <wallet name>` (`payDepositAddressWithWallet`:
+  exactly that amount, then a transaction-hash hint), and keeps a QR code that requests the amount
+  (EIP-681 `uint256`) and the address to copy behind "Pay from an exchange or another wallet". It
+  follows the payment the wallet sent, by its hash, or else the newest one that arrives after the
+  address was first read, on one status line; `onChange` reports it as `payment`, and
+  `onDepositSuccess(payment)` is called once when it is credited. An address that does not take the
+  chosen token on the chosen network is a `createDepositAddress` failure.
+
+  ```tsx
+  <PaymentElement
+    options={paymentOptions(config.assets)}
+    amount={2500}
+    // POST /v1/deposit_addresses on your backend: { address, networks, clientSecret }
+    createDepositAddress={() => api.depositAddress()}
+    // 25 of a $1 stablecoin: cents × 10^(decimals − 2)
+    depositAmountAtomic={(option) => (2500n * 10n ** BigInt(option.decimals)) / 100n}
+    apiBase="https://pay.example.com"
+    onDepositSuccess={() => router.refresh()}
+  />
+  ```
+
 - Your own content: `children` go inside the form, under the token and network and above the
   element's button, while the payer chooses. With `hideSubmit`, put your summary and your
   `type="submit"` button there, and the deposit-address line follows your button:
@@ -219,8 +244,9 @@ import { PaymentElement } from "@phala/pay-react";
   button `type="submit" form={id}` (or call `requestSubmit()` on the form with that id). The
   element is a `<form>`: do not nest it in another one.
 - `value` and `onOptionChange` control the choice (`defaultValue` sets the first one otherwise);
-  `onChange({ step, checkout })` reports each step (`options`, `creating`, `checkout`,
-  `deposit_address`) and, while paying, each checkout status change; `onSuccess`, `onExpire`,
+  `onChange({ step, checkout, payment })` reports each step (`options`, `creating`, `checkout`,
+  `deposit_address`) and, while paying, each checkout status change or, with
+  `depositAmountAtomic`, each change of the deposit address's payment; `onSuccess`, `onExpire`,
   `onWalletError`, `walletClient`, `pollInterval`, and `appearance` are `<Checkout>`'s.
 
 ### Payment options
@@ -299,8 +325,20 @@ not report loading. Unchanged polls, callback replacements,
 and reconnecting alone do not trigger it. Use it to update your page without additional polling;
 fulfil from the `deposit.credited` webhook.
 
+With `amountAtomic` (an amount of the token at `chainId` and `asset`, which then stay fixed), it
+asks for that amount instead: the amount and network stated once, a `Pay with <wallet name>` button
+(`walletClient`, `buttonText`, and `onWalletError` as `<Checkout>`'s), and "Pay from an exchange or
+another wallet" revealing a QR code that requests exactly the amount and the address to copy (shown
+at once when the browser has no wallet). With `clientSecret` and `apiBase` it follows that payment
+(the wallet's transaction by its hash, else the newest payment that arrives after the address was
+first read) on one status line, calls `onPaymentChange(payment)` as it changes and `onSuccess(payment)`
+once it is credited, and replaces the ways to pay with that status once it is on its way.
+
 `depositAddressTransfer(network, asset)` reads and checks one token's amount-less EIP-681
-`payment_uri` without React.
+`payment_uri` without React; `payDepositAddressWithWallet(wallet, { network, asset, amountAtomic,
+clientSecret?, apiBase? })` pays an amount of it from a wallet as `payWithWallet` pays a quote
+(connect, switch chain, balance check, `transfer`), then, with `clientSecret` and `apiBase`, hints
+the transaction with its `chain_id` without waiting on the hint, and resolves with the hash.
 
 ## Appearance
 
