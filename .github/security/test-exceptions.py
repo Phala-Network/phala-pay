@@ -10,13 +10,17 @@ from pathlib import Path
 
 
 class ExceptionPolicy(unittest.TestCase):
-    def check(self, entry: dict[str, str], expected: bool) -> None:
+    def check(self, entry: dict[str, str], expected: bool, *, rustsec: bool = False) -> None:
         with tempfile.TemporaryDirectory(prefix="trivy-exceptions-") as directory:
             root = Path(directory)
-            shutil.copyfile(Path(__file__).with_name("check-exceptions.py"), root / "check.py")
-            (root / "trivy-ignore.yaml").write_text(json.dumps({"vulnerabilities": [entry]}))
+            policy = root / ".github/security"
+            policy.mkdir(parents=True)
+            shutil.copyfile(Path(__file__).with_name("check-exceptions.py"), policy / "check.py")
+            (policy / "trivy-ignore.yaml").write_text(json.dumps({"vulnerabilities": [entry]}))
+            ignore = '{ id = "RUSTSEC-2026-0387", reason = "Test mitigation" }' if rustsec else ""
+            (root / "deny.toml").write_text(f"[advisories]\nignore = [{ignore}]\n")
             result = subprocess.run(
-                [sys.executable, str(root / "check.py")], capture_output=True, text=True, check=False
+                [sys.executable, str(policy / "check.py")], capture_output=True, text=True, check=False
             )
             self.assertEqual(result.returncode == 0, expected, result.stderr)
 
@@ -46,6 +50,21 @@ class ExceptionPolicy(unittest.TestCase):
     def test_ambiguous_timezone(self) -> None:
         entry = self.entry(1)
         entry["expired_at"] = "2099-01-01T00:00:00"
+        self.check(entry, False)
+
+    def test_rustsec_review_and_expiry(self) -> None:
+        for days, expected in [(1, True), (-1, False), (31, False)]:
+            with self.subTest(days=days):
+                entry = self.entry(days)
+                entry["id"] = "RUSTSEC-2026-0387"
+                self.check(entry, expected, rustsec=True)
+
+    def test_cargo_ignore_without_review(self) -> None:
+        self.check(self.entry(1), False, rustsec=True)
+
+    def test_rustsec_review_without_cargo_ignore(self) -> None:
+        entry = self.entry(1)
+        entry["id"] = "RUSTSEC-2026-0387"
         self.check(entry, False)
 
 

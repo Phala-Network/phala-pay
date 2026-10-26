@@ -7,11 +7,15 @@ allowBuilds:
   puppeteer: false
   workerd: false
 
-# miniflare's 7.29.0 has published advisories; keep its transitive Undici on a fixed release.
 overrides:
   # React's exact npm dependency must use the same local core as the demo's direct dependency.
   '@phala/pay': file:../../../sdk/js
   # The CLI still requires vulnerable KaTeX ^0.16.25; use the fixed CSS/fonts with Mermaid 12.2.
   # Remove when @mermaid-js/mermaid-cli depends on katex >=0.18.2.
   '@mermaid-js/mermaid-cli@12.0.0>katex': ^0.18.2
-  undici@7.29.0: 7.30.0
+  # Remove when these Miniflare releases allow Undici >=7.30.1 (October 2026 advisories).
+  'miniflare@5.20260926.0-alpha>undici': 7.30.1
+  'miniflare@5.20261012.1-beta>undici': 7.30.1
+  # Remove when these @cloudflare/config releases allow Zod >=4.6.6 (CVE-2023-54404).
+  '@cloudflare/config@0.20.0>zod': 4.6.7
+  '@cloudflare/config@0.27.0>zod': 4.6.7
