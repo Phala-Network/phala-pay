@@ -32,11 +32,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - Deposit-address mode for `<PaymentElement>`: `createQuote` is now optional, and without it submit
   calls `createDepositAddress(option)` once and shows the customer's one fixed deposit address as
-  the way to pay, with no "Use a deposit address" line. The new `depositAmountAtomic(option)` makes
-  the address ask for an exact token amount, paid from a wallet first; the state passed to
-  `onChange` gains `payment`, and the new `onDepositSuccess(payment)` is called once when that
-  payment is credited. `onDepositSent(txHash, chainId)` and `depositTxHash` resume following a sent
-  payment after a reload. Hosts that pass `createQuote` see no change
+  the way to pay, with no "Use a deposit address" line. The new
+  `depositAmountAtomic(option, token)`, called once the address is created with its token for the
+  chosen option (whose `decimals` give the unit), makes the address ask for an exact token amount,
+  paid from a wallet first; the state passed to `onChange` gains `payment`, and the new
+  `onDepositSuccess(payment)` is called once when that payment is credited. `onDepositSent(txHash, chainId)` and `depositTxHash` resume
+  following a sent payment after a reload. Hosts that pass `createQuote` see no change
   ([#535](https://github.com/Phala-Network/phala-pay/pull/535)).
 - `<DepositAddress amountAtomic>`: the amount and network stated once, a "Pay with" button naming
   the wallet, and "Pay from an exchange or another wallet" revealing a QR code that requests exactly
@@ -49,6 +50,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   in `@phala/pay`: pays an amount of a token to a deposit address as `payWithWallet` pays a quote,
   then hints the transaction (with its `chain_id`) without waiting on the hint
   ([#535](https://github.com/Phala-Network/phala-pay/pull/535)).
+
+#### Fixed
+
+- The external-link glyph after a transaction link (`<Checkout>`'s "Transaction sent", the deposit
+  address's "View transaction") stays on its line of text under a host's CSS reset that makes SVGs
+  blocks, such as Tailwind's preflight: every glyph is now explicitly `inline-block` (`.pp-glyph`).
 
 ## [0.11.4] - 2026-10-23
 

@@ -460,6 +460,55 @@ for (const width of [390, 1280]) {
   }
 }
 
+// A host's reset, as Tailwind's preflight has it: SVGs and images are blocks.
+const PREFLIGHT = "svg, img, video, canvas { display: block; vertical-align: middle; }";
+
+/** Whether the link's glyph is on the link's line of text, not on a line of its own. */
+function glyphOnItsLine(link: Locator): Promise<boolean> {
+  return link.evaluate((element) => {
+    const glyph = element.querySelector("svg");
+    const lines = element.getClientRects();
+    const box = glyph?.getBoundingClientRect();
+    return box !== undefined && lines.length === 1 && box.top >= (lines[0]?.top ?? 0) - 1 && box.bottom <= (lines[0]?.bottom ?? 0) + 1;
+  });
+}
+
+for (const width of [390, 1280]) {
+  test(`glyphs stay on their line of text under a host's CSS reset at ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const served = waiting();
+    await serve(page, () => served);
+    await page.route(`${API_BASE}/v1/deposit_addresses/**`, (route) =>
+      route.fulfill({
+        status: route.request().method() === "GET" ? 200 : 202,
+        headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "Content-Type" },
+        json: {
+          id: `da_${"0d".repeat(16)}`, object: "deposit_address", livemode: false, status: "active",
+          networks: [{ chain_id: 11155111, address: ADDRESS, typical_credit_seconds: 30 }], payments: [],
+        },
+      }),
+    );
+    await installWallet(page);
+
+    await page.goto(`/?${new URLSearchParams({ deposit_mode: "", to: ADDRESS, client_secret: DEPOSIT_SECRET, api_base: API_BASE })}`);
+    await page.addStyleTag({ content: PREFLIGHT });
+    await page.getByRole("button", { name: "Pay $25.00 in PHA" }).click();
+    await page.getByRole("button", { name: "Pay with Test Wallet" }).click();
+    const view = page.getByRole("link", { name: "View transaction" });
+    await expect(view).toBeVisible();
+    expect(await glyphOnItsLine(view), "deposit status").toBe(true);
+    await check(page, `preflight-deposit-sent-${width}`);
+
+    await page.goto(checkoutUrl("light"));
+    await page.addStyleTag({ content: PREFLIGHT });
+    await page.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+    const hash = page.locator("a.pp-tx__hash");
+    await expect(hash).toBeVisible();
+    // The hash wraps at narrow widths; its glyph stays inline, after its last character.
+    expect(await hash.evaluate((element) => getComputedStyle(element.querySelector("svg") ?? element).display)).toBe("inline-block");
+  });
+}
+
 test("keyboard focus is visible and differs from the selected state", async ({ page }) => {
   await page.goto("/?deposit");
   await expect(page.getByRole("group", { name: "Pay with" })).toBeVisible();

@@ -200,7 +200,8 @@ describe("without createQuote", () => {
     ],
   }));
   const created = { address: ADDRESS, networks: NETWORKS, clientSecret: SECRET, apiBase: API_BASE };
-  const amountOf = (option: (typeof OPTIONS)[number]) => (option.asset === "usdc" ? 10_000_000n : undefined);
+  // 10 of the address's token, in its units.
+  const amountOf = (_: (typeof OPTIONS)[number], token: { decimals: number }) => 10n * 10n ** BigInt(token.decimals);
 
   function row(tx_hash: string, status: DepositAddressPayment["status"], created = 1_790_000_000): DepositAddressPayment {
     return {
@@ -410,6 +411,26 @@ describe("without createQuote", () => {
     await waitFor(() => expect(onDepositSuccess).toHaveBeenCalledTimes(1));
     expect(onDepositSuccess.mock.calls[0]?.[0].tx_hash).toBe(HASH);
     expect(screen.getByRole("status").textContent).toBe("Payment credited View transaction");
+  });
+
+  it("computes the amount in the units of the address's token, once it is created", async () => {
+    serve([]);
+    const depositAmountAtomic = vi.fn(amountOf);
+    const createDepositAddress = vi.fn(() => Promise.resolve(created));
+    render(
+      <PaymentElement options={OPTIONS} createDepositAddress={createDepositAddress} depositAmountAtomic={depositAmountAtomic} />,
+    );
+    // Nothing is computed before the address, whose token states the decimals.
+    expect(depositAmountAtomic).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Pay in PHA" }));
+    expect(await screen.findByText("10 PHA")).toBeDefined();
+    expect(depositAmountAtomic).toHaveBeenCalledExactlyOnceWith(OPTIONS[0], NETWORKS[0]?.assets[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Back to payment options" }));
+    choose("Token", "USDC");
+    fireEvent.click(screen.getByRole("button", { name: "Pay in USDC" }));
+    // 10 × 10^6, not 10 × 10^18: the QR code requests exactly that.
+    expect(await screen.findByText("10 USDC")).toBeDefined();
+    expect(depositAmountAtomic.mock.results[1]?.value).toBe(10_000_000n);
   });
 
   it("refuses an address that does not take the token to pay", async () => {

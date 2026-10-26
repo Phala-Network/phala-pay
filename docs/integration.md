@@ -192,14 +192,14 @@ checkout status change (§1.2).
 payment, leave out `createQuote` and pass `createDepositAddress`: submit calls it once and the
 element shows the customer's address (§1.5) as the way to pay. Your backend returns the active
 address, recomputed from your pins, with a new `client_secret` (call it only on submit; each call
-issues a secret). `depositAmountAtomic(option)` makes the address ask for that token amount: the
-element states it once, pays it from the payer's wallet first (exactly that amount, then a
-transaction-hash hint, so it is found within about a block), and offers the QR code (EIP-681 with
-`uint256`) and the address behind "Pay from an exchange or another wallet". It follows that
-payment on one status line, reports it in `onChange` as `payment`, and calls
-`onDepositSuccess(payment)` once it is credited; fulfil from the webhook as for quotes. Any
-amount within the per-transfer limits is credited at the market rate, so keep your own amount
-within them.
+issues a secret). `depositAmountAtomic(option, token)` makes the address ask for that amount of
+`token`, the address's asset for the chosen option (its `decimals` give the unit): the element
+states it once, pays it from the payer's wallet first (exactly that amount, then a transaction-hash
+hint, so it is found within about a block), and offers the QR code (EIP-681 with `uint256`) and the
+address behind "Pay from an exchange or another wallet". It follows that payment on one status line,
+reports it in `onChange` as `payment`, and calls `onDepositSuccess(payment)` once it is credited;
+fulfil from the webhook as for quotes. Any amount within the per-transfer limits is credited at the
+market rate, so keep your own amount within them.
 
 ```python
 @app.post("/deposit-address")
@@ -219,7 +219,7 @@ def deposit_address(team: Team = Depends(current_team)) -> dict[str, object]:
   apiBase={PHALA_PAY_API_BASE}
   createDepositAddress={() => post("/deposit-address")}
   // $25.00 of a $1 stablecoin: cents × 10^(decimals − 2)
-  depositAmountAtomic={(option) => (2500n * 10n ** BigInt(option.decimals)) / 100n}
+  depositAmountAtomic={(option, token) => (2500n * 10n ** BigInt(token.decimals)) / 100n}
   onDepositSuccess={() => router.refresh()}
 />
 ```

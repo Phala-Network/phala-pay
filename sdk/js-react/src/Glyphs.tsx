@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 /** A 1em interface glyph drawn in `currentColor`; always decorative. */
 function Glyph({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"
+    <svg className={className === undefined ? "pp-glyph" : `pp-glyph ${className}`} xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"
       fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
       aria-hidden="true" focusable="false">
       {children}

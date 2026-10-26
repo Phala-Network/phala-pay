@@ -8,6 +8,7 @@ import {
   type CheckoutParams,
   type CheckoutState,
   type ClientQuote,
+  type DepositAddressAsset,
   type DepositAddressDetails,
   type DepositAddressPayment,
   type EthereumProvider,
@@ -83,12 +84,14 @@ export interface PaymentElementProps<T extends PaymentOption> {
    */
   createDepositAddress?: ((option: T | undefined) => Promise<PaymentElementDepositAddress>) | undefined;
   /**
-   * The token amount for the deposit address to ask for, in the option's smallest unit, for
-   * example `10_000_000n` for 10 USDC (6 decimals); `undefined` for any amount. With an amount,
+   * The token amount for the deposit address to ask for, in the token's smallest unit; `undefined`
+   * for any amount. Called once `createDepositAddress` resolves, with the chosen option and that
+   * address's token for it on the chosen network, whose `decimals` give the unit: for example
+   * `(2500n * 10n ** BigInt(token.decimals)) / 100n` for $25.00 of a $1 stablecoin. With an amount,
    * the address view states it once, pays it from a wallet first (a QR code and the address are
    * the secondary way), follows that payment, and reports it in `onChange` and `onDepositSuccess`.
    */
-  depositAmountAtomic?: ((option: T) => bigint | undefined) | undefined;
+  depositAmountAtomic?: ((option: T, token: DepositAddressAsset) => bigint | undefined) | undefined;
   /**
    * A deposit-address payment already sent from a wallet, from `onDepositSent`, to resume after a
    * reload: the element calls `createDepositAddress` with the chosen option at once (set `value` or
@@ -292,19 +295,21 @@ export function PaymentElement<T extends PaymentOption>({
     if (disabled || createDepositAddress === undefined) {
       return;
     }
-    const amountAtomic = option === undefined ? undefined : depositAmountAtomic?.(option);
     const create = async () => {
       const created = await createDepositAddress(option);
+      if (option === undefined || depositAmountAtomic === undefined) {
+        return { created, amountAtomic: undefined };
+      }
       // An amount is of the chosen token: the address must take it on the chosen network.
-      if (
-        amountAtomic !== undefined &&
-        !created.networks.some((each) => each.chain_id === option?.chain_id && each.assets.some((a) => a.asset === option.asset))
-      ) {
+      const token = created.networks
+        .find((each) => each.chain_id === option.chain_id)
+        ?.assets.find((each) => each.asset === option.asset);
+      if (token === undefined) {
         throw new TypeError("the deposit address does not take the chosen token on the chosen network");
       }
-      return created;
+      return { created, amountAtomic: depositAmountAtomic(option, token) };
     };
-    start("deposit_address", create, (created): Step => ({
+    start("deposit_address", create, ({ created, amountAtomic }): Step => ({
       step: "deposit_address",
       created,
       apiBase: created.apiBase ?? apiBase,
