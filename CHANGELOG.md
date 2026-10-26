@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-26
+
 ### Security
 
 - Update the website and JS SDK toolchains' Zod, Undici, body-parser, and fast-uri dependency
@@ -24,7 +26,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Time-box the upstream-blocked crypto-bigint and deployment CLI Zod 3 exceptions until
   November 24, 2026, at 4 p.m. PST, with CI-enforced expiry and exposure reviews
   ([#536](https://github.com/Phala-Network/phala-pay/issues/536),
-  [#537](https://github.com/Phala-Network/phala-pay/issues/537)).
+  [#537](https://github.com/Phala-Network/phala-pay/issues/537)); advisory updates and exceptions
+  are in [#538](https://github.com/Phala-Network/phala-pay/pull/538).
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
@@ -2295,7 +2298,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.11.4...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.12.0
 [0.11.4]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.4
 [0.11.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.3
 [0.11.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.11.2
