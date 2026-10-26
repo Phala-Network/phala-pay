@@ -55,7 +55,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - The external-link glyph after a transaction link (`<Checkout>`'s "Transaction sent", the deposit
   address's "View transaction") stays on its line of text under a host's CSS reset that makes SVGs
-  blocks, such as Tailwind's preflight: every glyph is now explicitly `inline-block` (`.pp-glyph`).
+  blocks, such as Tailwind's preflight: every glyph is now explicitly `inline-block` (`.pp-glyph`)
+  ([#539](https://github.com/Phala-Network/phala-pay/pull/539)).
 
 ## [0.11.4] - 2026-10-23
 
