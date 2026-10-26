@@ -21,9 +21,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - `<PaymentElement>`'s deposit-address mode no longer offers "Back to payment options" once the
   wallet has sent the payment (or one is resumed with `depositTxHash`), until it is credited,
   rejected, or reversed: going back and paying again would pay twice. Once it settles, "Start a new
-  payment" (or "Start over") returns.
+  payment" (or "Start over") returns ([#542](https://github.com/Phala-Network/phala-pay/pull/542)).
 - The deposit address's status line is one plain line while a payment is in progress, without the
-  dot that read as a list bullet; credited and failed payments keep their mark.
+  dot that read as a list bullet; credited and failed payments keep their mark
+  ([#542](https://github.com/Phala-Network/phala-pay/pull/542)).
 
 ## [0.12.0] - 2026-10-26
 
