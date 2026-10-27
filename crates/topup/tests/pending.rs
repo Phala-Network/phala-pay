@@ -236,6 +236,37 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         .execute(pool)
         .await?;
     ensure!(api.client_progress("checkout-1").await? == ("reversed".to_owned(), None));
+    // Other assets and transfers outside this quote's window must not mark it reversed.
+    let address_id = api.address_id(pool, "checkout-1").await?;
+    let (window_start, expires_at): (DateTime<Utc>, DateTime<Utc>) =
+        sqlx::query_as("SELECT window_start, expires_at FROM quotes WHERE address_id=$1")
+            .bind(address_id)
+            .fetch_one(pool)
+            .await?;
+    let canonical_time: DateTime<Utc> =
+        sqlx::query_scalar("SELECT block_time FROM deposits WHERE address_id=$1")
+            .bind(address_id)
+            .fetch_one(pool)
+            .await?;
+    for (asset, block_time) in [
+        (Address::repeat_byte(0xee), canonical_time),
+        (token, window_start),
+        (token, expires_at + chrono::Duration::seconds(1)),
+        (token, canonical_time),
+    ] {
+        sqlx::query("UPDATE deposits SET asset_contract=$2, block_time=$3 WHERE address_id=$1")
+            .bind(address_id)
+            .bind(format!("{asset:#x}"))
+            .bind(block_time)
+            .execute(pool)
+            .await?;
+        let expected = if asset == token && block_time == canonical_time {
+            "reversed"
+        } else {
+            "none"
+        };
+        ensure!(api.client_progress("checkout-1").await? == (expected.to_owned(), None));
+    }
 
     // Underpay, then pay in full: the finalized underpayment does not consume the lock, so the
     // later exact payment is the one shown while it is still pending.

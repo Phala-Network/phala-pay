@@ -523,7 +523,9 @@ async fn client_quote_view(
         super::pending::quote_payment(&mut *state.pool.acquire().await?, route, &lock).await?;
     let (payment_status, confirmations, amount_credited) = match payment {
         // A reversed deposit is no payment; the page says so rather than ask for one again.
-        None if quote_has_reversed_deposit(&state.pool, lock.id).await? => ("reversed", None, None),
+        None if quote_has_reversed_deposit(&state.pool, route, &lock).await? => {
+            ("reversed", None, None)
+        }
         None => ("none", None, None),
         Some(payment) if payment.status == "seen" => ("seen", payment.confirmations, None),
         Some(payment) => {
@@ -577,13 +579,19 @@ async fn client_quote_view(
     })
 }
 
-async fn quote_has_reversed_deposit(pool: &PgPool, quote_id: Uuid) -> ApiResult<bool> {
+async fn quote_has_reversed_deposit(
+    pool: &PgPool,
+    route: &RouteFile,
+    lock: &RateLock,
+) -> ApiResult<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM deposits d JOIN quotes q ON q.id=$1
-         WHERE d.state='reversed' AND (d.quote_id=q.id OR (d.address_id=q.address_id
-         AND d.block_time>q.window_start AND d.block_time<=q.expires_at)))",
+        "SELECT EXISTS (SELECT 1 FROM deposits WHERE state='reversed'
+         AND address_id=$1 AND asset_contract=$2 AND block_time>$3 AND block_time<=$4)",
     )
-    .bind(quote_id)
+    .bind(lock.address_id)
+    .bind(format!("{:#x}", route.asset.contract))
+    .bind(lock.window_start)
+    .bind(lock.expires_at)
     .fetch_one(pool)
     .await?)
 }
