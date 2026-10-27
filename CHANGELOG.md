@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-27
+
 ### Breaking (operators)
 
 - **Breaking**: no rollback to 0.12.2; restore required. No rollback to v0.12.x is supported.
@@ -2383,7 +2385,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.12.2...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.0
 [0.12.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.12.2
 [0.12.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.12.1
 [0.12.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.12.0
