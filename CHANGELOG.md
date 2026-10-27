@@ -14,6 +14,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore drills keep the restore-only RPC overlay out of the source service variant. RPC
+  preflight searches up to eight finalized blocks for a receipt/log sample and accepts an empty
+  history, while still rejecting inconsistent receipt and log responses.
+
 ## [0.13.0] - 2026-10-27
 
 ### Breaking (operators)
