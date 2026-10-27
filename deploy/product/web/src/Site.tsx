@@ -13,7 +13,7 @@ import { TEASER, TEASER_OTHERS } from "./content/compare.js";
 import { HERO_CODE, HERO_CODE_NOTE } from "./content/hero-code.js";
 import {
   CLOSING_LEAD, CLOSING_TITLE, CREDIT_TIMES, CUSTODY_LINKS, CUSTODY_NOTE, CUSTODY_PATH, DEMO_LEAD, DEMO_STATUS, DEMO_TITLE,
-  DEPLOY_COMMAND, EYEBROWS, FAQ, FEATURES_TITLE, FEE_FIGURE, HERO_FACTS, HERO_FACTS_NOTE, HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES,
+  DEPLOY_COMMAND, EYEBROWS, FAQ, FEATURES_TITLE, FEE_FIGURE, HERO_FACTS, HERO_META, HERO_SUBHEAD, MONEY_TITLE, PROPERTIES,
   PROPERTIES_LEAD, SDK_PACKAGES, TAGLINE, VERIFY_CHECKS, WEBHOOK_EVENTS, type Station,
 } from "./content/site.js";
 import { divided, unbroken } from "./text.js";
@@ -264,9 +264,8 @@ export function Hero({ code }: { code: ReactNode }) {
             <DeployButton />
             <Button asChild size="lg" variant="secondary"><a href={LINKS.docs}>Read the docs</a></Button>
           </div>
-          {/* Three facts under a rule, each value over its meaning, and the note that qualifies the
-              first under them; on a phone, a row each, the values in one column and the meanings in
-              the next. */}
+          {/* Three facts under a rule, each value over its meaning; on a phone, a row each, the
+              values in one column and the meanings in the next. */}
           <div className="mt-14 max-w-xl border-t pt-7 2xl:max-w-none">
             <dl data-facts className="grid gap-y-3 sm:grid-cols-3 sm:divide-x">
               {HERO_FACTS.map(({ value, label }) => (
@@ -276,7 +275,6 @@ export function Hero({ code }: { code: ReactNode }) {
                 </div>
               ))}
             </dl>
-            <p data-facts-note className="mt-4 text-sm text-pretty text-muted-foreground">{unbroken(HERO_FACTS_NOTE)}</p>
           </div>
         </div>
         {/* The window takes its half to the page's right edge; its code grows a step on a wide screen. */}

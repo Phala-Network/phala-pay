@@ -1,4 +1,4 @@
-import { paymentOptions, samePaymentOption, type CheckoutStatus, type NetworkPaymentOption, type PaymentOption } from "@phala/pay";
+import { assetSymbol, paymentOptions, samePaymentOption, type CheckoutStatus, type NetworkPaymentOption, type PaymentOption } from "@phala/pay";
 import { PaymentOptionPicker, type Appearance, type PaymentElementStep } from "@phala/pay-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, CircleCheck, Info } from "lucide-react";
@@ -10,7 +10,6 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { Skeleton } from "@/components/ui/skeleton";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Account, Asset, CreatedQuote, DepositAddressResponse, Network } from "./api.js";
@@ -90,18 +89,11 @@ export function Product({
   const picker = <PaymentOptions networks={networksView} options={options} option={option} onChange={choose} appearance={appearance} />;
   return (
     <Card role="region" aria-labelledby="product-title" className="flex-1 rounded-xl shadow-frame">
-      {/* Whose page this is (with the testnet mark while the network is a testnet) over the
-          merchant's name, and the balance the payment moves, its label beside it. */}
+      {/* Whose page this is over the merchant's name, and the balance the payment moves, its label
+          beside it. */}
       <CardHeader className="items-center rounded-t-xl bg-muted/40">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <CardTitle id="product-title">Customer view</CardTitle>
-            {(network?.testnet ?? DEMO_TESTNET) && (
-              <StatusBadge tone="warning" data-testid="testnet-notice">
-                Testnet
-              </StatusBadge>
-            )}
-          </div>
+          <CardTitle id="product-title">Customer view</CardTitle>
           <CardDescription className="mt-1">Acme Cloud · Billing</CardDescription>
         </div>
         {/* The label over the figure, both from one left edge in a box as wide as most balances, so
@@ -187,14 +179,10 @@ export function Product({
         </CardFooter>
       )}
       {/* While the networks load (and as the page is prerendered), on the demo's testnets, the test
-          tokens' row keeps its place: its name (on a phone) and its first button, so the card does
-          not grow when they arrive. */}
+          tokens' row keeps its place: its first button, so the card does not grow when they arrive. */}
       {network === undefined && networksView.error === null && DEMO_TESTNET && (
         <CardFooter aria-hidden="true">
-          <div className="flex w-full flex-col gap-3">
-            <p className="text-sm font-medium text-muted-foreground lg:hidden">Test tokens</p>
-            <Skeleton className={cn("h-8 w-full sm:w-48", TOUCH)} />
-          </div>
+          <Skeleton className={cn("h-8 w-full sm:w-48", TOUCH)} />
         </CardFooter>
       )}
     </Card>
@@ -392,6 +380,9 @@ function QuotePayment({
   const minutes = Math.round((asset?.quote_ttl_seconds ?? 900) / 60);
   const paying = session === null ? undefined : options.find((each) => samePaymentOption(each, session));
   const bps = paying?.token.bonus_bps ?? 0;
+  // As the payment element's own submit would read.
+  const symbol = option === undefined ? null : assetSymbol(option.asset);
+  const submitText = symbol === null ? "Pay" : valid ? `Pay ${dollars(cents)} in ${symbol}` : `Pay in ${symbol}`;
 
   return (
     // The form's fields apart; the checkout close to the bonus over it, as the receipt under it.
@@ -500,7 +491,7 @@ function QuotePayment({
               if (!valid) event.preventDefault();
             }}
           >
-            {step === "creating" ? "Creating quote…" : "Pay with crypto"}
+            {step === "creating" ? "Starting your payment…" : submitText}
           </Button>
           <p className="text-sm text-pretty text-muted-foreground">
             Price locked for {minutes} minutes; other amounts at the market rate.

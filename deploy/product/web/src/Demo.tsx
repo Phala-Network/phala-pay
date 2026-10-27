@@ -91,10 +91,10 @@ function DemoContent() {
     <>
       {/* Two sibling cards on the page's grid, the customer's view and (beside it from lg) what the
           backend sees: product windows of one height, the shorter one's tab panel taking the rest.
-          Each layout keeps the height of the demo's tallest state (src/index.css), so nothing on
-          the page moves as a payment goes through. */}
+          From sm, each layout keeps the height of the demo's tallest state (src/index.css), so
+          nothing on the page moves as a payment goes through. */}
       <div data-layout="split" className={cn(GRID, "gap-y-6 lg:min-h-demo-lg lg:items-stretch xl:min-h-demo-xl")}>
-        <div data-column="left" className={cn(LEFT, "flex min-h-demo-view flex-col sm:min-h-demo-view-sm lg:min-h-0")}>
+        <div data-column="left" className={cn(LEFT, "flex flex-col sm:min-h-demo-view-sm lg:min-h-0")}>
           <Product
             account={views.account}
             networks={views.networks}
