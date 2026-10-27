@@ -69,10 +69,11 @@ def export_restore_records(
         if after(response.get("created"), recorded_at)
     ]
     # Quotes share customer networks. Recover the address, never an old price window.
-    known = {address["id"] for address in addresses}
+    known = {(address["id"], address["version"]) for address in addresses}
     for response, recorded_at in ledger.quote_records():
         address_id = response.get("deposit_address")
-        if address_id and address_id not in known and after(response.get("created"), recorded_at):
+        key = (address_id, response.get("deposit_address_version"))
+        if address_id and key not in known and after(response.get("created"), recorded_at):
             addresses.append(
                 {
                     "account": account,
@@ -83,7 +84,7 @@ def export_restore_records(
                     "address": response["address"],
                 }
             )
-            known.add(address_id)
+            known.add(key)
 
     def kept(event_types: tuple[str, ...]) -> list[tuple[dict[str, Any], Delivery]]:
         """The inbox's deliveries of `event_types` since, each with its parsed event."""

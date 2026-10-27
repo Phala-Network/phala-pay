@@ -183,6 +183,10 @@ admin POST /v1/admin/restore/webhook_endpoints/delete \
 
 ## 4. Re-issue the deposit addresses given out after the restore point
 
+Keep every recorded address version, including each quote's
+`(deposit_address, deposit_address_version)` pair. Deduplicate only identical pairs when
+combining quote and deposit-address records; one version must not suppress another.
+
 A deposit address's salt is derived from the account, mode, `client_reference_id`, and version
 ([design §5a](../../docs/design/multi-tenant.md#5a-deposit-addresses-d16)), so the service issues
 the same address again from the merchant's record. A network's address is derived over the

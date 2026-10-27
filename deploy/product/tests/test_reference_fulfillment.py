@@ -1045,6 +1045,26 @@ def test_the_export_orders_deliveries_by_deposit_position_and_batches_them() -> 
     assert [len(batch["deliveries"]) for batch in records["events"]] == [100, 3]
 
 
+def test_restore_export_keeps_each_quote_address_version() -> None:
+    ledger = ProductLedger()
+    ledger.add_team(TEAM)
+    for number, version in enumerate((1, 2, 2)):
+        ledger.record_quote(
+            TEAM,
+            {
+                **_quote(),
+                "id": f"qt_{number:032x}",
+                "deposit_address": ADDRESS_ID,
+                "deposit_address_version": version,
+                "address": "0x" + f"{version:02x}" * 20,
+            },
+        )
+    records = export_restore_records(CONFIG.account, ledger)["deposit_addresses"]
+    assert [(record["id"], record["version"], record["address"]) for record in records] == [
+        (ADDRESS_ID, version, "0x" + f"{version:02x}" * 20) for version in (1, 2)
+    ]
+
+
 def test_a_later_deposit_address_response_replaces_the_record() -> None:
     ledger = ProductLedger()
     ledger.add_team(TEAM)
