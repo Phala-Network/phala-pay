@@ -610,9 +610,12 @@ async fn published_image_round_trip() -> Result<()> {
         ensure!(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM deposits WHERE tx_hash=$1)")
             .bind(format!("{historical:#x}")).fetch_one(&database.app_pool).await?,"restored history was recorded before reissue");
         let pending_hint=B256::repeat_byte(0x79);
+        // Counters have one row per UTC day; total them so midnight can start a new row.
+        let hint_usage_sql="SELECT COALESCE(sum(used),0) FROM daily_budgets WHERE name='hints'";
+        let hint_usage_before=sqlx::query_scalar::<_,i64>(hint_usage_sql).fetch_one(&database.app_pool).await?;
         // Use a deposit-address object, whose endpoint requires the explicit network.
         submit_hint(&origin,&key,address["id"].as_str().unwrap(),pending_hint).await?;
-        wait_until("N pending hint task started",||async {Ok(sqlx::query_scalar::<_,i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&database.app_pool).await?==2)}).await?;
+        wait_until("N pending hint task started",||async {Ok(sqlx::query_scalar::<_,i64>(hint_usage_sql).fetch_one(&database.app_pool).await?>hint_usage_before)}).await?;
         current_service.stop()?;
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{pending_hint:#x}")).fetch_one(&database.app_pool).await?==0);
         let historic_block:i64=sqlx::query_scalar("SELECT block_number FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?;
