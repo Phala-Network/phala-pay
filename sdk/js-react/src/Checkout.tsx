@@ -192,15 +192,20 @@ function StatusLine({
         : "neutral";
   return (
     <div className="pp-status" data-tone={tone}>
-      {/* One plain line while in progress; a mark only for its outcome. */}
-      {tone !== "neutral" && (
-        <span className="pp-status__icon">
-          <ToneGlyph tone={tone} />
-        </span>
-      )}
       <span className="pp-status__text" role="status" aria-live="polite">
-        {statusMessage(status, quote, error?.code)}
-        {(reconnecting || error !== null) && status !== "error" && " (reconnecting…)"}
+        {/* One plain line while in progress; a mark only for its outcome, which arrives with its
+            own text (a new line, by its tone) rather than moving the text already there. */}
+        <span className="pp-status__line" key={tone}>
+          {tone !== "neutral" && (
+            <span className="pp-status__icon">
+              <ToneGlyph tone={tone} />
+            </span>
+          )}
+          <span>
+            {statusMessage(status, quote, error?.code)}
+            {(reconnecting || error !== null) && status !== "error" && " (reconnecting…)"}
+          </span>
+        </span>
       </span>
       {status === "waiting" && quote !== null && (
         <span className="pp-status__countdown" role="timer" aria-label="Time left to pay">

@@ -81,6 +81,7 @@
 .pp-status[data-tone="success"] .pp-status__icon { color: var(--pp-color-success); }
 .pp-status[data-tone="danger"] { color: var(--pp-color-danger); }
 .pp-status__text { flex: 1; min-width: 0; }
+.pp-status__line { display: flex; gap: 0.5em; align-items: flex-start; }
 .pp-status__countdown { color: var(--pp-color-text); font-weight: 500; white-space: nowrap; }
 
 .pp-notice { margin: 0 0 1em; color: var(--pp-color-text-muted); }
@@ -197,9 +198,10 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 /* The line's 44px target overhangs its text, so that the text keeps the form's rhythm. */
 .pp-element__alternative { margin-block: -0.875em; color: var(--pp-color-text-muted); font-size: 0.875em;
   text-align: center; }
-/* The way back is as quiet: its 44px target overhangs its text into the top of the step, and is no
-   narrower than that for a short label. */
-.pp-element__back { display: flex; margin: -0.875em 0 0.25em; font-size: 0.875em; }
+/* The way back is quiet, at body size (hosts may hold body text to a minimum size): its 44px
+   target overhangs its line of text into the top of the step, and is no narrower than that for a
+   short label. */
+.pp-element__back { display: flex; margin: calc((1.5em - var(--pp-control-height)) / 2) 0 0.25em; }
 .pp-element__back .pp-text-button { min-width: var(--pp-control-height); color: var(--pp-color-text-muted); }
 .pp-element__back .pp-text-button:hover { color: var(--pp-color-text); }
 .pp-text-button { display: inline-flex; align-items: center; min-height: var(--pp-control-height); padding: 0;

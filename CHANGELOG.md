@@ -35,8 +35,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
     top-up".
   - `<PaymentElement>`'s way back reads "Back" before a payment and "Start a new payment" after any
     finished one. Before, it read "Choose another token or network", "Back to payment options", or
-    "Start over". It is now a smaller, muted link that keeps its 44px target without leaving an
-    empty band above the step.
+    "Start over". It is now a muted link whose 44px target overhangs its text, leaving no empty
+    band above the step.
   - `<DepositAddress>` drops its intro line and the Network field, which repeated the network
     picker. Its footer now names only the chosen network's credit time: "Send … on Base Sepolia.
     Other tokens and networks aren’t credited. Credited at the market rate, usually within about 5

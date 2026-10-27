@@ -1058,7 +1058,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   // The SDK's <DepositAddress> shows the customer the same address to copy, and when a transfer
   // is credited: the five-minute discovery scan, then the public view's 30-second credit time.
   await expect(product.getByText(address).first()).toBeVisible();
-  await expect(product.getByText(/credited at the market rate, usually within about 6 minutes\./)).toBeVisible();
+  await expect(product.getByText(/Credited at the market rate, usually within about 6 minutes\./)).toBeVisible();
 
   // Any amount, sent from a wallet as from an exchange.
   const testTokens = page.getByRole("note", { name: "Test tokens" });
