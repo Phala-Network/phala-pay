@@ -167,11 +167,6 @@ export function DepositAddressContent({
   const amount = depositLimits(currentToken) ?? symbol;
   return (
     <>
-      <p className="pp-intro">
-        {depositAddress.address === null
-          ? "Reusable deposit address; varies by network"
-          : "One reusable address for supported tokens and networks"}
-      </p>
       <PaymentOptionFields
         options={options}
         value={option}
@@ -181,7 +176,6 @@ export function DepositAddressContent({
         <QrCode value={token.payment_uri} label={`Deposit address for ${symbol} on ${name}`} />
       </div>
       <dl className="pp-fields">
-        <Field label="Network" value={`${name} (chain ID ${network.chain_id})`} />
         <Field label={`Token (${symbol}) contract`} value={contract} copy />
         <Field label="Deposit address" value={to} copy />
       </dl>
@@ -201,8 +195,8 @@ export function DepositAddressContent({
         </ul>
       )}
       <p className="pp-message">
-        Send {amount} on {name}. Unsupported tokens or networks are not credited.{" "}
-        {creditMessage(networks.map((each) => each.chain_id), view)}
+        Send {amount} on {name}. Other tokens and networks aren’t credited.{" "}
+        {creditMessage(network.chain_id, view)}
       </p>
     </>
   );
@@ -326,7 +320,7 @@ function DepositPayment({
     <>
       <div className="pp-qr">
         <QrCode value={`${token.payment_uri}&uint256=${amountAtomic}`} label={`Payment request for ${amount} on ${name}`} />
-        <p className="pp-qr__caption">Send exactly this amount in {symbol} on {name}, in one transfer.</p>
+        <p className="pp-qr__caption">Send exactly this amount in one transfer.</p>
       </div>
       <dl className="pp-fields">
         <Field label="Deposit address" value={to} copy />
@@ -382,6 +376,8 @@ function DepositPayment({
             {message !== "" && tone !== "neutral" && <ToneGlyph tone={tone} />}
             <span>
               {message}
+              {/* A sentence before the link, as "View transaction" follows it. */}
+              {url !== undefined && message !== "" && !/[.…]$/.test(message) && "."}
               {reconnecting && (message === "" ? "Reconnecting…" : " (reconnecting…)")}
               {url !== undefined && (
                 <>
@@ -570,28 +566,14 @@ function useClientView(
 const DISCOVERY_SECONDS = 300;
 
 /**
- * When a payment on each of `chainIds` is credited: the discovery scan, then `view`'s typical
- * credit time, for example "usually within about 6 minutes on Sepolia and about 5 minutes on
- * Base Sepolia". Before the view is loaded it names no time.
+ * When a payment on `chainId` is credited: the discovery scan, then `view`'s typical credit time,
+ * for example "usually within about 6 minutes". Before the view is loaded it names no time.
  */
-function creditMessage(chainIds: number[], view: ClientDepositAddress | null): string {
-  const names = new Map<string, string[]>();
-  for (const network of view?.networks ?? []) {
-    if (chainIds.includes(network.chain_id)) {
-      const wait = formatWait(DISCOVERY_SECONDS + network.typical_credit_seconds);
-      names.set(wait, [...(names.get(wait) ?? []), networkName(network.chain_id)]);
-    }
-  }
-  if (names.size === 0) {
-    return "Eligible transfers are credited at the market rate after confirmation.";
-  }
-  const list = new Intl.ListFormat("en", { type: "conjunction" });
-  const [only, ...others] = names.keys();
-  const within =
-    only !== undefined && others.length === 0
-      ? only
-      : list.format([...names].map(([wait, on]) => `${wait} on ${list.format(on)}`));
-  return `Eligible transfers are credited at the market rate, usually within ${within}.`;
+function creditMessage(chainId: number, view: ClientDepositAddress | null): string {
+  const network = view?.networks.find((each) => each.chain_id === chainId);
+  return network === undefined
+    ? "Credited at the market rate after confirmation."
+    : `Credited at the market rate, usually within ${formatWait(DISCOVERY_SECONDS + network.typical_credit_seconds)}.`;
 }
 
 function paymentTone({ status }: DepositAddressPayment): "neutral" | "success" | "danger" {

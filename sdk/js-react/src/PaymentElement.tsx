@@ -341,13 +341,7 @@ export function PaymentElement<T extends PaymentOption>({
   };
 
   const status = checkout?.status ?? payment?.status ?? "loading";
-  const backText = UNDERWAY.has(status)
-    ? null
-    : status === "credited"
-      ? "Start a new payment"
-      : FINISHED.has(status)
-        ? "Start over"
-        : "Choose another token or network";
+  const backText = UNDERWAY.has(status) ? null : FINISHED.has(status) ? "Start a new payment" : "Back";
   // Once a payment is sent (or resumed), there is no way back until it settles: going back and
   // paying again would pay twice.
   const depositSent = sent || (current.step === "deposit_address" && current.txHash !== undefined);
@@ -355,7 +349,7 @@ export function PaymentElement<T extends PaymentOption>({
     payment !== null && SETTLED.has(payment.status)
       ? backText
       : payment === null && !depositSent
-        ? "Back to payment options"
+        ? "Back"
         : null;
   const primary = createQuote === undefined ? "deposit_address" : "quote";
   const symbol = option === undefined ? null : assetSymbol(option.asset);

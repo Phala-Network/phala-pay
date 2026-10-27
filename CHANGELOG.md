@@ -14,6 +14,37 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Changed
+
+- `@phala/pay-react` copy and layout are simpler, and the copy is no longer about top-ups. Hosts
+  that match these strings in tests must update them
+  ([#559](https://github.com/Phala-Network/phala-pay/pull/559)):
+  - `<Checkout>`'s wallet button now reads `Pay with <wallet name>` by default, as the deposit
+    address's button does, or "Pay with your wallet" for `walletClient`. Before, it read
+    `Pay with crypto <wallet name>`. A `buttonText` you set is still followed by the wallet's name.
+  - `<Checkout>`'s status is now a plain line, as the deposit address's is: it has no tinted box,
+    and only a credited or failed status has a mark. The summary reads "$25.00 · Sepolia", without
+    "top-up". The amount and network are no longer repeated: the notice reads "Send exactly 25 USDC
+    in one transfer before the timer ends; other amounts are credited at the market rate.", the QR
+    caption reads "Scan with your wallet app.", and the Manual tab's note reads "Exchange
+    withdrawal fees must not reduce the amount received." The Manual tab's exact amount now shows
+    its token, as in "25 USDC"; the copy button still copies the number only. A payment credited at
+    the quoted amount reads "Payment credited". Statuses no longer tell the payer to "start a new
+    top-up".
+  - `<PaymentElement>`'s way back reads "Back" before a payment and "Start a new payment" after any
+    finished one. Before, it read "Choose another token or network", "Back to payment options", or
+    "Start over". It is now a muted link whose 44px target overhangs its text, leaving no empty
+    band above the step.
+  - `<DepositAddress>` drops its intro line and the Network field, which repeated the network
+    picker. Its footer now names only the chosen network's credit time: "Send … on Base Sepolia.
+    Other tokens and networks aren’t credited. Credited at the market rate, usually within about 5
+    minutes." In amount mode, the QR caption reads "Send exactly this amount in one transfer.", and
+    the status line ends its sentence before "View transaction".
+  - The `.pp-intro` and `.pp-status__note` classes are removed, and `.pp-status` no longer has a
+    background or padding.
+
 ## [0.12.1] - 2026-10-26
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)

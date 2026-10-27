@@ -331,7 +331,7 @@ async function chooseOption(product: Locator, name: string) {
  * credited, else the payment element's way back.
  */
 async function startOver(product: Locator) {
-  await product.getByRole("button", { name: /^(Start a new top-up|Start over|Choose another token or network)$/ }).click();
+  await product.getByRole("button", { name: /^(Start a new top-up|Start a new payment|Back)$/ }).click();
 }
 
 /** Collects the page's console errors and CSP violations; the flows expect none. */
@@ -890,7 +890,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   await expect(product).not.toContainText("order_");
   await page.screenshot({ path: testInfo.outputPath("checkout.png"), fullPage: true });
 
-  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByText(/^Transaction sent:/)).toBeVisible();
   await expectComplete(timeline, ["sent", "received", "credited", "webhook_received"]);
   // One confirmation: the credit, the demo merchant's bonus, the total, and the transaction.
@@ -1062,7 +1062,7 @@ test("a deposit address: one verified address, any amount credited at spot, then
   // The SDK's <DepositAddress> shows the customer the same address to copy, and when a transfer
   // is credited: the five-minute discovery scan, then the public view's 30-second credit time.
   await expect(product.getByText(address).first()).toBeVisible();
-  await expect(product.getByText(/credited at the market rate, usually within about 6 minutes\./)).toBeVisible();
+  await expect(product.getByText(/Credited at the market rate, usually within about 6 minutes\./)).toBeVisible();
 
   // Any amount, sent from a wallet as from an exchange.
   const testTokens = page.getByRole("note", { name: "Test tokens" });
@@ -1180,7 +1180,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await expect(product.getByRole("tabpanel", { name: "Exact amount", exact: true }).getByText(/bonus/)).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.screenshot({ path: testInfo.outputPath("usdc-quote.png") });
-  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$5.00", { timeout: 60_000 });
   await expect(product.getByTestId("balance")).toHaveText("$5.00", { timeout: 10_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
@@ -1207,7 +1207,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
     "1 USDC = $1.00",
   );
-  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$20.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
   await expect(product.getByTestId("balance")).toHaveText("$25.00", { timeout: 10_000 });
@@ -1234,7 +1234,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
     "1 USDT = $1.00",
   );
-  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$5.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
   await expect(product.getByTestId("balance")).toHaveText("$30.00", { timeout: 10_000 });
@@ -1256,7 +1256,7 @@ test("a quote a wallet cannot cover sends nothing; the mint beside it funds that
   await page.goto(env("SITE_URL"));
   const product = page.getByRole("region", { name: "Customer view" });
   const helper = page.getByRole("note", { name: "Test tokens" });
-  const pay = product.getByRole("button", { name: "Pay with crypto Empty Wallet" });
+  const pay = product.getByRole("button", { name: "Pay with Empty Wallet" });
   await expect(product.getByTestId("balance")).toHaveText("$0.00");
 
   // $20 in test USDC from a wallet holding a millionth less, in USDC's 6 decimals: the checkout
@@ -1869,7 +1869,7 @@ test("a credit whose bonus the ledger has not applied yet shows the bonus pendin
   });
   await product.getByRole("button", { name: PAY }).click();
   await expect(product.locator(".pp-summary")).toContainText("80 PHA");
-  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   const confirmation = product.getByTestId("payment-credited");
   await expect(confirmation).toBeVisible({ timeout: 60_000 });
   // The deposit's row, credited but without its bonus, has arrived: the bonus and the total wait
@@ -1972,7 +1972,7 @@ test("the demo's states move nothing on the page: one height in each state and o
   await product.getByRole("button", { name: PAY }).click();
   await expect(product.locator(".pp-summary")).toContainText("80 PHA");
   await steady("paying");
-  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
   await steady("credited");
@@ -2643,7 +2643,7 @@ test("the demo sets its text well while it loads, while paying, once credited, a
   await expect(product.locator(".pp-summary")).toContainText("PHA");
   await pass("paying");
   // Credited: the receipt, the payment's row, its webhook and requests.
-  await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toBeVisible({ timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toBeVisible({ timeout: 10_000 });
   await openTab(scenes, "API");

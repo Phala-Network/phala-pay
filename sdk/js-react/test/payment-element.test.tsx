@@ -46,7 +46,7 @@ it("creates the quote once, on submit, with the chosen option, then shows its ch
 
   expect(await screen.findByText("Waiting for your payment")).toBeDefined();
   await waitFor(() => expect(onChange.mock.lastCall?.[0].checkout?.status).toBe("waiting"));
-  fireEvent.click(screen.getByRole("button", { name: "Choose another token or network" }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
   expect(chosen()).toBe("USDC · Base Sepolia");
   expect(onChange).toHaveBeenLastCalledWith({ step: "options", checkout: null, payment: null });
 });
@@ -104,7 +104,7 @@ it("shows the customer's deposit address instead, at the chosen option", async (
   expect(createDepositAddress).toHaveBeenCalledWith(OPTIONS[1]);
   expect((await screen.findByRole("img")).getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
   expect(createQuote).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Back to payment options" }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
   expect(screen.getByRole("button", { name: "Pay in USDC" })).toBeDefined();
 });
 
@@ -162,7 +162,7 @@ it("creates each quote with its own idempotency key, kept only to retry a failur
   expect(key(2)).not.toBe(key(1));
 
   // Back from a created quote, the same option asks for a new one.
-  fireEvent.click(screen.getByRole("button", { name: "Choose another token or network" }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
   fireEvent.click(screen.getByRole("button", { name: "Pay in USDC" }));
   expect(await screen.findByText("Waiting for your payment")).toBeDefined();
   expect(key(3)).not.toBe(key(2));
@@ -266,11 +266,11 @@ describe("without createQuote", () => {
     // No wallet in this browser: the QR code and the address are the way to pay, stated once.
     expect(await screen.findByText("10 USDC")).toBeDefined();
     expect(screen.getByRole("img", { name: "Payment request for 10 USDC on Base Sepolia" })).toBeDefined();
-    expect(screen.getByText("Send exactly this amount in USDC on Base Sepolia, in one transfer.")).toBeDefined();
+    expect(screen.getByText("Send exactly this amount in one transfer.")).toBeDefined();
     expect(screen.getByRole("button", { name: "Copy Deposit address" })).toBeDefined();
     expect(screen.queryByRole("combobox")).toBeNull();
     expect((await axe.run(container, { rules: { "color-contrast": { enabled: false } } })).violations).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: "Back to payment options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByRole("button", { name: "Pay $10.00 in USDC" })).toBeDefined();
   });
 
@@ -336,28 +336,28 @@ describe("without createQuote", () => {
     expect(screen.queryByRole("button", { name: "Pay with your wallet" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Pay from an exchange or another wallet" })).toBeNull();
     // No way back to pay again while the sent payment has not settled; one plain status line.
-    expect(screen.queryByRole("button", { name: "Back to payment options" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     expect(screen.getByRole("status").querySelector("svg:not(.pp-tx__external)")).toBeNull();
 
     payments.unshift(row(HASH, "seen"));
     await waitFor(() =>
-      expect(screen.getByRole("status").textContent).toBe("Received, 1 confirmation. Crediting in about 7 seconds View transaction"),
+      expect(screen.getByRole("status").textContent).toBe("Received, 1 confirmation. Crediting in about 7 seconds. View transaction"),
     );
     await waitFor(() => expect(onChange.mock.lastCall?.[0].payment?.status).toBe("seen"));
     // While the payment is on its way, the element stays on it.
-    expect(screen.queryByRole("button", { name: "Back to payment options" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
 
     payments[0] = row(HASH, "credited");
     await waitFor(() => expect(onDepositSuccess).toHaveBeenCalledTimes(1));
     expect(onDepositSuccess.mock.calls[0]?.[0]).toMatchObject({ tx_hash: HASH, status: "credited" });
-    expect(screen.getByRole("status").textContent).toBe("Payment credited View transaction");
+    expect(screen.getByRole("status").textContent).toBe("Payment credited. View transaction");
     await waitFor(() =>
       expect(onChange.mock.lastCall?.[0]).toMatchObject({ step: "deposit_address", payment: { status: "credited" } }),
     );
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(onDepositSuccess).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Start a new payment" })).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Back to payment options" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   });
 
   it("follows a payment sent by QR code or by hand once it arrives", async () => {
@@ -411,14 +411,14 @@ describe("without createQuote", () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(onDepositSuccess).not.toHaveBeenCalled();
     // No way back to pay again until the resumed payment settles.
-    expect(screen.queryByRole("button", { name: /^(Back to payment options|Start)/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^(Back|Start)/ })).toBeNull();
     payments.unshift(row(HASH, "seen"));
     await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/^Received/));
-    expect(screen.queryByRole("button", { name: /^(Back to payment options|Start)/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^(Back|Start)/ })).toBeNull();
     payments[0] = row(HASH, "credited");
     await waitFor(() => expect(onDepositSuccess).toHaveBeenCalledTimes(1));
     expect(onDepositSuccess.mock.calls[0]?.[0].tx_hash).toBe(HASH);
-    expect(screen.getByRole("status").textContent).toBe("Payment credited View transaction");
+    expect(screen.getByRole("status").textContent).toBe("Payment credited. View transaction");
     fireEvent.click(screen.getByRole("button", { name: "Start a new payment" }));
     expect(screen.getByRole("button", { name: "Pay in USDC" })).toBeDefined();
   });
@@ -435,7 +435,7 @@ describe("without createQuote", () => {
         pollInterval={20}
       />,
     );
-    expect(await screen.findByRole("button", { name: "Start over" })).toBeDefined();
+    expect(await screen.findByRole("button", { name: "Start a new payment" })).toBeDefined();
     expect(screen.getByRole("status").textContent).toMatch(/^This payment cannot be credited/);
   });
 
@@ -451,7 +451,7 @@ describe("without createQuote", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pay in PHA" }));
     expect(await screen.findByText("10 PHA")).toBeDefined();
     expect(depositAmountAtomic).toHaveBeenCalledExactlyOnceWith(OPTIONS[0], NETWORKS[0]?.assets[0]);
-    fireEvent.click(screen.getByRole("button", { name: "Back to payment options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
     choose("Token", "USDC");
     fireEvent.click(screen.getByRole("button", { name: "Pay in USDC" }));
     // 10 × 10^6, not 10 × 10^18: the QR code requests exactly that.

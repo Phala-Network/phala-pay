@@ -4,7 +4,7 @@ import { formatUnitsGrouped } from "@phala/pay";
  * A token's per-transfer limits: a deposit address's asset, or a `GET /v1/config` asset, which
  * carries the same terms. Any field may be absent, as on older servers.
  */
-export interface DepositLimitsSource {
+interface DepositLimitsSource {
   asset: string;
   decimals?: unknown;
   min_amount?: unknown;

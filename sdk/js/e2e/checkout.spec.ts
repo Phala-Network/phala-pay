@@ -229,9 +229,9 @@ test("pays a quote from a browser wallet, end to end on Anvil", async ({ page })
   await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
   await expect(page.getByText("12.345678901234567891 PHA").first()).toBeVisible();
 
-  await page.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+  await page.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(page.getByText(/^Transaction sent:/)).toBeVisible();
-  await expect(page.getByRole("status")).toHaveText("Payment credited: $25.00");
+  await expect(page.getByRole("status")).toHaveText("Payment credited");
   await expect(page.getByTestId("events")).toHaveText("success");
 
   const token = { address: getAddress(env("TOKEN_ADDRESS")), abi: erc20Abi, functionName: "balanceOf" } as const;
@@ -261,8 +261,8 @@ test("pays with the page's own viem wallet client instead of discovered wallets"
   await page.goto(`/?client_secret=${secret}&expected_address=${quote.address}&api_base=${API_BASE}&wallet_client=${env("PAYER_ADDRESS")}`);
   const panel = page.getByRole("tabpanel");
   await expect(panel.getByRole("button")).toHaveCount(1);
-  await panel.getByRole("button", { name: "Pay with crypto" }).click();
-  await expect(page.getByRole("status")).toHaveText("Payment credited: $25.00");
+  await panel.getByRole("button", { name: "Pay with your wallet" }).click();
+  await expect(page.getByRole("status")).toHaveText("Payment credited");
 
   const token = { address: getAddress(env("TOKEN_ADDRESS")), abi: erc20Abi, functionName: "balanceOf" } as const;
   expect(await chain().readContract({ ...token, args: [quote.address as Address] })).toBe(
@@ -320,7 +320,7 @@ test("reports an invalid client secret", async ({ page }) => {
   const { quote } = newQuote();
   await serveQuote(page, quote, "another");
   await page.goto(`/?client_secret=${quote.id}_secret_00&expected_address=${quote.address}&api_base=${API_BASE}`);
-  await expect(page.getByRole("status")).toHaveText("This payment link is not valid. Start a new top-up.");
+  await expect(page.getByRole("status")).toHaveText("This payment link is not valid.");
 });
 
 test("fails closed when the quote's address is not the expected one", async ({ page }) => {
@@ -332,7 +332,7 @@ test("fails closed when the quote's address is not the expected one", async ({ p
     "This payment address could not be verified. Do not send funds; contact support.",
   );
   await expect(page.getByText(quote.address)).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /Pay with crypto/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Pay with/ })).toHaveCount(0);
 });
 
 test("deposit-address mode pays the exact amount from a wallet and follows it to credited", async ({ page }) => {
@@ -401,7 +401,7 @@ test("deposit-address mode pays the exact amount from a wallet and follows it to
   expect(hints[0]?.chain_id).toBe(sepolia.id);
   await expect(page.getByTestId("events")).toHaveText(`success:${hints[0]?.transaction_hash ?? ""}`);
   await expect(page.getByRole("button", { name: "Start a new payment" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Back to payment options" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Back", exact: true })).toHaveCount(0);
 });
 
 /** Rasterizes the SVG path (one unit per module) and decodes it. */
