@@ -12,12 +12,6 @@
       "purls": ["pkg:cargo/crypto-bigint@0.5.5"],
       "statement": "No patched crypto-bigint 0.5.x or compatible Alloy/k256 upgrade exists. Secret-scalar validation constructs a secp256k1 public key only during TEE startup: keys provisioning (backup/database secrets) and client-secret initialization. These paths are not request-triggered or remotely repeatable; runtime webhook signing uses Ed25519, and secp256k1 signature recovery/verification uses public inputs. This accepts startup exposure rather than claiming the dependency is fixed. Remove when Alloy/k256 and the dstack SDK resolve crypto-bigint >=0.7.6; reassess immediately if secret secp256k1 operations become request-triggered. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/536.",
       "expired_at": "2026-11-25T00:00:00Z"
-    },
-    {
-      "id": "GHSA-wq5f-xc86-pv6w",
-      "purls": ["pkg:npm/sharp@0.35.4"],
-      "statement": "dev-only: sharp is pulled in by cf → miniflare (local Workers dev server), a native module never included in the deployed Workers static-asset bundle; no fixed version reachable because miniflare pins sharp 0.35.4; remove when cf/miniflare allow sharp ≥0.35.5. deploy/product/web/pnpm-lock.yaml is the only lockfile in the repo that resolves sharp 0.35.4.",
-      "expired_at": "2026-11-05T00:00:00Z"
     }
   ]
 }

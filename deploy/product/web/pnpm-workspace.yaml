@@ -7,15 +7,18 @@ allowBuilds:
   puppeteer: false
   workerd: false
 
+# Reviewed upstream security releases; the exact pins fix Undici, Zod, and sharp.
+minimumReleaseAgeExclude:
+  - '@cloudflare/build-output-utils@0.9.5'
+  - '@cloudflare/config@0.28.1'
+  - '@cloudflare/runtime-types@0.1.16'
+  - '@cloudflare/vite-plugin@2.0.0-beta.v.5'
+  - cf@1.0.0-beta.23
+  - miniflare@5.20261023.0-beta
+
 overrides:
   # React's exact npm dependency must use the same local core as the demo's direct dependency.
   '@phala/pay': file:../../../sdk/js
   # The CLI still requires vulnerable KaTeX ^0.16.25; use the fixed CSS/fonts with Mermaid 12.2.
   # Remove when @mermaid-js/mermaid-cli depends on katex >=0.18.2.
   '@mermaid-js/mermaid-cli@12.0.0>katex': ^0.18.2
-  # Remove when these Miniflare releases allow Undici >=7.30.1 (October 2026 advisories).
-  'miniflare@5.20260926.0-alpha>undici': 7.30.1
-  'miniflare@5.20261012.1-beta>undici': 7.30.1
-  # Remove when these @cloudflare/config releases allow Zod >=4.6.6 (CVE-2023-54404).
-  '@cloudflare/config@0.20.0>zod': 4.6.7
-  '@cloudflare/config@0.27.0>zod': 4.6.7
