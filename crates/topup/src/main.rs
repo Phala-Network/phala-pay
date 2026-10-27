@@ -668,6 +668,10 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             .await
             .context("failed to connect to database")?;
         check_payment_settings_cutover(&pool).await?;
+        // Admin restore reissues require healthy chain evidence in this serving process too.
+        if let Err(error) = topup::rpc_runtime::preflight(&routes).await {
+            tracing::warn!(%error, "read-only RPC self-test failed; affected chains remain unavailable for restore operations");
+        }
         let state = topup::api::AppState {
             pool,
             max_attached_pending_refunds: config.max_attached_pending_refunds,
