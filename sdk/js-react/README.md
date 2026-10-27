@@ -26,11 +26,9 @@ checkout, with a way back to the options. `PaymentOptionPicker` is that choice o
 />
 ```
 
-Without `createQuote`, submit shows the customer's one fixed deposit address from
-`createDepositAddress(option)` instead, and `depositAmountAtomic(option, token)` makes it ask for an
-exact amount of the address's token (its `decimals` give the unit), paid from a wallet first. See
-the [payment element guide](../js/README.md#the-payment-element) for its other props, your own
-submit button, and both deposit-address paths.
+Every quote pays to the customer's fixed deposit address. `createQuote` is required. Use the
+standalone `DepositAddress` for transfers of any amount at the market rate. See the
+[payment element guide](../js/README.md#the-payment-element) for its props and your own submit button.
 
 `Checkout` and `DepositAddress` retain their last view and payer selection during temporary
 network/5xx outages, show a neutral reconnecting message, and resume polling without creating a

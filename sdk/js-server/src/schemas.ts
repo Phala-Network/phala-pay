@@ -571,6 +571,19 @@ export const schemas: Record<string, Schema> = {
         "minimum": 0,
         "type": "integer"
       },
+      "deposit_address": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "deposit_address_version": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "expires_at": {
         "type": "integer"
       },
@@ -592,11 +605,20 @@ export const schemas: Record<string, Schema> = {
       "payment_uri": {
         "type": "string"
       },
+      "replaced_by": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "status": {
         "type": "string"
       },
       "typical_credit_seconds": {
         "minimum": 0,
+        "type": "integer"
+      },
+      "window_start": {
         "type": "integer"
       }
     },
@@ -612,6 +634,10 @@ export const schemas: Record<string, Schema> = {
       "chain_id",
       "amount_atomic",
       "address",
+      "deposit_address",
+      "deposit_address_version",
+      "replaced_by",
+      "window_start",
       "payment_uri",
       "expires_at",
       "payment_status",
@@ -2050,6 +2076,19 @@ export const schemas: Record<string, Schema> = {
           }
         ]
       },
+      "deposit_address": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "deposit_address_version": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "exchange_rate": {
         "type": "string"
       },
@@ -2087,6 +2126,12 @@ export const schemas: Record<string, Schema> = {
       "payment_uri": {
         "type": "string"
       },
+      "replaced_by": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "status": {
         "type": "string"
       },
@@ -2095,6 +2140,9 @@ export const schemas: Record<string, Schema> = {
       },
       "treasury": {
         "type": "string"
+      },
+      "window_start": {
+        "type": "integer"
       }
     },
     "required": [
@@ -2109,6 +2157,10 @@ export const schemas: Record<string, Schema> = {
       "amount_atomic",
       "exchange_rate",
       "address",
+      "deposit_address",
+      "deposit_address_version",
+      "replaced_by",
+      "window_start",
       "treasury",
       "payment_uri",
       "status",

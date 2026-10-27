@@ -380,7 +380,7 @@ struct Issuable {
 
 impl Issuable {
     /// Maps a failure, naming why no chain accepted a new address when none did.
-    fn map_error(&self, error: DepositAddressError) -> ApiError {
+    pub(super) fn map_error(&self, error: DepositAddressError) -> ApiError {
         match error {
             DepositAddressError::NoChain if self.unavailable => ApiError::chain_unavailable(),
             DepositAddressError::NoChain if self.frozen => ApiError::chain_frozen(),

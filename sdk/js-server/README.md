@@ -167,7 +167,7 @@ const batchFile = safeBatch(1, TREASURY_SAFE, calls); // Safe Transaction Builde
 ```
 
 `verifyDepositAddress(pins, address)` checks every network of a deposit address the same way.
-`quoteAddress`, `depositAddress`, `forwarderAddress`, `quoteSalt`, and `depositAddressSalt`
+`quoteAddress`, `depositAddress`, `forwarderAddress`, and `depositAddressSalt`
 recompute an address offline from a treasury you pass, as the Python SDK does.
 
 ## Chain and token icons

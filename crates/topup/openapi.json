@@ -746,7 +746,7 @@
       "ClientQuote": {
         "description": "The public view of a quote, read with its `client_secret` and without a signature, for the\npayer's checkout page. It has no account or internal fields.",
         "example": {
-          "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+          "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
           "amount": 2500,
           "amount_atomic": "25000000",
           "amount_credited": null,
@@ -755,18 +755,22 @@
           "confirmations": 1,
           "currency": "usd",
           "decimals": 6,
+          "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+          "deposit_address_version": 1,
           "expires_at": 1790554500,
           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
           "livemode": false,
           "object": "quote",
           "payment_status": "seen",
           "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+          "replaced_by": null,
           "status": "open",
-          "typical_credit_seconds": 30
+          "typical_credit_seconds": 30,
+          "window_start": 1790553600
         },
         "properties": {
           "address": {
-            "description": "Single-use forwarder address to pay.",
+            "description": "Customer deposit-address network to pay.",
             "type": "string"
           },
           "amount": {
@@ -825,6 +829,22 @@
             "minimum": 0,
             "type": "integer"
           },
+          "deposit_address": {
+            "description": "Deposit address id; null only for historical single-use quotes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deposit_address_version": {
+            "description": "Deposit-address salt version; null only for historical single-use quotes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "expires_at": {
             "description": "End of the payment window, Unix seconds.",
             "format": "int64",
@@ -853,6 +873,13 @@
             "description": "EIP-681 URI carrying the token, chain, address, and amount.",
             "type": "string"
           },
+          "replaced_by": {
+            "description": "The quote that closed this price window, if replaced.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "description": "`open`, `complete`, `expired`, or `canceled`, as on `Quote`; hide the address once\n`expires_at` has passed.",
             "type": "string"
@@ -861,6 +888,11 @@
             "description": "Typical time from payment to credit, in seconds, at the confirmation the quote's payments\nare credited at, as `GET /v1/config` reports it.",
             "format": "int64",
             "minimum": 0,
+            "type": "integer"
+          },
+          "window_start": {
+            "description": "Exclusive start of the payment window, Unix seconds.",
+            "format": "int64",
             "type": "integer"
           }
         },
@@ -876,6 +908,10 @@
           "chain_id",
           "amount_atomic",
           "address",
+          "deposit_address",
+          "deposit_address_version",
+          "replaced_by",
+          "window_start",
           "payment_uri",
           "expires_at",
           "payment_status",
@@ -1524,7 +1560,7 @@
             "type": "string"
           },
           "deposit_address": {
-            "description": "The deposit address that received the transfer, `da_…`, on `chain_id` at `address`; `null`\nfor a quote's address. Payments to a deposit address, active or retired, are credited at\nspot.",
+            "description": "The deposit address that received the transfer, `da_…`, on `chain_id` at `address`; `null`\nfor a historical single-use address. Transfers that do not consume a quote use spot.",
             "type": [
               "string",
               "null"
@@ -1571,7 +1607,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): a copy of the\nquote's or the deposit address's when the deposit is recorded, independent of it\nafterwards; `{}` when none.",
+            "description": "Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): copied from the\nconsumed quote, otherwise from the deposit address when recorded; independent afterwards.",
             "propertyNames": {
               "type": "string"
             },
@@ -1595,7 +1631,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ExpandableQuote",
-                "description": "The quote whose address received the transfer; `null` for a deposit address."
+                "description": "The quote consumed by this transfer; `null` when no quote was consumed."
               },
               {
                 "type": "null"
@@ -3219,9 +3255,9 @@
         "type": "object"
       },
       "Quote": {
-        "description": "A quote: a locked price, an exact token amount, and a single-use address to pay it to.",
+        "description": "A price window on the customer's persistent deposit address.",
         "example": {
-          "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+          "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
           "amount": 2500,
           "amount_atomic": "25000000",
           "asset": "usdc",
@@ -3231,6 +3267,8 @@
           "created": 1790553600,
           "currency": "usd",
           "deposit": null,
+          "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+          "deposit_address_version": 1,
           "exchange_rate": "1.00000000",
           "expires_at": 1790554500,
           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3251,6 +3289,7 @@
             "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
           },
           "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+          "replaced_by": null,
           "status": "open",
           "terms": {
             "confirmations": "12",
@@ -3263,11 +3302,12 @@
             "quote_tolerance_bps": 100,
             "quote_ttl_seconds": 900
           },
-          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+          "window_start": 1790553600
         },
         "properties": {
           "address": {
-            "description": "Single-use forwarder address to pay.",
+            "description": "Customer deposit-address network to pay.",
             "type": "string"
           },
           "amount": {
@@ -3329,6 +3369,22 @@
               }
             ]
           },
+          "deposit_address": {
+            "description": "Deposit address id; null only for historical single-use quotes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deposit_address_version": {
+            "description": "Deposit-address salt version; null only for historical single-use quotes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "exchange_rate": {
             "description": "The locked price in USD per token, a decimal string with 8 decimal places.",
             "type": "string"
@@ -3339,7 +3395,7 @@
             "type": "integer"
           },
           "id": {
-            "description": "`qt_` id. The quote's address salt is `keccak256(abi.encode(account,\nclient_reference_id, \"quote\", id))` with the types `(string, string, string, string)`,\nwhere `account` is your `acct_` id.",
+            "description": "`qt_` id.",
             "type": "string"
           },
           "livemode": {
@@ -3378,6 +3434,13 @@
             "description": "EIP-681 URI carrying the token, chain, address, and amount.",
             "type": "string"
           },
+          "replaced_by": {
+            "description": "The quote that closed this price window, if replaced.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "description": "`open`, `complete` (a matching payment consumed it), `expired`, or `canceled`. A quote stays\n`open` after `expires_at` until the finalized chain passes it, so a payment mined in time\nis never reported as expired; hide the address once `expires_at` has passed.",
             "type": "string"
@@ -3389,6 +3452,11 @@
           "treasury": {
             "description": "The treasury the address pays: your treasury of the chain when the quote was created. The\naddress is the factory's `CREATE2` over it and the salt.",
             "type": "string"
+          },
+          "window_start": {
+            "description": "Exclusive start of the payment window, Unix seconds.",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
@@ -3403,6 +3471,10 @@
           "amount_atomic",
           "exchange_rate",
           "address",
+          "deposit_address",
+          "deposit_address_version",
+          "replaced_by",
+          "window_start",
           "treasury",
           "payment_uri",
           "status",
@@ -3418,7 +3490,7 @@
         "example": {
           "data": [
             {
-              "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+              "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
               "amount": 2500,
               "amount_atomic": "25000000",
               "asset": "usdc",
@@ -3428,6 +3500,8 @@
               "created": 1790553600,
               "currency": "usd",
               "deposit": null,
+              "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+              "deposit_address_version": 1,
               "exchange_rate": "1.00000000",
               "expires_at": 1790554500,
               "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3448,6 +3522,7 @@
                 "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
               },
               "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+              "replaced_by": null,
               "status": "open",
               "terms": {
                 "confirmations": "12",
@@ -3460,7 +3535,8 @@
                 "quote_tolerance_bps": 100,
                 "quote_ttl_seconds": 900
               },
-              "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+              "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+              "window_start": 1790553600
             }
           ],
           "has_more": false,
@@ -3565,7 +3641,7 @@
       "QuoteView": {
         "description": "`GET /v1/quotes/{id}` returns a `Quote` to a signed request and a `ClientQuote` to a request by\n`client_secret`.",
         "example": {
-          "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+          "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
           "amount": 2500,
           "amount_atomic": "25000000",
           "asset": "usdc",
@@ -3575,6 +3651,8 @@
           "created": 1790553600,
           "currency": "usd",
           "deposit": null,
+          "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+          "deposit_address_version": 1,
           "exchange_rate": "1.00000000",
           "expires_at": 1790554500,
           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3595,6 +3673,7 @@
             "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
           },
           "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+          "replaced_by": null,
           "status": "open",
           "terms": {
             "confirmations": "12",
@@ -3607,7 +3686,8 @@
             "quote_tolerance_bps": 100,
             "quote_ttl_seconds": 900
           },
-          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+          "window_start": 1790553600
         },
         "oneOf": [
           {
@@ -8798,7 +8878,7 @@
             }
           },
           {
-            "description": "Only deposits to this quote's address",
+            "description": "Only deposits that consumed this quote",
             "in": "query",
             "name": "quote",
             "required": false,
@@ -11631,7 +11711,7 @@
             "api_key": []
           }
         ],
-        "summary": "Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,\nand a single-use address, valid until `expires_at`, on the terms your payment settings set for\nthe asset; the quote keeps them for good. An asset your settings do not accept is\n`asset_not_accepted`.",
+        "summary": "Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,\nand a fixed customer address, valid until `expires_at`, on the terms your payment settings set for\nthe asset; the quote keeps them for good. An asset your settings do not accept is\n`asset_not_accepted`.",
         "tags": [
           "quotes"
         ]
@@ -17570,7 +17650,7 @@
   ],
   "tags": [
     {
-      "description": "A locked price and a single-use address for one payment.",
+      "description": "A locked price and a fixed customer address for one payment.",
       "name": "quotes"
     },
     {

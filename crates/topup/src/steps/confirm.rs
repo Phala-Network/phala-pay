@@ -453,19 +453,19 @@ impl ConfirmStep {
         clock: Option<DateTime<Utc>>,
         supplied: Option<ConfirmationEvidence>,
     ) -> StepResult {
-        let context = match self
+        let mut context = match self
             .context_lookup
-            .load(deposit.address_id, deposit.id)
+            .load(
+                deposit.address_id,
+                deposit.id,
+                deposit.route.as_deref(),
+                deposit.block_time,
+            )
             .await
         {
             Ok(context) => context,
             Err(error) => {
-                tracing::error!(deposit_id = %crate::ids::format(crate::ids::DEPOSIT, deposit.id), %error, "confirm context load failed");
-                return retry(
-                    RetryError::Transient,
-                    json!({"stage": "context", "error": "database"}),
-                    TransitionEffects::default(),
-                );
+                return context_failure(&error);
             }
         };
         let Some(chains) = self.chains.get(&deposit.chain_id) else {
@@ -500,11 +500,11 @@ impl ConfirmStep {
         // The stricter of the chain's current floor, the confirmation the deposit's binding
         // requires, and, for a payment of a quote's asset to its address, the quote's (design
         // §7): which of the two governs is known only once the deposit is confirmed.
-        let required = |route: Option<&str>| {
+        let required = |context: &ConfirmationContext, route: Option<&str>| {
             let quoted = context
                 .lock
                 .as_ref()
-                .filter(|lock| !lock.restored && route == Some(lock.route.as_str()))
+                .filter(|lock| route == Some(lock.route.as_str()))
                 .map(|lock| lock.terms.confirmations);
             required_confirmations(
                 chains.confirmations,
@@ -515,7 +515,7 @@ impl ConfirmStep {
                     .chain(quoted),
             )
         };
-        let confirmations = required(deposit.route.as_deref());
+        let confirmations = required(&context, deposit.route.as_deref());
         let (canonical, is_final, complete_evidence) = match self
             .bounded_evidence(
                 chains,
@@ -545,9 +545,24 @@ impl ConfirmStep {
             }
         };
         let selected_route = self.selected_route(deposit, &canonical);
+        context = match self
+            .context_lookup
+            .load(
+                deposit.address_id,
+                deposit.id,
+                selected_route.map(|(name, _)| name.as_str()),
+                canonical.block_time,
+            )
+            .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                return context_failure(&error);
+            }
+        };
         // The receipt corrected the token: the requirement is that of the corrected facts, so a
         // payment now of the quote's asset is held to the quote's stricter confirmation.
-        let corrected = required(selected_route.map(|(name, _)| name.as_str()));
+        let corrected = required(&context, selected_route.map(|(name, _)| name.as_str()));
         if corrected.stricter(confirmations) != confirmations && !is_final {
             let mut result = retry(
                 RetryError::RpcDisagreement,
@@ -649,14 +664,12 @@ impl ConfirmStep {
             );
         };
 
-        // A valid payment of the address's quote is governed by the terms the quote was issued
+        // A valid payment in a quote's window is governed by the terms the quote was issued
         // with; every other payment by the payment settings the deposit is bound to (design §8).
-        // A quote re-issued after a restore carries the merchant's record of its terms, never
-        // applied: a payment to it follows its binding, valued at spot.
         let quote_lock = context
             .lock
             .as_ref()
-            .filter(|lock| !lock.restored && lock.route == runtime.route.route)
+            .filter(|lock| lock.route == runtime.route.route)
             .and_then(|lock| {
                 Some((
                     LockTerms {
@@ -775,9 +788,12 @@ impl ConfirmStep {
                 );
             }
         };
-        if valuation.source == ValuationSource::Lock {
+        if valuation.source == ValuationSource::Lock
+            && let Some(candidate) = &context.lock
+        {
             effects.lock_consumption = Some(LockConsumption {
-                address_id: deposit.address_id,
+                quote_id: candidate.id,
+                block_time: canonical.block_time,
                 idempotent: false,
             });
         }
@@ -812,7 +828,7 @@ impl ConfirmStep {
 /// Values the deposit at the credit a delivered event told the merchant, and consumes the quote it
 /// paid when that credit was the quote's.
 fn carried_forward(
-    deposit: &Deposit,
+    _deposit: &Deposit,
     canonical: &TransferLog,
     context: &ConfirmationContext,
     delivered: &ImportedCredit,
@@ -820,9 +836,12 @@ fn carried_forward(
 ) -> StepResult {
     let credit = &delivered.credit;
     let event = crate::ids::format(crate::ids::EVENT, delivered.event_id);
-    if credit.source == ValuationSource::Lock && context.lock.is_some() {
+    if credit.source == ValuationSource::Lock
+        && let Some(lock) = &context.lock
+    {
         effects.lock_consumption = Some(LockConsumption {
-            address_id: deposit.address_id,
+            quote_id: lock.id,
+            block_time: canonical.block_time,
             idempotent: false,
         });
     }
@@ -911,8 +930,7 @@ struct DeliveredRejection {
 
 #[derive(Clone)]
 struct StoredLock {
-    /// Re-issued after a restore from the merchant's record: its terms are never applied.
-    restored: bool,
+    id: Uuid,
     route: String,
     amount: AtomicAmount,
     price: ScaledPrice,
@@ -972,6 +990,8 @@ trait ContextLookup: Send + Sync {
         &self,
         address_id: Uuid,
         deposit_id: Uuid,
+        route: Option<&str>,
+        block_time: DateTime<Utc>,
     ) -> Result<ConfirmationContext, sqlx::Error>;
 }
 
@@ -1070,31 +1090,62 @@ impl ContextLookup for PostgresContextLookup {
         &self,
         address_id: Uuid,
         deposit_id: Uuid,
+        route: Option<&str>,
+        block_time: DateTime<Utc>,
     ) -> Result<ConfirmationContext, sqlx::Error> {
-        load_context(&self.0, address_id, deposit_id).await
+        load_context(&self.0, address_id, deposit_id, route, block_time).await
     }
+}
+
+fn context_failure(error: &sqlx::Error) -> StepResult {
+    let overlap =
+        matches!(error, sqlx::Error::Protocol(message) if message == "overlapping quote windows");
+    if overlap {
+        tracing::error!(tags.alert = "TopupQuoteWindowOverlap", %error, "quote windows overlap");
+    } else {
+        tracing::error!(%error, "confirm context load failed");
+    }
+    retry(
+        if overlap {
+            RetryError::InvariantViolation
+        } else {
+            RetryError::Transient
+        },
+        json!({"stage":"context", "error": if overlap { "overlapping_quote_windows" } else { "database" }}),
+        TransitionEffects::default(),
+    )
 }
 
 async fn load_context(
     pool: &PgPool,
     address_id: Uuid,
     deposit_id: Uuid,
+    route: Option<&str>,
+    block_time: DateTime<Utc>,
 ) -> Result<ConfirmationContext, sqlx::Error> {
-    let row = sqlx::query(
+    let rows = sqlx::query(
         r#"
-        SELECT address.address, quote.terms,
-               quote.restore_id IS NOT NULL AS restored, quote.route, quote.amount_atomic::text AS amount_atomic,
+        SELECT address.address, quote.id AS quote_id, quote.terms,
+               quote.route, quote.amount_atomic::text AS amount_atomic,
                quote.price_scaled::text AS price_scaled,
                quote.credit_minor::text AS credit_minor,
                quote.expires_at, quote.consumed_by, quote.status AS lock_status
         FROM addresses AS address
-        LEFT JOIN quotes AS quote ON quote.id = address.quote_id
+        LEFT JOIN quotes AS quote ON quote.address_id = address.id AND quote.route = $2
+          AND quote.status IN ('open', 'expired') AND quote.consumed_by IS NULL
+          AND quote.window_start < $3 AND $3 <= quote.expires_at
         WHERE address.id = $1
         "#,
     )
     .bind(address_id)
-    .fetch_one(pool)
+    .bind(route)
+    .bind(block_time)
+    .fetch_all(pool)
     .await?;
+    if rows.len() > 1 {
+        return Err(sqlx::Error::Protocol("overlapping quote windows".into()));
+    }
+    let row = rows.into_iter().next().ok_or(sqlx::Error::RowNotFound)?;
     let address_text: String = row.try_get("address")?;
     let address = Address::from_str(&address_text)
         .map_err(|error| sqlx::Error::Decode(format!("invalid address: {error}").into()))?;
@@ -1109,7 +1160,7 @@ async fn load_context(
         let credit_minor: Option<String> = row.try_get("credit_minor")?;
         let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
         Some(StoredLock {
-            restored: row.try_get("restored")?,
+            id: row.try_get("quote_id")?,
             route: route.ok_or_else(|| sqlx::Error::Decode("lock route is missing".into()))?,
             amount: AtomicAmount::new(
                 U256::from_str(
@@ -1687,6 +1738,8 @@ mod tests {
             &self,
             _address_id: Uuid,
             _deposit_id: Uuid,
+            _route: Option<&str>,
+            _block_time: DateTime<Utc>,
         ) -> Result<ConfirmationContext, sqlx::Error> {
             Ok(self.0.clone())
         }
@@ -2538,31 +2591,6 @@ mod tests {
         assert!(result.effects.lock_consumption.is_none());
     }
 
-    #[tokio::test]
-    async fn a_reissued_quotes_lock_is_never_applied() {
-        let now = now_seconds();
-        let deposit = deposit(1_000);
-        let log = transfer(&deposit);
-        let restored = StoredLock {
-            restored: true,
-            ..lock(now)
-        };
-        let result = step(
-            route(PricingMode::Spot),
-            chain(100, vec![log.clone()]),
-            chain(100, vec![log]),
-            prices(now),
-            context(Some(restored)),
-        )
-        .run(&deposit)
-        .await;
-        assert_eq!(result.outcome, StepOutcome::Advance);
-        let valuation = result.effects.valuation.expect("valuation");
-        assert_eq!(valuation.price_source, "spot");
-        assert_eq!(valuation.credit_minor, MinorAmount::new(100));
-        assert!(result.effects.lock_consumption.is_none());
-    }
-
     fn delivered(deposit: &Deposit, source: ValuationSource) -> ImportedCredit {
         ImportedCredit {
             event_id: event_id("deposit.credited", deposit.id),
@@ -2996,7 +3024,7 @@ mod tests {
 
     fn lock(now: u64) -> StoredLock {
         StoredLock {
-            restored: false,
+            id: Uuid::new_v4(),
             route: "phala-cloud-ethereum-pha-usd".to_owned(),
             amount: AtomicAmount::new(U256::from(1_000_u64)),
             price: ScaledPrice::new(9_000_000, PRICE_SCALE).expect("lock price"),

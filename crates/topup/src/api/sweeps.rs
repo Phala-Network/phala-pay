@@ -379,7 +379,10 @@ pub(crate) async fn list_forwarders(
                 builder.push(" AND address.chain_id = ").push_bind(chain_id);
             }
             Condition::Quote(id) => {
-                builder.push(" AND address.quote_id = ").push_bind(id);
+                builder
+                    .push(" AND address.id = (SELECT address_id FROM quotes WHERE id = ")
+                    .push_bind(id)
+                    .push(")");
             }
             Condition::DepositAddress(id) => {
                 builder

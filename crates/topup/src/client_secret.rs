@@ -8,7 +8,7 @@
 //! the object's id, and the random bytes as they appear in the secret, lowercase hex) under the
 //! owner subkey, HMAC-SHA256 of [`OWNER_SUBKEY_LABEL`] under the key. So a secret also proves
 //! which account the service issued the object to ([`ClientSecretKey::verify_owner`]), which a
-//! restore's re-issue checks; quote and deposit-address secrets alike.
+//! deposit-address recovery checks after a restore.
 //! The tag is checked in memory in constant time, so a forged or malformed secret is refused
 //! without touching the database. The database still stores each issued secret's SHA-256: a
 //! secret is valid only while its row is, which lets a deposit address retire its old secrets.

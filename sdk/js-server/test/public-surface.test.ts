@@ -13,7 +13,6 @@ it("exports offline functions only from the helpers entry", () => {
     "depositAddress",
     "depositAddressSalt",
     "forwarderAddress",
-    "quoteSalt",
     "quoteAddress",
     "verifyDepositAddress",
     "verifyQuoteAddress",

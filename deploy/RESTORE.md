@@ -126,11 +126,11 @@ delivered credit; a reversed deposit that was never valued is imported the same 
 reconciliation revokes again the keys, cancels again the treasury changes, pauses or resumes
 treasury crediting again, and deletes again the endpoints that the restore brought back; applies
 again, while frozen, a treasury change that applied after the restore point, from its signed
-`treasury.updated`; and re-issues the deposit addresses and quotes given out after the restore
-point, identically, over the treasury in force when each was issued. A re-issued quote's payment
-is credited at spot unless a signed delivery carries its credit, a client secret re-issued with one
-is accepted only when the service issued it for that id to that account, and a quote no merchant
-reports stays lost ([runbook](runbooks/restore.md)).
+`treasury.updated`; and re-issues the deposit addresses given out after the restore point, identically, over the
+treasuries in force since it. Lost quotes are not reissued; surviving open windows are clamped
+to the restore point. Payments to the customer's fixed address stay watched and credit at spot,
+while signed delivered `deposit.credited` outcomes carry forward their original credit
+([runbook](runbooks/restore.md)).
 
 A service that booted straight from backup into the service compose (an empty volume, so the
 PostgreSQL entrypoint restored it, without the restore-check variant) is frozen as well: every
@@ -443,9 +443,8 @@ treasury it replaced `replacement_lost`, and the address over T2 is refused unti
 `treasuries/apply` restores T2 from its signed `treasury.updated` (a body changed after signing,
 or the replaced treasury's delivery, is refused; a repeat applies nothing), at the event's time,
 after which both verify as `matches` and the address is re-issued, that the
-quote is re-issued at its own address (over the treasury in force at its `created`) with its
-client secret (the payer's read works again) while a secret of another quote, or of this quote
-issued to another account, is refused, that the deliveries the product kept are exported byte
+lost quote remains absent and its fixed address is recovered from the merchant's records,
+that the deliveries the product kept are exported byte
 for byte and imported exactly as delivered with no delivery and the credit kept for the deposit,
 the unvalued reversal and D0 restored `reversed` and D0's successor recorded as D1, while a body
 changed after signing is refused and changes nothing, and that the unfreeze is refused while no
@@ -516,3 +515,13 @@ Cleanup removes the chains and their
 project volumes together with the rest of the drill.
 The local drill may switch its isolated replacement to service mode; the staging isolation drill
 above remains read-only and cannot attest full merchant-service RTO.
+
+## Fixed-address quote upgrade
+
+The v0.13.0 schema is restore-only: no rollback to v0.12.x. Before upgrading, pause quote
+creation, take a backup and verify its restore. To return to v0.12.x, restore that pre-upgrade
+backup, reapply security and treasury changes, recover customer deposit addresses, import signed
+delivered events, rescan and reconcile, then unfreeze per the [restore runbook](runbooks/restore.md).
+A new release must never run the old binary against this schema. Open quote windows are clamped
+to the restore point; lost price windows are not reissued. Fixed-address transfers use spot unless
+an imported delivered credit preserves their already-delivered outcome.

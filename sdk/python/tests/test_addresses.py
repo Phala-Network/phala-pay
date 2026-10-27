@@ -11,8 +11,6 @@ from topup_sdk.addresses import (
     deposit_address_salt,
     deposit_id,
     forwarder_address,
-    quote_address,
-    quote_salt,
     same_address,
     to_checksum_address,
 )
@@ -23,27 +21,6 @@ VECTORS: dict[str, Any] = json.loads(
         encoding="utf-8"
     )
 )
-
-
-@pytest.mark.parametrize("vector", VECTORS["quote"], ids=lambda vector: vector["quote_id"])
-def test_quote_salt_and_address_match_the_contract_vectors(vector: dict[str, Any]) -> None:
-    salt = quote_salt(vector["account"], vector["client_reference_id"], vector["quote_id"])
-    assert "0x" + salt.hex() == vector["salt"]
-    address = forwarder_address(
-        VECTORS["factory"], VECTORS["implementation"], vector["treasury"], salt
-    )
-    assert address == vector["predicted_address"]
-    assert (
-        quote_address(
-            VECTORS["factory"],
-            VECTORS["implementation"],
-            vector["treasury"],
-            account=vector["account"],
-            client_reference_id=vector["client_reference_id"],
-            quote_id=vector["quote_id"],
-        )
-        == vector["predicted_address"]
-    )
 
 
 @pytest.mark.parametrize(

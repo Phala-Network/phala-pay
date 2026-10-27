@@ -899,7 +899,7 @@ async fn slow_gauges_are_db_derived_once_only_and_keep_resolved_entries() -> Res
 async fn nonterminal_price_failure_then_reorg_reverses_with_atomic_successor() -> Result<()> {
     with_database(|ctx|Box::pin(async move {
         let p=&ctx.app_pool;let f=fixture(p,Confirmations::Depth(2),1).await?;
-        sqlx::query("UPDATE quotes SET exposure_reserved=true WHERE id=(SELECT quote_id FROM addresses a JOIN deposits d ON d.address_id=a.id WHERE d.id=$1)").bind(f.id).execute(p).await?;
+        sqlx::query("UPDATE quotes SET exposure_reserved=true WHERE id=(SELECT a.quote_id FROM addresses a JOIN deposits d ON d.address_id=a.id WHERE d.id=$1)").bind(f.id).execute(p).await?;
         let customer:Uuid=sqlx::query_scalar("SELECT customer_id FROM deposits WHERE id=$1").bind(f.id).fetch_one(p).await?;
         let successor_address=NewAddress {id:Uuid::new_v4(),customer_id:customer,chain_id:1,route:f.route.route.clone(),salt:hash(3),address:Address::repeat_byte(3)};
         seed::insert_address(p,&successor_address).await?;

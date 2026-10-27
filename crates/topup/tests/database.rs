@@ -227,14 +227,15 @@ async fn tenant_rows_cannot_join_another_accounts_or_modes_rows() -> Result<()> 
             sqlx::query(
                 "INSERT INTO quotes (id, account_id, livemode, customer_id, route, \
                  amount_atomic, price_scaled, credit_minor, expires_at, route_version, \
-                 settings_revision_id, terms) \
-                 SELECT $1, $2, true, $3, 'r', 1, 1, 1, now(), 1, current_revision_id, $4 \
+                 settings_revision_id, terms, address_id, window_start) \
+                 SELECT $1, $2, true, $3, 'r', 1, 1, 1, now(), 1, current_revision_id, $4, $5, now() \
                  FROM payment_settings_state WHERE account_id = $2 AND livemode",
             )
             .bind(quote)
             .bind(seed.account_id)
             .bind(seed.customer_id)
             .bind(sqlx::types::Json(seed::fixture_terms()))
+            .bind(seed.address_id)
             .execute(pool)
             .await?;
 
@@ -263,14 +264,15 @@ async fn tenant_rows_cannot_join_another_accounts_or_modes_rows() -> Result<()> 
                 sqlx::query(
                     "INSERT INTO quotes (id, account_id, livemode, customer_id, route, \
                      amount_atomic, price_scaled, credit_minor, expires_at, route_version, \
-                     settings_revision_id, terms) \
-                     SELECT $1, $2, true, $3, 'r', 1, 1, 1, now(), 1, current_revision_id, $4 \
+                     settings_revision_id, terms, address_id, window_start) \
+                     SELECT $1, $2, true, $3, 'r', 1, 1, 1, now(), 1, current_revision_id, $4, $5, now() \
                      FROM payment_settings_state WHERE account_id = $2 AND livemode",
                 )
                 .bind(Uuid::new_v4())
                 .bind(other.account_id)
                 .bind(seed.customer_id)
                 .bind(sqlx::types::Json(seed::fixture_terms()))
+            .bind(seed.address_id)
                 .execute(pool)
                 .await
                 .err(),
@@ -1619,11 +1621,11 @@ async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
             "SELECT count(*) FROM _sqlx_migrations m \
              JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
              WHERE m.version BETWEEN 20261029030000 AND 20261029030005 \
-               AND m.success AND c.compatibility_floor=20261029030005",
+               AND m.success AND c.compatibility_floor=20261104000000",
         )
         .fetch_one(pool)
         .await?;
-        ensure!(compatible == 6, "scale migrations must retain the N-1 compatibility floor");
+        ensure!(compatible == 6, "scale migrations must use the declared compatibility floor");
         undo_legacy_indexes(pool,20261028000002).await?;
         ensure!(objects().await?.is_empty());
         // Queries shipped by the previous release still work with the old or new schema.
@@ -1681,11 +1683,11 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
                 "SELECT count(*) FROM _sqlx_migrations m \
                  JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
                  WHERE m.version BETWEEN 20261029040000 AND 20261029040003 \
-                   AND m.success AND c.compatibility_floor=20261029030005",
+                   AND m.success AND c.compatibility_floor=20261104000000",
             )
             .fetch_one(pool)
             .await?;
-            ensure!(compatible == 4, "service indexes must retain the N-1 floor");
+            ensure!(compatible == 4, "service indexes must use the declared compatibility floor");
             undo_legacy_indexes(pool, 20261029030005).await?;
             ensure!(objects().await?.is_empty());
             legacy_migrations().await?.run(pool).await?;

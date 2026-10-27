@@ -195,12 +195,14 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             ensure!(stats.watched == 0, "{stats:?}");
             ensure!(chain.deposit(tx).await?.state == DepositState::Credited);
 
-            sqlx::query(
-                "UPDATE quotes SET expires_at=now()-interval '1 second' WHERE consumed_by=$1",
-            )
-            .bind(credited.id)
-            .execute(&chain.pool)
-            .await?;
+            let customer = db::get_customer(&chain.pool,chain.customer_id).await?.context("customer")?;
+            let account=db::get_account(&chain.pool,customer.account_id).await?.context("account")?;
+            seed::set_treasury(&chain.pool,account.id,false,chain.chain_id,seed::FIXTURE_TREASURY).await?;
+            let quotes: Arc<dyn topup::locks::QuoteProvider>=Arc::new(FixedQuotePrice);
+            let (new_quote,_)=topup::locks::create(&chain.pool,&quotes,
+                &topup::client_secret::ClientSecretKey::ephemeral(),&account,&customer,&chain.route,
+                topup_core::money::MinorAmount::new(90),&Default::default()).await?;
+            let cut=new_quote.window_start;
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
             chain.record_known_replacement(&replacement).await?;
             let stats = chain.watch().await?;
@@ -244,6 +246,10 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             ensure!(chain.quote_status().await? == ("open".to_owned(), None));
             let reserved:bool=sqlx::query_scalar("SELECT exposure_reserved FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(chain.address_id).fetch_one(&chain.pool).await?;
             ensure!(reserved);
+            let reopened: (chrono::DateTime<Utc>,Option<Uuid>)=sqlx::query_as("SELECT expires_at,replaced_by FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)")
+                .bind(chain.address_id).fetch_one(&chain.pool).await?;
+            ensure!(reopened==(cut,Some(new_quote.id)), "reversal changed the cut window");
+
             ensure!(chain.events("quote.expired").await?.is_empty());
             chain.anvil.mine(80)?;
             chain.anvil.mine(1)?;
@@ -1402,4 +1408,141 @@ impl SanctionsSource for ClearSanctions {
     async fn sanctions(&self, _address: Address, _block_number: u64) -> SanctionsResult {
         topup_core::screening::SanctionsResult::new(SanctionsVerdict::Clear)
     }
+}
+
+struct FixedQuotePrice;
+#[async_trait]
+impl topup::locks::QuoteProvider for FixedQuotePrice {
+    async fn quote(
+        &self,
+        _route: &RouteFile,
+        _deadline: tokio::time::Instant,
+    ) -> Result<topup::locks::pricing::ValidatedQuote, Value> {
+        Ok(topup::locks::pricing::ValidatedQuote {
+            price: ScaledPrice::new(9_000_000, PRICE_SCALE).expect("fixture price"),
+            evidence: serde_json::json!({"fixture":true}),
+        })
+    }
+}
+
+#[tokio::test]
+async fn wallet_paid_fixed_address_uses_one_lock_then_spot_and_requote_cuts_window() -> Result<()> {
+    run(&[], |chain| {
+        Box::pin(async move {
+            let customer = db::get_customer(&chain.pool, chain.customer_id)
+                .await?
+                .context("customer")?;
+            let account = db::get_account(&chain.pool, customer.account_id)
+                .await?
+                .context("account")?;
+            let key = topup::client_secret::ClientSecretKey::ephemeral();
+            let prices: Arc<dyn topup::locks::QuoteProvider> = Arc::new(FixedQuotePrice);
+            let metadata = std::collections::BTreeMap::from([(
+                "order_id".to_owned(),
+                "fixed-wallet".to_owned(),
+            )]);
+            seed::set_treasury(
+                &chain.pool,
+                account.id,
+                false,
+                chain.route.chain.chain_id,
+                seed::FIXTURE_TREASURY,
+            )
+            .await?;
+            let (first, _) = topup::locks::create(
+                &chain.pool,
+                &prices,
+                &key,
+                &account,
+                &customer,
+                &chain.route,
+                topup_core::money::MinorAmount::new(90),
+                &metadata,
+            )
+            .await?;
+            ensure!(first.deposit_address_id.is_some());
+            run_checked(
+                "cast",
+                &[
+                    "rpc",
+                    "--rpc-url",
+                    &chain.anvil.rpc_url,
+                    "evm_setNextBlockTimestamp",
+                    &(first.window_start.timestamp() + 1).to_string(),
+                ],
+                None,
+            )?;
+            let amount = u64::try_from(first.amount_atomic.value())?;
+            let tx = chain.pay_to(first.address, amount)?;
+            chain.anvil.mine(1)?;
+            ensure!(chain.scan().await? == 1);
+            chain.settle().await?;
+            let paid = chain.deposit(tx).await?;
+            ensure!(
+                paid.state == DepositState::Credited
+                    && paid.price_source.as_deref() == Some("lock")
+            );
+            let stored: (Option<Uuid>, Value) =
+                sqlx::query_as("SELECT quote_id,metadata FROM deposits WHERE id=$1")
+                    .bind(paid.id)
+                    .fetch_one(&chain.pool)
+                    .await?;
+            ensure!(stored.0 == Some(first.id) && stored.1["order_id"] == "fixed-wallet");
+            // The same wallet pays the same address and amount again; only the first uses the lock.
+            let tx2 = chain.pay_to(first.address, amount)?;
+            chain.anvil.mine(1)?;
+            ensure!(chain.scan().await? == 1);
+            chain.settle().await?;
+            let second = chain.deposit(tx2).await?;
+            ensure!(
+                second.state == DepositState::Credited
+                    && second.price_source.as_deref() == Some("spot")
+            );
+            let associated: Option<Uuid> =
+                sqlx::query_scalar("SELECT quote_id FROM deposits WHERE id=$1")
+                    .bind(second.id)
+                    .fetch_one(&chain.pool)
+                    .await?;
+            ensure!(associated.is_none());
+            let (replacement, _) = topup::locks::create(
+                &chain.pool,
+                &prices,
+                &key,
+                &account,
+                &customer,
+                &chain.route,
+                topup_core::money::MinorAmount::new(90),
+                &metadata,
+            )
+            .await?;
+            ensure!(
+                replacement.address == first.address && replacement.address_id == first.address_id
+            );
+            let previous = topup::locks::get(&chain.pool, Scope::new(account.id, false), first.id)
+                .await?
+                .context("previous quote")?;
+            ensure!(
+                previous.replaced_by == Some(replacement.id)
+                    && previous.expires_at == replacement.window_start
+            );
+            let reconciler = topup::reconciler::Reconciler::with_dependencies(
+                chain.pool.clone(),
+                Arc::new(RouteSet::new(vec![chain.route.clone()]).map_err(anyhow::Error::msg)?),
+                std::collections::BTreeMap::from([(
+                    chain.chain_id,
+                    Arc::new(reader(&chain.anvil.rpc_url)?)
+                        as Arc<dyn topup::reconciler::ReconciliationChain>,
+                )]),
+            );
+            ensure!(
+                reconciler
+                    .check(topup::reconciler::CheckName::CreditRecomputation)
+                    .await?
+                    .is_empty()
+            );
+            // The payer's old page exposes the replacement while retaining the consumed payment.
+            Ok(())
+        })
+    })
+    .await
 }

@@ -36,16 +36,6 @@ export function forwarderAddress(
   });
 }
 
-/** `keccak256(abi.encode(account, client_reference_id, "quote", quote_id))`: a quote's salt. */
-export function quoteSalt(account: string, clientReferenceId: string, quoteId: string): Hex {
-  return keccak256(
-    encodeAbiParameters(
-      [{ type: "string" }, { type: "string" }, { type: "string" }, { type: "string" }],
-      [account, clientReferenceId, "quote", quoteId],
-    ),
-  );
-}
-
 /**
  * `keccak256(abi.encode(account, livemode, client_reference_id, "deposit_address", version))`:
  * a deposit address's salt, the same on every chain.
@@ -78,15 +68,18 @@ export interface Forwarder {
 /** The address of a quote over `treasury`, which you pin yourself (see `verifyQuoteAddress`). */
 export function quoteAddress(
   forwarder: Forwarder,
-  quote: { client_reference_id: string; id: string },
+  quote: { client_reference_id: string; livemode: boolean; deposit_address_version: number | null },
   treasury: string,
   account: string,
 ): Address {
+  if (quote.deposit_address_version === null || !Number.isSafeInteger(quote.deposit_address_version) || quote.deposit_address_version < 1) {
+    throw new AddressMismatchError("quote has no valid deposit-address version");
+  }
   return forwarderAddress(
     forwarder.factory,
     forwarder.implementation,
     treasury,
-    quoteSalt(account, quote.client_reference_id, quote.id),
+    depositAddressSalt(account, quote.livemode, quote.client_reference_id, quote.deposit_address_version),
   );
 }
 
@@ -177,6 +170,7 @@ export function verifyQuoteAddress(
     treasury: string;
     address: string;
     client_reference_id: string;
+    deposit_address_version: number | null;
   },
 ): Address {
   const where = `quote ${quote.id}`;

@@ -16,7 +16,6 @@ use sqlx::types::Json;
 use sqlx::{Acquire, FromRow, PgPool, Postgres, Row, Transaction};
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
-use topup_core::address::{forwarder_address, quote_salt};
 use topup_core::money::{
     AtomicAmount, MinorAmount, PRICE_SCALE, ScaledPrice, lock_price, round_up_to_decimals,
     tokens_for_credit,
@@ -43,10 +42,12 @@ macro_rules! select_lock {
            quote.price_scaled::text AS price_scaled,
            quote.credit_minor::text AS credit_minor,
            quote.expires_at, quote.cancel_requested_at, quote.status, quote.created_at, quote.consumed_by, quote.metadata,
-           quote.route_version, quote.terms
+           quote.route_version, quote.terms, quote.window_start, quote.replaced_by,
+           address.deposit_address_id, deposit_address.version AS deposit_address_version
     FROM quotes AS quote
-    JOIN addresses AS address ON address.quote_id = quote.id
-    JOIN customers AS customer ON customer.id = quote.customer_id"#
+    JOIN addresses AS address ON address.id = quote.address_id
+    JOIN customers AS customer ON customer.id = quote.customer_id
+    LEFT JOIN deposit_addresses AS deposit_address ON deposit_address.id = address.deposit_address_id"#
     };
 }
 
@@ -99,11 +100,19 @@ pub struct RateLock {
     pub address_id: Uuid,
     /// The customer's `client_reference_id`.
     pub client_reference_id: String,
+    /// Deposit address owning this network; absent only on historical quote addresses.
+    pub deposit_address_id: Option<Uuid>,
+    /// Deposit-address derivation version.
+    pub deposit_address_version: Option<u64>,
+    /// Exclusive start of the payment window.
+    pub window_start: DateTime<Utc>,
+    /// The quote that closed this window.
+    pub replaced_by: Option<Uuid>,
     /// Route name.
     pub route: String,
     /// EVM chain identifier.
     pub chain_id: u64,
-    /// Single-use forwarder address.
+    /// Customer deposit-address network.
     pub address: EvmAddress,
     /// The treasury the address pays: the account's treasury of the chain when it was issued.
     pub treasury: EvmAddress,
@@ -131,8 +140,7 @@ pub struct RateLock {
     pub terms: Terms,
 }
 
-/// The public id of a quote: `qt_` and the hex of its id. Quotes derive their address salt from
-/// it, so a merchant can recompute the address from the id alone.
+/// The public id of a quote: `qt_` and the hex of its id.
 #[must_use]
 pub fn quote_id(id: Uuid) -> String {
     crate::ids::format(crate::ids::QUOTE, id)
@@ -247,15 +255,15 @@ pub enum RateLockError {
     /// The requested credit's token amount is above the route's maximum deposit.
     #[error("{0}")]
     AmountTooLarge(&'static str),
+    /// Customer deposit-address issuance failed.
+    #[error("{0}")]
+    DepositAddress(#[from] crate::deposit_addresses::DepositAddressError),
     /// Current validated pricing is unavailable.
     #[error("validated pricing is unavailable")]
     PricingUnavailable,
     /// The chain is not initialized or temporarily unavailable.
     #[error("chain cannot issue an address yet")]
     ChainUnavailable,
-    /// The permanent per-chain issued-address pilot quota is exhausted.
-    #[error("permanent chain address capacity reached")]
-    AddressCapacityReached,
     /// The account has no treasury on the route's chain.
     #[error("no treasury is set on the chain")]
     TreasuryNotSet,
@@ -488,44 +496,58 @@ pub async fn create_in(
     lock_customer(transaction, customer).await?;
     check_creation_rate(transaction, customer.id, creations_per_minute).await?;
     check_exposure(transaction, account, customer, credit_minor).await?;
-    // The account's current treasury of the chain; the shared lock, held to commit, keeps a
-    // treasury change from applying meanwhile. The address keeps it for good, as the forwarder
-    // does.
-    crate::treasuries::lock(transaction, scope, false).await?;
-    let treasury = treasury(transaction, scope, route.chain.chain_id).await?;
-    // Taken under the treasury lock, so `created` falls while `treasury` is in force.
-    let now = Utc::now();
+    let (deposit_address, _) = crate::deposit_addresses::create(
+        &mut **transaction,
+        account,
+        customer,
+        &[crate::deposit_addresses::ChainContracts::of(route)],
+        None,
+    )
+    .await?;
+    let network = deposit_address
+        .networks
+        .iter()
+        .find(|network| network.chain_id == route.chain.chain_id)
+        .ok_or(RateLockError::ChainUnavailable)?;
+    // Take T after the customer lock: concurrent requests get nonoverlapping windows.
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT date_trunc('second', clock_timestamp())")
+        .fetch_one(&mut **transaction)
+        .await?;
     let expires_at = now
         .checked_add_signed(chrono::Duration::seconds(window))
         .ok_or(RateLockError::Arithmetic)?;
     let id = Uuid::new_v4();
-    let address_id = Uuid::new_v4();
+    let address_id = network.address_id;
+    let address = network.address;
+    let treasury = network.treasury;
     let client_secret = client_secrets
         .issue(&account.public_id, &quote_id(id))
         .map_err(|error| {
             tracing::error!(%error, "no client secret issued");
             RateLockError::EntropyUnavailable
         })?;
-    let salt = quote_salt(
-        &account.public_id,
-        &customer.client_reference_id,
-        &quote_id(id),
-    );
-    let address = forwarder_address(
-        route.chain.contracts.forwarder_factory,
-        route.chain.contracts.implementation,
-        treasury,
-        salt,
-    );
+    // Used quotes are cut too: a reversal must not reopen an overlapping window.
+    sqlx::query(
+        "UPDATE quotes SET expires_at=$3, replaced_by=$4, \
+         cancel_requested_at=CASE WHEN status='open' AND consumed_by IS NULL \
+         THEN COALESCE(cancel_requested_at,$3) ELSE cancel_requested_at END \
+         WHERE customer_id=$1 AND route=$2 AND expires_at>$3",
+    )
+    .bind(customer.id)
+    .bind(&route.route)
+    .bind(now)
+    .bind(id)
+    .execute(&mut **transaction)
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO quotes (
             id, account_id, livemode, customer_id, route, amount_atomic, price_scaled,
             credit_minor, expires_at, status, exposure_reserved, created_at, metadata,
-            client_secret_hash, route_version, settings_revision_id, terms
+            client_secret_hash, route_version, settings_revision_id, terms, address_id, window_start
         )
         VALUES ($1, $2, $3, $4, $5, $6::text::numeric, $7::text::numeric, $8::text::numeric,
-                $9, 'open', true, $10, $11, $12, $13, $14, $15)
+                $9, 'open', true, $10, $11, $12, $13, $14, $15, $16, $10)
         "#,
     )
     .bind(id)
@@ -543,38 +565,7 @@ pub async fn create_in(
     .bind(i64::try_from(route.version).map_err(|_| RateLockError::Arithmetic)?)
     .bind(revision)
     .bind(Json(terms))
-    .execute(&mut **transaction)
-    .await?;
-    match crate::db::chain_reads::admit_address(transaction, route.chain.chain_id).await? {
-        crate::db::chain_reads::AddressAdmission::Admitted => {}
-        crate::db::chain_reads::AddressAdmission::NotReady => {
-            return Err(RateLockError::ChainUnavailable);
-        }
-        crate::db::chain_reads::AddressAdmission::CapacityReached => {
-            return Err(RateLockError::AddressCapacityReached);
-        }
-    }
-    // A freshly derived single-use address cannot hold earlier payments, so the scanner only
-    // needs to cover it from the chain's committed cursor instead of backfilling from genesis.
-    sqlx::query(
-        r#"
-        INSERT INTO addresses (
-            id, account_id, livemode, chain_id, quote_id, salt, treasury, address, created_block
-        )
-        VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8,
-            (SELECT through_block FROM chain_coverage WHERE chain_id = $4)
-        )
-        "#,
-    )
     .bind(address_id)
-    .bind(scope.account_id())
-    .bind(scope.livemode())
-    .bind(i64::try_from(route.chain.chain_id).map_err(|_| RateLockError::Arithmetic)?)
-    .bind(id)
-    .bind(format!("{salt:#x}"))
-    .bind(format!("{treasury:#x}"))
-    .bind(format!("{address:#x}"))
     .execute(&mut **transaction)
     .await?;
     let lock = RateLock {
@@ -582,6 +573,10 @@ pub async fn create_in(
         livemode: scope.livemode(),
         address_id,
         client_reference_id: customer.client_reference_id.clone(),
+        deposit_address_id: Some(deposit_address.id),
+        deposit_address_version: Some(deposit_address.version),
+        window_start: now,
+        replaced_by: None,
         route: route.route.clone(),
         chain_id: route.chain.chain_id,
         address,
@@ -599,264 +594,6 @@ pub async fn create_in(
         terms,
     };
     Ok((lock, client_secret))
-}
-
-/// A quote as the merchant's records hold it, for [`reissue`].
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReissuedTerms {
-    /// The quote id, from its `qt_` id.
-    pub id: Uuid,
-    /// The customer's `client_reference_id`.
-    pub client_reference_id: String,
-    /// The address the merchant holds.
-    pub address: EvmAddress,
-    /// The token amount to pay.
-    pub amount_atomic: AtomicAmount,
-    /// The locked price.
-    pub price: ScaledPrice,
-    /// The credit.
-    pub credit_minor: MinorAmount,
-    /// Creation time.
-    pub created_at: DateTime<Utc>,
-    /// End of the payment window.
-    pub expires_at: DateTime<Utc>,
-    /// The quote's `metadata`.
-    pub metadata: BTreeMap<String, String>,
-    /// The SHA-256 of the quote's `client_secret`, checked by the caller, so the payer's page
-    /// reads the quote again.
-    pub client_secret_hash: Option<[u8; 32]>,
-}
-
-/// Re-issues after a restore a quote the merchant created after the restore point and lost with
-/// it (docs/design/multi-tenant.md §13), from its record: the address salt is derived from the
-/// account, customer, and quote id, so only the quote's own address over a treasury of the
-/// account on `route`'s chain in force within `crate::treasuries::IN_FORCE_TOLERANCE` of the quote's
-/// `created` is accepted (a change that applied since, or was restored since, does not move it:
-/// `crate::treasuries::in_force`). A quote the restored database holds is returned as it is
-/// (idempotent), whenever it was created; any other created more than that before the restore
-/// point is refused, since the restore would not have lost it. The address is backfilled from the
-/// chain's cursor in `backfill_from` (the restored cursor), so the rescan finds payments made to it
-/// since.
-///
-/// The terms are the merchant's record, not the service's, so they are stored as recorded but
-/// never applied: the quote is marked re-issued by `restore`, a payment to it is credited at spot
-/// unless a delivered `deposit.credited` the service signed carries its credit
-/// (`crate::restore_mode`), and its payment window closes at the restore's detection at the
-/// latest, so its page shows it expired instead of asking for a payment at a price that is not
-/// honoured. The customer is created only once the address matches. A quote that exists already
-/// for the customer at the address is returned as it is, with `false`; a re-issued one without a
-/// client secret takes the one in `terms`. Caps and pauses do not
-/// apply: nothing new is given out.
-#[allow(clippy::too_many_arguments)]
-pub async fn reissue(
-    pool: &PgPool,
-    account: &Account,
-    livemode: bool,
-    route: &RouteFile,
-    terms: &ReissuedTerms,
-    restore: &crate::restore_mode::Restore,
-    actor: &Actor,
-    reason: &str,
-) -> Result<(RateLock, bool), RateLockError> {
-    if route.livemode != livemode {
-        return Err(RateLockError::InvalidInput(
-            "the route's mode differs from the quote's",
-        ));
-    }
-    let (restore_id, detected_at, backfill_from) =
-        (restore.id, restore.detected_at, &restore.restored_cursors);
-    let restore_point = restore.restore_point.ok_or(RateLockError::InvalidInput(
-        "the restore has no restore point (the restored database has no heartbeat): escalate",
-    ))?;
-    let scope = Scope::new(account.id, livemode);
-    let mut transaction = pool.begin().await?;
-    crate::treasuries::lock(&mut transaction, scope, false).await?;
-    if let Some(existing) = get(&mut *transaction, scope, terms.id).await? {
-        if existing.address != terms.address
-            || existing.client_reference_id != terms.client_reference_id
-        {
-            return Err(RateLockError::InvalidInput(
-                "the quote exists with another customer or address",
-            ));
-        }
-        // A quote re-issued without its secret takes the one the merchant finds later; a quote the
-        // service issued, or one re-issued with a secret, keeps its own.
-        if let Some(secret_hash) = &terms.client_secret_hash {
-            let added = sqlx::query(
-                "UPDATE quotes SET client_secret_hash = $2 \
-                 WHERE id = $1 AND restore_id IS NOT NULL AND client_secret_hash IS NULL",
-            )
-            .bind(terms.id)
-            .bind(secret_hash.as_slice())
-            .execute(&mut *transaction)
-            .await?
-            .rows_affected()
-                > 0;
-            if added {
-                audit::insert(
-                    &mut *transaction,
-                    &audit::Entry {
-                        account_id: Some(scope.account_id()),
-                        actor,
-                        action: "quote.client_secret_restore",
-                        subject: &format!("quote:{}", quote_id(terms.id)),
-                        reason,
-                    },
-                )
-                .await?;
-            }
-        }
-        transaction.commit().await?;
-        return Ok((existing, false));
-    }
-    match crate::db::chain_reads::admit_address(&mut transaction, route.chain.chain_id).await? {
-        crate::db::chain_reads::AddressAdmission::Admitted => {}
-        crate::db::chain_reads::AddressAdmission::NotReady => {
-            return Err(RateLockError::ChainUnavailable);
-        }
-        crate::db::chain_reads::AddressAdmission::CapacityReached => {
-            return Err(RateLockError::AddressCapacityReached);
-        }
-    }
-    let tolerance = crate::treasuries::IN_FORCE_TOLERANCE;
-    // A quote the restored database holds was returned above, whenever it was created.
-    if terms.created_at < restore_point - tolerance {
-        return Err(RateLockError::InvalidInput(
-            "the quote was created before the restore point, so the restored database holds it",
-        ));
-    }
-    let in_force = crate::treasuries::in_force(
-        &mut transaction,
-        scope,
-        Some(terms.created_at - tolerance),
-        terms.created_at + tolerance,
-    )
-    .await
-    .map_err(|error| match error {
-        crate::treasuries::TreasuryError::Database(error) => RateLockError::Database(error),
-        _ => RateLockError::DatabaseInvariant,
-    })?;
-    let salt = quote_salt(
-        &account.public_id,
-        &terms.client_reference_id,
-        &quote_id(terms.id),
-    );
-    let treasury = in_force
-        .into_iter()
-        .filter(|(chain_id, _)| *chain_id == route.chain.chain_id)
-        .map(|(_, treasury)| treasury)
-        .find(|treasury| {
-            forwarder_address(
-                route.chain.contracts.forwarder_factory,
-                route.chain.contracts.implementation,
-                *treasury,
-                salt,
-            ) == terms.address
-        });
-    let Some(treasury) = treasury else {
-        // `treasury_not_set` when the chain has no treasury at all.
-        self::treasury(&mut transaction, scope, route.chain.chain_id).await?;
-        return Err(RateLockError::InvalidInput(
-            "the address is not the quote's over the account's treasury in force when it was \
-             created",
-        ));
-    };
-    let address = terms.address;
-    let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM quotes WHERE id = $1)")
-        .bind(terms.id)
-        .fetch_one(&mut *transaction)
-        .await?;
-    if taken {
-        return Err(RateLockError::InvalidInput("id belongs to another quote"));
-    }
-    let customer_id = crate::db::ensure_customer_in(
-        &mut transaction,
-        scope.account_id(),
-        scope.livemode(),
-        &terms.client_reference_id,
-    )
-    .await?
-    .id;
-    // Re-issuing does not re-authorize acceptance: the lock never applies, and a payment follows
-    // the binding of its deposit. The terms shown are those the current settings resolve, or the
-    // route's defaults (docs/design/payment-settings.md §11).
-    let settings = payment_config::load(&mut transaction, scope).await?;
-    let shown = payment_config::resolve(route, &settings.document)
-        .terms()
-        .unwrap_or_else(|| Terms::defaults(route));
-    sqlx::query(
-        r#"
-        INSERT INTO quotes (
-            id, account_id, livemode, customer_id, route, amount_atomic, price_scaled,
-            credit_minor, expires_at, status, exposure_reserved, created_at, metadata,
-            client_secret_hash, restore_id, route_version, terms
-        )
-        VALUES ($1, $2, $3, $4, $5, $6::text::numeric, $7::text::numeric, $8::text::numeric,
-                $9, 'open', false, $10, $11, $12, $13, $14, $15)
-        "#,
-    )
-    .bind(terms.id)
-    .bind(scope.account_id())
-    .bind(scope.livemode())
-    .bind(customer_id)
-    .bind(&route.route)
-    .bind(terms.amount_atomic.value().to_string())
-    .bind(terms.price.value().to_string())
-    .bind(terms.credit_minor.value().to_string())
-    .bind(terms.expires_at.min(detected_at))
-    .bind(terms.created_at)
-    .bind(Json(&terms.metadata))
-    .bind(terms.client_secret_hash.as_ref().map(<[u8; 32]>::as_slice))
-    .bind(restore_id)
-    .bind(i64::try_from(route.version).map_err(|_| RateLockError::Arithmetic)?)
-    .bind(Json(shown))
-    .execute(&mut *transaction)
-    .await?;
-    let chain_id = i64::try_from(route.chain.chain_id).map_err(|_| RateLockError::Arithmetic)?;
-    let restored_block = backfill_from
-        .get(&route.chain.chain_id)
-        .map(|block| i64::try_from(*block))
-        .transpose()
-        .map_err(|_| RateLockError::Arithmetic)?;
-    sqlx::query(
-        r#"
-        INSERT INTO addresses (
-            id, account_id, livemode, chain_id, quote_id, salt, treasury, address, created_block
-        )
-        VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8,
-            LEAST((SELECT through_block FROM chain_coverage WHERE chain_id = $4),
-                  $9::bigint)
-        )
-        "#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(scope.account_id())
-    .bind(scope.livemode())
-    .bind(chain_id)
-    .bind(terms.id)
-    .bind(format!("{salt:#x}"))
-    .bind(format!("{treasury:#x}"))
-    .bind(format!("{address:#x}"))
-    .bind(restored_block)
-    .execute(&mut *transaction)
-    .await?;
-    audit::insert(
-        &mut *transaction,
-        &audit::Entry {
-            account_id: Some(scope.account_id()),
-            actor,
-            action: "quote.reissue",
-            subject: &format!("quote:{}", quote_id(terms.id)),
-            reason,
-        },
-    )
-    .await?;
-    let lock = get(&mut *transaction, scope, terms.id)
-        .await?
-        .ok_or(RateLockError::DatabaseInvariant)?;
-    transaction.commit().await?;
-    Ok((lock, true))
 }
 
 /// The scope's current treasury of `chain_id`, or `TreasuryNotSet`.
@@ -983,7 +720,7 @@ pub async fn list(
 /// Cancels an unpaid open lock, releasing its exposure, and appends an audit row atomically.
 ///
 /// Any deposit row for the lock address, including a rejected one, means funds already arrived at
-/// the single-use address, so the lock is no longer unpaid and cancellation is refused; such a
+/// the fixed customer address, so the lock is no longer unpaid and cancellation is refused; such a
 /// lock stays open until it is consumed or expires.
 pub async fn cancel<'c>(
     db: impl Acquire<'c, Database = Postgres>,
@@ -999,7 +736,7 @@ pub async fn cancel<'c>(
 
 async fn cancel_in(
     transaction: &mut Transaction<'_, Postgres>,
-    _routes: &RouteSet,
+    routes: &RouteSet,
     scope: Scope,
     actor: &Actor,
     id: Uuid,
@@ -1026,9 +763,21 @@ async fn cancel_in(
         .execute(&mut **transaction)
         .await?;
     let paid: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM deposits WHERE address_id = $1 AND state <> 'reversed')",
+        "SELECT EXISTS (SELECT 1 FROM deposits WHERE address_id = $1 AND state <> 'reversed'
+         AND block_time > $2 AND block_time <= $3 AND asset_contract = $4)",
     )
     .bind(row.address_id)
+    .bind(row.window_start)
+    .bind(row.expires_at)
+    .bind(format!(
+        "{:#x}",
+        routes
+            .current()
+            .find(|route| route.route == row.route)
+            .ok_or(RateLockError::DatabaseInvariant)?
+            .asset
+            .contract
+    ))
     .fetch_one(&mut **transaction)
     .await?;
     if paid {
@@ -1037,7 +786,7 @@ async fn cancel_in(
     sqlx::query(
         r#"
         UPDATE quotes
-        SET cancel_requested_at = now(), expires_at = now()
+        SET cancel_requested_at = clock_timestamp(), expires_at = date_trunc('second', clock_timestamp())
         WHERE id = $1 AND status = 'open' AND consumed_by IS NULL
         "#,
     )
@@ -1063,43 +812,55 @@ async fn cancel_in(
 /// Atomically consumes an open lock, releasing its exposure reservation.
 pub(crate) async fn consume(
     transaction: &mut Transaction<'_, Postgres>,
-    address_id: Uuid,
+    quote_id: Uuid,
     deposit_id: Uuid,
+    block_time: DateTime<Utc>,
     idempotent: bool,
 ) -> Result<bool, sqlx::Error> {
-    let Some((id, status, consumed_by)) = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
-        r#"
-        SELECT quote.id, quote.status, quote.consumed_by
-        FROM quotes AS quote
-        JOIN addresses AS address ON address.quote_id = quote.id
-        WHERE address.id = $1
-        FOR UPDATE OF quote
-        "#,
+    let Some((status, consumed_by, start, end)) = sqlx::query_as::<
+        _,
+        (String, Option<Uuid>, DateTime<Utc>, DateTime<Utc>),
+    >(
+        "SELECT status, consumed_by, window_start, expires_at FROM quotes WHERE id=$1 FOR UPDATE",
     )
-    .bind(address_id)
+    .bind(quote_id)
     .fetch_optional(&mut **transaction)
     .await?
     else {
         return Ok(false);
     };
-    let status = RateLockStatus::parse(&status).map_err(rate_lock_sqlx)?;
-    if status == RateLockStatus::Consumed && idempotent && consumed_by == Some(deposit_id) {
+    if status == "consumed" && idempotent && consumed_by == Some(deposit_id) {
         return Ok(true);
     }
-    if !matches!(status, RateLockStatus::Open | RateLockStatus::Expired) || consumed_by.is_some() {
+    if !matches!(status.as_str(), "open" | "expired")
+        || consumed_by.is_some()
+        || block_time <= start
+        || block_time > end
+    {
         return Ok(false);
     }
     sqlx::query(
-        r#"
-        UPDATE quotes
-        SET consumed_by = $2, status = 'consumed', exposure_reserved = false, closed_at = now()
-        WHERE id = $1 AND status IN ('open', 'expired') AND consumed_by IS NULL
-        "#,
+        "UPDATE quotes SET consumed_by=$2, status='consumed', exposure_reserved=false,
+         closed_at=now() WHERE id=$1",
     )
-    .bind(id)
+    .bind(quote_id)
     .bind(deposit_id)
     .execute(&mut **transaction)
     .await?;
+    let associated = sqlx::query(
+        "UPDATE deposits d SET quote_id=q.id, metadata=q.metadata FROM quotes q
+         WHERE d.id=$2 AND q.id=$1 AND d.account_id=q.account_id AND d.livemode=q.livemode
+         AND d.address_id=q.address_id",
+    )
+    .bind(quote_id)
+    .bind(deposit_id)
+    .execute(&mut **transaction)
+    .await?;
+    if associated.rows_affected() != 1 {
+        return Err(sqlx::Error::Protocol(
+            "quote consumption has no matching deposit".into(),
+        ));
+    }
     Ok(true)
 }
 
@@ -1115,7 +876,7 @@ pub async fn expire_once(pool: &PgPool, routes: &RouteSet) -> Result<u64, RateLo
         r#"
         SELECT quote.id, quote.account_id, quote.livemode, quote.cancel_requested_at IS NOT NULL AS cancelled
         FROM quotes AS quote
-        JOIN addresses AS address ON address.quote_id = quote.id
+        JOIN addresses AS address ON address.id = quote.address_id
         JOIN chain_coverage AS coverage ON coverage.chain_id = address.chain_id
         WHERE quote.status = 'open'
           AND quote.consumed_by IS NULL
@@ -1127,6 +888,7 @@ pub async fn expire_once(pool: &PgPool, routes: &RouteSet) -> Result<u64, RateLo
               FROM deposits AS deposit
               WHERE deposit.address_id = address.id
                 AND deposit.state = 'detected'
+                AND deposit.block_time > quote.window_start
                 AND deposit.block_time <= quote.expires_at
           )
         ORDER BY quote.expires_at, quote.id
@@ -1428,6 +1190,10 @@ struct RateLockRow {
     address_id: Uuid,
     client_reference_id: String,
     route: String,
+    deposit_address_id: Option<Uuid>,
+    deposit_address_version: Option<i64>,
+    window_start: DateTime<Utc>,
+    replaced_by: Option<Uuid>,
     chain_id: i64,
     address: String,
     treasury: String,
@@ -1453,6 +1219,14 @@ impl TryFrom<RateLockRow> for RateLock {
             livemode: row.livemode,
             address_id: row.address_id,
             client_reference_id: row.client_reference_id,
+            deposit_address_id: row.deposit_address_id,
+            deposit_address_version: row
+                .deposit_address_version
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| RateLockError::DatabaseInvariant)?,
+            window_start: row.window_start,
+            replaced_by: row.replaced_by,
             route: row.route,
             chain_id: u64::try_from(row.chain_id).map_err(|_| RateLockError::DatabaseInvariant)?,
             address: EvmAddress::from_str(&row.address)
@@ -1514,11 +1288,4 @@ fn parse_minor(value: &str) -> Result<MinorAmount, RateLockError> {
         .parse::<u64>()
         .map(MinorAmount::new)
         .map_err(|_| RateLockError::DatabaseInvariant)
-}
-
-fn rate_lock_sqlx(error: RateLockError) -> sqlx::Error {
-    match error {
-        RateLockError::Database(error) => error,
-        other => sqlx::Error::Protocol(other.to_string()),
-    }
 }

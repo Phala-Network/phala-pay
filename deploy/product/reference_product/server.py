@@ -1,7 +1,7 @@
 """The product service: webhook receiver with fulfillment, and the product's account API.
 
 It pins its account's webhook keys from attestation, keeps its ledger in SQLite, and serves its
-own account API, through which a user registers a workspace, gets a quote-first single-use
+own account API, through which a user registers a workspace, gets a quote-first fixed-address
 address, and reads its deposits, credits, and webhook events. It holds the product key and calls
 the service on the user's behalf, as Phala Cloud's backend does.
 """
@@ -47,7 +47,7 @@ from topup_sdk import (
     verify_attestation_binding,
     verify_request,
 )
-from topup_sdk.addresses import forwarder_address, quote_salt
+from topup_sdk.addresses import deposit_address_salt, forwarder_address
 from topup_sdk.errors import ResponseValidationError, TransportError
 from topup_sdk.ids import DEPOSIT, QUOTE, object_id, parse_id
 
@@ -107,7 +107,11 @@ class ProductServer:
         self._requests: anyio.abc.TaskGroup | None = None
 
         def dispatch(
-            method: str, target: str, headers: dict[str, str], body: bytes, webhook: bool
+            method: str,
+            target: str,
+            headers: dict[str, str],
+            body: bytes,
+            webhook: bool,
         ) -> HttpResponse:
             timeout = (
                 DEMO_TIMEOUT_SECONDS
@@ -241,7 +245,9 @@ class ProductServer:
         self.app = Starlette(
             routes=[
                 Route(
-                    base_path + "/webhooks", webhook_endpoint, methods=["GET", "POST", "OPTIONS"]
+                    base_path + "/webhooks",
+                    webhook_endpoint,
+                    methods=["GET", "POST", "OPTIONS"],
                 ),
                 Route("/{path:path}", endpoint, methods=["GET", "POST", "OPTIONS"]),
             ],
@@ -441,7 +447,10 @@ class AccountApi:
                 ):
                     return Answer(HTTPStatus.NOT_FOUND)
                 refund = self._service().create_refund(
-                    deposit, destination, amount, idempotency_key=verified.idempotency_key
+                    deposit,
+                    destination,
+                    amount,
+                    idempotency_key=verified.idempotency_key,
                 )
                 return Answer(HTTPStatus.OK, refund.to_dict())
             if parts == [RESTORE_RECORDS] and method == "GET":
@@ -483,7 +492,10 @@ class AccountApi:
 
     def _account_view(self, team: str) -> dict[str, Any]:
         deposits = list(
-            islice(self._service().list_deposits(client_reference_id=team, page_size=100), 100)
+            islice(
+                self._service().list_deposits(client_reference_id=team, page_size=100),
+                100,
+            )
         )
         ids = {deposit.id for deposit in deposits}
         return {
@@ -572,7 +584,8 @@ def pin_webhook_keys(config: ProductConfig, *, wait_s: float = 0) -> PinnedKeys:
     livemode = config.livemode()
     if config.webhook_public_keys:
         return PinnedKeys(
-            livemode, [load_webhook_public_key(key) for key in config.webhook_public_keys]
+            livemode,
+            [load_webhook_public_key(key) for key in config.webhook_public_keys],
         )
     if livemode:
         raise MissingProductKeyError(
@@ -595,7 +608,9 @@ def pin_webhook_keys(config: ProductConfig, *, wait_s: float = 0) -> PinnedKeys:
             if time.monotonic() >= deadline:
                 raise TransientError("the service's attestation is unavailable") from error
             LOG.warning(
-                "waiting for %s/v1/attestation: %s", config.service_url, type(error).__name__
+                "waiting for %s/v1/attestation: %s",
+                config.service_url,
+                type(error).__name__,
             )
             time.sleep(5)
     keys = verify_attestation_binding(
@@ -650,7 +665,7 @@ def create_quote(
     returns the first quote.
 
     The client recomputes the address from the pinned forwarder, the chain's treasury, and the
-    quote id, and raises before returning an address the product did not derive.
+    customer's deposit-address version, and raises before returning an address it did not derive.
     """
     chain = config.chain(chain_id)
     quote = client.create_quote(
@@ -664,12 +679,14 @@ def create_quote(
     return quote
 
 
-def quote_address(config: ProductConfig, team: str, quote_id: str, chain_id: int) -> str:
+def quote_address(config: ProductConfig, team: str, version: int, chain_id: int) -> str:
     return forwarder_address(
         config.factory,
         config.implementation,
         config.chain(chain_id).treasury,
-        quote_salt(config.account, team, quote_id),
+        deposit_address_salt(
+            config.account, livemode=False, client_reference_id=team, version=version
+        ),
     )
 
 

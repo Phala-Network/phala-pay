@@ -711,6 +711,17 @@ async fn hints_record_only_dual_verified_confirmed_positive_facts_and_scanner_du
     };
     let result = async {
         let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+        // A quote stays on its original customer network after a treasury change. The hint
+        // must follow quotes.address_id even though the network has been superseded.
+        let address_id: Uuid=sqlx::query_scalar("SELECT address_id FROM quotes WHERE id=$1")
+            .bind(topup::ids::parse(topup::ids::QUOTE,&h.quote_id).context("quote id")?)
+            .fetch_one(&db.app_pool).await?;
+        let deposit_address=Uuid::new_v4();
+        sqlx::query("INSERT INTO deposit_addresses(id,account_id,livemode,customer_id,version)
+            SELECT $2,q.account_id,q.livemode,q.customer_id,1 FROM quotes q WHERE address_id=$1")
+            .bind(address_id).bind(deposit_address).execute(&db.app_pool).await?;
+        sqlx::query("UPDATE addresses SET quote_id=NULL,deposit_address_id=$2,superseded_at=now() WHERE id=$1")
+            .bind(address_id).bind(deposit_address).execute(&db.app_pool).await?;
         h.submit(&format!("/v1/quotes/{}/transactions", h.quote_id), Some(&h.key), json!({"transaction_hash":TX})).await?;
         let (cancel, _worker) = h.worker(&db.app_pool);
         wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
@@ -718,6 +729,7 @@ async fn hints_record_only_dual_verified_confirmed_positive_facts_and_scanner_du
         ensure!(sqlx::query_scalar::<_, bool>("SELECT state='detected' AND final_at IS NULL AND dual_verified_at IS NOT NULL AND receipt_log_index=0 AND log_index=35 FROM deposits").fetch_one(&db.app_pool).await?);
         ensure!(sqlx::query_scalar::<_, i32>("SELECT used FROM daily_budgets WHERE name='hints'").fetch_one(&db.app_pool).await? == 1);
         let deposit: topup::db::Deposit = topup::db::get_deposit(&db.app_pool, sqlx::query_scalar("SELECT id FROM deposits").fetch_one(&db.app_pool).await?).await?.context("hint deposit")?;
+        ensure!(sqlx::query_scalar::<_,bool>("SELECT quote_id IS NULL FROM deposits").fetch_one(&db.app_pool).await?, "hint bound a quote before confirmation");
         // Normal scanner insertion at the same receipt position cannot create a second deposit.
         let mut tx = db.app_pool.begin().await?;
         let duplicate = topup::db::NewDeposit { chain_id: CHAIN, tx_hash: deposit.tx_hash, receipt_log_index: 0, log_index: deposit.log_index,

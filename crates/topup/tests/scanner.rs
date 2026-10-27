@@ -287,11 +287,25 @@ async fn forward_migration_repairs_existing_dual_cursors_and_n_minus_one_reissue
         let mut previous=sqlx::migrate::Migrator::new(directory.as_path()).await?;
         previous.migrations.to_mut().retain(|migration|migration.version<20261031000000);
         previous.run(&d.owner_pool).await?;
-        let address=address(&d,100).await?;
+        // Seed the historical schema explicitly: the shared fixture writes today's quote columns.
+        let (account,customer)=seed::create_account_and_customer(&d.app_pool,&NewAccount::named("legacy coverage"),"coverage").await?;
+        let address_id=Uuid::new_v4();
+        sqlx::query("WITH quote AS (
+            INSERT INTO quotes(id,account_id,livemode,customer_id,route,amount_atomic,price_scaled,credit_minor,expires_at,terms,route_version,settings_revision_id)
+            SELECT $1,$2,true,$3,$4,1,100000000,1,now(),$5,1,current_revision_id
+            FROM payment_settings_state WHERE account_id=$2 AND livemode RETURNING id)
+            INSERT INTO addresses(id,account_id,livemode,chain_id,quote_id,salt,treasury,address,created_block)
+            SELECT $6,$2,true,1,id,$7,$8,$9,100 FROM quote")
+            .bind(Uuid::new_v4()).bind(account.id).bind(customer.id).bind(route().route)
+            .bind(sqlx::types::Json(seed::fixture_terms())).bind(address_id)
+            .bind(format!("{:#x}",B256::repeat_byte(0x11)))
+            .bind(format!("{:#x}",Address::repeat_byte(0x22)))
+            .bind(format!("{:#x}",Address::repeat_byte(0x33)))
+            .execute(&d.app_pool).await?;
         let read=Reader::new(4000);
         scanner::initialize_chain(&d.app_pool,1,&read,&read).await?;
         sqlx::query("UPDATE chain_coverage SET through_block=4000 WHERE chain_id=1").execute(&d.app_pool).await?;
-        sqlx::query("UPDATE addresses SET dual_covered_through=3009 WHERE id=$1").bind(address.id).execute(&d.app_pool).await?;
+        sqlx::query("UPDATE addresses SET dual_covered_through=3009 WHERE id=$1").bind(address_id).execute(&d.app_pool).await?;
         sqlx::query("UPDATE cursors SET scanned_block=9999,scanned_block_time=to_timestamp(9999) WHERE chain_id=1").execute(&d.app_pool).await?;
         sqlx::query("INSERT INTO chain_coverage(chain_id,through_block,through_hash,through_time) VALUES(2,222,$1,$2)").bind(format!("{:#x}",hash(222))).bind(time(222)).execute(&d.app_pool).await?;
         db::initialize_cursor(&d.app_pool,2,777,time(777)).await?;
@@ -300,9 +314,9 @@ async fn forward_migration_repairs_existing_dual_cursors_and_n_minus_one_reissue
         let empty:(i64,Option<DateTime<Utc>>)=sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=2").fetch_one(&d.app_pool).await?;
         ensure!(empty==(222,None), "empty-chain cursor was not capped at its agreed boundary");
         // Exactly the UPDATE issued by N-1; it does not know any dual column.
-        sqlx::query("UPDATE addresses SET created_block=10 WHERE id=$1").bind(address.id).execute(&d.app_pool).await?;
+        sqlx::query("UPDATE addresses SET created_block=10 WHERE id=$1").bind(address_id).execute(&d.app_pool).await?;
         ensure!(compat(&d).await?==(9,None));
-        ensure!(marker(&d,address.id).await?.is_none());
+        ensure!(marker(&d,address_id).await?.is_none());
         Ok::<_,anyhow::Error>(())
     }.await;
     result.and(d.cleanup().await)

@@ -268,11 +268,11 @@ async fn submit(
         };
         (Scope::new(account, livemode), Some(slot))
     };
-    // Only issued, current physical networks of this object are eligible; never create addresses.
+    // Quotes keep their issued network through rotation; address hints use the current network.
     let address: Option<(Uuid, i64, String, i64)> = sqlx::query_as(
         "SELECT id,chain_id,address,created_block FROM addresses WHERE account_id=$1 AND livemode=$2 \
-         AND (($3 AND quote_id=$4) OR (NOT $3 AND deposit_address_id=$4 AND chain_id=$5)) \
-         AND superseded_at IS NULL LIMIT 1")
+         AND (($3 AND id=(SELECT address_id FROM quotes WHERE id=$4)) OR (NOT $3 AND deposit_address_id=$4 AND chain_id=$5 AND superseded_at IS NULL)) \
+         LIMIT 1")
         .bind(scope.account_id()).bind(scope.livemode()).bind(quote).bind(object)
         .bind(chain.and_then(|chain| i64::try_from(chain).ok())).fetch_optional(&state.pool).await?;
     let Some((id, chain, recipient, created)) = address else {

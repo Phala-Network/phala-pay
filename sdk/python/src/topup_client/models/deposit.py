@@ -81,10 +81,9 @@ class Deposit:
                 another id, `uuid_v5(DEPOSIT_NAMESPACE, "{chain_id}:{tx_hash}:{receipt_log_index}:{revision}")`.
             livemode (bool): Whether the deposit is on a live-mode route.
             log_index (int): Block-wide log index of the transfer; it changes if the transaction is re-included.
-            metadata (DepositMetadata): Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): a copy of
+            metadata (DepositMetadata): Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): copied from
                 the
-                quote's or the deposit address's when the deposit is recorded, independent of it
-                afterwards; `{}` when none.
+                consumed quote, otherwise from the deposit address when recorded; independent afterwards.
             object_ (DepositObject): Always `deposit`.
             receipt_log_index (int): Position of the transfer among its transaction's receipt logs: with `chain_id`,
                 `tx_hash`,
@@ -104,8 +103,7 @@ class Deposit:
             asset (None | str | Unset): Asset code; `null` for a token without a route.
             deposit_address (None | str | Unset): The deposit address that received the transfer, `da_…`, on `chain_id` at
                 `address`; `null`
-                for a quote's address. Payments to a deposit address, active or retired, are credited at
-                spot.
+                for a historical single-use address. Transfers that do not consume a quote use spot.
             exchange_rate (None | str | Unset): USD per token, a decimal string with 8 places, once valued.
             final_at (int | None | Unset): When the finality watch found the deposit's block final on both providers, Unix
                 seconds;

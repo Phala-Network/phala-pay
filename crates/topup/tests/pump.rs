@@ -485,20 +485,15 @@ async fn two_pumps_consume_one_rate_lock_only_once() -> Result<()> {
             )?;
             let (first, second) = tokio::join!(pump.run_once(), pump.run_once());
             let results = [first?, second?];
-            ensure!(
-                results
-                    .iter()
-                    .filter(|result| matches!(result, RunOnceResult::Applied { .. }))
-                    .count()
-                    == 1
-            );
-            ensure!(
-                results
-                    .iter()
-                    .filter(|result| matches!(result, RunOnceResult::Contended { .. }))
-                    .count()
-                    == 1
-            );
+            ensure!(results.iter().all(|result| matches!(result,
+                RunOnceResult::Applied { .. } | RunOnceResult::Contended { .. })));
+            // Canonical lookup may see the winner's commit and use spot immediately; a stale
+            // candidate instead contends and retries with the now-consumed quote excluded.
+            let retry = test_pump(&context.app_pool, confirm_steps(&context.app_pool,
+                vec![transfer_log(&db::get_deposit(&context.app_pool, first_id).await?.context("first")?, evm_address(14)),
+                     transfer_log(&db::get_deposit(&context.app_pool, second_id).await?.context("second")?, evm_address(14))], None),
+                PumpConfig::default(), 0)?;
+            retry.run_once().await?;
             let consumed_by: Uuid =
                 sqlx::query_scalar("SELECT consumed_by FROM quotes WHERE id = (SELECT quote_id FROM addresses WHERE id = $1)")
                     .bind(seed.address_id)
@@ -512,7 +507,7 @@ async fn two_pumps_consume_one_rate_lock_only_once() -> Result<()> {
             .bind(second_id)
             .fetch_one(&context.app_pool)
             .await?;
-            ensure!(confirmed == 1);
+            ensure!(confirmed == 2);
             let locked: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM deposits WHERE id IN ($1, $2) AND price_source = 'lock' AND credit_minor = 777",
             )
@@ -539,13 +534,16 @@ async fn confirm_uses_lock_only_within_amount_and_time_tolerance() -> Result<()>
     with_database(|context| {
         Box::pin(async move {
             let cases = [
-                ("within", 19_u8, 1_010_u64, 900_i64, "lock", 777_u64, true),
-                ("under", 20, 989, 900, "spot", 98, false),
-                ("over", 21, 1_011, 900, "spot", 101, false),
-                ("late", 22, 1_000, -1, "spot", 100, false),
+                ("within", 19_u8, 1_010_u64, 900_i64, -10_i64, "lock", 777_u64, true),
+                ("under", 20, 989, 900, -10, "spot", 98, false),
+                ("over", 21, 1_011, 900, -10, "spot", 101, false),
+                ("late", 22, 1_000, -1, -10, "spot", 100, false),
+                ("exclusive_start", 23, 1_000, 900, 0, "spot", 100, false),
+                ("before_start", 24, 1_000, 900, 1, "spot", 100, false),
+                ("inclusive_end", 25, 1_000, 0, -10, "lock", 777, true),
             ];
 
-            for (name, number, amount, expiry_seconds, source, credit, consumed) in cases {
+            for (name, number, amount, expiry_seconds, start_seconds, source, credit, consumed) in cases {
                 let seed = seed_account(&context.app_pool, number).await?;
                 let deposit_id = insert_deposit(&context.app_pool, seed, number).await?;
                 sqlx::query("UPDATE deposits SET amount_atomic = $2::text::numeric WHERE id = $1")
@@ -567,13 +565,14 @@ async fn confirm_uses_lock_only_within_amount_and_time_tolerance() -> Result<()>
                     r#"
                     UPDATE quotes
                     SET route = 'phala-cloud-ethereum-pha-usd', amount_atomic = 1000,
-                        price_scaled = 9000000, credit_minor = 777, expires_at = $2,
+                        price_scaled = 9000000, credit_minor = 777, expires_at = $2, window_start = $3,
                         status = 'open', exposure_reserved = true, closed_at = NULL
                     WHERE id = (SELECT quote_id FROM addresses WHERE id = $1)
                     "#,
                 )
                 .bind(seed.address_id)
                 .bind(expires_at)
+                .bind(block_time + Duration::seconds(start_seconds))
                 .execute(&context.app_pool)
                 .await?;
 
@@ -643,13 +642,14 @@ async fn in_window_payment_finalized_after_the_window_never_emits_expired() -> R
                 r#"
                 UPDATE quotes
                 SET route = 'phala-cloud-ethereum-pha-usd', amount_atomic = 1000,
-                    price_scaled = 9000000, credit_minor = 777, expires_at = $2,
+                    price_scaled = 9000000, credit_minor = 777, expires_at = $2, window_start = $3,
                     status = 'open', exposure_reserved = true, closed_at = NULL
                 WHERE id = (SELECT quote_id FROM addresses WHERE id = $1)
                 "#,
             )
             .bind(seed.address_id)
             .bind(expires_at)
+            .bind(expires_at - Duration::seconds(10))
             .execute(&context.app_pool)
             .await?;
 
@@ -1395,4 +1395,57 @@ fn evm_address(byte: u8) -> Address {
 
 fn b256(byte: u8) -> B256 {
     B256::from([byte; 32])
+}
+
+#[tokio::test]
+async fn canonical_time_selects_the_quote_and_overlap_refuses_credit() -> Result<()> {
+    with_database(|database| Box::pin(async move {
+        for (number, canonical_inside) in [(70, true), (71, false)] {
+            let seed = seed_account(&database.app_pool, number).await?;
+            let id = insert_deposit(&database.app_pool, seed, number).await?;
+            let start = DateTime::from_timestamp(Utc::now().timestamp()-10, 0).context("start")?;
+            sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,
+                amount_atomic=1000,price_scaled=9000000,credit_minor=777,window_start=$2,
+                expires_at=$2+interval '1 hour' WHERE address_id=$1")
+                .bind(seed.address_id).bind(start).execute(&database.app_pool).await?;
+            let provisional = start + Duration::seconds(if canonical_inside { -1 } else { 1 });
+            sqlx::query("UPDATE deposits SET block_time=$2 WHERE id=$1")
+                .bind(id).bind(provisional).execute(&database.app_pool).await?;
+            let deposit = db::get_deposit(&database.app_pool,id).await?.context("deposit")?;
+            let mut canonical = transfer_log(&deposit, evm_address(number));
+            canonical.block_time = start + Duration::seconds(if canonical_inside { 1 } else { -1 });
+            // The watcher establishes corrected canonical evidence before confirmation,
+            // as it does for a transfer re-included at a different timestamp.
+            let now=DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).context("clock")?;
+            sqlx::query("UPDATE deposits SET first_unresolved_at=$2-interval '7 hours',finality_due_at=$2-interval '7 hours',finality_check_at=$2,next_attempt_at=$2 WHERE id=$1")
+                .bind(id).bind(now).execute(&database.app_pool).await?;
+            db::chain_reads::advance_checkpoint(&database.app_pool,1,db::chain_reads::Boundary {number:500,hash:b256(50),time:now}).await?;
+            let reader=ConfirmChain {logs:Arc::new(vec![canonical.clone()]),barrier:None};
+            let pump = test_pump(&database.app_pool,confirm_steps(&database.app_pool,vec![canonical],None),PumpConfig::default(),0)?;
+            let watch=topup::finality::FinalityWatch::single(database.app_pool.clone(),Arc::default(),1,reader.clone(),reader)
+                .with_pump(Arc::new(pump));
+            ensure!(watch.watch_once_at(1,now).await?.watched==1);
+            let stored = db::get_deposit(&database.app_pool,id).await?.context("valued")?;
+            ensure!(stored.price_source.as_deref()==Some(if canonical_inside {"lock"}else{"spot"}));
+        }
+        let seed = seed_account(&database.app_pool,72).await?;
+        let id = insert_deposit(&database.app_pool,seed,72).await?;
+        sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,expires_at=now()+interval '1 hour' WHERE address_id=$1")
+            .bind(seed.address_id).execute(&database.app_pool).await?;
+        sqlx::query("INSERT INTO quotes(id,account_id,livemode,customer_id,route,route_version,
+            amount_atomic,price_scaled,credit_minor,window_start,expires_at,address_id,settings_revision_id,terms)
+            SELECT $2,account_id,livemode,customer_id,route,route_version,amount_atomic,price_scaled,
+            credit_minor,window_start,expires_at,address_id,settings_revision_id,terms FROM quotes WHERE address_id=$1")
+            .bind(seed.address_id).bind(Uuid::new_v4()).execute(&database.owner_pool).await?;
+        let deposit=db::get_deposit(&database.app_pool,id).await?.context("deposit")?;
+        let pump=test_pump(&database.app_pool,confirm_steps(&database.app_pool,
+            vec![transfer_log(&deposit,evm_address(72))],None),PumpConfig::default(),0)?;
+        pump.run_once().await?;
+        let stored=db::get_deposit(&database.app_pool,id).await?.context("unvalued")?;
+        ensure!(stored.state==DepositState::Detected && stored.price_source.is_none());
+        let evidence: serde_json::Value=sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1")
+            .bind(id).fetch_one(&database.app_pool).await?;
+        ensure!(evidence["error"]=="overlapping_quote_windows");
+        Ok(())
+    })).await
 }

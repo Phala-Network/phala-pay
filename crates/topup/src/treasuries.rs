@@ -677,7 +677,7 @@ pub struct Application {
 /// scope's pending treasury whose change applied after the restore point and was lost with it, as
 /// `application`, read from the delivered `treasury.updated` the service signed, shows it (the
 /// caller verified the delivery). Otherwise it would apply only after the unfreeze, and the
-/// deposit addresses and quotes issued over it meanwhile could not be re-issued before it.
+/// deposit addresses issued over it meanwhile could not be re-issued before it.
 ///
 /// The change's own rules hold: it is the restored treasury of that chain and address, proven
 /// when it was submitted and still pending (a cancellation the merchant made after the restore

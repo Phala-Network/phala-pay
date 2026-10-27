@@ -332,8 +332,8 @@ function PaymentOptions({
   return (
     <>
       <p className="pp-notice">
-        Send <strong>exactly {amount}</strong> in one transfer before the timer ends; other amounts
-        are credited at the market rate.
+        Send <strong>exactly {amount}</strong> before {new Date(quote.expires_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} for this price; anything else
+        sent to this address is credited at the market rate.
       </p>
       <div className="pp-tabs" role="tablist" aria-label="Payment method" onKeyDown={onKeyDown}>
         {METHODS.map((m, index) => (

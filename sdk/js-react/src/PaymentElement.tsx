@@ -8,26 +8,16 @@ import {
   type CheckoutParams,
   type CheckoutState,
   type ClientQuote,
-  type DepositAddressAsset,
-  type DepositAddressDetails,
-  type DepositAddressPayment,
   type EthereumProvider,
   type PaymentOption,
   type WalletError,
 } from "@phala/pay";
 import { rootProps, type Appearance } from "./appearance.js";
 import { CheckoutContent } from "./Checkout.js";
-import { DepositAddressContent } from "./DepositAddress.js";
 import { PaymentOptionFields } from "./PaymentOptionPicker.js";
 
 /** What `createQuote` resolves to: your backend's `pay.checkoutParams(quote)`. */
 export type PaymentElementQuote = Omit<CheckoutParams, "apiBase"> & { apiBase?: string };
-
-/**
- * What `createDepositAddress` resolves to: `address` and `networks` of your backend's
- * `POST /v1/deposit_addresses` response, with its `client_secret` to follow payments.
- */
-export type PaymentElementDepositAddress = DepositAddressDetails & { clientSecret?: string; apiBase?: string };
 
 /** What `createQuote` receives beside the option. */
 export interface PaymentElementQuoteRequest {
@@ -41,18 +31,14 @@ export interface PaymentElementQuoteRequest {
   idempotencyKey: string;
 }
 
-/** Where the payer is: choosing, waiting for your backend, paying a quote, or at a deposit address. */
-export type PaymentElementStep = "options" | "creating" | "checkout" | "deposit_address";
+/** Where the payer is: choosing, waiting for your backend, or paying a quote. */
+export type PaymentElementStep = "options" | "creating" | "checkout";
 
 export interface PaymentElementState {
   step: PaymentElementStep;
   /** The quote's checkout state while `step` is `checkout`; otherwise `null`. */
   checkout: CheckoutState | null;
-  /**
-   * While `step` is `deposit_address` with an amount (`depositAmountAtomic`), the payment it
-   * follows, once there is one; otherwise `null`.
-   */
-  payment: DepositAddressPayment | null;
+
 }
 
 export interface PaymentElementProps<T extends PaymentOption> {
@@ -71,34 +57,10 @@ export interface PaymentElementProps<T extends PaymentOption> {
   /**
    * Called once per submit, with the chosen option and the idempotency key to create its quote
    * with: create the quote on your backend with its API key and that `Idempotency-Key`, and resolve
-   * with `pay.checkoutParams(quote)`. A rejection is shown with a way to retry. Without it, submit
-   * shows the customer's deposit address (`createDepositAddress`) instead.
+   * with `pay.checkoutParams(quote)`. A rejection is shown with a way to retry.
    */
-  createQuote?: ((option: T, request: PaymentElementQuoteRequest) => Promise<PaymentElementQuote>) | undefined;
-  /**
-   * Get the customer's deposit address from your backend, with the chosen option to show first;
-   * give one of this and `createQuote`. With `createQuote`, it is offered as one line at the end of
-   * the form, "Paying from an exchange? Use a deposit address", and the address states its
-   * per-transfer limits. Without it, submit calls it: the customer's one fixed address is how they
-   * pay, best with `depositAmountAtomic`.
-   */
-  createDepositAddress?: ((option: T | undefined) => Promise<PaymentElementDepositAddress>) | undefined;
-  /**
-   * The token amount for the deposit address to ask for, in the token's smallest unit; `undefined`
-   * for any amount. Called once `createDepositAddress` resolves, with the chosen option and that
-   * address's token for it on the chosen network, whose `decimals` give the unit: for example
-   * `(2500n * 10n ** BigInt(token.decimals)) / 100n` for $25.00 of a $1 stablecoin. With an amount,
-   * the address view states it once, pays it from a wallet first (a QR code and the address are
-   * the secondary way), follows that payment, and reports it in `onChange` and `onDepositSuccess`.
-   */
-  depositAmountAtomic?: ((option: T, token: DepositAddressAsset) => bigint | undefined) | undefined;
-  /**
-   * A deposit-address payment already sent from a wallet, from `onDepositSent`, to resume after a
-   * reload: the element calls `createDepositAddress` with the chosen option at once (set `value` or
-   * `defaultValue` to the option it was paid in, on `chainId`) and follows that transaction.
-   */
-  depositTxHash?: { txHash: string; chainId: number } | undefined;
-  /** The service origin, for a quote or deposit address that does not name its own. */
+  createQuote: (option: T, request: PaymentElementQuoteRequest) => Promise<PaymentElementQuote>;
+  /** The service origin, for a quote that does not name its own. */
   apiBase?: string | undefined;
   /** The form's id: a button elsewhere on your page with `type="submit" form={id}` submits it. */
   id?: string | undefined;
@@ -107,7 +69,7 @@ export interface PaymentElementProps<T extends PaymentOption> {
   /**
    * Your content inside the form, under the token and network, while the payer chooses: a summary
    * above the element's button, or with `hideSubmit` your summary and your `type="submit"` button,
-   * which then comes before the deposit-address line.
+   * in the same form.
    */
   children?: ReactNode;
   disabled?: boolean | undefined;
@@ -121,17 +83,10 @@ export interface PaymentElementProps<T extends PaymentOption> {
   onSuccess?: ((quote: ClientQuote) => void) | undefined;
   /** Called once when the quote expires or is canceled without a payment. */
   onExpire?: ((quote: ClientQuote) => void) | undefined;
-  /**
-   * Called once when the deposit address's payment, with `depositAmountAtomic`, is credited.
-   * Fulfil from the `deposit.credited` webhook.
-   */
-  onDepositSuccess?: ((payment: DepositAddressPayment) => void) | undefined;
-  /** Called once the wallet has sent the deposit-address payment: keep both for `depositTxHash`. */
-  onDepositSent?: ((txHash: string, chainId: number) => void) | undefined;
-  /** Called when `createQuote` or `createDepositAddress` rejects, with its error. */
+  /** Called when `createQuote` rejects, with its error. */
   onError?: ((error: unknown) => void) | undefined;
   /**
-   * The alert to show when `createQuote` or `createDepositAddress` rejects, from its error, for
+   * The alert to show when `createQuote` rejects, from its error, for
    * example your backend's reason; `null`, `undefined`, or an empty string keeps the element's own,
    * such as "Could not start the payment. Try again."
    */
@@ -148,30 +103,19 @@ export interface PaymentElementProps<T extends PaymentOption> {
 
 type Step =
   | { step: "options"; failed: string | null }
-  | { step: "creating"; kind: "quote" | "deposit_address" }
-  | { step: "checkout"; params: CheckoutParams }
-  | {
-      step: "deposit_address";
-      created: PaymentElementDepositAddress;
-      apiBase: string | undefined;
-      option: PaymentOption | undefined;
-      amountAtomic: bigint | undefined;
-      txHash: string | undefined;
-    };
+  | { step: "creating" }
+  | { step: "checkout"; params: CheckoutParams };
 
 // While a payment is on its way, the checkout stays: leaving it would hide the payment's progress.
 const UNDERWAY = new Set(["seen", "confirming"]);
 const FINISHED = new Set(["credited", "rejected", "reversed", "expired", "canceled", "error"]);
-const SETTLED = new Set(["credited", "rejected", "reversed"]);
 
 /**
  * A complete payment, created only when the payer submits, like Stripe's Payment Element with a
  * deferred intent: the payer picks a token and network, submits, and your `createQuote` creates
  * the quote on your backend; the element then shows its checkout (wallet, QR code, or manual,
  * with live status), and a way back to the options once the quote can no longer be paid or before
- * a payment is sent. With `createDepositAddress`, it also offers the customer's deposit address,
- * or, without `createQuote`, shows that address on submit: the customer's one fixed address, with
- * `depositAmountAtomic` paid from a wallet first.
+ * a payment is sent. The quote uses the customer's fixed deposit address.
  */
 export function PaymentElement<T extends PaymentOption>({
   options,
@@ -181,9 +125,6 @@ export function PaymentElement<T extends PaymentOption>({
   amount,
   currency = "usd",
   createQuote,
-  createDepositAddress,
-  depositAmountAtomic,
-  depositTxHash,
   apiBase,
   id,
   hideSubmit = false,
@@ -194,8 +135,6 @@ export function PaymentElement<T extends PaymentOption>({
   onChange,
   onSuccess,
   onExpire,
-  onDepositSuccess,
-  onDepositSent,
   onError,
   errorMessage,
   onWalletError,
@@ -207,9 +146,6 @@ export function PaymentElement<T extends PaymentOption>({
   const [current, setCurrent] = useState<Step>({ step: "options", failed: null });
   const [chosen, setChosen] = useState<PaymentOption | null>(defaultValue === undefined ? (options[0] ?? null) : defaultValue);
   const [checkout, setCheckout] = useState<CheckoutState | null>(null);
-  const [payment, setPayment] = useState<DepositAddressPayment | null>(null);
-  // Whether the wallet sent the deposit-address payment in this view.
-  const [sent, setSent] = useState(false);
   const selected = value === undefined ? chosen : value;
   const option = options.find((each) => samePaymentOption(each, selected));
 
@@ -228,9 +164,8 @@ export function PaymentElement<T extends PaymentOption>({
     callbacks.current.onChange?.({
       step,
       checkout: step === "checkout" ? checkout : null,
-      payment: step === "deposit_address" ? payment : null,
     });
-  }, [step, checkout, payment]);
+  }, [step, checkout]);
   // A new step takes the focus, so that a keyboard or screen reader user continues from its start.
   const body = useRef<HTMLDivElement>(null);
   const shown = useRef(step);
@@ -245,27 +180,25 @@ export function PaymentElement<T extends PaymentOption>({
     pending.current = false;
   }, []);
 
-  const start = <R,>(kind: "quote" | "deposit_address", create: () => Promise<R>, done: (result: R) => Step) => {
+  const start = <R,>(create: () => Promise<R>, done: (result: R) => Step) => {
     if (pending.current) {
       return;
     }
     pending.current = true;
     const mine = ++request.current;
-    setCurrent({ step: "creating", kind });
+    setCurrent({ step: "creating" });
     // A `create` that throws rejects, as one whose promise does.
     new Promise<R>((resolve) => resolve(create())).then(
       (result) => {
         if (mine !== request.current) return;
         pending.current = false;
         setCheckout(null);
-        setPayment(null);
-        setSent(false);
         setCurrent(done(result));
       },
       (error: unknown) => {
         if (mine !== request.current) return;
         pending.current = false;
-        setCurrent({ step: "options", failed: failureMessage(kind, error, callbacks.current.errorMessage) });
+        setCurrent({ step: "options", failed: failureMessage(error, callbacks.current.errorMessage) });
         callbacks.current.onError?.(error);
       },
     );
@@ -274,10 +207,6 @@ export function PaymentElement<T extends PaymentOption>({
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
     if (disabled || option === undefined) {
-      return;
-    }
-    if (createQuote === undefined) {
-      showDepositAddress();
       return;
     }
     const same =
@@ -289,69 +218,21 @@ export function PaymentElement<T extends PaymentOption>({
       attempt.current = { option, amount, currency, key: crypto.randomUUID() };
     }
     const { key } = attempt.current;
-    start("quote", () => createQuote(option, { idempotencyKey: key }), (params): Step => {
+    start(() => createQuote(option, { idempotencyKey: key }), (params): Step => {
       attempt.current = null;
       return { step: "checkout", params: { ...params, apiBase: params.apiBase ?? apiBase ?? "" } };
     });
   };
 
-  const showDepositAddress = (txHash?: string) => {
-    if (disabled || createDepositAddress === undefined) {
-      return;
-    }
-    const create = async () => {
-      const created = await createDepositAddress(option);
-      if (option === undefined || depositAmountAtomic === undefined) {
-        return { created, amountAtomic: undefined };
-      }
-      // An amount is of the chosen token: the address must take it on the chosen network.
-      const token = created.networks
-        .find((each) => each.chain_id === option.chain_id)
-        ?.assets.find((each) => each.asset === option.asset);
-      if (token === undefined) {
-        throw new TypeError("the deposit address does not take the chosen token on the chosen network");
-      }
-      return { created, amountAtomic: depositAmountAtomic(option, token) };
-    };
-    start("deposit_address", create, ({ created, amountAtomic }): Step => ({
-      step: "deposit_address",
-      created,
-      apiBase: created.apiBase ?? apiBase,
-      option,
-      amountAtomic,
-      txHash,
-    }));
-  };
-
-  // A payment sent before a reload: back to its address at once, following it.
-  const resume = depositTxHash !== undefined && option?.chain_id === depositTxHash.chainId ? depositTxHash.txHash : undefined;
-  const resumeOnMount = useRef(resume);
-  const showOnMount = useRef(showDepositAddress);
-  useEffect(() => {
-    if (resumeOnMount.current !== undefined) showOnMount.current(resumeOnMount.current);
-  }, []);
-
   const back = () => {
     request.current += 1;
     pending.current = false;
     setCheckout(null);
-    setPayment(null);
-    setSent(false);
     setCurrent({ step: "options", failed: null });
   };
 
-  const status = checkout?.status ?? payment?.status ?? "loading";
+  const status = checkout?.status ?? "loading";
   const backText = UNDERWAY.has(status) ? null : FINISHED.has(status) ? "Start a new payment" : "Back";
-  // Once a payment is sent (or resumed), there is no way back until it settles: going back and
-  // paying again would pay twice.
-  const depositSent = sent || (current.step === "deposit_address" && current.txHash !== undefined);
-  const depositBackText =
-    payment !== null && SETTLED.has(payment.status)
-      ? backText
-      : payment === null && !depositSent
-        ? "Back"
-        : null;
-  const primary = createQuote === undefined ? "deposit_address" : "quote";
   const symbol = option === undefined ? null : assetSymbol(option.asset);
   const submitText =
     symbol === null ? "Pay" : amount === undefined ? `Pay in ${symbol}` : `Pay ${formatMoney(amount, currency)} in ${symbol}`;
@@ -380,31 +261,15 @@ export function PaymentElement<T extends PaymentOption>({
                 disabled={
                   disabled ||
                   option === undefined ||
-                  current.step === "creating" ||
-                  (createQuote === undefined && createDepositAddress === undefined)
+                  current.step === "creating"
                 }
               >
-                <span>{current.step === "creating" && current.kind === primary ? "Starting your payment…" : submitText}</span>
+                <span>{current.step === "creating" ? "Starting your payment…" : submitText}</span>
               </button>
             )}
             {current.step === "options" && current.failed !== null && (
               <p className="pp-message" data-tone="danger" role="alert">
                 {current.failed}
-              </p>
-            )}
-            {createQuote !== undefined && createDepositAddress !== undefined && (
-              <p className="pp-element__alternative">
-                Paying from an exchange?{" "}
-                <button
-                  type="button"
-                  className="pp-text-button"
-                  onClick={() => showDepositAddress()}
-                  disabled={disabled || current.step === "creating"}
-                >
-                  {current.step === "creating" && current.kind === "deposit_address"
-                    ? "Getting your deposit address…"
-                    : "Use a deposit address"}
-                </button>
               </p>
             )}
           </form>
@@ -431,43 +296,13 @@ export function PaymentElement<T extends PaymentOption>({
             />
           </>
         )}
-        {current.step === "deposit_address" && (
-          <>
-            {depositBackText !== null && (
-              <p className="pp-element__back" key={depositBackText}>
-                <button type="button" className="pp-text-button" onClick={back}>
-                  {depositBackText}
-                </button>
-              </p>
-            )}
-            <DepositAddressContent
-              depositAddress={{ address: current.created.address, networks: current.created.networks }}
-              chainId={current.option?.chain_id}
-              asset={current.option?.asset}
-              clientSecret={current.created.clientSecret}
-              apiBase={current.apiBase}
-              pollInterval={pollInterval}
-              amountAtomic={current.amountAtomic}
-              walletClient={walletClient}
-              onWalletError={onWalletError}
-              onPaymentChange={setPayment}
-              onSuccess={onDepositSuccess}
-              onSent={(txHash, chainId) => {
-                setSent(true);
-                onDepositSent?.(txHash, chainId);
-              }}
-              txHash={current.txHash}
-            />
-          </>
-        )}
       </div>
     </div>
   );
 }
 
-/** The alert for a rejected `kind` of request: the host's `errorMessage` for it, else the element's own. */
+/** The alert for a rejected quote request: the host's `errorMessage` for it, else the element's own. */
 function failureMessage(
-  kind: "quote" | "deposit_address",
   cause: unknown,
   errorMessage: PaymentElementProps<PaymentOption>["errorMessage"],
 ): string {
@@ -483,7 +318,7 @@ function failureMessage(
   if (typeof message === "string" && message.trim() !== "") {
     return message;
   }
-  return kind === "quote" ? "Could not start the payment. Try again." : "Could not get your deposit address. Try again.";
+  return "Could not start the payment. Try again.";
 }
 
 /** `minor` units of `currency`, for example `$10.00` for 1000 cents. */

@@ -240,7 +240,6 @@ for (const width of [390, 1280]) {
       await serve(page, () => waiting({ asset: "usdc", chain_id: 84532, decimals: 6, amount_atomic: "25000000" }));
       await page.goto(checkoutUrl(theme).replace("/?", "/?element&"));
       await expect(page.getByRole("combobox", { name: "Network" })).toHaveText("Base");
-      await expect(page.getByText(/Paying from an exchange\?/)).toHaveText("Paying from an exchange? Use a deposit address");
       expect(await axeViolations(page), "options").toEqual([]);
       await check(page, `element-options-${suffix}`);
       await page.getByRole("button", { name: "Pay $25.00 in USDC" }).click();
@@ -248,15 +247,11 @@ for (const width of [390, 1280]) {
       expect(await axeViolations(page), "checkout").toEqual([]);
       await check(page, `element-checkout-${suffix}`);
       await page.getByRole("button", { name: "Back", exact: true }).click();
-      await page.getByRole("button", { name: "Use a deposit address" }).click();
-      await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
-      await check(page, `element-deposit-${suffix}`);
-
-      // The host's summary and button, then the deposit-address line under them.
+      // The host's summary and submit remain in the same form.
       await page.goto(checkoutUrl(theme).replace("/?", "/?element&host&"));
       await expect(page.getByRole("combobox", { name: "Network" })).toHaveText("Base");
       const buttons = page.locator(".pp-element button");
-      await expect(buttons).toHaveText(["Continue to pay $25.00", "Use a deposit address"]);
+      await expect(buttons).toHaveText(["Continue to pay $25.00"]);
       expect(await axeViolations(page), "host").toEqual([]);
       await check(page, `element-host-${suffix}`);
       await page.getByRole("button", { name: "Continue to pay $25.00" }).click();
@@ -270,75 +265,6 @@ for (const width of [390, 1280]) {
       online = false;
       await expect(page.getByRole("status")).toHaveText("Reconnecting…", { timeout: 15_000 });
       await check(page, `deposit-reconnecting-${suffix}`);
-    });
-
-    test(`deposit mode steps at ${suffix}`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 });
-      let payments: unknown[] = [];
-      await page.route(`${API_BASE}/v1/deposit_addresses/**`, async (route) => {
-        const headers = {
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "POST, OPTIONS",
-          "access-control-allow-headers": "Content-Type",
-        };
-        if (route.request().method() !== "GET") {
-          await route.fulfill({ status: route.request().method() === "OPTIONS" ? 204 : 202, headers, body: "" });
-          return;
-        }
-        await route.fulfill({
-          headers,
-          json: {
-            id: `da_${"0d".repeat(16)}`, object: "deposit_address", livemode: false, status: "active",
-            networks: [11155111, 84532].map((chain_id) => ({ chain_id, address: ADDRESS, typical_credit_seconds: 30 })),
-            payments,
-          },
-        });
-      });
-      const url = (option: string) =>
-        `/?${new URLSearchParams({ deposit_mode: "", option, theme, to: ADDRESS, client_secret: DEPOSIT_SECRET, api_base: API_BASE })}`;
-      const row = (status: string) => ({
-        status, chain_id: 11155111, asset: "pha", decimals: 18, amount_atomic: "12500000000000000000", tx_hash: HASH,
-        confirmations: status === "seen" ? 1 : null, created: Math.floor(Date.now() / 1000),
-      });
-
-      // No wallet in the browser: the QR code and the address are the way to pay.
-      await page.goto(url("usdc"));
-      await expect(page.getByText(/Paying from an exchange\?/)).toHaveCount(0);
-      await check(page, `deposit-mode-options-${suffix}`);
-      await page.getByRole("button", { name: "Pay $25.00 in USDC" }).click();
-      await expect(page.getByText("25 USDC", { exact: true })).toBeVisible();
-      expect(await axeViolations(page), "no wallet").toEqual([]);
-      await check(page, `deposit-mode-no-wallet-${suffix}`);
-
-      // A wallet: it pays, and the QR code and the address wait behind one quiet control.
-      await installWallet(page);
-      await page.goto(url("pha"));
-      await page.getByRole("button", { name: "Pay $25.00 in PHA" }).click();
-      const pay = page.getByRole("button", { name: "Pay with Test Wallet" });
-      await expect(pay).toBeVisible();
-      await check(page, `deposit-mode-wallet-${suffix}`);
-      const more = page.getByRole("button", { name: "Pay from an exchange or another wallet" });
-      await more.click();
-      await expect(more).toHaveAttribute("aria-expanded", "true");
-      expect(await axeViolations(page), "expanded").toEqual([]);
-      await check(page, `deposit-mode-expanded-${suffix}`);
-      await more.click();
-
-      const status = page.getByRole("status");
-      await pay.click();
-      await expect(status).toHaveText(/^Sent, waiting for it on chain…/);
-      await expect(pay).toHaveCount(0);
-      // Sent: no way back to pay again until the payment settles.
-      await expect(page.getByRole("button", { name: "Back", exact: true })).toHaveCount(0);
-      await check(page, `deposit-mode-sent-${suffix}`);
-      payments = [row("seen")];
-      await expect(status).toHaveText(/^Received, 1 confirmation\. Crediting in about 30 seconds/);
-      await check(page, `deposit-mode-seen-${suffix}`);
-      payments = [row("credited")];
-      await expect(status).toHaveText(/^Payment credited/);
-      await expect(page.getByTestId("events")).toHaveText(`success:${HASH}`);
-      expect(await axeViolations(page), "credited").toEqual([]);
-      await check(page, `deposit-mode-credited-${suffix}`);
     });
 
     test(`QR codes decode from the screen at ${suffix}`, async ({ page }) => {
@@ -465,43 +391,12 @@ for (const width of [390, 1280]) {
 // A host's reset, as Tailwind's preflight has it: SVGs and images are blocks.
 const PREFLIGHT = "svg, img, video, canvas { display: block; vertical-align: middle; }";
 
-/** Whether the link's glyph is on the link's line of text, not on a line of its own. */
-function glyphOnItsLine(link: Locator): Promise<boolean> {
-  return link.evaluate((element) => {
-    const glyph = element.querySelector("svg");
-    const lines = element.getClientRects();
-    const box = glyph?.getBoundingClientRect();
-    return box !== undefined && lines.length === 1 && box.top >= (lines[0]?.top ?? 0) - 1 && box.bottom <= (lines[0]?.bottom ?? 0) + 1;
-  });
-}
-
 for (const width of [390, 1280]) {
   test(`glyphs stay on their line of text under a host's CSS reset at ${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     const served = waiting();
     await serve(page, () => served);
-    await page.route(`${API_BASE}/v1/deposit_addresses/**`, (route) =>
-      route.fulfill({
-        status: route.request().method() === "GET" ? 200 : 202,
-        headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "Content-Type" },
-        json: {
-          id: `da_${"0d".repeat(16)}`, object: "deposit_address", livemode: false, status: "active",
-          networks: [{ chain_id: 11155111, address: ADDRESS, typical_credit_seconds: 30 }], payments: [],
-        },
-      }),
-    );
     await installWallet(page);
-
-    await page.goto(`/?${new URLSearchParams({ deposit_mode: "", to: ADDRESS, client_secret: DEPOSIT_SECRET, api_base: API_BASE })}`);
-    await page.addStyleTag({ content: PREFLIGHT });
-    await page.getByRole("button", { name: "Pay $25.00 in PHA" }).click();
-    await page.getByRole("button", { name: "Pay with Test Wallet" }).click();
-    const view = page.getByRole("link", { name: "View transaction" });
-    await expect(view).toBeVisible();
-    expect(await glyphOnItsLine(view), "deposit status").toBe(true);
-    // One plain line while in progress: no mark before it.
-    await expect(page.locator(".pp-deposit__status > svg")).toHaveCount(0);
-    await check(page, `preflight-deposit-sent-${width}`);
 
     await page.goto(checkoutUrl("light"));
     await page.addStyleTag({ content: PREFLIGHT });

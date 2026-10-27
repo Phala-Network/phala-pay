@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from phala_pay import PhalaPay, Pins
-from topup_sdk import TopupClient, deposit_address, quote_address, sign_webhook
+from topup_sdk import TopupClient, deposit_address, sign_webhook
 
 API_KEY = "ppay_sk_test_" + "B" * 43 + "000000"
 SERVICE_KEY = Ed25519PrivateKey.from_private_bytes(bytes([9] * 32))
@@ -62,13 +62,14 @@ EPOCH = 1_790_000_000
 
 
 def _quote(**fields: object) -> dict[str, object]:
-    address = quote_address(
+    address = deposit_address(
         FACTORY,
         IMPLEMENTATION,
         TREASURY,
         account=ACCOUNT,
         client_reference_id="team-42",
-        quote_id=QUOTE_ID,
+        livemode=bool(fields.get("livemode", False)),
+        version=1,
     )
     return {
         "id": QUOTE_ID,
@@ -84,6 +85,10 @@ def _quote(**fields: object) -> dict[str, object]:
         "amount_atomic": "100",
         "exchange_rate": "25.00000000",
         "address": address,
+        "deposit_address": "da_" + "0d" * 16,
+        "deposit_address_version": 1,
+        "window_start": EPOCH,
+        "replaced_by": None,
         "payment_uri": f"ethereum:0x{'22' * 20}@11155111/transfer?address={address}&uint256=100",
         "status": "open",
         "expires_at": 1_790_000_900,

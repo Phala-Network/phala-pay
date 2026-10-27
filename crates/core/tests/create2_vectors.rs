@@ -8,29 +8,18 @@ use std::str::FromStr;
 
 use alloy_primitives::{Address, B256};
 use serde::Deserialize;
-use topup_core::address::{deposit_address_salt, forwarder_address, quote_salt};
+use topup_core::address::{deposit_address_salt, forwarder_address};
 
 #[derive(Deserialize)]
 struct Vectors {
     factory: String,
     implementation: String,
     forwarders: Vec<ForwarderVector>,
-    quote: Vec<QuoteVector>,
     deposit_address: Vec<DepositAddressVector>,
 }
 
 #[derive(Deserialize)]
 struct ForwarderVector {
-    treasury: String,
-    salt: String,
-    predicted_address: String,
-}
-
-#[derive(Deserialize)]
-struct QuoteVector {
-    account: String,
-    client_reference_id: String,
-    quote_id: String,
     treasury: String,
     salt: String,
     predicted_address: String,
@@ -62,25 +51,6 @@ fn reproduces_all_foundry_create2_vectors() -> Result<(), Box<dyn Error>> {
                 implementation,
                 Address::from_str(&vector.treasury)?,
                 B256::from_str(&vector.salt)?
-            ),
-            Address::from_str(&vector.predicted_address)?
-        );
-    }
-
-    assert!(!vectors.quote.is_empty());
-    for vector in vectors.quote {
-        let salt = quote_salt(
-            &vector.account,
-            &vector.client_reference_id,
-            &vector.quote_id,
-        );
-        assert_eq!(salt, B256::from_str(&vector.salt)?);
-        assert_eq!(
-            forwarder_address(
-                factory,
-                implementation,
-                Address::from_str(&vector.treasury)?,
-                salt
             ),
             Address::from_str(&vector.predicted_address)?
         );

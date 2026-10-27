@@ -155,7 +155,7 @@ pub(super) fn quote_terms(terms: &Terms) -> QuoteTerms {
     tag = "quotes"
 )]
 /// Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,
-/// and a single-use address, valid until `expires_at`, on the terms your payment settings set for
+/// and a fixed customer address, valid until `expires_at`, on the terms your payment settings set for
 /// the asset; the quote keeps them for good. An asset your settings do not accept is
 /// `asset_not_accepted`.
 pub(crate) async fn create_quote(
@@ -337,8 +337,8 @@ pub(crate) async fn list_quotes(
         (error, _) => map_error(error),
     })?;
     let mut connection = state.pool.acquire().await?;
-    let address_ids = locks.iter().map(|lock| lock.address_id).collect::<Vec<_>>();
-    let payments = super::pending::QuotePayments::load(&mut connection, &address_ids).await?;
+    let quote_ids = locks.iter().map(|lock| lock.id).collect::<Vec<_>>();
+    let payments = super::pending::QuotePayments::load(&mut connection, &quote_ids).await?;
     let mut data = Vec::with_capacity(locks.len());
     for lock in locks {
         let route = quote_route(&state.routes, &lock)?;
@@ -523,9 +523,7 @@ async fn client_quote_view(
         super::pending::quote_payment(&mut *state.pool.acquire().await?, route, &lock).await?;
     let (payment_status, confirmations, amount_credited) = match payment {
         // A reversed deposit is no payment; the page says so rather than ask for one again.
-        None if address_has_reversed_deposit(&state.pool, lock.address_id).await? => {
-            ("reversed", None, None)
-        }
+        None if quote_has_reversed_deposit(&state.pool, lock.id).await? => ("reversed", None, None),
         None => ("none", None, None),
         Some(payment) if payment.status == "seen" => ("seen", payment.confirmations, None),
         Some(payment) => {
@@ -563,6 +561,12 @@ async fn client_quote_view(
         chain_id: lock.chain_id,
         amount_atomic: lock.amount_atomic.value().to_string(),
         address: format!("{:#x}", lock.address),
+        deposit_address: lock
+            .deposit_address_id
+            .map(crate::deposit_addresses::public_id),
+        deposit_address_version: lock.deposit_address_version,
+        replaced_by: lock.replaced_by.map(locks::quote_id),
+        window_start: lock.window_start.timestamp(),
         payment_uri: payment_uri(route, &lock),
         expires_at: lock.expires_at.timestamp(),
         cancel_requested_at: lock.cancel_requested_at.map(|at| at.timestamp()),
@@ -573,11 +577,13 @@ async fn client_quote_view(
     })
 }
 
-async fn address_has_reversed_deposit(pool: &PgPool, address_id: Uuid) -> ApiResult<bool> {
+async fn quote_has_reversed_deposit(pool: &PgPool, quote_id: Uuid) -> ApiResult<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM deposits WHERE address_id = $1 AND state = 'reversed')",
+        "SELECT EXISTS (SELECT 1 FROM deposits d JOIN quotes q ON q.id=$1
+         WHERE d.state='reversed' AND (d.quote_id=q.id OR (d.address_id=q.address_id
+         AND d.block_time>q.window_start AND d.block_time<=q.expires_at)))",
     )
-    .bind(address_id)
+    .bind(quote_id)
     .fetch_one(pool)
     .await?)
 }
@@ -698,6 +704,12 @@ fn render_quote(
         amount_atomic: lock.amount_atomic.value().to_string(),
         exchange_rate: decimal(lock.price.value()),
         address: format!("{:#x}", lock.address),
+        deposit_address: lock
+            .deposit_address_id
+            .map(crate::deposit_addresses::public_id),
+        deposit_address_version: lock.deposit_address_version,
+        replaced_by: lock.replaced_by.map(locks::quote_id),
+        window_start: lock.window_start.timestamp(),
         treasury: format!("{:#x}", lock.treasury),
         payment_uri,
         status: status(lock.status).to_owned(),
@@ -748,11 +760,11 @@ fn has_quotes_pause(account: &Account, customer: &Customer, route_scopes: &[Stri
 
 pub(super) fn map_error(error: RateLockError) -> ApiError {
     match error {
+        RateLockError::DepositAddress(error) => super::deposit_addresses::map_error(error),
         RateLockError::InvalidInput(message) => ApiError::bad_request(message),
         RateLockError::AmountTooSmall(message) => ApiError::amount_too_small("amount", message),
         RateLockError::AmountTooLarge(message) => ApiError::amount_too_large("amount", message),
         RateLockError::ChainUnavailable => ApiError::chain_unavailable(),
-        RateLockError::AddressCapacityReached => ApiError::address_capacity_reached(),
         RateLockError::PricingUnavailable => ApiError::price_unavailable(),
         RateLockError::RateLimited { retry_after } => ApiError::customer_quote_limit(retry_after),
         RateLockError::TreasuryNotSet => ApiError::treasury_not_set(),

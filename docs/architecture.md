@@ -61,7 +61,7 @@ finality; the rare deposit a reorganization proves replaced is reversed with a s
 `deposit.reversed`, which the merchant handles like a refund (one whose transaction leaves the
 chain without positively proven replacement stays credited and not final, with an alert, §7). There are two ways to deposit. A
 **quote** fixes a price: the user states a USD amount, receives a locked price, an exact token
-amount, a single-use address, and a countdown, then pays. This is the checkout model of Coinbase
+amount, a fixed customer address, and a countdown, then pays. This is the checkout model of Coinbase
 Commerce and BitPay. A payment that does not match its quote (late, wrong amount, second
 payment) is still credited, at the price observed when it is confirmed. A **deposit address**
 (§9, [design §5a](design/multi-tenant.md#5a-deposit-addresses-d16)) is the customer's
@@ -180,13 +180,11 @@ contract ForwarderFactory {                            // no roles, no admin, no
   200 000 per transfer cannot be swept through the factory and must not be enabled in a route. The
   factory's `flush` is non-reentrant (`ReentrancyGuardTransient`). Treasury `address(0)` is
   refused.
-- `salt = keccak256(abi.encode(account, client_reference_id, "quote", quote_id))`, where `account`
-  is the merchant's `acct_…` id, `client_reference_id` its customer's identifier, and `quote_id` the
-  service-assigned `qt_…` id. A deposit address's salt is `keccak256(abi.encode(account,
-  livemode, client_reference_id, "deposit_address", version))`, types `(string, bool, string,
-  string, uint256)` (§9): it names no chain or asset, so the address is the same on every chain
-  whose treasury is the same address. The merchant holds every input, including the treasury, so
-  it recomputes an address before showing it.
+- Quotes and deposit addresses use `salt = keccak256(abi.encode(account, livemode,
+  client_reference_id, "deposit_address", version))`, types `(string, bool, string, string,
+  uint256)` (§9). It names no chain or asset, so the address is the same on every chain whose
+  treasury is the same address. The merchant holds every input, including the treasury, and
+  recomputes the address before showing it. Historical quote addresses remain watched.
 - One factory per chain, deployed by anyone through the deterministic deployment proxy with the
   fixed salt `keccak256("phala-pay.ForwarderFactory.v2")`: no constructor arguments, so the same
   factory (`0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747`) and implementation
@@ -286,11 +284,10 @@ customers     id, account_id, livemode, client_reference_id, paused_scopes text[
               UNIQUE (account_id, livemode, client_reference_id)
               -- created by the customer's first quote or deposit address
               -- (`settlement` stops crediting: deposits wait in `confirmed`)
-quotes        id (qt_ + hex), account_id, livemode, customer_id, route, route_version, amount_atomic,
-              price_scaled, credit_minor, expires_at, cancel_requested_at, status, consumed_by (deposit_id) UNIQUE,
-              client_secret_hash, metadata jsonb, restore_id, settings_revision_id, terms jsonb
-              -- restore_id: re-issued after a restore, lock never applied; terms: the resolved
-              -- terms the quote was issued with, kept for good (§9, Payment settings)
+quotes        id (qt_ + hex), account_id, livemode, customer_id, address_id, route, route_version, amount_atomic,
+              window_start, replaced_by, price_scaled, credit_minor, expires_at, cancel_requested_at, status, consumed_by (deposit_id) UNIQUE,
+              client_secret_hash, metadata jsonb, settings_revision_id, terms jsonb
+              -- terms: resolved terms kept for good; address_id: fixed network (§9)
 payment_settings_revisions  id (random, never reused), account_id, livemode,
               kind (unconfigured|configured|legacy), document jsonb, created_at, created_by
               -- immutable; the service may only insert
@@ -315,7 +312,7 @@ pending_transfers  chain_id, tx_hash, log_index, receipt_log_index, block_number
               first_seen_at
               PRIMARY KEY (chain_id, tx_hash, log_index)          -- display only (§8)
 deposits      id, account_id, livemode, customer_id, chain_id, tx_hash, receipt_log_index,
-              log_index, block_number, block_hash, block_time, address_id, route, route_version,
+              log_index, block_number, block_hash, block_time, address_id, quote_id, route, route_version,
               asset_contract, from_address, amount_atomic, tx_from, tx_nonce, confirmations_at,
               final_at, state, reason, attempt, next_attempt_at, lease_token, lease_until,
               valuation_at, price_scaled, price_source (spot|lock), credit_minor, quote jsonb,
@@ -426,7 +423,7 @@ once. A step panic aborts the process; the lease expires and another pump re-cla
 
 | Step | Does |
 |---|---|
-| `detected → confirmed` | From both providers, by the transaction's receipt: the log at the deposit's receipt position, in the same block (same hash), and that block has reached the route's confirmation on each (§8, §14). Normal confirmation first probes the corresponding head on each endpoint, with at most 6 Depth, 3 Safe or 7 Finalized probes. Once both meet the actual policy, that claim reads full receipt, canonical header and transaction evidence once per endpoint. Depth targets about 4 s after expected depth when healthy, with lag bounded by the current normal probe interval (up to 64 s); Safe/Finalized target one 384 s epoch interval. Normal and slow lane L share one full evidence-read allowance. If the normal window runs out only because of height lag, enter L: probe heads at 60 s / ten-minute / hourly intervals by `first_slow_at` age and credit with the full agreed evidence as soon as both heads qualify, without waiting for the checkpoint. L does not count toward S. Missing, conflicting or changed complete evidence, or an RPC failure that cannot establish height-only lag, records `first_unresolved_at` and enters S even before the checkpoint; no normal window is reopened. Reversal still requires positive evidence under the agreed checkpoint. For a `finalized` route, whose check reads `finalized`, the deposit is marked final (`final_at`) in the same transaction; otherwise the finality watch marks it. The confirmation waited for is the stricter of the chain's current floor, the deposit's bound requirement, and, for a payment of a quote's asset to its address, the quote's (§9). A deposit bound while its account's settings were held waits, unless its outcome was delivered before a restore (§14). Then the terms: those of the address's quote for a valid payment of it, otherwise those its binding resolves on its route; a binding that does not accept the asset → `rejected(asset_not_accepted)`, before any price is fetched. In the same step, fetch the quote (§8) and store `valuation_at`, `price_scaled`, `credit_minor`, `quote`. Below the terms' `min_amount` → `rejected(below_minimum)`. |
+| `detected → confirmed` | From both providers, by the transaction's receipt: the log at the deposit's receipt position, in the same block (same hash), and that block has reached the route's confirmation on each (§8, §14). Normal confirmation first probes the corresponding head on each endpoint, with at most 6 Depth, 3 Safe or 7 Finalized probes. Once both meet the actual policy, that claim reads full receipt, canonical header and transaction evidence once per endpoint. Depth targets about 4 s after expected depth when healthy, with lag bounded by the current normal probe interval (up to 64 s); Safe/Finalized target one 384 s epoch interval. Normal and slow lane L share one full evidence-read allowance. If the normal window runs out only because of height lag, enter L: probe heads at 60 s / ten-minute / hourly intervals by `first_slow_at` age and credit with the full agreed evidence as soon as both heads qualify, without waiting for the checkpoint. L does not count toward S. Missing, conflicting or changed complete evidence, or an RPC failure that cannot establish height-only lag, records `first_unresolved_at` and enters S even before the checkpoint; no normal window is reopened. Reversal still requires positive evidence under the agreed checkpoint. For a `finalized` route, whose check reads `finalized`, the deposit is marked final (`final_at`) in the same transaction; otherwise the finality watch marks it. The confirmation waited for is the stricter of the chain's current floor, the deposit's bound requirement, and, for a payment of a quote's asset to its address, the quote's (§9). A deposit bound while its account's settings were held waits, unless its outcome was delivered before a restore (§14). Then the terms: those of the matching quote window for a valid payment of it, otherwise those its binding resolves on its route; a binding that does not accept the asset → `rejected(asset_not_accepted)`, before any price is fetched. In the same step, fetch the quote (§8) and store `valuation_at`, `price_scaled`, `credit_minor`, `quote`. Below the terms' `min_amount` → `rejected(below_minimum)`. |
 | `confirmed → credited` | decision-time local screening of `from` against the newest verified snapshot and active manual entries; the governing terms' `min_deposit_atomic ≤ amount ≤ max_deposit_atomic` (none for a credit delivered before a restore, §14); account, customer, and route not paused for `settlement`, and crediting of the treasury the deposit's forwarder pays not paused by the merchant or the operator (paused → `Wait`, never a rejection); a deposit not final yet only while its credit keeps the account's unfinalized credit within `accounts.max_unfinalized_credit` (below; past it → `Wait` until final). On a pass, the same transaction writes the `deposit.credited` outbox row (§11): the credit is owed to the merchant, whatever the merchant answers, unless the deposit is reversed before finality. |
 | `credited → swept` | The deposit is final and a `flushed` row (a finalized `Flushed` event for its address, token, and treasury, whoever sent it) exists at a log position `(block_number, log_index)` greater than the deposit's. Applied in SQL, with the finalized `Flushed` event as evidence, when the scanner indexes the event, when the deposit is credited or becomes final, and by the reconciler's repair pass; the pump's credited step only waits. |
 
@@ -707,10 +704,10 @@ Invoice model, with this service's exception profile:
   (default 10, at most 60; `429 customer_rate_limit`). Repeating an `Idempotency-Key` with the same request within 24
   hours returns the first response (another request is `400 idempotency_key_reused`), also while
   `quotes` is paused.
-- The lock is consumed by the first deposit to its address whose `block_time ≤ expires_at`,
+- The lock is consumed by the first deposit to its address whose `window_start < block_time ≤ expires_at`,
   `asset` matches, and `|amount − locked| × 10 000 ≤ locked × quote_tolerance_bps` of the quote's
   own terms, two-sided (an overpayment within it is credited at the quote's credit); consumption is a
-  single `UPDATE … WHERE consumed_by IS NULL`, in the confirm step. If that deposit is reversed
+  row-locked re-check and update in the confirm step. If that deposit is reversed
   (§7), the quote always opens again with its exposure reserved and no event; the
   coverage-driven flow later expires or cancels it. That deposit is valued at `price_lock` and the
   merchant receives exactly the `credit_minor` it showed the user.
@@ -719,8 +716,9 @@ Invoice model, with this service's exception profile:
   they accept its asset; the merchant shows this rule before payment.
 - Expiry and reservation release require the quote address's `dual_covered_through` to equal
   `chain_coverage.through_block`, the coverage time strictly past `expires_at`, and no in-window
-  `detected` deposit. Lagging, restored and reissued addresses keep their quotes open until their
-  own history catches up. Cancel before expiry, while open and without any deposit, records
+  `detected` deposit. Lagging and recovered addresses keep their quotes open until their
+  own history catches up. Cancel before expiry, while open and without a non-reversed
+  in-window deposit of the quote's asset, records
   `cancel_requested_at = now()` and `expires_at = now()` and returns the quote still open.
   An in-window payment discovered later consumes it normally. Once dual coverage permits closure,
   a cancel-requested quote becomes `cancelled` with `quote.canceled`; otherwise `expired` with
@@ -732,9 +730,21 @@ Invoice model, with this service's exception profile:
   reuse remains twelve seconds; confirmation always requests a fresh dual Multicall3 snapshot.
 - Exposure counters sum `credit_minor` across routes, which every route counts in USD cents
   (§6).
-- A "quote, then pay to a reusable address" variant is deliberately not offered: matching a
-  quote by amount alone is ambiguous, and the single-use address is the processor-standard
-  answer. A deposit address (below) carries no price.
+- Every quote uses the customer's active deposit-address network on its chain, issued in the
+  same transaction if missing. Quotes reference `addresses.id`; they do not issue single-use
+  addresses. Historical fixed customer addresses remain watched.
+- Windows are `(window_start, expires_at]`, with `window_start` the whole second of creation
+  after the customer lock. Creating a quote cuts the earlier window for the same customer and
+  route at that instant and sets `replaced_by`, even if it was consumed. These windows never
+  overlap. A transfer in the creation second belongs to the old window; the new window starts
+  strictly after it. The first eligible transfer to finish confirmation consumes the quote.
+- Replacement keeps exposure reserved until chain closure. Reversal reopens the quote with its
+  already-cut window. Canonical block time and asset select the candidate; consumption rechecks
+  its window under the row lock, retrying if a concurrent replacement invalidated it. Two
+  candidates are an invariant error. Hints are discovery-only and never bind a transaction.
+- `deposits.quote_id` identifies only the consuming deposit, which copies the quote's metadata.
+  Rotation and treasury changes keep existing quote windows on their original network.
+  Restore detection clamps open windows to the restore point (or their start without a heartbeat).
 
 **Payment settings** ([design](design/payment-settings.md), owner decision of 2026-10-02,
 replacing the implicit model in which a treasury enabled a chain and every routed asset was
@@ -897,8 +907,8 @@ webhook-signature: v1a,<base64 ed25519 by settlement/{acct}/{mode}/v{n} over
   of the transition, and never changed (Stripe: an event's data is rendered when it is created,
   <https://docs.stripe.com/api/events/object>), so every endpoint, retry, resend, and read gets
   the same body. `amount` is the quoted credit when `price_source`
-  is `quote`, otherwise the spot credit at finality (§9). `quote` is the receiving address's
-  quote, also when a late or wrong-amount payment was valued at spot.
+  is `quote`, otherwise the spot credit at finality (§9). `quote` names only the quote consumed by this deposit; a late, wrong-amount or second
+  payment has `quote: null`.
 - A credited deposit that a reorganization proves replaced before finality (its transaction's
   service-known same-sender/same-nonce replacement agreed finalized on both endpoints, or
   another transfer at its position at finality; §7) is `reversed`, and
@@ -1102,7 +1112,7 @@ POST   /v1/treasuries/{id}/pause | resume                         the merchant's
 GET    /v1/config                                                 the effective payment config: accepted assets and terms
 GET|POST /v1/payment_settings {chains?, quote_creations_per_customer_per_minute?}   what the account accepts, per mode (§9)
 POST   /v1/account/pause | resume {scopes: ["quotes"]}             the merchant's own quotes pause (design §12)
-POST   /v1/quotes {client_reference_id, amount, currency, chain_id, asset, metadata?} single-use address + locked price; Idempotency-Key
+POST   /v1/quotes {client_reference_id, amount, currency, chain_id, asset, metadata?} fixed customer address + locked price; Idempotency-Key
 GET    /v1/quotes?client_reference_id&status&limit&starting_after&ending_before
 GET    /v1/quotes/{id}                                            resume a checkout; with ?client_secret= and no key: the payer's view
 POST   /v1/quotes/{id} {metadata}                                 update metadata, in any status
@@ -1154,7 +1164,6 @@ POST   /v1/admin/restore/treasuries/verify {account, livemode, treasuries, reapp
 POST   /v1/admin/restore/treasuries/apply {delivery, reason}   a change that applied after the restore point, from its signed treasury.updated
 POST   /v1/admin/restore/webhook_endpoints/delete {account, livemode, id, reason}
 POST   /v1/admin/restore/deposit_addresses {account, livemode, client_reference_id, address | version, id?, client_secret?, reason}   re-issue identically, over a treasury in force since the restore point
-POST   /v1/admin/restore/quotes {account, livemode, id, client_reference_id, chain_id, asset, amount, amount_atomic, exchange_rate, address, created, expires_at, metadata?, client_secret?, reason}   re-issue identically, over the treasury in force at created; the lock never applies
 POST   /v1/admin/restore/events {deliveries, reason}   import signed deliveries of deposit events as delivered; their credit stands, a reversed deposit is rebuilt
 POST   /v1/admin/restore/delivered_credits/discard {deposit, reason}   release a deposit whose transfer contradicts its delivered event
 POST   /v1/admin/restore/unfreeze {reason, checklist}   once every chain is rescanned; audited
@@ -1265,8 +1274,8 @@ has to be whole: like Stripe's Charge, the deposit carries `amount_refunded_atom
 never exceeds the refunded share, only grows, and is all of `amount` once fully refunded);
 `amount_reversed` is `amount` once `reversed`, else 0. Every `deposit.*` event carries them, so the
 merchant's balance follows the latest snapshot whatever the delivery order (§11). `amount` and `exchange_rate` are set once valued; `price_source` is `quote` or `spot`;
-`asset` is `null` for a token without a route; exactly one of `quote` and `deposit_address` is
-set, naming what the receiving address belongs to. Routes, versions, and valuation evidence are in the admin view.
+`asset` is `null` for a token without a route; `deposit_address` names the receiving customer address; `quote` is also set when the deposit
+consumed a quote. Historical single-use addresses have no `deposit_address`. Routes, versions, and valuation evidence are in the admin view.
 
 **Deposit address payments and client secret.** A deposit address carries `payments`, its payments
 of the last 24 hours in the quote's `payment` shape (`matches_quote` is `null`). Each create or
@@ -1400,7 +1409,7 @@ the integration checklist:
 
 | Topic | Requirement |
 |---|---|
-| Default flow | Quote first: amount input → locked price, exact token amount, single-use address, QR as an EIP-681 URI carrying token and amount, countdown to `expires_at`, and the rule for late or wrong-amount payments. |
+| Default flow | Quote first: amount input → locked price, exact token amount, fixed customer address, QR as an EIP-681 URI carrying token and amount, countdown to `expires_at`, and the rule for late or wrong-amount payments. |
 | Warnings | Network name and chain id, full token contract, "only PHA on Ethereum", minimum deposit, and that below-minimum deposits are not credited. Never truncate addresses or hashes. |
 | Waiting | After payment the user sees "Payment received" within seconds of the block, then "Credited" about 30 seconds after paying (depth 2), from the quote's `payment` and the payer's `payment_status`, with a transaction-hash lookup and an explorer link. A seen payment is not credited and may still disappear in a reorg. |
 | History | Each deposit shows token amount, rate, valuation time, USD credited, transaction hash, status, and quote. |
@@ -1439,7 +1448,7 @@ from fetched state, never from webhook order.
 
 ### Quote and address copy (product UI)
 
-- Quote page, next to the single-use address: "Paying from an exchange? Exchanges may hold new
+- Quote page, next to the fixed customer address: "Paying from an exchange? Exchanges may hold new
   withdrawal addresses and deduct withdrawal fees; the amount received must still equal the
   quote, or it is credited at the rate when it is confirmed."
 - QR codes: a quote's QR is an EIP-681 URI (token and amount), always shown with copy-address
@@ -1625,26 +1634,19 @@ applied after the restore point applied again while frozen, from its signed `tre
 restored database, its time-lock ended, screened again when screening answers, otherwise by the
 daily screening after the unfreeze), at the event's `created`, audited in its transaction and not
 announced again (the merchant has its events; new ones would carry the restore's time), so each
-treasury is in force when it was; deposit addresses and quotes given out after the restore point
-re-issued identically from their deterministic salts over a treasury in force when each was issued,
-within 5 minutes for clock and rounding skew between the issuer's clock and the recorded
-application time, which the time-lock takes under the account's lock as the change applies, or the
-event's second for a restored change (every candidate is the merchant's own, and the salt binds the address): for a
-deposit address, every one since the restore point, each re-issued version keeping a superseded
-network over each, whether it is sent by address or by version; for a quote, around its `created`,
-and none created well before the restore point, which the restored database holds (a restore
-without a restore point re-issues nothing), backfilled from the restored cursor, with the
-client secrets the merchant holds when the service issued them for those ids to that account
-(§12); and the events merchants received imported from their signed deliveries, so a deposit
+treasury is in force when it was; deposit addresses given out after the restore point are
+re-issued identically from their deterministic salts, with superseded networks preserved over
+all treasuries in force since the restore point and backfilled from the restored cursor. A
+restore without a restore point re-issues nothing. The merchant's deposit-address client secrets
+are accepted only when issued for those ids to that account (§12); and the events merchants received imported from their signed deliveries, so a deposit
 rebuilt from the chain keeps its `deposit.credited` event id and delivered body and is never
 re-emitted. Nothing of this waits for the unfreeze, so the unfreeze's checklist can be met. A settled amount is immutable: the confirm step values a rebuilt deposit at the credit
 its imported `deposit.credited` or `deposit.reversed` carries (`restore_delivered_credits`), not at
 spot, so its `amount_refunded` and `amount_reversed` reference what the merchant was told; a
 deposit whose transfer contradicts its delivered event is held, not credited, until the operator
-discards the delivered credit. A re-issued quote's locked price is the merchant's record, not the
-service's, so it never applies: its payment is credited at a delivered credit or at spot. A quote
-no merchant reports is lost: the scanner watches only issued addresses and its salt derives from
-its random id. `POST /v1/admin/restore/unfreeze` lifts the freeze once every chain has finalized
+discards the delivered credit. Lost quotes are not reissued. Existing open quote windows are clamped to the restore point
+(or their start when no heartbeat exists). Payments to recovered fixed addresses continue at
+spot unless a signed delivered credit carries forward their valuation. `POST /v1/admin/restore/unfreeze` lifts the freeze once every chain has finalized
 past the restore's detection with every address backfilled, recording the reason and checklist in
 `audit`. The unfinalized-credit cap and a deposit's `amount_refunded` and `amount_reversed` are
 computed from ledger rows, so they hold after a restore: a deposit credited in the window is
@@ -1711,7 +1713,7 @@ which are stable across releases; a production CVM exposes no logs or shell. `to
 
 | Topic | Rule |
 |---|---|
-| Addresses | A quote's address is single-use; a later payment to it is credited at spot. A deposit address is the customer's one persistent address for every supported token on every chain (the same wherever the treasury is the same), rotatable; payments to it, active or retired, are credited at spot, and retired ones stay monitored. |
+| Addresses | Quotes use the customer's fixed deposit address. One nonoverlapping price window per customer and route can credit the first eligible transfer at the locked price; other transfers use spot. Deposit addresses are rotatable and retired networks stay monitored. |
 | Dust and mistakes | Below-minimum and unsupported-asset deposits are recorded, visible, and not credited. Rejected deposits of a routed token reach the treasury with everything else when the forwarder is flushed; an unsupported token stays in its forwarder until someone flushes that token. |
 | Refunds | Only a final deposit is refunded (`400 deposit_not_final` before), so nothing is paid back for a payment that could still be reversed; a reversed deposit is not refundable. Refundable: wrong token (`unsupported_asset`, `asset_not_accepted`); below the minimum credit but at or above the refund floor of the deposit's governing terms, or the route's default floor for a deposit no terms govern; rejected for any reason other than sanctions; funds arriving after the merchant closed the customer. A credited deposit is refunded only by the merchant's decision, for a credit it did not apply or has reversed; an overpayment beyond tolerance is credited at spot for the full amount (§9) like any other credit. Not refundable: sanctioned funds and dust under the refund floor. The merchant's staff request a refund by deposit id with a destination address the payer controls (never defaulted to `from_address`, which may be an exchange hot wallet), screened for sanctions; the merchant pays it from the treasury of the deposit's address and attaches the transaction; the service verifies it at finality and emits `deposit.refunded`. Refunds are in the original token. |
 | Customer closure | Unused credit and in-flight deposits follow the merchant's closure policy; the customer's addresses stay monitored, and later funds are held for refund: the merchant holds a `deposit.credited` for a closed customer instead of crediting it and refunds it (§11); the service has no closure check of its own. Account closure is an operator action at the merchant's request (design §13, PR 13). |

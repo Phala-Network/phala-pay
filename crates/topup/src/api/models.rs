@@ -157,12 +157,10 @@ impl utoipa::PartialSchema for MetadataClear {
 
 impl ToSchema for MetadataClear {}
 
-/// A quote: a locked price, an exact token amount, and a single-use address to pay it to.
+/// A price window on the customer's persistent deposit address.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct Quote {
-    /// `qt_` id. The quote's address salt is `keccak256(abi.encode(account,
-    /// client_reference_id, "quote", id))` with the types `(string, string, string, string)`,
-    /// where `account` is your `acct_` id.
+    /// `qt_` id.
     pub id: String,
     /// Always `quote`.
     pub object: String,
@@ -182,8 +180,19 @@ pub struct Quote {
     pub amount_atomic: String,
     /// The locked price in USD per token, a decimal string with 8 decimal places.
     pub exchange_rate: String,
-    /// Single-use forwarder address to pay.
+    /// Customer deposit-address network to pay.
     pub address: String,
+    /// Deposit address id; null only for historical single-use quotes.
+    #[schema(required = true)]
+    pub deposit_address: Option<String>,
+    /// Deposit-address salt version; null only for historical single-use quotes.
+    #[schema(required = true)]
+    pub deposit_address_version: Option<u64>,
+    /// The quote that closed this price window, if replaced.
+    #[schema(required = true)]
+    pub replaced_by: Option<String>,
+    /// Exclusive start of the payment window, Unix seconds.
+    pub window_start: i64,
     /// The treasury the address pays: your treasury of the chain when the quote was created. The
     /// address is the factory's `CREATE2` over it and the salt.
     pub treasury: String,
@@ -292,8 +301,19 @@ pub struct ClientQuote {
     pub chain_id: u64,
     /// The exact token amount to pay, in base units, as a decimal string.
     pub amount_atomic: String,
-    /// Single-use forwarder address to pay.
+    /// Customer deposit-address network to pay.
     pub address: String,
+    /// Deposit address id; null only for historical single-use quotes.
+    #[schema(required = true)]
+    pub deposit_address: Option<String>,
+    /// Deposit-address salt version; null only for historical single-use quotes.
+    #[schema(required = true)]
+    pub deposit_address_version: Option<u64>,
+    /// The quote that closed this price window, if replaced.
+    #[schema(required = true)]
+    pub replaced_by: Option<String>,
+    /// Exclusive start of the payment window, Unix seconds.
+    pub window_start: i64,
     /// EIP-681 URI carrying the token, chain, address, and amount.
     pub payment_uri: String,
     /// End of the payment window, Unix seconds.
@@ -405,11 +425,10 @@ pub struct Deposit {
     pub livemode: bool,
     /// Your identifier of the customer the deposit is credited to.
     pub client_reference_id: String,
-    /// The quote whose address received the transfer; `null` for a deposit address.
+    /// The quote consumed by this transfer; `null` when no quote was consumed.
     pub quote: Option<ExpandableQuote>,
     /// The deposit address that received the transfer, `da_…`, on `chain_id` at `address`; `null`
-    /// for a quote's address. Payments to a deposit address, active or retired, are credited at
-    /// spot.
+    /// for a historical single-use address. Transfers that do not consume a quote use spot.
     pub deposit_address: Option<String>,
     /// `pending` (recorded at the route's confirmation and being valued and screened, or held
     /// while the account's or customer's `settlement` is paused), `credited`, `rejected` (see
@@ -492,9 +511,8 @@ pub struct Deposit {
     pub replaced_by: Option<String>,
     /// Detection time, Unix seconds.
     pub created: i64,
-    /// Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): a copy of the
-    /// quote's or the deposit address's when the deposit is recorded, independent of it
-    /// afterwards; `{}` when none.
+    /// Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): copied from the
+    /// consumed quote, otherwise from the deposit address when recorded; independent afterwards.
     pub metadata: std::collections::BTreeMap<String, String>,
     /// The operator's view of the deposit's internals; only in `GET /v1/admin/deposits/{id}`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2349,63 +2367,6 @@ pub struct RestoreDeliveredCreditDiscardResponse {
     pub discarded: bool,
 }
 
-/// `POST /v1/admin/restore/quotes` body: a quote the merchant created after the restore point, as
-/// its records hold the quote object.
-#[derive(Clone, Debug, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RestoreQuoteRequest {
-    /// Account id, `acct_…`.
-    pub account: String,
-    /// The mode.
-    pub livemode: bool,
-    /// The quote's `qt_` id: its address salt is derived from it.
-    pub id: String,
-    /// The quote's `client_reference_id`.
-    pub client_reference_id: String,
-    /// The quote's `chain_id`.
-    pub chain_id: u64,
-    /// The quote's `asset`.
-    pub asset: String,
-    /// The quote's `amount`, the credit in minor units.
-    pub amount: u64,
-    /// The quote's `amount_atomic`.
-    pub amount_atomic: String,
-    /// The quote's `exchange_rate`.
-    pub exchange_rate: String,
-    /// The quote's `address`.
-    pub address: String,
-    /// The quote's `created`, Unix seconds.
-    pub created: i64,
-    /// The quote's `expires_at`, Unix seconds; the re-issued quote's window closes at the
-    /// restore's detection at the latest.
-    pub expires_at: i64,
-    /// The quote's `metadata`.
-    #[serde(default)]
-    #[schema(value_type = Option<Object>)]
-    pub metadata: Option<serde_json::Value>,
-    /// The quote's `client_secret`, when the merchant holds it: kept, so the payer's page reads the
-    /// quote again. Only a secret the service issued for the `id` to the account is accepted, and
-    /// it proves the service issued the quote to the account. Optional: without it the quote is
-    /// re-issued, and found, all the same, but its public view is not readable.
-    #[serde(default)]
-    pub client_secret: Option<String>,
-    /// Why, 1 to 1024 bytes.
-    pub reason: String,
-}
-
-/// `POST /v1/admin/restore/quotes` response.
-#[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct RestoreQuoteResponse {
-    /// Whether the quote was issued now; `false` when it exists already for the customer at the
-    /// address.
-    pub reissued: bool,
-    /// The quote, with the recorded terms. They are the merchant's record, not the service's, so
-    /// they are never applied: a payment to it is credited at spot unless an imported
-    /// `deposit.credited` for it carries its credit, and `expires_at` is the restore's detection
-    /// at the latest.
-    pub quote: Quote,
-}
-
 /// `POST /v1/admin/restore/unfreeze` body: the operator's reason and checklist.
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -2417,9 +2378,6 @@ pub struct RestoreUnfreezeRequest {
     pub security_changes_reapplied: bool,
     /// Every deposit address given out after the restore point was re-issued; must be `true`.
     pub deposit_addresses_reissued: bool,
-    /// Every quote created after the restore point that a merchant reported was re-issued; must be
-    /// `true`.
-    pub quotes_reissued: bool,
     /// Every event delivered after the restore point was imported; must be `true`.
     pub delivered_events_imported: bool,
 }

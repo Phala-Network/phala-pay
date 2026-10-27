@@ -1,4 +1,4 @@
-import { submitTransaction, submitWalletTransaction } from "./transactions.js";
+import { submitWalletTransaction } from "./transactions.js";
 import { createStore } from "mipd";
 import {
   BaseError,
@@ -15,10 +15,7 @@ import { readContract } from "viem/actions";
 import { knownChain, networkName } from "./chains.js";
 import { formatUnitsGrouped } from "./format.js";
 import {
-  depositAddressTransfer,
   quoteTransfer,
-  type DepositAddressAsset,
-  type DepositAddressNetwork,
   type TokenTransfer,
 } from "./payment.js";
 import type { ClientQuote } from "./quote.js";
@@ -127,47 +124,6 @@ export async function payWithWallet(
 ): Promise<Hash> {
   const hash = await sendTransfer(wallet, quoteTransfer(quote), quote.asset, quote.decimals);
   submitWalletTransaction(quote, hash);
-  return hash;
-}
-
-export interface PayDepositAddressOptions {
-  /** The network to pay on, from the deposit address's `networks`. */
-  network: DepositAddressNetwork;
-  /** The token to pay in, from that network's `assets`. */
-  asset: DepositAddressAsset;
-  /** The token amount to send, in the smallest unit; positive. */
-  amountAtomic: bigint;
-  /**
-   * The address's `client_secret`. With `apiBase`, the transaction hash is sent to the service as
-   * a best-effort hint once the wallet broadcasts it, so the payment is found within about a block.
-   */
-  clientSecret?: string | undefined;
-  /** The service origin; needed with `clientSecret`. */
-  apiBase?: string | undefined;
-}
-
-/**
- * Pays `amountAtomic` of a token to a customer's deposit address from a wallet, as `payWithWallet`
- * pays a quote: connects, switches to (or adds) the network's chain, checks the token balance, and
- * sends the ERC-20 `transfer` that the token's `payment_uri` states, for exactly that amount. Then,
- * with `clientSecret` and `apiBase`, it hints the transaction to the service without waiting for
- * or failing on it. Resolves with the transaction hash once the wallet has broadcast it; follow the
- * payment in the address's `payments` by that hash.
- */
-export async function payDepositAddressWithWallet(
-  wallet: WalletClient | EthereumProvider,
-  { network, asset, amountAtomic, clientSecret, apiBase }: PayDepositAddressOptions,
-): Promise<Hash> {
-  if (amountAtomic <= 0n) {
-    throw new TypeError("amountAtomic must be positive");
-  }
-  const transfer = { ...depositAddressTransfer(network, asset), amount: amountAtomic };
-  const hash = await sendTransfer(wallet, transfer, asset.asset, asset.decimals);
-  if (clientSecret !== undefined && apiBase !== undefined) {
-    void submitTransaction({ apiBase, clientSecret, transactionHash: hash, chainId: transfer.chainId }).catch(
-      () => undefined,
-    );
-  }
   return hash;
 }
 

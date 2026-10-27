@@ -23,14 +23,16 @@ class ClientQuote:
     payer's checkout page. It has no account or internal fields.
 
         Example:
-            {'address': '0x2f3e91325b2288bce392711f85f5359661062a91', 'amount': 2500, 'amount_atomic': '25000000',
+            {'address': '0x0f45147a02e4c9d91aff20024e22095536fd5053', 'amount': 2500, 'amount_atomic': '25000000',
                 'amount_credited': None, 'asset': 'usdc', 'chain_id': 1, 'confirmations': 1, 'currency': 'usd', 'decimals': 6,
-                'expires_at': 1790554500, 'id': 'qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10', 'livemode': False, 'object': 'quote',
-                'payment_status': 'seen', 'payment_uri': 'ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address
-                =0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000', 'status': 'open', 'typical_credit_seconds': 30}
+                'deposit_address': 'da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3', 'deposit_address_version': 1, 'expires_at':
+                1790554500, 'id': 'qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10', 'livemode': False, 'object': 'quote', 'payment_status':
+                'seen', 'payment_uri': 'ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288b
+                ce392711f85f5359661062a91&uint256=25000000', 'replaced_by': None, 'status': 'open', 'typical_credit_seconds':
+                30, 'window_start': 1790553600}
 
         Attributes:
-            address (str): Single-use forwarder address to pay.
+            address (str): Customer deposit-address network to pay.
             amount (int): Credit in the currency's minor unit.
             amount_atomic (str): The exact token amount to pay, in base units, as a decimal string.
             amount_credited (int | None): While `credited`: the credit of the payment in the currency's minor unit, the
@@ -42,6 +44,8 @@ class ClientQuote:
             confirmations (int | None): While `seen`: blocks on top of and including the payment's block; otherwise `null`.
             currency (str): `usd`.
             decimals (int): The token's decimals, to display `amount_atomic`.
+            deposit_address (None | str): Deposit address id; null only for historical single-use quotes.
+            deposit_address_version (int | None): Deposit-address salt version; null only for historical single-use quotes.
             expires_at (int): End of the payment window, Unix seconds.
             id (str): `qt_` id.
             livemode (bool): Whether the quote is in live mode; a test-mode page should say so.
@@ -53,11 +57,13 @@ class ClientQuote:
                 `reversed` (credited, then its transaction left the chain before finality: the payment did
                 not happen, and the credit is taken back).
             payment_uri (str): EIP-681 URI carrying the token, chain, address, and amount.
+            replaced_by (None | str): The quote that closed this price window, if replaced.
             status (str): `open`, `complete`, `expired`, or `canceled`, as on `Quote`; hide the address once
                 `expires_at` has passed.
             typical_credit_seconds (int): Typical time from payment to credit, in seconds, at the confirmation the quote's
                 payments
                 are credited at, as `GET /v1/config` reports it.
+            window_start (int): Exclusive start of the payment window, Unix seconds.
             cancel_requested_at (int | None | Unset): Deferred cancellation request time, Unix seconds.
     """
 
@@ -70,14 +76,18 @@ class ClientQuote:
     confirmations: int | None
     currency: str
     decimals: int
+    deposit_address: None | str
+    deposit_address_version: int | None
     expires_at: int
     id: str
     livemode: bool
     object_: ClientQuoteObject
     payment_status: str
     payment_uri: str
+    replaced_by: None | str
     status: str
     typical_credit_seconds: int
+    window_start: int
     cancel_requested_at: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -102,6 +112,12 @@ class ClientQuote:
 
         decimals = self.decimals
 
+        deposit_address: None | str
+        deposit_address = self.deposit_address
+
+        deposit_address_version: int | None
+        deposit_address_version = self.deposit_address_version
+
         expires_at = self.expires_at
 
         id = self.id
@@ -114,9 +130,14 @@ class ClientQuote:
 
         payment_uri = self.payment_uri
 
+        replaced_by: None | str
+        replaced_by = self.replaced_by
+
         status = self.status
 
         typical_credit_seconds = self.typical_credit_seconds
+
+        window_start = self.window_start
 
         cancel_requested_at: int | None | Unset
         if isinstance(self.cancel_requested_at, Unset):
@@ -137,14 +158,18 @@ class ClientQuote:
                 "confirmations": confirmations,
                 "currency": currency,
                 "decimals": decimals,
+                "deposit_address": deposit_address,
+                "deposit_address_version": deposit_address_version,
                 "expires_at": expires_at,
                 "id": id,
                 "livemode": livemode,
                 "object": object_,
                 "payment_status": payment_status,
                 "payment_uri": payment_uri,
+                "replaced_by": replaced_by,
                 "status": status,
                 "typical_credit_seconds": typical_credit_seconds,
+                "window_start": window_start,
             }
         )
         if cancel_requested_at is not UNSET:
@@ -183,6 +208,20 @@ class ClientQuote:
 
         decimals = d.pop("decimals")
 
+        def _parse_deposit_address(data: object) -> None | str:
+            if data is None:
+                return data
+            return cast(None | str, data)
+
+        deposit_address = _parse_deposit_address(d.pop("deposit_address"))
+
+        def _parse_deposit_address_version(data: object) -> int | None:
+            if data is None:
+                return data
+            return cast(int | None, data)
+
+        deposit_address_version = _parse_deposit_address_version(d.pop("deposit_address_version"))
+
         expires_at = d.pop("expires_at")
 
         id = d.pop("id")
@@ -195,9 +234,18 @@ class ClientQuote:
 
         payment_uri = d.pop("payment_uri")
 
+        def _parse_replaced_by(data: object) -> None | str:
+            if data is None:
+                return data
+            return cast(None | str, data)
+
+        replaced_by = _parse_replaced_by(d.pop("replaced_by"))
+
         status = d.pop("status")
 
         typical_credit_seconds = d.pop("typical_credit_seconds")
+
+        window_start = d.pop("window_start")
 
         def _parse_cancel_requested_at(data: object) -> int | None | Unset:
             if data is None:
@@ -218,14 +266,18 @@ class ClientQuote:
             confirmations=confirmations,
             currency=currency,
             decimals=decimals,
+            deposit_address=deposit_address,
+            deposit_address_version=deposit_address_version,
             expires_at=expires_at,
             id=id,
             livemode=livemode,
             object_=object_,
             payment_status=payment_status,
             payment_uri=payment_uri,
+            replaced_by=replaced_by,
             status=status,
             typical_credit_seconds=typical_credit_seconds,
+            window_start=window_start,
             cancel_requested_at=cancel_requested_at,
         )
 

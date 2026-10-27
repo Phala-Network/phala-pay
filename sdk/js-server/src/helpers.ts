@@ -16,7 +16,6 @@ export {
   depositAddress,
   depositAddressSalt,
   forwarderAddress,
-  quoteSalt,
   quoteAddress,
   verifyDepositAddress,
   verifyQuoteAddress,

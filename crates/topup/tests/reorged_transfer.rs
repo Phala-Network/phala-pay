@@ -691,6 +691,7 @@ impl Scenario {
             r#"
             UPDATE quotes
             SET route = $2, amount_atomic = $3::text::numeric, price_scaled = 9000000,
+                window_start = '1969-12-31 23:59:59+00',
                 expires_at = now() + interval '1 hour', credit_minor = 900, status = 'open',
                 exposure_reserved = true, closed_at = NULL, terms = $4
             WHERE id = (SELECT quote_id FROM addresses WHERE id = $1)

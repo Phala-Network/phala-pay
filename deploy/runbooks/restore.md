@@ -13,8 +13,7 @@ point is lost, and some of it matters beyond the database:
 - a treasury whose crediting the merchant paused credits again (or a resume is undone);
 - a webhook endpoint the merchant deleted receives events again;
 - a deposit address given to a customer is unknown, so payments to it are not credited;
-- a quote given to a customer is unknown (its address derives from its random id), so a payment
-  to it is not found;
+- a quote window given to a customer is unknown; its fixed address still accepts spot payments;
 - an event the merchant received is gone: re-derived from the chain, a spot-priced deposit would
   be re-valued, and its `deposit.credited` carries the same event id with another `amount`, and
   its refunds and reversal would reference the re-valued amount.
@@ -59,9 +58,8 @@ receiver's store, its database, or an `export_account` taken before the loss):
 3. webhook endpoints it deleted (`we_…`);
 4. deposit addresses it received: `client_reference_id`, `address`, and `id` (`da_…`) or
    `version`, and a `client_secret` it holds for one;
-5. quotes it created: the quote object (`id`, `client_reference_id`, `chain_id`, `asset`,
-   `amount`, `amount_atomic`, `exchange_rate`, `address`, `created`, `expires_at`, `metadata`) and
-   its `client_secret`, if it kept it;
+5. quotes it created: `deposit_address`, `deposit_address_version`, `client_reference_id`,
+   `livemode`, and `address`, to recover fixed addresses when no address record was saved;
 6. the delivery of every `deposit.credited`, `deposit.rejected`, and `deposit.reversed` event it
    received, as its receiver got it: the raw body, byte for byte, with its `webhook-id`,
    `webhook-timestamp`, and `webhook-signature` headers. Only a delivery the service signed is
@@ -71,16 +69,12 @@ A merchant running the reference product exports items 2 and 4 to 6 with
 `python -m reference_product fetch-restore-records --since <restore point>` (or
 `export-restore-records` next to its ledger), each already the body of its request in
 steps 3 to 5 without `reason`: `treasuries` (`treasuries/verify`), `treasury_applications`
-(`treasuries/apply`), `deposit_addresses`, `quotes`, and `events` ([Staging reference
+(`treasuries/apply`), `deposit_addresses`, and `events` ([Staging reference
 product](../phala.md#staging-reference-product)).
 
-Tell it what it cannot produce is lost: a quote it has no record of is not found, so a payment to
-it is not credited (the chain cannot name it: its address derives from its random id); a spot
-deposit whose delivery it has no record of is re-valued, and its refunds and reversal reference the
-re-valued amount; a quote whose `deposit.credited` it has no record of is credited at spot, since
-its own record of the quote's price is not proof the service issued it
-([design §13](../../docs/design/multi-tenant.md#13-operations)). Its API keys answer `503` until the unfreeze
-(step 7).
+Lost quote windows stay lost; recover fixed customer addresses from saved deposit-address or
+quote records. A spot deposit whose signed delivery is missing is re-valued, and refunds and
+reversals reference that amount. Its API keys answer `503` until the unfreeze (step 7).
 
 Refunds it created or marked paid after the restore point are gone too: after the unfreeze it
 creates them again and marks them paid with the same transaction. Their `deposit.refunded` carries
@@ -135,7 +129,7 @@ merchant's own pause is compared: re-apply the operator's own treasury pauses ma
 restore point from the incident record
 (`admin POST "/v1/admin/accounts/$ACCOUNT/treasuries/$TREASURY_ID/pause" '{"reason":"…"}'`).
 
-Restore each `application_lost` change now, before step 4: the deposit addresses and quotes issued
+Restore each `application_lost` change now, before step 4: the deposit addresses issued
 after it are derived over it, so they can be re-issued only once it is in force again. The evidence
 is the merchant's delivery of the `treasury.updated` that announced it (its object `active`, its
 `previous_attributes.status` `pending`), as its receiver got it:
@@ -162,7 +156,7 @@ move to it. Its `treasury.updated` events are not sent again: the merchant recei
 first applied, and new ones would carry the restore's time. The apply and its `restore.treasury_apply`
 audit row commit together. `applied` is `false` when it is in force already. The merchant's unsigned `treasury`
 object is never enough: a merchant without the delivery proves the treasury again after the
-unfreeze, and the addresses and quotes issued over it meanwhile cannot be re-issued (escalate).
+unfreeze, and the addresses issued over it meanwhile cannot be re-issued (escalate).
 
 **A lost change that applied at once.** Any test-mode change, and a chain's first treasury in
 either mode, applies when it is proven, with no pending state: the merchant received a
@@ -174,7 +168,7 @@ export has no `treasury_applications`, and `treasuries/apply` refuses each of it
 not the `treasury.updated` of a pending change becoming active). Record both results: that
 `differs` needs no escalation of its own when the merchant's `missing` treasury of the same chain
 is the one that replaced it. After the unfreeze the merchant proves the treasury again
-(it applies at once, under a new `trs_` id) and pins it again. Deposit addresses and quotes issued
+(it applies at once, under a new `trs_` id) and pins it again. Deposit addresses issued
 over it after the restore point cannot be re-issued (`400` in step 4), and payments to them are not
 credited: escalate and settle them with the merchant. A live change of a chain that already has a
 treasury is always time-locked for 48 hours, so with an RPO below that it is in the backup, pending,
@@ -225,44 +219,19 @@ returns version 1 identically, and each `POST /v1/deposit_addresses/{id}/rotate`
 Payments made to it meanwhile are credited once it is registered, but only from the chain's cursor
 at that time; re-issue here so nothing is missed.
 
-Re-issue every quote the merchant created after the restore point the same way. Its address salt
-is derived from the account, `client_reference_id`, and `qt_` id ([architecture
-§9](../../docs/architecture.md#9-quotes)), so only the quote's own address over a treasury of the
-chain in force within 5 minutes of its `created` is accepted (every one is the merchant's own, and
-the salt binds the `qt_` id). A quote the restored database holds, same id and account, is returned
-as it is, `reissued: false`, whenever it was created; any other quote created more than 5 minutes
-before the restore point is refused, since the restore did not lose it:
+Quote windows are not reissued after a restore. Open windows are clamped to the restore point
+so a lost replacement cannot revive an old price. Payments to the customer's fixed address stay
+watched and are credited at spot; import delivered `deposit.credited` outcomes to carry forward
+credits the merchant already received. Recover a lost customer address from the quote's
+`deposit_address`, `deposit_address_version`, `client_reference_id`, mode and address.
 
-```sh
-admin POST /v1/admin/restore/quotes \
-  '{"account":"acct_…","livemode":true,"id":"qt_…","client_reference_id":"team-42","chain_id":1,"asset":"pha","amount":1000,"amount_atomic":"…","exchange_rate":"0.10000000","address":"0x…","created":1790000000,"expires_at":1790000900,"metadata":{},"client_secret":"qt_…_secret_…","reason":"INC-…"}' | jq
-```
-
-Only the address is checked: the terms are stored as the merchant recorded them, whatever the
-route issues today, and never applied. The locked price is the merchant's record, not the
-service's, so a payment to the quote is credited at spot, unless the merchant's delivered
-`deposit.credited` for it (step 5) carries the quote's credit; and the quote's `expires_at` is the
-restore's detection at the latest, so its payment page shows it expired instead of asking for a
-payment at a price that is not honoured. Send the quote's `client_secret` when the merchant holds
-it: only a secret the service issued for that `qt_` id to that account is accepted (its tags prove
-both, so a secret copied from another merchant's payer page is refused), and it is kept, so the
-payer's page reads the quote again; without it the quote is re-issued and its payment found all
-the same, and a repeat with the secret, once the merchant finds it, adds it. `reissued` is `false`
-when the quote exists already for the customer at the address. Its address is backfilled from the
-restored cursor, so the rescan finds a payment made to it. `400` means the address is not the
-quote's over a treasury in force around its `created` (check the treasuries, then the record), the
-quote was created before the restore point, the
-`client_secret` is
-not the quote's or not the account's, or no route has the chain and asset. A quote nobody reports
-stays lost.
-
-A `qt_` or `da_` id is unique across accounts, and nothing but its secret proves which account the
+A `da_` id is unique across accounts, and nothing but its secret proves which account the
 service issued it to: a re-issue without one is the merchant's claim. `400` `id belongs to another
-quote` (or `deposit address`) for a request whose `client_secret` was accepted means another
+deposit address` for a request whose `client_secret` was accepted means another
 account or mode re-issued the id first, without its secret: this account's secret proves the id
 is its own. The other claim cannot show this merchant's payers its address (this secret is refused
 there), but it holds the id. Escalate: record both accounts and their records in the incident and
-decide with both merchants; a payment to this merchant's quote address is forwarded only to its
+decide with both merchants; a payment to this merchant's fixed address is forwarded only to its
 treasury, but is not credited while the id is held elsewhere. Ask merchants for their secrets
 before re-issuing without one.
 
@@ -350,14 +319,14 @@ unfreeze is when merchant keys authenticate again:
 
 ```sh
 admin POST /v1/admin/restore/unfreeze \
-  '{"reason":"INC-…: reconciled, signed off by …","security_changes_reapplied":true,"deposit_addresses_reissued":true,"quotes_reissued":true,"delivered_events_imported":true}'
+  '{"reason":"INC-…: reconciled, signed off by …","security_changes_reapplied":true,"deposit_addresses_reissued":true,"delivered_events_imported":true}'
 ```
 
 `400 restore_rescan_incomplete` means rescan or acceptance checks are incomplete. The reason and checklist are
 recorded in the restore and in `audit`; crediting, settlement, quote expiry, treasury changes,
 refund verification, and event delivery resume, and merchants' API keys work again, reads and
 writes. Each checklist item is a step: `security_changes_reapplied` step 3,
-`deposit_addresses_reissued` and `quotes_reissued` step 4, `delivered_events_imported` step 5.
+`deposit_addresses_reissued` step 4, `delivered_events_imported` step 5.
 
 Before unfreeze, the latest `restore.validation` audit entry for this restore must say `ok`.
 A failed RPC or database check, an interrupted check, or absent validation evidence blocks it,
@@ -370,7 +339,7 @@ An administrator may explicitly accept the critical-check risk only with an inci
 
 ```sh
 admin POST /v1/admin/restore/unfreeze \
-  '{"reason":"override-critical-checks: INC-42: independent evidence reviewed by NAME; custody RPC unavailable","security_changes_reapplied":true,"deposit_addresses_reissued":true,"quotes_reissued":true,"delivered_events_imported":true}'
+  '{"reason":"override-critical-checks: INC-42: independent evidence reviewed by NAME; custody RPC unavailable","security_changes_reapplied":true,"deposit_addresses_reissued":true,"delivered_events_imported":true}'
 ```
 
 The exact `override-critical-checks:` prefix and a nonempty reason are required. This does not

@@ -362,3 +362,10 @@ the reference; an unlinked legacy marker or stale S proof remains watcher-owned.
 Additive SQL functions share watcher eligibility and terminal-proof lookup with the pump and DB
 metrics, including detected S rows with an older final marker. Its down migration keeps all
 history and money state. N-1 can read/write the expanded schema but uses its old RPC allocation.
+
+`20261104000000_fixed_address_quotes` is a declared breaking change. It backfills every
+quote's required `address_id` from its historical address, introduces `(window_start, expires_at]`
+and `replaced_by`, and backfills lock-priced deposits' `quote_id` (reversals included).
+Historically reissued quotes get empty windows so their unsigned prices cannot apply. New quotes reuse customer
+networks; historical addresses stay watched. The compatibility floor is raised to this migration.
+No rollback to 0.12.2 is supported; restore a verified pre-upgrade backup to run v0.12.x.

@@ -24,7 +24,6 @@ use crate::api_keys;
 use crate::audit::{self, Actor};
 use crate::deposit_addresses::{self, ChainContracts, ReissueTarget};
 use crate::ids;
-use crate::locks::{self, ReissuedTerms};
 use crate::outbox::SignedWebhook;
 use crate::restore_mode::{self, DeliveredCredit, DeliveredEvent, DeliveredIdentity, Restore};
 use crate::tenancy::Scope;
@@ -39,10 +38,9 @@ use super::models::{
     self, ApiKeyObject, DeletedWebhookEndpoint, EventImport, RestoreApiKeyRevokeRequest,
     RestoreDeliveredCreditDiscardRequest, RestoreDeliveredCreditDiscardResponse,
     RestoreDepositAddressRequest, RestoreDepositAddressResponse, RestoreEventsImportRequest,
-    RestoreEventsImportResponse, RestoreObject, RestoreQuoteRequest, RestoreQuoteResponse,
-    RestoreStatus, RestoreTreasuryApplyRequest, RestoreTreasuryApplyResponse,
-    RestoreTreasuryVerifyRequest, RestoreTreasuryVerifyResponse, RestoreUnfreezeRequest,
-    RestoreWebhookEndpointDeleteRequest, TreasuryVerification,
+    RestoreEventsImportResponse, RestoreObject, RestoreStatus, RestoreTreasuryApplyRequest,
+    RestoreTreasuryApplyResponse, RestoreTreasuryVerifyRequest, RestoreTreasuryVerifyResponse,
+    RestoreUnfreezeRequest, RestoreWebhookEndpointDeleteRequest, TreasuryVerification,
 };
 
 type ApiResult<T> = Result<T, ApiError>;
@@ -388,7 +386,7 @@ pub(crate) async fn verify_treasuries(
 /// from the merchant's delivery of its `treasury.updated`: only a delivery the service signed
 /// (with one of the account's webhook keys in its mode) of a pending treasury becoming `active`
 /// is accepted. The change applies as its time-lock applied it, at the event's `created`, so the
-/// deposit addresses and quotes issued over it are re-issued over it while frozen, and those
+/// deposit addresses issued over it are re-issued over it while frozen, and those
 /// issued before it over the treasury it replaced. It is screened again when screening is
 /// available; no event is sent again. Audited in the transaction that applies it.
 pub(crate) async fn apply_treasury(
@@ -639,119 +637,6 @@ pub(crate) async fn reissue_deposit_address(
     }))
 }
 
-#[utoipa::path(
-    post,
-    path = "/v1/admin/restore/quotes",
-    request_body = RestoreQuoteRequest,
-    responses(
-        (status = 200, description = "OK: re-issued, or the quote exists already for the customer at the address", body = RestoreQuoteResponse),
-        (status = 400, description = "Bad Request: the address is not the quote's over the account's treasury of the chain in force at its `created` (restore a lost treasury change first), the `client_secret` is not one the service issued for the quote to the account, no route has the chain and asset, the quote exists with another customer or address, or `treasury_not_set`; or `restore_not_frozen`", body = ErrorResponse),
-        (status = 401, description = "Unauthorized", body = ErrorResponse),
-        (status = 404, description = "Not Found", body = ErrorResponse)
-    ),
-    security(("http_message_signature" = [])),
-    tag = "admin"
-)]
-/// Re-issues a quote the merchant created after the restore point, from its record of the quote
-/// object: the address salt is derived from the account, customer, and `qt_` id, so only the
-/// quote's own address over the treasury in force at its `created` is accepted, backfilled from
-/// the restored cursor so the rescan finds a
-/// payment made to it since. A `client_secret` the service issued for the quote to the account is
-/// kept, so the payer's page reads it again. The terms are stored as recorded but never applied:
-/// a payment to the quote is credited at spot unless an imported `deposit.credited` for it, which
-/// the service signed, carries its credit, and the payment window closes at the restore's
-/// detection at the latest. Audited.
-pub(crate) async fn reissue_quote(
-    State(state): State<AppState>,
-    AdminActor(actor): AdminActor,
-    ApiJson(request): ApiJson<RestoreQuoteRequest>,
-) -> ApiResult<Json<RestoreQuoteResponse>> {
-    validate_reason(&request.reason)?;
-    validate_client_reference_id(&request.client_reference_id)?;
-    let restore = frozen(&state).await?;
-    let account_id = parse_account_id(&request.account)?;
-    let account = crate::db::get_account(&state.pool, account_id)
-        .await?
-        .ok_or_else(ApiError::not_found)?;
-    let id = ids::parse(ids::QUOTE, &request.id)
-        .ok_or_else(|| ApiError::invalid_param("id", "id must be a qt_ id"))?;
-    let address = EvmAddress::from_str(&request.address)
-        .map_err(|_| ApiError::invalid_param("address", "address must be an address"))?;
-    let amount_atomic = decimal_u256(&request.amount_atomic).ok_or_else(|| {
-        ApiError::invalid_param("amount_atomic", "amount_atomic must be a decimal integer")
-    })?;
-    let price = super::quotes::parse_decimal(&request.exchange_rate)
-        .and_then(|price| ScaledPrice::new(price, PRICE_SCALE).ok())
-        .ok_or_else(|| {
-            ApiError::invalid_param("exchange_rate", "exchange_rate must have 8 decimal places")
-        })?;
-    let timestamp = |param: &'static str, seconds: i64| {
-        DateTime::from_timestamp(seconds, 0)
-            .ok_or_else(|| ApiError::invalid_param(param, format!("{param} must be Unix seconds")))
-    };
-    let client_secret_hash = request
-        .client_secret
-        .as_deref()
-        .map(|secret| {
-            client_secret_hash(&state, &account, &request.id, secret).ok_or_else(|| {
-                ApiError::invalid_param(
-                    "client_secret",
-                    "client_secret is not one the service issued for this quote to this account",
-                )
-            })
-        })
-        .transpose()?;
-    let terms = ReissuedTerms {
-        id,
-        client_reference_id: request.client_reference_id.clone(),
-        address,
-        amount_atomic: AtomicAmount::new(amount_atomic),
-        price,
-        credit_minor: MinorAmount::new(request.amount),
-        created_at: timestamp("created", request.created)?,
-        expires_at: timestamp("expires_at", request.expires_at)?,
-        metadata: super::metadata::on_create(request.metadata.as_ref())?,
-        client_secret_hash,
-    };
-    // A route of the mode with the quote's chain and asset, paused or not and current or not:
-    // nothing new is given out, the quote was issued already, and only its contracts are used.
-    let route = state
-        .routes
-        .current_in(request.livemode)
-        .chain(
-            state
-                .routes
-                .routes()
-                .iter()
-                .filter(|route| route.livemode == request.livemode),
-        )
-        .find(|route| {
-            route.chain.chain_id == request.chain_id
-                && route.asset.symbol.eq_ignore_ascii_case(&request.asset)
-        })
-        .ok_or_else(|| ApiError::invalid_param("asset", "no route has the chain and asset"))?;
-    if !state.routes.chain_ready(route.chain.chain_id) {
-        return Err(ApiError::chain_unavailable());
-    }
-    let (lock, issued) = locks::reissue(
-        &state.pool,
-        &account,
-        request.livemode,
-        route,
-        &terms,
-        &restore,
-        &actor,
-        &request.reason,
-    )
-    .await
-    .map_err(super::quotes::map_error)?;
-    let mut connection = state.pool.acquire().await?;
-    Ok(Json(RestoreQuoteResponse {
-        reissued: issued,
-        quote: super::quotes::quote_object(&mut connection, &state.routes, lock).await?,
-    }))
-}
-
 /// The SHA-256 of `secret` when it is a client secret the service issued for the object whose
 /// public id is `id` to `account` (`crate::client_secret`): its tag proves the service issued
 /// that id, its owner tag that it issued it to the account, so no other account's record of the
@@ -969,7 +854,6 @@ pub(crate) async fn unfreeze(
             "deposit_addresses_reissued",
             request.deposit_addresses_reissued,
         ),
-        ("quotes_reissued", request.quotes_reissued),
         (
             "delivered_events_imported",
             request.delivered_events_imported,
@@ -984,7 +868,7 @@ pub(crate) async fn unfreeze(
     }
     let reason = format!(
         "{}; checklist: security_changes_reapplied, deposit_addresses_reissued, \
-         quotes_reissued, delivered_events_imported",
+         delivered_events_imported",
         request.reason.trim()
     );
     let restore = restore_mode::unfreeze(&state.pool, &state.routes, &actor, &reason)

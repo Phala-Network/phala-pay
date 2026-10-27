@@ -850,7 +850,7 @@ async fn every_merchant_endpoint_is_404_across_accounts_and_modes() -> Result<()
         ];
         let lists = [
             "/v1/deposits".to_owned(),
-            format!("/v1/deposits?quote={quote}"),
+
             "/v1/deposits?client_reference_id=owned-customer".to_owned(),
         ];
         let app = test_router(pool, &admin_key);

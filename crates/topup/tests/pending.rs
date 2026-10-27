@@ -121,6 +121,20 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let other_quote = api.lock("checkout-0").await?;
     let before = Ledger::read(pool).await?;
 
+    let quote_start = api.quote("checkout-1").await?["window_start"]
+        .as_i64()
+        .context("window start")?;
+    run_checked(
+        "cast",
+        &[
+            "rpc",
+            "--rpc-url",
+            &anvil.rpc_url,
+            "evm_setNextBlockTimestamp",
+            &(quote_start + 1).to_string(),
+        ],
+        None,
+    )?;
     let snapshot = snapshot(anvil)?;
     transfer(&anvil.rpc_url, token, lock_address, 100)?;
     transfer(&anvil.rpc_url, other_token, other_quote, 5)?;
@@ -258,14 +272,15 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
             .bind(api.address_id(pool, "checkout-2").await?)
             .fetch_one(pool)
             .await?;
-    sqlx::query(
-        "UPDATE quotes SET status = 'consumed', consumed_by = $1, exposure_reserved = false, \
-         closed_at = now() WHERE id = (SELECT address.quote_id FROM deposits AS deposit \
-         JOIN addresses AS address ON address.id = deposit.address_id WHERE deposit.id = $1)",
-    )
-    .bind(underpayment)
-    .execute(pool)
-    .await?;
+    let quote_id =
+        topup::ids::parse(topup::ids::QUOTE, &api.id("checkout-2")?).context("quote id")?;
+    sqlx::query("UPDATE quotes SET status='consumed',consumed_by=$1,exposure_reserved=false,closed_at=now() WHERE id=$2")
+        .bind(underpayment).bind(quote_id).execute(pool).await?;
+    sqlx::query("UPDATE deposits SET quote_id=$2 WHERE id=$1")
+        .bind(underpayment)
+        .bind(quote_id)
+        .execute(pool)
+        .await?;
     let payment = api.payment("checkout-2").await?;
     ensure!(
         payment["status"] == "recorded"
@@ -298,7 +313,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         deposit["quote"]["id"] == quote_id && deposit["quote"]["deposit"] == deposit_id,
         "{deposit}"
     );
-    ensure!(deposit["client_reference_id"] == "ws-pending" && deposit["asset"] == "pha");
+    ensure!(deposit["client_reference_id"] == "checkout-2" && deposit["asset"] == "pha");
 
     // A cancelled lock credits every payment at spot, so none is in time or within tolerance.
     let cancelled = api.lock("checkout-4").await?;
@@ -318,8 +333,8 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let lock = api.quote("checkout-4").await?;
     ensure!(lock["status"] == "canceled", "unexpected {lock}");
     ensure!(
-        lock["payment"]["amount_atomic"] == "100" && lock["payment"]["matches_quote"] == false,
-        "canceled quote shows its payment as applying: {lock}"
+        lock["payment"].is_null(),
+        "out-of-window payment leaked onto canceled quote: {lock}"
     );
     Ok(())
 }
@@ -415,13 +430,13 @@ struct Api {
 }
 
 impl Api {
-    /// Creates a 100-cent quote for `ws-pending` and returns its address.
+    /// Creates a 100-cent quote for the named customer and returns its address.
     async fn lock(&self, name: &str) -> Result<Address> {
         let quote = self
             .call(
                 Method::POST,
                 "/v1/quotes",
-                json!({"client_reference_id": "ws-pending", "amount": 100, "currency": "usd",
+                json!({"client_reference_id": name, "amount": 100, "currency": "usd",
                        "chain_id": CHAIN_ID, "asset": "pha"}),
             )
             .await?;
@@ -478,7 +493,7 @@ impl Api {
     async fn address_id(&self, pool: &sqlx::PgPool, name: &str) -> Result<Uuid> {
         let quote = topup::ids::parse(topup::ids::QUOTE, &self.id(name)?).context("quote id")?;
         Ok(
-            sqlx::query_scalar("SELECT id FROM addresses WHERE quote_id = $1")
+            sqlx::query_scalar("SELECT address_id FROM quotes WHERE id = $1")
                 .bind(quote)
                 .fetch_one(pool)
                 .await?,

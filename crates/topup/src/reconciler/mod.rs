@@ -572,22 +572,13 @@ impl Reconciler {
             .await?
             .into_iter()
             .collect::<BTreeMap<_, _>>();
-        let address_ids = deposits
-            .values()
-            .filter_map(|d| {
-                d.as_ref()
-                    .ok()
-                    .filter(|d| d.price_source.as_deref() == Some("lock"))
-                    .map(|d| d.address_id)
-            })
-            .collect::<Vec<_>>();
         let quote_credits = sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT a.id,q.credit_minor::text \
-             FROM addresses a \
-             JOIN quotes q ON q.id=a.quote_id \
-             WHERE a.id=ANY($1)",
+            "SELECT d.id,COALESCE(c.credit_minor,q.credit_minor)::text FROM deposits d
+             LEFT JOIN quotes q ON q.id=d.quote_id
+             LEFT JOIN restore_delivered_credits c ON c.deposit_id=d.id AND c.discarded_at IS NULL
+             WHERE d.id=ANY($1) AND (q.id IS NOT NULL OR c.deposit_id IS NOT NULL)",
         )
-        .bind(address_ids)
+        .bind(&ids)
         .fetch_all(&self.pool)
         .await?
         .into_iter()
@@ -658,7 +649,7 @@ impl Reconciler {
         ))?;
         let expected = if deposit.price_source.as_deref() == Some("lock") {
             quote_credits
-                .get(&deposit.address_id)
+                .get(&deposit.id)
                 .ok_or(ReconciliationError::Invariant(
                     "lock-priced deposit has no rate lock",
                 ))?

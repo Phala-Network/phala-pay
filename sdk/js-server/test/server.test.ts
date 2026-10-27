@@ -10,8 +10,6 @@ import {
   depositAddress,
   flushTransaction,
   flushTransactions,
-  forwarderAddress,
-  quoteSalt,
   quoteAddress,
   safeBatch,
   verifyDepositAddress,
@@ -40,18 +38,6 @@ const vectors = JSON.parse(
 const forwarder = { factory: vectors.factory, implementation: vectors.implementation };
 
 describe("address recomputation", () => {
-  it("reproduces the contract vectors of quotes", () => {
-    expect(vectors.quote.length).toBeGreaterThan(0);
-    for (const vector of vectors.quote) {
-      expect(quoteSalt(vector.account, vector.client_reference_id, vector.quote_id)).toBe(vector.salt);
-      expect(forwarderAddress(vectors.factory, vectors.implementation, vector.treasury, vector.salt)).toBe(
-        vector.predicted_address,
-      );
-      const quote = { client_reference_id: vector.client_reference_id, id: vector.quote_id };
-      expect(quoteAddress(forwarder, quote, vector.treasury, vector.account)).toBe(vector.predicted_address);
-    }
-  });
-
   it("reproduces the contract vectors of deposit addresses", () => {
     expect(vectors.deposit_address.length).toBeGreaterThan(0);
     for (const vector of vectors.deposit_address) {
@@ -63,11 +49,12 @@ describe("address recomputation", () => {
 });
 
 describe("address verification from your own pins", () => {
-  const [vector] = vectors.quote;
+  const vector = vectors.deposit_address.find((vector) => vector.livemode);
   if (vector === undefined) throw new Error("no quote vector");
   const pins: AddressPins = { ...forwarder, account: vector.account, treasuries: { 1: vector.treasury } };
   const quote = {
-    id: vector.quote_id,
+    id: "qt_example",
+    deposit_address_version: vector.version,
     livemode: true,
     chain_id: 1,
     treasury: vector.treasury,
@@ -80,7 +67,7 @@ describe("address verification from your own pins", () => {
   const spoofed = {
     ...quote,
     treasury: attacker,
-    address: quoteAddress(forwarder, { client_reference_id: vector.client_reference_id, id: vector.quote_id }, attacker, vector.account),
+    address: quoteAddress(forwarder, { client_reference_id: vector.client_reference_id, livemode: vector.livemode, deposit_address_version: vector.version }, attacker, vector.account),
   };
 
   it("returns the address derived from the pinned treasury", () => {
@@ -106,8 +93,8 @@ describe("address verification from your own pins", () => {
   it("trusts the response's treasury only in test mode, with a warning", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      expect(verifyQuoteAddress({ ...pins, treasuries: undefined }, { ...spoofed, livemode: false })).toBe(
-        spoofed.address,
+      expect(verifyQuoteAddress({ ...pins, treasuries: undefined }, { ...spoofed, livemode: false, address: quoteAddress(forwarder, { ...spoofed, livemode: false }, attacker, vector.account) })).toBe(
+        quoteAddress(forwarder, { ...spoofed, livemode: false }, attacker, vector.account),
       );
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("test mode only"));
     } finally {

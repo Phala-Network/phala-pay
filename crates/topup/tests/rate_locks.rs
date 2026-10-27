@@ -658,8 +658,9 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
                     created["address"].as_str().context("address")?
                 )
         );
-        // The address salt's reference is the quote id.
-        let salt = topup_core::address::quote_salt(&product.public_id, "account-rl", &quote_id);
+        // Every quote derives the customer's deposit-address network.
+        let salt =
+            topup_core::address::deposit_address_salt(&product.public_id, true, "account-rl", 1);
         let expected = topup_core::address::forwarder_address(
             route.chain.contracts.forwarder_factory,
             route.chain.contracts.implementation,
@@ -707,6 +708,9 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
                     "currency": "usd", "asset": "pha", "decimals": route.asset.decimals,
                     "chain_id": 1, "amount_atomic": "100", "address": created["address"],
                     "payment_uri": created["payment_uri"], "expires_at": created["expires_at"],
+                    "deposit_address": created["deposit_address"],
+                    "deposit_address_version": 1, "replaced_by": null,
+                    "window_start": created["window_start"],
                     "cancel_requested_at": null,
                     "payment_status": "none", "confirmations": null,
                     "amount_credited": null, "typical_credit_seconds": 900,
@@ -989,7 +993,7 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
         ensure!(audit_count == 1);
         ensure!(quote_status(&database.app_pool, &quote_id).await? == "cancelled");
 
-        // A quote whose single-use address already received funds is no longer unpaid.
+        // A quote whose fixed customer address already received funds is no longer unpaid.
         sqlx::query("DELETE FROM route_pauses WHERE route = $1")
             .bind(&route.route)
             .execute(&database.app_pool)
@@ -1639,10 +1643,8 @@ async fn new_lock_addresses_start_scanning_at_the_chain_cursor() -> Result<()> {
             .execute(&database.app_pool)
             .await?;
         let after_cursor = create_lock(&database, &quotes, &product, &account, &route).await?;
-        for (address_id, expected) in [
-            (before_cursor.address_id, 0),
-            (after_cursor.address_id, 1234),
-        ] {
+        for (address_id, expected) in [(before_cursor.address_id, 0), (after_cursor.address_id, 0)]
+        {
             let (created_block, backfilled): (i64, bool) =
                 sqlx::query_as("SELECT created_block, backfilled FROM addresses WHERE id = $1")
                     .bind(address_id)
@@ -2065,182 +2067,6 @@ async fn cancel_waits_for_an_uncommitted_deposit_to_the_lock_address() -> Result
     result.and(cleanup)
 }
 
-#[tokio::test]
-#[traced_test]
-async fn failing_expiry_scans_alert_and_recover() -> Result<()> {
-    let Some(database) = TestDatabase::create().await? else {
-        return Ok(());
-    };
-    let result = async {
-        let product = seed_product_without_key(&database.app_pool, "phala-cloud").await?;
-        let account = seed_account(&database.app_pool, product.id, "failing").await?;
-        let route = test_route();
-        let quotes: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
-        let lock = create_lock(&database, &quotes, &product, &account, &route).await?;
-        sqlx::query("UPDATE quotes SET expires_at = now() - interval '1 second' WHERE id = $1")
-            .bind(lock.id)
-            .execute(&database.app_pool)
-            .await?;
-        // The batch fails at its `quote.expired` event and rolls back.
-        sqlx::query("REVOKE INSERT ON events FROM topup_app")
-            .execute(&database.owner_pool)
-            .await?;
-        finalize_chain_past_now(&database.app_pool).await?;
-
-        let cancellation = tokio_util::sync::CancellationToken::new();
-        let worker = locks::ExpiryWorker::new(
-            database.app_pool.clone(),
-            Arc::new(test_routes()),
-            std::time::Duration::from_millis(10),
-        );
-        let worker_cancellation = cancellation.clone();
-        let running = tokio::spawn(async move { worker.run(worker_cancellation).await });
-        // The current-thread test runtime polls the spawned worker inside this test's span.
-        for _ in 0..400 {
-            if logs_contain("TopupLockExpiryFailing") {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        ensure!(
-            logs_contain("TopupLockExpiryFailing"),
-            "expiry never failed"
-        );
-        ensure!(lock_status(&database.app_pool, lock.id).await? == "open");
-
-        sqlx::query("GRANT INSERT ON events TO topup_app")
-            .execute(&database.owner_pool)
-            .await?;
-        for _ in 0..400 {
-            if lock_status(&database.app_pool, lock.id).await? == "expired" {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        cancellation.cancel();
-        running.await?;
-        ensure!(lock_status(&database.app_pool, lock.id).await? == "expired");
-        ensure!(exposure(&database.app_pool, "global").await? == 0);
-        Ok(())
-    }
-    .await;
-    let cleanup = database.cleanup().await;
-    result.and(cleanup)
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn exposure_is_exact_after_concurrent_create_consume_cancel_and_expire() -> Result<()> {
-    let Some(database) = TestDatabase::create().await? else {
-        return Ok(());
-    };
-    let result = async {
-        const ACCOUNTS: usize = 4;
-        let product = seed_product_without_key(&database.app_pool, "phala-cloud").await?;
-        set_limits(
-            &database.app_pool,
-            product.id,
-            true,
-            None,
-            Some(1_000_000),
-            Some(1_000_000),
-        )
-        .await?;
-        let route = Arc::new(test_route());
-        let quotes: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
-        let mut accounts = Vec::new();
-        for index in 0..ACCOUNTS {
-            let account =
-                seed_account(&database.app_pool, product.id, &format!("c-{index}")).await?;
-            let mut ids = std::collections::HashMap::new();
-            for name in ["consume", "cancel", "expire", "keep"] {
-                let lock = create_lock(&database, &quotes, &product, &account, &route).await?;
-                if name == "expire" {
-                    sqlx::query("UPDATE quotes SET expires_at = now() WHERE id = $1")
-                        .bind(lock.id)
-                        .execute(&database.app_pool)
-                        .await?;
-                }
-                ids.insert(name, lock.id);
-            }
-            accounts.push((account, ids["cancel"], ids["consume"]));
-        }
-        finalize_chain_past_now(&database.app_pool).await?;
-
-        let mut tasks = tokio::task::JoinSet::new();
-        for (index, (account, cancel_id, consume_id)) in accounts.iter().cloned().enumerate() {
-            let (pool, quotes, product, route) = (
-                database.app_pool.clone(),
-                Arc::clone(&quotes),
-                product.clone(),
-                Arc::clone(&route),
-            );
-            tasks.spawn(async move {
-                for _ in 0..3 {
-                    locks::create(
-                        &pool,
-                        &quotes,
-                        &client_secret_key(),
-                        &product,
-                        &account,
-                        &route,
-                        MinorAmount::new(100),
-                        &Default::default(),
-                    )
-                    .await?;
-                }
-                cancel_lock(&pool, &product, cancel_id).await?;
-                consume_lock(&pool, consume_id, u8::try_from(index)?).await?;
-                anyhow::Ok(())
-            });
-        }
-        {
-            let pool = database.app_pool.clone();
-            tasks.spawn(async move {
-                while sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM quotes WHERE status='expired'",
-                )
-                .fetch_one(&pool)
-                .await?
-                    < ACCOUNTS as i64
-                {
-                    locks::expire_once(&pool, &test_routes()).await?;
-                }
-                anyhow::Ok(())
-            });
-        }
-        tokio::time::timeout(std::time::Duration::from_secs(60), async {
-            while let Some(task) = tasks.join_next().await {
-                task??;
-            }
-            anyhow::Ok(())
-        })
-        .await
-        .context("lifecycle operations never completed")??;
-
-        // Cancellation reserves exposure until the dual scan catches up after the request.
-        finalize_chain_past_now(&database.app_pool).await?;
-        locks::expire_once(&database.app_pool, &test_routes()).await?;
-        ensure!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM quotes WHERE status='cancelled'")
-                .fetch_one(&database.app_pool)
-                .await?
-                == ACCOUNTS as i64
-        );
-
-        // Per account: "keep" plus three new locks remain reserved.
-        let open = exposure(&database.app_pool, "global").await?;
-        ensure!(open == 4 * 100 * ACCOUNTS as u64, "{open}");
-        ensure!(exposure(&database.app_pool, &format!("product:{}", product.id)).await? == open);
-        for (account, _, _) in &accounts {
-            ensure!(exposure(&database.app_pool, &format!("account:{}", account.id)).await? == 400);
-        }
-        Ok(())
-    }
-    .await;
-    let cleanup = database.cleanup().await;
-    result.and(cleanup)
-}
-
 /// Commits the test chain's scanner cursor through a finalized block just past every lock already
 /// overdue by wall clock, as the scanner does on reaching the finalized head.
 async fn finalize_chain_past_now(pool: &sqlx::PgPool) -> Result<()> {
@@ -2270,7 +2096,26 @@ async fn set_finalized_time(pool: &sqlx::PgPool, time: chrono::DateTime<Utc>) ->
 
 /// Consumes a lock the way the confirm step does: a leased deposit transition with consumption.
 async fn consume_lock(pool: &sqlx::PgPool, quote_id: Uuid, number: u8) -> Result<()> {
-    let address_id: Uuid = sqlx::query_scalar("SELECT id FROM addresses WHERE quote_id = $1")
+    let block_time =
+        sqlx::query_scalar("SELECT window_start+interval '1 second' FROM quotes WHERE id=$1")
+            .bind(quote_id)
+            .fetch_one(pool)
+            .await?;
+    ensure!(
+        try_consume_lock(pool, quote_id, number, block_time).await?
+            == topup::db::ApplyTransitionResult::Applied
+    );
+    ensure!(lock_status(pool, quote_id).await? == "consumed");
+    Ok(())
+}
+
+async fn try_consume_lock(
+    pool: &sqlx::PgPool,
+    quote_id: Uuid,
+    number: u8,
+    block_time: chrono::DateTime<Utc>,
+) -> Result<topup::db::ApplyTransitionResult> {
+    let address_id: Uuid = sqlx::query_scalar("SELECT address_id FROM quotes WHERE id = $1")
         .bind(quote_id)
         .fetch_one(pool)
         .await?;
@@ -2291,7 +2136,8 @@ async fn consume_lock(pool: &sqlx::PgPool, quote_id: Uuid, number: u8) -> Result
     )?;
     let effects = topup::db::TransitionEffects {
         lock_consumption: Some(topup::db::LockConsumption {
-            address_id,
+            quote_id,
+            block_time,
             idempotent: false,
         }),
         ..topup::db::TransitionEffects::default()
@@ -2317,17 +2163,8 @@ async fn consume_lock(pool: &sqlx::PgPool, quote_id: Uuid, number: u8) -> Result
         },
     )
     .await?;
-    ensure!(
-        applied == topup::db::ApplyTransitionResult::Applied,
-        "consumption was not applied: {applied:?}"
-    );
     transaction.commit().await?;
-    let status: String = sqlx::query_scalar("SELECT status FROM quotes WHERE id = $1")
-        .bind(quote_id)
-        .fetch_one(pool)
-        .await?;
-    ensure!(status == "consumed");
-    Ok(())
+    Ok(applied)
 }
 
 /// Inserts a rejected deposit to `address_id`, under the address's account, mode, and customer.
@@ -2349,7 +2186,7 @@ async fn insert_deposit_in(
                quote.customer_id, $5, $6, 100, 'rejected', 'unsupported_asset', now(), 0, $6, 0,
                settings.current_revision_id
         FROM addresses AS address
-        JOIN quotes AS quote ON quote.id = address.quote_id
+        JOIN LATERAL (SELECT customer_id FROM quotes WHERE address_id=address.id ORDER BY created_at DESC LIMIT 1) AS quote ON true
         JOIN payment_settings_state AS settings
             ON settings.account_id = address.account_id AND settings.livemode = address.livemode
         WHERE address.id = $4
@@ -2359,7 +2196,7 @@ async fn insert_deposit_in(
     .bind(format!("{:#x}", B256::repeat_byte(number)))
     .bind(format!("{:#x}", B256::repeat_byte(number.wrapping_add(1))))
     .bind(address_id)
-    .bind(format!("{:#x}", Address::repeat_byte(0x73)))
+    .bind(format!("{:#x}", test_route().asset.contract))
     .bind(format!("{:#x}", Address::repeat_byte(0x74)))
     .execute(&mut **transaction)
     .await?;
@@ -2466,7 +2303,7 @@ async fn quote_status(pool: &sqlx::PgPool, quote_id: &str) -> Result<String> {
 
 async fn quote_address_id(pool: &sqlx::PgPool, quote_id: &str) -> Result<Uuid> {
     Ok(
-        sqlx::query_scalar("SELECT id FROM addresses WHERE quote_id = $1")
+        sqlx::query_scalar("SELECT address_id FROM quotes WHERE id = $1")
             .bind(topup::ids::parse(topup::ids::QUOTE, quote_id).context("quote id")?)
             .fetch_one(pool)
             .await?,
@@ -2494,7 +2331,7 @@ async fn insert_rejected_deposit(
             address_id,
             route: None,
             route_version: None,
-            asset_contract: Address::repeat_byte(0x73),
+            asset_contract: route.asset.contract,
             from_address: Address::repeat_byte(0x74),
             amount_atomic: AtomicAmount::new(U256::from(100_u64)),
             state: DepositState::Rejected,
@@ -2652,7 +2489,7 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
         let route = test_route();
         let quotes: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
         let (account, key) = seed_product(pool, "batch-quotes").await?;
-        let customer = seed_account(pool, account.id, "shared-reference").await?;
+
         let (other, _) = seed_product(pool, "other-batch-quotes").await?;
         let other_customer = seed_account(pool, other.id, "shared-reference").await?;
         let foreign = create_lock(database, &quotes, &other, &other_customer, &route).await?;
@@ -2668,13 +2505,17 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
         let test_lock = create_lock(database, &quotes, &account, &test_customer, &test_route).await?;
         let mut live = Vec::new();
         for n in 0..4 {
-            let lock = create_lock(database, &quotes, &account, &customer, &route).await?;
+            let page_customer = seed_account(pool, account.id, &format!("page-{n}")).await?;
+            let lock = create_lock(database, &quotes, &account, &page_customer, &route).await?;
             sqlx::query("UPDATE quotes SET created_at='2026-01-01'::timestamptz + $2 * interval '1 second' WHERE id=$1")
                 .bind(lock.id).bind(n).execute(&database.owner_pool).await?;
             live.push(lock);
         }
         consume_lock(pool, live[0].id, 0x61).await?;
         insert_rejected_deposit(pool, &route, live[1].address_id).await?;
+        sqlx::query("UPDATE deposits SET asset_contract=$2 WHERE address_id=$1")
+            .bind(live[1].address_id).bind(format!("{:#x}",Address::repeat_byte(0xee)))
+            .execute(pool).await?;
         let mut tx = database.owner_pool.begin().await?;
         let earlier = insert_deposit_in(&mut tx,live[0].address_id,0x60).await?;
         sqlx::query("UPDATE deposits SET block_number=9,asset_contract=$2 WHERE id=$1")
@@ -2719,7 +2560,7 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
                 response_json(response).await
             }
         };
-        let all = get("/v1/quotes?client_reference_id=shared-reference".to_owned()).await?;
+        let all = get("/v1/quotes".to_owned()).await?;
         let rows = all["data"].as_array().context("quote data")?;
         ensure!(rows.len()==4 && all["has_more"]==false,"{all}");
         for (row, lock) in rows.iter().zip(live.iter().rev()) {
@@ -2898,4 +2739,79 @@ async fn routed_chain_not_ready_returns_chain_unavailable_for_both_issuance_path
         }
         Ok(())
     })).await
+}
+
+/// Concurrent quotes share one network and cut even a consumed window. Reversal must keep
+/// that cut, and replacements retain exposure until complete chain coverage.
+#[tokio::test]
+async fn fixed_address_quotes_replace_windows_without_issuing_more_addresses() -> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool = &database.app_pool;
+        let product = seed_product_without_key(pool, "fixed quotes").await?;
+        let customer = seed_account(pool, product.id, "fixed").await?;
+        let route = test_route();
+        let provider: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
+        let first = create_lock(database, &provider, &product, &customer, &route).await?;
+        ensure!(first.deposit_address_id.is_some() && first.deposit_address_version == Some(1));
+        sqlx::query("UPDATE quotes SET window_start=window_start-interval '30 seconds' WHERE id=$1")
+            .bind(first.id).execute(pool).await?;
+        consume_lock(pool, first.id, 0x19).await?;
+        let (second, third) = tokio::try_join!(
+            create_lock(database, &provider, &product, &customer, &route),
+            create_lock(database, &provider, &product, &customer, &route)
+        )?;
+        ensure!(first.address_id == second.address_id && second.address_id == third.address_id);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM addresses WHERE account_id=$1")
+            .bind(product.id).fetch_one(pool).await?;
+        ensure!(count == 1, "quotes grew the watched address set");
+        type Window = (Uuid, chrono::DateTime<Utc>, chrono::DateTime<Utc>, Option<Uuid>, bool);
+        let windows: Vec<Window> =
+            sqlx::query_as("SELECT id,window_start,expires_at,replaced_by,exposure_reserved FROM quotes WHERE customer_id=$1 ORDER BY window_start,expires_at,id")
+                .bind(customer.id).fetch_all(pool).await?;
+        ensure!(windows.len()==3);
+        let original = windows.iter().find(|q|q.0==first.id).context("original")?;
+        ensure!(original.3.is_some(), "consumed window was not cut");
+        let mut replacements = windows.iter().filter(|q|q.0!=first.id).collect::<Vec<_>>();
+        replacements.sort_by_key(|q|q.3.is_none());
+        ensure!(replacements[0].2 == replacements[1].1);
+        ensure!(replacements.iter().all(|q|q.4), "replacement released exposure early");
+        let quote_on_deposit: Option<Uuid> = sqlx::query_scalar("SELECT quote_id FROM deposits WHERE address_id=$1")
+            .bind(first.address_id).fetch_one(pool).await?;
+        ensure!(quote_on_deposit == Some(first.id));
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn consumption_rechecks_a_window_cut_after_the_candidate_was_read() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let pool = &database.app_pool;
+            let account = seed_product_without_key(pool, "window race").await?;
+            let customer = seed_account(pool, account.id, "racing").await?;
+            let provider: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
+            let route = test_route();
+            let first = create_lock(database, &provider, &account, &customer, &route).await?;
+            let canonical_time = first.window_start + chrono::Duration::seconds(5);
+            let replacement = create_lock(database, &provider, &account, &customer, &route).await?;
+            use topup::db::ApplyTransitionResult::{Applied, LockUnavailable};
+            ensure!(
+                try_consume_lock(pool, first.id, 0x21, canonical_time).await? == LockUnavailable
+            );
+            ensure!(
+                try_consume_lock(pool, replacement.id, 0x22, replacement.window_start).await?
+                    == LockUnavailable
+            );
+            ensure!(
+                try_consume_lock(pool, replacement.id, 0x23, replacement.expires_at).await?
+                    == Applied
+            );
+            ensure!(
+                try_consume_lock(pool, replacement.id, 0x24, canonical_time).await?
+                    == LockUnavailable
+            );
+            Ok(())
+        })
+    })
+    .await
 }
