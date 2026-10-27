@@ -19,7 +19,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 #### Changed
 
 - `@phala/pay-react` copy and layout are simpler, and the copy is no longer about top-ups. Hosts
-  that match these strings in tests must update them:
+  that match these strings in tests must update them
+  ([#559](https://github.com/Phala-Network/phala-pay/pull/559)):
   - `<Checkout>`'s wallet button now reads "Pay with <wallet name>" by default, as the deposit
     address's button does, or "Pay with your wallet" for `walletClient`. Before, it read "Pay with
     crypto <wallet name>". A `buttonText` you set is still followed by the wallet's name.
