@@ -3,16 +3,15 @@ export const TAGLINE = "Crypto payments, without a custodian";
 export const HERO_SUBHEAD = "Self-host an open-source payments API. Customers pay in USDC, USDT, or other ERC-20 tokens on Ethereum or Base; deposits can only reach your treasury.";
 // README.md: pre-1.0, no third-party security audit.
 export const HERO_META = "Pre-1.0 · Not yet audited";
-// Three facts under the hero's actions, and the note under them. The time is the hinted path's
-// (README.md, "Fast credit"; docs/integration.md, `typical_credit_seconds`): a payment from the
-// wallet checkout, whose transaction hash reaches the service; a manual transfer waits for the
-// five-minute scan.
+// Three facts under the hero's actions. The time is the hinted path's (README.md, "Fast credit";
+// docs/integration.md, `typical_credit_seconds`): a payment from the wallet checkout, whose
+// transaction hash reaches the service; a manual transfer waits for the five-minute scan, as
+// CREDIT_TIMES.note and the FAQ say.
 export const HERO_FACTS = [
   { value: "~7 s", label: "to credit on Base" },
   { value: "0%", label: "fee per payment" },
   { value: "Apache-2.0", label: "open source" },
 ];
-export const HERO_FACTS_NOTE = "~7 s with the wallet checkout; a manual transfer waits for the five-minute scan.";
 export const HOME_TITLE = "Phala Pay: self-hosted, non-custodial crypto payments";
 export const NOT_FOUND_TITLE = "Page not found | Phala Pay";
 export const HOME_DESCRIPTION = "Open-source payments API for ERC-20 tokens on Ethereum and Base. Deposits can only reach your treasury. No per-payment fee.";
@@ -41,14 +40,14 @@ export const CUSTODY_PATH: { station: Station; role: string; name: string; detai
   { station: "treasury", role: "You", name: "Your treasury", detail: "An address or Safe you prove you control with a signed message." },
 ];
 export const CUSTODY_LINKS = ["pays", "sweeps only to"];
-export const CUSTODY_NOTE = "Phala Pay holds no key to the funds and sends no transactions; the operator cannot change your treasury.";
+export const CUSTODY_NOTE = "Phala Pay holds no key to the funds and sends no transactions.";
 
 // Facts: README.md; docs/overview.md; docs/architecture.md §§1, 8; docs/integration.md §§1.6, 5.
 export const PROPERTIES = [
   { title: "No custodian", text: "Deposit addresses are contracts that can only pay your treasury. You set the treasury with a signed message; the operator cannot change it." },
-  { title: "No per-payment fee", text: "The software takes no cut. You pay for your own hosting, RPC providers, and the gas to sweep." },
-  { title: "Credited in seconds", text: "About 7 s on Base and 30 s on Ethereum after payment, double-checked by a second RPC provider and watched to finality." },
-  { title: "Verify what runs", text: "It runs in an Intel TDX confidential VM. Check its attestation and pin its webhook signing key from it." },
+  { title: "No per-payment fee", text: "You pay only for hosting, RPC providers, and sweep gas." },
+  { title: "Credited in seconds", text: "Double-checked by a second RPC provider and watched to finality." },
+  { title: "Verify what runs", text: "Check its attestation before you trust its webhooks." },
   { title: "Stripe-style API", text: "Quotes, deposit addresses, test and live modes, idempotency keys, signed webhooks. SDKs for React, Node.js, and Python." },
 ];
 
