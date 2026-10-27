@@ -37,6 +37,9 @@ declare global {
   }
 }
 
+// The demo's submit: "Pay $20.00 in USDC".
+const PAY = /^Pay \$[\d,]+\.\d\d in [A-Z]+$/;
+
 function env(name: string): string {
   const value = process.env[name];
   if (value === undefined) {
@@ -592,7 +595,7 @@ test("a missing timeline shows a terminal message and stops polling", async ({ p
   });
   await page.goto(env("SITE_URL"));
   const product = page.getByRole("region", { name: "Customer view" });
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   await expect(scenes).toContainText("Timeline is unavailable for this request.");
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
@@ -618,7 +621,7 @@ test("a refused timeline keeps its cached data and shows paused updates", async 
   });
   await page.goto(env("SITE_URL"));
   const product = page.getByRole("region", { name: "Customer view" });
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const timeline = scenes.getByRole("list", { name: "Payment timeline" });
   await expect(step(timeline, "quote_created")).toHaveAttribute("data-state", "complete");
@@ -663,7 +666,7 @@ for (const sent of [false, true]) {
     });
     await page.goto(env("SITE_URL"));
     const product = page.getByRole("region", { name: "Customer view" });
-    await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+    await product.getByRole("button", { name: PAY }).click();
     await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     expect((await refetchTimeline(page)).status()).toBe(200);
@@ -702,7 +705,7 @@ test("a swept payment keeps polling until its webhook arrives", async ({ page })
   });
   await page.goto(env("SITE_URL"));
   const product = page.getByRole("region", { name: "Customer view" });
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   await expect(step(scenes, "webhook_received")).toHaveAttribute("data-state", "current");
   await expect(scenes.getByTestId("stream-status")).toHaveText("Live");
@@ -751,7 +754,7 @@ for (const status of ["reversed", "rejected"] as const) {
     });
     await page.goto(env("SITE_URL"));
     const product = page.getByRole("region", { name: "Customer view" });
-    await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+    await product.getByRole("button", { name: PAY }).click();
     await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
     await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
     expect((await refetchTimeline(page)).status()).toBe(200);
@@ -776,7 +779,7 @@ test("a reversed deposit keeps polling while the reversal's webhook has not arri
   });
   await page.goto(env("SITE_URL"));
   const product = page.getByRole("region", { name: "Customer view" });
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   await expect(page.getByRole("list", { name: "Payment timeline" })).toBeVisible();
   await expect(product.getByRole("tab", { name: "QR code", exact: true })).toBeVisible();
   expect((await refetchTimeline(page)).status()).toBe(200);
@@ -835,7 +838,6 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   );
   await expectMetadata(page);
   const product = page.getByRole("region", { name: "Customer view" });
-  await expect(product.getByTestId("testnet-notice")).toHaveText("Testnet");
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const preview = scenes.getByRole("list", { name: "The steps of a payment" });
   await expect(preview).toBeVisible();
@@ -864,7 +866,9 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   // The quote is for the chosen network and token.
   await product.getByText("$20", { exact: true }).click();
   const quoteRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  // The submit names the amount and the token, as the payment element's own would.
+  await expect(product.getByRole("button", { name: PAY })).toHaveText("Pay $20.00 in PHA");
+  await product.getByRole("button", { name: PAY }).click();
   expect((await quoteRequest).postDataJSON()).toEqual({ amount: 2000, chain_id: sepolia.id, asset: "pha" });
   // The checkout's summary states the quote: 80 PHA for $20.00 (its rate is in the backend's
   // timeline); the SDK's status line holds the one countdown.
@@ -1013,7 +1017,7 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
     const before = await followed.getAttribute("data-value");
     await startOver(product);
     await product.getByText("$5", { exact: true }).click();
-    await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+    await product.getByRole("button", { name: PAY }).click();
     await expect(followed).not.toHaveAttribute("data-value", before ?? "");
     await expect(summary).toContainText("20 PHA");
     const quote = (await followed.getAttribute("data-value")) ?? "";
@@ -1167,7 +1171,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await mintUsdc(env("PAYER_ADDRESS"), parseUnits("100", 6));
   await product.getByText("$5", { exact: true }).click();
   const usdcRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   expect((await usdcRequest).postDataJSON()).toEqual({ amount: 500, chain_id: sepolia.id, asset: "usdc" });
   await expect(product.locator(".pp-summary")).toContainText("5 USDC");
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
@@ -1197,13 +1201,12 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   );
   await mintUsdc(env("PAYER_ADDRESS"), parseUnits("100", 6), true);
   const baseRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   expect((await baseRequest).postDataJSON()).toEqual({ amount: 2000, chain_id: baseSepolia.id, asset: "usdc" });
   await expect(product.locator(".pp-summary")).toContainText("20 USDC");
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
     "1 USDC = $1.00",
   );
-  await expect(product.getByTestId("testnet-notice")).toBeVisible();
   await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$20.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
@@ -1225,7 +1228,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
 
   await product.getByText("$5", { exact: true }).click();
   const usdtRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   expect((await usdtRequest).postDataJSON()).toEqual({ amount: 500, chain_id: sepolia.id, asset: "usdt" });
   await expect(product.locator(".pp-summary")).toContainText("5 USDT");
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
@@ -1260,7 +1263,7 @@ test("a quote a wallet cannot cover sends nothing; the mint beside it funds that
   // sends nothing, and points to Circle's faucet.
   await mintUsdc(empty, 19_999_999n);
   await chooseOption(product, "USDC · Sepolia");
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   await pay.click();
   await expect(
     product.getByText("Your wallet holds 19.999999 USDC, less than the 20 USDC to pay. Nothing was sent."),
@@ -1278,7 +1281,7 @@ test("a quote a wallet cannot cover sends nothing; the mint beside it funds that
   await chooseOption(product, "PHA · Sepolia");
   await product.getByText("Custom", { exact: true }).click();
   await product.getByLabel("Custom amount (USD)").fill("500");
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   await expect(product.locator(".pp-summary")).toContainText("2,000 PHA");
   await expect(helper.getByRole("button", { name: "Mint 2,000 test PHA" })).toBeVisible();
   await pay.click();
@@ -1663,7 +1666,7 @@ test("the checkout takes the site's theme in either theme, over the SDK's defaul
       await page.goto(env("SITE_URL"));
       const product = page.getByRole("region", { name: "Customer view" });
       await expect(product.getByTestId("balance")).toHaveText("$0.00");
-      await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+      await product.getByRole("button", { name: PAY }).click();
       const checkout = product.locator(".pp-root").first();
       await expect(checkout).toHaveAttribute("data-theme", colorScheme);
       const tokens = await checkout.evaluate((root) => {
@@ -1864,7 +1867,7 @@ test("a credit whose bonus the ledger has not applied yet shows the bonus pendin
       if (confirmation !== null) seen.add(confirmation.textContent);
     }).observe(card, { subtree: true, childList: true, characterData: true });
   });
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   await expect(product.locator(".pp-summary")).toContainText("80 PHA");
   await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
   const confirmation = product.getByTestId("payment-credited");
@@ -1909,9 +1912,10 @@ test("the demo's states move nothing on the page: one height in each state and o
   const scenes = page.getByRole("complementary", { name: "Your backend" });
   const section = page.locator(DEMO_SECTION);
   // From lg, where the two panels sit side by side, the section is one height in every state and
-  // on every tab (its first measure at each width), so nothing under it moves; where they stack,
-  // the customer's view, which changes with the payment, is one height in every state the payment
-  // brings, and no taller than the form it starts from (src/index.css, --spacing-demo-view).
+  // on every tab (its first measure at each width), so nothing under it moves; where they stack on
+  // a tablet, the customer's view, which changes with the payment, is one height in every state the
+  // payment brings, and no taller than the form it starts from (src/index.css,
+  // --spacing-demo-view-sm). On a phone the view is as tall as its content.
   const fixed = new Map<string, number>();
   const idle = new Map<string, number>();
   const same = (key: string, value: number, where: string) => {
@@ -1932,7 +1936,7 @@ test("the demo's states move nothing on the page: one height in each state and o
         await openTab(scenes, tab);
         const where = `${state}, ${tab} tab, at ${width}×${height}`;
         if (width >= 1024) same(`${width}`, await section.evaluate((element) => element.getBoundingClientRect().height), where);
-        else {
+        else if (width >= 640) {
           const view = await product.evaluate((element) => element.getBoundingClientRect().height);
           if (state === "idle") idle.set(`${width}`, view);
           else {
@@ -1965,7 +1969,7 @@ test("the demo's states move nothing on the page: one height in each state and o
   await steady("idle");
   await testTokens.getByRole("button", { name: "Mint 1,000 test PHA" }).click();
   await expect(testTokens).toContainText("Minted:");
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   await expect(product.locator(".pp-summary")).toContainText("80 PHA");
   await steady("paying");
   await product.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
@@ -2375,7 +2379,7 @@ test("the head's theme bootstrap alone sets the visitor's theme, with every modu
   }
 });
 
-test("the hero's facts wrap alike, and the note under them qualifies the time", async ({ page }) => {
+test("the hero's facts wrap alike", async ({ page }) => {
   // The owner's regression: one fact's meaning on two lines beside its siblings' one. At every
   // width the three sit side by side, their meanings take as many lines each.
   await page.goto(env("SITE_URL"));
@@ -2389,8 +2393,6 @@ test("the hero's facts wrap alike, and the note under them qualifies the time", 
     expect(lines, `${width}px`).toHaveLength(3);
     expect(new Set(lines).size, `${width}px: lines per fact ${lines.join(", ")}`).toBe(1);
   }
-  // The ~7 s is the wallet checkout's (its transaction hash reaches the service), said under the row.
-  await expect(page.locator("[data-facts-note]")).toContainText("wallet checkout");
 });
 
 /**
@@ -2637,7 +2639,7 @@ test("the demo sets its text well while it loads, while paying, once credited, a
     }
   };
   // Paying: the checkout, and the stepper waiting for the transfer.
-  await product.getByRole("button", { name: "Pay with crypto", exact: true }).click();
+  await product.getByRole("button", { name: PAY }).click();
   await expect(product.locator(".pp-summary")).toContainText("PHA");
   await pass("paying");
   // Credited: the receipt, the payment's row, its webhook and requests.

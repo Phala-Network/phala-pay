@@ -91,12 +91,12 @@ export function TestTokens({ network, need }: { network: Network; need: Need | n
   const id = useId();
   // Two groups on one row, spaced apart: the mints from the wallet, then the faucets off the page
   // (the links name what each gives, a test token or gas); where the row is narrow, the faucets
-  // wrap onto a line of their own. On a phone, the name heads the group, the mints are full-width
-  // rows, and the faucets a list of 44px rows: one column, nothing left ragged.
+  // wrap onto a line of their own. On a phone, the mints are full-width rows, and the faucets a
+  // list of 44px rows: one column, nothing left ragged.
   return (
     <div role="note" aria-labelledby={id} className="flex flex-col gap-3">
-      {/* From lg the row speaks for itself: its name is for screen readers. */}
-      <h4 id={id} className="text-sm font-medium text-muted-foreground lg:sr-only">
+      {/* The row speaks for itself: its name is for screen readers. */}
+      <h4 id={id} className="sr-only">
         Test tokens
       </h4>
       <div className="flex flex-col gap-x-6 gap-y-3 sm:flex-row sm:flex-wrap sm:items-center">
