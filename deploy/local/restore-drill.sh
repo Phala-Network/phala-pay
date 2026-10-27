@@ -51,6 +51,7 @@ if [ ! -e "$root/contracts/out" ]; then
 fi
 chain_overlay=()
 service_overlay=()
+restore_overlay=()
 # The source runs the service variant of the rendered compose; the replacement boots the
 # restore-check variant (deploy/RESTORE.md). The controlled drill adds the merchant's product.
 variant=()
@@ -62,6 +63,8 @@ dc() {
     local service_files=()
     if [ "${#variant[@]}" -eq 0 ]; then
         service_files=("${service_overlay[@]}")
+    else
+        service_files=("${restore_overlay[@]}")
     fi
     "$root/deploy/local/compose.sh" "${variant[@]}" --environment-dir "$env_dir" -p "$project" \
         -f "$drill_compose" "${chain_overlay[@]}" "${service_files[@]}" "${profiles[@]}" "$@"
@@ -236,6 +239,15 @@ SELECT
     '33333333-3333-3333-3333-333333333333', '2026-09-21T23:59:00Z'
 FROM payment_settings_state
 WHERE account_id = '11111111-1111-1111-1111-111111111111' AND livemode;
+-- An open v0.13 quote survives the backup, but its price window must end at the restore point.
+INSERT INTO quotes (
+    id, account_id, livemode, customer_id, route, amount_atomic, price_scaled, credit_minor,
+    expires_at, status, route_version, settings_revision_id, terms, address_id, window_start
+)
+SELECT '55555555-5555-5555-5555-555555555556', account_id, livemode, customer_id, route,
+       amount_atomic, price_scaled, credit_minor, now() + interval '1 hour', 'open',
+       route_version, settings_revision_id, terms, address_id, now() - interval '1 minute'
+FROM quotes WHERE id = '55555555-5555-5555-5555-555555555555';
 INSERT INTO addresses (
     id, account_id, livemode, chain_id, quote_id, salt, treasury, address
 )
@@ -1303,12 +1315,14 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -addext 'basicConstraints=crit
     -addext 'subjectAltName=DNS:*.rpc.test' -keyout "$admin_dir/rpc-key.pem" \
     -out "$admin_dir/rpc-cert.pem" >/dev/null 2>&1
 cp "$admin_dir/config.json" "$admin_dir/topup.json"
-python3 "$root/deploy/local/rpc-tls.py" "$admin_dir/topup.json" "$admin_dir/rpc-tls.json" --restore-check \
+python3 "$root/deploy/local/rpc-tls.py" "$admin_dir/topup.json" "$admin_dir/rpc-tls.json" \
+    --restore-check-overlay "$admin_dir/restore-rpc-tls.json" \
     --certificate "$admin_dir/rpc-cert.pem" --key "$admin_dir/rpc-key.pem" \
     --image python:3.14-slim-trixie@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2 \
     --chain 11155111=http://anvil:8545 --chain 84532=http://anvil-base:8545 \
     --chain 1=http://anvil-mainnet-price:8545 --chain 8453=http://anvil-base-mainnet-price:8545
 chain_overlay+=(-f "$admin_dir/rpc-tls.json")
+restore_overlay=(-f "$admin_dir/restore-rpc-tls.json")
 docker run --rm -i --network none "$TOPUP_LOCAL_SERVICE_IMAGE" topup config check /dev/stdin \
     <"$admin_dir/topup.json"
 mv "$admin_dir/topup.json" "$env_dir/topup.yaml"
@@ -1496,6 +1510,8 @@ restored_pricing=$(psql_value \
 test "$reconciliation" = complete
 # The service's own record is authoritative: the restore asks the product nothing and keeps it.
 test "$restored_pricing" = 'credited|250|25000000'
+test "$(psql_value "SELECT q.expires_at = r.restore_point FROM quotes q CROSS JOIN restores r \
+    WHERE q.id = '55555555-5555-5555-5555-555555555556' AND r.unfrozen_at IS NULL")" = t
 test "$allowed_rpo" -eq 60
 awk -v measured="$measured_rpo" 'BEGIN { exit !(measured >= 0 && measured <= 60) }'
 if [ "$mode" = controlled ]; then
@@ -1556,6 +1572,7 @@ printf 'archive_window_seconds=30\n'
 printf 'archive_wait_seconds=%s\n' "$archive_wait_seconds"
 printf 'upload_latency_seconds=%s\n' "$upload_latency_seconds"
 printf 'restored_timeline=%s storage_unchanged_by_restore_check=true\n' "$restored_timeline"
+echo 'open_quote_window_clamped_to_restore_point=true'
 printf 'elapsed_rto_seconds=%s\n' "$rto_elapsed"
 if [ "$mode" = controlled ]; then
     echo 'restore_mode=frozen, merchant reads refused; attested by the admin API; lost key revoked again; lost treasury application restored from its signed event; lost fixed deposit addresses re-issued identically; lost quote windows remain closed; the deliveries its receiver kept imported, credit kept, reversed deposits restored; all from the product'"'"'s records'
