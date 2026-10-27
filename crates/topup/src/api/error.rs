@@ -135,7 +135,7 @@ pub const ERROR_CODES: &[(&str, u16, &str)] = &[
     (
         "quote_payment_received",
         400,
-        "The quote's address already received a payment, so the quote cannot be canceled.",
+        "A payment of this asset was already received in the quote's window, so the quote cannot be canceled.",
     ),
     (
         "quote_window_closed",
@@ -473,13 +473,13 @@ impl ApiError {
         Self::new(StatusCode::BAD_REQUEST, "exposure_cap_exceeded", message).with_param("amount")
     }
 
-    /// Returns a cancellation refused because the quote's address already received a payment.
+    /// Returns a cancellation refused because this asset was already received in the quote's window.
     #[must_use]
     pub fn quote_payment_received() -> Self {
         Self::new(
             StatusCode::BAD_REQUEST,
             "quote_payment_received",
-            "the quote's address already received a payment",
+            "a payment of this asset was already received in the quote's window",
         )
     }
 

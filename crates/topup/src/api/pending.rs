@@ -80,11 +80,13 @@ impl QuotePayments {
             .iter()
             .filter(|deposit| {
                 !deposit.reversed
+                    && deposit.asset_contract == route.asset.contract
                     && deposit.block_time > lock.window_start
                     && deposit.block_time <= lock.expires_at
             })
             .chain(pending.iter().filter(|transfer| {
-                transfer.block_time > lock.window_start
+                transfer.asset_contract == route.asset.contract
+                    && transfer.block_time > lock.window_start
                     && transfer.block_time <= lock.expires_at
                     && !deposits
                         .iter()

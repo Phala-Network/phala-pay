@@ -509,10 +509,27 @@ pub async fn create_in(
         .iter()
         .find(|network| network.chain_id == route.chain.chain_id)
         .ok_or(RateLockError::ChainUnavailable)?;
-    // Take T after the customer lock: concurrent requests get nonoverlapping windows.
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT date_trunc('second', clock_timestamp())")
-        .fetch_one(&mut **transaction)
-        .await?;
+    // Wait for in-flight consumption before reading its canonical block time in a fresh
+    // snapshot. A chain slightly ahead of wall time must keep its payment in the old window.
+    sqlx::query(
+        "SELECT id FROM quotes WHERE customer_id=$1 AND route=$2 \
+         AND expires_at>date_trunc('second', clock_timestamp()) ORDER BY id FOR UPDATE",
+    )
+    .bind(customer.id)
+    .bind(&route.route)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let now: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT GREATEST(date_trunc('second', clock_timestamp()), \
+         max(q.window_start), max(d.block_time)) FROM quotes q \
+         LEFT JOIN deposits d ON d.id=q.consumed_by \
+         WHERE q.customer_id=$1 AND q.route=$2 \
+         AND q.expires_at>date_trunc('second', clock_timestamp())",
+    )
+    .bind(customer.id)
+    .bind(&route.route)
+    .fetch_one(&mut **transaction)
+    .await?;
     let expires_at = now
         .checked_add_signed(chrono::Duration::seconds(window))
         .ok_or(RateLockError::Arithmetic)?;
@@ -717,11 +734,11 @@ pub async fn list(
     Ok((locks, has_more))
 }
 
-/// Cancels an unpaid open lock, releasing its exposure, and appends an audit row atomically.
+/// Ends an unpaid open lock's payment window and appends an audit row atomically.
 ///
-/// Any deposit row for the lock address, including a rejected one, means funds already arrived at
-/// the fixed customer address, so the lock is no longer unpaid and cancellation is refused; such a
-/// lock stays open until it is consumed or expires.
+/// Any non-reversed deposit of the quote's asset in its window, including a rejected one,
+/// means the lock is no longer unpaid and cancellation is refused; such a lock stays open
+/// until it is consumed or expires.
 pub async fn cancel<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     routes: &RouteSet,
@@ -741,6 +758,16 @@ async fn cancel_in(
     actor: &Actor,
     id: Uuid,
 ) -> Result<RateLock, RateLockError> {
+    let address_id = get(&mut **transaction, scope, id)
+        .await?
+        .ok_or(RateLockError::NotFound)?
+        .address_id;
+    // Match creation's address-before-quote lock order. This also conflicts with the KEY SHARE
+    // lock taken by scanner inserts, so a payment commits before the check below or waits.
+    sqlx::query("SELECT 1 FROM addresses WHERE id = $1 FOR UPDATE")
+        .bind(address_id)
+        .execute(&mut **transaction)
+        .await?;
     let row = get_in(transaction, scope, id)
         .await?
         .ok_or(RateLockError::NotFound)?;
@@ -755,13 +782,6 @@ async fn cancel_in(
     if row.expires_at <= Utc::now() {
         return Err(RateLockError::WindowClosed);
     }
-    // `FOR UPDATE` conflicts with the `KEY SHARE` lock a scanner deposit insert takes on its
-    // address row, so an uncommitted deposit either commits first and is seen below, or waits
-    // until this cancellation commits.
-    sqlx::query("SELECT 1 FROM addresses WHERE id = $1 FOR UPDATE")
-        .bind(row.address_id)
-        .execute(&mut **transaction)
-        .await?;
     let paid: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM deposits WHERE address_id = $1 AND state <> 'reversed'
          AND block_time > $2 AND block_time <= $3 AND asset_contract = $4)",

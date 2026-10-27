@@ -734,10 +734,11 @@ Invoice model, with this service's exception profile:
   same transaction if missing. Quotes reference `addresses.id`; they do not issue single-use
   addresses. Historical fixed customer addresses remain watched.
 - Windows are `(window_start, expires_at]`, with `window_start` the whole second of creation
-  after the customer lock. Creating a quote cuts the earlier window for the same customer and
-  route at that instant and sets `replaced_by`, even if it was consumed. These windows never
-  overlap. A transfer in the creation second belongs to the old window; the new window starts
-  strictly after it. The first eligible transfer to finish confirmation consumes the quote.
+  after the customer lock, advanced if necessary to the previous window's start or its consuming
+  deposit's canonical block time. Creating a quote cuts the earlier window for the same customer
+  and route at that boundary and sets `replaced_by`, even if it was consumed. These windows never
+  overlap. A transfer at the boundary belongs to the old window; the new window starts strictly
+  after it. The first eligible transfer to finish confirmation consumes the quote.
 - Replacement keeps exposure reserved until chain closure. Reversal reopens the quote with its
   already-cut window. Canonical block time and asset select the candidate; consumption rechecks
   its window under the row lock, retrying if a concurrent replacement invalidated it. Two

@@ -31,6 +31,7 @@ admin_key:
   id: $admin_key_id
   public_key: $admin_public_key
 YAML
+    sed -n '/^max_attached_pending_refunds:/p' "$root/deploy/environments/phala-network/staging/topup/topup.yaml"
     sed -n '/^rpc:/,/^routes:$/p' "$root/deploy/environments/phala-network/staging/topup/topup.yaml" |
         sed '$d; s|rpc.ankr.com|read.localhost|g; s|[a-z-]*\.infura.io|verify.localhost|g'
     sed -n '/^routes:$/,$p' "$root/deploy/environments/phala-network/staging/topup/topup.yaml"

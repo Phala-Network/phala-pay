@@ -2056,6 +2056,13 @@ async fn cancel_waits_for_an_uncommitted_deposit_to_the_lock_address() -> Result
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
+        ensure!(lock_waiters(&database.app_pool).await? > 0);
+        // Creation locks address then quote. Cancellation waiting on the address must not
+        // already hold the quote, or the two operations can deadlock.
+        sqlx::query("SELECT id FROM quotes WHERE id=$1 FOR UPDATE NOWAIT")
+            .bind(lock.id)
+            .execute(&mut *scanner)
+            .await?;
         scanner.commit().await?;
         ensure!(matches!(cancel.await?, Err(RateLockError::PendingPayment)));
         ensure!(lock_status(&database.app_pool, lock.id).await? == "open");
@@ -2123,10 +2130,11 @@ async fn try_consume_lock(
     let deposit_id = insert_deposit_in(&mut transaction, address_id, number).await?;
     let lease_token = Uuid::new_v4();
     sqlx::query(
-        "UPDATE deposits SET state = 'detected', reason = NULL, lease_token = $2, lease_until = now() + interval '5 minutes' WHERE id = $1",
+        "UPDATE deposits SET state = 'detected', reason = NULL, lease_token = $2, lease_until = now() + interval '5 minutes', block_time = $3 WHERE id = $1",
     )
     .bind(deposit_id)
     .bind(lease_token)
+    .bind(block_time)
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
@@ -2522,6 +2530,10 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
             .bind(earlier).bind(format!("{:#x}",route.asset.contract)).execute(&mut *tx).await?;
         let reversed = insert_deposit_in(&mut tx,live[3].address_id,0x68).await?;
         sqlx::query("UPDATE deposits SET state='reversed',reason=NULL WHERE id=$1").bind(reversed).execute(&mut *tx).await?;
+        let wrong_asset = insert_deposit_in(&mut tx,live[3].address_id,0x69).await?;
+        sqlx::query("UPDATE deposits SET asset_contract=$2 WHERE id=$1")
+            .bind(wrong_asset).bind(format!("{:#x}",Address::repeat_byte(0xee)))
+            .execute(&mut *tx).await?;
         tx.commit().await?;
         // A matching pending transfer beats an unsupported recorded payment; another quote's
         // matching pending payment must never appear on a quote with no observations.
@@ -2537,6 +2549,11 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
         duplicate.tx_hash = B256::repeat_byte(0x71);
         duplicate.block_number = 19;
         pending.push(duplicate);
+        // Neither a recorded nor an unfinalized transfer of another asset belongs on this quote.
+        let mut wrong_asset_pending = pending[4].clone();
+        wrong_asset_pending.tx_hash = B256::repeat_byte(0x6a);
+        wrong_asset_pending.asset_contract = Address::repeat_byte(0xee);
+        pending.push(wrong_asset_pending);
         topup::db::commit_head_scan(pool,1,19,21,&pending).await?;
         let admin_key = SigningKey::from_bytes(&[48;32]);
         let app = topup::api::router(AppState {
@@ -2753,9 +2770,9 @@ async fn fixed_address_quotes_replace_windows_without_issuing_more_addresses() -
         let provider: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
         let first = create_lock(database, &provider, &product, &customer, &route).await?;
         ensure!(first.deposit_address_id.is_some() && first.deposit_address_version == Some(1));
-        sqlx::query("UPDATE quotes SET window_start=window_start-interval '30 seconds' WHERE id=$1")
-            .bind(first.id).execute(pool).await?;
-        consume_lock(pool, first.id, 0x19).await?;
+        let canonical_time = first.window_start + chrono::Duration::seconds(30);
+        ensure!(try_consume_lock(pool, first.id, 0x19, canonical_time).await?
+            == topup::db::ApplyTransitionResult::Applied);
         let (second, third) = tokio::try_join!(
             create_lock(database, &provider, &product, &customer, &route),
             create_lock(database, &provider, &product, &customer, &route)
@@ -2773,6 +2790,8 @@ async fn fixed_address_quotes_replace_windows_without_issuing_more_addresses() -
         ensure!(original.3.is_some(), "consumed window was not cut");
         let mut replacements = windows.iter().filter(|q|q.0!=first.id).collect::<Vec<_>>();
         replacements.sort_by_key(|q|q.3.is_none());
+        ensure!(original.2 >= canonical_time, "replacement excluded its consuming payment");
+        ensure!(original.2 == replacements[0].1, "replacement windows overlap");
         ensure!(replacements[0].2 == replacements[1].1);
         ensure!(replacements.iter().all(|q|q.4), "replacement released exposure early");
         let quote_on_deposit: Option<Uuid> = sqlx::query_scalar("SELECT quote_id FROM deposits WHERE address_id=$1")
