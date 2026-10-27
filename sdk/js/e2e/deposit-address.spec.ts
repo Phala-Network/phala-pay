@@ -15,7 +15,7 @@ for (const width of [320, 1280]) {
       await page.goto(`/?deposit&theme=${theme}`);
       const message = page.locator(".pp-message").last();
       await expect(message).toHaveText(
-        "Send at least $5.00 and 0.1 PHA, up to 10,100 PHA per transfer on Sepolia. Unsupported tokens or networks are not credited. Eligible transfers are credited at the market rate after confirmation.",
+        "Send at least $5.00 and 0.1 PHA, up to 10,100 PHA per transfer on Sepolia. Other tokens and networks aren’t credited. Credited at the market rate after confirmation.",
       );
       await choose(page, "Token", "USDC");
       await choose(page, "Network", "Base Sepolia");
@@ -48,7 +48,7 @@ test("retains deposit selections and payments through a three-minute network out
   await page.goto(`/?deposit&client_secret=${secret}&api_base=http://topup.test`);
   await expect(page.getByRole("list", { name: "Payments" })).toBeVisible();
   // A payer sending to the address gives no hint: the discovery scan, then Sepolia's 30 s.
-  await expect(page.getByText(/credited at the market rate, usually within about 6 minutes\./)).toBeVisible();
+  await expect(page.getByText(/Credited at the market rate, usually within about 6 minutes\./)).toBeVisible();
   await choose(page, "Token", "USDC");
   await choose(page, "Network", "Base Sepolia");
   const payments = await page.getByRole("list", { name: "Payments" }).textContent();

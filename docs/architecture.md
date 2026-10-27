@@ -1451,12 +1451,11 @@ from fetched state, never from webhook order.
   the address with a copy button, and a QR of that token's EIP-681 URI (no amount), with the selected
   token’s per-transfer limits from the account’s resolved `min_amount` (USD cents),
   `min_deposit_atomic`, and `max_deposit_atomic` at view time: "Send at least $5.00 and up to
-  10,100 USDC per transfer on Ethereum. Unsupported tokens or networks are not credited. Eligible
-  transfers are credited at the market rate, usually within about 6 minutes on Ethereum and about
-  5 minutes on Base."
-  Each network’s time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
-  public view (the page submits no hint); until the view is loaded, "Eligible transfers are
-  credited at the market rate after confirmation." Both minima apply independently. When the
+  10,100 USDC per transfer on Ethereum. Other tokens and networks aren’t credited. Credited at the
+  market rate, usually within about 6 minutes."
+  The chosen network’s time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
+  public view (the page submits no hint); until the view is loaded, "Credited at the market rate
+  after confirmation." Both minima apply independently. When the
   atomic minimum is positive, show both: "Send at least $5.00 and 10 USDC, up to 10,100 USDC
   per transfer on Ethereum." Omit a zero atomic minimum. Group token amounts in English,
   preserving every fractional digit. If any limit is missing or malformed, show "Send USDC on

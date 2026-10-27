@@ -52,7 +52,8 @@ export interface CheckoutProps {
   /** Milliseconds between status reads; default 3000. */
   pollInterval?: number | undefined;
   className?: string;
-  /** The wallet button's label; default "Pay with crypto". */
+  /** The wallet button's label, followed by the wallet's name; default "Pay with <wallet name>", or
+   * "Pay with your wallet" for `walletClient`. */
   buttonText?: string;
   /** Your page's connected wallet, for example wagmi's `useWalletClient().data`. When set, the
    * wallet tab pays with it and its account instead of listing the browser's wallets. */
@@ -86,7 +87,7 @@ export function CheckoutContent({
   onChange,
   onWalletError,
   pollInterval,
-  buttonText = "Pay with crypto",
+  buttonText,
   walletClient,
 }: Omit<CheckoutProps, "appearance" | "className">) {
   const { status, quote, error, reconnecting, refresh } = useCheckout({
@@ -143,7 +144,7 @@ export function CheckoutContent({
             {formatTokenAmount(quote)} {quote.asset.toUpperCase()}
           </p>
           <p className="pp-summary__meta">
-            {formatAmount(quote)} top-up ·{" "}
+            {formatAmount(quote)} ·{" "}
             <span className="pp-summary__network">
               <NetworkIcon chainId={quote.chain_id} size={16} />
               {networkName(quote.chain_id)}
@@ -191,14 +192,15 @@ function StatusLine({
         : "neutral";
   return (
     <div className="pp-status" data-tone={tone}>
-      <span className="pp-status__icon">
-        <ToneGlyph tone={tone} />
-      </span>
+      {/* One plain line while in progress; a mark only for its outcome. */}
+      {tone !== "neutral" && (
+        <span className="pp-status__icon">
+          <ToneGlyph tone={tone} />
+        </span>
+      )}
       <span className="pp-status__text" role="status" aria-live="polite">
         {statusMessage(status, quote, error?.code)}
-        {(reconnecting || error !== null) && status !== "error" && (
-          <span className="pp-status__note"> (reconnecting…)</span>
-        )}
+        {(reconnecting || error !== null) && status !== "error" && " (reconnecting…)"}
       </span>
       {status === "waiting" && quote !== null && (
         <span className="pp-status__countdown" role="timer" aria-label="Time left to pay">
@@ -228,15 +230,15 @@ function statusMessage(
     case "rejected":
       return "This payment cannot be credited. Contact support with your transaction.";
     case "reversed":
-      return "Payment reversed: a chain reorganization replaced it and its credit was removed. Check your wallet, then start a new top-up.";
+      return "Payment reversed: a chain reorganization replaced it and its credit was removed. Check your wallet.";
     case "expired":
-      return "Quote expired. Do not send funds; start a new top-up.";
+      return "Quote expired. Do not send funds.";
     case "canceled":
       return "Quote canceled. Do not send funds.";
     case "error":
       return code === "address_mismatch"
         ? "This payment address could not be verified. Do not send funds; contact support."
-        : "This payment link is not valid. Start a new top-up.";
+        : "This payment link is not valid.";
   }
 }
 
@@ -250,19 +252,16 @@ function seenMessage(quote: ClientQuote | null): string {
     : `Received, ${quote.confirmations} confirmation${quote.confirmations === 1 ? "" : "s"}. Crediting in ${wait}`;
 }
 
-/** What was credited and, when the payment was valued at the market price, the quote it missed. */
+/** When the payment was valued at the market price, what was credited and the quote it missed. */
 function creditedMessage(quote: ClientQuote | null): string {
-  if (quote?.amount_credited == null) {
+  if (quote?.amount_credited == null || quote.amount_credited === quote.amount) {
     return "Payment credited";
   }
   const credited = formatMinorAmount(quote, quote.amount_credited);
   if (quote.amount_credited < quote.amount) {
     return `Payment credited: ${credited} of ${formatAmount(quote)}`;
   }
-  if (quote.amount_credited > quote.amount) {
-    return `Payment credited: ${credited} (${formatAmount(quote)} quoted)`;
-  }
-  return `Payment credited: ${credited}`;
+  return `Payment credited: ${credited} (${formatAmount(quote)} quoted)`;
 }
 
 function Transaction({ hash, chainId }: { hash: Hash; chainId: number }) {
@@ -293,7 +292,7 @@ function PaymentOptions({
   onWalletError,
 }: {
   quote: ClientQuote;
-  buttonText: string;
+  buttonText: string | undefined;
   walletClient: WalletClient | undefined;
   onSent: (hash: Hash) => void;
   onWalletError: CheckoutProps["onWalletError"];
@@ -328,8 +327,8 @@ function PaymentOptions({
   return (
     <>
       <p className="pp-notice">
-        Send <strong>exactly {amount}</strong> on {networkName(quote.chain_id)} in one transfer
-        before the timer ends. Otherwise it’s credited at the market rate.
+        Send <strong>exactly {amount}</strong> in one transfer before the timer ends; other amounts
+        are credited at the market rate.
       </p>
       <div className="pp-tabs" role="tablist" aria-label="Payment method" onKeyDown={onKeyDown}>
         {METHODS.map((m, index) => (
@@ -372,9 +371,7 @@ function PaymentOptions({
         {method === "qr" && (
           <div className="pp-qr">
             <QrCode value={quote.payment_uri} label={`Payment request for ${amount}`} />
-            <p className="pp-qr__caption">
-              Scan with your wallet app and check it shows {amount} on {networkName(quote.chain_id)}.
-            </p>
+            <p className="pp-qr__caption">Scan with your wallet app.</p>
           </div>
         )}
         {method === "manual" && <ManualPanel quote={quote} />}
@@ -398,7 +395,7 @@ function WalletPanel({
 }: {
   quote: ClientQuote;
   wallets: WalletChoice[];
-  buttonText: string;
+  buttonText: string | undefined;
   /** Whether each button names its wallet: not for the page's own wallet client. */
   named: boolean;
   onSent: (hash: Hash) => void;
@@ -440,11 +437,17 @@ function WalletPanel({
           onClick={() => void pay(choice)}
         >
           {choice.icon !== "" && <img className="pp-button__icon" src={choice.icon} alt="" />}
-          <span>{buttonText}</span>
-          {named && (
+          {buttonText === undefined ? (
+            <span>Pay with {choice.name}</span>
+          ) : (
             <>
-              {" "}
-              <span className="pp-button__detail">{choice.name}</span>
+              <span>{buttonText}</span>
+              {named && (
+                <>
+                  {" "}
+                  <span className="pp-button__detail">{choice.name}</span>
+                </>
+              )}
             </>
           )}
         </button>
@@ -463,18 +466,16 @@ function WalletPanel({
 
 function ManualPanel({ quote }: { quote: ClientQuote }) {
   const token = quoteTransfer(quote).token;
+  const symbol = quote.asset.toUpperCase();
   return (
     <>
       <dl className="pp-fields">
         <Field label="Network" value={`${networkName(quote.chain_id)} (chain ID ${quote.chain_id})`} />
-        <Field label={`Token (${quote.asset.toUpperCase()}) contract`} value={token} copy />
+        <Field label={`Token (${symbol}) contract`} value={token} copy />
         <Field label="Send to address" value={quote.address} copy />
-        <Field label="Exact amount" value={formatTokenAmount(quote)} copy={tokenAmount(quote)} />
+        <Field label="Exact amount" value={`${formatTokenAmount(quote)} ${symbol}`} copy={tokenAmount(quote)} />
       </dl>
-      <p className="pp-message">
-        Only {quote.asset.toUpperCase()} on {networkName(quote.chain_id)} is credited. Exchange
-        withdrawal fees must not reduce the amount received.
-      </p>
+      <p className="pp-message">Exchange withdrawal fees must not reduce the amount received.</p>
     </>
   );
 }

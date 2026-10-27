@@ -710,21 +710,20 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
 customer pick the network and the token; show that network, the token contract, the full address
 with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain, and address
 and no amount). State the USD credit minimum and selected token’s maximum on its network, for
-example: "Send at least $5.00 and up to 10,100 USDC per transfer on Base. Unsupported tokens or
-networks are not credited. Eligible transfers are credited at the market rate, usually within about
-5 minutes." If the atomic minimum is positive, state both independent floors: "Send at least $5.00
+example: "Send at least $5.00 and up to 10,100 USDC per transfer on Base. Other tokens and
+networks aren’t credited. Credited at the market rate, usually within about 5 minutes." If the atomic minimum is positive, state both independent floors: "Send at least $5.00
 and 10 USDC, up to 10,100 USDC per transfer on Base." Omit the atomic minimum when it is zero;
 the stricter floor at payment time binds. Group token amounts in English without losing precision.
 Read all limits from the latest public view when available. When any limit is missing or malformed,
 use "Send USDC on Base" without a range; never promise credit for any amount.
 A payer sending from their own wallet or exchange gives the page no transaction hash,
-so unless your page submits one ([transaction-hash hints](#transaction-hash-hints)), each network's
-time is the 5-minute discovery scan plus its `typical_credit_seconds` in the address's public view
+so unless your page submits one ([transaction-hash hints](#transaction-hash-hints)), the chosen
+network's time is the 5-minute discovery scan plus its `typical_credit_seconds` in the address's public view
 (above), the time from paying to credit at the confirmation your account's payments on that chain
 wait for, as `GET /v1/config` reports it. Do not promise `typical_credit_seconds` alone, which is
 the time of a hinted payment: even a page that submits the hash can exhaust the daily hint budget
-and fall back to the scan. Until the view is loaded the page names no time: "Eligible transfers are credited at the
-market rate after confirmation."
+and fall back to the scan. Until the view is loaded the page names no time: "Credited at the market rate after
+confirmation."
 `<DepositAddress depositAddress={…} clientSecret={…} apiBase={…}>` from `@phala/pay-react`
 renders exactly that from `address` and `networks` (pass only those and the `client_secret` to the
 browser) and, with the secret, shows each payment as it arrives: "1.5 PHA received on Sepolia, 1

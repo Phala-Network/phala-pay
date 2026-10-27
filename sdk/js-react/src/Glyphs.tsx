@@ -31,18 +31,12 @@ export function ExternalGlyph() {
   return <Glyph className="pp-tx__external"><path d="M7 17 17 7M9 7h8v8" /></Glyph>;
 }
 
-/** The status row's tone: a dot while in progress, a check once credited, an alert on failure. */
-export function ToneGlyph({ tone }: { tone: "neutral" | "success" | "danger" }) {
+/** A status line's outcome: a check once credited, an alert on failure. */
+export function ToneGlyph({ tone }: { tone: "success" | "danger" }) {
   return (
     <Glyph>
-      {tone === "neutral" ? (
-        <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
-      ) : (
-        <>
-          <circle cx="12" cy="12" r="9" />
-          {tone === "success" ? <path d="m8.5 12.5 2.5 2.5 4.5-5" /> : <path d="M12 7.5v5.5M12 16.5h.01" />}
-        </>
-      )}
+      <circle cx="12" cy="12" r="9" />
+      {tone === "success" ? <path d="m8.5 12.5 2.5 2.5 4.5-5" /> : <path d="M12 7.5v5.5M12 16.5h.01" />}
     </Glyph>
   );
 }

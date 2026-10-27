@@ -48,7 +48,6 @@ connects a wallet with wagmi, RainbowKit, ConnectKit, or AppKit, pass it in inst
          apiBase="https://pay.example.com"
          onSuccess={props.onPaid}
          onExpire={props.onRetry}
-         buttonText="Pay with crypto"
        />
      );
    }
@@ -197,9 +196,8 @@ import { PaymentElement } from "@phala/pay-react";
   new quote with the expired one. If your quote varies by anything else between attempts (a field
   of your own form, say), pass it as `amount` or give the element a new `key` when it changes, or
   a retry would reuse a key with another body.
-- After the quote: the checkout, and a way back to the options ("Choose another token or
-  network") until a payment is on its way, then "Start over" if it does not complete or "Start a
-  new payment" once credited.
+- After the quote: the checkout, and a way back to the options ("Back") until a payment is on its
+  way, then "Start a new payment" once it is credited or does not complete.
 - `createDepositAddress(option)` adds one quiet line at the end of the form, "Paying from an
   exchange? Use a deposit address", for payers sending from an exchange or any wallet: it resolves
   with the deposit address's `address` and `networks` and, to follow its payments, `clientSecret`;
@@ -314,11 +312,11 @@ import { DepositAddress } from "@phala/pay-react";
 With `clientSecret` and `apiBase` it reads the address's public view about every three seconds and
 lists its payments of the last 24 hours: "1.5 PHA received on Sepolia, 1 confirmation" once the
 service sees the transfer (within about a block for a hinted payment, at the next discovery scan
-otherwise), then "credited" (or rejected or reversed). Display only. It also states when each
-network's payments are usually credited: `<DepositAddress>` submits no transaction-hash hint (the
+otherwise), then "credited" (or rejected or reversed). Display only. It also states when a payment on the
+chosen network is usually credited: `<DepositAddress>` submits no transaction-hash hint (the
 payer's wallet or exchange gives it no hash), so the service's 5-minute discovery scan plus the
-view's `typical_credit_seconds` ("usually within about 6 minutes on Sepolia and about 5 minutes on
-Base Sepolia"); until the view is loaded it names no time.
+view's `typical_credit_seconds` ("usually within about 6 minutes"); until the view is loaded it
+names no time.
 
 After ten minutes without a change in the public view, `<DepositAddress>` uses a base interval
 of `max(pollInterval, 15000)` milliseconds, with the same jitter and failure backoff, so a longer

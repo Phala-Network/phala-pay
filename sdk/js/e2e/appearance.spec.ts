@@ -191,13 +191,13 @@ for (const width of [390, 1280]) {
       await check(page, `manual-${suffix}`);
 
       await page.getByRole("tab", { name: "Browser wallet" }).click();
-      await page.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+      await page.getByRole("button", { name: "Pay with Test Wallet" }).click();
       await expect(page.getByText(/^Transaction sent:/)).toBeVisible();
       served = waiting({ payment_status: "seen", confirmations: 1 });
       await expect(page.getByRole("status")).toHaveText(/^Received, 1 confirmation/);
       await check(page, `seen-${suffix}`);
       served = waiting({ status: "complete", payment_status: "credited", amount_credited: 2500 });
-      await expect(page.getByRole("status")).toHaveText("Payment credited: $25.00");
+      await expect(page.getByRole("status")).toHaveText("Payment credited");
       await check(page, `credited-${suffix}`);
 
       served = waiting({ expires_at: Math.floor(Date.now() / 1000) - 1 });
@@ -207,7 +207,7 @@ for (const width of [390, 1280]) {
 
       served = 404;
       await page.goto(checkoutUrl(theme));
-      await expect(page.getByRole("status")).toHaveText("This payment link is not valid. Start a new top-up.");
+      await expect(page.getByRole("status")).toHaveText("This payment link is not valid.");
       await check(page, `error-${suffix}`);
 
       served = waiting();
@@ -247,9 +247,9 @@ for (const width of [390, 1280]) {
       await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
       expect(await axeViolations(page), "checkout").toEqual([]);
       await check(page, `element-checkout-${suffix}`);
-      await page.getByRole("button", { name: "Choose another token or network" }).click();
+      await page.getByRole("button", { name: "Back", exact: true }).click();
       await page.getByRole("button", { name: "Use a deposit address" }).click();
-      await expect(page.getByRole("button", { name: "Back to payment options" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
       await check(page, `element-deposit-${suffix}`);
 
       // The host's summary and button, then the deposit-address line under them.
@@ -329,7 +329,7 @@ for (const width of [390, 1280]) {
       await expect(status).toHaveText(/^Sent, waiting for it on chain…/);
       await expect(pay).toHaveCount(0);
       // Sent: no way back to pay again until the payment settles.
-      await expect(page.getByRole("button", { name: "Back to payment options" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Back", exact: true })).toHaveCount(0);
       await check(page, `deposit-mode-sent-${suffix}`);
       payments = [row("seen")];
       await expect(status).toHaveText(/^Received, 1 confirmation\. Crediting in about 30 seconds/);
@@ -371,7 +371,7 @@ for (const theme of ["light", "dark"]) {
       expect(await violations(), name).toEqual([]);
     }
     served = waiting({ status: "complete", payment_status: "credited", amount_credited: 2500 });
-    await expect(page.getByRole("status")).toHaveText("Payment credited: $25.00");
+    await expect(page.getByRole("status")).toHaveText("Payment credited");
     expect(await violations(), "credited").toEqual([]);
   });
 }
@@ -435,7 +435,7 @@ for (const width of [390, 1280]) {
       await installWallet(page);
       await page.goto(checkoutUrl(theme));
       await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
-      const button = page.getByRole("button", { name: "Pay with crypto Test Wallet" });
+      const button = page.getByRole("button", { name: "Pay with Test Wallet" });
       const tab = page.getByRole("tab", { selected: true });
       const primary = await button.evaluate((element) => getComputedStyle(element).backgroundColor);
       await expect(tab).toHaveCSS("border-bottom-color", primary);
@@ -505,7 +505,7 @@ for (const width of [390, 1280]) {
 
     await page.goto(checkoutUrl("light"));
     await page.addStyleTag({ content: PREFLIGHT });
-    await page.getByRole("button", { name: "Pay with crypto Test Wallet" }).click();
+    await page.getByRole("button", { name: "Pay with Test Wallet" }).click();
     const hash = page.locator("a.pp-tx__hash");
     await expect(hash).toBeVisible();
     // The hash wraps at narrow widths; its glyph stays inline, after its last character.

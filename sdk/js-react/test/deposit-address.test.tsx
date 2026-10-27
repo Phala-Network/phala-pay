@@ -100,17 +100,17 @@ describe("DepositAddress", () => {
 
   it("shows one address for every network and token, with a QR code per network and token", () => {
     render(<DepositAddress depositAddress={details()} />);
-    expect(screen.getByText("One reusable address for supported tokens and networks")).toBeDefined();
     const qr = () => screen.getByRole("img");
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for PHA on Sepolia");
     expect(qr().querySelector("path")?.getAttribute("d")).toMatch(/^M\d+ \d+h1v1h-1z/);
-    expect(screen.getByText("Sepolia (chain ID 11155111)")).toBeDefined();
+    // The network is the chosen one, above: no field repeats it.
+    expect(screen.queryByText(/chain ID/)).toBeNull();
     expect(screen.getByText(shownValue(ADDRESS))).toBeDefined();
     expect(screen.getByText(shownValue(TOKEN))).toBeDefined();
     expect(screen.getByRole("button", { name: "Copy Deposit address" })).toBeDefined();
-    expect(screen.getByText(/Send PHA on Sepolia/)).toBeDefined();
+    expect(screen.getByText(/Send PHA on Sepolia\. Other tokens and networks aren’t credited\./)).toBeDefined();
     // Without the address's public view it knows no network's credit time, and names none.
-    expect(screen.getByText(/credited at the market rate after confirmation\./)).toBeDefined();
+    expect(screen.getByText(/Credited at the market rate after confirmation\./)).toBeDefined();
     expect(screen.queryByText(/seconds|minutes/)).toBeNull();
 
     choose("Token", "USDC");
@@ -119,7 +119,6 @@ describe("DepositAddress", () => {
 
     choose("Network", "Base Sepolia");
     expect(qr().getAttribute("aria-label")).toBe("Deposit address for USDC on Base Sepolia");
-    expect(screen.getByText("Base Sepolia (chain ID 84532)")).toBeDefined();
   });
 
   it("shows what the payer sends with even when there is one option", () => {
@@ -141,7 +140,6 @@ describe("DepositAddress", () => {
         })}
       />,
     );
-    expect(screen.getByText(/varies by network/)).toBeDefined();
     expect(screen.getByText(shownValue(OTHER))).toBeDefined();
   });
 
@@ -557,11 +555,15 @@ describe("DepositAddress payments", () => {
     );
   });
 
-  it("states each network's credit time after the discovery scan, as a payer sends no hint", async () => {
+  it("states the chosen network's credit time after the discovery scan, as a payer sends no hint", async () => {
     // Up to 5 minutes to discover an unhinted transfer, then the view's 30 s or 7 s confirmation.
-    expect(await messageWith([clientNetwork(11155111, 30), clientNetwork(84532, 7)])).toContain(
-      "Eligible transfers are credited at the market rate, usually within about 6 minutes on Sepolia and about 5 minutes on Base Sepolia.",
+    expect(await messageWith([clientNetwork(11155111, 30), clientNetwork(84532, 7)])).toBe(
+      "Send PHA on Sepolia. Other tokens and networks aren’t credited. Credited at the market rate, usually within about 6 minutes.",
     );
+    choose("Token", "USDC");
+    choose("Network", "Base Sepolia");
+    expect(screen.getByText(/Credited at the market rate, usually within about 5 minutes\./)).toBeDefined();
+    expect(screen.queryByText(/6 minutes/)).toBeNull();
   });
 
   it("formats the selected token's exact per-transfer range and changes it with the selection", () => {
@@ -603,7 +605,7 @@ describe("DepositAddress payments", () => {
       ...asset(11155111, "pha", TOKEN), min_amount: 100, min_deposit_atomic: "0", max_deposit_atomic: "1000000000000000000",
     }])] });
     expect(await messageWith([current], initial)).toContain("Send at least $5.00 and 25 PHA, up to 10,100 PHA per transfer on Sepolia.");
-    expect(screen.getByText(/Eligible transfers are credited at the market rate, usually within about 6 minutes\./)).toBeDefined();
+    expect(screen.getByText(/Credited at the market rate, usually within about 6 minutes\./)).toBeDefined();
   });
 
   it.each(["", "abc", "1.5", "1e18", "0x10", "-1", " 10 ", "10\n"])("omits the range for malformed merchant atomic bounds %j", (invalid) => {
@@ -638,7 +640,7 @@ describe("DepositAddress payments", () => {
     old.assets = [asset(11155111, "pha", TOKEN)];
     const message = await messageWith([old]);
     expect(message).toContain("Send PHA on Sepolia.");
-    expect(message).toContain("Eligible transfers are credited at the market rate, usually within about 6 minutes.");
+    expect(message).toContain("Credited at the market rate, usually within about 6 minutes.");
     expect(message).not.toMatch(/Any amount|per transfer/);
     cleanup();
     render(<DepositAddress depositAddress={details({ networks: [network(11155111, [
@@ -666,15 +668,6 @@ describe("DepositAddress payments", () => {
     for (const invalid of [null, 0, -1, 1.5, "500", Number.MAX_SAFE_INTEGER + 1]) {
       expect(() => parseClientDepositAddress(body({ min_amount: invalid }))).toThrow(TypeError);
     }
-  });
-
-  it("states one time when every network's rounds to the same, as under a finalized policy", async () => {
-    expect(await messageWith([clientNetwork(11155111, 900), clientNetwork(84532, 900)])).toContain(
-      "Eligible transfers are credited at the market rate, usually within about 20 minutes.",
-    );
-    expect(await messageWith([clientNetwork(11155111, 7), clientNetwork(84532, 2)])).toContain(
-      "Eligible transfers are credited at the market rate, usually within about 5 minutes.",
-    );
   });
 
   it("parses the public view and refuses anything else", () => {

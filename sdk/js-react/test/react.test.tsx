@@ -87,7 +87,7 @@ it("surfaces the existing error message and stops after three non-retryable 4xx 
   vi.stubGlobal("fetch", fetch);
   render(<Checkout clientSecret={CLIENT_SECRET} expectedAddress={ADDRESS} apiBase={API_BASE} pollInterval={1000} />);
   await act(() => vi.advanceTimersByTimeAsync(6000));
-  expect(screen.getByText("This payment link is not valid. Start a new top-up.")).toBeDefined();
+  expect(screen.getByText("This payment link is not valid.")).toBeDefined();
   expect(fetch).toHaveBeenCalledTimes(3);
   await act(() => vi.advanceTimersByTimeAsync(60_000));
   expect(fetch).toHaveBeenCalledTimes(3);
@@ -108,7 +108,7 @@ describe("Checkout", () => {
   it("states the exact amount, the network, and the time left", async () => {
     await renderCheckout();
     expect(screen.getByText("100.502512562814070352 PHA")).toBeDefined();
-    expect(screen.getByText(/\$25\.00 top-up ·/).textContent).toContain("Sepolia");
+    expect(screen.getByText(/^\$25\.00 ·/).textContent).toContain("Sepolia");
     expect(screen.getByText(/Test mode/)).toBeDefined();
     expect(screen.getByText(/exactly 100.502512562814070352 PHA/)).toBeDefined();
     expect(screen.getByLabelText("Time left to pay").textContent).toBe("14:32");
@@ -136,6 +136,7 @@ describe("Checkout", () => {
     expect(within(manual).getByText(shownValue(ADDRESS))).toBeDefined();
     expect(within(manual).getByText(shownValue(TOKEN))).toBeDefined();
     expect(within(manual).getByText("Sepolia (chain ID 11155111)")).toBeDefined();
+    expect(within(manual).getByText("100.502512562814070352 PHA")).toBeDefined();
   });
 
   it("defaults to QR without a browser wallet and keeps the wallet tab available", async () => {
@@ -153,7 +154,7 @@ describe("Checkout", () => {
       }));
     });
     expect(screen.getByRole("tab", { name: "Browser wallet" }).getAttribute("aria-selected")).toBe("true");
-    expect(await screen.findByRole("button", { name: "Pay with crypto Late wallet" })).toBeDefined();
+    expect(await screen.findByRole("button", { name: "Pay with Late wallet" })).toBeDefined();
   });
 
   it("copies the address and the exact amount", async () => {
@@ -185,7 +186,7 @@ describe("Checkout", () => {
     served = quote({ status: "complete", payment_status: "credited", amount_credited: 2500 });
     await poll();
     await poll();
-    expect(screen.getByRole("status").textContent).toBe("Payment credited: $25.00");
+    expect(screen.getByRole("status").textContent).toBe("Payment credited");
     expect(onSuccess).toHaveBeenCalledTimes(1);
     expect(onSuccess).toHaveBeenCalledWith(served);
   });
@@ -268,7 +269,7 @@ describe("Checkout", () => {
     vi.stubGlobal("ethereum", browserWallet(hash).provider);
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     await renderCheckout();
-    await user.click(await screen.findByRole("button", { name: "Pay with crypto Browser wallet" }));
+    await user.click(await screen.findByRole("button", { name: "Pay with Browser wallet" }));
     const link = await screen.findByRole("link", { name: hash });
     expect(link.getAttribute("href")).toBe(`https://sepolia.etherscan.io/tx/${hash}`);
   });
@@ -282,9 +283,9 @@ describe("Checkout", () => {
     await renderCheckout({ walletClient });
     const panel = screen.getByRole("tabpanel");
     expect(within(panel).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Pay with crypto",
+      "Pay with your wallet",
     ]);
-    await user.click(within(panel).getByRole("button", { name: "Pay with crypto" }));
+    await user.click(within(panel).getByRole("button", { name: "Pay with your wallet" }));
     await screen.findByRole("link", { name: hash });
     expect(methods).not.toContain("eth_requestAccounts");
   });
@@ -295,7 +296,7 @@ describe("Checkout", () => {
     const errors: [WalletError, unknown][] = [];
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     await renderCheckout({ onWalletError: (error, wallet) => errors.push([error, wallet]) });
-    await user.click(await screen.findByRole("button", { name: "Pay with crypto Browser wallet" }));
+    await user.click(await screen.findByRole("button", { name: "Pay with Browser wallet" }));
     await screen.findByText(
       "Your wallet holds 1 PHA, less than the 100.502512562814070352 PHA to pay. Nothing was sent.",
     );
