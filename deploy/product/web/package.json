@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
-    "@cloudflare/vite-plugin": "2.0.0-beta.sha-ad79608dd",
+    "@cloudflare/vite-plugin": "2.0.0-beta.v.5",
     "@eslint/js": "^10.0.1",
     "@mermaid-js/mermaid-cli": "12.0.0",
     "@phala/pay-server": "file:../../../sdk/js-server",
@@ -48,7 +48,7 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.1.1",
-    "cf": "1.0.0-beta.21",
+    "cf": "1.0.0-beta.23",
     "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "hast-util-to-string": "^3.0.1",
