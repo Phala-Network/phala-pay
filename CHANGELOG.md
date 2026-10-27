@@ -21,9 +21,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - `@phala/pay-react` copy and layout are simpler, and the copy is no longer about top-ups. Hosts
   that match these strings in tests must update them
   ([#559](https://github.com/Phala-Network/phala-pay/pull/559)):
-  - `<Checkout>`'s wallet button now reads "Pay with <wallet name>" by default, as the deposit
-    address's button does, or "Pay with your wallet" for `walletClient`. Before, it read "Pay with
-    crypto <wallet name>". A `buttonText` you set is still followed by the wallet's name.
+  - `<Checkout>`'s wallet button now reads `Pay with <wallet name>` by default, as the deposit
+    address's button does, or "Pay with your wallet" for `walletClient`. Before, it read
+    `Pay with crypto <wallet name>`. A `buttonText` you set is still followed by the wallet's name.
   - `<Checkout>`'s status is now a plain line, as the deposit address's is: it has no tinted box,
     and only a credited or failed status has a mark. The summary reads "$25.00 · Sepolia", without
     "top-up". The amount and network are no longer repeated: the notice reads "Send exactly 25 USDC
