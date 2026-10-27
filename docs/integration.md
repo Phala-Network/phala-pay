@@ -434,14 +434,17 @@ repeat with the same `Idempotency-Key` within 24 hours returns the same response
 
 **Resume a checkout.** Keep the quote's `client_secret` in the browser (for example
 `localStorage`, keyed by the signed-in account) until the checkout reaches `credited`, `expired`,
-or `canceled`, or reports `error`. A payer who closes
+or `canceled`, or reports `error`, together with the `txHash` that `onChange` reports once the
+wallet sent the payment; render `<Checkout clientSecret … txHash>` with them. A payer who closes
 the tab after paying then reopens the page on the same quote's progress instead of an empty form,
 and does not pay twice.
 
 **Drive the page from the checkout.** `<Checkout onChange>` is called once per status change with
-`{ status, quote, error }`, like Stripe Elements' `onChange`. Hide your own "new payment" or
-amount controls while the status is `seen` or `confirming`, so that a waiting payer does not
-start a second payment. While waiting, tell the payer that the payment is credited in about the
+`{ status, quote, error, txHash }`, like Stripe Elements' `onChange`; `txHash` is the transaction
+the wallet tab sent, `null` before then. Hide your own "new payment" or amount controls while a
+payment is sent (`txHash` set) and the status is not final, or the status is `seen` or
+`confirming`, so that a waiting payer does not start a second payment. The checkout and
+`<PaymentElement>` do the same for their own controls. While waiting, tell the payer that the payment is credited in about the
 quote's `typical_credit_seconds` (30 seconds on Ethereum, about 7 seconds on Base, about 5 minutes
 under a `safe` policy, 15 minutes at `finalized`), that they can close the page, and that the credit arrives
 automatically. `onSuccess(quote)` is called once credited; `quote.amount_credited` is what was
@@ -459,7 +462,11 @@ import "./pay-theme.css";
   clientSecret={clientSecret}
   expectedAddress={expectedAddress}
   apiBase={PHALA_PAY_API_BASE}
-  onChange={({ status }) => setPaymentInFlight(status === "seen" || status === "confirming")}
+  txHash={storedTxHash}
+  onChange={({ status, txHash }) => {
+    saveTxHash(account.id, txHash);
+    setPaymentInFlight(status === "seen" || status === "confirming" || (txHash !== null && status === "waiting"));
+  }}
   onSuccess={() => { forgetClientSecret(account.id); router.refresh(); }}
   onExpire={() => forgetClientSecret(account.id)}
 />
@@ -1464,8 +1471,8 @@ backend, run on Phala's staging, the model for fulfillment, holds, and refunds.
 - [ ] Quote, waiting, history, and exception UI per
       [architecture §12](architecture.md#customer-experience-obligations-product-ui); amounts
       validated against `/v1/config` and quote-creation errors mapped to messages (§1.2); a
-      checkout resumes after a reload; "new payment" hidden while a payment is `seen` or
-      `confirming`.
+      checkout resumes after a reload (with its `txHash`); "new payment" hidden while a payment is
+      sent, `seen`, or `confirming`.
 - [ ] Refund path in your internal admin, by deposit id with a user-supplied address, also for
       held credits and unknown accounts; a refund marked paid is never canceled (§3).
 - [ ] Every `deposit.*` event applied by the balance rule, per deposit, serially, from its

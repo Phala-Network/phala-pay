@@ -1,5 +1,6 @@
 import { fireEvent, screen, within } from "@testing-library/react";
-import type { ClientQuote } from "../../js/src/index.js";
+import { encodeFunctionResult, erc20Abi } from "viem";
+import type { ClientQuote, EthereumProvider } from "../../js/src/index.js";
 
 export const TOKEN = "0x8F40e7E99678F44c88158f049E62817580ab113B";
 export const ADDRESS = "0x1111111111111111111111111111111111111111";
@@ -82,4 +83,28 @@ export function chosen(): string {
   const value = (field: string) =>
     screen.getByRole("combobox", { name: field }).querySelector(".pp-select__value")?.textContent ?? "";
   return `${value("Token")} · ${value("Network")}`;
+}
+
+/** A browser wallet on the quote's chain whose account holds `balance` of the token; it records
+ * the methods called. */
+export function browserWallet(hash: string, balance = 10n ** 30n) {
+  const methods: string[] = [];
+  const provider: EthereumProvider = {
+    request: ({ method }) => {
+      methods.push(method);
+      switch (method) {
+        case "eth_requestAccounts":
+          return Promise.resolve([ADDRESS]);
+        case "eth_chainId":
+          return Promise.resolve(`0x${quote().chain_id.toString(16)}`);
+        case "eth_call":
+          return Promise.resolve(encodeFunctionResult({ abi: erc20Abi, functionName: "balanceOf", result: balance }));
+        case "eth_sendTransaction":
+          return Promise.resolve(hash);
+        default:
+          return Promise.reject(new Error(`unexpected ${method}`));
+      }
+    },
+  };
+  return { provider, methods };
 }

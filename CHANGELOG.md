@@ -14,6 +14,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Fixed
+
+- `<Checkout>` no longer offers to pay again once the wallet has sent the payment: until the
+  service sees it, the status reads "Sent, waiting for confirmation" with the transaction, in place
+  of the payment methods. `<PaymentElement>` hides "Back" from then until the checkout's status is
+  final, as 0.12.1 did for its deposit-address mode: going back and paying again would pay twice.
+- `<Checkout onChange>` (and `<PaymentElement onChange>`'s `checkout`) reports the sent payment's
+  `txHash`, and `<Checkout txHash>` resumes it after a reload, so a host can keep it with the
+  client secret and block a second payment itself.
+
 ## [0.13.0] - 2026-10-27
 
 ### Breaking (operators)

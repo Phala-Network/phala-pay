@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import type { Hash, WalletClient } from "viem";
+import { isHash, type Hash, type WalletClient } from "viem";
 import type { CheckoutErrorCode, CheckoutState, CheckoutStatus } from "@phala/pay";
 import { networkName, transactionUrl } from "@phala/pay";
 import {
@@ -40,9 +40,13 @@ export interface CheckoutProps {
   onSuccess?: ((quote: ClientQuote) => void) | undefined;
   /** Called once when the quote expires or is canceled without a payment. */
   onExpire?: ((quote: ClientQuote) => void) | undefined;
-  /** Called whenever the checkout's status changes, like Stripe Elements' `onChange`: for example,
-   * to hide your own "new payment" control while a payment is `seen` or `confirming`. */
-  onChange?: (state: CheckoutState) => void;
+  /** Called whenever the checkout's status or `txHash` changes, like Stripe Elements' `onChange`:
+   * for example, to hide your own "new payment" control while a payment is sent, `seen`, or
+   * `confirming`, and to keep `txHash` with the client secret for a reload. */
+  onChange?: (state: CheckoutChange) => void;
+  /** A payment already sent for this quote, the `txHash` that `onChange` reported, to resume after
+   * a reload: the checkout follows it instead of offering to pay again. */
+  txHash?: string | undefined;
   /** Called when the wallet tab could not send the payment, with the `WalletError` and the wallet
    * it tried (the chosen browser wallet's provider, or `walletClient`): for example on
    * `insufficient_balance` (nothing was sent), to offer your own way to fund that wallet. The
@@ -58,6 +62,13 @@ export interface CheckoutProps {
   /** Your page's connected wallet, for example wagmi's `useWalletClient().data`. When set, the
    * wallet tab pays with it and its account instead of listing the browser's wallets. */
   walletClient?: WalletClient | undefined;
+}
+
+/** What `<Checkout onChange>` receives: the quote's state, and the payment the payer sent. */
+export interface CheckoutChange extends CheckoutState {
+  /** The transaction the wallet sent for this quote, or `txHash` on resume; `null` before then.
+   * Until the status is final, there is a payment on its way: do not let the payer pay again. */
+  txHash: string | null;
 }
 
 type Method = "wallet" | "qr" | "manual";
@@ -89,6 +100,7 @@ export function CheckoutContent({
   pollInterval,
   buttonText,
   walletClient,
+  txHash: resumed,
 }: Omit<CheckoutProps, "appearance" | "className">) {
   const { status, quote, error, reconnecting, refresh } = useCheckout({
     clientSecret,
@@ -96,19 +108,26 @@ export function CheckoutContent({
     apiBase,
     ...(pollInterval === undefined ? {} : { pollInterval }),
   });
-  const [txHash, setTxHash] = useState<Hash | null>(null);
+  // The payment sent from the wallet, for this quote only.
+  const [sent, setSent] = useState<{ clientSecret: string; hash: Hash } | null>(null);
+  const txHash =
+    sent?.clientSecret === clientSecret
+      ? sent.hash
+      : resumed !== undefined && isHash(resumed)
+        ? resumed
+        : null;
   const now = useNow(status === "waiting");
 
   const callbacks = useRef({ onSuccess, onExpire, onChange });
-  const state = useRef<CheckoutState>({ status, quote, error });
+  const state = useRef<CheckoutChange>({ status, quote, error, txHash });
   useEffect(() => {
     callbacks.current = { onSuccess, onExpire, onChange };
-    state.current = { status, quote, error };
+    state.current = { status, quote, error, txHash };
   });
-  // Once per status change, not on every poll.
+  // Once per status or payment change, not on every poll.
   useEffect(() => {
     callbacks.current.onChange?.(state.current);
-  }, [status]);
+  }, [status, txHash]);
   const notified = useRef(new Set<string>());
   useEffect(() => {
     if (quote === null) {
@@ -153,15 +172,23 @@ export function CheckoutContent({
           </p>
         </div>
       )}
-      <StatusLine status={status} quote={quote} now={now} error={error} reconnecting={reconnecting ?? false} />
+      <StatusLine
+        status={status}
+        quote={quote}
+        now={now}
+        error={error}
+        reconnecting={reconnecting ?? false}
+        sent={txHash !== null}
+      />
       {txHash !== null && quote !== null && <Transaction hash={txHash} chainId={quote.chain_id} />}
-      {status === "waiting" && quote !== null && (
+      {/* Once a payment is sent, nothing offers to pay again: paying again would pay twice. */}
+      {status === "waiting" && quote !== null && txHash === null && (
         <PaymentOptions
           quote={quote}
           buttonText={buttonText}
           walletClient={walletClient}
           onSent={(hash) => {
-            setTxHash(hash);
+            setSent({ clientSecret, hash });
             refresh();
           }}
           onWalletError={onWalletError}
@@ -177,12 +204,14 @@ function StatusLine({
   now,
   error,
   reconnecting,
+  sent,
 }: {
   status: CheckoutStatus;
   quote: ClientQuote | null;
   now: number;
   error: CheckoutState["error"];
   reconnecting: boolean;
+  sent: boolean;
 }) {
   const tone: "neutral" | "success" | "danger" =
     status === "credited"
@@ -202,7 +231,7 @@ function StatusLine({
             </span>
           )}
           <span>
-            {statusMessage(status, quote, error?.code)}
+            {status === "waiting" && sent ? "Sent, waiting for confirmation" : statusMessage(status, quote, error?.code)}
             {(reconnecting || error !== null) && status !== "error" && " (reconnecting…)"}
           </span>
         </span>
@@ -411,8 +440,8 @@ function WalletPanel({
   const pay = async ({ name, wallet }: WalletChoice) => {
     setStep({ kind: "pending", wallet: name });
     try {
+      // The checkout then follows the payment in place of this panel.
       onSent(await payWithWallet(wallet, quote));
-      setStep({ kind: "idle" });
     } catch (error) {
       setStep({
         kind: "failed",
