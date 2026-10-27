@@ -712,7 +712,9 @@ impl EvmClient {
                 }
             }
         }
-        tracing::warn!("RPC receipt/log self-test found no finalized log sample within eight blocks");
+        tracing::warn!(
+            "RPC receipt/log self-test found no finalized log sample within eight blocks"
+        );
         Ok(())
     }
 
