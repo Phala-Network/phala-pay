@@ -21,8 +21,6 @@ from topup_sdk import (
     deposit_address,
     deposit_address_salt,
     load_webhook_public_key,
-    quote_address,
-    quote_salt,
     verify_webhook,
 )
 from topup_sdk.client import TopupClient, _ErrorResponseError, _seconds
@@ -42,20 +40,6 @@ def test_manifest_declares_implemented_and_pending_groups() -> None:
 
 def test_address_fixtures_match_existing_derivation() -> None:
     vectors = load("addresses-v1.json")
-    for vector in vectors["quote"]:
-        salt = quote_salt(vector["account"], vector["client_reference_id"], vector["quote_id"])
-        assert "0x" + salt.hex() == vector["salt"]
-        assert (
-            quote_address(
-                vectors["factory"],
-                vectors["implementation"],
-                vector["treasury"],
-                account=vector["account"],
-                client_reference_id=vector["client_reference_id"],
-                quote_id=vector["quote_id"],
-            )
-            == vector["predicted_address"]
-        )
     for vector in vectors["deposit_address"]:
         inputs = {
             key: vector[key] for key in ("account", "livemode", "client_reference_id", "version")

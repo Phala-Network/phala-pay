@@ -70,7 +70,7 @@ pub(crate) fn deposit_status(state: &str) -> &'static str {
     path = "/v1/deposits",
     params(
         ("client_reference_id" = Option<String>, Query, description = "Only this customer's deposits"),
-        ("quote" = Option<String>, Query, description = "Only deposits to this quote's address"),
+        ("quote" = Option<String>, Query, description = "Only deposits that consumed this quote"),
         ("deposit_address" = Option<String>, Query, description = "Only deposits to this deposit address, `da_…`"),
         ("status" = Option<String>, Query, description = "Only deposits in this status: `pending`, `credited`, `rejected`, or `reversed`"),
         ("tx_hash" = Option<String>, Query, description = "Only deposits in this transaction"),
@@ -108,7 +108,7 @@ pub(crate) async fn list_deposits(
             .push_bind(client_reference_id.clone());
     }
     if let Some(quote) = filters.quote {
-        builder.push(" AND address.quote_id = ").push_bind(quote);
+        builder.push(" AND deposit.quote_id = ").push_bind(quote);
     }
     if let Some(deposit_address) = filters.deposit_address {
         builder
@@ -863,7 +863,7 @@ fn scoped_deposit_query(scope: Scope) -> QueryBuilder<Postgres> {
     let mut builder = QueryBuilder::new(
         r#"
         SELECT deposit.id, deposit.livemode, customer.client_reference_id,
-               address.quote_id,
+               deposit.quote_id,
                address.deposit_address_id,
                deposit.state, deposit.final_at IS NOT NULL AS is_final, deposit.final_at,
                deposit.state = 'swept' OR EXISTS (

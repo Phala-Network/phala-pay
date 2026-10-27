@@ -33,7 +33,12 @@ from reference_product.config import (
     MissingProductKeyError,
     ProductConfig,
 )
-from reference_product.fulfillment import Answer, Fulfillment, PinnedKeys, TransientError
+from reference_product.fulfillment import (
+    Answer,
+    Fulfillment,
+    PinnedKeys,
+    TransientError,
+)
 from reference_product.ledger import MIGRATIONS, SCHEMA_VERSION, Delivery, ProductLedger
 from reference_product.restore_records import export_restore_records
 from reference_product.server import (
@@ -110,7 +115,10 @@ def _create_ledger_schema(db: sqlite3.Connection, *, version: int) -> None:
 
 
 def _fulfillment(
-    *, suspended: bool = False, config: ProductConfig = CONFIG, ledger: ProductLedger | None = None
+    *,
+    suspended: bool = False,
+    config: ProductConfig = CONFIG,
+    ledger: ProductLedger | None = None,
 ) -> Fulfillment:
     if ledger is None:
         ledger = ProductLedger()
@@ -402,7 +410,11 @@ def test_a_credit_for_an_unknown_workspace_is_held() -> None:
     assert fulfillment.handle(*_credited(team="team-unknown")).status == 204
     order = fulfillment.ledger.find_order(deposit_id(CHAIN_ID, "0x" + "01" * 32, 0))
     assert order is not None
-    assert (order.status, order.reason, order.team_id) == ("held", "unknown_account", None)
+    assert (order.status, order.reason, order.team_id) == (
+        "held",
+        "unknown_account",
+        None,
+    )
 
 
 def test_another_accounts_or_modes_event_is_refused_without_a_credit() -> None:
@@ -415,7 +427,9 @@ def test_another_accounts_or_modes_event_is_refused_without_a_credit() -> None:
     assert fulfillment.ledger.credits_for(TEAM) == []
 
 
-def test_the_inbox_keeps_each_delivery_as_received_once(caplog: pytest.LogCaptureFixture) -> None:
+def test_the_inbox_keeps_each_delivery_as_received_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     fulfillment = _fulfillment()
     headers, body = _credited()
     # Header names arrive in any case; the body is kept byte for byte, not re-serialized.
@@ -441,7 +455,9 @@ def test_the_inbox_keeps_each_delivery_as_received_once(caplog: pytest.LogCaptur
     assert "repeats with another body" in caplog.text
 
 
-def test_a_delivery_is_kept_only_with_its_ledger_effect(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_delivery_is_kept_only_with_its_ledger_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fulfillment = _fulfillment()
     delivery = _credited()
 
@@ -506,7 +522,9 @@ def test_live_product_without_a_pin_fails_startup(tmp_path: Path) -> None:
         _make_product(config)
 
 
-def test_unsealed_test_product_starts_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unsealed_test_product_starts_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("UNSEALED_TEST_KEY", raising=False)
     config = replace(
         CONFIG,
@@ -730,7 +748,11 @@ def test_product_api_submits_a_signed_transaction_hint() -> None:
 
 @pytest.mark.parametrize(
     "hint_error",
-    [None, driver.ProductApiError(503, "unavailable"), httpx.ConnectError("connection refused")],
+    [
+        None,
+        driver.ProductApiError(503, "unavailable"),
+        httpx.ConnectError("connection refused"),
+    ],
     ids=["received", "api_error", "connect_error"],
 )
 def test_deposit_driver_submits_after_payment_and_keeps_scanner_fallback(
@@ -789,6 +811,10 @@ def _quote(created: int = 1_790_000_000) -> dict[str, Any]:
     return {
         "id": QUOTE_ID,
         "object": "quote",
+        "window_start": created,
+        "replaced_by": None,
+        "deposit_address": ADDRESS_ID,
+        "deposit_address_version": 2,
         "livemode": False,
         "client_reference_id": TEAM,
         "amount": 2_500,
@@ -823,7 +849,12 @@ def _deposit_address(created: int = 1_790_000_000) -> dict[str, Any]:
         "salt": "0x" + "5a" * 32,
         "address": "0x" + "88" * 20,
         "networks": [
-            {"chain_id": 11155111, "address": "0x" + "88" * 20, "treasury": "0x0", "assets": []}
+            {
+                "chain_id": 11155111,
+                "address": "0x" + "88" * 20,
+                "treasury": "0x0",
+                "assets": [],
+            }
         ],
         "payments": [],
         "metadata": {},
@@ -860,29 +891,8 @@ def test_the_export_is_the_admin_requests_bodies() -> None:
             "client_secret": ADDRESS_SECRET,
         }
     ]
-    # Only the fields the restore request takes (it refuses any other), the secret included.
-    quote = _quote()
-    assert records["quotes"] == [
-        {"account": CONFIG.account}
-        | {
-            name: quote[name]
-            for name in (
-                "livemode",
-                "id",
-                "client_reference_id",
-                "chain_id",
-                "asset",
-                "amount",
-                "amount_atomic",
-                "exchange_rate",
-                "address",
-                "created",
-                "expires_at",
-                "metadata",
-                "client_secret",
-            )
-        }
-    ]
+    # Price windows are never reissued; the network record above is sufficient.
+    assert "quotes" not in records
     [batch] = records["events"]
     deliveries = batch["deliveries"]
     assert [json.loads(each["body"])["type"] for each in deliveries] == [
@@ -932,7 +942,10 @@ def test_the_export_verifies_the_latest_treasuries_and_restores_signed_applicati
     applied_body = json.loads(applied[1])
     applied_body["data"]["previous_attributes"] = {"status": "pending"}
     body = json.dumps(applied_body).encode()
-    applied = sign_webhook(SERVICE_KEY, applied_body["id"], int(time.time()), body), body
+    applied = (
+        sign_webhook(SERVICE_KEY, applied_body["id"], int(time.time()), body),
+        body,
+    )
     paused = _delivery("treasury.updated", _treasury("active", 2), created=200)
     # Delivered out of order: the latest by `created` wins.
     for delivery in (applied, paused, pending):
@@ -946,7 +959,13 @@ def test_the_export_verifies_the_latest_treasuries_and_restores_signed_applicati
             "treasuries": [
                 {
                     name: _treasury(status, number)[name]
-                    for name in ("id", "status", "chain_id", "address", "crediting_paused_by")
+                    for name in (
+                        "id",
+                        "status",
+                        "chain_id",
+                        "address",
+                        "crediting_paused_by",
+                    )
                 }
                 for status, number in (("active", 1), ("active", 2))
             ],
@@ -979,20 +998,21 @@ def test_the_export_starts_five_minutes_before_the_restore_point(
     ledger.record_quote(TEAM, {**_quote(created=restore_point - 301), "id": "qt_" + "0e" * 16})
     ledger.record_deposit_address(TEAM, _deposit_address(created=restore_point - 3_600))
     records = export_restore_records(CONFIG.account, ledger, since=restore_point)
-    # The service re-issues a quote it no longer holds created up to five minutes before.
-    assert [quote["id"] for quote in records["quotes"]] == [QUOTE_ID]
-    assert records["deposit_addresses"] == []
+    # A quote can recover its fixed address, never its lost price window.
+    assert [address["id"] for address in records["deposit_addresses"]] == [ADDRESS_ID]
+    assert "client_secret" not in records["deposit_addresses"][0]
     # Posted again after the restore point, the address has a new client secret the service
     # must keep, though it was created long before.
     fresh = f"{ADDRESS_ID}_secret_" + "ef" * 24
     monkeypatch.setattr("reference_product.ledger.time.time", lambda: restore_point + 10)
     ledger.record_deposit_address(
-        TEAM, {**_deposit_address(created=restore_point - 3_600), "client_secret": fresh}
+        TEAM,
+        {**_deposit_address(created=restore_point - 3_600), "client_secret": fresh},
     )
     records = export_restore_records(CONFIG.account, ledger, since=restore_point)
     assert [address["client_secret"] for address in records["deposit_addresses"]] == [fresh]
     everything = export_restore_records(CONFIG.account, ledger, since=None)
-    assert len(everything["quotes"]) == 2
+    assert len(everything["deposit_addresses"]) == 1
 
 
 def test_the_export_orders_deliveries_by_deposit_position_and_batches_them() -> None:
@@ -1025,6 +1045,26 @@ def test_the_export_orders_deliveries_by_deposit_position_and_batches_them() -> 
     assert [len(batch["deliveries"]) for batch in records["events"]] == [100, 3]
 
 
+def test_restore_export_keeps_each_quote_address_version() -> None:
+    ledger = ProductLedger()
+    ledger.add_team(TEAM)
+    for number, version in enumerate((1, 2, 2)):
+        ledger.record_quote(
+            TEAM,
+            {
+                **_quote(),
+                "id": f"qt_{number:032x}",
+                "deposit_address": ADDRESS_ID,
+                "deposit_address_version": version,
+                "address": "0x" + f"{version:02x}" * 20,
+            },
+        )
+    records = export_restore_records(CONFIG.account, ledger)["deposit_addresses"]
+    assert [(record["id"], record["version"], record["address"]) for record in records] == [
+        (ADDRESS_ID, version, "0x" + f"{version:02x}" * 20) for version in (1, 2)
+    ]
+
+
 def test_a_later_deposit_address_response_replaces_the_record() -> None:
     ledger = ProductLedger()
     ledger.add_team(TEAM)
@@ -1054,7 +1094,10 @@ def test_the_account_api_serves_the_restore_records_to_the_driver_only() -> None
     assert fulfillment.handle(*_credited()).status == 204
     api = AccountApi(CONFIG, ledger, load_public_key(DRIVER.public_key_base64()))
     answer = _account_call(api, "GET", "/accounts/restore-records", b"")
-    assert (answer.status, answer.body) == (200, export_restore_records(CONFIG.account, ledger))
+    assert (answer.status, answer.body) == (
+        200,
+        export_restore_records(CONFIG.account, ledger),
+    )
     answer = _account_call(api, "GET", "/accounts/restore-records?since=1790000000", b"")
     assert answer.body == export_restore_records(CONFIG.account, ledger, since=1_790_000_000)
     other = RequestSigner.from_seed(DRIVER_KEYID, bytes([8] * 32))
@@ -1093,7 +1136,15 @@ def test_event_references_upgrade_once_and_deduplicate_matches(tmp_path: Path) -
         _create_ledger_schema(db, version=1)
         db.execute(
             "INSERT INTO webhook_events VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("evt_test", "deposit.credited", json.dumps(data), 1, b"{}", "1", "signature"),
+            (
+                "evt_test",
+                "deposit.credited",
+                json.dumps(data),
+                1,
+                b"{}",
+                "1",
+                "signature",
+            ),
         )
     for _ in range(2):
         ledger = ProductLedger(str(path))
@@ -1152,7 +1203,10 @@ def test_account_view_bounds_deposits_and_avoids_global_event_reads(
     service = Service()
     client.list_deposits.side_effect = service.list_deposits
     api = AccountApi(
-        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
+        CONFIG,
+        fulfillment.ledger,
+        load_public_key(DRIVER.public_key_base64()),
+        client=client,
     )
 
     def global_events() -> list[dict[str, Any]]:
@@ -1294,7 +1348,10 @@ def test_account_api_isolates_sdk_service_failures(
         max_attempts=1,
     )
     api = AccountApi(
-        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
+        CONFIG,
+        fulfillment.ledger,
+        load_public_key(DRIVER.public_key_base64()),
+        client=client,
     )
     try:
         answer = _account_call(api, "GET", f"/accounts/{TEAM}", b"")
@@ -1312,7 +1369,10 @@ def test_account_api_leaves_injected_client_open() -> None:
     client = create_autospec(TopupClient, instance=True, spec_set=True)
     client.list_deposits.return_value = iter([])
     api = AccountApi(
-        CONFIG, fulfillment.ledger, load_public_key(DRIVER.public_key_base64()), client=client
+        CONFIG,
+        fulfillment.ledger,
+        load_public_key(DRIVER.public_key_base64()),
+        client=client,
     )
     try:
         assert _account_call(api, "GET", f"/accounts/{TEAM}", b"").status == 200
@@ -1379,10 +1439,12 @@ def test_quote_status_migration_backfills_and_is_idempotent(tmp_path: Path) -> N
         try:
             with ledger.transaction() as db:
                 assert db.execute(
-                    "SELECT status FROM quote_statuses WHERE quote_id = ?", (quote["id"],)
+                    "SELECT status FROM quote_statuses WHERE quote_id = ?",
+                    (quote["id"],),
                 ).fetchone() == ("canceled",)
                 assert db.execute(
-                    "SELECT status FROM quote_statuses WHERE quote_id = ?", (expired_quote_id,)
+                    "SELECT status FROM quote_statuses WHERE quote_id = ?",
+                    (expired_quote_id,),
                 ).fetchone() == ("expired",)
                 assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         finally:

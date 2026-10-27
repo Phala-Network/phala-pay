@@ -478,7 +478,6 @@ fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(restore::apply_treasury))
         .routes(routes!(restore::delete_webhook_endpoint))
         .routes(routes!(restore::reissue_deposit_address))
-        .routes(routes!(restore::reissue_quote))
         .routes(routes!(restore::import_events))
         .routes(routes!(restore::discard_delivered_credit))
         .routes(routes!(restore::unfreeze))

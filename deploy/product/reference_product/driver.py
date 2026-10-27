@@ -46,7 +46,10 @@ TOKEN_ABI = [
     {
         "type": "function",
         "name": name,
-        "inputs": [{"name": "to", "type": "address"}, {"name": "amount", "type": "uint256"}],
+        "inputs": [
+            {"name": "to", "type": "address"},
+            {"name": "amount", "type": "uint256"},
+        ],
         "outputs": [],
         "stateMutability": "nonpayable",
     }
@@ -145,9 +148,14 @@ class ProductApi:
     def refund(
         self, team: str, deposit_id: str, destination_address: str, amount_atomic: str
     ) -> dict[str, Any]:
-        body = {"destination_address": destination_address, "amount_atomic": amount_atomic}
+        body = {
+            "destination_address": destination_address,
+            "amount_atomic": amount_atomic,
+        }
         return self._call(
-            "POST", f"/accounts/{quote(team)}/deposits/{quote(deposit_id)}/refunds", body
+            "POST",
+            f"/accounts/{quote(team)}/deposits/{quote(deposit_id)}/refunds",
+            body,
         )
 
     def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -198,7 +206,10 @@ def run_deposit(
         quote = api.quote(team, amount_minor, chain.chain_id, chain.test_token.symbol.lower())
         # Pay only an address recomputed here from the account, workspace, quote id, and the
         # chain's treasury.
-        if not same_address(quote_address(config, team, quote.id, chain.chain_id), quote.address):
+        if quote.deposit_address_version is None or not same_address(
+            quote_address(config, team, quote.deposit_address_version, chain.chain_id),
+            quote.address,
+        ):
             raise RuntimeError("quote address does not match the driver's own computation")
         address = quote.address
         amount_atomic = int(quote.amount_atomic) * pay_bps // 10_000
@@ -227,7 +238,10 @@ def run_deposit(
             api.submit_transaction(team, quote.id, tx_hash)
             LOG.info("transaction hint received for %s", tx_hash)
         except (ProductApiError, httpx.HTTPError) as error:
-            LOG.warning("transaction hint unavailable: %s; scanner discovery will continue", error)
+            LOG.warning(
+                "transaction hint unavailable: %s; scanner discovery will continue",
+                error,
+            )
         LOG.info("paid %s atomic in %s from %s", amount_atomic, tx_hash, payer.address)
         if until in {"rejected", "refunded"}:
             _check_rejection(api, team, address, refund_to, timeout)
@@ -236,7 +250,10 @@ def run_deposit(
         states = {"credited", "swept"} if until == "credited" else {"swept"}
         expired_ref = quote.id if pay_after_expiry else None
         deposit, view = _wait_for_account(
-            api, team, timeout, lambda view: _credited(view, address, states, expired_ref)
+            api,
+            team,
+            timeout,
+            lambda view: _credited(view, address, states, expired_ref),
         )
         credited = _event(view, "deposit.credited", id=deposit.id)
         if credited["price_source"] != ("quote" if at_quote_price else "spot"):

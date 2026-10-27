@@ -69,6 +69,8 @@ async fn pending_transfers_are_display_only_until_final() -> Result<()> {
 
 async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let pool = &database.app_pool;
+    // Keep block time independent of host speed; each quote below sets its payment time.
+    rpc(anvil, "anvil_setBlockTimestampInterval", &["0"])?;
     let token = forge_create(&anvil.rpc_url, MOCK_ERC20, &[])?;
     let other_token = forge_create(&anvil.rpc_url, MOCK_ERC20, &[])?;
     anvil.mine(FINALITY_LAG + 2)?;
@@ -112,13 +114,13 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
     coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
 
-    let lock_address = api.lock("checkout-1").await?;
+    let lock_address = api.lock("checkout-1", anvil).await?;
     ensure!(
         api.payment("checkout-1").await?.is_null(),
         "unpaid quote has a payment"
     );
     ensure!(api.client_progress("checkout-1").await? == ("none".to_owned(), None));
-    let other_quote = api.lock("checkout-0").await?;
+    let other_quote = api.lock("checkout-0", anvil).await?;
     let before = Ledger::read(pool).await?;
 
     let snapshot = snapshot(anvil)?;
@@ -195,6 +197,12 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
 
     // Once final, the finalized scanner records the deposit and clears its pending row in the same
     // transaction, and the lock shows the finalized payment.
+    next_block_after(
+        anvil,
+        api.quote("checkout-1").await?["window_start"]
+            .as_i64()
+            .context("window start")?,
+    )?;
     transfer(&anvil.rpc_url, token, lock_address, 100)?;
     fast_once(pool, &reader, &chain_routes).await?;
     ensure!(pending_rows(pool).await? == 1);
@@ -222,27 +230,63 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         .execute(pool)
         .await?;
     ensure!(api.client_progress("checkout-1").await? == ("reversed".to_owned(), None));
+    // Other assets and transfers outside this quote's window must not mark it reversed.
+    let address_id = api.address_id(pool, "checkout-1").await?;
+    let (window_start, expires_at): (DateTime<Utc>, DateTime<Utc>) =
+        sqlx::query_as("SELECT window_start, expires_at FROM quotes WHERE address_id=$1")
+            .bind(address_id)
+            .fetch_one(pool)
+            .await?;
+    let canonical_time: DateTime<Utc> =
+        sqlx::query_scalar("SELECT block_time FROM deposits WHERE address_id=$1")
+            .bind(address_id)
+            .fetch_one(pool)
+            .await?;
+    for (asset, block_time) in [
+        (Address::repeat_byte(0xee), canonical_time),
+        (token, window_start),
+        (token, expires_at + chrono::Duration::seconds(1)),
+        (token, canonical_time),
+    ] {
+        sqlx::query("UPDATE deposits SET asset_contract=$2, block_time=$3 WHERE address_id=$1")
+            .bind(address_id)
+            .bind(format!("{asset:#x}"))
+            .bind(block_time)
+            .execute(pool)
+            .await?;
+        let expected = if asset == token && block_time == canonical_time {
+            "reversed"
+        } else {
+            "none"
+        };
+        ensure!(api.client_progress("checkout-1").await? == (expected.to_owned(), None));
+    }
 
     // Underpay, then pay in full: the finalized underpayment does not consume the lock, so the
     // later exact payment is the one shown while it is still pending.
-    let underpaid = api.lock("checkout-2").await?;
+    let underpaid = api.lock("checkout-2", anvil).await?;
     transfer(&anvil.rpc_url, token, underpaid, 50)?;
     anvil.mine(FINALITY_LAG)?;
     topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
     coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
     transfer(&anvil.rpc_url, token, underpaid, 100)?;
     // Dust first, then the exact amount, both still pending.
-    let dusted = api.lock("checkout-3").await?;
+    let dusted = api.lock("checkout-3", anvil).await?;
     transfer(&anvil.rpc_url, token, dusted, 1)?;
     transfer(&anvil.rpc_url, token, dusted, 100)?;
     fast_once(pool, &reader, &chain_routes).await?;
     for lock_ref in ["checkout-2", "checkout-3"] {
-        let payment = api.payment(lock_ref).await?;
+        let quote = api.quote(lock_ref).await?;
+        let payment = &quote["payment"];
         ensure!(
             payment["status"] == "seen"
                 && payment["amount_atomic"] == "100"
                 && payment["matches_quote"] == true,
-            "{lock_ref} does not show the payment that consumes it: {payment}"
+            "{lock_ref} does not show the payment that consumes it: {payment}; window=({}, {}]; pending block times={:?}",
+            quote["window_start"], quote["expires_at"],
+            sqlx::query_scalar::<_, DateTime<Utc>>(
+                "SELECT block_time FROM pending_transfers WHERE address_id=$1 ORDER BY block_number",
+            ).bind(api.address_id(pool, lock_ref).await?).fetch_all(pool).await?
         );
     }
 
@@ -258,14 +302,15 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
             .bind(api.address_id(pool, "checkout-2").await?)
             .fetch_one(pool)
             .await?;
-    sqlx::query(
-        "UPDATE quotes SET status = 'consumed', consumed_by = $1, exposure_reserved = false, \
-         closed_at = now() WHERE id = (SELECT address.quote_id FROM deposits AS deposit \
-         JOIN addresses AS address ON address.id = deposit.address_id WHERE deposit.id = $1)",
-    )
-    .bind(underpayment)
-    .execute(pool)
-    .await?;
+    let quote_id =
+        topup::ids::parse(topup::ids::QUOTE, &api.id("checkout-2")?).context("quote id")?;
+    sqlx::query("UPDATE quotes SET status='consumed',consumed_by=$1,exposure_reserved=false,closed_at=now() WHERE id=$2")
+        .bind(underpayment).bind(quote_id).execute(pool).await?;
+    sqlx::query("UPDATE deposits SET quote_id=$2 WHERE id=$1")
+        .bind(underpayment)
+        .bind(quote_id)
+        .execute(pool)
+        .await?;
     let payment = api.payment("checkout-2").await?;
     ensure!(
         payment["status"] == "recorded"
@@ -298,10 +343,10 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         deposit["quote"]["id"] == quote_id && deposit["quote"]["deposit"] == deposit_id,
         "{deposit}"
     );
-    ensure!(deposit["client_reference_id"] == "ws-pending" && deposit["asset"] == "pha");
+    ensure!(deposit["client_reference_id"] == "checkout-2" && deposit["asset"] == "pha");
 
     // A cancelled lock credits every payment at spot, so none is in time or within tolerance.
-    let cancelled = api.lock("checkout-4").await?;
+    let cancelled = api.lock("checkout-4", anvil).await?;
     let id = api.id("checkout-4")?;
     api.call(
         Method::POST,
@@ -309,7 +354,12 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         Value::Null,
     )
     .await?;
-    rpc(anvil, "evm_increaseTime", &["2"])?;
+    next_block_after(
+        anvil,
+        api.quote("checkout-4").await?["expires_at"]
+            .as_i64()
+            .context("cancelled window end")?,
+    )?;
     transfer(&anvil.rpc_url, token, cancelled, 100)?;
     anvil.mine(FINALITY_LAG)?;
     topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
@@ -318,8 +368,8 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let lock = api.quote("checkout-4").await?;
     ensure!(lock["status"] == "canceled", "unexpected {lock}");
     ensure!(
-        lock["payment"]["amount_atomic"] == "100" && lock["payment"]["matches_quote"] == false,
-        "canceled quote shows its payment as applying: {lock}"
+        lock["payment"].is_null(),
+        "out-of-window payment leaked onto canceled quote: {lock}"
     );
     Ok(())
 }
@@ -415,13 +465,13 @@ struct Api {
 }
 
 impl Api {
-    /// Creates a 100-cent quote for `ws-pending` and returns its address.
-    async fn lock(&self, name: &str) -> Result<Address> {
+    /// Creates a 100-cent quote for the named customer and returns its address.
+    async fn lock(&self, name: &str, anvil: &Anvil) -> Result<Address> {
         let quote = self
             .call(
                 Method::POST,
                 "/v1/quotes",
-                json!({"client_reference_id": "ws-pending", "amount": 100, "currency": "usd",
+                json!({"client_reference_id": name, "amount": 100, "currency": "usd",
                        "chain_id": CHAIN_ID, "asset": "pha"}),
             )
             .await?;
@@ -434,6 +484,10 @@ impl Api {
             .lock()
             .map_err(|_| anyhow::anyhow!("quote map poisoned"))?
             .insert(name.to_owned(), (id, secret));
+        next_block_after(
+            anvil,
+            quote["window_start"].as_i64().context("window start")?,
+        )?;
         Ok(Address::from_str(
             quote["address"].as_str().context("quote address")?,
         )?)
@@ -478,7 +532,7 @@ impl Api {
     async fn address_id(&self, pool: &sqlx::PgPool, name: &str) -> Result<Uuid> {
         let quote = topup::ids::parse(topup::ids::QUOTE, &self.id(name)?).context("quote id")?;
         Ok(
-            sqlx::query_scalar("SELECT id FROM addresses WHERE quote_id = $1")
+            sqlx::query_scalar("SELECT address_id FROM quotes WHERE id = $1")
                 .bind(quote)
                 .fetch_one(pool)
                 .await?,
@@ -581,6 +635,24 @@ fn rpc(anvil: &Anvil, method: &str, params: &[&str]) -> Result<String> {
     arguments.extend_from_slice(params);
     let output = run_checked("cast", &arguments, None)?;
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+}
+
+fn next_block_after(anvil: &Anvil, boundary: i64) -> Result<()> {
+    let head: Value =
+        serde_json::from_str(&rpc(anvil, "eth_getBlockByNumber", &["latest", "false"])?)?;
+    let timestamp = i64::from_str_radix(
+        head["timestamp"]
+            .as_str()
+            .context("head timestamp")?
+            .trim_start_matches("0x"),
+        16,
+    )?;
+    let next = timestamp
+        .max(boundary)
+        .checked_add(1)
+        .context("next block timestamp")?;
+    rpc(anvil, "evm_setNextBlockTimestamp", &[&next.to_string()])?;
+    Ok(())
 }
 
 fn snapshot(anvil: &Anvil) -> Result<String> {

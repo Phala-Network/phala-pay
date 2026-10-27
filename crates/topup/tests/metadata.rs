@@ -130,7 +130,7 @@ fn ensure_invalid(status: StatusCode, answer: &Value, param: &str) -> Result<()>
 }
 
 #[tokio::test]
-async fn metadata_is_set_merged_unset_and_copied_from_quote_to_deposit() -> Result<()> {
+async fn metadata_is_set_merged_unset_and_copied_from_deposit_address() -> Result<()> {
     let Some(database) = TestDatabase::create().await? else {
         return Ok(());
     };
@@ -275,8 +275,17 @@ async fn metadata_is_set_merged_unset_and_copied_from_quote_to_deposit() -> Resu
         let public: Value = serde_json::from_slice(&to_bytes(public.into_body(), 65_536).await?)?;
         ensure!(public.get("metadata").is_none(), "{public}");
 
-        // The deposit to the quote's address starts with a copy of the quote's metadata.
-        let address_id: Uuid = sqlx::query_scalar("SELECT id FROM addresses WHERE quote_id = $1")
+        // A transfer starts with address metadata; quote metadata is copied only on consumption.
+        let address_path = format!(
+            "/v1/deposit_addresses/{}",
+            quote["deposit_address"]
+                .as_str()
+                .context("deposit address")?
+        );
+        merchant
+            .ok(Method::POST, &address_path, &json!({"metadata": quoted}))
+            .await?;
+        let address_id: Uuid = sqlx::query_scalar("SELECT address_id FROM quotes WHERE id = $1")
             .bind(topup::ids::parse(topup::ids::QUOTE, &quote_id).context("quote id")?)
             .fetch_one(pool)
             .await?;
@@ -345,7 +354,7 @@ async fn metadata_is_set_merged_unset_and_copied_from_quote_to_deposit() -> Resu
                 &Value::Null,
             )
             .await?;
-        ensure!(read["metadata"] == deposited && read["quote"]["metadata"] == json!({}));
+        ensure!(read["metadata"] == deposited && read["quote"].is_null());
 
         // Refunds: set on create, part of an Idempotency-Key repeat, updated like the others.
         let refund_body = |metadata: Value| {

@@ -15,7 +15,7 @@ from topup_sdk import (
     ApiError,
     TopupClient,
     UnpinnedTreasuryWarning,
-    quote_address,
+    deposit_address,
 )
 
 from ._support import CLIENT_ACCOUNT as ACCOUNT
@@ -45,13 +45,14 @@ QUOTE_TERMS = {
 
 
 def _quote(**fields: object) -> dict[str, object]:
-    address = quote_address(
+    address = deposit_address(
         FACTORY,
         IMPLEMENTATION,
         str(fields.get("treasury", TREASURY)),
         account=ACCOUNT,
         client_reference_id="ws 1",
-        quote_id=QUOTE_ID,
+        livemode=bool(fields.get("livemode", False)),
+        version=1,
     )
     return {
         "id": QUOTE_ID,
@@ -67,6 +68,10 @@ def _quote(**fields: object) -> dict[str, object]:
         "amount_atomic": "100",
         "exchange_rate": "25.00000000",
         "address": address,
+        "deposit_address": "da_" + "0d" * 16,
+        "deposit_address_version": 1,
+        "window_start": EPOCH,
+        "replaced_by": None,
         "payment_uri": f"ethereum:0x{'22' * 20}@11155111/transfer?address={address}&uint256=100",
         "status": "open",
         "expires_at": EPOCH + 900,
@@ -213,7 +218,20 @@ def test_only_secret_and_restricted_keys_are_accepted() -> None:
 
 
 def _live_quote(treasury: str = TREASURY) -> dict[str, object]:
-    return {**_quote(treasury=treasury), "livemode": True, "chain_id": 1}
+    return {
+        **_quote(treasury=treasury),
+        "livemode": True,
+        "chain_id": 1,
+        "address": deposit_address(
+            FACTORY,
+            IMPLEMENTATION,
+            treasury,
+            account=ACCOUNT,
+            livemode=True,
+            client_reference_id="ws 1",
+            version=1,
+        ),
+    }
 
 
 def test_live_address_checks_fail_closed_without_every_pin() -> None:
@@ -239,13 +257,14 @@ def test_a_spoofed_treasury_with_its_valid_address_is_refused_in_live_mode() -> 
     # derives from it: recomputing over the response's treasury would pass.
     attacker = "0x" + "ee" * 20
     spoofed = _live_quote(treasury=attacker)
-    assert spoofed["address"] == quote_address(
+    assert spoofed["address"] == deposit_address(
         FACTORY,
         IMPLEMENTATION,
         attacker,
         account=ACCOUNT,
         client_reference_id="ws 1",
-        quote_id=QUOTE_ID,
+        livemode=True,
+        version=1,
     )
     service = FakeService(lambda request, _: httpx.Response(200, json=spoofed))
     with (

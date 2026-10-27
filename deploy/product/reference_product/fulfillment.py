@@ -183,7 +183,13 @@ class Fulfillment:
                 LOG.warning("ignoring deposit.credited %s: %s", event.id, error)
                 return
             # The deposit's claw-backs apply to its credit at once.
-            self._settle(db, credit.fulfillment_key, snapshot[1], credit=credit, reason=event.type)
+            self._settle(
+                db,
+                credit.fulfillment_key,
+                snapshot[1],
+                credit=credit,
+                reason=event.type,
+            )
         else:
             self._settle(db, *snapshot, reason=event.type)
 

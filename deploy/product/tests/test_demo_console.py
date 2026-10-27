@@ -44,7 +44,6 @@ from topup_sdk import (
     credited_event_id,
     deposit_address_salt,
     forwarder_address,
-    quote_salt,
     sign_webhook,
 )
 from topup_sdk.errors import ConfigurationError, ResponseValidationError, TransportError
@@ -109,11 +108,18 @@ QUOTE_TERMS = {
 
 def _quote(customer: str = "acct", **fields: Any) -> dict[str, Any]:
     address = forwarder_address(
-        CONFIG.factory, CONFIG.implementation, TREASURY, quote_salt(ACCOUNT, customer, QUOTE)
+        CONFIG.factory,
+        CONFIG.implementation,
+        TREASURY,
+        deposit_address_salt(ACCOUNT, livemode=False, client_reference_id=customer, version=1),
     )
     return {
         "id": QUOTE,
         "object": "quote",
+        "deposit_address": ADDRESS_ID,
+        "deposit_address_version": 1,
+        "window_start": NOW,
+        "replaced_by": None,
         "livemode": False,
         "client_reference_id": customer,
         "treasury": TREASURY,
@@ -623,7 +629,10 @@ def test_a_quote_is_for_an_offered_network_and_token_and_returns_its_locked_rate
     console, service = demo
     cookie = _account(console)
     for pair in (
-        {"chain_id": 1, "asset": "pha"},  # the service's, on a chain without the product's pins
+        {
+            "chain_id": 1,
+            "asset": "pha",
+        },  # the service's, on a chain without the product's pins
         {"chain_id": 84532, "asset": "usdc"},  # the product's, not served there yet
         {"chain_id": 11155111, "asset": "dai"},  # no such token
         {"chain_id": "11155111", "asset": "pha"},
@@ -638,7 +647,12 @@ def test_a_quote_is_for_an_offered_network_and_token_and_returns_its_locked_rate
     assert status == HTTPStatus.OK
     sent = json.loads(service.requests[-1].content)
     assert (sent["chain_id"], sent["asset"]) == (11155111, "usdc")
-    assert (body["chain_id"], body["asset"], body["exchange_rate"], body["expires_at"]) == (
+    assert (
+        body["chain_id"],
+        body["asset"],
+        body["exchange_rate"],
+        body["expires_at"],
+    ) == (
         11155111,
         "usdc",
         "25.00000000",
@@ -664,7 +678,8 @@ def test_an_expired_quote_without_payment_fails_at_the_transfer(
 
 
 @pytest.mark.parametrize(
-    ("event_type", "status"), [("quote.canceled", "canceled"), ("quote.expired", "expired")]
+    ("event_type", "status"),
+    [("quote.canceled", "canceled"), ("quote.expired", "expired")],
 )
 def test_account_quote_status_comes_from_quote_webhook(
     demo: tuple[DemoConsole, Service], event_type: str, status: str
@@ -711,7 +726,9 @@ def test_account_quote_without_webhook_falls_back_to_expiry(
     assert account["payments"][0]["status"] == "expired"
 
 
-def test_a_rejected_deposit_fails_at_the_credit(demo: tuple[DemoConsole, Service]) -> None:
+def test_a_rejected_deposit_fails_at_the_credit(
+    demo: tuple[DemoConsole, Service],
+) -> None:
     console, service = demo
     cookie = _account(console)
     _create_quote(console, cookie)
@@ -751,7 +768,9 @@ def test_a_credited_deposit_waits_for_the_webhook_finality_and_the_sweep(
     assert steps["swept"]["state"] == "current"
 
 
-def test_the_ledger_view_applies_the_snapshot_rule(demo: tuple[DemoConsole, Service]) -> None:
+def test_the_ledger_view_applies_the_snapshot_rule(
+    demo: tuple[DemoConsole, Service],
+) -> None:
     console, service = demo
     cookie = _account(console)
     customer = _customer(cookie)
@@ -795,7 +814,11 @@ def test_refunds_of_own_deposits_show_the_transfer_to_make(
     console, service = demo
     cookie = _account(console)
     service.deposits = [_deposit("someone-else")]
-    refund = {"deposit": DEPOSIT, "amount_atomic": "40", "destination_address": "0x" + "33" * 20}
+    refund = {
+        "deposit": DEPOSIT,
+        "amount_atomic": "40",
+        "destination_address": "0x" + "33" * 20,
+    }
     status, _ = _post(console, cookie, "refunds", refund)
     assert status == HTTPStatus.NOT_FOUND
     assert not service.refunds
@@ -813,7 +836,10 @@ def test_refunds_of_own_deposits_show_the_transfer_to_make(
         status, body = _post(console, cookie, f"refunds/{REFUND}/mark_paid", bad)
         assert status == HTTPStatus.BAD_REQUEST
     status, body = _post(
-        console, cookie, f"refunds/{REFUND}/mark_paid", {"transaction_hash": "0x" + "AB" * 32}
+        console,
+        cookie,
+        f"refunds/{REFUND}/mark_paid",
+        {"transaction_hash": "0x" + "AB" * 32},
     )
     assert status == HTTPStatus.OK
     assert body["refund"]["transaction_hash"] == "0x" + "ab" * 32
@@ -831,7 +857,7 @@ def test_the_sweep_is_built_only_from_forwarders_the_pins_derive(
 ) -> None:
     console, service = demo
     cookie = _account(console)
-    salt = quote_salt(ACCOUNT, "acct", QUOTE)
+    salt = deposit_address_salt(ACCOUNT, livemode=False, client_reference_id="acct", version=1)
     good = {
         "id": "fwd_" + "01" * 16,
         "object": "forwarder",
@@ -862,7 +888,11 @@ def test_the_sweep_is_built_only_from_forwarders_the_pins_derive(
     assert salt.hex() in flush["data"]
     assert group["safe_batch"]["meta"]["createdFromSafeAddress"].lower() == TREASURY
     assert group["safe_batch"]["transactions"] == [flush]
-    assert (usdc["unswept_atomic"], usdc["flush"], usdc["safe_batch"]) == ("0", [], None)
+    assert (usdc["unswept_atomic"], usdc["flush"], usdc["safe_batch"]) == (
+        "0",
+        [],
+        None,
+    )
     forwarder_reads = [r for r in service.requests if r.url.path == "/v1/forwarders"]
     assert [r.url.params["sweepable"] for r in forwarder_reads] == [TOKEN]
 
@@ -955,7 +985,7 @@ def test_stale_sweep_group_refresh_restores_flush(
     clock: Clock,
 ) -> None:
     console, service = demo
-    salt = quote_salt(ACCOUNT, "acct", QUOTE)
+    salt = deposit_address_salt(ACCOUNT, livemode=False, client_reference_id="acct", version=1)
     service.forwarders = [
         {
             "id": "fwd_" + "01" * 16,
@@ -1007,7 +1037,9 @@ def test_sweep_group_failure_is_scoped_to_chain_and_token(
     assert groups[(11155111, "pha")] == first["groups"][0]
 
 
-def test_requests_need_the_cookie_and_posts_need_json(demo: tuple[DemoConsole, Service]) -> None:
+def test_requests_need_the_cookie_and_posts_need_json(
+    demo: tuple[DemoConsole, Service],
+) -> None:
     console, _ = demo
     no_cookie = console.handle("GET", f"/api/quotes/{QUOTE}", {}, b"")
     assert no_cookie.status == HTTPStatus.UNAUTHORIZED
@@ -1046,7 +1078,9 @@ def test_the_website_origin_reads_the_api_with_credentials(
         assert {key: response.headers[key] for key in cors} == cors
 
 
-def test_answers_the_preflight_of_the_website_only(demo: tuple[DemoConsole, Service]) -> None:
+def test_answers_the_preflight_of_the_website_only(
+    demo: tuple[DemoConsole, Service],
+) -> None:
     console, _ = demo
     request = {
         **WEBSITE,
@@ -1087,7 +1121,13 @@ def test_serves_only_the_api(demo: tuple[DemoConsole, Service]) -> None:
     console, _ = demo
     assert console.handles("/api/account")
     # The website is on Cloudflare: the API's origin serves no page and no asset.
-    for path in ["/", "/index.html", "/assets/index-0a1b2c.js", "/webhooks", "/healthz"]:
+    for path in [
+        "/",
+        "/index.html",
+        "/assets/index-0a1b2c.js",
+        "/webhooks",
+        "/healthz",
+    ]:
         assert not console.handles(path)
         assert console.handle("GET", path, WEBSITE, b"").status == HTTPStatus.NOT_FOUND
     for path in ["/api/../index.html", "/api/unknown", "/api/assets/index-0a1b2c.js"]:
@@ -1108,7 +1148,11 @@ def test_the_config_requires_the_website_origin() -> None:
     ):
         with pytest.raises(ValueError, match="web_origin"):
             replace(CONFIG, web_origin=origin)
-    for origin in ("https://pay.phala.com", "https://pay.phala.com:8443", "http://127.0.0.1:4173"):
+    for origin in (
+        "https://pay.phala.com",
+        "https://pay.phala.com:8443",
+        "http://127.0.0.1:4173",
+    ):
         assert replace(CONFIG, web_origin=origin).web_origin == origin
     with pytest.raises(ValueError, match="web_origin"):
         DemoConsole(replace(CONFIG, web_origin=None), ProductLedger())
@@ -1158,9 +1202,12 @@ def test_the_ledger_lines_show_the_bonus_apart_from_the_credit(
     assert view["ledger"]["product"]["bonus"] == 250
     # The rates are the service's decimals, for the page to format.
     credited = next(step for step in view["steps"] if step["key"] == "credited")
-    assert {"label": "Rate", "value": "25.00000000", "kind": "rate", "unit": "PHA"} in credited[
-        "details"
-    ]
+    assert {
+        "label": "Rate",
+        "value": "25.00000000",
+        "kind": "rate",
+        "unit": "PHA",
+    } in credited["details"]
 
 
 def test_the_config_validates_its_chains() -> None:
@@ -1187,7 +1234,10 @@ def test_the_config_validates_its_chains() -> None:
     with pytest.raises(ValueError, match="at least one"):
         replace(CONFIG, chains=())
     with pytest.raises(ValueError, match="distinct"):
-        replace(sepolia, test_tokens=(MintableToken("PHA", TOKEN), MintableToken("PHA", TOKEN)))
+        replace(
+            sepolia,
+            test_tokens=(MintableToken("PHA", TOKEN), MintableToken("PHA", TOKEN)),
+        )
     # The deposit driver mints the first test token itself.
     with pytest.raises(ValueError, match="must mint itself"):
         replace(sepolia, test_tokens=(MintableToken("USDT", TOKEN, minter=FAUCET),))
@@ -1299,7 +1349,9 @@ def test_sweep_lookup_returns_the_earliest_sweep_after_a_reused_address_deposit(
     assert result["block_number"] == 20
 
 
-def test_sweeps_service_rejects_address_filters(demo: tuple[DemoConsole, Service]) -> None:
+def test_sweeps_service_rejects_address_filters(
+    demo: tuple[DemoConsole, Service],
+) -> None:
     console, _ = demo
     with pytest.raises(ApiError, match="invalid_forwarder"):
         next(console._service().list_sweeps(forwarder=_deposit()["address"]))
@@ -1369,7 +1421,9 @@ def test_caches_fetch_single_flight_and_serve_stale_on_failure(
 
     method = console._trust_view if kind == "trust" else console._payable_networks
     monkeypatch.setattr(
-        console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
+        console,
+        "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks",
+        fetch,
     )
     with ThreadPoolExecutor(max_workers=5) as workers:
         futures = [workers.submit(method) for _ in range(5)]
@@ -1405,7 +1459,9 @@ def test_cold_cache_failures_retry_after_thirty_seconds(
         raise TransportError("timeout")
 
     monkeypatch.setattr(
-        console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
+        console,
+        "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks",
+        fetch,
     )
     for _ in range(2):
         response = console.handle(
@@ -1474,7 +1530,9 @@ def test_rpc_failures_are_cached_for_thirty_seconds(
     assert len(calls) == 3
 
 
-def test_block_time_cache_evicts_the_least_recently_used_entry(demo_factory: DemoFactory) -> None:
+def test_block_time_cache_evicts_the_least_recently_used_entry(
+    demo_factory: DemoFactory,
+) -> None:
     calls: list[str] = []
 
     def rpc(request: httpx.Request) -> httpx.Response:
@@ -1518,7 +1576,10 @@ def test_cold_sweeps_timeout_keeps_one_build_running_with_its_own_deadline(
     token = operation_deadline.set(caller_deadline)
     try:
         status, body = _get(console, cookie, "sweeps")
-        assert (status, body) == (HTTPStatus.SERVICE_UNAVAILABLE, {"code": "unavailable"})
+        assert (status, body) == (
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            {"code": "unavailable"},
+        )
         assert service.sweeps_started.is_set()
         assert deadlines[0] is not None
         assert deadlines[0] > caller_deadline + 24
@@ -1620,7 +1681,9 @@ def test_cached_failures_preserve_http_responses_for_concurrent_readers(
         raise original
 
     monkeypatch.setattr(
-        console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
+        console,
+        "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks",
+        fetch,
     )
 
     def read_failure() -> tuple[int, str, str | None]:
@@ -1742,7 +1805,10 @@ def test_unexpected_sync_cache_errors_do_not_serve_stale_or_back_off(
     method = console._trust_view if kind == "trust" else console._payable_networks
     if warm:
         value: Any = (
-            {"attestation": {"binding_verified": True}, "tls_evidence": {"app_id": "test"}}
+            {
+                "attestation": {"binding_verified": True},
+                "tls_evidence": {"app_id": "test"},
+            }
             if kind == "trust"
             else [{"chain_id": 11155111}]
         )
@@ -1760,7 +1826,9 @@ def test_unexpected_sync_cache_errors_do_not_serve_stale_or_back_off(
         raise ValueError("unexpected backend failure")
 
     monkeypatch.setattr(
-        console, "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks", fetch
+        console,
+        "_fetch_trust_view" if kind == "trust" else "_fetch_payable_networks",
+        fetch,
     )
     for _ in range(2):
         with pytest.raises(ValueError, match="unexpected backend failure"):

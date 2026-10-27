@@ -412,7 +412,7 @@ known only after confirmation.
 - **A valid payment honours the quote.** It must be:
   - the quote's asset;
   - to the quote's address;
-  - in a block at or before `expires_at`;
+  - in a block with `window_start < block_time <= expires_at`;
   - within the quote's tolerance;
   - the payment that consumes the quote (one per quote, as today).
 
@@ -426,8 +426,9 @@ known only after confirmation.
 - **Every other payment** to a quote's address follows the record-time binding, with no
   grandfathering. This covers a late, wrong-amount, or second payment, and a payment to a
   canceled, expired, or consumed quote.
-- **Re-issued quotes after a restore** (§11) never apply their lock, as today. Their payments
-  follow the record-time binding.
+- **Restore** (§11) clamps open windows to the restore point. Lost quotes are not reissued;
+  recover the customer's fixed address and credit unmatched payments at spot, carrying forward
+  any signed delivered credit.
 
 ## 9. Deposits the binding does not accept
 
@@ -585,15 +586,9 @@ deposit is bound or `pending`.
   sanctioned-deposit alert and blocks sweeping that forwarder (`GET /v1/forwarders?sweepable`).
   It does not rewrite the delivered outcome.
 
-**Quotes.** Re-issuing a quote (`POST /v1/admin/restore/quotes`) restores its id, address, and
-client secret, so its payments are found. It does **not** re-authorize acceptance:
-
-- its lock never applies, as today;
-- its payments bind like any other: `pending` while held, then to the revision that ends the
-  hold.
-
-Re-issued deposit addresses are rebuilt on every chain they had, as today: an address already
-given out is never blocked by settings.
+**Quotes.** Restore clamps every open price window to the restore point. Lost quote windows
+are not reissued. Fixed-address transfers follow their deposit binding at spot unless an imported,
+signed delivered credit carries forward the outcome already delivered to the merchant.
 
 ## 12. Acceptance scenarios
 

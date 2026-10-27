@@ -61,7 +61,6 @@ from topup_sdk.addresses import (
     deposit_id,
     forwarder_address,
     keccak256,
-    quote_salt,
 )
 
 LOG = logging.getLogger("fake_service")
@@ -238,6 +237,7 @@ class FakeTopup:
                 if item["logIndex"] == log["logIndex"]
             )
             key = deposit_id(chain_id, log["transactionHash"], position)
+            block = self.call(chain_id, "eth_getBlockByHash", log["blockHash"], False)
             with self.lock:
                 self.seen.setdefault(
                     key,
@@ -255,7 +255,7 @@ class FakeTopup:
                         "block": int(log["blockNumber"], 16),
                         "block_hash": log["blockHash"],
                         "log_index": int(log["logIndex"], 16),
-                        "created": int(time.time()),
+                        "created": int(block["timestamp"], 16),
                     },
                 )
         chain["scanned"] = head
@@ -263,17 +263,27 @@ class FakeTopup:
     def record(self, transfer: dict[str, Any]) -> None:
         """Records a transfer at the credit depth as a deposit, values it, and credits it."""
         forwarder = self.forwarders[f"{transfer['chain_id']}:{transfer['address']}"]
-        quote = self.quotes.get(forwarder["quote"] or "")
-        owner = quote or self.addresses[forwarder["deposit_address"]]
+        quote = next(
+            (
+                q
+                for q in self.quotes.values()
+                if q["address"].lower() == transfer["address"]
+                and q["chain_id"] == transfer["chain_id"]
+                and q["_contract"] == transfer["contract"]
+                and q["window_start"] < transfer["created"] <= q["expires_at"]
+                and q["status"] == "open"
+            ),
+            None,
+        )
         token = self.chains[transfer["chain_id"]]["tokens"][transfer["contract"]]
         atomic = int(transfer["amount_atomic"])
         at_quote = (
             quote is not None
             and quote["status"] == "open"
-            and time.time() < quote["expires_at"]
             and transfer["contract"] == quote["_contract"]
             and transfer["amount_atomic"] == quote["amount_atomic"]
         )
+        owner = quote if at_quote and quote else self.addresses[forwarder["deposit_address"]]
         spot = int(atomic * Fraction(token["price"]) * 100 / 10 ** token["decimals"])
         now = int(time.time())
         deposit = {
@@ -281,7 +291,7 @@ class FakeTopup:
             "object": "deposit",
             "livemode": False,
             "client_reference_id": owner["client_reference_id"],
-            "quote": None if quote is None else quote["id"],
+            "quote": quote["id"] if at_quote and quote is not None else None,
             "deposit_address": forwarder["deposit_address"],
             "status": "credited",
             "final": False,
@@ -509,10 +519,8 @@ class FakeTopup:
         amount = int(body["amount"])
         chain_id = int(body["chain_id"])
         token = self.token(chain_id, str(body["asset"]))
-        salt = quote_salt(self.args.account, customer, quote_id)
-        address = forwarder_address(
-            self.args.factory, self.args.implementation, self.treasury, salt
-        )
+        deposit_address = self.create_deposit_address({"client_reference_id": customer})
+        address = deposit_address["address"]
         # The amount at the token's price (cents / 100 / USD per token), rounded up to 4 decimals
         # as the service rounds it (a route's default `quote.amount_decimals`).
         step = 10 ** max(token["decimals"] - 4, 0)
@@ -536,6 +544,10 @@ class FakeTopup:
                     "amount_atomic": atomic,
                     "exchange_rate": token["price"],
                     "address": address,
+                    "deposit_address": deposit_address["id"],
+                    "deposit_address_version": deposit_address["version"],
+                    "window_start": now,
+                    "replaced_by": None,
                     "payment_uri": f"ethereum:{token['contract']}@{chain_id}/transfer"
                     f"?address={address}&uint256={atomic}",
                     "status": "open",
@@ -546,8 +558,17 @@ class FakeTopup:
                     "_contract": token["contract"].lower(),
                     "_decimals": token["decimals"],
                 }
+                for old in self.quotes.values():
+                    if (
+                        old["client_reference_id"] == customer
+                        and old["chain_id"] == chain_id
+                        and old["asset"] == token["asset"]
+                        and old["expires_at"] > now
+                    ):
+                        old["expires_at"] = now
+                        old["replaced_by"] = quote_id
                 self.quotes[quote_id] = quote
-                self.add_forwarder(chain_id, address, salt, quote=quote_id, deposit_address=None)
+
             secret = f"{quote_id}_secret_{secrets.token_hex(24)}"
             self.secrets.setdefault(quote_id, []).append(secret)
             return {**self.quote_view(quote), "client_secret": secret}
@@ -583,17 +604,26 @@ class FakeTopup:
         }
 
     def quote_view(self, quote: dict[str, Any]) -> dict[str, Any]:
-        transfers = self.transfers_at(quote["address"], quote["chain_id"])
+        transfers = [
+            t
+            for t in self.transfers_at(quote["address"], quote["chain_id"])
+            if quote["window_start"] < t["created"] <= quote["expires_at"]
+        ]
         shown = next((t for t in transfers if t["id"] == quote["deposit"]), None)
         shown = shown or (transfers[0] if transfers else None)
         payment = None if shown is None else self.payment(shown, quote)
         return {**_public(quote), "payment": payment}
 
     def client_quote(self, quote: dict[str, Any]) -> dict[str, Any]:
-        transfers = self.transfers_at(quote["address"], quote["chain_id"])
+        transfers = [
+            t
+            for t in self.transfers_at(quote["address"], quote["chain_id"])
+            if quote["window_start"] < t["created"] <= quote["expires_at"]
+        ]
         payment_status, confirmations = "none", None
         credited = self.deposits.get(quote["deposit"]) or next(
-            (self.deposits[t["id"]] for t in transfers if t["id"] in self.deposits), None
+            (self.deposits[t["id"]] for t in transfers if t["id"] in self.deposits),
+            None,
         )
         if credited is not None:
             payment_status = "credited"
@@ -603,6 +633,12 @@ class FakeTopup:
         keys = (
             *("id", "object", "status", "amount", "currency", "asset", "chain_id"),
             *("amount_atomic", "address", "payment_uri", "expires_at"),
+            *(
+                "deposit_address",
+                "deposit_address_version",
+                "window_start",
+                "replaced_by",
+            ),
         )
         view = {k: quote[k] for k in keys}
         view.update(
@@ -630,7 +666,10 @@ class FakeTopup:
             )
             if address is None:
                 salt = deposit_address_salt(
-                    self.args.account, livemode=False, client_reference_id=customer, version=1
+                    self.args.account,
+                    livemode=False,
+                    client_reference_id=customer,
+                    version=1,
                 )
                 at = forwarder_address(
                     self.args.factory, self.args.implementation, self.treasury, salt
@@ -1003,7 +1042,11 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
                     if query.get("client_secret") not in fake.secrets.get(address["id"], []):
                         raise RefusedError(HTTPStatus.NOT_FOUND, "resource_missing")
                     with fake.lock:
-                        self.send(HTTPStatus.OK, fake.client_deposit_address(address), cors=True)
+                        self.send(
+                            HTTPStatus.OK,
+                            fake.client_deposit_address(address),
+                            cors=True,
+                        )
                     return
                 with fake.lock:
                     self.send(HTTPStatus.OK, fake.deposit_address_view(address))
@@ -1019,7 +1062,11 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
                         for d in sorted(fake.deposits.values(), key=lambda d: -d["created"])
                         if all(
                             query.get(name, d[name]) == d[name]
-                            for name in ("quote", "client_reference_id", "deposit_address")
+                            for name in (
+                                "quote",
+                                "client_reference_id",
+                                "deposit_address",
+                            )
                         )
                     ]
                 self.send(HTTPStatus.OK, _page(path, data))
@@ -1079,12 +1126,18 @@ def serve(fake: FakeTopup) -> ThreadingHTTPServer:
             if parts[:2] == ["_test", "deposits"] and parts[3:] == ["reverse"]:
                 self.send(HTTPStatus.OK, _public(fake.reverse(parts[2])))
                 return
-            if parts[:2] == ["_test", "mining"] and parts[2:] in (["pause"], ["resume"]):
+            if parts[:2] == ["_test", "mining"] and parts[2:] in (
+                ["pause"],
+                ["resume"],
+            ):
                 with fake.mining_lock:
                     fake.mining = parts[2] == "resume"
                 self.send(HTTPStatus.OK, {"mining": fake.mining})
                 return
-            if parts[:2] == ["_test", "quotes"] and parts[3:] in (["expire"], ["cancel"]):
+            if parts[:2] == ["_test", "quotes"] and parts[3:] in (
+                ["expire"],
+                ["cancel"],
+            ):
                 status = "expired" if parts[3] == "expire" else "canceled"
                 self.send(HTTPStatus.OK, fake.end_quote(parts[2], status))
                 return

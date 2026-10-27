@@ -81,7 +81,7 @@
        as its content: a fixed height would leave the form a screen of empty card, and the view
        changes there only on the payer's action. */
     --spacing-demo-view-sm: 56.5rem;
-    --spacing-demo-lg: 69rem;
+    --spacing-demo-lg: 70.5rem;
     --spacing-demo-xl: 54rem;
     /* Running text's measure: 36em, about 75 characters of Geist at any size (a lead's line is as
        long, in words, as a paragraph's), however wide its column. */

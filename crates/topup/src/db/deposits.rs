@@ -191,11 +191,13 @@ pub struct StoredValuation {
     pub quote: Value,
 }
 
-/// Conditional single-use rate-lock consumption.
+/// Conditional quote consumption, rechecked against canonical block time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LockConsumption {
-    /// Lock address row used as the rate-lock primary key.
-    pub address_id: Uuid,
+    /// Quote to consume.
+    pub quote_id: Uuid,
+    /// Canonical transfer time, checked again under the quote row lock.
+    pub block_time: DateTime<Utc>,
     /// Whether an existing consumption by this same deposit is accepted.
     pub idempotent: bool,
 }
@@ -747,8 +749,9 @@ pub async fn apply_transition(
     if let Some(consumption) = writes.effects.lock_consumption
         && !crate::locks::consume(
             transaction,
-            consumption.address_id,
+            consumption.quote_id,
             deposit_id,
+            consumption.block_time,
             consumption.idempotent,
         )
         .await?

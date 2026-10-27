@@ -27,9 +27,9 @@ store sensitive information in it.
 Every quote and deposit address is recomputed before it is returned from the pins the merchant
 configures itself: `account` (its `acct_` id), `forwarder` (the `(factory, implementation)` pair of
 the attested deployment), and `treasuries` (its own treasury per chain, as it proved them). An open
-quote's address is derived from the pinned treasury of its chain, the account, the customer, and
-the quote id; every network of an active deposit address from its chain's pinned treasury and salt
-inputs. The response's `treasury` is never trusted: a compromised service could return another
+quote's address is derived from the pinned treasury of its chain, the account, mode, customer, and
+deposit-address version; every network of an active deposit address uses the same salt inputs.
+The response's `treasury` is never trusted: a compromised service could return another
 treasury with its matching address. A mismatch, a response naming another treasury, or a chain
 without a pinned treasury raises `AddressMismatchError` rather than return an address the merchant
 did not derive.
@@ -177,7 +177,7 @@ from topup_client.types import UNSET, Response, Unset
 from ._origin import normalize_origin
 from ._secrets import Secret, protect, redact
 from ._transport import REQUEST_STATE, BorrowedTransport, HTTPClient, RequestState
-from .addresses import deposit_address, quote_address, same_address
+from .addresses import deposit_address, same_address
 from .attestation import verify_attestation_binding
 from .errors import (
     AddressMismatchError,
@@ -1794,13 +1794,16 @@ class TopupClient:
             return quote
         factory, implementation, account = pins
         treasury = self._treasury(quote.chain_id, quote.treasury, where)
-        derived = quote_address(
+        if quote.deposit_address_version is None or quote.deposit_address_version < 1:
+            raise AddressMismatchError(f"{where} has no valid deposit-address version")
+        derived = deposit_address(
             factory,
             implementation,
             treasury,
             account=account,
             client_reference_id=quote.client_reference_id,
-            quote_id=quote.id,
+            livemode=quote.livemode,
+            version=quote.deposit_address_version,
         )
         if not same_address(derived, quote.address):
             raise AddressMismatchError(f"quote {quote.id} has an address the account cannot derive")

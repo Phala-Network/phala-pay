@@ -217,6 +217,14 @@ async fn freeze_in(
     // every account and mode is held until the merchant reconfirms, in the transaction that
     // records the restore, before any recorder runs (docs/design/payment-settings.md §11).
     crate::payment_config::hold_all(&mut *connection, restore.id).await?;
+    // A replacement lost after the backup must never resurrect an overlapping price window.
+    sqlx::query(
+        "UPDATE quotes SET expires_at=LEAST(expires_at,COALESCE($1,window_start))
+                 WHERE status='open'",
+    )
+    .bind(restore.restore_point)
+    .execute(&mut *connection)
+    .await?;
     tracing::error!(
         restore_id = %restore.id,
         detected_by = detection.code(),

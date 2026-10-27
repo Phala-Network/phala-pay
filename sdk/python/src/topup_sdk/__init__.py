@@ -11,8 +11,6 @@ from .addresses import (
     deposit_address_salt,
     deposit_id,
     forwarder_address,
-    quote_address,
-    quote_salt,
 )
 from .attestation import attestation_report_data, verify_attestation_binding
 from .client import TopupClient
@@ -79,8 +77,6 @@ __all__ = [
     "forwarder_address",
     "load_public_key",
     "load_webhook_public_key",
-    "quote_address",
-    "quote_salt",
     "safe_batch",
     "sign_treasury_challenge",
     "sign_webhook",

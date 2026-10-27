@@ -18,7 +18,7 @@ import {
   type Hash,
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
-import type { Timeline } from "../src/api.js";
+import type { CreatedQuote, Timeline } from "../src/api.js";
 import { DOCS, docPath } from "../src/content/docs.js";
 import { tokens } from "../src/format.js";
 import { EXPIRED_QUOTE_INTERVAL_MS, QUERY_RETRY_LIMIT, TIMELINE_ACTIVE_INTERVAL_MS, TIMELINE_INTERVAL_MS } from "../src/polling.js";
@@ -1030,6 +1030,64 @@ test("a quote: locked price, metadata, the merchant's sweep, and refunds that su
   expect(problems).toEqual([]);
 });
 
+/** Mine wallet payments strictly after the server's quote-creation second. */
+async function advanceQuoteWindow(page: Page, quote: CreatedQuote): Promise<void> {
+  const response = await page.request.get(`${env("SERVICE_URL")}/v1/quotes/${quote.quote}?client_secret=${quote.client_secret}`);
+  expect(response.status()).toBe(200);
+  const view = await response.json() as { window_start: number };
+  const chain = createTestClient({ mode: "anvil", chain: quote.chain_id === baseSepolia.id ? baseSepolia : sepolia,
+    transport: http(env(quote.chain_id === baseSepolia.id ? "BASE_ANVIL_URL" : "ANVIL_URL")) }).extend(publicActions);
+  await chain.setNextBlockTimestamp({ timestamp: BigInt(Math.max(view.window_start + 1, Number((await chain.getBlock()).timestamp) + 1)) });
+}
+
+test("fixed-address quotes credit once at lock, then spot, and a new quote closes the old window", async ({ page }) => {
+  await installWallet(page);
+  await page.goto(env("SITE_URL"));
+  const product = page.getByRole("region", { name: "Customer view" });
+  await product.getByText("$20", { exact: true }).click();
+  const created = page.waitForResponse((r) => r.request().method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
+  await product.getByRole("button", { name: PAY }).click();
+  const first = await (await created).json() as CreatedQuote;
+  const publicQuote = async (quote: CreatedQuote) => {
+    const response = await page.request.get(`${env("SERVICE_URL")}/v1/quotes/${quote.quote}?client_secret=${quote.client_secret}`);
+    expect(response.status()).toBe(200);
+    return await response.json() as { address: string; window_start: number; expires_at: number; replaced_by: string | null };
+  };
+  const initial = await publicQuote(first);
+  const chain = createTestClient({ mode: "anvil", chain: sepolia, transport: http(env("ANVIL_URL")) })
+    .extend(publicActions).extend(walletActions);
+  // Fund the actual browser wallet, then pay through Checkout's wallet button.
+  await chain.writeContract({ account: getAddress(env("PAYER_ADDRESS")), address: getAddress(env("TOKEN_ADDRESS")),
+    abi: parseAbi(["function mint(address,uint256)"]), functionName: "mint", args: [getAddress(env("PAYER_ADDRESS")), parseEther("1000")] });
+  await chain.setNextBlockTimestamp({ timestamp: BigInt(Math.max(initial.window_start + 1, Number((await chain.getBlock()).timestamp) + 1)) });
+  await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
+  await expect(product.getByTestId("payment-credited")).toBeVisible();
+  const timeline = await page.request.get(`${env("API_URL")}/api/quotes/${first.quote}`);
+  const paid = await timeline.json() as Timeline;
+  expect(paid.deposit?.price_source).toBe("quote");
+  const hash = await chain.writeContract({ account: getAddress(env("PAYER_ADDRESS")), address: getAddress(env("TOKEN_ADDRESS")),
+    abi: erc20Abi, functionName: "transfer", args: [getAddress(initial.address), BigInt(first.amount_atomic)] });
+  await chain.mine({ blocks: 2 });
+  const secondDeposit = async () => {
+    const response = await page.request.get(`${env("SERVICE_URL")}/v1/deposits?tx_hash=${hash}`, { headers: { authorization: `Bearer ppay_rk_test_${"A".repeat(43)}000000` } });
+    expect(response.status()).toBe(200);
+    const deposits = await response.json() as { data: { quote: string | null; price_source: string; tx_hash: string }[] };
+    return deposits.data.find((deposit) => deposit.tx_hash === hash);
+  };
+  await expect.poll(async () => (await secondDeposit())?.price_source).toBe("spot");
+  expect((await secondDeposit())?.quote).toBeNull();
+  const replacementResponse = await page.request.post(`${env("API_URL")}/api/quotes`, {
+    data: { amount: 2000, chain_id: sepolia.id, asset: "pha" },
+  });
+  expect(replacementResponse.status()).toBe(200);
+  const replacement = await replacementResponse.json() as CreatedQuote;
+  const current = await publicQuote(replacement);
+  expect(current.address).toBe(initial.address);
+  const previous = await publicQuote(first);
+  expect(previous.replaced_by).toBe(replacement.quote);
+  expect(previous.expires_at).toBe(current.window_start);
+});
+
 test("a deposit address: one verified address, any amount credited at spot, then reversed", async ({
   page,
 }, testInfo) => {
@@ -1170,6 +1228,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await expect(circle).toBeVisible();
   await mintUsdc(env("PAYER_ADDRESS"), parseUnits("100", 6));
   await product.getByText("$5", { exact: true }).click();
+  const usdcCreated = page.waitForResponse((r) => r.request().method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   const usdcRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: PAY }).click();
   expect((await usdcRequest).postDataJSON()).toEqual({ amount: 500, chain_id: sepolia.id, asset: "usdc" });
@@ -1180,6 +1239,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await expect(product.getByRole("tabpanel", { name: "Exact amount", exact: true }).getByText(/bonus/)).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.screenshot({ path: testInfo.outputPath("usdc-quote.png") });
+  await advanceQuoteWindow(page, await (await usdcCreated).json() as CreatedQuote);
   await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$5.00", { timeout: 60_000 });
   await expect(product.getByTestId("balance")).toHaveText("$5.00", { timeout: 10_000 });
@@ -1200,6 +1260,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
     "https://docs.base.org/get-started/get-funds#testnet-base-sepolia",
   );
   await mintUsdc(env("PAYER_ADDRESS"), parseUnits("100", 6), true);
+  const baseCreated = page.waitForResponse((r) => r.request().method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   const baseRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: PAY }).click();
   expect((await baseRequest).postDataJSON()).toEqual({ amount: 2000, chain_id: baseSepolia.id, asset: "usdc" });
@@ -1207,6 +1268,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
     "1 USDC = $1.00",
   );
+  await advanceQuoteWindow(page, await (await baseCreated).json() as CreatedQuote);
   await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$20.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);
@@ -1227,6 +1289,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await expect.poll(() => tokenBalance(env("PAYER_ADDRESS"), usdt)).toBe(parseUnits("1000", 6));
 
   await product.getByText("$5", { exact: true }).click();
+  const usdtCreated = page.waitForResponse((r) => r.request().method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   const usdtRequest = page.waitForRequest((r) => r.method() === "POST" && r.url() === `${env("API_URL")}/api/quotes`);
   await product.getByRole("button", { name: PAY }).click();
   expect((await usdtRequest).postDataJSON()).toEqual({ amount: 500, chain_id: sepolia.id, asset: "usdt" });
@@ -1234,6 +1297,7 @@ test("networks and tokens: Base Sepolia offers only USDC, Sepolia keeps PHA and 
   await expect(await openStep(scenes.getByRole("list", { name: "Payment timeline" }), "quote_created")).toContainText(
     "1 USDT = $1.00",
   );
+  await advanceQuoteWindow(page, await (await usdtCreated).json() as CreatedQuote);
   await product.getByRole("button", { name: "Pay with Test Wallet" }).click();
   await expect(product.getByTestId("payment-credited")).toContainText("$5.00", { timeout: 60_000 });
   await expect(product.getByTestId("bonus-credited")).toHaveCount(0);

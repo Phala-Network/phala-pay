@@ -189,15 +189,10 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 .pp-select__option[aria-selected="true"] { font-weight: 500; }
 .pp-select__check { display: flex; margin-inline-start: auto; color: var(--pp-color-text-muted); }
 
-/* Payment element: the options, the host's content, the submit button, and one quiet line with a
-   secondary way to pay, 1em apart; then the step it leads to, under a way back. A new step takes
-   the focus without a ring of its own. */
+/* The payment element keeps its options, host content, and submit in one form. */
 .pp-root .pp-element__step:focus-visible { outline: none; }
 .pp-element { display: grid; gap: 1em; }
 .pp-element > .pp-options, .pp-element > .pp-message { margin: 0; }
-/* The line's 44px target overhangs its text, so that the text keeps the form's rhythm. */
-.pp-element__alternative { margin-block: -0.875em; color: var(--pp-color-text-muted); font-size: 0.875em;
-  text-align: center; }
 /* The way back is quiet, at body size (hosts may hold body text to a minimum size): its 44px
    target overhangs its line of text into the top of the step, and is no narrower than that for a
    short label. */
@@ -213,12 +208,7 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
 
 /* A deposit address asking for an amount: the amount, the wallet, one status line that changes in
    place, then a quiet way to pay from an exchange or another wallet. */
-.pp-deposit__status { display: flex; gap: 0.5em; align-items: flex-start; }
-.pp-deposit__status > svg { flex: none; height: 1.5em; }
-.pp-deposit__status[data-tone="success"] > svg { color: var(--pp-color-success); }
-.pp-deposit__tx { color: inherit; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
-.pp-deposit__more { margin: 0.25em 0 -0.5em; color: var(--pp-color-text-muted); font-size: 0.875em; text-align: center; }
-.pp-deposit__manual { margin-top: 1em; }
+
 
 .pp-payments { margin: 1em 0 0; padding: 0; list-style: none; border-top: 1px solid var(--pp-color-border); }
 .pp-payments__item { display: flex; gap: 0.625em; align-items: flex-start; padding: 0.625em 0;

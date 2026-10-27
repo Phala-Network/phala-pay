@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Published immutable N-1 workers -> current workers -> N-1 workers -> current workers.
-# Uses only a disposable PostgreSQL cluster, Anvil, verified local TLS and fixture KMS.
+# Published N-1 backup -> current migration -> N-1 refused -> pre-upgrade restore.
+# Uses only a disposable PostgreSQL cluster and the verified published image.
 set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 previous=${1:?verified published N-1 image digest required}
 [[ "$previous" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'N-1 must be an immutable published image' >&2; exit 64; }
-for tool in docker cargo anvil forge cast openssl; do command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }; done
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/topup-rollback-drill.XXXXXX")
+for tool in docker cargo; do command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }; done
+tmp=$(mktemp -d "$root/.task-tmp/rollback-drill.XXXXXX")
 name=topup-rollback-drill-$$
 image=postgres:18.6-trixie@sha256:86c951e05bf56c93d95d397747fb8820ac76cc3bedb78f43abd83eedbe3666ae
 cleanup() {
@@ -28,7 +28,6 @@ cd "$root"
 export CI=true SQLX_OFFLINE=true TOPUP_ROLLBACK_IMAGE="$previous"
 export OWNER_DATABASE_URL="postgres://postgres:drill@127.0.0.1:$port/postgres"
 export DATABASE_URL="postgres://topup_ci:topup_ci@127.0.0.1:$port/postgres"
-# The round trip submits a real hint-recorded deposit and interrupts an unmined in-memory task.
-# N-1 preserves the positive deposit and verification marker without touching the hint budget.
+# The declared breaking migration refuses the old image; only restoring the backup permits it.
 timeout --kill-after=10 1800 cargo test --locked -p topup --features test-support --test rollback_drill \
-    published_image_round_trip -- --ignored --exact --nocapture
+    published_image_requires_pre_upgrade_restore -- --ignored --exact --nocapture

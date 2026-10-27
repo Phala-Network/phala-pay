@@ -5,7 +5,6 @@ export { DepositAddress, type DepositAddressProps } from "./DepositAddress.js";
 export { PaymentOptionPicker, type PaymentOptionPickerProps } from "./PaymentOptionPicker.js";
 export {
   PaymentElement,
-  type PaymentElementDepositAddress,
   type PaymentElementProps,
   type PaymentElementQuote,
   type PaymentElementQuoteRequest,

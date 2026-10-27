@@ -35,7 +35,7 @@ pub use outbox::{
 };
 pub use pending::{
     HeadCommit, NewPendingTransfer, PendingTransfer, commit_head_scan, list_address_pending,
-    list_addresses_pending,
+    list_quotes_pending,
 };
 pub(crate) use scanner::find_scan_address;
 pub use scanner::{

@@ -4,7 +4,7 @@ These are the calls a product such as Phala Cloud makes, and the checks it adds 
 
 1. pin the account's webhook keys from attestation evidence bound to a fresh nonce, fetched with
    the account's API key;
-2. create a quote (the account is created with it); the client recomputes its single-use address
+2. create a quote (the account is created with it); the client recomputes its fixed customer address
    from the pinned forwarder;
 3. list the account's deposits;
 4. receive webhooks (Standard Webhooks) and fulfill each `deposit.credited` once.

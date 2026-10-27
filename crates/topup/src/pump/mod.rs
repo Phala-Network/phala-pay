@@ -233,7 +233,7 @@ pub enum RunOnceResult {
         /// Deposit whose result was discarded.
         deposit_id: Uuid,
     },
-    /// A selected single-use rate lock was consumed by another deposit.
+    /// A selected quote was consumed or its payment window changed.
     Contended {
         /// Deposit that must be re-run at spot pricing.
         deposit_id: Uuid,

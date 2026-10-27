@@ -1361,7 +1361,7 @@
             "type": "string"
           },
           "deposit_address": {
-            "description": "The deposit address that received the transfer, `da_…`, on `chain_id` at `address`; `null`\nfor a quote's address. Payments to a deposit address, active or retired, are credited at\nspot.",
+            "description": "The deposit address that received the transfer, `da_…`, on `chain_id` at `address`; `null`\nfor a historical single-use address. Transfers that do not consume a quote use spot.",
             "type": [
               "string",
               "null"
@@ -1408,7 +1408,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): a copy of the\nquote's or the deposit address's when the deposit is recorded, independent of it\nafterwards; `{}` when none.",
+            "description": "Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): copied from the\nconsumed quote, otherwise from the deposit address when recorded; independent afterwards.",
             "propertyNames": {
               "type": "string"
             },
@@ -1432,7 +1432,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ExpandableQuote",
-                "description": "The quote whose address received the transfer; `null` for a deposit address."
+                "description": "The quote consumed by this transfer; `null` when no quote was consumed."
               },
               {
                 "type": "null"
@@ -2023,19 +2023,6 @@
           "result"
         ],
         "type": "object"
-      },
-      "ExpandableDeposit": {
-        "description": "A deposit id, or the deposit with `expand[]`.",
-        "oneOf": [
-          {
-            "description": "`dep_` id.",
-            "type": "string"
-          },
-          {
-            "$ref": "#/components/schemas/Deposit",
-            "description": "The expanded deposit."
-          }
-        ]
       },
       "ExpandableQuote": {
         "description": "A quote id, or the quote with `expand[]`.",
@@ -2852,264 +2839,6 @@
         ],
         "type": "object"
       },
-      "Quote": {
-        "description": "A quote: a locked price, an exact token amount, and a single-use address to pay it to.",
-        "example": {
-          "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
-          "amount": 2500,
-          "amount_atomic": "25000000",
-          "asset": "usdc",
-          "chain_id": 1,
-          "client_reference_id": "team-42",
-          "client_secret": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10_secret_9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0a",
-          "created": 1790553600,
-          "currency": "usd",
-          "deposit": null,
-          "exchange_rate": "1.00000000",
-          "expires_at": 1790554500,
-          "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
-          "livemode": false,
-          "metadata": {
-            "order_id": "ord_1001"
-          },
-          "object": "quote",
-          "payment": {
-            "amount_atomic": "25000000",
-            "asset": "usdc",
-            "chain_id": 1,
-            "confirmations": 1,
-            "deposit": "dep_8a1f4e2b6c3d49e0a7b5c1d2e3f40516",
-            "estimated_final_at": 1790554572,
-            "matches_quote": true,
-            "status": "seen",
-            "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
-          },
-          "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
-          "status": "open",
-          "terms": {
-            "confirmations": "12",
-            "max_deposit_atomic": "10000000000",
-            "min_amount": 100,
-            "min_deposit_atomic": "0",
-            "min_refund_atomic": "1000000",
-            "quote_amount_decimals": 4,
-            "quote_spread_bps": 0,
-            "quote_tolerance_bps": 100,
-            "quote_ttl_seconds": 900
-          },
-          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
-        },
-        "properties": {
-          "address": {
-            "description": "Single-use forwarder address to pay.",
-            "type": "string"
-          },
-          "amount": {
-            "description": "Credit in the currency's minor unit.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "amount_atomic": {
-            "description": "The exact token amount to pay, in base units, as a decimal string.",
-            "type": "string"
-          },
-          "asset": {
-            "description": "Asset code.",
-            "type": "string"
-          },
-          "cancel_requested_at": {
-            "description": "Deferred cancellation request time, Unix seconds; null before a request.",
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "chain_id": {
-            "description": "EVM chain identifier.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "client_reference_id": {
-            "description": "Your identifier of the customer the quote credits.",
-            "type": "string"
-          },
-          "client_secret": {
-            "description": "Lets the payer's browser read the quote's public view, `ClientQuote`, from\n`GET /v1/quotes/{id}?client_secret=…` without an API key. Returned only by\n`POST /v1/quotes`; a repeat with the same `Idempotency-Key` within 24 hours replays the\nfirst response, the same secret included. Give it only to the paying customer's page, and\ndo not log it.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "created": {
-            "description": "Creation time, Unix seconds.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "currency": {
-            "description": "`usd`.",
-            "type": "string"
-          },
-          "deposit": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ExpandableDeposit",
-                "description": "The deposit that completed the quote: its `dep_` id, or the object with `expand[]=deposit`."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "exchange_rate": {
-            "description": "The locked price in USD per token, a decimal string with 8 decimal places.",
-            "type": "string"
-          },
-          "expires_at": {
-            "description": "End of the payment window, Unix seconds.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "id": {
-            "description": "`qt_` id. The quote's address salt is `keccak256(abi.encode(account,\nclient_reference_id, \"quote\", id))` with the types `(string, string, string, string)`,\nwhere `account` is your `acct_` id.",
-            "type": "string"
-          },
-          "livemode": {
-            "description": "Whether the quote was created with a live key.",
-            "type": "boolean"
-          },
-          "metadata": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)); `{}` when none.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "object": {
-            "description": "Always `quote`.",
-            "enum": [
-              "quote"
-            ],
-            "type": "string"
-          },
-          "payment": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Payment",
-                "description": "The payment the checkout page should show, once one is seen on chain; display only."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "payment_uri": {
-            "description": "EIP-681 URI carrying the token, chain, address, and amount.",
-            "type": "string"
-          },
-          "status": {
-            "description": "`open`, `complete` (a matching payment consumed it), `expired`, or `canceled`. A quote stays\n`open` after `expires_at` until the finalized chain passes it, so a payment mined in time\nis never reported as expired; hide the address once `expires_at` has passed.",
-            "type": "string"
-          },
-          "terms": {
-            "$ref": "#/components/schemas/QuoteTerms",
-            "description": "The terms the quote was issued with, from your payment settings then; the quote keeps\nthem whatever the settings say later."
-          },
-          "treasury": {
-            "description": "The treasury the address pays: your treasury of the chain when the quote was created. The\naddress is the factory's `CREATE2` over it and the salt.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "object",
-          "livemode",
-          "client_reference_id",
-          "amount",
-          "currency",
-          "chain_id",
-          "asset",
-          "amount_atomic",
-          "exchange_rate",
-          "address",
-          "treasury",
-          "payment_uri",
-          "status",
-          "expires_at",
-          "created",
-          "terms",
-          "metadata"
-        ],
-        "type": "object"
-      },
-      "QuoteTerms": {
-        "description": "The terms a quote was issued with.",
-        "properties": {
-          "confirmations": {
-            "description": "The confirmation the quote required when issued: a depth, `safe`, or `finalized`. A payment\nnot credited yet waits for the stricter of it and the chain's current floor.",
-            "type": "string"
-          },
-          "max_deposit_atomic": {
-            "description": "Maximum creditable deposit in base units, as a decimal string.",
-            "type": "string"
-          },
-          "min_amount": {
-            "description": "Minimum credit in cents of a payment valued at spot.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "min_deposit_atomic": {
-            "description": "Minimum creditable deposit in base units, as a decimal string.",
-            "type": "string"
-          },
-          "min_refund_atomic": {
-            "description": "Refund dust floor in base units, as a decimal string.",
-            "type": "string"
-          },
-          "quote_amount_decimals": {
-            "description": "Token decimals `amount_atomic` was rounded up to.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "quote_spread_bps": {
-            "description": "The spread below spot of the locked price, in basis points.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "quote_tolerance_bps": {
-            "description": "A payment within this many basis points of `amount_atomic`, either way, completes the\nquote at its `amount`.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "quote_ttl_seconds": {
-            "description": "The payment window, in seconds.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "quote_ttl_seconds",
-          "quote_spread_bps",
-          "quote_tolerance_bps",
-          "quote_amount_decimals",
-          "min_amount",
-          "min_deposit_atomic",
-          "max_deposit_atomic",
-          "min_refund_atomic",
-          "confirmations"
-        ],
-        "type": "object"
-      },
       "ReceivedTreasury": {
         "description": "A treasury object as the merchant received it; other fields are ignored.",
         "properties": {
@@ -3617,175 +3346,6 @@
         ],
         "type": "object"
       },
-      "RestoreQuoteRequest": {
-        "additionalProperties": false,
-        "description": "`POST /v1/admin/restore/quotes` body: a quote the merchant created after the restore point, as\nits records hold the quote object.",
-        "example": {
-          "account": "acct_0c6e1d0a9b3f4c2e8d7a6b5c4d3e2f10",
-          "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
-          "amount": 2500,
-          "amount_atomic": "25000000",
-          "asset": "usdc",
-          "chain_id": 1,
-          "client_reference_id": "team-42",
-          "client_secret": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10_secret_9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0a",
-          "created": 1790553600,
-          "exchange_rate": "1.00000000",
-          "expires_at": 1790554500,
-          "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
-          "livemode": false,
-          "metadata": {
-            "order_id": "ord_1001"
-          },
-          "reason": "created after the restore point, from the merchant's records; INC-12"
-        },
-        "properties": {
-          "account": {
-            "description": "Account id, `acct_…`.",
-            "type": "string"
-          },
-          "address": {
-            "description": "The quote's `address`.",
-            "type": "string"
-          },
-          "amount": {
-            "description": "The quote's `amount`, the credit in minor units.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "amount_atomic": {
-            "description": "The quote's `amount_atomic`.",
-            "type": "string"
-          },
-          "asset": {
-            "description": "The quote's `asset`.",
-            "type": "string"
-          },
-          "chain_id": {
-            "description": "The quote's `chain_id`.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "client_reference_id": {
-            "description": "The quote's `client_reference_id`.",
-            "type": "string"
-          },
-          "client_secret": {
-            "description": "The quote's `client_secret`, when the merchant holds it: kept, so the payer's page reads the\nquote again. Only a secret the service issued for the `id` to the account is accepted, and\nit proves the service issued the quote to the account. Optional: without it the quote is\nre-issued, and found, all the same, but its public view is not readable.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "created": {
-            "description": "The quote's `created`, Unix seconds.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "exchange_rate": {
-            "description": "The quote's `exchange_rate`.",
-            "type": "string"
-          },
-          "expires_at": {
-            "description": "The quote's `expires_at`, Unix seconds; the re-issued quote's window closes at the\nrestore's detection at the latest.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "id": {
-            "description": "The quote's `qt_` id: its address salt is derived from it.",
-            "type": "string"
-          },
-          "livemode": {
-            "description": "The mode.",
-            "type": "boolean"
-          },
-          "metadata": {
-            "description": "The quote's `metadata`.",
-            "type": [
-              "object",
-              "null"
-            ]
-          },
-          "reason": {
-            "description": "Why, 1 to 1024 bytes.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "account",
-          "livemode",
-          "id",
-          "client_reference_id",
-          "chain_id",
-          "asset",
-          "amount",
-          "amount_atomic",
-          "exchange_rate",
-          "address",
-          "created",
-          "expires_at",
-          "reason"
-        ],
-        "type": "object"
-      },
-      "RestoreQuoteResponse": {
-        "description": "`POST /v1/admin/restore/quotes` response.",
-        "example": {
-          "quote": {
-            "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
-            "amount": 2500,
-            "amount_atomic": "25000000",
-            "asset": "usdc",
-            "chain_id": 1,
-            "client_reference_id": "team-42",
-            "client_secret": null,
-            "created": 1790553600,
-            "currency": "usd",
-            "deposit": null,
-            "exchange_rate": "1.00000000",
-            "expires_at": 1790555400,
-            "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
-            "livemode": false,
-            "metadata": {
-              "order_id": "ord_1001"
-            },
-            "object": "quote",
-            "payment": null,
-            "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
-            "status": "open",
-            "terms": {
-              "confirmations": "12",
-              "max_deposit_atomic": "10000000000",
-              "min_amount": 100,
-              "min_deposit_atomic": "0",
-              "min_refund_atomic": "1000000",
-              "quote_amount_decimals": 4,
-              "quote_spread_bps": 0,
-              "quote_tolerance_bps": 100,
-              "quote_ttl_seconds": 900
-            },
-            "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
-          },
-          "reissued": true
-        },
-        "properties": {
-          "quote": {
-            "$ref": "#/components/schemas/Quote",
-            "description": "The quote, with the recorded terms. They are the merchant's record, not the service's, so\nthey are never applied: a payment to it is credited at spot unless an imported\n`deposit.credited` for it carries its credit, and `expires_at` is the restore's detection\nat the latest."
-          },
-          "reissued": {
-            "description": "Whether the quote was issued now; `false` when it exists already for the customer at the\naddress.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "reissued",
-          "quote"
-        ],
-        "type": "object"
-      },
       "RestoreStatus": {
         "description": "`GET /v1/admin/restore`: the restore freeze and the reconciliation before unfreezing\n(`deploy/RESTORE.md`).",
         "example": {
@@ -4033,7 +3593,6 @@
         "example": {
           "delivered_events_imported": true,
           "deposit_addresses_reissued": true,
-          "quotes_reissued": true,
           "reason": "INC-12 reconciled with every merchant; signed off by the on-call lead",
           "security_changes_reapplied": true
         },
@@ -4044,10 +3603,6 @@
           },
           "deposit_addresses_reissued": {
             "description": "Every deposit address given out after the restore point was re-issued; must be `true`.",
-            "type": "boolean"
-          },
-          "quotes_reissued": {
-            "description": "Every quote created after the restore point that a merchant reported was re-issued; must be\n`true`.",
             "type": "boolean"
           },
           "reason": {
@@ -4063,7 +3618,6 @@
           "reason",
           "security_changes_reapplied",
           "deposit_addresses_reissued",
-          "quotes_reissued",
           "delivered_events_imported"
         ],
         "type": "object"
@@ -8677,208 +8231,6 @@
         ]
       }
     },
-    "/v1/admin/restore/quotes": {
-      "post": {
-        "operationId": "reissue_quote",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RestoreQuoteRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RestoreQuoteResponse"
-                }
-              }
-            },
-            "description": "OK: re-issued, or the quote exists already for the customer at the address",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad Request: the address is not the quote's over the account's treasury of the chain in force at its `created` (restore a lost treasury change first), the `client_secret` is not one the service issued for the quote to the account, no route has the chain and asset, the quote exists with another customer or address, or `treasury_not_set`; or `restore_not_frozen`",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Unauthorized",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not Found",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "`idempotency_key_in_use`: a request with this `Idempotency-Key` is still running; retry with the same key",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "`unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds",
-            "headers": {
-              "Cache-Control": {
-                "description": "Tenant data and credentials must never be stored, including errors",
-                "required": true,
-                "schema": {
-                  "enum": [
-                    "no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Request-Id": {
-                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Optional: minimum seconds to wait before retrying; sent for database admission failures and service_restoring, and may be absent for other unavailable errors",
-                "required": false,
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "http_message_signature": []
-          }
-        ],
-        "summary": "Re-issues a quote the merchant created after the restore point, from its record of the quote\nobject: the address salt is derived from the account, customer, and `qt_` id, so only the\nquote's own address over the treasury in force at its `created` is accepted, backfilled from\nthe restored cursor so the rescan finds a\npayment made to it since. A `client_secret` the service issued for the quote to the account is\nkept, so the payer's page reads it again. The terms are stored as recorded but never applied:\na payment to the quote is credited at spot unless an imported `deposit.credited` for it, which\nthe service signed, carries its credit, and the payment window closes at the restore's\ndetection at the latest. Audited.",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
     "/v1/admin/restore/treasuries/apply": {
       "post": {
         "operationId": "apply_treasury",
@@ -9075,7 +8427,7 @@
             "http_message_signature": []
           }
         ],
-        "summary": "Applies again a treasury change that applied after the restore point and was lost with it,\nfrom the merchant's delivery of its `treasury.updated`: only a delivery the service signed\n(with one of the account's webhook keys in its mode) of a pending treasury becoming `active`\nis accepted. The change applies as its time-lock applied it, at the event's `created`, so the\ndeposit addresses and quotes issued over it are re-issued over it while frozen, and those\nissued before it over the treasury it replaced. It is screened again when screening is\navailable; no event is sent again. Audited in the transaction that applies it.",
+        "summary": "Applies again a treasury change that applied after the restore point and was lost with it,\nfrom the merchant's delivery of its `treasury.updated`: only a delivery the service signed\n(with one of the account's webhook keys in its mode) of a pending treasury becoming `active`\nis accepted. The change applies as its time-lock applied it, at the event's `created`, so the\ndeposit addresses issued over it are re-issued over it while frozen, and those\nissued before it over the treasury it replaced. It is screened again when screening is\navailable; no event is sent again. Audited in the transaction that applies it.",
         "tags": [
           "admin"
         ]

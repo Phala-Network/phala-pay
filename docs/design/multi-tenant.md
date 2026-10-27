@@ -8,6 +8,13 @@ into a Stripe-shaped, API-only crypto payments **software service** for any merc
 onboards. Phala Cloud becomes an ordinary account. This document records decisions; the
 [architecture](../architecture.md) stays the specification and is rewritten by the PRs in §16.
 
+**Amendment of 2026-10-27 (owner decision): fixed-address quotes.** All quotes now use the
+customer's deposit-address network, with nonoverlapping `(window_start, expires_at]` windows
+per customer and route. Replacements cut prior windows, including consumed ones; only the first
+eligible transfer consumes a quote. Lost quotes are not reissued after restore; open windows
+are clamped and recovered addresses credit at spot unless signed delivered credits carry forward.
+This is a declared breaking migration with restore-only rollback; architecture §9 and §14 govern.
+
 Every mechanism names the established practice it follows. External claims were checked on
 2026-09-27 and 2026-09-28 against the linked sources; where a source could not be verified, the
 text says so.
@@ -357,7 +364,7 @@ deterministic deployment proxy, so anyone can deploy it at the same address on e
 creates `Forwarder` clones with `Clones.cloneDeterministicWithImmutableArgs`, whose only
 immutable argument is `treasury` (OpenZeppelin 5.2.0+, pinned v5.7.0,
 [Clones.sol](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v5.7.0/contracts/proxy/Clones.sol)).
-The salt is `keccak256(abi.encode(account, client_reference_id, "quote", quote_id))`, so the
+The salt is `keccak256(abi.encode(account, livemode, client_reference_id, "deposit_address", version))`, so the
 merchant recomputes every address. `flush(treasury, salts[], token)` is public, like BitGo's
 `flush()` ([ForwarderV4.sol](https://github.com/BitGo/eth-multisig-v4/blob/c175a6a56d4fd049d67417970b318e0500315f67/contracts/ForwarderV4.sol)):
 the destination is fixed in the address, so no party needs to be trusted with the timing. Per
@@ -511,7 +518,7 @@ route's confirmation (D1), reversal, screening, events, chain-sourced sweeps (D4
 and per-forwarder reconciliation (§13). A token without a route on that chain is recorded
 `rejected (unsupported_asset)`, as at a quote's address. Each chain's forwarder is an ordinary
 `addresses` row owned by the deposit address (its network on that chain), so every mechanism that
-reads `addresses` covers it. Its deposit has `quote: null`, `deposit_address: "da_…"`, and the
+reads `addresses` covers it. Its deposit has `quote` set only if it consumes a quote, `deposit_address: "da_…"`, and the
 chain and address it arrived on (`chain_id`, `address`), and `deposit.credited` carries that
 object. The set of issued addresses of a chain includes every customer's address on that chain,
 active, retired, and superseded: fast discovery and dual finalized coverage read every issued
@@ -568,7 +575,7 @@ erDiagram
     ACCOUNT ||--o{ CUSTOMER : "client_reference_id"
     CUSTOMER ||--o{ QUOTE : creates
     CUSTOMER ||--o{ DEPOSIT_ADDRESS : "one active, rotatable"
-    QUOTE ||--o| ADDRESS : "single-use"
+    ADDRESS ||--o{ QUOTE : "price windows"
     DEPOSIT_ADDRESS ||--|{ ADDRESS : "one current per chain"
     ADDRESS ||--o{ DEPOSIT : receives
     DEPOSIT ||--o{ REFUND : "merchant-paid"
@@ -859,9 +866,8 @@ New live accounts get default limits; the operator raises them on request.
 - **Disaster recovery.** `ForwarderCreated` and `Flushed` carry the treasury, so swept status and
   clone arguments are rebuilt from the chain. Restoring the database is not restoring the
   business: within the window a restore can undo key revocations (the keys work again), treasury
-  cancellations, and endpoint changes, lose deposit addresses and quotes given to customers (a
-  quote's salt includes its random id, and the scanner watches only issued addresses, so nothing
-  finds a payment to a lost quote), and lose delivered events, whose deposits are re-derived from
+  cancellations, and endpoint changes, lose deposit addresses and quote windows given to customers (the scanner watches only issued
+  addresses, so lost fixed addresses must be recovered), and lose delivered events, whose deposits are re-derived from
   the chain and, at spot, would be re-valued. So a restored service starts in **restore mode**
   (amendment of 2026-09-28, after a design review; restore correctness amendment of 2026-09-29),
   the smallest standard mechanism, a maintenance freeze with operator reconciliation:
@@ -890,12 +896,8 @@ New live accounts get default limits; the operator raises them on request.
     ended, screened again when screening answers, applied at the event's time and not announced
     again), deletes again the endpoints it deleted,
     re-issues the deposit addresses it gave out (the salt formula of §5a gives the same address
-    over a treasury in force since the restore point, backfilled from the restored cursor) and the
-    quotes it created (the quote salt gives the same address from the `qt_` id; only that address
-    over a treasury in force within minutes of the quote's creation is accepted, backfilled from the restored
-    cursor, with the recorded terms kept but never applied and a `client_secret` accepted only
-    with the service's tag and its owner tag of the account: an id is unique across accounts, and
-    only the secret proves which one the service issued it to), and imports the deposit events it received
+    over a treasury in force since the restore point, backfilled from the restored cursor) and
+    imports the deposit events it received
     from their deliveries, only those whose `v1a` signature verifies with the account's webhook
     keys: the delivered snapshot is the event, so a re-derived deposit never re-emits it with
     another body. A settled amount is immutable, so the credit a delivered `deposit.credited` or
@@ -905,14 +907,10 @@ New live accounts get default limits; the operator raises them on request.
     names (`receipt_log_index`, `revision`), so the transfer that replaced it is re-derived under
     its successor's id and link; a deposit whose transfer on chain contradicts the delivered one is
     held, not credited, until the operator discards the delivered credit and settles the
-    difference. A re-issued quote's locked
-    price is the merchant's record, which the service never signed (no event carries a quote as
-    created), so it never applies: a payment to the quote is valued at a delivered credit, which
-    is the service's signed evidence of the quote's price, or at spot. The chain alone cannot name
-    the customers of lost addresses (a salt is a hash of the `client_reference_id`) or lost quotes
-    (a salt includes the random quote id), so the merchant's records, or for an address its own
-    re-registration (create returns version 1, rotation the next ones), are the source; a quote no
-    merchant reports stays lost.
+    difference. Lost quote windows stay lost; recovered fixed addresses credit at spot unless a signed
+    delivered credit supplies the valuation. The chain cannot name the customers of lost
+    addresses because the salt hashes `client_reference_id`, so merchant records or customer
+    re-registration recover their address versions.
   - **Unfreeze** through the admin API once every chain has finalized past the moment the restore
     was detected with every issued address backfilled, with the operator's checklist (the key
     revocations re-applied first: the unfreeze is when merchant keys authenticate again); the

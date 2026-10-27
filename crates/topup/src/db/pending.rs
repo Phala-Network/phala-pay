@@ -354,21 +354,22 @@ pub async fn list_address_pending<'e>(
     records.into_iter().map(TryInto::try_into).collect()
 }
 
-/// Pending transfers for a page of scoped address ids, oldest first within each address.
+/// Pending transfers within a page of scoped quote windows, oldest first within each address.
 /// Callers obtain the ids from an authenticated parent query; no arbitrary client ids belong here.
-pub async fn list_addresses_pending<'e>(
+pub async fn list_quotes_pending<'e>(
     executor: impl sqlx::PgExecutor<'e>,
-    address_ids: &[Uuid],
+    quote_ids: &[Uuid],
 ) -> Result<Vec<(Uuid, PendingTransfer)>, sqlx::Error> {
-    if address_ids.is_empty() {
+    if quote_ids.is_empty() {
         return Ok(Vec::new());
     }
     let query = format!(
-        "{PENDING_SELECT} AND pending.address_id = ANY($1) \
+        "{PENDING_SELECT} AND EXISTS (SELECT 1 FROM quotes q WHERE q.id=ANY($1) AND q.address_id=pending.address_id \
+         AND pending.block_time > q.window_start AND pending.block_time <= q.expires_at) \
          ORDER BY pending.address_id, pending.block_number, pending.log_index, pending.tx_hash"
     );
     let records = sqlx::query_as::<_, PendingRecord>(AssertSqlSafe(query))
-        .bind(address_ids)
+        .bind(quote_ids)
         .fetch_all(executor)
         .await?;
     records

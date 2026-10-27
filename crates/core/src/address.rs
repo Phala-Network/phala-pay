@@ -3,19 +3,6 @@
 use alloy_primitives::{Address, B256, U256, keccak256};
 use alloy_sol_types::SolValue;
 
-/// Derives the salt of a quote's single-use address:
-/// `keccak256(abi.encode(account, client_reference_id, "quote", quote_id))`, with the types
-/// `(string, string, string, string)` (docs/design/multi-tenant.md D3). `account` is the
-/// merchant's `acct_` id and `quote_id` the quote's `qt_` id.
-#[must_use]
-pub fn quote_salt(account: &str, client_reference_id: &str, quote_id: &str) -> B256 {
-    keccak256(
-        (account, client_reference_id, "quote", quote_id)
-            .abi_encode_params()
-            .as_slice(),
-    )
-}
-
 /// Derives the salt of a customer's persistent deposit address:
 /// `keccak256(abi.encode(account, livemode, client_reference_id, "deposit_address", version))`,
 /// with the types `(string, bool, string, string, uint256)`.

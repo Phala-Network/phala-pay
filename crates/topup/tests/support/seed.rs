@@ -252,10 +252,10 @@ pub async fn insert_address(pool: &PgPool, address: &NewAddress) -> Result<Addre
         INSERT INTO quotes (
             id, account_id, livemode, customer_id, route, amount_atomic, price_scaled,
             credit_minor, expires_at, status, closed_at, route_version, settings_revision_id,
-            terms
+            terms, address_id, window_start
         )
         SELECT $1, customer.account_id, customer.livemode, customer.id, $3, 1, 100000000, 1,
-               now(), 'cancelled', now(), 1, settings.current_revision_id, $4
+               now(), 'cancelled', now(), 1, settings.current_revision_id, $4, $5, 'epoch'
         FROM customers AS customer
         JOIN payment_settings_state AS settings
             ON settings.account_id = customer.account_id AND settings.livemode = customer.livemode
@@ -266,6 +266,7 @@ pub async fn insert_address(pool: &PgPool, address: &NewAddress) -> Result<Addre
     .bind(address.customer_id)
     .bind(&address.route)
     .bind(sqlx::types::Json(fixture_terms()))
+    .bind(address.id)
     .execute(&mut *transaction)
     .await?;
     sqlx::query(

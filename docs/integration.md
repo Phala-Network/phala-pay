@@ -183,46 +183,12 @@ Try again." and calls `onError`. `expectedAddress` is required: it is the addres
 recomputed, and the checkout fails closed, showing nothing to pay, when the quote it reads names
 another one. To submit with your own button, pass `hideSubmit` and put your summary and
 `type="submit"` button in the element's `children` (or give a button elsewhere `type="submit"
-form={id}` with the element's `id`). `createDepositAddress` adds one line after the button, "Paying
-from an exchange? Use a deposit address" (§1.5). `appearance` themes it to
+form={id}` with the element's `id`). `appearance` themes it to
 match the page, a test-mode quote says "Test mode", and `onChange` reports each step and every
 checkout status change (§1.2).
 
-**Deposit-address mode.** To give each customer one fixed address rather than a new quote per
-payment, leave out `createQuote` and pass `createDepositAddress`: submit calls it once and the
-element shows the customer's address (§1.5) as the way to pay. Your backend returns the active
-address, recomputed from your pins, with a new `client_secret` (call it only on submit; each call
-issues a secret). `depositAmountAtomic(option, token)` makes the address ask for that amount of
-`token`, the address's asset for the chosen option (its `decimals` give the unit): the element
-states it once, pays it from the payer's wallet first (exactly that amount, then a transaction-hash
-hint, so it is found within about a block), and offers the QR code (EIP-681 with `uint256`) and the
-address behind "Pay from an exchange or another wallet". It follows that payment on one status line,
-reports it in `onChange` as `payment`, and calls `onDepositSuccess(payment)` once it is credited;
-fulfil from the webhook as for quotes. Any amount within the per-transfer limits is credited at the
-market rate, so keep your own amount within them.
-
-```python
-@app.post("/deposit-address")
-def deposit_address(team: Team = Depends(current_team)) -> dict[str, object]:
-    address = pay.deposit_addresses.create(client_reference_id=team.id)
-    return {
-        "address": address.address,
-        "networks": [network.to_dict() for network in address.networks],
-        "clientSecret": address.client_secret,
-    }
-```
-
-```tsx
-<PaymentElement
-  options={paymentOptions(config.assets)}
-  amount={2500}
-  apiBase={PHALA_PAY_API_BASE}
-  createDepositAddress={() => post("/deposit-address")}
-  // $25.00 of a $1 stablecoin: cents × 10^(decimals − 2)
-  depositAmountAtomic={(option, token) => (2500n * 10n ** BigInt(token.decimals)) / 100n}
-  onDepositSuccess={() => router.refresh()}
-/>
-```
+Quotes already use the customer's fixed address. Use the standalone `<DepositAddress>` (§1.5)
+when your page accepts any amount without requesting a price lock.
 
 For a quote you already created, render `<Checkout clientSecret expectedAddress apiBase>` alone;
 `<PaymentOptionPicker>` is the element's token and network choice on its own. Without React,
@@ -263,7 +229,7 @@ cloud console's billing page, on [pay.phala.com](https://pay.phala.com/).
 ### 1.1 How it works
 
 A quote is the way to pay a known amount, as a PaymentIntent is in Stripe: the user states an
-amount in dollars and receives a locked price, an exact token amount, and a single-use address to
+amount in dollars and receives a locked price, an exact token amount, and a fixed customer address to
 pay within the window. A quote is a **payment instruction at a locked price, not a guarantee of
 payment in full**: an underpayment, an overpayment, or a late payment to its address is still
 credited, at spot, for what arrived (§1.3). Treat an order as paid in full only when the deposit's
@@ -422,11 +388,20 @@ until six hours, then hourly. Recovery can take that interval plus processing; c
 as soon as both providers qualify, without waiting for the published checkpoint. Existing typical
 credit times describe healthy hinted payments and are not guarantees during provider lag.
 
+One price window exists per customer, chain and asset. A new quote replaces the previous
+window at a whole-second boundary; `replaced_by` names it. Send exactly the quoted amount after
+`window_start` and by `expires_at` for that price. Other amounts, earlier or late payments, and
+second transfers use the market rate. The first eligible transfer to finish confirmation wins.
+A replayed idempotency key returns its original quote even if another request has replaced it.
+Replaced windows retain exposure until complete chain coverage closes them. Hints only speed
+up discovery; they never bind a transaction to a quote.
+
 Semantics (spread, tolerance, expiry by dual coverage time, exposure caps) are
 [architecture §9](architecture.md#9-quotes).
 
 **Recompute every address before you show it.** A quote's address salt is
-`keccak256(abi.encode(account, client_reference_id, "quote", quote_id))` with `account` your
+`keccak256(abi.encode(account, livemode, client_reference_id, "deposit_address", deposit_address_version))`
+with `account` your
 `acct_` id, and the address is the factory's `CREATE2` clone of the implementation over **your
 pinned treasury** of the quote's chain and that salt. `PhalaPay(api_key, pins=pins)` recomputes
 every quote from those pins and raises `AddressMismatchError` when the quote names another
@@ -436,7 +411,7 @@ backend does the same with `verifyQuoteAddress(pins, quote)` from `@phala/pay-se
 returns the address. Pass the recomputed address to the page as `<Checkout expectedAddress>`,
 which fails closed on any other. You need no address records of your own to credit:
 `deposit.credited` carries the deposit, which names the customer (`client_reference_id`) and the
-quote (`quote`), also for a late or wrong-amount payment.
+quote (`quote`) only when that deposit consumed its window. Other payments carry no quote.
 
 **The payer's page.** Hand the quote's `client_secret` to the paying customer's page only, and
 do not log it. The page reads `GET /v1/quotes/{id}?client_secret=…` without an API key, from any
@@ -1830,14 +1805,9 @@ own records since then, for:
 - the deposit addresses you received (`client_reference_id`, `address`, and `id` or `version`):
   the address is derived from your account, mode, customer, and version, so the operator issues
   the same address again, and payments made to it since are credited;
-- the quotes you created (the quote object: `id`, `client_reference_id`, `chain_id`, `asset`,
-  `amount`, `amount_atomic`, `exchange_rate`, `address`, `created`, `expires_at`, `metadata`, and
-  its `client_secret` if you kept it): the address is derived from the quote id, so the operator
-  issues the same quote again, and a payment made to it since is credited. Your record of its
-  locked price is not proof the service issued it, so the payment is credited at spot, unless you
-  also hold its `deposit.credited`, which carries the quote's credit; the re-issued quote's window
-  closes at the restore, so its page shows it expired, and with its `client_secret` the page reads
-  it again (the same holds for a deposit address's `client_secret`);
+- a quote's `deposit_address` and `deposit_address_version` can recover the customer's fixed
+  address when no deposit-address record was saved. Quote windows and their prices are not
+  reissued; payments use spot unless a signed delivered credit carries forward the valuation;
 - the delivery of every `deposit.credited`, `deposit.rejected`, and `deposit.reversed` event you
   received, as your receiver got it: the raw body and its `webhook-id`, `webhook-timestamp`, and
   `webhook-signature` headers. The operator imports only what the service signed. Each is kept as

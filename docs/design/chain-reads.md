@@ -460,7 +460,7 @@ Hint readiness, task budgets and confirmations still apply. Already unresolved d
 the age-dependent recheck cadence; later-day evidence can wait up to an hour for the next check.
 The ten-minute reversal target concerns newly due deposits. Conflicts visible only in full logs
 may wait for hourly coverage. Payment windows and negative-evidence gates are unchanged:
-in-window qualifying payments retain quote terms; late, partial and persistent-address payments
+in-window qualifying payments retain quote terms; late, partial and other unmatched payments
 use fresh processing-time prices and screening uses the verified local lists at decision time.
 
 ## 6. DB changes and N-1

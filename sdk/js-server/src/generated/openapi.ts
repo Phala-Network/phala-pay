@@ -480,7 +480,7 @@ export interface paths {
         readonly put?: never;
         /**
          * Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,
-         *     and a single-use address, valid until `expires_at`, on the terms your payment settings set for
+         *     and a fixed customer address, valid until `expires_at`, on the terms your payment settings set for
          *     the asset; the quote keeps them for good. An asset your settings do not accept is
          *     `asset_not_accepted`.
          */
@@ -1320,7 +1320,7 @@ export interface components {
          * @description The public view of a quote, read with its `client_secret` and without a signature, for the
          *     payer's checkout page. It has no account or internal fields.
          * @example {
-         *       "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+         *       "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
          *       "amount": 2500,
          *       "amount_atomic": "25000000",
          *       "amount_credited": null,
@@ -1329,18 +1329,22 @@ export interface components {
          *       "confirmations": 1,
          *       "currency": "usd",
          *       "decimals": 6,
+         *       "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+         *       "deposit_address_version": 1,
          *       "expires_at": 1790554500,
          *       "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
          *       "livemode": false,
          *       "object": "quote",
          *       "payment_status": "seen",
          *       "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+         *       "replaced_by": null,
          *       "status": "open",
-         *       "typical_credit_seconds": 30
+         *       "typical_credit_seconds": 30,
+         *       "window_start": 1790553600
          *     }
          */
         readonly ClientQuote: {
-            /** @description Single-use forwarder address to pay. */
+            /** @description Customer deposit-address network to pay. */
             readonly address: string;
             /**
              * Format: int64
@@ -1380,6 +1384,13 @@ export interface components {
              * @description The token's decimals, to display `amount_atomic`.
              */
             readonly decimals: number;
+            /** @description Deposit address id; null only for historical single-use quotes. */
+            readonly deposit_address: string | null;
+            /**
+             * Format: int64
+             * @description Deposit-address salt version; null only for historical single-use quotes.
+             */
+            readonly deposit_address_version: number | null;
             /**
              * Format: int64
              * @description End of the payment window, Unix seconds.
@@ -1405,6 +1416,8 @@ export interface components {
             readonly payment_status: string;
             /** @description EIP-681 URI carrying the token, chain, address, and amount. */
             readonly payment_uri: string;
+            /** @description The quote that closed this price window, if replaced. */
+            readonly replaced_by: string | null;
             /**
              * @description `open`, `complete`, `expired`, or `canceled`, as on `Quote`; hide the address once
              *     `expires_at` has passed.
@@ -1416,6 +1429,11 @@ export interface components {
              *     are credited at, as `GET /v1/config` reports it.
              */
             readonly typical_credit_seconds: number;
+            /**
+             * Format: int64
+             * @description Exclusive start of the payment window, Unix seconds.
+             */
+            readonly window_start: number;
         };
         /**
          * @description What a product's UI reads instead of hardcoding: assets, limits, and quote terms.
@@ -1895,8 +1913,7 @@ export interface components {
             readonly currency: string;
             /**
              * @description The deposit address that received the transfer, `da_…`, on `chain_id` at `address`; `null`
-             *     for a quote's address. Payments to a deposit address, active or retired, are credited at
-             *     spot.
+             *     for a historical single-use address. Transfers that do not consume a quote use spot.
              */
             readonly deposit_address?: string | null;
             /** @description USD per token, a decimal string with 8 places, once valued. */
@@ -1931,9 +1948,8 @@ export interface components {
              */
             readonly log_index: number;
             /**
-             * @description Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): a copy of the
-             *     quote's or the deposit address's when the deposit is recorded, independent of it
-             *     afterwards; `{}` when none.
+             * @description Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): copied from the
+             *     consumed quote, otherwise from the deposit address when recorded; independent afterwards.
              */
             readonly metadata: {
                 readonly [key: string]: string;
@@ -3017,9 +3033,9 @@ export interface components {
             readonly updated: number;
         };
         /**
-         * @description A quote: a locked price, an exact token amount, and a single-use address to pay it to.
+         * @description A price window on the customer's persistent deposit address.
          * @example {
-         *       "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+         *       "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
          *       "amount": 2500,
          *       "amount_atomic": "25000000",
          *       "asset": "usdc",
@@ -3029,6 +3045,8 @@ export interface components {
          *       "created": 1790553600,
          *       "currency": "usd",
          *       "deposit": null,
+         *       "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+         *       "deposit_address_version": 1,
          *       "exchange_rate": "1.00000000",
          *       "expires_at": 1790554500,
          *       "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3049,6 +3067,7 @@ export interface components {
          *         "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
          *       },
          *       "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+         *       "replaced_by": null,
          *       "status": "open",
          *       "terms": {
          *         "confirmations": "12",
@@ -3061,11 +3080,12 @@ export interface components {
          *         "quote_tolerance_bps": 100,
          *         "quote_ttl_seconds": 900
          *       },
-         *       "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+         *       "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+         *       "window_start": 1790553600
          *     }
          */
         readonly Quote: {
-            /** @description Single-use forwarder address to pay. */
+            /** @description Customer deposit-address network to pay. */
             readonly address: string;
             /**
              * Format: int64
@@ -3104,6 +3124,13 @@ export interface components {
             /** @description `usd`. */
             readonly currency: string;
             readonly deposit?: components["schemas"]["ExpandableDeposit"] | null;
+            /** @description Deposit address id; null only for historical single-use quotes. */
+            readonly deposit_address: string | null;
+            /**
+             * Format: int64
+             * @description Deposit-address salt version; null only for historical single-use quotes.
+             */
+            readonly deposit_address_version: number | null;
             /** @description The locked price in USD per token, a decimal string with 8 decimal places. */
             readonly exchange_rate: string;
             /**
@@ -3111,11 +3138,7 @@ export interface components {
              * @description End of the payment window, Unix seconds.
              */
             readonly expires_at: number;
-            /**
-             * @description `qt_` id. The quote's address salt is `keccak256(abi.encode(account,
-             *     client_reference_id, "quote", id))` with the types `(string, string, string, string)`,
-             *     where `account` is your `acct_` id.
-             */
+            /** @description `qt_` id. */
             readonly id: string;
             /** @description Whether the quote was created with a live key. */
             readonly livemode: boolean;
@@ -3131,6 +3154,8 @@ export interface components {
             readonly payment?: components["schemas"]["Payment"] | null;
             /** @description EIP-681 URI carrying the token, chain, address, and amount. */
             readonly payment_uri: string;
+            /** @description The quote that closed this price window, if replaced. */
+            readonly replaced_by: string | null;
             /**
              * @description `open`, `complete` (a matching payment consumed it), `expired`, or `canceled`. A quote stays
              *     `open` after `expires_at` until the finalized chain passes it, so a payment mined in time
@@ -3147,13 +3172,18 @@ export interface components {
              *     address is the factory's `CREATE2` over it and the salt.
              */
             readonly treasury: string;
+            /**
+             * Format: int64
+             * @description Exclusive start of the payment window, Unix seconds.
+             */
+            readonly window_start: number;
         };
         /**
          * @description A page of quotes, newest first (<https://docs.stripe.com/api/pagination>).
          * @example {
          *       "data": [
          *         {
-         *           "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+         *           "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
          *           "amount": 2500,
          *           "amount_atomic": "25000000",
          *           "asset": "usdc",
@@ -3163,6 +3193,8 @@ export interface components {
          *           "created": 1790553600,
          *           "currency": "usd",
          *           "deposit": null,
+         *           "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+         *           "deposit_address_version": 1,
          *           "exchange_rate": "1.00000000",
          *           "expires_at": 1790554500,
          *           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3183,6 +3215,7 @@ export interface components {
          *             "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
          *           },
          *           "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+         *           "replaced_by": null,
          *           "status": "open",
          *           "terms": {
          *             "confirmations": "12",
@@ -3195,7 +3228,8 @@ export interface components {
          *             "quote_tolerance_bps": 100,
          *             "quote_ttl_seconds": 900
          *           },
-         *           "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+         *           "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+         *           "window_start": 1790553600
          *         }
          *       ],
          *       "has_more": false,
@@ -3260,7 +3294,7 @@ export interface components {
          * @description `GET /v1/quotes/{id}` returns a `Quote` to a signed request and a `ClientQuote` to a request by
          *     `client_secret`.
          * @example {
-         *       "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+         *       "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
          *       "amount": 2500,
          *       "amount_atomic": "25000000",
          *       "asset": "usdc",
@@ -3270,6 +3304,8 @@ export interface components {
          *       "created": 1790553600,
          *       "currency": "usd",
          *       "deposit": null,
+         *       "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+         *       "deposit_address_version": 1,
          *       "exchange_rate": "1.00000000",
          *       "expires_at": 1790554500,
          *       "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3290,6 +3326,7 @@ export interface components {
          *         "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
          *       },
          *       "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+         *       "replaced_by": null,
          *       "status": "open",
          *       "terms": {
          *         "confirmations": "12",
@@ -3302,7 +3339,8 @@ export interface components {
          *         "quote_tolerance_bps": 100,
          *         "quote_ttl_seconds": 900
          *       },
-         *       "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+         *       "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+         *       "window_start": 1790553600
          *     }
          */
         readonly QuoteView: components["schemas"]["Quote"] | components["schemas"]["ClientQuote"];
@@ -5882,7 +5920,7 @@ export interface operations {
             readonly query?: {
                 /** @description Only this customer's deposits */
                 readonly client_reference_id?: string;
-                /** @description Only deposits to this quote's address */
+                /** @description Only deposits that consumed this quote */
                 readonly quote?: string;
                 /** @description Only deposits to this deposit address, `da_…` */
                 readonly deposit_address?: string;

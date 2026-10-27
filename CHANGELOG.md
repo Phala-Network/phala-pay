@@ -14,6 +14,44 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Breaking (operators)
+
+- **Breaking**: no rollback to 0.12.2; restore required. No rollback to v0.12.x is supported.
+  The owner accepted this schema break before launch. Take and verify a pre-upgrade backup,
+  pause quote creation, and follow [restore and reconciliation](deploy/RESTORE.md) before running
+  an older release. The compatibility floor is `20261104000000`.
+- Quotes now use each customer's fixed deposit-address network. A new quote closes the previous
+  window on the same customer and route, including a previously consumed quote. Replaced quotes
+  retain exposure until chain coverage closes them. Hints discover transfers and never bind them.
+- Remove `POST /v1/admin/restore/quotes` and the `quotes_reissued` unfreeze checklist field.
+  Restore clamps open quote windows to the restore point. Reissue customer addresses and import
+  delivered outcomes; lost quotes are not reissued.
+
+### Changed
+
+- Quotes expose `deposit_address`, `deposit_address_version`, `window_start`, and `replaced_by`.
+  Only a deposit that consumes a quote carries its `quote` and metadata; other transfers use spot.
+  Historical addresses and deposits are preserved. Quotes reuse address capacity after the
+  customer's network is issued.
+
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Changed
+
+- **Breaking**: `PaymentElement` requires `createQuote`; remove its deposit-address mode and
+  secondary deposit link, deposit callbacks and resume props, and `payDepositAddressWithWallet`.
+  Standalone `DepositAddress` supports transfers of any amount within its limits.
+- **Breaking**: `quoteAddress` and `verifyQuoteAddress` derive the deposit-address salt using the
+  quote's mode, customer and address version. Remove `quoteSalt`.
+- Checkout explains the fixed address and price deadline; API types are regenerated.
+
+### Python SDK (`phala-pay`)
+
+#### Changed
+
+- **Breaking**: verify quote addresses with the deposit-address salt; remove `quote_salt` and
+  `quote_address`. Regenerate the API client, including removal of quote reissue.
+
 ## [0.12.2] - 2026-10-27
 
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)

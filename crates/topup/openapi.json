@@ -746,7 +746,7 @@
       "ClientQuote": {
         "description": "The public view of a quote, read with its `client_secret` and without a signature, for the\npayer's checkout page. It has no account or internal fields.",
         "example": {
-          "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+          "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
           "amount": 2500,
           "amount_atomic": "25000000",
           "amount_credited": null,
@@ -755,18 +755,22 @@
           "confirmations": 1,
           "currency": "usd",
           "decimals": 6,
+          "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+          "deposit_address_version": 1,
           "expires_at": 1790554500,
           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
           "livemode": false,
           "object": "quote",
           "payment_status": "seen",
           "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+          "replaced_by": null,
           "status": "open",
-          "typical_credit_seconds": 30
+          "typical_credit_seconds": 30,
+          "window_start": 1790553600
         },
         "properties": {
           "address": {
-            "description": "Single-use forwarder address to pay.",
+            "description": "Customer deposit-address network to pay.",
             "type": "string"
           },
           "amount": {
@@ -825,6 +829,22 @@
             "minimum": 0,
             "type": "integer"
           },
+          "deposit_address": {
+            "description": "Deposit address id; null only for historical single-use quotes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deposit_address_version": {
+            "description": "Deposit-address salt version; null only for historical single-use quotes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "expires_at": {
             "description": "End of the payment window, Unix seconds.",
             "format": "int64",
@@ -853,6 +873,13 @@
             "description": "EIP-681 URI carrying the token, chain, address, and amount.",
             "type": "string"
           },
+          "replaced_by": {
+            "description": "The quote that closed this price window, if replaced.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "description": "`open`, `complete`, `expired`, or `canceled`, as on `Quote`; hide the address once\n`expires_at` has passed.",
             "type": "string"
@@ -861,6 +888,11 @@
             "description": "Typical time from payment to credit, in seconds, at the confirmation the quote's payments\nare credited at, as `GET /v1/config` reports it.",
             "format": "int64",
             "minimum": 0,
+            "type": "integer"
+          },
+          "window_start": {
+            "description": "Exclusive start of the payment window, Unix seconds.",
+            "format": "int64",
             "type": "integer"
           }
         },
@@ -876,6 +908,10 @@
           "chain_id",
           "amount_atomic",
           "address",
+          "deposit_address",
+          "deposit_address_version",
+          "replaced_by",
+          "window_start",
           "payment_uri",
           "expires_at",
           "payment_status",
@@ -1524,7 +1560,7 @@
             "type": "string"
           },
           "deposit_address": {
-            "description": "The deposit address that received the transfer, `da_…`, on `chain_id` at `address`; `null`\nfor a quote's address. Payments to a deposit address, active or retired, are credited at\nspot.",
+            "description": "The deposit address that received the transfer, `da_…`, on `chain_id` at `address`; `null`\nfor a historical single-use address. Transfers that do not consume a quote use spot.",
             "type": [
               "string",
               "null"
@@ -1571,7 +1607,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): a copy of the\nquote's or the deposit address's when the deposit is recorded, independent of it\nafterwards; `{}` when none.",
+            "description": "Your key/value pairs ([metadata](https://docs.stripe.com/api/metadata)): copied from the\nconsumed quote, otherwise from the deposit address when recorded; independent afterwards.",
             "propertyNames": {
               "type": "string"
             },
@@ -1595,7 +1631,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ExpandableQuote",
-                "description": "The quote whose address received the transfer; `null` for a deposit address."
+                "description": "The quote consumed by this transfer; `null` when no quote was consumed."
               },
               {
                 "type": "null"
@@ -3219,9 +3255,9 @@
         "type": "object"
       },
       "Quote": {
-        "description": "A quote: a locked price, an exact token amount, and a single-use address to pay it to.",
+        "description": "A price window on the customer's persistent deposit address.",
         "example": {
-          "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+          "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
           "amount": 2500,
           "amount_atomic": "25000000",
           "asset": "usdc",
@@ -3231,6 +3267,8 @@
           "created": 1790553600,
           "currency": "usd",
           "deposit": null,
+          "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+          "deposit_address_version": 1,
           "exchange_rate": "1.00000000",
           "expires_at": 1790554500,
           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3251,6 +3289,7 @@
             "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
           },
           "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+          "replaced_by": null,
           "status": "open",
           "terms": {
             "confirmations": "12",
@@ -3263,11 +3302,12 @@
             "quote_tolerance_bps": 100,
             "quote_ttl_seconds": 900
           },
-          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+          "window_start": 1790553600
         },
         "properties": {
           "address": {
-            "description": "Single-use forwarder address to pay.",
+            "description": "Customer deposit-address network to pay.",
             "type": "string"
           },
           "amount": {
@@ -3329,6 +3369,22 @@
               }
             ]
           },
+          "deposit_address": {
+            "description": "Deposit address id; null only for historical single-use quotes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deposit_address_version": {
+            "description": "Deposit-address salt version; null only for historical single-use quotes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "exchange_rate": {
             "description": "The locked price in USD per token, a decimal string with 8 decimal places.",
             "type": "string"
@@ -3339,7 +3395,7 @@
             "type": "integer"
           },
           "id": {
-            "description": "`qt_` id. The quote's address salt is `keccak256(abi.encode(account,\nclient_reference_id, \"quote\", id))` with the types `(string, string, string, string)`,\nwhere `account` is your `acct_` id.",
+            "description": "`qt_` id.",
             "type": "string"
           },
           "livemode": {
@@ -3378,6 +3434,13 @@
             "description": "EIP-681 URI carrying the token, chain, address, and amount.",
             "type": "string"
           },
+          "replaced_by": {
+            "description": "The quote that closed this price window, if replaced.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "description": "`open`, `complete` (a matching payment consumed it), `expired`, or `canceled`. A quote stays\n`open` after `expires_at` until the finalized chain passes it, so a payment mined in time\nis never reported as expired; hide the address once `expires_at` has passed.",
             "type": "string"
@@ -3389,6 +3452,11 @@
           "treasury": {
             "description": "The treasury the address pays: your treasury of the chain when the quote was created. The\naddress is the factory's `CREATE2` over it and the salt.",
             "type": "string"
+          },
+          "window_start": {
+            "description": "Exclusive start of the payment window, Unix seconds.",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
@@ -3403,6 +3471,10 @@
           "amount_atomic",
           "exchange_rate",
           "address",
+          "deposit_address",
+          "deposit_address_version",
+          "replaced_by",
+          "window_start",
           "treasury",
           "payment_uri",
           "status",
@@ -3418,7 +3490,7 @@
         "example": {
           "data": [
             {
-              "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+              "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
               "amount": 2500,
               "amount_atomic": "25000000",
               "asset": "usdc",
@@ -3428,6 +3500,8 @@
               "created": 1790553600,
               "currency": "usd",
               "deposit": null,
+              "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+              "deposit_address_version": 1,
               "exchange_rate": "1.00000000",
               "expires_at": 1790554500,
               "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3448,6 +3522,7 @@
                 "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
               },
               "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+              "replaced_by": null,
               "status": "open",
               "terms": {
                 "confirmations": "12",
@@ -3460,7 +3535,8 @@
                 "quote_tolerance_bps": 100,
                 "quote_ttl_seconds": 900
               },
-              "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+              "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+              "window_start": 1790553600
             }
           ],
           "has_more": false,
@@ -3565,7 +3641,7 @@
       "QuoteView": {
         "description": "`GET /v1/quotes/{id}` returns a `Quote` to a signed request and a `ClientQuote` to a request by\n`client_secret`.",
         "example": {
-          "address": "0x2f3e91325b2288bce392711f85f5359661062a91",
+          "address": "0x0f45147a02e4c9d91aff20024e22095536fd5053",
           "amount": 2500,
           "amount_atomic": "25000000",
           "asset": "usdc",
@@ -3575,6 +3651,8 @@
           "created": 1790553600,
           "currency": "usd",
           "deposit": null,
+          "deposit_address": "da_7b2e9c4a1f6d48b3a5c0e2d4f6a8b1c3",
+          "deposit_address_version": 1,
           "exchange_rate": "1.00000000",
           "expires_at": 1790554500,
           "id": "qt_5f1c0b6a2d9e4f3a8b7c6d5e4f3a2b10",
@@ -3595,6 +3673,7 @@
             "tx_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
           },
           "payment_uri": "ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48@1/transfer?address=0x2f3e91325b2288bce392711f85f5359661062a91&uint256=25000000",
+          "replaced_by": null,
           "status": "open",
           "terms": {
             "confirmations": "12",
@@ -3607,7 +3686,8 @@
             "quote_tolerance_bps": 100,
             "quote_ttl_seconds": 900
           },
-          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504"
+          "treasury": "0x936c1991f8da9a919fa11b557a3514719f5a4504",
+          "window_start": 1790553600
         },
         "oneOf": [
           {
@@ -4658,7 +4738,7 @@
     }
   },
   "info": {
-    "description": "Phala Pay is a non-custodial crypto payments API for merchants: quotes and deposit addresses, deposits credited at a small confirmation depth and watched to finality, refunds you pay from your treasury, and webhooks signed with a key bound to a TDX attestation. The [integration guide](https://github.com/Phala-Network/phala-pay/blob/main/docs/integration.md) walks through an integration end to end.\n\n# Authentication\n\nSend an API key as `Authorization: Bearer ppay_rk_test_…` (test mode) or `ppay_rk_live_…` (live mode). A restricted key (`ppay_rk_`, [Stripe](https://docs.stripe.com/keys#limit-access)) holds only the permissions it was created with and never manages keys, treasuries, webhook endpoints, webhook keys, or account settings: run production with one. A secret key (`ppay_sk_`) holds every permission; keep it offline, for administration. The key selects the account and the mode; every object carries `livemode`, and a key never sees the other mode's objects.\n\n# Request ids\n\nEvery response carries `Request-Id: req_…` ([Stripe](https://docs.stripe.com/api/request_ids)). Quote it when you contact support. An event caused by an API request names it in `request.id`, with the `Idempotency-Key` the request sent.\n\n# Idempotent requests\n\nEvery `POST` accepts an `Idempotency-Key` of up to 255 characters ([Stripe](https://docs.stripe.com/api/idempotent_requests)). For 24 hours a repeat of the same request returns the first response, with `Idempotent-Replayed: true`, whatever it was, including a `500`, so a retry never runs a request twice; a repeat with another request is `400 idempotency_key_reused`, and one while the first still runs is `409 idempotency_key_in_use`. A request that did not execute is not saved and runs again on a retry: one that failed validation (`parameter_*`), was rate limited (`429`), or met `503 unavailable`.\n\n# Pagination\n\nLists are newest first with Stripe's cursor pagination ([Stripe](https://docs.stripe.com/api/pagination)): `limit` (1 to 100, default 10), and `starting_after` or `ending_before`, the id of an object of the list; `has_more` says whether more follow. Lists with a `created` filter take `created[gt]`, `created[gte]`, `created[lt]`, and `created[lte]` in Unix seconds.\n\n# Events\n\nEvery change is an event, delivered to your webhook endpoints and listed by `GET /v1/events` ([Stripe](https://docs.stripe.com/api/events/object)). `data.object` is the object as it was when the event happened, rendered with the change and never changed afterwards; `*.updated` events add `data.previous_attributes`. Deliveries are retried until delivered and never given up on; a webhook endpoint's `pending_deliveries`, `oldest_pending_at`, and `last_attempt` show whether it is keeping up, and `GET /v1/events?delivery_success=false` lists what it has not received.\n\n# Errors\n\nErrors are Stripe's error object ([Stripe](https://docs.stripe.com/api/errors)): `{\"error\": {\"type\", \"code\", \"message\", \"param\", \"doc_url\"}}`. `400` means the request cannot succeed as sent or in the objects' current state, `401` authentication, `403` permission, `404` a missing object, `409` only an `Idempotency-Key` still in use, `429` too many requests (with `Retry-After` in seconds), and `5xx` the service. Branch on `code`; `message` may change.\n\n## refund_attachment_limit_exceeded\n\n`422`. The environment has a configured attached-pending refund limit (production 2, staging 1), and permits one new attachment per rolling 24 hours, across all merchants and modes. This is not retryable; contact the operator before sending or attaching another payout. The refund stays pending and reserved. Repeating the same attachment does not consume quota; existing attachments continue verification.\n\n## address_capacity_reached\n\n`422`. The chain has reached its permanent pilot limit of 1,000 issued addresses, including retired and expired addresses. This is not retryable; the operator must upgrade the scanning/provider plan before issuing more.\n\n## chain_unavailable\n\n`503`. The requested chain is temporarily not ready. Retry after the indicated delay.\n\n## price_unavailable\n\n`503`. Fresh dual-source prices are unavailable or the UTC daily snapshot cap is exhausted. Retry after the indicated delay; no stale price is returned.\n\n## parameter_invalid\n\n`400`. A parameter is malformed or out of range; `param` names it. Fix the request.\n\n## parameter_missing\n\n`400`. A required parameter is absent; `param` names it.\n\n## parameter_unknown\n\n`400`. The operation does not take a parameter the request sent; `param` names it.\n\n## amount_too_small\n\n`400`. The amount is below the minimum of the route, or nothing is left to refund.\n\n## amount_too_large\n\n`400`. The amount is above the route's maximum deposit, or above what is left to refund.\n\n## exposure_cap_exceeded\n\n`400`. The quote would take the open quotes of your account in this mode past a cap: their number (`max_open_quotes` of `GET /v1/config`), their credit (`max_open_amount_per_account`), or one customer's credit (`max_open_amount_per_customer`). Wait for quotes to be paid, expire, or be canceled, or ask the operator to raise the cap.\n\n## paused\n\n`400`. A pause of the account, the customer, or the route blocks the operation (`quotes`, `settlement`, or `refunds`). Your own `quotes` pause lifts with `POST /v1/account/resume`; the operator lifts its own.\n\n## chain_frozen\n\n`400`. Reconciliation froze the chain pending the operator's review; no quote is issued on it until the operator lifts the block.\n\n## asset_not_accepted\n\n`400`. Your payment settings do not accept the asset on the chain in this mode, or accept nothing yet (`GET /v1/payment_settings`): quote an asset `GET /v1/config` lists, or accept it with `POST /v1/payment_settings`.\n\n## payment_settings_unconfirmed\n\n`400`. After a restore of the service, your payment settings wait for your reconfirmation: send your complete configuration with `POST /v1/payment_settings`.\n\n## treasury_not_set\n\n`400`. The account has no treasury on the chain: `POST /v1/treasuries/challenge`, then `POST /v1/treasuries`.\n\n## treasury_proof_invalid\n\n`400`. The treasury proof does not prove the address: the message is not the challenge, or the signature does not verify.\n\n## treasury_challenge_expired\n\n`400`. The treasury challenge expired; request a new one.\n\n## treasury_challenge_used\n\n`400`. The treasury challenge was already used; request a new one.\n\n## treasury_not_deployed\n\n`400`. The signature does not recover to the address and no contract is deployed there at the chain's finalized block; deploy the Safe first (ERC-6492 signatures are refused).\n\n## treasury_sanctioned\n\n`400`. A sanctions list names the treasury address.\n\n## treasury_change_pending\n\n`400`. A treasury change is already pending on the chain; cancel it first.\n\n## treasury_unchanged\n\n`400`. The address is already the chain's treasury.\n\n## treasury_unexpected_state\n\n`400`. Only a `pending` treasury can be canceled.\n\n## quote_payment_received\n\n`400`. The quote's address already received a payment, so the quote cannot be canceled.\n\n## quote_window_closed\n\n`400`. The quote's payment window has closed, so it cannot be canceled; it expires on its own.\n\n## quote_unexpected_state\n\n`400`. The quote is `complete` or `expired`; only an `open` quote can be canceled.\n\n## deposit_unexpected_state\n\n`400`. Admin: only a deposit the pump processes, `detected` or `confirmed`, can be nudged; a credited deposit waits for its sweep, which only a finalized `Flushed` event records.\n\n## deposit_not_refundable\n\n`400`. The deposit cannot be refunded: it is not credited or rejected, or it was reversed.\n\n## deposit_not_final\n\n`400`. The deposit is not final yet and could still be reversed; request the refund once `final` is `true` (about 15 minutes after its block on Ethereum).\n\n## destination_sanctioned\n\n`400`. A sanctions list names the refund's destination address.\n\n## transfer_already_used\n\n`400`. The transfer log already pays another refund.\n\n## refund_unexpected_state\n\n`400`. The refund's status does not allow the action: it is not `pending`, it is already marked paid with another transaction, or, being marked paid, it cannot be canceled.\n\n## api_key_inactive\n\n`400`. The API key is revoked or already rolled.\n\n## last_api_key\n\n`400`. The account's last active key of the mode cannot be revoked; create or roll a key first.\n\n## deposit_address_cap_exceeded\n\n`400`. The account has its maximum of active deposit addresses in the mode.\n\n## deposit_address_retired\n\n`400`. The deposit address is retired; rotate the customer's active address instead.\n\n## webhook_endpoint_cap_exceeded\n\n`400`. The account has 16 webhook endpoints in the mode; delete one first.\n\n## webhook_endpoint_disabled\n\n`400`. The webhook endpoint is disabled; enable it before resending events to it.\n\n## idempotency_key_reused\n\n`400`. The `Idempotency-Key` was used with a different request (type `idempotency_error`). Use a new key for a new request.\n\n## signature_invalid\n\n`401`. Admin API only: the RFC 9421 request signature did not verify.\n\n## signature_replayed\n\n`401`. Admin API only: the request signature was already used; sign the request again.\n\n## api_key_missing\n\n`401`. No `Authorization: Bearer` header with an API key (`ppay_rk_…` or `ppay_sk_…`).\n\n## api_key_invalid\n\n`401`. The API key is malformed, unknown, or revoked.\n\n## api_key_expired\n\n`401`. The API key was rolled and its overlap has ended; use the key it was rolled to.\n\n## permission_denied\n\n`403`. The key may not make this request: a restricted key lacks the permission, or the request manages keys, treasuries, webhook endpoints, webhook keys, or account settings, which needs a secret key.\n\n## testmode_charges_only\n\n`403`. The account is not enabled for live mode; use a test key until the operator enables it.\n\n## resource_missing\n\n`404`. No such object in the key's account and mode.\n\n## idempotency_key_in_use\n\n`409`. A request with this `Idempotency-Key` is still running (type `idempotency_error`); retry shortly with the same key. The only `409`.\n\n## rate_limit\n\n`429`. Too many requests of the account and mode (100 per second live, 25 test), or reads of one quote's or deposit address's public view. Retry after `Retry-After` seconds, with exponential backoff.\n\n## customer_rate_limit\n\n`429`. The customer made too many quotes in the last minute, or rotated its deposit address too often in the last hour. Retry after `Retry-After` seconds.\n\n## internal_error\n\n`500`. The service failed. Retry with the same `Idempotency-Key`: a request that started executing replays this response, so it never runs twice; a new key runs it again.\n\n## unavailable\n\n`503`. A dependency (pricing, sanctions screening, attestation) is temporarily unavailable. Retry with backoff; the same `Idempotency-Key` runs the request again.\n\n## service_maintenance\n\n`503`. A planned upgrade temporarily pauses new mutations. Reads continue while the process is up. Retry after Retry-After with the same Idempotency-Key; the request has not executed. The pause expires automatically if deployment fails.\n\n## service_restoring\n\n`503`. The service was restored from backup and is frozen until the operator has reconciled it with you: every request with an API key is refused, reads too, and nothing is credited or delivered meanwhile. Retry after `Retry-After` seconds; the operator contacts you for your records since the restore point.\n\n## restore_not_frozen\n\n`400`. Admin API only: a restore reconciliation action needs the service frozen after a restore.\n\n## restore_rescan_incomplete\n\n`400`. Admin API only: a chain is not rescanned since the restore (`GET /v1/admin/restore`); the freeze cannot be lifted yet.\n",
+    "description": "Phala Pay is a non-custodial crypto payments API for merchants: quotes and deposit addresses, deposits credited at a small confirmation depth and watched to finality, refunds you pay from your treasury, and webhooks signed with a key bound to a TDX attestation. The [integration guide](https://github.com/Phala-Network/phala-pay/blob/main/docs/integration.md) walks through an integration end to end.\n\n# Authentication\n\nSend an API key as `Authorization: Bearer ppay_rk_test_…` (test mode) or `ppay_rk_live_…` (live mode). A restricted key (`ppay_rk_`, [Stripe](https://docs.stripe.com/keys#limit-access)) holds only the permissions it was created with and never manages keys, treasuries, webhook endpoints, webhook keys, or account settings: run production with one. A secret key (`ppay_sk_`) holds every permission; keep it offline, for administration. The key selects the account and the mode; every object carries `livemode`, and a key never sees the other mode's objects.\n\n# Request ids\n\nEvery response carries `Request-Id: req_…` ([Stripe](https://docs.stripe.com/api/request_ids)). Quote it when you contact support. An event caused by an API request names it in `request.id`, with the `Idempotency-Key` the request sent.\n\n# Idempotent requests\n\nEvery `POST` accepts an `Idempotency-Key` of up to 255 characters ([Stripe](https://docs.stripe.com/api/idempotent_requests)). For 24 hours a repeat of the same request returns the first response, with `Idempotent-Replayed: true`, whatever it was, including a `500`, so a retry never runs a request twice; a repeat with another request is `400 idempotency_key_reused`, and one while the first still runs is `409 idempotency_key_in_use`. A request that did not execute is not saved and runs again on a retry: one that failed validation (`parameter_*`), was rate limited (`429`), or met `503 unavailable`.\n\n# Pagination\n\nLists are newest first with Stripe's cursor pagination ([Stripe](https://docs.stripe.com/api/pagination)): `limit` (1 to 100, default 10), and `starting_after` or `ending_before`, the id of an object of the list; `has_more` says whether more follow. Lists with a `created` filter take `created[gt]`, `created[gte]`, `created[lt]`, and `created[lte]` in Unix seconds.\n\n# Events\n\nEvery change is an event, delivered to your webhook endpoints and listed by `GET /v1/events` ([Stripe](https://docs.stripe.com/api/events/object)). `data.object` is the object as it was when the event happened, rendered with the change and never changed afterwards; `*.updated` events add `data.previous_attributes`. Deliveries are retried until delivered and never given up on; a webhook endpoint's `pending_deliveries`, `oldest_pending_at`, and `last_attempt` show whether it is keeping up, and `GET /v1/events?delivery_success=false` lists what it has not received.\n\n# Errors\n\nErrors are Stripe's error object ([Stripe](https://docs.stripe.com/api/errors)): `{\"error\": {\"type\", \"code\", \"message\", \"param\", \"doc_url\"}}`. `400` means the request cannot succeed as sent or in the objects' current state, `401` authentication, `403` permission, `404` a missing object, `409` only an `Idempotency-Key` still in use, `429` too many requests (with `Retry-After` in seconds), and `5xx` the service. Branch on `code`; `message` may change.\n\n## refund_attachment_limit_exceeded\n\n`422`. The environment has a configured attached-pending refund limit (production 2, staging 1), and permits one new attachment per rolling 24 hours, across all merchants and modes. This is not retryable; contact the operator before sending or attaching another payout. The refund stays pending and reserved. Repeating the same attachment does not consume quota; existing attachments continue verification.\n\n## address_capacity_reached\n\n`422`. The chain has reached its permanent pilot limit of 1,000 issued addresses, including retired and expired addresses. This is not retryable; the operator must upgrade the scanning/provider plan before issuing more.\n\n## chain_unavailable\n\n`503`. The requested chain is temporarily not ready. Retry after the indicated delay.\n\n## price_unavailable\n\n`503`. Fresh dual-source prices are unavailable or the UTC daily snapshot cap is exhausted. Retry after the indicated delay; no stale price is returned.\n\n## parameter_invalid\n\n`400`. A parameter is malformed or out of range; `param` names it. Fix the request.\n\n## parameter_missing\n\n`400`. A required parameter is absent; `param` names it.\n\n## parameter_unknown\n\n`400`. The operation does not take a parameter the request sent; `param` names it.\n\n## amount_too_small\n\n`400`. The amount is below the minimum of the route, or nothing is left to refund.\n\n## amount_too_large\n\n`400`. The amount is above the route's maximum deposit, or above what is left to refund.\n\n## exposure_cap_exceeded\n\n`400`. The quote would take the open quotes of your account in this mode past a cap: their number (`max_open_quotes` of `GET /v1/config`), their credit (`max_open_amount_per_account`), or one customer's credit (`max_open_amount_per_customer`). Wait for quotes to be paid, expire, or be canceled, or ask the operator to raise the cap.\n\n## paused\n\n`400`. A pause of the account, the customer, or the route blocks the operation (`quotes`, `settlement`, or `refunds`). Your own `quotes` pause lifts with `POST /v1/account/resume`; the operator lifts its own.\n\n## chain_frozen\n\n`400`. Reconciliation froze the chain pending the operator's review; no quote is issued on it until the operator lifts the block.\n\n## asset_not_accepted\n\n`400`. Your payment settings do not accept the asset on the chain in this mode, or accept nothing yet (`GET /v1/payment_settings`): quote an asset `GET /v1/config` lists, or accept it with `POST /v1/payment_settings`.\n\n## payment_settings_unconfirmed\n\n`400`. After a restore of the service, your payment settings wait for your reconfirmation: send your complete configuration with `POST /v1/payment_settings`.\n\n## treasury_not_set\n\n`400`. The account has no treasury on the chain: `POST /v1/treasuries/challenge`, then `POST /v1/treasuries`.\n\n## treasury_proof_invalid\n\n`400`. The treasury proof does not prove the address: the message is not the challenge, or the signature does not verify.\n\n## treasury_challenge_expired\n\n`400`. The treasury challenge expired; request a new one.\n\n## treasury_challenge_used\n\n`400`. The treasury challenge was already used; request a new one.\n\n## treasury_not_deployed\n\n`400`. The signature does not recover to the address and no contract is deployed there at the chain's finalized block; deploy the Safe first (ERC-6492 signatures are refused).\n\n## treasury_sanctioned\n\n`400`. A sanctions list names the treasury address.\n\n## treasury_change_pending\n\n`400`. A treasury change is already pending on the chain; cancel it first.\n\n## treasury_unchanged\n\n`400`. The address is already the chain's treasury.\n\n## treasury_unexpected_state\n\n`400`. Only a `pending` treasury can be canceled.\n\n## quote_payment_received\n\n`400`. A payment of this asset was already received in the quote's window, so the quote cannot be canceled.\n\n## quote_window_closed\n\n`400`. The quote's payment window has closed, so it cannot be canceled; it expires on its own.\n\n## quote_unexpected_state\n\n`400`. The quote is `complete` or `expired`; only an `open` quote can be canceled.\n\n## deposit_unexpected_state\n\n`400`. Admin: only a deposit the pump processes, `detected` or `confirmed`, can be nudged; a credited deposit waits for its sweep, which only a finalized `Flushed` event records.\n\n## deposit_not_refundable\n\n`400`. The deposit cannot be refunded: it is not credited or rejected, or it was reversed.\n\n## deposit_not_final\n\n`400`. The deposit is not final yet and could still be reversed; request the refund once `final` is `true` (about 15 minutes after its block on Ethereum).\n\n## destination_sanctioned\n\n`400`. A sanctions list names the refund's destination address.\n\n## transfer_already_used\n\n`400`. The transfer log already pays another refund.\n\n## refund_unexpected_state\n\n`400`. The refund's status does not allow the action: it is not `pending`, it is already marked paid with another transaction, or, being marked paid, it cannot be canceled.\n\n## api_key_inactive\n\n`400`. The API key is revoked or already rolled.\n\n## last_api_key\n\n`400`. The account's last active key of the mode cannot be revoked; create or roll a key first.\n\n## deposit_address_cap_exceeded\n\n`400`. The account has its maximum of active deposit addresses in the mode.\n\n## deposit_address_retired\n\n`400`. The deposit address is retired; rotate the customer's active address instead.\n\n## webhook_endpoint_cap_exceeded\n\n`400`. The account has 16 webhook endpoints in the mode; delete one first.\n\n## webhook_endpoint_disabled\n\n`400`. The webhook endpoint is disabled; enable it before resending events to it.\n\n## idempotency_key_reused\n\n`400`. The `Idempotency-Key` was used with a different request (type `idempotency_error`). Use a new key for a new request.\n\n## signature_invalid\n\n`401`. Admin API only: the RFC 9421 request signature did not verify.\n\n## signature_replayed\n\n`401`. Admin API only: the request signature was already used; sign the request again.\n\n## api_key_missing\n\n`401`. No `Authorization: Bearer` header with an API key (`ppay_rk_…` or `ppay_sk_…`).\n\n## api_key_invalid\n\n`401`. The API key is malformed, unknown, or revoked.\n\n## api_key_expired\n\n`401`. The API key was rolled and its overlap has ended; use the key it was rolled to.\n\n## permission_denied\n\n`403`. The key may not make this request: a restricted key lacks the permission, or the request manages keys, treasuries, webhook endpoints, webhook keys, or account settings, which needs a secret key.\n\n## testmode_charges_only\n\n`403`. The account is not enabled for live mode; use a test key until the operator enables it.\n\n## resource_missing\n\n`404`. No such object in the key's account and mode.\n\n## idempotency_key_in_use\n\n`409`. A request with this `Idempotency-Key` is still running (type `idempotency_error`); retry shortly with the same key. The only `409`.\n\n## rate_limit\n\n`429`. Too many requests of the account and mode (100 per second live, 25 test), or reads of one quote's or deposit address's public view. Retry after `Retry-After` seconds, with exponential backoff.\n\n## customer_rate_limit\n\n`429`. The customer made too many quotes in the last minute, or rotated its deposit address too often in the last hour. Retry after `Retry-After` seconds.\n\n## internal_error\n\n`500`. The service failed. Retry with the same `Idempotency-Key`: a request that started executing replays this response, so it never runs twice; a new key runs it again.\n\n## unavailable\n\n`503`. A dependency (pricing, sanctions screening, attestation) is temporarily unavailable. Retry with backoff; the same `Idempotency-Key` runs the request again.\n\n## service_maintenance\n\n`503`. A planned upgrade temporarily pauses new mutations. Reads continue while the process is up. Retry after Retry-After with the same Idempotency-Key; the request has not executed. The pause expires automatically if deployment fails.\n\n## service_restoring\n\n`503`. The service was restored from backup and is frozen until the operator has reconciled it with you: every request with an API key is refused, reads too, and nothing is credited or delivered meanwhile. Retry after `Retry-After` seconds; the operator contacts you for your records since the restore point.\n\n## restore_not_frozen\n\n`400`. Admin API only: a restore reconciliation action needs the service frozen after a restore.\n\n## restore_rescan_incomplete\n\n`400`. Admin API only: a chain is not rescanned since the restore (`GET /v1/admin/restore`); the freeze cannot be lifted yet.\n",
     "license": {
       "identifier": "Apache-2.0",
       "name": "Apache-2.0"
@@ -8798,7 +8878,7 @@
             }
           },
           {
-            "description": "Only deposits to this quote's address",
+            "description": "Only deposits that consumed this quote",
             "in": "query",
             "name": "quote",
             "required": false,
@@ -11631,7 +11711,7 @@
             "api_key": []
           }
         ],
-        "summary": "Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,\nand a single-use address, valid until `expires_at`, on the terms your payment settings set for\nthe asset; the quote keeps them for good. An asset your settings do not accept is\n`asset_not_accepted`.",
+        "summary": "Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,\nand a fixed customer address, valid until `expires_at`, on the terms your payment settings set for\nthe asset; the quote keeps them for good. An asset your settings do not accept is\n`asset_not_accepted`.",
         "tags": [
           "quotes"
         ]
@@ -17570,7 +17650,7 @@
   ],
   "tags": [
     {
-      "description": "A locked price and a single-use address for one payment.",
+      "description": "A locked price and a fixed customer address for one payment.",
       "name": "quotes"
     },
     {

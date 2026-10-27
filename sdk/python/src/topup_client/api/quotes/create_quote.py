@@ -104,7 +104,7 @@ def sync_detailed(
     idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | Quote]:
     """Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,
-    and a single-use address, valid until `expires_at`, on the terms your payment settings set for
+    and a fixed customer address, valid until `expires_at`, on the terms your payment settings set for
     the asset; the quote keeps them for good. An asset your settings do not accept is
     `asset_not_accepted`.
 
@@ -141,7 +141,7 @@ def sync(
     idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | Quote | None:
     """Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,
-    and a single-use address, valid until `expires_at`, on the terms your payment settings set for
+    and a fixed customer address, valid until `expires_at`, on the terms your payment settings set for
     the asset; the quote keeps them for good. An asset your settings do not accept is
     `asset_not_accepted`.
 
@@ -173,7 +173,7 @@ async def asyncio_detailed(
     idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | Quote]:
     """Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,
-    and a single-use address, valid until `expires_at`, on the terms your payment settings set for
+    and a fixed customer address, valid until `expires_at`, on the terms your payment settings set for
     the asset; the quote keeps them for good. An asset your settings do not accept is
     `asset_not_accepted`.
 
@@ -208,7 +208,7 @@ async def asyncio(
     idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | Quote | None:
     """Quotes `amount` cents payable in `asset` on `chain_id`: a locked price, the exact token amount,
-    and a single-use address, valid until `expires_at`, on the terms your payment settings set for
+    and a fixed customer address, valid until `expires_at`, on the terms your payment settings set for
     the asset; the quote keeps them for good. An asset your settings do not accept is
     `asset_not_accepted`.
 

@@ -55,7 +55,7 @@ staging instance ([staging reference product](deploy/phala.md#staging-reference-
 
 ## Features
 
-- **Quotes**: a locked price, an exact token amount, and a single-use address to pay within a
+- **Quotes**: a locked price, an exact token amount, and a fixed customer address to pay within a
   window. Late, partial, or extra payments are still credited, at spot.
 - **Deposit addresses**: one persistent, rotatable address per customer for every supported token
   on every chain, credited at spot within per-transfer limits.

@@ -34,7 +34,7 @@ pub(super) async fn quote_payment(
     route: &RouteFile,
     lock: &RateLock,
 ) -> Result<Option<Payment>, ApiError> {
-    let payments = QuotePayments::load(connection, &[lock.address_id]).await?;
+    let payments = QuotePayments::load(connection, &[lock.id]).await?;
     Ok(payments.payment(route, lock))
 }
 
@@ -48,11 +48,11 @@ pub(super) struct QuotePayments {
 impl QuotePayments {
     pub(super) async fn load(
         connection: &mut PgConnection,
-        address_ids: &[Uuid],
+        quote_ids: &[Uuid],
     ) -> Result<Self, ApiError> {
-        let deposits = address_deposits(&mut *connection, address_ids).await?;
+        let deposits = address_deposits(&mut *connection, quote_ids).await?;
         let mut pending: HashMap<Uuid, Vec<Observed>> = HashMap::new();
-        for (address_id, transfer) in db::list_addresses_pending(connection, address_ids).await? {
+        for (address_id, transfer) in db::list_quotes_pending(connection, quote_ids).await? {
             pending
                 .entry(address_id)
                 .or_default()
@@ -76,15 +76,22 @@ impl QuotePayments {
             .pending
             .get(&lock.address_id)
             .map_or(&[][..], Vec::as_slice);
-        let mut observed =
-            deposits
-                .iter()
-                .filter(|deposit| !deposit.reversed)
-                .chain(pending.iter().filter(|transfer| {
-                    !deposits
+        let mut observed = deposits
+            .iter()
+            .filter(|deposit| {
+                !deposit.reversed
+                    && deposit.asset_contract == route.asset.contract
+                    && deposit.block_time > lock.window_start
+                    && deposit.block_time <= lock.expires_at
+            })
+            .chain(pending.iter().filter(|transfer| {
+                transfer.asset_contract == route.asset.contract
+                    && transfer.block_time > lock.window_start
+                    && transfer.block_time <= lock.expires_at
+                    && !deposits
                         .iter()
                         .any(|deposit| deposit.deposit_id == transfer.deposit_id)
-                }));
+            }));
         let first = observed.next()?;
         let shown = std::iter::once(first)
             .chain(observed)
@@ -140,7 +147,9 @@ fn terms(route: &RouteFile, lock: &RateLock, observed: &Observed) -> Terms {
         && observed.asset_contract == route.asset.contract;
     Terms {
         supported,
-        in_time: open && observed.block_time <= lock.expires_at,
+        in_time: open
+            && observed.block_time > lock.window_start
+            && observed.block_time <= lock.expires_at,
         amount_within_tolerance: open
             && supported
             && amount_within_tolerance(
@@ -181,20 +190,22 @@ type DepositRow = (
 
 async fn address_deposits(
     connection: &mut PgConnection,
-    address_ids: &[Uuid],
+    quote_ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Vec<Observed>>, ApiError> {
-    if address_ids.is_empty() {
+    if quote_ids.is_empty() {
         return Ok(HashMap::new());
     }
     let rows = sqlx::query_as::<_, DepositRow>(
         r#"
         SELECT address_id, id, chain_id, tx_hash, state, block_time, asset_contract, amount_atomic::text
         FROM deposits
-        WHERE address_id = ANY($1)
+        WHERE EXISTS (SELECT 1 FROM quotes q WHERE q.id=ANY($1) AND q.address_id=deposits.address_id
+          AND ((deposits.block_time > q.window_start AND deposits.block_time <= q.expires_at)
+               OR q.consumed_by=deposits.id))
         ORDER BY address_id, block_number, log_index, id
         "#,
     )
-    .bind(address_ids)
+    .bind(quote_ids)
     .fetch_all(connection)
     .await?;
     rows.into_iter()

@@ -13,8 +13,6 @@ it back, without the operator's `reason`:
   only evidence a lost application is restored from;
 - `deposit_addresses`: `POST /v1/admin/restore/deposit_addresses` bodies (step 4), from each
   deposit address response the product recorded, with its `client_secret`;
-- `quotes`: `POST /v1/admin/restore/quotes` bodies (step 4), from each quote response the product
-  recorded, with its `client_secret`;
 - `events`: `POST /v1/admin/restore/events` bodies (step 5) of at most 100 deliveries each, every
   `deposit.credited`, `deposit.rejected`, and `deposit.reversed` delivery the webhook inbox kept,
   its raw body and Standard Webhooks headers exactly as received, in the order of their deposits'
@@ -23,8 +21,8 @@ it back, without the operator's `reason`:
 
 With `since` (the restore point, Unix seconds), a record is exported when the service created it
 or the product last recorded it (a deposit address posted again gets a fresh `client_secret`) at
-most `SINCE_MARGIN` seconds before: the service re-issues a quote it no longer holds that was
-created up to five minutes before the restore point. Without `since`, everything is exported,
+most `SINCE_MARGIN` seconds before, allowing for clock skew. Without `since`, everything is
+exported,
 which is safe: a record the restored service still holds is answered `reissued: false` or
 `matches`. The export holds client secrets:
 hand it to the operator over the incident's channel only, and delete it once the restore is done.
@@ -46,28 +44,11 @@ RESTORED_EVENT_TYPES = ("deposit.credited", "deposit.rejected", "deposit.reverse
 TREASURY_EVENT_TYPES = ("treasury.created", "treasury.updated", "treasury.canceled")
 # Deliveries per `POST /v1/admin/restore/events`, and treasuries per `treasuries/verify`.
 MAX_DELIVERIES = 100
-# How long before `since` a record still counts: the service re-issues a quote it no longer holds
-# that was created up to five minutes before the restore point.
+# Clock-skew allowance around the restore point.
 SINCE_MARGIN = 300
 MAX_TREASURIES = 100
 # The treasury fields `treasuries/verify` compares.
 TREASURY_FIELDS = ("id", "status", "chain_id", "address", "crediting_paused_by")
-# The quote fields `POST /v1/admin/restore/quotes` takes, as `POST /v1/quotes` returned them.
-QUOTE_FIELDS = (
-    "livemode",
-    "id",
-    "client_reference_id",
-    "chain_id",
-    "asset",
-    "amount",
-    "amount_atomic",
-    "exchange_rate",
-    "address",
-    "created",
-    "expires_at",
-    "metadata",
-    "client_secret",
-)
 
 
 def export_restore_records(
@@ -87,11 +68,23 @@ def export_restore_records(
         for response, recorded_at in ledger.deposit_address_records()
         if after(response.get("created"), recorded_at)
     ]
-    quotes = [
-        quote_request(account, response)
-        for response, recorded_at in ledger.quote_records()
-        if after(response.get("created"), recorded_at)
-    ]
+    # Quotes share customer networks. Recover the address, never an old price window.
+    known = {(address["id"], address["version"]) for address in addresses}
+    for response, recorded_at in ledger.quote_records():
+        address_id = response.get("deposit_address")
+        key = (address_id, response.get("deposit_address_version"))
+        if address_id and key not in known and after(response.get("created"), recorded_at):
+            addresses.append(
+                {
+                    "account": account,
+                    "livemode": response["livemode"],
+                    "client_reference_id": response["client_reference_id"],
+                    "id": address_id,
+                    "version": response["deposit_address_version"],
+                    "address": response["address"],
+                }
+            )
+            known.add(key)
 
     def kept(event_types: tuple[str, ...]) -> list[tuple[dict[str, Any], Delivery]]:
         """The inbox's deliveries of `event_types` since, each with its parsed event."""
@@ -119,7 +112,6 @@ def export_restore_records(
             if is_application(event) and (request := delivery_request(delivery)) is not None
         ],
         "deposit_addresses": addresses,
-        "quotes": quotes,
         "events": [
             {"deliveries": deliveries[start : start + MAX_DELIVERIES]}
             for start in range(0, len(deliveries), MAX_DELIVERIES)
@@ -170,13 +162,6 @@ def is_application(event: Mapping[str, Any]) -> bool:
         and (data.get("object") or {}).get("status") == "active"
         and (data.get("previous_attributes") or {}).get("status") == "pending"
     )
-
-
-def quote_request(account: str, quote: Mapping[str, Any]) -> dict[str, Any]:
-    """A `POST /v1/admin/restore/quotes` body from a `POST /v1/quotes` response."""
-    request = {"account": account}
-    request.update({name: quote[name] for name in QUOTE_FIELDS if quote.get(name) is not None})
-    return request
 
 
 def deposit_address_request(account: str, address: Mapping[str, Any]) -> dict[str, Any]:

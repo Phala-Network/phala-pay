@@ -7,8 +7,6 @@ import {
   depositAddress,
   depositAddressSalt,
   forwarderAddress,
-  quoteAddress,
-  quoteSalt,
 } from "../src/helpers.js";
 type Manifest = {
   schema_version: number;
@@ -69,19 +67,6 @@ describe("shared SDK fixtures", () => {
     const vectors = typed<Addresses>(fixture("addresses-v1.json"));
     const first = vectors.quote[0];
     if (!first) throw new Error("address fixture has no quote vectors");
-    for (const vector of vectors.quote) {
-      expect(quoteSalt(vector.account, vector.client_reference_id, vector.quote_id)).toBe(
-        vector.salt,
-      );
-      expect(
-        quoteAddress(
-          { factory: vectors.factory, implementation: vectors.implementation },
-          { client_reference_id: vector.client_reference_id, id: vector.quote_id },
-          vector.treasury,
-          vector.account,
-        ),
-      ).toBe(vector.predicted_address);
-    }
     for (const vector of vectors.deposit_address) {
       expect(
         depositAddressSalt(

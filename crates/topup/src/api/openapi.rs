@@ -30,7 +30,7 @@ const SERVERS: &[(&str, &str)] = &[
 const MERCHANT_TAGS: &[(&str, &str)] = &[
     (
         "quotes",
-        "A locked price and a single-use address for one payment.",
+        "A locked price and a fixed customer address for one payment.",
     ),
     (
         "deposit_addresses",

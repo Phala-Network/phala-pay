@@ -30,7 +30,7 @@ It is software, not custody:
 
 ## Quotes and deposit addresses
 
-A **quote** locks a price: the customer receives an exact amount and a single-use address, and
+A **quote** locks a price: the customer receives an exact amount and a fixed customer address, and
 pays within the window.
 
 Each customer can also have one persistent, rotatable **deposit address** for every supported

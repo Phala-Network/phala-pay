@@ -1,6 +1,6 @@
 //! Restore mode (docs/architecture.md §14, docs/design/multi-tenant.md §13) on PostgreSQL: a
 //! restore freezes merchant requests and the crediting tasks; the operator re-applies lost
-//! security changes, re-issues lost deposit addresses and quotes identically, imports the signed
+//! security changes, re-issues lost deposit addresses identically, imports the signed
 //! deliveries of events so none is sent again with another body and each delivered credit stands,
 //! and unfreezes once the chains are rescanned, audited.
 
@@ -40,7 +40,7 @@ use topup_adapters::chain::evm::{
 };
 use topup_adapters::pricing::{Observation, PriceError, PriceSource};
 use topup_core::Ed25519PublicKey;
-use topup_core::address::{deposit_address_salt, forwarder_address, quote_salt};
+use topup_core::address::{deposit_address_salt, forwarder_address};
 use topup_core::deposit::DepositState;
 use topup_core::identity::{credited_event_id, deposit_id};
 use topup_core::money::{AtomicAmount, PRICE_SCALE, ScaledPrice};
@@ -809,7 +809,6 @@ fn checklist(reason: &str) -> Value {
         "reason": reason,
         "security_changes_reapplied": true,
         "deposit_addresses_reissued": true,
-        "quotes_reissued": true,
         "delivered_events_imported": true,
     })
 }
@@ -2040,248 +2039,6 @@ async fn a_delivered_credit_the_chain_contradicts_holds_the_deposit_until_discar
                 .body["delivered_events"]["findings"][0]
                 .clone();
             ensure!(finding["status"] == "mismatch", "{finding}");
-            Ok(())
-        })
-    })
-    .await
-}
-
-#[tokio::test]
-async fn a_quote_given_out_after_the_restore_point_is_reissued_and_credited() -> Result<()> {
-    support::with_database(|database| {
-        Box::pin(async move {
-            let harness = Harness::new(database).await?;
-            harness.scan_to(100, Utc::now()).await?;
-            let restore = harness.restore().await?;
-            harness.scan_to(250, Utc::now()).await?;
-
-            // The merchant's record of a quote created after the restore point: $10.00 at $0.10.
-            let id = Uuid::new_v4();
-            let qt = topup::ids::format(topup::ids::QUOTE, id);
-            let contracts = &harness.route.chain.contracts;
-            let address = forwarder_address(
-                contracts.forwarder_factory,
-                contracts.implementation,
-                seed::FIXTURE_TREASURY,
-                quote_salt(harness.account_id(), "team-q", &qt),
-            );
-            // Terms no route issues today (a window past the route's, another amount) are the
-            // merchant's record all the same: the route may have changed since.
-            let created = Utc::now().timestamp() - 60;
-            let secret = harness
-                .client_reads
-                .key()
-                .issue(harness.account_id(), &qt)?;
-            let request = json!({
-                "account": harness.account_id(),
-                "livemode": true,
-                "id": qt,
-                "client_reference_id": "team-q",
-                "chain_id": 1,
-                "asset": "pha",
-                "amount": 1_000,
-                "amount_atomic": "100000000000000000000",
-                "exchange_rate": "0.10000000",
-                "address": format!("{address:#x}"),
-                "created": created,
-                "expires_at": created + 3_600,
-                "metadata": {"order_id": "o-1"},
-                "client_secret": secret,
-                "reason": "the merchant's quote log",
-            });
-            let path = "/v1/admin/restore/quotes";
-            // A forged address, a client secret the service did not issue for the quote, issued
-            // for it to another account (another merchant's record of the id, or the payer's page
-            // of the owner's quote), or issued before owner tags, or an asset no route has is
-            // refused, and no customer is created.
-            let other_quote = topup::ids::format(topup::ids::QUOTE, Uuid::new_v4());
-            for (field, value) in [
-                (
-                    "address",
-                    json!(format!("{:#x}", Address::repeat_byte(0x99))),
-                ),
-                (
-                    "client_secret",
-                    json!(
-                        harness
-                            .client_reads
-                            .key()
-                            .issue(harness.account_id(), &other_quote)?
-                    ),
-                ),
-                (
-                    "client_secret",
-                    json!(harness.client_reads.key().issue("acct_other", &qt)?),
-                ),
-                (
-                    "client_secret",
-                    json!(format!("{qt}_secret_{}", "0".repeat(64))),
-                ),
-                ("asset", json!("usdc")),
-            ] {
-                let mut forged = request.clone();
-                forged[field] = value;
-                let refused = harness.admin(Method::POST, path, &forged).await?;
-                ensure!(
-                    refused.status == StatusCode::BAD_REQUEST,
-                    "{field}: {}",
-                    refused.body
-                );
-            }
-            let (quotes, customers): (i64, i64) = sqlx::query_as(
-                "SELECT (SELECT count(*) FROM quotes), \
-                        (SELECT count(*) FROM customers WHERE client_reference_id = 'team-q')",
-            )
-            .fetch_one(&harness.pool)
-            .await?;
-            ensure!((quotes, customers) == (0, 0));
-
-            // Re-issued first without its secret, found later in the merchant's records.
-            let mut without_secret = request.clone();
-            without_secret["client_secret"] = Value::Null;
-            let reissued = harness.admin(Method::POST, path, &without_secret).await?;
-            ensure!(reissued.status == StatusCode::OK, "{}", reissued.body);
-            ensure!(reissued.body["reissued"] == true);
-            let public_read = |secret: String| {
-                let app = harness.app.clone();
-                let path = format!("/v1/quotes/{qt}?client_secret={secret}");
-                async move { anonymous(&app, &path).await }
-            };
-            ensure!(public_read(secret.clone()).await?.status == StatusCode::NOT_FOUND);
-            let quote = &reissued.body["quote"];
-            ensure!(quote["id"] == qt && quote["address"] == format!("{address:#x}"));
-            ensure!(quote["amount"] == 1_000 && quote["exchange_rate"] == "0.10000000");
-            ensure!(quote["metadata"] == json!({"order_id": "o-1"}));
-            // Its lock is never honoured, so its window closes at the restore: its page shows it
-            // expired instead of asking for a payment at the locked price.
-            ensure!(
-                quote["expires_at"] == restore.detected_at.timestamp(),
-                "{quote}"
-            );
-            // A repeat with a secret of the quote issued to another account is refused and adds
-            // nothing, though a read accepts its tag.
-            let other = harness.client_reads.key().issue("acct_other", &qt)?;
-            ensure!(harness.client_reads.key().verify(&qt, &other));
-            let mut other_secret = request.clone();
-            other_secret["client_secret"] = json!(other);
-            let refused = harness.admin(Method::POST, path, &other_secret).await?;
-            ensure!(
-                refused.status == StatusCode::BAD_REQUEST
-                    && refused.body["error"]["param"] == "client_secret",
-                "{}",
-                refused.body
-            );
-            ensure!(public_read(other).await?.status == StatusCode::NOT_FOUND);
-            // A repeat with its secret adds it; the payer's page reads the quote again.
-            let repeated = harness.admin(Method::POST, path, &request).await?;
-            ensure!(repeated.body["reissued"] == false, "{}", repeated.body);
-            let public = public_read(secret.clone()).await?;
-            ensure!(public.status == StatusCode::OK, "{}", public.body);
-            // Once it has one, another secret of the quote does not replace it.
-            let other = harness
-                .client_reads
-                .key()
-                .issue(harness.account_id(), &qt)?;
-            let mut other_secret = request.clone();
-            other_secret["client_secret"] = json!(other);
-            let repeated = harness.admin(Method::POST, path, &other_secret).await?;
-            ensure!(repeated.body["reissued"] == false);
-            ensure!(public_read(other).await?.status == StatusCode::NOT_FOUND);
-            ensure!(public_read(secret.clone()).await?.status == StatusCode::OK);
-            let secret_restored: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM audit WHERE action = 'quote.client_secret_restore'",
-            )
-            .fetch_one(&harness.pool)
-            .await?;
-            ensure!(secret_restored == 1);
-
-            // The scanner watches it from the restored cursor, so the rescan finds its payment.
-            let scanned = db::list_scan_addresses(&harness.pool, 1).await?;
-            let watched = scanned
-                .iter()
-                .find(|scan| scan.address == address)
-                .context("the re-issued quote's address is scanned")?;
-            ensure!(!watched.backfilled && watched.backfill_start() == 100);
-            ensure!(restore.restored_cursors.get(&1) == Some(&100));
-            let status = harness
-                .admin(Method::GET, "/v1/admin/restore", &Value::Null)
-                .await?;
-            ensure!(status.body["rescan"][0]["pending_backfills"] == 1);
-
-            // Its locked price is the merchant's record, never applied: at $0.08 spot the
-            // payment credits $8.00, not the quote's $10.00.
-            let address_id: Uuid =
-                sqlx::query_scalar("SELECT id FROM addresses WHERE quote_id = $1")
-                    .bind(id)
-                    .fetch_one(&harness.pool)
-                    .await?;
-            let tx_hash = B256::repeat_byte(0x8d);
-            let deposit = record_deposit(
-                &harness,
-                tx_hash,
-                address_id,
-                U256::from(10_u64).pow(U256::from(20)),
-            )
-            .await?;
-            reconfirm(&harness).await?;
-            confirm(&harness, deposit, address, 8_000_000).await?;
-            ensure!(
-                valuation(&harness, deposit).await?
-                    == (
-                        "confirmed".to_owned(),
-                        "spot".to_owned(),
-                        "8000000".to_owned(),
-                        "800".to_owned()
-                    )
-            );
-
-            // A signed deposit.credited that carries the quote's credit is the evidence: a second
-            // payment the merchant was told was credited at the quote is valued at it.
-            let paid = B256::repeat_byte(0x8e);
-            let second = deposit_id(1, paid, 0);
-            let delivered = credited_event(
-                &harness,
-                second,
-                paid,
-                &format!("{address:#x}"),
-                "100000000000000000000",
-                (1_000, "0.10000000", "quote"),
-            );
-            harness
-                .admin(
-                    Method::POST,
-                    "/v1/admin/restore/events",
-                    &json!({"deliveries": [harness.delivered(&delivered)], "reason": "log"}),
-                )
-                .await?;
-            record_deposit(
-                &harness,
-                paid,
-                address_id,
-                U256::from(10_u64).pow(U256::from(20)),
-            )
-            .await?;
-            confirm(&harness, second, address, 8_000_000).await?;
-            ensure!(
-                valuation(&harness, second).await?
-                    == (
-                        "confirmed".to_owned(),
-                        "lock".to_owned(),
-                        "10000000".to_owned(),
-                        "1000".to_owned()
-                    )
-            );
-            let (status, consumed_by): (String, Option<Uuid>) =
-                sqlx::query_as("SELECT status, consumed_by FROM quotes WHERE id = $1")
-                    .bind(id)
-                    .fetch_one(&harness.pool)
-                    .await?;
-            ensure!(status == "consumed" && consumed_by == Some(second));
-            let audited: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM audit WHERE action = 'quote.reissue'")
-                    .fetch_one(&harness.pool)
-                    .await?;
-            ensure!(audited == 1);
             Ok(())
         })
     })
@@ -3531,49 +3288,6 @@ async fn addresses_paid_over_a_treasury_change_lost_in_the_restore_are_reissued_
                     ],
                 "{networks:?}"
             );
-            let quote = |customer: &str, treasury: Address, created: i64| {
-                let qt = topup::ids::format(topup::ids::QUOTE, Uuid::new_v4());
-                let address = over(treasury, quote_salt(harness.account_id(), customer, &qt));
-                json!({
-                    "account": harness.account_id(),
-                    "livemode": true,
-                    "id": qt,
-                    "client_reference_id": customer,
-                    "chain_id": 1,
-                    "asset": "pha",
-                    "amount": 1_000,
-                    "amount_atomic": "100000000000000000000",
-                    "exchange_rate": "0.10000000",
-                    "address": format!("{address:#x}"),
-                    "created": created,
-                    "expires_at": created + 900,
-                    "reason": "the merchant's quote log",
-                })
-            };
-            // A quote created in the second B applied is re-issued over either treasury: the
-            // recorded application time is not the instant the quote saw. A quote over A created
-            // well after B applied, or created well before the restore point, is refused.
-            let restore_point = restore.restore_point.context("restore point")?.timestamp();
-            for (customer, treasury, created, status) in [
-                ("team-q", changed, applied_at + 5, StatusCode::OK),
-                ("team-same-b", changed, applied_at, StatusCode::OK),
-                ("team-same-a", former, applied_at, StatusCode::OK),
-                // `created` read before the quote waited on the treasury lock B's pass held.
-                ("team-before-b", changed, applied_at - 1, StatusCode::OK),
-                ("team-early", former, applied_at - 30, StatusCode::OK),
-                ("team-late", former, applied_at + 600, StatusCode::BAD_REQUEST),
-                ("team-old", former, restore_point - 600, StatusCode::BAD_REQUEST),
-            ] {
-                let answer = harness
-                    .admin(
-                        Method::POST,
-                        "/v1/admin/restore/quotes",
-                        &quote(customer, treasury, created),
-                    )
-                    .await?;
-                ensure!(answer.status == status, "{customer}: {}", answer.body);
-            }
-
             // The rescan credits the payment to the same deposit of the re-issued address, at its
             // delivered credit.
             let imported = harness
@@ -3945,105 +3659,6 @@ async fn a_reversed_deposit_is_restored_only_on_its_own_account_and_untaken_posi
 }
 
 /// The merchant's record of quote `id` for `customer` at `address`, created at `created`.
-fn quote_record(
-    harness: &Harness,
-    id: Uuid,
-    customer: &str,
-    address: Address,
-    created: i64,
-) -> Value {
-    json!({
-        "account": harness.account_id(),
-        "livemode": true,
-        "id": topup::ids::format(topup::ids::QUOTE, id),
-        "client_reference_id": customer,
-        "chain_id": 1,
-        "asset": "pha",
-        "amount": 1_000,
-        "amount_atomic": "100000000000000000000",
-        "exchange_rate": "0.10000000",
-        "address": format!("{address:#x}"),
-        "created": created,
-        "expires_at": created + 900,
-        "reason": "the merchant's quote log",
-    })
-}
-
-#[tokio::test]
-async fn a_quote_the_backup_holds_is_reissued_idempotently_whenever_it_was_created() -> Result<()> {
-    support::with_database(|database| {
-        Box::pin(async move {
-            let harness = Harness::new(database).await?;
-            // A quote the service issued before the backup.
-            let customer = seed::create_customer(
-                &harness.pool,
-                &seed::NewCustomer {
-                    id: Uuid::new_v4(),
-                    account_id: harness.account.id,
-                    livemode: true,
-                    client_reference_id: "team-held".to_owned(),
-                    paused_scopes: Vec::new(),
-                },
-            )
-            .await?;
-            let held = seed::insert_address(
-                &harness.pool,
-                &seed::NewAddress {
-                    id: Uuid::new_v4(),
-                    customer_id: customer.id,
-                    chain_id: 1,
-                    route: harness.route.route.clone(),
-                    salt: B256::repeat_byte(0x4e),
-                    address: Address::repeat_byte(0x4e),
-                },
-            )
-            .await?;
-            let quote: Uuid = sqlx::query_scalar("SELECT quote_id FROM addresses WHERE id = $1")
-                .bind(held.id)
-                .fetch_one(&harness.pool)
-                .await?;
-            let restore = harness.restore().await?;
-            let restore_point = restore.restore_point.context("restore point")?.timestamp();
-            // Sent again, even as created long before the restore point, it is returned as it is.
-            let record = quote_record(
-                &harness,
-                quote,
-                "team-held",
-                Address::repeat_byte(0x4e),
-                restore_point - 3_600,
-            );
-            let answer = harness
-                .admin(Method::POST, "/v1/admin/restore/quotes", &record)
-                .await?;
-            ensure!(answer.status == StatusCode::OK, "{}", answer.body);
-            ensure!(answer.body["reissued"] == false, "{}", answer.body);
-            // A quote the restored database does not hold, created that long before the restore
-            // point, is not one the restore lost.
-            let contracts = &harness.route.chain.contracts;
-            let other = Uuid::new_v4();
-            let address = forwarder_address(
-                contracts.forwarder_factory,
-                contracts.implementation,
-                seed::FIXTURE_TREASURY,
-                quote_salt(
-                    harness.account_id(),
-                    "team-old",
-                    &topup::ids::format(topup::ids::QUOTE, other),
-                ),
-            );
-            let answer = harness
-                .admin(
-                    Method::POST,
-                    "/v1/admin/restore/quotes",
-                    &quote_record(&harness, other, "team-old", address, restore_point - 3_600),
-                )
-                .await?;
-            ensure!(answer.status == StatusCode::BAD_REQUEST, "{}", answer.body);
-            Ok(())
-        })
-    })
-    .await
-}
 
 #[tokio::test]
 async fn a_restore_without_a_restore_point_reissues_nothing() -> Result<()> {
@@ -4073,28 +3688,6 @@ async fn a_restore_without_a_restore_point_reissues_nothing() -> Result<()> {
                         "address": format!("{address:#x}"),
                         "reason": "the merchant's export",
                     }),
-                )
-                .await?;
-            ensure!(
-                answer.status == StatusCode::BAD_REQUEST
-                    && answer.body["error"]["message"]
-                        .as_str()
-                        .is_some_and(|message| message.contains("no restore point")),
-                "{}",
-                answer.body
-            );
-            let quote = Uuid::new_v4();
-            let answer = harness
-                .admin(
-                    Method::POST,
-                    "/v1/admin/restore/quotes",
-                    &quote_record(
-                        &harness,
-                        quote,
-                        "team-np",
-                        Address::repeat_byte(0x51),
-                        Utc::now().timestamp(),
-                    ),
                 )
                 .await?;
             ensure!(
@@ -5065,4 +4658,35 @@ async fn failed_critical_checks_block_unfreeze_and_override_is_explicit_and_audi
         })
     })
     .await
+}
+
+#[tokio::test]
+async fn restore_clamps_open_quote_windows_to_the_last_heartbeat() -> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let harness = Harness::new(database).await?;
+        let customer = seed::create_customer(&harness.pool, &seed::NewCustomer {
+            id: Uuid::new_v4(), account_id:harness.account.id, livemode:true,
+            client_reference_id:"clamp".to_owned(), paused_scopes:Vec::new(),
+        }).await?;
+        let address = seed::insert_address(&harness.pool, &seed::NewAddress {
+            id: Uuid::new_v4(), customer_id: customer.id, chain_id: 1,
+            route: harness.route.route.clone(), salt: B256::repeat_byte(0x48),
+            address: Address::repeat_byte(0x49),
+        }).await?;
+        sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,expires_at=now()+interval '1 hour' WHERE address_id=$1")
+            .bind(address.id).execute(&harness.pool).await?;
+        let restore = restore_mode::freeze_after_restore(&database.owner_pool).await?;
+        let end: DateTime<Utc> = sqlx::query_scalar("SELECT expires_at FROM quotes WHERE address_id=$1")
+            .bind(address.id).fetch_one(&harness.pool).await?;
+        ensure!(Some(end)==restore.restore_point);
+        sqlx::query("UPDATE restores SET unfrozen_at=now(),unfrozen_by='test',unfreeze_reason='test'").execute(&database.owner_pool).await?;
+        sqlx::query("DELETE FROM heartbeat").execute(&database.owner_pool).await?;
+        sqlx::query("UPDATE quotes SET expires_at=now()+interval '1 hour' WHERE address_id=$1")
+            .bind(address.id).execute(&harness.pool).await?;
+        restore_mode::freeze_after_restore(&database.owner_pool).await?;
+        let empty: bool=sqlx::query_scalar("SELECT expires_at=window_start FROM quotes WHERE address_id=$1")
+            .bind(address.id).fetch_one(&harness.pool).await?;
+        ensure!(empty);
+        Ok(())
+    })).await
 }

@@ -190,6 +190,7 @@ seed_reconciliation_fixture() {
     # A merchant credential committed before backup must authenticate after service recovery.
     resume_merchant_key=$(new_api_key)
     dc exec -T postgres psql -U postgres -d topup -v ON_ERROR_STOP=1 -v merchant_key="$resume_merchant_key" <<'SQL'
+BEGIN;
 CREATE TABLE restore_drill_marker (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     mode text NOT NULL,
@@ -213,7 +214,7 @@ VALUES (
 -- the one its creation made.
 INSERT INTO quotes (
     id, account_id, livemode, customer_id, route, amount_atomic, price_scaled, credit_minor,
-    expires_at, status, closed_at, route_version, settings_revision_id, terms
+    expires_at, status, closed_at, route_version, settings_revision_id, terms, address_id, window_start
 )
 SELECT
     '55555555-5555-5555-5555-555555555555',
@@ -231,7 +232,8 @@ SELECT
     current_revision_id,
     '{"quote_ttl_seconds": 900, "quote_spread_bps": 50, "quote_tolerance_bps": 100,
       "quote_amount_decimals": 4, "min_amount": 100, "min_deposit_atomic": "0",
-      "max_deposit_atomic": "1000000", "min_refund_atomic": "1", "confirmations": "finalized"}'
+      "max_deposit_atomic": "1000000", "min_refund_atomic": "1", "confirmations": "finalized"}',
+    '33333333-3333-3333-3333-333333333333', '2026-09-21T23:59:00Z'
 FROM payment_settings_state
 WHERE account_id = '11111111-1111-1111-1111-111111111111' AND livemode;
 INSERT INTO addresses (
@@ -285,6 +287,7 @@ VALUES (
 );
 INSERT INTO heartbeat DEFAULT VALUES;
 INSERT INTO restore_drill_marker(mode) VALUES ('base');
+COMMIT;
 SQL
 }
 
@@ -320,8 +323,7 @@ treasury_applied_at=
 # merchant's records; restore_point is the restore's, from GET /v1/admin/restore.
 driver_seed=
 restore_point=
-# When the merchant created the quote, after the backup: re-issue refuses a quote the backup does
-# not hold that was created more than five minutes before the restore point.
+# When the merchant created the quote on its fixed address after the backup.
 quote_created=
 replaced_delivery=
 # Deposits to the version 2 address the merchant was told of after the backup, by their
@@ -335,10 +337,9 @@ reorged_deposit=dd1da4cd-1092-5496-8382-ca14b8734919
 reorged_event=evt_9760e10d32995d689263ea3c4de08055
 successor_deposit=5e0d5b86-cde2-5a86-885b-a4d8122337ae
 successor_event=evt_80ee71be371554f0b955be8bacabd517
-# A quote the merchant created after the backup, for another customer; its address is the quote
-# salt formula's for this account, customer, and id over the route factory and treasury.
+# A quote created after the backup uses the same version 3 fixed address recovered above.
 consistency_quote=qt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-consistency_quote_address=0x0594d2d54372b0c02108a544d224a8e3311614f8
+consistency_quote_address=$consistency_address_v3
 delivered_event=$(jq -cn --arg address "$consistency_address_v2" '{
     id: "evt_c371cbc544c45e44a7956242ab4606d9", object: "event",
     account: "acct_66666666666666666666666666666666", livemode: false,
@@ -548,8 +549,7 @@ INSERT INTO treasuries (
 VALUES ('77777777-7777-7777-7777-777777777773', :'account', false, 11155111, :'treasury', 'eoa',
         'restore drill', '0x', to_timestamp(1789000000), to_timestamp(1789000000), now(),
         to_timestamp(1789000000), 'key_77777777777777777777777777777771');
--- In force since before the quote's `created`, which re-issue derives its address over; then a
--- change to T2 whose time-lock ended, pending until it applies after the backup.
+-- T1 is in force before the backup; T2's time-lock ended but applies after the backup.
 INSERT INTO treasuries (
     id, account_id, livemode, chain_id, address, kind, proof_message, proof_signature,
     verified_at, effective_at, screened_at, created_by
@@ -735,15 +735,16 @@ SQL
           client_secret: $secret}' | product_record deposit_address restore-drill-da
     secret=$(dstack_key secret client-secret/v1 "$consistency_account_id" "$consistency_quote")
     jq -n --arg id "$consistency_quote" --arg address "$consistency_quote_address" \
-        --arg treasury "$consistency_treasury" --arg secret "$secret" \
-        --argjson created "$quote_created" \
-        '{id: $id, object: "quote", livemode: false, client_reference_id: "restore-drill-qt",
+        --arg treasury "$consistency_treasury_v2" --arg secret "$secret" \
+        --argjson created "$quote_created" --arg da "$consistency_address_v3_id" \
+        '{id: $id, object: "quote", livemode: false, client_reference_id: "restore-drill-da",
+          deposit_address: $da, deposit_address_version: 3, replaced_by: null, window_start: $created,
           amount: 25, currency: "usd", chain_id: 11155111, asset: "pha",
           amount_atomic: "1000000000000000000", exchange_rate: "0.25000000", address: $address,
           treasury: $treasury, payment_uri: "ethereum:…", status: "open",
           expires_at: ($created + 900), created: $created, payment: null, deposit: null,
           client_secret: $secret, metadata: {}}' |
-        product_record quote restore-drill-qt
+        product_record quote restore-drill-da
 }
 
 # One request to topup on the compose network, its body on stdin; prints the status, the
@@ -951,34 +952,9 @@ check_consistency_after_restore() {
          and .deposit_address.address == $address and .deposit_address.status == "active"' \
         >/dev/null
 
-    # The quote created after the backup is re-issued from the merchant's record with the client
-    # secret the service tagged, so the payer's page reads it again; a secret of another quote, or
-    # of this one issued to another account, is refused.
-    local quote_request refused
-    quote_request=$(jq -ce --arg id "$consistency_quote" \
-        '.quotes | select(length == 1) | .[0] | select(.id == $id)
-         | .reason = "restore drill: quoted after the backup"' <<<"$records")
-    secret=$(jq -r .client_secret <<<"$quote_request")
-    for refused in "$consistency_account_id qt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" \
-        "acct_restoredrillother $consistency_quote"; do
-        # shellcheck disable=SC2086 # the account and the quote id, split on purpose
-        answer=$(admin_call POST /v1/admin/restore/quotes "$(jq -c --arg secret \
-            "$(dstack_key secret client-secret/v1 $refused)" \
-            '.client_secret = $secret' <<<"$quote_request")")
-        expect_call 400 "$answer"
-    done
-    answer=$(admin_call POST /v1/admin/restore/quotes "$quote_request")
-    expect_call 200 "$answer"
-    call_body "$answer" | jq -e --arg address "$consistency_quote_address" \
-        '.reissued and .quote.address == $address and .quote.amount == 25' >/dev/null
-    # A repeat finds the quote held already and issues nothing.
-    answer=$(admin_call POST /v1/admin/restore/quotes "$quote_request")
-    expect_call 200 "$answer"
-    call_body "$answer" | jq -e '.reissued == false' >/dev/null
-    expect_call 200 "$(topup_call GET "/v1/quotes/$consistency_quote?client_secret=$secret" </dev/null)"
-    # Its address is watched, its history not read yet (no scanner runs here).
-    test "$(psql_value "SELECT backfilled FROM addresses \
-        WHERE address = '$consistency_quote_address'")" = f
+    # Lost quote windows are not reissued. Their fixed address was recovered above and stays
+    # watched; subsequent transfers are credited at spot unless a delivered credit is imported.
+    test "$(psql_value "SELECT count(*) FROM quotes WHERE id = '${consistency_quote#qt_}'::uuid")" = 0
 
     # The events delivered after the backup are imported from the deliveries the merchant's
     # receiver kept, the first byte for byte as the service sent it, as delivered, and never sent
@@ -1017,7 +993,7 @@ check_consistency_after_restore() {
 
     # Nothing scans on the restore-check instance, so the freeze cannot be lifted there.
     answer=$(admin_call POST /v1/admin/restore/unfreeze '{"reason":"restore drill",
-        "security_changes_reapplied":true,"deposit_addresses_reissued":true,"quotes_reissued":true,
+        "security_changes_reapplied":true,"deposit_addresses_reissued":true,
         "delivered_events_imported":true}')
     expect_call 400 "$answer"
     call_body "$answer" | jq -e '.error.code == "restore_rescan_incomplete"' >/dev/null
@@ -1560,7 +1536,7 @@ service_rescanned() {
 }
 wait_for "service rescan" service_rescanned
 answer=$(admin_call POST /v1/admin/restore/unfreeze '{"reason":"restore drill: checks and merchant reconciliation complete",
-    "security_changes_reapplied":true,"deposit_addresses_reissued":true,"quotes_reissued":true,
+    "security_changes_reapplied":true,"deposit_addresses_reissued":true,
     "delivered_events_imported":true}')
 expect_call 200 "$answer"
 answer=$(merchant_call GET /v1/account "$resume_merchant_key" </dev/null)
@@ -1582,6 +1558,6 @@ printf 'upload_latency_seconds=%s\n' "$upload_latency_seconds"
 printf 'restored_timeline=%s storage_unchanged_by_restore_check=true\n' "$restored_timeline"
 printf 'elapsed_rto_seconds=%s\n' "$rto_elapsed"
 if [ "$mode" = controlled ]; then
-    echo 'restore_mode=frozen, merchant reads refused; attested by the admin API; lost key revoked again; lost treasury application restored from its signed event; lost deposit addresses and quote re-issued identically; the deliveries its receiver kept imported, credit kept, reversed deposits restored; all from the product'"'"'s records'
+    echo 'restore_mode=frozen, merchant reads refused; attested by the admin API; lost key revoked again; lost treasury application restored from its signed event; lost fixed deposit addresses re-issued identically; lost quote windows remain closed; the deliveries its receiver kept imported, credit kept, reversed deposits restored; all from the product'"'"'s records'
 fi
 echo "restore drill $mode passed"

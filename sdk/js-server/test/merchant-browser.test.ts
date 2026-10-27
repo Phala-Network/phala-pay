@@ -6,6 +6,6 @@ describe("server entry exclusion", () => {
   });
   it("keeps offline helpers available without a merchant client", async () => {
     const helpers = await import("../src/helpers.js");
-    expect(helpers.quoteSalt("acct_example", "customer", "qt_example")).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(helpers.depositAddressSalt("acct_example", false, "customer", 1)).toMatch(/^0x[0-9a-f]{64}$/);
   });
 });

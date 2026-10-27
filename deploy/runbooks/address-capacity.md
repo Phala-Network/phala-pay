@@ -5,8 +5,9 @@
 
 **Impact:** the pilot permits 1,000 issued addresses per chain, permanently, across all accounts
 and modes. Every historical address counts, including closed quotes and retired deposit addresses.
-At the cap, quotes and deposit-address issuance return the same non-retryable error. Existing
-addresses remain watched. Closing, cancelling, or retiring an address does not release capacity.
+At the cap, issuing a missing network returns this non-retryable error. Quotes reuse an existing
+customer network without consuming capacity. Existing addresses remain watched. Closing,
+cancelling, or retiring an address does not release capacity.
 
 ## First steps
 
@@ -40,3 +41,5 @@ reports all per-chain counts and refuses a database already above 1,000.
 
 The reviewed capacity release is deployed and verified, or merchants have an agreed capacity
 plan within the pilot limit. A retry cannot resolve `address_capacity_reached` on its own.
+
+Only issuing a missing network, rotating an address, or changing its treasury needs capacity.

@@ -17,8 +17,13 @@ export interface ClientQuote {
   chain_id: number;
   /** The exact token amount to send, in the token's smallest unit, as a decimal string. */
   amount_atomic: string;
-  /** The quote's single-use deposit address. */
+  /** The customer's fixed deposit address on the chosen network. */
   address: string;
+  deposit_address: string | null;
+  deposit_address_version: number | null;
+  replaced_by: string | null;
+  /** Exclusive start of the price window, Unix seconds. */
+  window_start: number;
   /** The EIP-681 payment request: token transfer of `amount_atomic` to `address`. */
   payment_uri: string;
   /** Unix seconds; after this the address must no longer be shown. */
@@ -83,6 +88,10 @@ export function parseClientQuote(value: unknown): ClientQuote {
     !/^\d+$/.test(v["amount_atomic"]) ||
     typeof v["address"] !== "string" ||
     !/^0x[0-9a-fA-F]{40}$/.test(v["address"]) ||
+    !(v["deposit_address"] === null || typeof v["deposit_address"] === "string") ||
+    !(v["deposit_address_version"] === null || isSafeInteger(v["deposit_address_version"])) ||
+    !(v["replaced_by"] === null || typeof v["replaced_by"] === "string") ||
+    !isSafeInteger(v["window_start"]) ||
     typeof v["payment_uri"] !== "string" ||
     !isSafeInteger(v["expires_at"]) ||
     !(cancelRequestedAt === undefined || cancelRequestedAt === null || isSafeInteger(cancelRequestedAt)) ||
@@ -105,6 +114,10 @@ export function parseClientQuote(value: unknown): ClientQuote {
     chain_id: v["chain_id"],
     amount_atomic: v["amount_atomic"],
     address: v["address"],
+    deposit_address: v["deposit_address"],
+    deposit_address_version: v["deposit_address_version"],
+    replaced_by: v["replaced_by"],
+    window_start: v["window_start"],
     payment_uri: v["payment_uri"],
     expires_at: v["expires_at"],
     ...(cancelRequestedAt === undefined ? {} : { cancel_requested_at: cancelRequestedAt }),
