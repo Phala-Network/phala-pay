@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-28
+
 ### Fixed
 
 - Restore drills keep the restore-only RPC overlay out of the source service variant. RPC
@@ -2405,7 +2407,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.0...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.1
 [0.13.0]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.0
 [0.12.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.12.2
 [0.12.1]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.12.1
