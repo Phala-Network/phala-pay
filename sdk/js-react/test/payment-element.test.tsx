@@ -1,9 +1,9 @@
 import axe from "axe-core";
-import { StrictMode } from "react";
+import { Profiler, StrictMode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PaymentElement, type PaymentElementState } from "../src/index.js";
-import { ADDRESS, API_BASE, CLIENT_SECRET, choose, chosen, quote } from "./fixtures.js";
+import { ADDRESS, API_BASE, CLIENT_SECRET, browserWallet, choose, chosen, quote } from "./fixtures.js";
 
 const OPTIONS = [
   { chain_id: 11155111, asset: "pha", price: "Market rate" },
@@ -12,9 +12,11 @@ const OPTIONS = [
 const PARAMS = { clientSecret: CLIENT_SECRET, expectedAddress: ADDRESS, apiBase: API_BASE };
 type CreateQuote = (option: (typeof OPTIONS)[number], request: { idempotencyKey: string }) => Promise<typeof PARAMS>;
 
+let served: ReturnType<typeof quote>;
+
 beforeEach(() => {
   vi.spyOn(Math, "random").mockReturnValue(0.5);
-  const served = quote({ expires_at: Math.floor(Date.now() / 1000) + 900 });
+  served = quote({ expires_at: Math.floor(Date.now() / 1000) + 900 });
   vi.stubGlobal("fetch", () => Promise.resolve(Response.json(served)));
 });
 afterEach(() => {
@@ -47,6 +49,38 @@ it("creates the quote once, on submit, with the chosen option, then shows its ch
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   expect(chosen()).toBe("USDC · Base Sepolia");
   expect(onChange).toHaveBeenLastCalledWith({ step: "options", checkout: null });
+});
+
+it("has no way back from a sent payment until it is final, and reports its hash", async () => {
+  const hash = `0x${"ab".repeat(32)}`;
+  vi.stubGlobal("ethereum", browserWallet(hash).provider);
+  const onChange = vi.fn<(state: PaymentElementState) => void>();
+  // Every commit's DOM: "Back" or a wallet button never shows beside "Sent", not even for one render.
+  const beside: string[] = [];
+  render(
+    <Profiler
+      id="element"
+      onRender={() => {
+        if (document.body.textContent.includes("Sent, waiting for confirmation")) {
+          beside.push(...[...document.querySelectorAll("button")].map((b) => b.textContent).filter((t) => /^(Back|Pay with)/.test(t)));
+        }
+      }}
+    >
+      <PaymentElement options={OPTIONS} createQuote={() => Promise.resolve(PARAMS)} onChange={onChange} pollInterval={20} />
+    </Profiler>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pay in PHA" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Pay with Browser wallet" }));
+  expect(await screen.findByText("Sent, waiting for confirmation")).toBeDefined();
+  expect(beside).toEqual([]);
+
+  await waitFor(() => expect(onChange.mock.lastCall?.[0].checkout).toMatchObject({ status: "waiting", txHash: hash }));
+  expect(screen.getByRole("status").textContent).toBe("Sent, waiting for confirmation");
+  expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Pay with/ })).toBeNull();
+
+  served = { ...served, payment_status: "credited", amount_credited: 2500 };
+  expect(await screen.findByRole("button", { name: "Start a new payment" })).toBeDefined();
 });
 
 it("shows a failed quote and lets the payer try again", async () => {

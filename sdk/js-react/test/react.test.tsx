@@ -1,10 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { createWalletClient, custom, encodeFunctionResult, erc20Abi } from "viem";
+import { createWalletClient, custom } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Checkout } from "../src/index.js";
-import type { CheckoutState, ClientQuote, EthereumProvider, WalletError } from "../../js/src/index.js";
-import { ADDRESS, API_BASE, CLIENT_SECRET, TOKEN, quote, shownValue } from "./fixtures.js";
+import { Checkout, type CheckoutChange } from "../src/index.js";
+import type { ClientQuote, WalletError } from "../../js/src/index.js";
+import { ADDRESS, API_BASE, CLIENT_SECRET, TOKEN, browserWallet, quote, shownValue } from "./fixtures.js";
 
 const NOW = (quote().expires_at - 14 * 60 - 32) * 1000;
 let served: ClientQuote;
@@ -53,30 +53,6 @@ it("shows neutral reconnecting while preserving checkout details for a three-min
   await act(() => vi.advanceTimersByTimeAsync(30000));
   expect(screen.getByRole("status").textContent).not.toContain("reconnecting");
 });
-
-/** A browser wallet on the quote's chain whose account holds `balance` of the token; it records
- * the methods called. */
-function browserWallet(hash: string, balance = 10n ** 30n) {
-  const methods: string[] = [];
-  const provider: EthereumProvider = {
-    request: ({ method }) => {
-      methods.push(method);
-      switch (method) {
-        case "eth_requestAccounts":
-          return Promise.resolve([ADDRESS]);
-        case "eth_chainId":
-          return Promise.resolve(`0x${quote().chain_id.toString(16)}`);
-        case "eth_call":
-          return Promise.resolve(encodeFunctionResult({ abi: erc20Abi, functionName: "balanceOf", result: balance }));
-        case "eth_sendTransaction":
-          return Promise.resolve(hash);
-        default:
-          return Promise.reject(new Error(`unexpected ${method}`));
-      }
-    },
-  };
-  return { provider, methods };
-}
 
 async function poll() {
   await act(() => vi.advanceTimersByTimeAsync(1000));
@@ -215,7 +191,7 @@ describe("Checkout", () => {
   });
 
   it("calls onChange once per status change, not on every poll", async () => {
-    const onChange = vi.fn<(state: CheckoutState) => void>();
+    const onChange = vi.fn<(state: CheckoutChange) => void>();
     await renderCheckout({ onChange });
 
     served = quote({ payment_status: "seen", confirmations: 2 });
@@ -264,14 +240,39 @@ describe("Checkout", () => {
     expect(onSuccess).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the full transaction hash after a wallet payment, linked to the explorer", async () => {
+  it("follows a sent wallet payment without offering to pay again, and reports its hash", async () => {
     const hash = `0x${"ab".repeat(32)}`;
     vi.stubGlobal("ethereum", browserWallet(hash).provider);
+    const onChange = vi.fn<(state: CheckoutChange) => void>();
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
-    await renderCheckout();
+    await renderCheckout({ onChange });
     await user.click(await screen.findByRole("button", { name: "Pay with Browser wallet" }));
     const link = await screen.findByRole("link", { name: hash });
     expect(link.getAttribute("href")).toBe(`https://sepolia.etherscan.io/tx/${hash}`);
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ status: "waiting", txHash: hash }));
+
+    // Still `waiting` until the service sees the transaction: nothing to pay with any more.
+    await poll();
+    expect(screen.getByRole("status").textContent).toBe("Sent, waiting for confirmation");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Pay with/ })).toBeNull();
+
+    served = quote({ status: "complete", payment_status: "credited", amount_credited: 2500 });
+    await poll();
+    expect(screen.getByRole("status").textContent).toBe("Payment credited");
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ status: "credited", txHash: hash }));
+  });
+
+  it("resumes a sent payment from txHash instead of offering to pay again", async () => {
+    const hash = `0x${"ab".repeat(32)}`;
+    const onChange = vi.fn<(state: CheckoutChange) => void>();
+    render(
+      <Checkout clientSecret={CLIENT_SECRET} expectedAddress={ADDRESS} apiBase={API_BASE} txHash={hash} onChange={onChange} />,
+    );
+    expect(await screen.findByText("Sent, waiting for confirmation")).toBeDefined();
+    expect(screen.getByRole("link", { name: hash })).toBeDefined();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ status: "waiting", txHash: hash }));
   });
 
   it("pays with the page's own wallet client instead of discovered wallets", async () => {

@@ -93,9 +93,11 @@ still stops immediately.
 | `expired`, `canceled` | The address is hidden; `onExpire` is called once |
 | `error` | Invalid client secret, address mismatch, or three consecutive non-retryable 4xx; nothing to pay |
 
-`onChange(state)` is called once per status change with `{ status, quote, error }`, like Stripe
-Elements' `onChange`, for example to hide your own "new payment" control while a payment is
-`seen` or `confirming`.
+`onChange(state)` is called once per status change with `{ status, quote, error, txHash }`, like
+Stripe Elements' `onChange`, for example to hide your own "new payment" control while a payment is
+sent, `seen`, or `confirming`. `txHash` is the transaction the wallet tab sent (`null` before
+then): from then until the status is final, the checkout shows it with "Sent, waiting for
+confirmation" instead of the payment methods, so the payer cannot pay twice.
 
 `CheckoutError` exposes `code`, `message`, and optional readonly fields `status` (the HTTP status
 when the error came from a response), `requestId` (the response's `Request-Id`), and `retryAfter`
@@ -110,7 +112,9 @@ wallet tab could not send (`code` `insufficient_balance`, `rejected`, `wrong_cha
 to offer your own way to fund that wallet.
 
 To resume after a reload, keep the client secret in the browser (for example `localStorage`, per
-signed-in account) until the status is `credited`, `expired`, `canceled`, or `error`. Tell a
+signed-in account) until the status is `credited`, `expired`, `canceled`, or `error`, with
+`onChange`'s `txHash` once there is one, and pass it back as `<Checkout txHash>`: the checkout then
+follows that payment instead of offering to pay again. Tell a
 payer who is waiting that the payment is credited in about the quote's `typical_credit_seconds`
 (30 seconds on Ethereum, about 7 seconds on Base, 15 minutes under a `finalized` policy) and the
 credit arrives on its own.
@@ -213,7 +217,8 @@ import { PaymentElement } from "@phala/pay-react";
   element is a `<form>`: do not nest it in another one.
 - `value` and `onOptionChange` control the choice (`defaultValue` sets the first one otherwise);
   `onChange({ step, checkout })` reports each step (`options`, `creating`, `checkout`) and each
-  checkout status change; `onSuccess`, `onExpire`, `onWalletError`, `walletClient`, `pollInterval`,
+  checkout status or `txHash` change (`checkout` is `<Checkout onChange>`'s state). "Back" is
+  hidden from the wallet's send until the status is final; `onSuccess`, `onExpire`, `onWalletError`, `walletClient`, `pollInterval`,
   and `appearance` are `<Checkout>`'s.
 
 ### Payment options

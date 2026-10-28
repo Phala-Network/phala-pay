@@ -193,6 +193,10 @@ for (const width of [390, 1280]) {
       await page.getByRole("tab", { name: "Browser wallet" }).click();
       await page.getByRole("button", { name: "Pay with Test Wallet" }).click();
       await expect(page.getByText(/^Transaction sent:/)).toBeVisible();
+      // Sent but not yet seen: nothing offers to pay again.
+      await expect(page.getByRole("status")).toHaveText("Sent, waiting for confirmation");
+      await expect(page.getByRole("tablist")).toHaveCount(0);
+      await check(page, `sent-${suffix}`);
       served = waiting({ payment_status: "seen", confirmations: 1 });
       await expect(page.getByRole("status")).toHaveText(/^Received, 1 confirmation/);
       await check(page, `seen-${suffix}`);
@@ -233,6 +237,35 @@ for (const width of [390, 1280]) {
       await page.getByRole("combobox", { name: "Token" }).click();
       await expect(page.getByRole("listbox", { name: "Token" }).getByRole("option")).toHaveText(["USDC", "USDT", "PHA", "ETH"]);
       await check(page, `picker-token-open-${suffix}`);
+    });
+
+    test(`payment element has no way back from a sent payment until it is final at ${suffix}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      let served = waiting();
+      await serve(page, () => served);
+      await installWallet(page);
+      await page.goto(checkoutUrl(theme).replace("/?", "/?element&"));
+      await page.getByRole("button", { name: "Pay $25.00 in USDC" }).click();
+      const pay = page.getByRole("button", { name: "Pay with Test Wallet" });
+      await expect(pay).toBeVisible();
+      // Flags any DOM state, even one render's, in which "Back" or a wallet button shows beside "Sent".
+      await page.evaluate(() => {
+        new MutationObserver(() => {
+          const buttons = [...document.querySelectorAll("button")].map((b) => b.textContent);
+          if (document.body.textContent.includes("Sent, waiting") && buttons.some((t) => /^(Back|Pay with)/.test(t))) {
+            document.documentElement.dataset["besideSent"] = "true";
+          }
+        }).observe(document.body, { childList: true, subtree: true, characterData: true });
+      });
+      await pay.click();
+      await expect(page.getByText(/^Transaction sent:/)).toBeVisible();
+      await expect(page.getByRole("status")).toHaveText("Sent, waiting for confirmation");
+      await expect(page.getByRole("button", { name: /^(Back|Pay with .*)$/ })).toHaveCount(0);
+      await expect(page.locator("html")).not.toHaveAttribute("data-beside-sent");
+      expect(await axeViolations(page), "sent").toEqual([]);
+      await check(page, `element-sent-${suffix}`);
+      served = waiting({ status: "complete", payment_status: "credited", amount_credited: 2500 });
+      await expect(page.getByRole("button", { name: "Start a new payment" })).toBeVisible({ timeout: 10_000 });
     });
 
     test(`payment element steps at ${suffix}`, async ({ page }) => {

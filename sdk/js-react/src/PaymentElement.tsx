@@ -6,14 +6,13 @@ import {
   assetSymbol,
   samePaymentOption,
   type CheckoutParams,
-  type CheckoutState,
   type ClientQuote,
   type EthereumProvider,
   type PaymentOption,
   type WalletError,
 } from "@phala/pay";
 import { rootProps, type Appearance } from "./appearance.js";
-import { CheckoutContent } from "./Checkout.js";
+import { CheckoutContent, type CheckoutChange } from "./Checkout.js";
 import { PaymentOptionFields } from "./PaymentOptionPicker.js";
 
 /** What `createQuote` resolves to: your backend's `pay.checkoutParams(quote)`. */
@@ -36,9 +35,11 @@ export type PaymentElementStep = "options" | "creating" | "checkout";
 
 export interface PaymentElementState {
   step: PaymentElementStep;
-  /** The quote's checkout state while `step` is `checkout`; otherwise `null`. */
-  checkout: CheckoutState | null;
-
+  /**
+   * The quote's checkout state while `step` is `checkout`, with the `txHash` the wallet sent;
+   * otherwise `null`. Keep `txHash` with the client secret to resume with `<Checkout txHash>`.
+   */
+  checkout: CheckoutChange | null;
 }
 
 export interface PaymentElementProps<T extends PaymentOption> {
@@ -77,7 +78,7 @@ export interface PaymentElementProps<T extends PaymentOption> {
   label?: ReactNode | undefined;
   /** Text at the end of an option, such as its price or a bonus; keep it non-interactive. */
   renderDetail?: ((option: T) => ReactNode) | undefined;
-  /** Called on every step and, while paying a quote, on every checkout status change. */
+  /** Called on every step and, while paying a quote, on every checkout status or `txHash` change. */
   onChange?: ((state: PaymentElementState) => void) | undefined;
   /** Called once when the quote's payment is credited. Fulfil from the `deposit.credited` webhook. */
   onSuccess?: ((quote: ClientQuote) => void) | undefined;
@@ -114,8 +115,8 @@ const FINISHED = new Set(["credited", "rejected", "reversed", "expired", "cancel
  * A complete payment, created only when the payer submits, like Stripe's Payment Element with a
  * deferred intent: the payer picks a token and network, submits, and your `createQuote` creates
  * the quote on your backend; the element then shows its checkout (wallet, QR code, or manual,
- * with live status), and a way back to the options once the quote can no longer be paid or before
- * a payment is sent. The quote uses the customer's fixed deposit address.
+ * with live status), and a way back to the options before a payment is sent or once the quote is
+ * final. The quote uses the customer's fixed deposit address.
  */
 export function PaymentElement<T extends PaymentOption>({
   options,
@@ -145,7 +146,10 @@ export function PaymentElement<T extends PaymentOption>({
 }: PaymentElementProps<T>) {
   const [current, setCurrent] = useState<Step>({ step: "options", failed: null });
   const [chosen, setChosen] = useState<PaymentOption | null>(defaultValue === undefined ? (options[0] ?? null) : defaultValue);
-  const [checkout, setCheckout] = useState<CheckoutState | null>(null);
+  const [checkout, setCheckout] = useState<CheckoutChange | null>(null);
+  // Whether the wallet sent this checkout's payment: set with the checkout's own "Sent" line, in
+  // the same update, so that "Back" is never shown beside it.
+  const [sent, setSent] = useState(false);
   const selected = value === undefined ? chosen : value;
   const option = options.find((each) => samePaymentOption(each, selected));
 
@@ -193,6 +197,7 @@ export function PaymentElement<T extends PaymentOption>({
         if (mine !== request.current) return;
         pending.current = false;
         setCheckout(null);
+        setSent(false);
         setCurrent(done(result));
       },
       (error: unknown) => {
@@ -228,11 +233,17 @@ export function PaymentElement<T extends PaymentOption>({
     request.current += 1;
     pending.current = false;
     setCheckout(null);
+    setSent(false);
     setCurrent({ step: "options", failed: null });
   };
 
   const status = checkout?.status ?? "loading";
-  const backText = UNDERWAY.has(status) ? null : FINISHED.has(status) ? "Start a new payment" : "Back";
+  // Once a payment is sent there is no way back until it is final: paying again would pay twice.
+  const backText = FINISHED.has(status)
+    ? "Start a new payment"
+    : UNDERWAY.has(status) || sent
+      ? null
+      : "Back";
   const symbol = option === undefined ? null : assetSymbol(option.asset);
   const submitText =
     symbol === null ? "Pay" : amount === undefined ? `Pay in ${symbol}` : `Pay ${formatMoney(amount, currency)} in ${symbol}`;
@@ -288,6 +299,7 @@ export function PaymentElement<T extends PaymentOption>({
             <CheckoutContent
               {...current.params}
               onChange={setCheckout}
+              onSent={() => setSent(true)}
               onSuccess={onSuccess}
               onExpire={onExpire}
               onWalletError={onWalletError}
