@@ -115,6 +115,29 @@ jq -e '[.services[].volumes[]? | select(.source == "/var/run/dstack.sock")] == [
 local_stack -p validate-sandbox -f "$root/deploy/sandbox/docker-compose.local.yml" >/dev/null
 local_stack --restore-check -p validate-drill -f "$root/deploy/local/restore-drill.compose.yml" \
     >"$tmp/drill.json"
+# The generated RPC overlay is shared across both drill variants. Restore-only TLS settings
+# must not reintroduce the gate that the service variant removes (and supplies no image for).
+jq -n '{rpc: [{chain_id: 1, read: {sealed_key: "TOPUP_RPC_ANKR_KEY"},
+    verify: {sealed_key: "TOPUP_RPC_INFURA_KEY"}}]}' >"$tmp/rpc.json"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=rpc.test \
+    -keyout "$tmp/rpc-key.pem" -out "$tmp/rpc-cert.pem" >/dev/null 2>&1
+python3 "$root/deploy/local/rpc-tls.py" "$tmp/rpc.json" "$tmp/rpc-tls.json" \
+    --restore-check-overlay "$tmp/restore-rpc-tls.json" \
+    --certificate "$tmp/rpc-cert.pem" --key "$tmp/rpc-key.pem" \
+    --image python:3.14-slim-trixie --chain 1=http://127.0.0.1:8545
+drill_rpc=(-f "$root/deploy/local/restore-drill.compose.yml" -f "$tmp/rpc-tls.json")
+local_stack -p validate-drill-service-rpc "${drill_rpc[@]}" >"$tmp/drill-service-rpc.json"
+jq -e '.services | has("restore-check") | not' "$tmp/drill-service-rpc.json" >/dev/null ||
+    fail "the service drill must not run the restore-check gate"
+local_stack --restore-check -p validate-drill-restore-rpc "${drill_rpc[@]}" \
+    -f "$tmp/restore-rpc-tls.json" >"$tmp/drill-restore-rpc.json"
+jq -e '.services["restore-check"] as $gate
+    | $gate.image == .services.topup.image and $gate.entrypoint[0:2] == ["topup", "restore-check"]
+      and $gate.environment.SSL_CERT_FILE == "/etc/rpc-tls/cert.pem"
+      and $gate.depends_on["rpc-1-read"].condition == "service_started"
+      and $gate.depends_on["rpc-1-verify"].condition == "service_started"' \
+    "$tmp/drill-restore-rpc.json" >/dev/null ||
+    fail "the restore drill gate must keep its image, command, and verified RPC access"
 # The local wrapper seals each variant's own values under the shared names, even with ambient
 # credentials and the source's read-write token present. Only the read-only values reach restore.
 AWS_ACCESS_KEY_ID=ambient-write AWS_SECRET_ACCESS_KEY=ambient-write-secret \

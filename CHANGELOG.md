@@ -14,6 +14,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore drills keep the restore-only RPC overlay out of the source service variant. RPC
+  preflight searches up to eight finalized blocks for a receipt/log sample and accepts an empty
+  history, while still rejecting inconsistent receipt and log responses.
+- The read-only restore API checks its own RPC clients before serving, so a healthy replacement
+  can reissue lost deposit addresses while remaining frozen and running no background workers.
+
 ### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
 
 #### Fixed

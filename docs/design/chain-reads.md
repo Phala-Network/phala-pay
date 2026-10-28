@@ -298,8 +298,10 @@ coverage-driven flow (§2.6) then expires or cancels it.
   never a crash loop.
 - Startup self-test = `topup rpc check`, both endpoints of every chain, real typed calls:
   `eth_chainId`; `latest`/`finalized` headers; typed transaction and receipt from the finalized
-  block; `eth_getLogs({blockHash})` returning a log of that receipt (equality ignores only
-  optional `blockTimestamp` metadata); the real `coverage_logs` queries (1 000 synthetic
+  block or up to seven earlier finalized blocks; `eth_getLogs({blockHash})` returning a log of
+  that receipt (equality ignores only optional `blockTimestamp` metadata). If no log sample
+  is found within that bound, only this sample probe passes without evidence; the
+  remaining checks are still required: the real `coverage_logs` queries (1 000 synthetic
   recipients, `max_log_blocks`); EIP-1898 `requireCanonical` calls (token `decimals`,
   factory and Multicall3 code, price feeds) at the checkpoint; state at
   2 × the observed finalized lag. Contract identity and preflight boundaries use

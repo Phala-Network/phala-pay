@@ -13,7 +13,7 @@ def main() -> None:
     parser.add_argument("--certificate", type=Path, required=True)
     parser.add_argument("--key", type=Path, required=True)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--restore-check", action="store_true")
+    parser.add_argument("--restore-check-overlay", type=Path)
     parser.add_argument("--chain", action="append", required=True, help="chain_id=http://upstream:port")
     args = parser.parse_args()
     upstreams = dict(item.split("=", 1) for item in args.chain)
@@ -42,19 +42,19 @@ def main() -> None:
                 "restart": "no",
             }
             relays[name] = {"condition": "service_started"}
-    for service in ("topup", "restore-check") if args.restore_check else ("topup",):
-        services[service] = {
-            "environment": {
-                "SSL_CERT_FILE": "/etc/rpc-tls/cert.pem",
-                **{
-                    chain[role]["sealed_key"]: "${" + chain[role]["sealed_key"] + ":-local-rpc-key}"
-                    for chain in config["rpc"]
-                    for role in ("read", "verify")
-                },
+    application = {
+        "environment": {
+            "SSL_CERT_FILE": "/etc/rpc-tls/cert.pem",
+            **{
+                chain[role]["sealed_key"]: "${" + chain[role]["sealed_key"] + ":-local-rpc-key}"
+                for chain in config["rpc"]
+                for role in ("read", "verify")
             },
-            "configs": [{"source": "rpc_tls_certificate", "target": "/etc/rpc-tls/cert.pem"}],
-            "depends_on": relays,
-        }
+        },
+        "configs": [{"source": "rpc_tls_certificate", "target": "/etc/rpc-tls/cert.pem"}],
+        "depends_on": relays,
+    }
+    services["topup"] = application
     overlay = {
         "services": services,
         "configs": {
@@ -64,6 +64,10 @@ def main() -> None:
         },
     }
     args.overlay.write_text(json.dumps(overlay))
+    if args.restore_check_overlay:
+        args.restore_check_overlay.write_text(json.dumps({
+            "services": {"restore-check": application},
+        }))
     args.config.write_text(json.dumps(config))
 
 

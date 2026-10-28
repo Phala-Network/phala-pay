@@ -45,7 +45,9 @@ receipt and log reads, the real coverage queries with 1,000 recipients, canonica
 and state at
 twice the observed finalized lag. Contract identity and the preflight boundary pin both
 endpoints at the lower finalized height and require matching header hash and timestamp.
-Receipt-log comparison ignores only optional `blockTimestamp` metadata. Deploy uses the
+The receipt/log probe searches up to eight finalized blocks for a logged transaction. If none
+is found, it passes without a sample; all other endpoint checks remain required. A sample's
+receipt and log responses must agree, ignoring only optional `blockTimestamp` metadata. Deploy uses the
 actual candidate compose environment:
 
 ```sh

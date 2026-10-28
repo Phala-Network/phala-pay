@@ -475,31 +475,46 @@ async fn two_pumps_consume_one_rate_lock_only_once() -> Result<()> {
             ];
             let pump = test_pump(
                 &context.app_pool,
-                confirm_steps(
-                    &context.app_pool,
-                    logs,
-                    Some(Arc::new(Barrier::new(4))),
-                ),
+                static_steps(StepOutcome::Wait { reason: WaitReason::Paused })
+                    .with_detected(Box::new(RacingConfirm {
+                        confirm: confirm_step(&context.app_pool, logs.clone(), None),
+                        ready: Barrier::new(2),
+                    })),
                 PumpConfig::default(),
                 0,
             )?;
             let (first, second) = tokio::join!(pump.run_once(), pump.run_once());
             let results = [first?, second?];
-            ensure!(results.iter().all(|result| matches!(result,
-                RunOnceResult::Applied { .. } | RunOnceResult::Contended { .. })));
-            // Canonical lookup may see the winner's commit and use spot immediately; a stale
-            // candidate instead contends and retries with the now-consumed quote excluded.
-            let retry = test_pump(&context.app_pool, confirm_steps(&context.app_pool,
-                vec![transfer_log(&db::get_deposit(&context.app_pool, first_id).await?.context("first")?, evm_address(14)),
-                     transfer_log(&db::get_deposit(&context.app_pool, second_id).await?.context("second")?, evm_address(14))], None),
-                PumpConfig::default(), 0)?;
-            retry.run_once().await?;
+            let (winner, loser) = match results {
+                [RunOnceResult::Applied { deposit_id: winner }, RunOnceResult::Contended { deposit_id: loser }]
+                | [RunOnceResult::Contended { deposit_id: loser }, RunOnceResult::Applied { deposit_id: winner }] => (winner, loser),
+                _ => anyhow::bail!("expected one consumption and one contention: {results:?}"),
+            };
             let consumed_by: Uuid =
                 sqlx::query_scalar("SELECT consumed_by FROM quotes WHERE id = (SELECT quote_id FROM addresses WHERE id = $1)")
                     .bind(seed.address_id)
                     .fetch_one(&context.app_pool)
                     .await?;
-            ensure!(consumed_by == first_id || consumed_by == second_id);
+            ensure!(consumed_by == winner);
+            let losing = db::get_deposit(&context.app_pool, loser).await?.context("loser")?;
+            ensure!(losing.state == DepositState::Detected && losing.price_source.is_none());
+            ensure!(losing.lease_token.is_none());
+            ensure!(transition_count(&context.app_pool, loser).await? == 0);
+            let (due, receipts, watcher_owned): (DateTime<Utc>, i32, bool) = sqlx::query_as(
+                "SELECT finality_check_at,confirm_receipt_checks,deposit_finality_pending(deposits) FROM deposits WHERE id=$1",
+            ).bind(loser).fetch_one(&context.app_pool).await?;
+            ensure!(receipts == 1 && watcher_owned);
+            // Receipt admission survives the rollback. The watcher owns recovery at the
+            // reserved due time; another normal pump claim cannot spend that receipt again.
+            db::chain_reads::advance_checkpoint(&context.app_pool, 1,
+                db::chain_reads::Boundary { number:500, hash:b256(50), time:due }).await?;
+            let reader = ConfirmChain { logs:Arc::new(logs.clone()), barrier:None };
+            let recovery = test_pump(&context.app_pool, confirm_steps(&context.app_pool, logs, None),
+                PumpConfig::default(), 0)?;
+            let watch = topup::finality::FinalityWatch::single(context.app_pool.clone(),
+                Arc::default(), 1, reader.clone(), reader).with_pump(Arc::new(recovery));
+            let watched = watch.watch_once_at(1, due).await?;
+            ensure!(watched.watched == 1 && watched.failed == 0);
             let confirmed: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM deposits WHERE id IN ($1, $2) AND state = 'confirmed'",
             )
@@ -508,6 +523,15 @@ async fn two_pumps_consume_one_rate_lock_only_once() -> Result<()> {
             .fetch_one(&context.app_pool)
             .await?;
             ensure!(confirmed == 2);
+            let recovered = db::get_deposit(&context.app_pool, loser).await?.context("recovered")?;
+            ensure!(recovered.price_source.as_deref() == Some("spot"));
+            ensure!(recovered.credit_minor == Some(MinorAmount::new(100)));
+            for id in [first_id, second_id] {
+                ensure!(transition_count(&context.app_pool, id).await? == 1);
+                let receipts: i32 = sqlx::query_scalar("SELECT confirm_receipt_checks FROM deposits WHERE id=$1")
+                    .bind(id).fetch_one(&context.app_pool).await?;
+                ensure!(receipts == 1, "normal receipt quota was reset");
+            }
             let locked: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM deposits WHERE id IN ($1, $2) AND price_source = 'lock' AND credit_minor = 777",
             )
@@ -1248,6 +1272,21 @@ impl ChainReader for ConfirmChain {
 
 struct FixedPrice(Observation);
 
+struct RacingConfirm {
+    confirm: ConfirmStep,
+    ready: Barrier,
+}
+
+#[async_trait]
+impl Step for RacingConfirm {
+    async fn run(&self, deposit: &db::Deposit) -> StepResult {
+        let result = self.confirm.run(deposit).await;
+        // Both candidates must finish valuation before either pump can persist consumption.
+        self.ready.wait().await;
+        result
+    }
+}
+
 #[async_trait]
 impl PriceSource for FixedPrice {
     async fn observe(&self) -> Result<Observation, PriceError> {
@@ -1256,6 +1295,17 @@ impl PriceSource for FixedPrice {
 }
 
 fn confirm_steps(pool: &PgPool, logs: Vec<TransferLog>, barrier: Option<Arc<Barrier>>) -> StepSet {
+    static_steps(StepOutcome::Wait {
+        reason: WaitReason::Paused,
+    })
+    .with_detected(Box::new(confirm_step(pool, logs, barrier)))
+}
+
+fn confirm_step(
+    pool: &PgPool,
+    logs: Vec<TransferLog>,
+    barrier: Option<Arc<Barrier>>,
+) -> ConfirmStep {
     let chain = ConfirmChain {
         logs: Arc::new(logs),
         barrier,
@@ -1270,7 +1320,7 @@ fn confirm_steps(pool: &PgPool, logs: Vec<TransferLog>, barrier: Option<Arc<Barr
             observed_at,
         })) as Arc<dyn PriceSource>
     };
-    let confirm = ConfirmStep::single(
+    ConfirmStep::single(
         pool.clone(),
         confirmation_route(),
         chain.clone(),
@@ -1278,11 +1328,7 @@ fn confirm_steps(pool: &PgPool, logs: Vec<TransferLog>, barrier: Option<Arc<Barr
         price("primary", 10_000_000),
         Some(price("check", 10_000_000)),
         Some(price("fx", 100_000_000)),
-    );
-    static_steps(StepOutcome::Wait {
-        reason: WaitReason::Paused,
-    })
-    .with_detected(Box::new(confirm))
+    )
 }
 
 fn confirmation_route() -> RouteFile {

@@ -650,45 +650,72 @@ impl EvmClient {
     pub fn max_log_blocks(&self) -> u32 {
         self.max_log_blocks
     }
-    /// Typed finalized-block transaction, receipt and blockHash getLogs capability check.
+    /// Check a receipt against blockHash getLogs in up to eight finalized blocks.
+    /// Finding no log sample in this bounded history is not an RPC failure.
     pub async fn check_receipt_logs(&self, number: u64) -> Result<(), ChainError> {
-        let block = self
-            .bounded(
-                "self-test finalized block",
-                self.provider
-                    .get_block_by_number(BlockNumberOrTag::Number(number)),
-            )
-            .await?
-            .ok_or(ChainError::MissingField("self-test block"))?;
-        for hash in block.transactions.hashes().take(20) {
-            let reader = FinalizedReader::new(Arc::new(self.clone()));
-            let Some(receipt) = reader.receipt(hash).await? else {
-                return Err(ChainError::MissingField("self-test receipt"));
-            };
-            if receipt.block_number != Some(number) || receipt.block_hash != Some(block.header.hash)
-            {
-                return Err(ChainError::Reorganized("self-test receipt"));
+        // blockTimestamp is optional RPC metadata and can differ between methods (#461).
+        let same_log = |actual: &Log, expected: &Log| {
+            let mut actual = actual.clone();
+            let mut expected = expected.clone();
+            actual.block_timestamp = None;
+            expected.block_timestamp = None;
+            actual == expected
+        };
+        for number in (number.saturating_sub(7)..=number).rev() {
+            let block = self
+                .bounded(
+                    "self-test finalized block",
+                    self.provider
+                        .get_block_by_number(BlockNumberOrTag::Number(number)),
+                )
+                .await?
+                .ok_or(ChainError::MissingField("self-test block"))?;
+            let logs = self
+                .logs(&Filter::new().at_block_hash(block.header.hash))
+                .await?;
+            let sample_hash = logs
+                .first()
+                .map(|log| {
+                    log.transaction_hash
+                        .ok_or(ChainError::MissingField("self-test log transaction"))
+                })
+                .transpose()?;
+            if sample_hash.is_some_and(|hash| !block.transactions.hashes().any(|tx| tx == hash)) {
+                return Err(ChainError::Reorganized("self-test log transaction"));
             }
-            if let Some(log) = receipt.logs().first() {
-                reader.receipt_lookup(hash, 0).await?;
-                let logs = self
-                    .logs(&Filter::new().at_block_hash(block.header.hash))
-                    .await?;
-                // blockTimestamp is optional RPC metadata and can differ between methods.
-                let mut expected = log.clone();
-                expected.block_timestamp = None;
-                if !logs.into_iter().any(|mut candidate| {
-                    candidate.block_timestamp = None;
-                    candidate == expected
-                }) {
+            // Prefer a known logged transaction; still inspect receipts when getLogs is empty,
+            // so an endpoint omitting logs from either response cannot pass as "no sample".
+            for hash in sample_hash
+                .into_iter()
+                .chain(block.transactions.hashes().take(20))
+            {
+                let reader = FinalizedReader::new(Arc::new(self.clone()));
+                let Some(receipt) = reader.receipt(hash).await? else {
+                    return Err(ChainError::MissingField("self-test receipt"));
+                };
+                if receipt.block_number != Some(number)
+                    || receipt.block_hash != Some(block.header.hash)
+                {
+                    return Err(ChainError::Reorganized("self-test receipt"));
+                }
+                if let Some(sample) = logs.iter().find(|log| log.transaction_hash == Some(hash))
+                    && !receipt.logs().iter().any(|log| same_log(log, sample))
+                {
                     return Err(ChainError::MissingField("self-test receipt log"));
                 }
-                return Ok(());
+                if let Some(log) = receipt.logs().first() {
+                    reader.receipt_lookup(hash, 0).await?;
+                    if !logs.iter().any(|candidate| same_log(candidate, log)) {
+                        return Err(ChainError::MissingField("self-test receipt log"));
+                    }
+                    return Ok(());
+                }
             }
         }
-        Err(ChainError::MissingField(
-            "finalized block with a logged transaction",
-        ))
+        tracing::warn!(
+            "RPC receipt/log self-test found no finalized log sample within eight blocks"
+        );
+        Ok(())
     }
 
     /// Current-state pins come from this endpoint's own head, two blocks behind latest.
@@ -2168,10 +2195,15 @@ mod tests {
 
     #[tokio::test]
     async fn receipt_log_self_test_ignores_only_optional_block_timestamp() {
-        for changed_data in [false, true] {
+        for (changed_data, omitted_receipt_logs, omitted_get_logs) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
             let mut block = base_sepolia("block-47297199");
             block["transactions"] = serde_json::json!([BRIDGE_MINT]);
-            let receipt = base_sepolia("bridge-mint-receipt");
+            let mut receipt = base_sepolia("bridge-mint-receipt");
             assert!(receipt["logs"][0].get("blockTimestamp").is_some());
             let mut logs = receipt["logs"].clone();
             for log in logs.as_array_mut().unwrap() {
@@ -2179,6 +2211,12 @@ mod tests {
             }
             if changed_data {
                 logs[0]["data"] = serde_json::json!(B256::ZERO);
+            }
+            if omitted_receipt_logs {
+                receipt["logs"] = serde_json::json!([]);
+            }
+            if omitted_get_logs {
+                logs = serde_json::json!([]);
             }
             let (reader, server) = replay_node(
                 vec![
@@ -2193,7 +2231,7 @@ mod tests {
             let result = reader.client.check_receipt_logs(47_297_199).await;
             server.abort();
             let _ = server.await;
-            if changed_data {
+            if changed_data || omitted_receipt_logs || omitted_get_logs {
                 assert_eq!(
                     result,
                     Err(ChainError::MissingField("self-test receipt log"))
@@ -2201,6 +2239,99 @@ mod tests {
             } else {
                 assert_eq!(result, Ok(()));
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn receipt_log_self_test_allows_an_empty_finalized_genesis() {
+        let mut block = base_sepolia("block-47297199");
+        block["number"] = serde_json::json!("0x0");
+        block["transactions"] = serde_json::json!([]);
+        let (reader, server) = replay_node(
+            vec![
+                ("eth_getBlockByNumber", block),
+                ("eth_getLogs", serde_json::json!([])),
+            ],
+            Vec::new(),
+        )
+        .await;
+        let result = reader.client.check_receipt_logs(0).await;
+        server.abort();
+        let _ = server.await;
+        assert_eq!(result, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn receipt_log_self_test_searches_recent_blocks_with_a_finite_bound() {
+        use axum::{Json, Router, routing::post};
+        use serde_json::json;
+
+        for has_sample in [true, false] {
+            let mut block = base_sepolia("block-47297199");
+            block["number"] = json!("0x7");
+            block["transactions"] = json!([BRIDGE_MINT]);
+            let mut receipt = base_sepolia("bridge-mint-receipt");
+            receipt["blockNumber"] = json!("0x7");
+            for log in receipt["logs"].as_array_mut().unwrap() {
+                log["blockNumber"] = json!("0x7");
+            }
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let captured = requests.clone();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let node = Router::new().route(
+                "/",
+                post(move |Json(request): Json<Value>| {
+                    let block = block.clone();
+                    let receipt = receipt.clone();
+                    let captured = captured.clone();
+                    async move {
+                        let result = match request["method"].as_str().unwrap() {
+                            "eth_getBlockByNumber" => {
+                                let number = u64::from_str_radix(
+                                    request["params"][0]
+                                        .as_str()
+                                        .unwrap()
+                                        .trim_start_matches("0x"),
+                                    16,
+                                )
+                                .unwrap();
+                                captured.lock().unwrap().push(number);
+                                let mut answer = block;
+                                answer["number"] = json!(format!("{number:#x}"));
+                                if !has_sample || number != 7 {
+                                    answer["hash"] = json!(B256::ZERO);
+                                    answer["transactions"] = json!([]);
+                                }
+                                answer
+                            }
+                            "eth_getBlockByHash" => block,
+                            "eth_getTransactionReceipt" => receipt,
+                            "eth_getLogs"
+                                if has_sample
+                                    && request["params"][0]["blockHash"] == block["hash"] =>
+                            {
+                                receipt["logs"].clone()
+                            }
+                            "eth_getLogs" => json!([]),
+                            method => panic!("unexpected self-test method {method}"),
+                        };
+                        Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result}))
+                    }
+                }),
+            );
+            let server = tokio::spawn(async move { axum::serve(listener, node).await.unwrap() });
+            let client = EvmClient::new(&url).unwrap().with_chain_id(84532);
+            let result = client.check_receipt_logs(8).await;
+            server.abort();
+            let _ = server.await;
+            assert_eq!(result, Ok(()));
+            let expected = if has_sample {
+                vec![8, 7]
+            } else {
+                (1..=8).rev().collect()
+            };
+            assert_eq!(*requests.lock().unwrap(), expected);
         }
     }
 
