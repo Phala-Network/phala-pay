@@ -246,10 +246,22 @@ for (const width of [390, 1280]) {
       await installWallet(page);
       await page.goto(checkoutUrl(theme).replace("/?", "/?element&"));
       await page.getByRole("button", { name: "Pay $25.00 in USDC" }).click();
-      await page.getByRole("button", { name: "Pay with Test Wallet" }).click();
+      const pay = page.getByRole("button", { name: "Pay with Test Wallet" });
+      await expect(pay).toBeVisible();
+      // Flags any DOM state, even one render's, in which "Back" or a wallet button shows beside "Sent".
+      await page.evaluate(() => {
+        new MutationObserver(() => {
+          const buttons = [...document.querySelectorAll("button")].map((b) => b.textContent);
+          if (document.body.textContent.includes("Sent, waiting") && buttons.some((t) => /^(Back|Pay with)/.test(t))) {
+            document.documentElement.dataset["besideSent"] = "true";
+          }
+        }).observe(document.body, { childList: true, subtree: true, characterData: true });
+      });
+      await pay.click();
       await expect(page.getByText(/^Transaction sent:/)).toBeVisible();
       await expect(page.getByRole("status")).toHaveText("Sent, waiting for confirmation");
       await expect(page.getByRole("button", { name: /^(Back|Pay with .*)$/ })).toHaveCount(0);
+      await expect(page.locator("html")).not.toHaveAttribute("data-beside-sent");
       expect(await axeViolations(page), "sent").toEqual([]);
       await check(page, `element-sent-${suffix}`);
       served = waiting({ status: "complete", payment_status: "credited", amount_credited: 2500 });

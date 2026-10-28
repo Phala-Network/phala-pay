@@ -147,6 +147,9 @@ export function PaymentElement<T extends PaymentOption>({
   const [current, setCurrent] = useState<Step>({ step: "options", failed: null });
   const [chosen, setChosen] = useState<PaymentOption | null>(defaultValue === undefined ? (options[0] ?? null) : defaultValue);
   const [checkout, setCheckout] = useState<CheckoutChange | null>(null);
+  // Whether the wallet sent this checkout's payment: set with the checkout's own "Sent" line, in
+  // the same update, so that "Back" is never shown beside it.
+  const [sent, setSent] = useState(false);
   const selected = value === undefined ? chosen : value;
   const option = options.find((each) => samePaymentOption(each, selected));
 
@@ -194,6 +197,7 @@ export function PaymentElement<T extends PaymentOption>({
         if (mine !== request.current) return;
         pending.current = false;
         setCheckout(null);
+        setSent(false);
         setCurrent(done(result));
       },
       (error: unknown) => {
@@ -229,6 +233,7 @@ export function PaymentElement<T extends PaymentOption>({
     request.current += 1;
     pending.current = false;
     setCheckout(null);
+    setSent(false);
     setCurrent({ step: "options", failed: null });
   };
 
@@ -236,7 +241,7 @@ export function PaymentElement<T extends PaymentOption>({
   // Once a payment is sent there is no way back until it is final: paying again would pay twice.
   const backText = FINISHED.has(status)
     ? "Start a new payment"
-    : UNDERWAY.has(status) || (checkout !== null && checkout.txHash !== null)
+    : UNDERWAY.has(status) || sent
       ? null
       : "Back";
   const symbol = option === undefined ? null : assetSymbol(option.asset);
@@ -294,6 +299,7 @@ export function PaymentElement<T extends PaymentOption>({
             <CheckoutContent
               {...current.params}
               onChange={setCheckout}
+              onSent={() => setSent(true)}
               onSuccess={onSuccess}
               onExpire={onExpire}
               onWalletError={onWalletError}

@@ -101,7 +101,11 @@ export function CheckoutContent({
   buttonText,
   walletClient,
   txHash: resumed,
-}: Omit<CheckoutProps, "appearance" | "className">) {
+  onSent,
+}: Omit<CheckoutProps, "appearance" | "className"> & {
+  /** Called when the wallet sent the payment, in the same update that shows it as sent. */
+  onSent?: ((txHash: Hash) => void) | undefined;
+}) {
   const { status, quote, error, reconnecting, refresh } = useCheckout({
     clientSecret,
     expectedAddress,
@@ -189,6 +193,7 @@ export function CheckoutContent({
           walletClient={walletClient}
           onSent={(hash) => {
             setSent({ clientSecret, hash });
+            onSent?.(hash);
             refresh();
           }}
           onWalletError={onWalletError}

@@ -1,5 +1,5 @@
 import axe from "axe-core";
-import { StrictMode } from "react";
+import { Profiler, StrictMode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PaymentElement, type PaymentElementState } from "../src/index.js";
@@ -55,9 +55,24 @@ it("has no way back from a sent payment until it is final, and reports its hash"
   const hash = `0x${"ab".repeat(32)}`;
   vi.stubGlobal("ethereum", browserWallet(hash).provider);
   const onChange = vi.fn<(state: PaymentElementState) => void>();
-  render(<PaymentElement options={OPTIONS} createQuote={() => Promise.resolve(PARAMS)} onChange={onChange} pollInterval={20} />);
+  // Every commit's DOM: "Back" or a wallet button never shows beside "Sent", not even for one render.
+  const beside: string[] = [];
+  render(
+    <Profiler
+      id="element"
+      onRender={() => {
+        if (document.body.textContent.includes("Sent, waiting for confirmation")) {
+          beside.push(...[...document.querySelectorAll("button")].map((b) => b.textContent).filter((t) => /^(Back|Pay with)/.test(t)));
+        }
+      }}
+    >
+      <PaymentElement options={OPTIONS} createQuote={() => Promise.resolve(PARAMS)} onChange={onChange} pollInterval={20} />
+    </Profiler>,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Pay in PHA" }));
   fireEvent.click(await screen.findByRole("button", { name: "Pay with Browser wallet" }));
+  expect(await screen.findByText("Sent, waiting for confirmation")).toBeDefined();
+  expect(beside).toEqual([]);
 
   await waitFor(() => expect(onChange.mock.lastCall?.[0].checkout).toMatchObject({ status: "waiting", txHash: hash }));
   expect(screen.getByRole("status").textContent).toBe("Sent, waiting for confirmation");
