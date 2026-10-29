@@ -149,7 +149,8 @@ GitHub-hosted `ubuntu-latest` runners.
      `warning` events). Confirm that the Crons monitors are listed as connected.
    - Phala's pilot has Sentry Uptime disabled at the owner's request. External `/healthz` is
      checked by [`pilot_watch`](runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions)
-     ad hoc and with the daily manual tallies. The owner accepts the risk between checks.
+     at least every two staffed hours for the first 72 h, at each UTC day boundary, then at
+     least twice daily, and immediately on any Sentry alert. The owner accepts the risk between checks.
      Other operators choose their own external availability monitoring.
    - The project DSN (Settings > Client Keys) is sealed as `SENTRY_DSN` ([Sealing the
      secrets](#sealing-the-secrets)).
@@ -741,8 +742,10 @@ environment is `topup.yaml`'s `environment`, both attested.
 
 - **External health**: Phala's pilot uses manual
   [`pilot_watch`](runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions) rather
-  than Sentry Uptime, at the owner's request. A down CVM also misses Crons check-ins. A
-  time-series collector is still needed for rolling SLO/provider-quota accounting. The existing
+  than Sentry Uptime, at the owner's request. External `/healthz` checks retain the accepted
+  cadence: at least every two staffed hours for the first 72 h, at each UTC day boundary, then
+  at least twice daily, and immediately on any Sentry alert. In-service checks do not establish
+  external ingress/DNS/availability. A down CVM also misses Crons check-ins. A time-series collector is still needed for rolling SLO/provider-quota accounting. The existing
   once-per-minute business monitor evaluates S/L, coverage/backfill, endpoint readiness and
   persisted H/Q budgets internally, alongside address capacity. It sends tagged warnings through
   the existing Sentry integration; Sentry owns notification delivery and routing. No additional

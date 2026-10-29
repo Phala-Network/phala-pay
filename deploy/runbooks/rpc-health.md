@@ -71,6 +71,9 @@ and has its own capacity stop action.
 Coverage and daily budget gauges are read from durable tables on authenticated metrics scrapes.
 An encoding or database failure fails the scrape; inspect database availability and capacity.
 Do not replace an unavailable sample with zero or infer negative payment evidence from metrics.
+Before raising pilot volume, add suitable indexes for the deposits `first_unresolved_at` and
+`first_slow_at` stock/rolling-entry scans, which currently lack timestamp indexes, and verify
+query plans against representative retained history. The internal-alert change adds no migration.
 
 ## Confirmation slow lane
 

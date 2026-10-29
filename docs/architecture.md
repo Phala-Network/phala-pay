@@ -1749,9 +1749,11 @@ are platform health only (design §13): an unswept balance or a `FlushFailed` ta
 merchant's, recorded for it, not an alert. Each loop checks in to a Sentry Crons
 monitor, which pages on scanner lag, backup age over 2 minutes, a failed reconciliation check, and
 any stopped loop. Phala's pilot disables Sentry Uptime at the owner's request; manual
-external `/healthz` checks remain an operator responsibility, including ad hoc
-[`pilot_watch`](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions).
-The owner accepts the risk of external failures between checks. Business state (deposits by
+[`pilot_watch`](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions)
+checks external `/healthz` at least every two staffed hours for the first 72 h, at each UTC day
+boundary, then at least twice daily, and immediately on any Sentry alert. This accepted cadence
+is unchanged: in-service checks do not establish external ingress/DNS/availability. The owner
+accepts the risk of external failures between checks. Business state (deposits by
 state and
 age, unflushed balance, open lock exposure, undelivered `deposit.credited` events and their age,
 reconciliation) is in the daily admin
@@ -1790,8 +1792,14 @@ durable SQL observations as the metrics exporter; stock and entry counts survive
 Sustained-condition timers reset on restart. Alerts enter immediately once their condition/duration
 is met, remind at most hourly, and resolve through an INFO log. Failed scans raise
 `TopupBusinessProbeFailed`, leaving previous measurements unknown. The loop waits for restore
-unfreeze; read-only restore instances never run it. Sentry is the only alert channel. HTTP
-percentages/percentiles below require an explicitly recorded observation
+unfreeze; read-only restore instances never run it. Sentry is the only alert channel.
+
+**Before volume grows:** the deposits scans for `first_unresolved_at` and `first_slow_at` currently
+have no timestamp indexes. Add suitable indexes for the stock and rolling-entry predicates and
+verify query plans against representative retained history before raising pilot volume. This
+change adds no index migration.
+
+HTTP percentages/percentiles below require an explicitly recorded observation
 interval and counter deltas from the same process; do not claim a continuous 30-day result from
 one snapshot. A restart ends that interval. Phala's pilot records manual external health checks;
 these do not establish continuous 30-day availability. Crons and issue history supply
@@ -1811,7 +1819,8 @@ Configure Sentry issue rules for the internal pilot alert names in
 [production launch §11](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions)
 and the existing Crons monitors. The committed RPC Prometheus rules are equivalent expressions
 for operators with a collector; their rolling provider-quota rules still require one. Manual
-`pilot_watch` remains an ad hoc diagnostic fallback and supplies daily tallies.
+`pilot_watch` remains the metrics diagnostic fallback and supplies daily tallies; its external
+`/healthz` checks retain the owner-accepted cadence above, including immediately on any Sentry alert.
 Replay/coverage backlogs and HTTP latency remain diagnostic snapshots; ongoing incident review
 must confirm those backlogs drain after provider recovery. Log lines and their spans (`deposit_id`, `chain_id`,
 `state`, `attempt`) serve local stacks.

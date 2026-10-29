@@ -405,7 +405,9 @@ Use only the project's error DSN (Settings > Client Keys) as `SENTRY_DSN`, seale
 stored as the §1.3 Environment secret. Sentry Uptime monitors are disabled for this project. Do not
 create one, per the owner's decision. For this pilot the owner accepts that external TLS, DNS,
 and ingress failures between manual checks may go undetected while the CVM still checks in.
-`pilot_watch` (§11) checks external health during ad hoc diagnostics and daily manual tallies. Then complete the following
+External `/healthz` checks retain the accepted cadence (§11): at least every two staffed hours
+for the first 72 h, at each UTC day boundary, then at least twice daily, and immediately on any
+Sentry alert. In-service checks do not establish external ingress/DNS/availability. Then complete the following
 ([Sentry](../README.md#sentry)):
 
 - Settings > Security & Privacy: keep *Data Scrubber* and *Use Default Scrubbers* on, and turn
@@ -1259,11 +1261,17 @@ Sentry before rollout, as in [business health](business-health.md).
 sets, and provider-dashboard quotas daily and at the UTC day boundary. RPC counters restart with
 the service, and shared Ankr usage also includes staging. Seven-day Ankr/BlockPI run rates and
 Infura daily credits need the provider dashboards or a real time-series collector; internal
-snapshot alerts do not approximate those rolling windows. External `/healthz` availability
-remains an operator check (Sentry Uptime is disabled for this pilot).
+snapshot alerts do not approximate those rolling windows.
 
-Use `pilot_watch` below ad hoc after an alert or recovery, as the fallback when investigating
-metrics and daily tallies. It reads diagnostics with the full admin key. Use the private-directory/
+**External health cadence is unchanged:** check the public origin's `/healthz` at least every two
+staffed hours for the first 72 h, at each UTC day boundary, then at least twice daily, and
+immediately on any Sentry alert. The owner accepts this manual cadence for the pilot. The new
+in-service checks do not establish external ingress/DNS/availability; Sentry Uptime remains
+disabled for this pilot.
+
+`pilot_watch` below includes that external health check and remains the diagnostic fallback for
+metrics and daily tallies. Run it on the external-health cadence, immediately on any Sentry
+alert, and after recovery. It reads diagnostics with the full admin key. Use the private-directory/
 `umask 077` setup, derive a temporary `admin.pem` from the owner's stored seed, and shred the
 local key and seed copy after each session (§13). Read the shared Ankr, staging Infura and
 production BlockPI dashboards daily:
@@ -1420,7 +1428,7 @@ recovery store, with non-secret run links in the deployment record.
 - [ ] §9 Restore drill passed; RPO and RTO recorded; deletion confirmed by 404 or retained deleted status for
       `restore-instance.json`'s `vm_uuid`; production still running; read-only token revoked.
 - [ ] §10 Merchant account onboarded, live, and confirmed; smoke account quotes paused.
-- [ ] §11 internal pilot alerts and Sentry routing verified; daily manual tallies, external health checks, and on-call owner agreed.
+- [ ] §11 internal pilot alerts and Sentry routing verified; daily manual tallies, owner-accepted external health cadence (including any Sentry alert), and on-call owner agreed.
 - [ ] §12 Approved release tag/commit, kit, images, configuration commit, and deployment records retained as the future
       N-1.
 - [ ] Owner's final go-live approval.
