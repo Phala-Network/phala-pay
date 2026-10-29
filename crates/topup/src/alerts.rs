@@ -39,7 +39,7 @@ fn failures() -> Result<&'static IntCounterVec, prometheus::Error> {
                 ),
                 &["reason"],
             )?;
-            for reason in ["queue_full", "database", "shutdown"] {
+            for reason in ["queue_full", "database", "shutdown", "cardinality"] {
                 counter.with_label_values(&[reason]);
             }
             Ok(counter)
@@ -265,6 +265,21 @@ pub(crate) async fn record(pool: &PgPool, observation: &Observation) -> Result<(
         }
         return Ok(());
     }
+    let tags = serde_json::json!(observation.tags);
+    // The lease owner and silence_change_lock serialize admission with every record/update.
+    // Existing instances keep receiving updates even after a name reaches its group budget.
+    let (active_count, existing): (i64, bool) = sqlx::query_as(
+        "SELECT count(*),COALESCE(bool_or(grouping_key=$2),false) FROM alerts \
+         WHERE name=$1 AND resolved_at IS NULL",
+    )
+    .bind(&observation.name)
+    .bind(&key)
+    .fetch_one(pool)
+    .await?;
+    if !existing && (active_count >= 100 || key.len() > 512 || tags.to_string().len() > 2048) {
+        failed("cardinality");
+        return Ok(());
+    }
     let runbook = crate::observability::alert_runbook(&observation.name, &observation.tags);
     sqlx::query(
         "INSERT INTO alerts (id,name,grouping_key,severity,tags,runbook,first_seen_at,last_seen_at) \
@@ -274,7 +289,7 @@ pub(crate) async fn record(pool: &PgPool, observation: &Observation) -> Result<(
            severity=EXCLUDED.severity,tags=EXCLUDED.tags,runbook=EXCLUDED.runbook, \
            last_seen_at=EXCLUDED.last_seen_at WHERE alerts.last_seen_at <= EXCLUDED.last_seen_at",
     ).bind(Uuid::new_v4()).bind(&observation.name).bind(key).bind(&observation.severity)
-        .bind(serde_json::json!(observation.tags)).bind(runbook).bind(observation.at)
+        .bind(tags).bind(runbook).bind(observation.at)
         .execute(pool).await?;
     Ok(())
 }
@@ -461,5 +476,68 @@ mod tests {
         recorder.persist(&sample).await;
         ensure!(counter.with_label_values(&["database"]).get() == failed_before + 1);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_groups_have_cardinality_and_byte_limits_existing_instances_still_update()
+    -> Result<()> {
+        crate::test_support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let now = Utc::now();
+                let counter = failures()?.with_label_values(&["cardinality"]);
+                let before = counter.get();
+                for index in 0..101 {
+                    let mut sample = observation("TopupCardinalityTest", now, "warning");
+                    sample
+                        .tags
+                        .insert("component".to_owned(), format!("group-{index}"));
+                    record(pool, &sample).await?;
+                }
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM alerts WHERE name='TopupCardinalityTest'",
+                )
+                .fetch_one(pool)
+                .await?;
+                ensure!(count == 100 && counter.get() == before + 1);
+                let mut updated = observation(
+                    "TopupCardinalityTest",
+                    now + chrono::TimeDelta::seconds(1),
+                    "critical",
+                );
+                updated
+                    .tags
+                    .insert("component".to_owned(), "group-0".to_owned());
+                record(pool, &updated).await?;
+                let severity: String = sqlx::query_scalar(
+                    "SELECT severity FROM alerts WHERE name=$1 AND grouping_key=$2",
+                )
+                .bind(&updated.name)
+                .bind(grouping_key(&updated.tags))
+                .fetch_one(pool)
+                .await?;
+                ensure!(severity == "critical" && counter.get() == before + 1);
+                let mut oversized = observation("TopupByteLimitTest", now, "warning");
+                oversized
+                    .tags
+                    .insert("component".to_owned(), "g".repeat(513));
+                record(pool, &oversized).await?;
+                oversized
+                    .tags
+                    .insert("component".to_owned(), "short".to_owned());
+                oversized
+                    .tags
+                    .insert("severity".to_owned(), "w".repeat(2048));
+                record(pool, &oversized).await?;
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM alerts WHERE name='TopupByteLimitTest'",
+                )
+                .fetch_one(pool)
+                .await?;
+                ensure!(count == 0 && counter.get() == before + 3);
+                Ok(())
+            })
+        })
+        .await
     }
 }

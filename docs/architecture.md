@@ -1740,6 +1740,9 @@ workers outside the business loop, through a bounded 1,024-observation queue. Da
 failures increment `topup_alert_persistence_failures_total` and never block Sentry. Persistence
 is asynchronous: a process crash or unavailable database can lose queued observations; existing
 Sentry reporting continues. The durable record is independent of whether Sentry is configured.
+New instances are limited to 100 active groups per name, a 512-byte grouping key, and 2 KiB of
+tags; rejected admissions increment the persistence failure counter with reason `cardinality`,
+while existing-instance updates and Sentry emission continue.
 The alert names include `TopupDepositStateAgeExceeded` (age in state past the route's
 `alerts.stuck_after_s`), `TopupReconciliationMismatch`, `TopupLockExposureNearCap`,
 `TopupLockExpiryFailing`, `TopupUnsupportedInflows`, `TopupDepositReversed` (a deposit's
