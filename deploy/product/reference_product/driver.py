@@ -35,7 +35,7 @@ from topup_sdk.addresses import same_address
 from topup_sdk.signing import sf_string
 
 from .config import ChainConfig, ProductConfig
-from .server import quote_address
+from .server import deposit_address
 
 LOG = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ def run_deposit(
         # Pay only an address recomputed here from the account, workspace, quote id, and the
         # chain's treasury.
         if quote.deposit_address_version is None or not same_address(
-            quote_address(config, team, quote.deposit_address_version, chain.chain_id),
+            deposit_address(config, team, quote.deposit_address_version, chain.chain_id),
             quote.address,
         ):
             raise RuntimeError("quote address does not match the driver's own computation")

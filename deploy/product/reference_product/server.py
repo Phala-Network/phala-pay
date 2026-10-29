@@ -679,7 +679,7 @@ def create_quote(
     return quote
 
 
-def quote_address(config: ProductConfig, team: str, version: int, chain_id: int) -> str:
+def deposit_address(config: ProductConfig, team: str, version: int, chain_id: int) -> str:
     return forwarder_address(
         config.factory,
         config.implementation,

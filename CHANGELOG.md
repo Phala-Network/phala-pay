@@ -14,6 +14,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Quotes on an existing customer network continue at the chain's issued-address cap. Only
+  issuing a missing network consumes capacity and returns `422 address_capacity_reached`
+  when the cap is reached.
+
 ## [0.13.1] - 2026-10-28
 
 ### Fixed
