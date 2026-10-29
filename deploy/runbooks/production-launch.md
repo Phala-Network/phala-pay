@@ -1,5 +1,10 @@
 # Production launch
 
+RedPill was the first live merchant; Phala Cloud onboarding remains planned. Current deployment
+records and the limits of the available sign-off evidence are in
+[Phala's instance, Launch evidence](../phala.md#launch-evidence). This procedure is the reusable
+checklist for a merchant account.
+
 This is the ordered, **HUMAN-ONLY** go-live procedure for Phala's production stablecoin pilot on
 the **approved release** selected in §1.1. Agents and CI run none of it. The committed live routes
 are USDC and USDT on Ethereum (chain 1) and USDC on Base (chain 8453), in
@@ -7,7 +12,7 @@ are USDC and USDT on Ethereum (chain 1) and USDC on Base (chain 8453), in
 sequencer uptime grace period. Both chains use the same deterministic factory, deployed on each chain
 separately. Production reads with Ankr and verifies with BlockPI on both mainnets. Before §2,
 the reviewed production RPC allocation and complete sealed mappings must be merged and pass
-preflight (§1.8). Staging stays on Ankr + Infura; no dRPC move is required. Production uses
+preflight (§1.8). Staging uses Ankr + Infura. Production uses
 D=115, H=200, Q=150, factory=150 and Safe=10; staging retains D=20, H=80, Q=60, factory=20
 and Safe=2
 ([RPC operations](../RPC.md#worst-case-pilot-budget)).
@@ -335,7 +340,7 @@ Finance, Risk, and Operations approve the following in writing
 The owner approved the committed pilot amounts on 2026-10-13: $5 minimum sale and $10,000 maximum
 quote, with `max_unfinalized_credit` of 1,000,000 cents ($10,000) per live account. One quote is
 bounded by the account's live `max_open_amount_per_customer`, whose default is $5,000, so §10
-raises Phala Cloud's to 1,000,000 cents. Each route's maximum deposit is 10,100 tokens, so a
+raises the merchant account's to 1,000,000 cents. Each route's maximum deposit is 10,100 tokens, so a
 $10,000 quote overpaid within its default 1% tolerance is still accepted.
 Any change is a reviewed PR to `topup.yaml`, merged **before** §2. A settings change after
 provisioning costs an extra upgrade and changes the compose hash.
@@ -345,7 +350,7 @@ provisioning costs an extra upgrade and changes the compose hash.
 
 ### 1.7 Treasury Safes
 
-Finance names the Safes for the smoke account and for Phala Cloud on Ethereum and Base. Their owners
+Finance names the Safes for the smoke and merchant accounts on Ethereum and Base. Their owners
 and threshold must be able to sign Safe messages, because §8 and §10 prove each Safe with EIP-1271.
 Deploy each Safe before its proof, because ERC-6492 signatures are refused. Then verify each Safe
 against a Finance-approved expectations file in the format of
@@ -353,12 +358,12 @@ against a Finance-approved expectations file in the format of
 shell:
 
 ```sh
-"$CONTRACT_REPO_DIR/deploy/contracts/verify-safe.sh" --expectations phala-cloud-ethereum-safe.json \
-  --rpc mainnet/a="$MAINNET_RPC_A" --rpc mainnet/b="$MAINNET_RPC_B" > phala-cloud-ethereum-safe-verification.json
-jq -e '.passed == true' phala-cloud-ethereum-safe-verification.json
+"$CONTRACT_REPO_DIR/deploy/contracts/verify-safe.sh" --expectations merchant-ethereum-safe.json \
+  --rpc mainnet/a="$MAINNET_RPC_A" --rpc mainnet/b="$MAINNET_RPC_B" > merchant-ethereum-safe-verification.json
+jq -e '.passed == true' merchant-ethereum-safe-verification.json
 ```
 
-Repeat the check for the Phala Cloud Base Safe with `base/a` and `base/b`, and for both smoke Safes.
+Repeat the check for the merchant's Base Safe with `base/a` and `base/b`, and for both smoke Safes.
 
 **Checks:** all four reports have `passed: true`. The owners, threshold, singleton, modules, guard,
 and fallback handler match Finance's approval.
@@ -379,8 +384,8 @@ Never register extra free accounts to stack quotas. The two BlockPI chain keys s
    Store these values in the owner's secret store. §4 seals them with the complete production
    secret set. Production-attested comments are updated before first provisioning; later
    configuration changes require a reviewed upgrade.
-3. Accept the [per-account budget](../RPC.md#worst-case-pilot-budget): 20,929 shared Ankr
-   calls/day, 736,331 staging-only Infura credits/day and 372,031 production-only BlockPI RU/day
+3. Accept the [provider-account budget](../RPC.md#worst-case-pilot-budget): 20,665 shared Ankr
+   calls/day, 715,211 staging-only Infura credits/day and 372,031 production-only BlockPI RU/day
    (372,030.5 before rounding up).
    Compare both environments' counters with the dashboards. Coordinate any Ankr key rotation
    across both environments. No staging re-seal or upgrade is required by this allocation.
@@ -897,7 +902,7 @@ done
 
 ## 9. Production restore drill
 
-Drill the production backup before Phala Cloud's charges. Follow
+Drill the production backup before enabling the merchant account's charges. Follow
 [RESTORE.md, Staging restore drill](../RESTORE.md#staging-restore-drill) and steps 1–5 of
 [Restore](../RESTORE.md#restore), with production values. Use the §1.4 **Object Read only** token
 only. `live_isolated` is a hard abort: run it before the instance exists, immediately after
@@ -1130,20 +1135,20 @@ If Phala Cloud retains a deleted CVM record, the 404 check fails safely. Confirm
 - The drill instance is deleted, the read-only token is revoked, and no read-write credential was
   ever sealed into the drill.
 
-## 10. Onboard Phala Cloud and enable its charges last
+## 10. Onboard the merchant account and enable its charges last
 
-Only after §§6–9 pass may Phala Cloud be onboarded. Open its account with charges disabled and set
+Only after §§6–9 pass may a merchant be onboarded. Open its account with charges disabled and set
 Finance's `max_unfinalized_credit` and its live `max_open_amount_per_customer`, which must be at
 least the largest approved quote (§1.6):
 
 ```sh
-(umask 077 && admin POST /v1/admin/accounts "$(jq -cn '{name:"Phala Cloud",contact:{name:"<name>",email:"<security email>"},due_diligence:{reference:"<review reference>",reviewed_at:"<YYYY-MM-DD>",reviewed_by:"<reviewer>"},charges_enabled:false,reason:"production onboarding after smoke and restore"}')" > phala-cloud-account.json)
-export PHALA_CLOUD_ACCOUNT_ID="$(jq -er '.id' phala-cloud-account.json)"
-(umask 077 && admin POST "/v1/admin/accounts/$PHALA_CLOUD_ACCOUNT_ID" \
+(umask 077 && admin POST /v1/admin/accounts "$(jq -cn '{name:"<merchant name>",contact:{name:"<name>",email:"<security email>"},due_diligence:{reference:"<review reference>",reviewed_at:"<YYYY-MM-DD>",reviewed_by:"<reviewer>"},charges_enabled:false,reason:"production onboarding after smoke and restore"}')" > merchant-account.json)
+export MERCHANT_ACCOUNT_ID="$(jq -er '.id' merchant-account.json)"
+(umask 077 && admin POST "/v1/admin/accounts/$MERCHANT_ACCOUNT_ID" \
   "$(jq -cn --argjson cents "$FINANCE_MAX_UNFINALIZED_CREDIT" --argjson customer 1000000 \
     '{max_unfinalized_credit:$cents,limits:{livemode:true,max_open_amount_per_customer:$customer},reason:"Finance-approved pilot value"}')" \
-  > phala-cloud-account-limits.json)
-jq -e '.limits.live.max_open_amount_per_customer == 1000000' phala-cloud-account-limits.json
+  > merchant-account-limits.json)
+jq -e '.limits.live.max_open_amount_per_customer == 1000000' merchant-account-limits.json
 ```
 
 With every gate passed, enable charges. The gates are the screening gates (§§6–8), Finance
@@ -1151,40 +1156,40 @@ With every gate passed, enable charges. The gates are the screening gates (§§6
 first live key without printing it:
 
 ```sh
-(umask 077 && admin POST "/v1/admin/accounts/$PHALA_CLOUD_ACCOUNT_ID" \
+(umask 077 && admin POST "/v1/admin/accounts/$MERCHANT_ACCOUNT_ID" \
   '{"charges_enabled":true,"reason":"screening, Finance, smoke, restore and monitoring gates passed"}' \
-  > phala-cloud-live.json)
-export PHALA_CLOUD_MERCHANT_SECRET_KEY="$(jq -er '.api_keys[] | select(.livemode == true and .type == "secret") | .secret' phala-cloud-live.json)"
+  > merchant-live.json)
+export MERCHANT_SECRET_KEY="$(jq -er '.api_keys[] | select(.livemode == true and .type == "secret") | .secret' merchant-live.json)"
 ```
 
-Prove Phala Cloud's Safes, accept exactly Ethereum USDC/USDT and Base USDC, register its live webhook
+Prove the merchant's Safes, accept exactly Ethereum USDC/USDT and Base USDC, register its live webhook
 endpoint, and pin its keys from the verified attestation:
 
 ```sh
-export PHALA_ETH_TREASURY_SAFE="<ethereum-phala-cloud-safe>" PHALA_BASE_TREASURY_SAFE="<base-phala-cloud-safe>"
-prove_live_treasuries "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_ETH_TREASURY_SAFE" "$PHALA_BASE_TREASURY_SAFE" phala-cloud &&
-  configure_live_payment_settings "$PHALA_CLOUD_MERCHANT_SECRET_KEY" &&
-  register_live_webhook "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "<Phala Cloud's https webhook receiver>" &&
-  pin_live_webhook_keys "$PHALA_CLOUD_MERCHANT_SECRET_KEY" "$PHALA_CLOUD_ACCOUNT_ID" phala-cloud || {
-  echo "Phala Cloud live configuration failed; stop" >&2
+export MERCHANT_ETH_TREASURY_SAFE="<ethereum-merchant-safe>" MERCHANT_BASE_TREASURY_SAFE="<base-merchant-safe>"
+prove_live_treasuries "$MERCHANT_SECRET_KEY" "$MERCHANT_ETH_TREASURY_SAFE" "$MERCHANT_BASE_TREASURY_SAFE" merchant &&
+  configure_live_payment_settings "$MERCHANT_SECRET_KEY" &&
+  register_live_webhook "$MERCHANT_SECRET_KEY" "<the merchant's https webhook receiver>" &&
+  pin_live_webhook_keys "$MERCHANT_SECRET_KEY" "$MERCHANT_ACCOUNT_ID" merchant || {
+  echo "Merchant live configuration failed; stop" >&2
   false
 }
 ```
 
-Hand the account id and live key to Phala Cloud's recorded contact through an encrypted channel.
-Phala Cloud rolls the key at once and runs its servers with a restricted live key
+Hand the account id and live key to the merchant's recorded contact through an encrypted channel.
+The merchant rolls the key at once and runs its servers with a restricted live key
 ([Operator onboarding, step 3](../README.md#operator-onboarding)). Pause the smoke account's
 quotes, so it adds no load until the next smoke. Then shred the response files:
 
 ```sh
 admin POST "/v1/admin/accounts/$SMOKE_ACCOUNT_ID/pause" '{"scopes":["quotes"],"reason":"smoke complete; idle until the next production smoke"}'
-shred -u phala-cloud-account.json phala-cloud-account-limits.json phala-cloud-live.json
-unset SMOKE_MERCHANT_SECRET_KEY PHALA_CLOUD_MERCHANT_SECRET_KEY PHALA_CLOUD_API_KEY
+shred -u merchant-account.json merchant-account-limits.json merchant-live.json
+unset SMOKE_MERCHANT_SECRET_KEY MERCHANT_SECRET_KEY PHALA_CLOUD_API_KEY
 ```
 
-**Checks:** Phala Cloud's account has `charges_enabled: true`, Finance's `max_unfinalized_credit`,
+**Checks:** the merchant's account has `charges_enabled: true`, Finance's `max_unfinalized_credit`,
 and a live `max_open_amount_per_customer` of at least the largest approved quote. Both Safes are active treasuries, the three assets are accepted, and its
-webhook keys are pinned. Phala Cloud confirms receipt, the key roll, and its first live payment
+webhook keys are pinned. The merchant confirms receipt, the key roll, and its first live payment
 credited and delivered.
 
 ## 11. Pilot caps, monitoring, and stop actions
@@ -1237,11 +1242,11 @@ seven-day RU run rate. BlockPI payload surcharges are visible in its dashboard. 
 | Signal | Stop action | Runbook |
 |---|---|---|
 | S or L stock above 1, or S or L entries in rolling 24 h above 1 | Pause `quotes` on every route of the affected chain (below) and escalate. Keep verifying funded work and keep its reservations. Resume only when stock, entries and the day's work all fit | [Deposit reversed](deposit-reversed.md), [RPC health](rpc-health.md) |
-| D reaches 115 in a UTC day, factory 150/day, or Safe 10/day | Pause `quotes` on all three routes until 00:00 UTC (5:00 PM PDT) and coordinate Phala Cloud's intake. Start no proof batch | [RPC operations](../RPC.md#monitoring-and-stop-actions) |
+| D reaches 115 in a UTC day, factory 150/day, or Safe 10/day | Pause `quotes` on all three routes until 00:00 UTC (5:00 PM PDT) and coordinate merchant intake. Start no proof batch | [RPC operations](../RPC.md#monitoring-and-stop-actions) |
 | Shared Ankr seven-day run rate ≥ 25,000 calls/day, staging Infura ≥ 1,500,000 credits/day, or production BlockPI seven-day run rate ≥ 1,250,000 RU/day | Add no merchant, route or test load. Investigate retry or range growth. Never add a second free account | [RPC health](rpc-health.md) |
 | Staging Infura `402`, or production BlockPI quota/throughput exhaustion | Infura verify halts until UTC midnight; BlockPI verify waits for provider recovery. Preserve pending work and do not switch endpoints | [RPC health](rpc-health.md) |
 | `TopupAddressCapacity` or 700 addresses on a chain (70%); 900 is critical | Plan the paid-provider or indexer upgrade, and stop growth before 1,000 | [Address capacity](address-capacity.md) |
-| `422 refund_attachment_limit_exceeded` (R=2 attached pending, N=1 per 24 h) | Enforced by the service. Phala Cloud contacts the operator before another payout. Never cancel an attached refund to make room | [RPC operations](../RPC.md#pilot-limits-and-operating-modes) |
+| `422 refund_attachment_limit_exceeded` (R=2 attached pending, N=1 per 24 h) | Enforced by the service. The merchant contacts the operator before another payout. Never cancel an attached refund to make room | [RPC operations](../RPC.md#pilot-limits-and-operating-modes) |
 | `TopupRefundProgressAge`: attached refund pending over 1 h, or unseen by both endpoints for 24 h | The refund stays pending and reserved. Checks back off from 60 s to ten minutes after 30 min, then hourly after 24 h | [Pending refund transaction](rejected-funds-at-treasury.md#pending-refund-transaction-alert) |
 | `TopupSanctionsListStale`, `TopupSanctionsListVerifyFailed`, `TopupSanctionsRescreenFailed` | Restore verification before the 24 h freshness limit, or pause `settlement` on the routes | [Sanctions list](sanctions-list.md) |
 | H 200 or Q 150 exhausted | Automatic until UTC midnight. Review the demand, but never raise caps without a reviewed budget | [RPC health](rpc-health.md) |
@@ -1262,7 +1267,7 @@ pause_chain_quotes() {
 ```
 
 Resume with the same body on `/v1/admin/routes/<route>/resume`. A pause does not stop transfers to
-persistent addresses, so coordinate Phala Cloud's intake as well. External `/healthz` availability
+persistent addresses, so coordinate merchant intake as well. External `/healthz` availability
 has no Sentry Uptime monitor. A down CVM shows as missed Crons check-ins, and `pilot_watch` checks
 the public origin.
 
@@ -1276,14 +1281,14 @@ with its own verified kit, image digests, configuration commit and deployment re
 it from a version number or from the current caller pin. Never delete the CVM or its app: the
 backups are encrypted with the app's derived key.
 
-- **Before Phala Cloud's charges (§§2–9):** leave every account without live charges or paused, fix
+- **Before enabling merchant charges (§§2–9):** leave every account without live charges or paused, fix
   the cause, and repeat the failed section. A configuration fix is a reviewed PR to `$ENV_DIR`
   followed by `dispatch_deploy upgrade`. To abandon the launch, stop the CVM
   (`"$KIT_DIR/deploy/phala" cvms stop "$TOPUP_CVM_ID"`), and keep the app, the bucket, and the DNS records
   until the owner decides.
 - **After charges:** pause first. Pause `quotes` on the affected routes, or `quotes` and
-  `settlement` on Phala Cloud's account
-  (`admin POST "/v1/admin/accounts/$PHALA_CLOUD_ACCOUNT_ID/pause" '{"scopes":["quotes","settlement"],"reason":"<incident>"}'`).
+  `settlement` on the merchant account
+  (`admin POST "/v1/admin/accounts/$MERCHANT_ACCOUNT_ID/pause" '{"scopes":["quotes","settlement"],"reason":"<incident>"}'`).
   Follow [incident communication](incident-communication.md). Revert a bad setting with a PR and
   `dispatch_deploy upgrade` at the approved release. Never run down migrations, edit the database,
   or release reservations.
@@ -1307,7 +1312,10 @@ and both deployment records as the recovery point for the next upgrade.
 ## 13. Sign-off checklist
 
 Record the evidence, the owner, and the time (PT) for each item. Launch is complete when every item
-is checked.
+is checked. The current [launch evidence](../phala.md#launch-evidence) records RedPill's
+production deployment; it does not mark the unrecorded screening, smoke, or production restore
+gates complete. Retain each merchant's signed checklist and private evidence in the owner's
+recovery store, with non-secret run links in the deployment record.
 
 - [ ] §1.1 `RELEASE_TAG` and `RELEASE_COMMIT` read from the caller at `APPROVED_COMMIT`;
       kit, images and pins verified; matching staging soak approved; prior production rollback
@@ -1348,13 +1356,13 @@ is checked.
       hits refused.
 - [ ] §9 Restore drill passed; RPO and RTO recorded; deletion confirmed by 404 or retained deleted status for
       `restore-instance.json`'s `vm_uuid`; production still running; read-only token revoked.
-- [ ] §10 Phala Cloud onboarded, live, and confirmed; smoke account quotes paused.
+- [ ] §10 Merchant account onboarded, live, and confirmed; smoke account quotes paused.
 - [ ] §11 `pilot_watch` cadence, daily tallies, and on-call owner agreed.
 - [ ] §12 Approved release tag/commit, kit, images, configuration commit, and deployment records retained as the future
       N-1.
 - [ ] Owner's final go-live approval.
 - [ ] Private work copies shredded: `admin.pem`, `admin.seed`, `maintenance/production.pem`,
-      `.env.production`, restore env, `payer.password`, admin request body, and smoke/Phala Cloud
+      `.env.production`, restore env, `payer.password`, admin request body, and smoke/merchant
       first-key response JSON files; transient secret environment variables unset.
 
 After sign-off, keep the verified kit, images, configuration commit and non-secret evidence in
@@ -1369,14 +1377,14 @@ cleanup_launch_private_material() {
   local private_file
   for private_file in admin.pem admin.seed maintenance/production.pem .env.production payer.password \
     admin-body.json smoke-account.json smoke-account-limits.json smoke-live.json \
-    phala-cloud-account.json phala-cloud-account-limits.json phala-cloud-live.json \
+    merchant-account.json merchant-account-limits.json merchant-live.json \
     restore-env.*/restore.env; do
     if [[ -f "$LAUNCH_WORK_DIR/$private_file" ]]; then
       shred -u -- "$LAUNCH_WORK_DIR/$private_file" || return 1
     fi
   done
   unset PHALA_CLOUD_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN PRIVATE_KEY
-  unset SMOKE_MERCHANT_SECRET_KEY PHALA_CLOUD_MERCHANT_SECRET_KEY
+  unset SMOKE_MERCHANT_SECRET_KEY MERCHANT_SECRET_KEY
 }
 cleanup_launch_private_material
 ```

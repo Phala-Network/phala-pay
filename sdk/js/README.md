@@ -93,6 +93,11 @@ still stops immediately.
 | `expired`, `canceled` | The address is hidden; `onExpire` is called once |
 | `error` | Invalid client secret, address mismatch, or three consecutive non-retryable 4xx; nothing to pay |
 
+A newer quote for the same customer and route closes the previous price window immediately:
+`expires_at` is cut and `replaced_by` names the new quote. With no payment in progress, the old
+checkout shows `expired` (or `canceled` once the service closes it), and `onExpire` fires once.
+An existing payment's status still takes precedence; there is no `replaced` status.
+
 `onChange(state)` is called once per status change with `{ status, quote, error, txHash }`, like
 Stripe Elements' `onChange`, for example to hide your own "new payment" control while a payment is
 sent, `seen`, or `confirming`. `txHash` is the transaction the wallet tab sent (`null` before

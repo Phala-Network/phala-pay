@@ -229,12 +229,14 @@ cloud console's billing page, on [pay.phala.com](https://pay.phala.com/).
 ### 1.1 How it works
 
 A quote is the way to pay a known amount, as a PaymentIntent is in Stripe: the user states an
-amount in dollars and receives a locked price, an exact token amount, and a fixed customer address to
-pay within the window. A quote is a **payment instruction at a locked price, not a guarantee of
+amount in dollars and receives a locked price and an exact token amount to pay to the customer's
+deposit address (§1.5) within `(window_start, expires_at]`. A new quote closes the previous window
+for the same customer and route. A quote is a **payment instruction at a locked price, not a guarantee of
 payment in full**: an underpayment, an overpayment, or a late payment to its address is still
 credited, at spot, for what arrived (§1.3). Treat an order as paid in full only when the deposit's
-`price_source` is `quote` (or its `amount` is what you expected). For top-ups within your deposit limits at any time, give the customer a persistent
-deposit address instead (§1.5). The service watches Ethereum for transfers to its addresses, waits for the
+`price_source` is `quote` (or its `amount` is what you expected). The same deposit address also
+takes transfers within your deposit limits at spot outside the quote window (§1.5).
+The service watches Ethereum for transfers to its addresses, waits for the
 route's confirmation (two blocks on Ethereum), prices each deposit, and screens it. A deposit that
 passes is credited, typically **about 30 seconds after paying**, and the service tells you
 with a signed `deposit.credited` webhook. It keeps watching the deposit until it is final (about
@@ -687,6 +689,12 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   (`400 deposit_address_cap_exceeded`; ask the operator to raise it); no new address is issued
   while `quotes` is paused (`400 paused`), and a network frozen by reconciliation gets no new
   address until it is lifted.
+  The operator also enforces a permanent per-chain issued-address cap: 1,000 across all accounts
+  and modes on Phala's pilot, including retired and historical addresses. A first quote that
+  issues a missing customer network and an address rotation consume it; at the cap these return
+  `422 address_capacity_reached`, without `Retry-After`. This is not retryable: contact the
+  operator. Quotes on an existing network continue without consuming capacity. Rotation moves
+  future quotes to the new address version.
 
 **Page copy.** "One address for all listed tokens and networks. Send only listed tokens." Let the
 customer pick the network and the token; show that network, the token contract, the full address
@@ -1412,10 +1420,10 @@ Sepolia and Base Sepolia, listed with their tokens and faucets in
 depth 3, typically about 7 seconds after paying. Route files carry no treasury, so set your own on
 each chain first (§1.6).
 
-For example, Phala's own instance, which serves only Phala Cloud's account: production
-`https://pay-api.phala.com` (live: Ethereum Mainnet; test: Sepolia; not deployed yet) and staging
-`https://pay-api-staging.phala.com` (test: Sepolia and Base Sepolia; internal pre-production,
-[deploy/phala.md, "Phala's instance"](../deploy/phala.md)).
+For example, Phala's instance serves its own products: RedPill (live) and Phala Cloud (planned),
+with no third-party merchants. Production `https://pay-api.phala.com` serves only live Ethereum
+USDC/USDT and Base USDC, with no test routes. Staging `https://pay-api-staging.phala.com` is
+test-only on Sepolia and Base Sepolia ([Phala's instance](../deploy/phala.md)).
 
 ### 4.2 Testing your receiver
 

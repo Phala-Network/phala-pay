@@ -10,11 +10,11 @@ records why each decision was made.
 Each operator runs its own instance in its own dstack confidential VM (CVM), for its own
 merchants, from a verified release of Phala Pay and a repository that holds only its settings.
 [Self-hosting](self-hosting.md) is the path from there to a credited deposit. Phala runs an
-instance only for Phala Cloud and offers no hosted service to others.
+instance for its own products: RedPill (live) and Phala Cloud (planned), with no third-party merchants.
 
 The operator onboards each merchant as an account (`acct_…`) through the admin API. The merchant
-does everything else with its API keys and the SDKs; there is no dashboard. Phala Cloud is an
-ordinary account of Phala's instance.
+does everything else with its API keys and the SDKs; there is no dashboard. RedPill is an
+ordinary merchant account of Phala's instance.
 
 The service turns deposits of configured ERC-20 tokens into USD-valued credits. It tells the
 merchant what to credit with signed `deposit.credited` webhooks, which the merchant fulfills once
@@ -30,12 +30,13 @@ It is software, not custody:
 
 ## Quotes and deposit addresses
 
-A **quote** locks a price: the customer receives an exact amount and a fixed customer address, and
-pays within the window.
+Each customer has one persistent, rotatable **deposit address** for every supported token on
+every chain (the same address wherever the treasury is the same).
 
-Each customer can also have one persistent, rotatable **deposit address** for every supported
-token on every chain (the same address wherever the treasury is the same). A transfer to it within
-the per-transfer limits is credited at spot, like the stable bank-transfer details of Stripe's customer balance.
+A **quote** adds a locked price and exact amount to that address for `(window_start, expires_at]`.
+One window is open per customer and route; a new quote closes the previous window. The first
+eligible transfer in the window uses the locked price. Other transfers within the per-transfer
+limits credit at spot, like the stable bank-transfer details of Stripe's customer balance.
 
 ## Routes
 
@@ -43,9 +44,9 @@ A route is one chain and one token, in test or live mode. Routes are settings th
 commits to its environment repository, so they are part of the attested deployment; further
 merchants are accounts, not configuration.
 
-The repository's committed routes are Phala's staging routes, test routes on Sepolia and Base
-Sepolia, listed in [deploy/phala.md, "Staging routes"](../deploy/phala.md#staging-routes).
-Production-eligible examples use Chainlink-priced stablecoins
+Phala's committed [production routes](../deploy/phala.md#production) are live Ethereum USDC/USDT
+and Base USDC; its [staging routes](../deploy/phala.md#staging-routes) are test-only on Sepolia
+and Base Sepolia. Production-eligible examples use Chainlink-priced stablecoins
 ([USDT mainnet template](../examples/phala-cloud-usdt.yaml)). The
 [PHA mainnet template](../examples/phala-cloud-pha.yaml) is staging/noncommercial only: PHA has
 no second Allowed independent price source ([price sources](configuration.md#price-sources)).
@@ -78,9 +79,10 @@ flowchart TB
 
 ## Payment lifecycle
 
-1. The merchant backend creates a quote (or the customer's deposit address) with its API key.
-2. The service locks the price and computes a CREATE2 forwarder address over the merchant's
-   treasury.
+1. The merchant backend creates a quote with its API key, or requests the customer's deposit
+   address for transfers at spot.
+2. The service issues any missing customer network as a CREATE2 forwarder over the merchant's
+   treasury. A quote reuses that network and opens its price window.
 3. The merchant recomputes the address from its own pins before showing it.
 4. A checkout transaction hint starts immediate verification; unhinted transfers are discovered
    by the fixed five-minute read scan.

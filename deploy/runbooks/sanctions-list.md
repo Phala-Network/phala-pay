@@ -104,17 +104,14 @@ retained. There is no clear-result cache; every decision uses local database rea
 
 ## N-1 rollback
 
-CI currently resolves v0.10.0 as N-1 for the next release's rollback rehearsal. It uses the
-verified OFAC SDN snapshot and manual supplements, supports the current `rpc` configuration and
-refund caps, and retains the sanctions tables. Use its retained verified configuration and kit;
-a successful rollback drill proves binary/schema compatibility, so also verify a fresh snapshot,
-manual supplements and re-screening before resuming screening-dependent processing.
-
-v0.10.0 is production's first release, with no earlier production rollback target. v0.9.2 ignores
-the sanctions tables and supplements, uses the known-stale Chainalysis oracle, and cannot parse
-the current configuration. Never deploy it to production. Pause and fix forward as in
-[production launch rollback](production-launch.md#12-rollback). Keep `chain.sanctions_oracle`
-in retained configurations for compatibility with older schemas; current screening does not use it.
+The rollback floor is v0.13.0; going below it requires
+[restore and reconciliation](../RESTORE.md), as declared in the v0.13.0 changelog.
+Use the target's retained verified configuration and kit. Supported releases use verified OFAC
+SDN snapshots and manual supplements and retain the sanctions tables. A successful rollback
+drill proves binary/schema compatibility; also verify a fresh snapshot, manual supplements and
+re-screening before resuming screening-dependent processing. Follow
+[production launch rollback](production-launch.md#12-rollback) for the recorded deployment target.
+Keep `chain.sanctions_oracle` in retained configurations; current screening does not use it.
 
 Run the disposable local [rollback drill](../local/rollback-drill.sh) with the verified published
 N-1 image digest. The N worker uses a loopback-only SLS fixture in the test-support build; the

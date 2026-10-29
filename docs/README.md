@@ -29,7 +29,7 @@ For the operator who runs an instance, onboards merchants, and handles incidents
 | [Contract deployment](../deploy/CONTRACTS.md) | Deploying and verifying the deterministic forwarder factory on a chain. |
 | [Backup and restore](../deploy/RESTORE.md) | WAL-G backups, the restore-check variant, restores, and drills. |
 | [Runbooks](../deploy/runbooks/README.md) | One runbook per alert or incident, and the alert index. |
-| [Phala's instance](../deploy/phala.md) | Phala's own deployment, as a worked example: its staging routes, the reference product behind the demo, the website, and its onboarding policy. |
+| [Phala's instance](../deploy/phala.md) | Production and staging, live routes and pilot limits, launch evidence, the reference product behind the demo, and onboarding policy. |
 
 ## Reference
 
@@ -52,7 +52,7 @@ For the operator who runs an instance, onboards merchants, and handles incidents
 | [Design: chain reads](design/chain-reads.md) | Read/verify endpoints, dual coverage, checkpoints and operator compatibility; current operations are in the [RPC runbook](../deploy/RPC.md). |
 | [Design: SDK ergonomics](design/sdk-ergonomics.md) | Phases 1–2 implemented in 0.9.0; phase 3 (setup CLI) pending: server client, pins, setup, checkout handoff, ledger recipes, and the owner’s compatibility decision. |
 | [Plan: Go SDK](design/go-sdk.md) | Proposed backend scope, security parity, generation and release decisions, and acceptance gates; not implemented. |
-| [Plan to production](plan.md) | What remains before Phala's own instance goes live. |
+| [Post-launch status](plan.md) | RedPill live, Phala Cloud onboarding pending, and gates before widening the pilot. |
 
 ## Contributing
 

@@ -638,19 +638,10 @@ do not export those access logs to Sentry. Topup's tracing and Sentry still neve
 IPs. The topup PROXY listener only carries connection information; there are no new
 per-IP limits, including for transaction-hash hints.
 
-**Rollout and rollback.** First deploy and verify v0.10.8 (dstack 0.6.1, ingress 2.8, and
-phase 1 with PROXY off) on staging and production. Then release phase 2 as v0.10.9 and follow the
-[staging verification recipe](client-ip-staging.md) before production topup. Product and template
-keep PROXY off; restore-check inherits the service's policy on its unbound 443. Gateway `pp:true`,
-ingress ACCEPT/SEND, the 8082 target,
-and topup's private listener must change together in one app-compose. Enabling only one hop breaks
-every connection, including health and certificate checks.
-
-Rolling back from v0.10.9 to an earlier release requires the **target release's compose-update
-path from a v0.10.8 or newer kit**, which explicitly restores `pp:false` together with PROXY-off
-ingress settings. Never roll back directly to v0.10.7 or older: their deployment path can leave
-gateway PROXY enabled against an ingress that expects ordinary TLS. Verify health, attestation,
-and ingress evidence after rollback.
+**Upgrades and rollback.** Gateway `pp:true`, ingress ACCEPT/SEND, the 8082 target, and topup's
+private listener must stay aligned in one app-compose; verify health, attestation, and ingress
+evidence after every change. Product and template keep PROXY off; restore-check inherits the
+service's policy on its unbound 443. The [rollback floor](#rollback-compatibility) is v0.13.0.
 
 **HUMAN-ONLY, owner of the domain's DNS zone** (any DNS provider; the Deploy summary's
 wording assumes Cloudflare, as in Phala's instance), once per CVM instance. Every Deploy run
@@ -1100,7 +1091,7 @@ its payment settings are held until it sends its complete configuration again wi
 
 ## Phala's instance
 
-Phala's own deployment (its staging routes, the staging reset, the reference product behind the
+Phala's own deployment (production and staging routes, the staging reset, the reference product behind the
 demo, the website, and its onboarding policy) is in [Phala's instance](phala.md).
 
 Production preflight passes `--require-sentry` to `topup config check`, forwarding `SENTRY_DSN`
@@ -1113,12 +1104,10 @@ Ingress uses the supported dstack-ingress TCP settings `TIMEOUT_CONNECT=5s`,
 
 ## Rollback compatibility
 
-Before rolling back to a release without `hints_per_day` and `quote_snapshots_per_day`, render
-that release's kit with its verified configuration and use its original RPC alert rules. Its
-strict parser rejects the new fields, including defaulted fields printed by newer
-`topup config show`. Preserve each release's configuration and operating allocation alongside
-its verified images. Database compatibility does not make the older binary honor the new caps.
-The [client address passthrough rollback requirements](#custom-domain) still apply.
+The rollback floor is **v0.13.0**. Its declared schema break forbids rollback to v0.12.x or older;
+going below it requires [restore and reconciliation](RESTORE.md), not a binary downgrade.
+Use each target's retained verified kit, images, configuration, and RPC alert rules.
+The [client address passthrough requirements](#custom-domain) still apply.
 
 Migrations must be expand-only and preserve N-1 reads, writes, defaults and constraints. Under the
 migration advisory lock, protocol-aware binaries validate every newer applied migration against
@@ -1128,10 +1117,10 @@ and it must have succeeded. Missing metadata, a higher floor or mismatched check
 SQLx continues checking all known migration checksums and dirty state. The application role cannot
 write the ledger. A rollback never lowers existing floors or edits migration history.
 
-CI resolves the latest stable release as N-1 automatically and requires v0.9.0 or later; currently
-it resolves v0.10.0. This is the rollback target for a later compatible release, while the initial
-production v0.10.0 launch has no earlier production target
-([launch rollback](runbooks/production-launch.md#12-rollback)).
+CI resolves the latest stable release other than the current Git ref as N-1 automatically.
+The v0.13.1 release rehearsed v0.13.0; a branch build currently selects v0.13.1.
+The deployment rollback target must also be a recorded prior production deployment at or above
+the v0.13.0 floor ([launch rollback](runbooks/production-launch.md#12-rollback)).
 For any N-1, an exact `no rollback to <N-1 version>; restore required` declaration in
 `### Breaking (operators)` under `## [Unreleased]` or the dated section matching the workspace
 version (including the release PR before tagging)

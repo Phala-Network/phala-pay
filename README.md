@@ -27,8 +27,8 @@ webhooks, and refunds, running in an attested confidential VM.
 
 ## What it isn't
 
-- **Not a hosted service.** Phala runs an instance only for Phala Cloud; everyone else runs
-  their own ([self-hosting](docs/self-hosting.md)).
+- **Not a hosted service.** Phala's instance serves its own products: RedPill (live) and Phala
+  Cloud (planned). Other merchants run their own ([self-hosting](docs/self-hosting.md)).
 - **Not a wallet, exchange, or dashboard.** There is no custody, trading, fiat conversion,
   signup, or merchant UI; merchants use the API and the SDKs.
 - **Not a compliance service.** Beyond direct sanctions screening, compliance (KYC, KYT, the
@@ -55,10 +55,12 @@ staging instance ([staging reference product](deploy/phala.md#staging-reference-
 
 ## Features
 
-- **Quotes**: a locked price, an exact token amount, and a fixed customer address to pay within a
-  window. Late, partial, or extra payments are still credited, at spot.
+- **Quotes**: a locked price and an exact token amount on the customer's own deposit address,
+  valid for `(window_start, expires_at]`. One window is open per customer and route; a new quote
+  closes the previous window. Late, partial, or extra payments are still credited, at spot.
 - **Deposit addresses**: one persistent, rotatable address per customer for every supported token
-  on every chain, credited at spot within per-transfer limits.
+  on every chain (the same address where the treasury is the same). Quotes use this address;
+  other transfers are credited at spot within per-transfer limits.
 - **Fast credit, watched to finality**: checkout transaction hints take the instant processing
   path, with credit in seconds at route confirmation (about 30 seconds after paying on Ethereum,
   about 7 seconds on Base). Unhinted transfers are discovered by a five-minute scan. Every credit
@@ -113,9 +115,10 @@ from [crates/topup/openapi.json](crates/topup/openapi.json), the API's OpenAPI d
 
 ## Status
 
-Phala Pay is pre-1.0 and has had no third-party security audit. Phala's production instance is
-not deployed yet; its staging instance (`https://pay-api-staging.phala.com`) serves test routes
-on Sepolia and Base Sepolia. [The plan to production](docs/plan.md) lists what remains.
+Phala Pay is pre-1.0 and has had no third-party security audit. Phala's production instance,
+`https://pay-api.phala.com`, runs v0.13.1 for RedPill with live Ethereum USDC/USDT and Base USDC.
+Staging (`https://pay-api-staging.phala.com`) serves test routes on Sepolia and Base Sepolia.
+[Post-launch status](docs/plan.md) records the remaining onboarding and pilot gates.
 
 ## Contributing
 

@@ -1,6 +1,7 @@
 # Phala's instance
 
-Phala runs an instance only for Phala Cloud and offers no hosted service to others. Its
+Phala's instance serves its own products: RedPill (live) and Phala Cloud (planned), with no
+third-party merchants. Its
 `staging` Environment (`https://pay-api-staging.phala.com`, on Sepolia and Base Sepolia) also runs
 a reference product whose API serves the live demo on Phala's website,
 [pay.phala.com](https://pay.phala.com/). This page records that setup and Phala's own policies.
@@ -14,29 +15,71 @@ API-key authentication that cannot acquire a database slot within 250 ms returns
 [Service configuration](../docs/configuration.md#api-admission-limits) for the authentication
 gate and protection model.
 
-## Ingress rollout
+## Ingress
 
-The phase-1 deploy kit pins dstack-ingress 2.8 for both topup and the staging reference product.
-Its explicit attested port policy keeps PROXY off (`pp:false`, `restrict_mode:false`); existing
-backend ports and the template/restore-check listeners stay unchanged. Upgrade through a release,
-staging topup and product verification, then production topup. These are rollout instructions,
-not a claim that any live CVM has been upgraded.
-
-Phase 2 is a separate release that enables gateway PROXY and ingress ACCEPT/SEND atomically for
-topup. Keep phase 1 as its rollback floor: once phase 2 ships, no rollback past that release.
-The product remains on its plain HTTP backend until separately approved. Topup carries the
-address without per-IP limits and never logs it; HAProxy's private access logs are the documented
-privacy exception. See [Custom domain](README.md#custom-domain) for the compose-update API path,
-attestation checks, validation rules, and rollback ordering.
+Staging and production run dstack-ingress 2.8. Topup enables gateway PROXY on 443 and ingress
+ACCEPT/SEND to its private listener on 8082 together; the staging reference product keeps PROXY
+off and uses its plain HTTP backend. Topup carries the client address without per-IP limits and
+never logs it; HAProxy's private access logs are the documented privacy exception. See
+[Custom domain](README.md#custom-domain) for the attested policy and verification checks.
+The current [rollback floor](README.md#rollback-compatibility) is v0.13.0.
 
 ## Onboarding policy
 
 Phala's instance onboards only Phala's own accounts, as in
-[Operator onboarding](README.md#operator-onboarding): Phala Cloud's, which collects Phala Cloud's
-own revenue, and the staging reference product's. It takes no third-party merchants, so live mode
-(`charges_enabled`) is a decision about Phala Cloud alone. Phala, as the operator of this
+[Operator onboarding](README.md#operator-onboarding): RedPill's live account, the planned Phala
+Cloud account, and the staging reference product's. Live mode (`charges_enabled`) is enabled per
+account after its gates pass. Phala, as the operator of this
 instance, is responsible for its compliance, as every operator is for its own (architecture §15,
 "Compliance").
+
+## Production
+
+Production has been live since October 23, 2026 PDT. `https://pay-api.phala.com` runs v0.13.1
+for RedPill; Phala Cloud onboarding is pending. Its
+[configuration](environments/phala-network/production/topup/topup.yaml) serves live routes only:
+
+| Route | Chain | Token | Confirmations |
+|---|---|---|---|
+| `phala-cloud-ethereum-usdc-usd` | Ethereum (1) | USDC | 2 |
+| `phala-cloud-ethereum-usdt-usd` | Ethereum (1) | USDT | 2 |
+| `phala-cloud-base-usdc-usd` | Base (8453) | USDC | 3; sequencer uptime grace of one hour |
+
+The `phala-cloud-*` route ids predate RedPill onboarding. They are persistent catalog identifiers,
+not merchant bindings: accounts select accepted assets through payment settings and supply their
+own treasuries. Keep the ids stable for stored quotes, deposits, and recovery. There are no test
+routes or PHA route in production. The factory is
+[deployed and verified on both mainnets](CONTRACTS.md#mainnet); screening uses verified OFAC SDN
+snapshots and audited operator supplements, not the legacy oracle fields.
+
+RPC uses Ankr read and independent BlockPI verify on both chains. Ankr's 25,000-call daily pilot
+budget is shared with staging; BlockPI's chain keys share one 1,250,000-RU daily account budget.
+See the [RPC budget](RPC.md#worst-case-pilot-budget) for reserve and stop lines.
+
+| Pilot limit | Production value | Enforcement |
+|---|---:|---|
+| D: deposits per UTC day | 115 | Operator tally and stop |
+| H: hint tasks per UTC day | 200 | Service; excess hints fall back to scanning |
+| Q: fresh quote snapshots per price chain per UTC day | 150 | Service; `503 price_unavailable`, with 12-second snapshot reuse |
+| Issued addresses per chain, all accounts and modes | 1,000 permanently | Service; `422 address_capacity_reached` for a missing network or rotation |
+
+Quotes on an existing customer network consume no address capacity and continue at the cap.
+Each new RedPill organization consumes one address on each chain it first quotes on. Closing
+quotes and retiring addresses free no capacity. The
+[address-capacity runbook](runbooks/address-capacity.md) sets warning and upgrade thresholds;
+[post-launch status](../docs/plan.md) records the gates before widening RedPill access.
+
+### Launch evidence
+
+The [v0.13.1 production upgrade](https://github.com/Phala-Network/phala-pay/actions/runs/40652271111)
+records deployment and health/attestation verification. The
+[restore-drill branch run](https://github.com/Phala-Network/phala-pay/actions/runs/40600616231)
+verified the repaired drill, rather than a production-backup drill on v0.13.1.
+Keep private recovery material and sign-off evidence in the operator recovery store
+specified by the [launch checklist](runbooks/production-launch.md#13-sign-off-checklist).
+No completed production sign-off report is committed here: confirm supplements, all three smoke
+payments, and the current production restore drill before widening access. RedPill's owner
+real-money acceptance test remains pending; a successful upgrade does not establish it.
 
 ## Staging routes
 
@@ -47,12 +90,12 @@ deterministic factory ([Contracts](README.md#contracts)); any test key quotes on
 
 | Route | Token | Pricing | Test tokens |
 |---|---|---|---|
-| `phala-cloud-sepolia-pha-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | test PHA `0x8F40e7E99678F44c88158f049E62817580ab113B` (`MockERC20`, 18 decimals) | volatile: Kraken `PHAUSD`, checked against Binance `PHAUSDT` × mainnet USDT/USD | `mint(address,uint256)` is public |
+| `phala-cloud-sepolia-pha-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | test PHA `0x8F40e7E99678F44c88158f049E62817580ab113B` (`MockERC20`, 18 decimals) | volatile: Uniswap V2 TWAP, checked against Kraken `PHAUSD`; Chainlink USDT/USD FX | `mint(address,uint256)` is public |
 | `phala-cloud-sepolia-usdc-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | Circle's testnet USDC `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` ([Circle's list](https://developers.circle.com/stablecoins/usdc-contract-addresses), 6 decimals) | stablecoin: 1.00 while every fresh USDC/USD rate is within 1% | [Circle's faucet](https://faucet.circle.com) (Ethereum Sepolia) |
 | `phala-cloud-sepolia-usdt-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | Aave's testnet USDT `0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0` ([Aave's address book](https://github.com/bgd-labs/aave-address-book), 6 decimals) | stablecoin: 1.00 while every fresh USDT/USD rate is within 1% | Aave's faucet contract `0xC959483DBa39aa9E78757139af0e9a2EDEb3f42D`: `mint(token, to, amount)` is public, up to 10 000 per call |
 | `phala-cloud-base-sepolia-usdc-usd` ([config](environments/phala-network/staging/topup/topup.yaml)) | Circle's testnet USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e` ([Circle's list](https://developers.circle.com/stablecoins/usdc-contract-addresses), 6 decimals) | as on Sepolia | [Circle's faucet](https://faucet.circle.com) (Base Sepolia) |
 
-| Chain | `confirmations` | RPC providers | Sanctions oracle (a `MockSanctionsOracle`) |
+| Chain | `confirmations` | RPC providers | Legacy oracle (unused by screening) |
 |---|---|---|---|
 | Sepolia (11155111) | `2`, Ethereum L1's default | `ankr-sepolia`, `infura-sepolia` | `0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6` |
 | Base Sepolia (84532) | `3`, the OP-stack default: the payment's block and two more on the sequencer's unsafe head, credited about 7 s after paying (architecture §8) | `ankr-base-sepolia`, `infura-base-sepolia` | `0x8A0C93d85a05aD30741C193068abF2e5E16e7b35` |
@@ -69,23 +112,9 @@ of at most 1,000 addresses, without a contract filter. See [chain RPC operations
 
 ### Retiring Base Sepolia PHA and USDT
 
-Before deploying this catalog, follow [route retirement](runbooks/route-retirement.md) for
-`phala-cloud-base-sepolia-pha-usd` and `phala-cloud-base-sepolia-usdt-usd`. Keep `quotes` paused
-on both routes and sweep all credited deposits. Require zero open rate-lock exposure,
-`detected`, `confirmed`, `credited`, and `credited_undelivered` in the daily report before the
-staging topup upgrade. Do not remove rows or bypass this drain gate.
-
-Then upgrade staging topup and the reference product with the same release's reviewed configs;
-verify `GET /v1/config`, the demo's token choices, and its faucets. The Phala Cloud template
-ships the same four routes. Base Sepolia's scanner remains running for USDC. Existing addresses
-and records remain in the database, but PHA and USDT sent to previously issued Base Sepolia
-addresses are no longer supported, and their sweeps and reversals are no longer recorded after
-removal. Use only USDC on Base Sepolia, including at existing deposit addresses.
-
-Retain the verified N-1 kit, images and configuration under the
-[rollback policy](README.md#rollback-compatibility). Restore the prior compose with Deploy
-`upgrade` to load these routes again; their database state and pauses survive. Resume `quotes`
-only if abandoning the retirement. No schema or compatibility-floor change is needed.
+Retired October 21, 2026 PDT under a testnet drain exception: 18 PHA and 15 USDT credited deposits
+were never swept. Base Sepolia now supports only USDC, including on existing addresses; removed
+tokens' sweeps and reversals are no longer recorded. Their historical rows remain intact.
 
 ### RPC providers
 
@@ -93,12 +122,8 @@ Staging configures one Ankr read and one independent Infura verify endpoint for 
 Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed credentials are
 `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Production keeps shared Ankr read and uses
 BlockPI verify on Ethereum and Base, with `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
-`TOPUP_RPC_BLOCKPI_BASE_KEY` from one free account. Before production launch §2, merge and
-preflight this production allocation and its complete sealed mappings. Staging stays unchanged;
-no dRPC move, staging re-seal or staging upgrade is required by the allocation. Production uses
+`TOPUP_RPC_BLOCKPI_BASE_KEY` from one free account. Production uses
 D=115/H=200/Q=150/factory=150/Safe=10; staging retains D=20/H=80/Q=60/factory=20/Safe=2.
-Production-attested comments are updated before provisioning
-([launch §1.8](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
 The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
 key templates. Run compose-path preflight with the complete sealed env before an authorized
 upgrade, including restore-check. The typed self-test checks actual receipt, transaction,
@@ -123,7 +148,7 @@ owner, except the workflow runs, which the owner dispatches; agents and CI run n
 exported and the release's verified kit in `kit/`:
 
 ```sh
-version=v0.9.0   # the release deploy-phala.yml pins
+version=v0.13.1   # the release deploy-phala.yml pins
 bash deploy/verify-release.sh "$version" release
 mkdir kit && tar -xzf "release/phala-pay-deploy-$version.tar.gz" -C kit --strip-components=1
 npm ci --prefix kit/deploy/tools --ignore-scripts
@@ -299,7 +324,7 @@ driver key (`driver/v1`, the product's own authentication, not Phala Pay's).
   and nothing logs one. The export is the bodies of the operator's
   `POST /v1/admin/restore/treasuries/verify` (each treasury's latest object among its `treasury.*`
   deliveries), `/treasuries/apply` (each signed `treasury.updated` of a pending change becoming
-  `active`), `/deposit_addresses`, `/quotes`, and `/events` requests (treasuries and events in
+  `active`), `/deposit_addresses`, and `/events` requests (treasuries and events in
   batches of 100, deliveries in the order of their deposits' positions and revisions), without
   `reason`. `--since` takes the restore point (Unix seconds, `GET /v1/admin/restore`'s
   `restore.restore_point`) and keeps every record the service created or the product last
@@ -337,10 +362,12 @@ live demo, and the key properties. The demo
 sets the product beside its backend (stacked on narrow screens): first, what the customer sees (a cloud console's
 billing page, framed as the merchant's app); then what the merchant's backend sees (the
 payment's live event stream, then tabs for payments, refunds, sweeps, API requests and webhooks,
-and the attestation). The billing page has both ways to collect a payment: a **quote** (a locked price and an exact amount, paid through
-`@phala/pay`'s `<Checkout expectedAddress>`) and the visitor's single **deposit address** (every
-token on every network, credited at spot within per-transfer limits, its payments read by the browser with the
-address's `client_secret`). An order id set as `metadata` arrives in the `deposit.credited` event.
+and the attestation). The billing page's exact-amount tab opens a **quote** price window on the
+visitor's deposit address, paid through the SDK's `<PaymentElement>` and `<Checkout expectedAddress>`.
+The deposit tab shows that same address for transfers within per-transfer limits, credited at spot
+unless they consume a quote window; its payments are read with the address's `client_secret`.
+An order id set as quote `metadata` arrives in the `deposit.credited` event only when the deposit
+consumes that quote.
 A timeline built only from real data (chain block times, the service's objects read with the
 product key, this product's verified webhooks and ledger rows) shows each payment received, credited
 (at two confirmations), final, and reversed if it is; the ledger follows the balance rule. Refunds
@@ -392,10 +419,10 @@ Setup, in order, during the [staging reset](#staging-reset-human-only)'s steps 7
    curl -fsS "https://pay-api-staging.phala.com/v1/payment_settings" \
      -H "Authorization: Bearer $SECRET_KEY" -H 'content-type: application/json' -d '{"chains": [
        {"chain_id": 11155111, "assets": [{"asset": "pha"}, {"asset": "usdc"}, {"asset": "usdt"}]},
-       {"chain_id": 84532, "assets": [{"asset": "pha"}, {"asset": "usdc"}, {"asset": "usdt"}]}]}'
+       {"chain_id": 84532, "assets": [{"asset": "usdc"}]}]}'
    ```
 
-   `GET /v1/config` with `PRODUCT_API_KEY` then lists the six assets. Open a PR
+   `GET /v1/config` with `PRODUCT_API_KEY` then lists the four assets. Open a PR
    setting the product config's `account` in
    [config.json](environments/phala-network/staging/product/config.json) to the new `acct_…` id,
    and merge it.
