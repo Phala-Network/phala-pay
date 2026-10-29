@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import secrets
+import socket
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
@@ -271,12 +272,19 @@ class ProductServer:
     def __enter__(self) -> ProductServer:
         self._thread.start()
         deadline = time.monotonic() + 10
-        while not self._ready.is_set():
-            if not self._thread.is_alive() or time.monotonic() >= deadline:
-                self.__exit__()
-                raise RuntimeError("product server did not start")
-            time.sleep(0.01)
-        return self
+        if self._ready.wait(timeout=10):
+            # Granian starts accepting connections after ASGI lifespan startup completes.
+            config = self.fulfillment.config
+            while self._thread.is_alive() and (remaining := deadline - time.monotonic()) > 0:
+                try:
+                    with socket.create_connection(
+                        (config.listen_host, config.listen_port), timeout=remaining
+                    ):
+                        return self
+                except OSError:
+                    continue
+        self.__exit__()
+        raise RuntimeError("product server did not start")
 
     def close(self) -> None:
         if self.accounts is not None:

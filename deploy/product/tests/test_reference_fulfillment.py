@@ -4,6 +4,7 @@ each delivery as received, and exports the records a service restore asks for.""
 from __future__ import annotations
 
 import json
+import socket
 import sqlite3
 import sys
 import threading
@@ -526,8 +527,12 @@ def test_unsealed_test_product_starts_without_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("UNSEALED_TEST_KEY", raising=False)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
     config = replace(
         CONFIG,
+        listen_port=port,
         api_key_file=None,
         api_key_env="UNSEALED_TEST_KEY",
         driver_public_key=DRIVER.public_key_base64(),
