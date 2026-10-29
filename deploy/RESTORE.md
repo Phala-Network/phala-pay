@@ -105,6 +105,21 @@ on `/healthz`:
 {"mode":"read-only","restore_check":{"status":"ok","failures":[],"rpo_basis":"unanchored","restored_heartbeat_at":"…","latest_migration":…,"row_counts":{…},"post_restore_reconciliation":{"status":"complete","failed_checks":[],"findings":[…]},…}}
 ```
 
+Preserve the complete report, including its reconciliation, failures, LSNs and RPO fields.
+A drill whose source stays live can replay WAL committed after instance creation: record the
+restored heartbeat's offset from creation (which may be positive), requiring it to be no more
+than 60 seconds before creation. Age at the first report also includes restore and reconciliation
+time, so it is informational only; neither observation proves failure-time RPO.
+Creation through the final read-only verification must fit one hour; it does
+not exercise merchant-service RTO through rescan and unfreeze. The bounded production example
+and evidence fields are in [production-launch.md §9](runbooks/production-launch.md#9-production-restore-drill).
+
+At v0.13.1, both `restore-check` and the read-only API run RPC preflight (#568), independently
+in each process on each boot. A failed read-only probe keeps affected chains unavailable for
+restore operations; a successful report from the separate check process does not establish
+that API's chain readiness. The bounded receipt/log probe accepts a missing sample in eight
+finalized blocks while retaining its other endpoint checks.
+
 `restore_check` is `null` until the check finishes. A finding left unverified makes the status
 `incomplete` and is listed in `failures`; a check that could not run reports `failed`. Other
 reconciliation findings are reported; every failed critical check makes the report `incomplete`
