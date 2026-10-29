@@ -64,7 +64,7 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 | Alert, monitor, or symptom | Runbook |
 |---|---|
 | `TopupSanctionsListStale`, `TopupSanctionsListVerifyFailed`, `TopupSanctionsRescreenFailed`, `TopupRefundDestinationSanctioned`, `topup-sanctions-refresh` | [Sanctions list](sanctions-list.md) |
-| `TopupRpcEndpointUnavailable`, `RpcEndpointUnavailable`, `RpcCoverageLag`, `RpcAddressBackfillLag`, `RpcPriceSnapshotBudgetExhausted`, `RpcInfuraQuotaPressure`, `RpcBlockpiQuotaPressure`, `RpcAnkrQuotaPressure` | [RPC health](rpc-health.md) |
+| `TopupRpcEndpointUnavailable`, `TopupRpcAddressBackfillLag`, `TopupRpcCoverageLag`, `TopupRpcConfirmationProviderLag`, `TopupRpcConfirmationSlowStock`, `TopupRpcConfirmationSlowEntries`, `TopupRpcHintBudgetExhausted`, `TopupRpcPriceSnapshotBudgetExhausted`, `RpcEndpointUnavailable`, `RpcCoverageLag`, `RpcAddressBackfillLag`, `RpcPriceSnapshotBudgetExhausted`, `RpcInfuraQuotaPressure`, `RpcBlockpiQuotaPressure`, `RpcAnkrQuotaPressure` | [RPC health](rpc-health.md) |
 | `TopupReconciliationMismatch` (`check:address_derivation` or `check:custody_balance`), `TopupContractCodeMismatch`, `TopupFinalizedCheckpointConflict`, `TopupUnverifiedEvidenceMismatch`, `400 chain_frozen` | [Chain frozen](chain-frozen.md) |
 | `TopupReconciliationMismatch` (other `check`), `topup-reconciler` | [Reconciliation mismatch](reconciliation-mismatch.md) |
 | `price-outage` (zero sources, disagreement, depeg, sequencer/grace, stuck valuation) | [Price outage](price-outage.md) |
@@ -80,7 +80,7 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 | `TopupUnsupportedInflows`, rejected funds at the treasury | [Rejected funds at treasury](rejected-funds-at-treasury.md) |
 | `TopupTreasurySanctioned`, a treasury on a sanctions list | [Treasury change, "Sanctioned treasury"](treasury-change.md#sanctioned-treasury) |
 | `TopupDeliveredCreditSanctioned`, a credit delivered before a restore whose sender is now listed | [Reconciliation after a restore, "Sanctioned delivered credit"](restore.md#sanctioned-delivered-credit) |
-| `TopupDepositReversed`, `TopupDepositPendingAfterReorg`, `TopupDepositReversalUnproven`, `topup-finality-watch` | [Deposit reversed or pending after a reorg](deposit-reversed.md) |
+| `TopupDepositReversed`, `TopupDepositPendingAfterReorg`, `TopupDepositReversalUnproven`, `TopupRpcUnresolvedDepositStock`, `TopupRpcUnresolvedDepositEntries`, `topup-finality-watch` | [Deposit reversed or pending after a reorg](deposit-reversed.md) |
 | Merchant reports a secret key exposed or lost, or requests it did not make | [API key compromise and key recovery](api-key-compromise.md) |
 | Unswept credited deposits, a `FlushFailed` target | Not a platform alert: the merchant sweeps with its own wallet, and a target whose transfer failed (a token or treasury refusing it) is the merchant's to resolve ([deploy/README.md, "Sweeping"](../README.md#sweeping)) |
 | Database loss, restore drill | [RESTORE.md](../RESTORE.md) |
@@ -129,6 +129,22 @@ was performed by the implementation PR.
 | `TopupCertificateProbeFailed` | `topup alert-test --alert TopupCertificateProbeFailed --severity critical` | invalid DER rejected; TLS/network failures raise this alert |
 | `TopupAddressCapacity` | `topup alert-test --alert TopupAddressCapacity` | `capacity_counts_all_history_and_alerts_at_seventy_and_ninety_percent`: historical count ≥700 warning, ≥900 critical; pre-upgrade refuses >1000 |
 | `TopupBusinessProbeFailed` | `topup alert-test --alert TopupBusinessProbeFailed --severity critical` | failed/timed-out database scan |
+
+The internal pilot checks share this loop and its reminder/recovery state. Their synthetic
+commands and detector boundaries are:
+
+| Runtime alert | Synthetic staging command | Detector verification |
+|---|---|---|
+| `TopupRpcEndpointUnavailable` | `topup alert-test --alert TopupRpcEndpointUnavailable --severity critical` | `pilot_sustained_alerts_wait_for_the_rule_duration_and_recovery_resets_the_clock`: endpoint not ready for five minutes |
+| `TopupRpcAddressBackfillLag` | `topup alert-test --alert TopupRpcAddressBackfillLag` | same supplied-clock test: backfill remains nonempty for one hour |
+| `TopupRpcConfirmationProviderLag` | `topup alert-test --alert TopupRpcConfirmationProviderLag` | same supplied-clock test: L remains nonempty for ten minutes |
+| `TopupRpcCoverageLag` | `topup alert-test --alert TopupRpcCoverageLag` | `pilot_stock_entries_and_coverage_alert_at_the_rule_boundaries_and_dedupe`: >7,200 seconds, not at 7,200 |
+| `TopupRpcUnresolvedDepositStock` | `topup alert-test --alert TopupRpcUnresolvedDepositStock --severity critical` | same boundary test: S stock >1 across all chains |
+| `TopupRpcUnresolvedDepositEntries` | `topup alert-test --alert TopupRpcUnresolvedDepositEntries --severity critical` | same boundary test: S rolling 24-hour entries >1 |
+| `TopupRpcConfirmationSlowStock` | `topup alert-test --alert TopupRpcConfirmationSlowStock --severity critical` | same boundary test: L stock >1 across all chains |
+| `TopupRpcConfirmationSlowEntries` | `topup alert-test --alert TopupRpcConfirmationSlowEntries --severity critical` | same boundary test: L rolling 24-hour entries >1 |
+| `TopupRpcHintBudgetExhausted` | `topup alert-test --alert TopupRpcHintBudgetExhausted` | `pilot_daily_budgets_use_the_configured_limits_and_resolve_after_utc_rollover`: persisted H reaches configured limit |
+| `TopupRpcPriceSnapshotBudgetExhausted` | `topup alert-test --alert TopupRpcPriceSnapshotBudgetExhausted` | same boundary/rollover test: persisted per-price-chain Q reaches configured limit |
 
 The business monitor's state tests `hourly_reminders_recovery_and_reentry_use_the_supplied_clock`,
 `components_and_severity_transitions_are_independent`, and

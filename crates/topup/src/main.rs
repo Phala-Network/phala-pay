@@ -119,6 +119,26 @@ enum SyntheticAlert {
     BusinessProbeFailed,
     #[value(name = "TopupAddressCapacity")]
     AddressCapacity,
+    #[value(name = "TopupRpcEndpointUnavailable")]
+    RpcEndpointUnavailable,
+    #[value(name = "TopupRpcAddressBackfillLag")]
+    RpcAddressBackfillLag,
+    #[value(name = "TopupRpcCoverageLag")]
+    RpcCoverageLag,
+    #[value(name = "TopupRpcUnresolvedDepositStock")]
+    RpcUnresolvedDepositStock,
+    #[value(name = "TopupRpcUnresolvedDepositEntries")]
+    RpcUnresolvedDepositEntries,
+    #[value(name = "TopupRpcConfirmationSlowStock")]
+    RpcConfirmationSlowStock,
+    #[value(name = "TopupRpcConfirmationSlowEntries")]
+    RpcConfirmationSlowEntries,
+    #[value(name = "TopupRpcConfirmationProviderLag")]
+    RpcConfirmationProviderLag,
+    #[value(name = "TopupRpcHintBudgetExhausted")]
+    RpcHintBudgetExhausted,
+    #[value(name = "TopupRpcPriceSnapshotBudgetExhausted")]
+    RpcPriceSnapshotBudgetExhausted,
 }
 
 #[derive(Subcommand)]
@@ -921,6 +941,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     });
     tasks.spawn("backup monitor", topup::observability::monitor_backup);
     let business_pool = pool.clone();
+    let business_routes = routes.clone();
     tasks.spawn("business health monitor", |cancellation| {
         after_unfreeze(
             business_pool.clone(),
@@ -928,6 +949,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             |cancellation| async move {
                 topup::observability::monitor_business(
                     business_pool,
+                    business_routes,
                     monitored_origin,
                     cancellation,
                 )

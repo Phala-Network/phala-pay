@@ -245,7 +245,8 @@ pub async fn probe_not_ready(pair: &crate::chain_rpc::ChainRpc) {
         if !client.ready()
             && let Err(error) = client.latest_head().await
         {
-            tracing::warn!(tags.alert="TopupRpcEndpointUnavailable", chain_id=?client.chain_id(),
+            // Sustained readiness is alerted once by the business monitor, including quota halts.
+            tracing::warn!(chain_id=?client.chain_id(),
                 provider=%client.endpoint().provider().unwrap_or_default(), %error,
                 "endpoint recovery head probe failed");
         }

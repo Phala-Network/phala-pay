@@ -14,6 +14,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added
+
+- The existing business health loop evaluates pilot RPC readiness, coverage/backfill, S/L
+  stock and rolling entries, and persisted daily H/Q limits without an external collector or
+  admin credential. It reuses the address-capacity and sanctions alerts and the current Sentry
+  integration, with runbook links and bounded reminders; Sentry owns notification delivery.
+  Provider-dashboard quotas and D/recovery, factory and Safe tallies remain manual.
+
 ### Fixed
 
 - Quotes on an existing customer network continue at the chain's issued-address cap. Only

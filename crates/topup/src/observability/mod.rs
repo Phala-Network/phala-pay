@@ -3,6 +3,7 @@
 mod backup;
 mod business;
 mod capacity;
+mod chain_health;
 mod logging;
 pub mod metrics;
 mod redaction;

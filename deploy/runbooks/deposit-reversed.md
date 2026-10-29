@@ -5,6 +5,11 @@ the deposit is now `reversed`), or `TopupDepositPendingAfterReorg` (a deposit's 
 been in no block for an hour, without positive replacement evidence). Both carry `chain_id` and
 `state` tags and the `deposit_id` and `tx_hash` fields.
 
+`TopupRpcUnresolvedDepositStock` and `TopupRpcUnresolvedDepositEntries` are environment-wide
+capacity alerts: S stock or rolling 24-hour first entries exceed one. They carry aggregate
+`observed`/`threshold` fields, without a deposit identifier. Inspect the per-chain admin metrics
+and follow the S stop actions in [production launch §11](production-launch.md#11-pilot-caps-monitoring-and-stop-actions).
+
 **Impact:** the service credits at the route's confirmation (two blocks on Ethereum) and watches
 each deposit to finality ([architecture §7](../../docs/architecture.md#7-states-and-pump)). A
 reversal already sent `deposit.reversed` when the merchant had been told of the deposit
