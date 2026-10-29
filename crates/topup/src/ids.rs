@@ -25,6 +25,8 @@ pub const REFUND: &str = "re_";
 pub const TREASURY: &str = "trs_";
 /// Event ids; the UUID is the event's derived id (architecture §11).
 pub const EVENT: &str = "evt_";
+/// Durable alert instance ids.
+pub const ALERT: &str = "al_";
 
 /// Formats `id` with `prefix`.
 #[must_use]

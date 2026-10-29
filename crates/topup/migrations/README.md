@@ -40,6 +40,11 @@ The `20261029040003` heartbeat timestamp index follows that protocol and floor, 
 
 ## Roles and privileges
 
+`20261105000000_alerts` adds the platform's durable alert instances and list/retention indexes.
+It is expand-only and preserves the previous release's schema compatibility floor. Its down
+migration drops only the new table. Resolved instances are pruned after 30 days in bounded
+batches; active alerts and the append-only admin audit history are retained.
+
 The service runs through the login role configured by `DATABASE_URL`. That login role must be a
 member of the migration-created `topup_app` NOLOGIN role. Table owners and PostgreSQL superusers
 remain trusted migration/operations identities. `BEFORE UPDATE OR DELETE` triggers on

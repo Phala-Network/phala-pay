@@ -28,6 +28,7 @@ where
         .with_writer(writer)
         .finish()
         .with(targets)
+        .with(crate::alerts::AlertLayer)
         .with(super::reporting::tracing_layer())
 }
 

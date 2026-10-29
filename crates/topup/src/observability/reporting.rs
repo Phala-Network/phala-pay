@@ -98,7 +98,12 @@ fn client_options(
     let throttle = EventThrottle::default();
     let mut options = ClientOptions::new()
         .send_default_pii(false)
-        .before_send(move |event| throttle.admit(prepare_event(event)))
+        .before_send(move |event| {
+            if crate::alerts::is_silenced(&event) {
+                return None;
+            }
+            throttle.admit(prepare_event(event))
+        })
         .before_breadcrumb(|breadcrumb| Some(scrub_breadcrumb(breadcrumb)));
     options.dsn = Some(dsn);
     options.release = commit_release(commit).map(|release| Cow::Owned(release.to_owned()));
@@ -226,6 +231,10 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         | "TopupDepositReplacementAmbiguous" => "deposit-reversed.md",
         _ => "README.md#alert-and-symptom-index",
     }
+}
+
+pub(crate) fn alert_runbook(alert: &str, tags: &BTreeMap<String, String>) -> String {
+    format!("{RUNBOOKS}{}", runbook(alert, tags))
 }
 
 /// Sends at most one event per issue every [`EVENT_REPEAT_INTERVAL`], or hourly for direct
@@ -465,6 +474,34 @@ mod tests {
         assert!(super::tracing_layer::<tracing_subscriber::Registry>().is_none());
         // Without a client this returns before building a check-in.
         CronMonitor::lock_expiry().check_in(true);
+    }
+
+    #[test]
+    fn durable_silence_suppresses_sentry_without_spending_the_repeat_throttle() {
+        let name = "TopupSilenceSinkTest";
+        let key = r#"{"component":"silence-test"}"#;
+        let id = uuid::Uuid::new_v4();
+        let events = with_captured_events_options(
+            || {
+                tracing::subscriber::with_default(log_subscriber(std::io::sink), || {
+                    crate::alerts::update_silence(
+                        name,
+                        key,
+                        id,
+                        Some(chrono::Utc::now() + chrono::TimeDelta::hours(1)),
+                    );
+                    super::super::emit_alert(name, "silence-test", "warning", 1, 0);
+                    // Severity escalation has the same durable silence group.
+                    super::super::emit_alert(name, "silence-test", "critical", 1, 0);
+                    crate::alerts::update_silence(name, key, id, None);
+                    super::super::emit_alert(name, "silence-test", "warning", 1, 0);
+                });
+            },
+            options(),
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tags["severity"], "warning");
+        assert_eq!(events[0].fingerprint[0], "topup-alert");
     }
 
     #[test]

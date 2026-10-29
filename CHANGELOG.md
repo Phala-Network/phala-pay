@@ -14,6 +14,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added
+
+- Durable alert instances and the signed admin alerts API: filter/page/get, acknowledge,
+  silence for up to seven days, unsilence, and resolve. Business detector recovery resolves
+  automatically; legacy event-only alerts require operator resolution. Recurrence creates a
+  fresh instance, resolved history is retained for 30 days, and all operator actions are audited.
+  Existing Sentry reporting remains the sink; silencing never hides an alert from the API.
+  A bounded asynchronous recorder exposes persistence failures without blocking Sentry.
+
 ## [0.13.2] - 2026-10-29
 
 ### Added
