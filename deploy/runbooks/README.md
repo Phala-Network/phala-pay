@@ -1,6 +1,6 @@
 # Operations runbooks
 
-Each runbook starts from a Sentry alert or Crons monitor ([deploy/README.md, "Sentry"](../README.md#sentry))
+Each runbook starts from the [alerts API](#manage-alerts), an existing Sentry alert, or a Crons monitor ([deploy/README.md, "Sentry"](../README.md#sentry))
 and works only through the surfaces a production CVM offers: it has no SSH, no logs, and no
 database access. Run `make runbook-check` after editing a runbook: it checks every `topup` command
 against the CLI and every API path against `crates/topup/openapi.json` and
@@ -104,6 +104,36 @@ require human exercises.
 Phala's historical exercise results and limitations are in the evidence for
 [the local runbooks](https://github.com/Phala-Network/phala-pay/pull/59) and
 [the full CVM restore drill](https://github.com/Phala-Network/phala-pay/pull/248).
+
+## Manage alerts
+
+Use the `admin` helper in [Environment](#environment), which signs each exact URL and body with
+`sign-admin-request.sh` and the full admin key. Merchant and maintenance keys cannot manage alerts.
+
+```sh
+admin GET '/v1/admin/alerts?state=active&limit=100' | jq
+admin GET '/v1/admin/alerts?state=all&name=TopupHeartbeatStale&limit=10' | jq
+export ALERT_ID=al_0123456789abcdef0123456789abcdef
+admin GET "/v1/admin/alerts/$ALERT_ID" | jq
+admin POST "/v1/admin/alerts/$ALERT_ID/acknowledge" | jq
+until=$(date -u -d '+1 hour' +%s)
+admin POST "/v1/admin/alerts/$ALERT_ID/silence" "{\"until\":$until}" | jq
+admin POST "/v1/admin/alerts/$ALERT_ID/unsilence" | jq
+# Event-only legacy alerts: verify recovery using the linked runbook, then resolve explicitly.
+admin POST "/v1/admin/alerts/$ALERT_ID/resolve" | jq
+```
+
+Lists are newest first, default to active instances, and support `state=active|resolved|all`, an
+exact `name`, `limit` (1–100, default 10), and either `starting_after` or `ending_before` with an
+alert id. Follow `has_more` with the last returned id as `starting_after`. Acknowledging preserves
+the first actor/time; it does not silence. Silence requires future Unix seconds within seven days,
+suppresses the existing Sentry sink, and leaves the instance visible. Every action is audited.
+Business detectors resolve automatically on recovery; legacy tagged events without recovery
+decisions require `/resolve`. A new firing after resolution creates a new instance with no inherited
+acknowledgment or silence. Resolved instances remain queryable for 30 days; active alerts and
+audit rows are not pruned. Persistence is asynchronous and independent of Sentry configuration;
+`topup_alert_persistence_failures_total` reports queue/database failures. A crash can lose queued
+observations; Sentry emission is never blocked by persistence failures.
 
 ## Synthetic alert validation
 

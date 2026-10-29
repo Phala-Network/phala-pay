@@ -55,11 +55,16 @@ impl AlertState {
             self.pending.remove(&key);
             0
         };
+        // A restart resets the duration timer, but an unhealthy pending observation is
+        // not recovery evidence for a previously persisted active instance.
+        if severity.is_some() && elapsed < after {
+            return;
+        }
         self.observe(
             now,
             alert,
             component,
-            severity.filter(|_| elapsed >= after),
+            severity,
             elapsed,
             after,
         );
@@ -76,12 +81,14 @@ impl AlertState {
     ) {
         let key = (alert, component.to_owned());
         let Some(severity) = severity else {
+            crate::alerts::condition(alert, component, None, now);
             if self.active.remove(&key).is_some() {
                 // No alert tag, and INFO stays a breadcrumb rather than a Sentry event.
                 tracing::info!(alert, component, "business health alert resolved");
             }
             return;
         };
+        crate::alerts::condition(alert, component, Some(severity), now);
         if self.active.get(&key).is_some_and(|(previous, sent)| {
             *previous == severity && now.saturating_sub(*sent) < REMINDER_SECONDS
         }) {

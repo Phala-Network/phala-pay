@@ -1887,3 +1887,105 @@ async fn manual_sanctions_require_admin_signature_and_are_audited_atomically() -
         Ok(())
     })).await
 }
+
+#[tokio::test]
+async fn alerts_admin_actions_are_audited_and_authentication_is_required() -> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool = &database.app_pool;
+        let key = SigningKey::from_bytes(&[71; 32]);
+        let maintenance = SigningKey::from_bytes(&[72; 32]);
+        let mut state = app_state(pool.clone(), &key);
+        state.maintenance_keys.push(VerificationKey::from_base64("maintenance/test".to_owned(), &public_key_base64(&maintenance)).map_err(anyhow::Error::msg)?);
+        let app = topup::api::router(state).0;
+        let id = Uuid::new_v4();
+        let public_id = topup::ids::format(topup::ids::ALERT, id);
+        sqlx::query("INSERT INTO alerts(id,name,grouping_key,severity,tags,runbook,first_seen_at,last_seen_at) VALUES($1,'TopupApiManagementTest','{}','warning','{}','https://example.invalid/runbook',now(),now())")
+            .bind(id).execute(pool).await?;
+        let path = format!("/v1/admin/alerts/{public_id}");
+        for (method, endpoint) in [(Method::GET, "/v1/admin/alerts".to_owned()), (Method::GET, path.clone()),
+            (Method::POST, format!("{path}/acknowledge")), (Method::POST, format!("{path}/silence")),
+            (Method::POST, format!("{path}/unsilence")), (Method::POST, format!("{path}/resolve"))] {
+            let denied = app.clone().oneshot(merchant_request(method.clone(), &endpoint, vec![], "not-an-admin-key")).await?;
+            ensure!(denied.status() == StatusCode::UNAUTHORIZED);
+            let denied = app.clone().oneshot(signed_request(method, &endpoint, vec![], "maintenance/test", &maintenance, Utc::now().timestamp())).await?;
+            ensure!(denied.status() == StatusCode::FORBIDDEN);
+        }
+        let admin = |method, endpoint: &str, body| support::signed_request_with_key(method, endpoint, body, ADMIN_KID, &key, Utc::now().timestamp(), &Uuid::new_v4().to_string());
+        let response = app.clone().oneshot(admin(Method::GET, &path, vec![])).await?;
+        ensure!(response.status() == StatusCode::OK);
+        ensure!(response_json(response).await?["id"] == public_id);
+        let mut acknowledged = Value::Null;
+        for _ in 0..2 {
+            let response = app.clone().oneshot(admin(Method::POST, &format!("{path}/acknowledge"), vec![])).await?;
+            ensure!(response.status() == StatusCode::OK);
+            let body = response_json(response).await?;
+            ensure!(body["acknowledged_by"] == format!("admin:{ADMIN_KID}"));
+            if !acknowledged.is_null() { ensure!(body["acknowledged_at"] == acknowledged); }
+            acknowledged = body["acknowledged_at"].clone();
+        }
+        let until = (Utc::now() + Duration::hours(1)).timestamp();
+        for invalid in [Utc::now().timestamp() - 1, (Utc::now() + Duration::days(8)).timestamp(), i64::MAX] {
+            let response = app.clone().oneshot(admin(Method::POST, &format!("{path}/silence"), serde_json::to_vec(&json!({"until":invalid}))?)).await?;
+            ensure!(response.status() == StatusCode::BAD_REQUEST);
+        }
+        let response = app.clone().oneshot(admin(Method::POST, &format!("{path}/silence"), serde_json::to_vec(&json!({"until":until}))?)).await?;
+        ensure!(response.status() == StatusCode::OK);
+        ensure!(response_json(response).await?["silenced_until"] == until);
+        let visible = response_json(app.clone().oneshot(admin(Method::GET, "/v1/admin/alerts", vec![])).await?).await?;
+        ensure!(visible["data"].as_array().context("alert list")?.len() == 1, "acknowledged/silenced alerts remain listed");
+        let response = app.clone().oneshot(admin(Method::POST, &format!("{path}/unsilence"), vec![])).await?;
+        ensure!(response_json(response).await?["silenced_until"].is_null());
+        let response = app.clone().oneshot(admin(Method::POST, &format!("{path}/resolve"), vec![])).await?;
+        ensure!(response_json(response).await?["resolved_at"].is_i64());
+        let response = app.clone().oneshot(admin(Method::POST, &format!("{path}/silence"), serde_json::to_vec(&json!({"until":until}))?)).await?;
+        ensure!(response.status() == StatusCode::BAD_REQUEST);
+        let actions: Vec<(String, String, String)> = sqlx::query_as("SELECT action,actor_type,actor_id FROM audit WHERE subject=$1 ORDER BY created_at,id")
+            .bind(&public_id).fetch_all(pool).await?;
+        ensure!(actions.len() == 5);
+        for (action, actor_type, actor_id) in &actions {
+            ensure!(action.starts_with("alert.") && actor_type == "admin" && actor_id == ADMIN_KID);
+        }
+        for action in ["alert.acknowledged", "alert.silenced", "alert.unsilenced", "alert.resolved"] {
+            ensure!(actions.iter().any(|(actual, _, _)| actual == action));
+        }
+        let missing = format!("/v1/admin/alerts/{}", topup::ids::format(topup::ids::ALERT, Uuid::new_v4()));
+        ensure!(app.clone().oneshot(admin(Method::GET, &missing, vec![])).await?.status() == StatusCode::NOT_FOUND);
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn alerts_lists_filter_and_page_in_both_directions_newest_first() -> Result<()> {
+    support::with_database(|database| Box::pin(async move {
+        let pool = &database.app_pool;
+        let key = SigningKey::from_bytes(&[73; 32]);
+        let app = test_router(pool, &key);
+        let mut ids = Vec::new();
+        for index in 0..5_i64 {
+            let id = Uuid::new_v4();
+            ids.push(topup::ids::format(topup::ids::ALERT, id));
+            sqlx::query("INSERT INTO alerts(id,name,grouping_key,severity,tags,runbook,first_seen_at,last_seen_at,resolved_at) \
+                VALUES($1,$2,$3,'warning','{}','runbook',now()-$4::bigint*interval '1 second',now(),CASE WHEN $4::bigint=4 THEN now() END)")
+                .bind(id).bind(if index == 4 { "TopupB" } else { "TopupA" }).bind(index.to_string()).bind(index)
+                .execute(pool).await?;
+        }
+        let request = |query: &str| signed_request(Method::GET, &format!("/v1/admin/alerts{query}"), vec![], ADMIN_KID, &key, Utc::now().timestamp());
+        let first = response_json(app.clone().oneshot(request("?limit=2")).await?).await?;
+        ensure!(first["has_more"] == true && first["data"][0]["id"] == ids[0] && first["data"][1]["id"] == ids[1]);
+        let second = response_json(app.clone().oneshot(request(&format!("?limit=2&starting_after={}", ids[1]))).await?).await?;
+        ensure!(second["has_more"] == false && second["data"][0]["id"] == ids[2] && second["data"][1]["id"] == ids[3]);
+        let previous = response_json(app.clone().oneshot(request(&format!("?limit=2&ending_before={}", ids[2]))).await?).await?;
+        ensure!(previous["data"] == first["data"]);
+        let resolved = response_json(app.clone().oneshot(request("?state=resolved&name=TopupB")).await?).await?;
+        ensure!(resolved["data"][0]["id"] == ids[4]);
+        let all = response_json(app.clone().oneshot(request("?state=all&limit=100")).await?).await?;
+        ensure!(all["data"].as_array().context("all alerts")?.len() == 5);
+        let empty = response_json(app.clone().oneshot(request("?name=unknown")).await?).await?;
+        ensure!(empty["data"] == json!([]));
+        for query in ["?state=bad", "?limit=0", "?limit=101", "?starting_after=bad", "?unknown=1"] {
+            ensure!(app.clone().oneshot(request(query)).await?.status() == StatusCode::BAD_REQUEST);
+        }
+        ensure!(app.clone().oneshot(request(&format!("?starting_after={}&ending_before={}", ids[0], ids[1]))).await?.status() == StatusCode::BAD_REQUEST);
+        Ok(())
+    })).await
+}

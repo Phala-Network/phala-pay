@@ -749,12 +749,15 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
              (deploy/RESTORE.md)"
         );
     }
-    topup::payment_config::report_invalid(&pool, &routes)
-        .await
-        .context("failed to check the accounts' payment settings")?;
     let Some(lease_owner) = wait_for_lease_owner_lock(&pool).await? else {
         return Ok(ExitCode::SUCCESS);
     };
+    let alert_recorder = topup::alerts::AlertRecorder::initialize(pool.clone())
+        .await
+        .context("failed to load durable alert silences")?;
+    topup::payment_config::report_invalid(&pool, &routes)
+        .await
+        .context("failed to check the accounts' payment settings")?;
     topup::db::rpc::check_start(&pool, &routes.chain_ids().collect::<Vec<_>>()).await?;
     if let Err(error) = topup::rpc_runtime::preflight(&routes).await {
         tracing::warn!(%error,"RPC self-test failed; affected endpoints remain not-ready while the API starts");
@@ -839,6 +842,9 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             .context("failed to configure the finality watch")?
             .with_pump(Arc::clone(&pump));
     let mut tasks = ServiceTasks::new();
+    tasks.spawn("alert persistence", |cancellation| {
+        alert_recorder.run(cancellation)
+    });
     let state = topup::api::AppState {
         pool: pool.clone(),
         max_attached_pending_refunds: config.max_attached_pending_refunds,

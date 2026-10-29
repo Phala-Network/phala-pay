@@ -1233,8 +1233,9 @@ credited and delivered.
 ## 11. Pilot caps, monitoring, and stop actions
 
 The service evaluates the pilot's durable health signals in its existing once-per-minute
-business health monitor, after restore unfreeze. It emits the usual tagged Sentry warnings;
-Sentry owns issue delivery and on-call routing. No metrics collector, extra admin credential, or
+business health monitor, after restore unfreeze. It persists alerts for signed API management and
+emits the usual tagged Sentry warnings. Delivery and on-call routing are outside the service.
+No metrics collector, extra admin credential, or
 GitHub schedule is needed for these alerts. The [RPC rules](../rpc-alerts.yaml) remain the
 Prometheus equivalent for operators that run a collector.
 
@@ -1250,12 +1251,23 @@ Prometheus equivalent for operators that run a collector.
 | `TopupAddressCapacity` | Historical issued addresses reach 70% (warning) or 90% (critical) of the permanent per-chain cap |
 | `TopupSanctionsListStale` | Existing sanctions freshness alert; no second detector is added |
 
-Alerts fire on entry or severity change, with reminders at most hourly; recovery is an INFO log.
+Alerts fire on entry or severity change, with reminders at most hourly; recovery resolves the
+durable instance and logs at INFO.
 A failed or timed-out database scan raises `TopupBusinessProbeFailed` and leaves previous
 observations unknown. It does not establish recovery. Restarting the service resets sustained
 condition timers and can emit fresh initial observations. These alerts never pause a route;
-the operator follows the stop actions below. Confirm warning and critical issue routing in
-Sentry before rollout, as in [business health](business-health.md).
+the operator follows the stop actions below. Query the alerts API on every staffed check using
+the full admin key and the signed `admin` helper; follow all pages while `has_more` is true:
+
+```sh
+admin GET '/v1/admin/alerts?state=active&limit=100' | jq
+```
+
+Follow each alert's runbook and use the [acknowledge/silence commands](README.md#manage-alerts)
+to record handling. Acknowledged and silenced alerts remain visible. Legacy event-only alerts
+require explicit resolution after checking recovery. Do not rely on notification receipt to
+establish the active alert state. Check `topup_alert_persistence_failures_total` in the metrics
+snapshot: failures mean the durable list may be incomplete even while Sentry continues working.
 
 **Manual checks still required:** record D and recovery work, factory verifications, Safe proof
 sets, and provider-dashboard quotas daily and at the UTC day boundary. RPC counters restart with
@@ -1278,11 +1290,14 @@ production BlockPI dashboards daily:
 
 ```sh
 pilot_watch() {
-  local stamp metrics daily status=0
+  local stamp metrics daily alerts status=0
   stamp="$(date -u +%Y%m%dT%H%M%SZ)" || return 1
-  metrics="pilot-metrics-$stamp.txt" daily="pilot-daily-$stamp.json"
+  metrics="pilot-metrics-$stamp.txt" daily="pilot-daily-$stamp.json" alerts="pilot-alerts-$stamp.json"
   admin GET /v1/admin/metrics > "$metrics" || return 1
   admin GET /v1/admin/reports/daily > "$daily" || return 1
+  admin GET '/v1/admin/alerts?state=active&limit=100' > "$alerts" || return 1
+  jq '{has_more, alerts: [.data[] | {id,name,severity,runbook,acknowledged_at,silenced_until}]}' "$alerts"
+  jq -e '.has_more == false' "$alerts" >/dev/null || { echo "Read remaining alert pages with starting_after"; status=1; }
   above() { metric_lines "$1" "$metrics" | awk -v max="$2" '{ s += $NF } END { exit !(s > max) }'; }
   any_at_least() { metric_lines "$1" "$metrics" | grep -F "$2" | awk -v min="$3" '$NF + 0 >= min { hit = 1 } END { exit !hit }'; }
   test "$(curl -sS -o /dev/null -w '%{http_code}' "$ORIGIN/healthz")" = 200 || { echo "STOP: /healthz is not 200"; status=1; }

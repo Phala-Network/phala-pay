@@ -16,6 +16,7 @@
 #[cfg(all(feature = "test-support", not(debug_assertions)))]
 compile_error!("the test-support feature must not be enabled in release builds");
 
+pub mod alerts;
 pub mod api;
 pub mod api_keys;
 pub mod audit;

@@ -2,6 +2,7 @@
 //! signatures, and the generated OpenAPI.
 
 mod account;
+mod alerts;
 mod attestation;
 mod auth;
 mod cache;
@@ -447,6 +448,12 @@ fn hint_routes() -> OpenApiRouter<AppState> {
 /// The operator's routes, authenticated by RFC 9421 signatures.
 fn admin_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(alerts::list))
+        .routes(routes!(alerts::get))
+        .routes(routes!(alerts::acknowledge))
+        .routes(routes!(alerts::silence))
+        .routes(routes!(alerts::unsilence))
+        .routes(routes!(alerts::resolve))
         .routes(routes!(
             instance_pause::get_instance_pause,
             instance_pause::pause_instance

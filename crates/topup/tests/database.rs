@@ -773,6 +773,7 @@ const DOCUMENTED_GRANTS: &[(&str, &[&str])] = &[
     ("payment_settings_state", OPERATIONAL),
     ("payment_settings_cutover", &["SELECT", "UPDATE"]),
     ("account_limits", OPERATIONAL),
+    ("alerts", OPERATIONAL),
     ("api_keys", OPERATIONAL),
     ("treasuries", OPERATIONAL),
     ("treasury_challenges", OPERATIONAL),

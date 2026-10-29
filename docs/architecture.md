@@ -1730,11 +1730,17 @@ which are stable across releases; a production CVM exposes no logs or shell. `to
 
 ## 16. Observability and tests
 
-A production CVM has no logs or shell. Its internal monitors evaluate health and emit tagged
-alerts through the existing Sentry integration; Sentry owns notification delivery and routing.
+A production CVM has no logs or shell. Its internal monitors evaluate health, persist alert
+instances, and expose them through the signed admin API. The existing Sentry integration remains
+an alert sink; delivery and routing are outside the service's scope.
 Errors and panics are events. An alert is a warning tagged with its name and
 low-cardinality grouping tags (route, state, check, chain, scope), fingerprinted by them and
-linked to its runbook: `TopupDepositStateAgeExceeded` (age in state past the route's
+linked to its runbook. A shared tracing layer captures every tagged alert, including alerts from
+workers outside the business loop, through a bounded 1,024-observation queue. Database/queue
+failures increment `topup_alert_persistence_failures_total` and never block Sentry. Persistence
+is asynchronous: a process crash or unavailable database can lose queued observations; existing
+Sentry reporting continues. The durable record is independent of whether Sentry is configured.
+The alert names include `TopupDepositStateAgeExceeded` (age in state past the route's
 `alerts.stuck_after_s`), `TopupReconciliationMismatch`, `TopupLockExposureNearCap`,
 `TopupLockExpiryFailing`, `TopupUnsupportedInflows`, `TopupDepositReversed` (a deposit's
 transaction left the chain before finality: a chain-health signal), `TopupDepositPendingAfterReorg`
@@ -1789,10 +1795,28 @@ hour), coverage lag (>2 hours), environment-wide S/L stock and rolling 24-hour e
 nonempty L (ten minutes), and persisted UTC-day H/Q usage at the configured limits. Existing
 address-capacity and sanctions monitors remain authoritative. These conditions use the same
 durable SQL observations as the metrics exporter; stock and entry counts survive restarts.
-Sustained-condition timers reset on restart. Alerts enter immediately once their condition/duration
-is met, remind at most hourly, and resolve through an INFO log. Failed scans raise
+Sustained-condition timers reset on restart; pending unhealthy observations do not resolve a
+previously persisted incident. Alerts enter immediately once their condition/duration
+is met, remind at most hourly, and resolve through an INFO log and durable recovery update. Failed scans raise
 `TopupBusinessProbeFailed`, leaving previous measurements unknown. The loop waits for restore
-unfreeze; read-only restore instances never run it. Sentry is the only alert channel.
+unfreeze; read-only restore instances never run it or the persistence worker.
+
+`alerts` stores one active instance per name and canonical grouping tags (severity excluded), with
+severity, tags, runbook, first/last seen, resolution, acknowledgment actor/time, and silence
+deadline. Every business observation refreshes the record even when no Sentry reminder is due.
+Recovery closes the instance; recurrence creates a new id without the previous acknowledgment
+or silence. Legacy event-only alerts have no recovery detector and stay active until the operator
+checks recovery and resolves them through the API; no timeout infers recovery. Resolved instances
+are pruned after 30 days, at most 1,000 per minute; active instances and audit history are retained.
+
+The full admin key reads `GET /v1/admin/alerts` (state `active` by default, `resolved` or `all`, exact
+`name`, and standard cursor pagination, newest first) and `GET /v1/admin/alerts/{id}`. Audited
+`POST` actions `/acknowledge`, `/silence` (`until`: future Unix seconds, at most seven days),
+`/unsilence`, and `/resolve` manage an instance. Acknowledgment records the first operator and
+does not silence it. Silencing suppresses the existing Sentry events until expiry and never
+hides the alert from the API. Durable silences load before the sole lease-owning process starts
+its workers and update immediately after API commits; the Sentry path performs no database I/O.
+See the [operator commands](../deploy/runbooks/README.md#manage-alerts).
 
 **Before volume grows:** the deposits scans for `first_unresolved_at` and `first_slow_at` currently
 have no timestamp indexes. Add suitable indexes for the stock and rolling-entry predicates and
