@@ -282,7 +282,7 @@ class ProductServer:
                     ):
                         return self
                 except OSError:
-                    continue
+                    self._thread.join(timeout=min(0.01, max(0, deadline - time.monotonic())))
         self.__exit__()
         raise RuntimeError("product server did not start")
 
