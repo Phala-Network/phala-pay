@@ -88,6 +88,4 @@ as part of this recipe. Until observed, record renewal as unverified.
 
 ## Rollback
 
-Use the target release's compose-update path from a v0.10.8 or newer kit so one update restores
-`pp:false`, PROXY-off ingress, and its plain HTTP backend. Never roll back directly to v0.10.7
-or older. Reverify public health, the exact attested policy, and certificate evidence.
+See [rollback compatibility](README.md#rollback-compatibility) for the v0.13.0 floor.

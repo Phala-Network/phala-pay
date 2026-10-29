@@ -9,6 +9,10 @@ At the cap, issuing a missing network returns this non-retryable error. Quotes r
 customer network without consuming capacity. Existing addresses remain watched. Closing,
 cancelling, or retiring an address does not release capacity.
 
+Each new RedPill organization that quotes consumes one address on each chain it first uses;
+switching tokens on an already-issued customer network consumes none. The cap is shared with
+other accounts, including future Phala Cloud customers.
+
 ## First steps
 
 Read the admin-signed metrics snapshot and locate the affected chain:

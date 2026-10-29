@@ -26,7 +26,7 @@ Every mechanism follows a named practice. Where this design adapts a practice, t
 | Deposit addresses | CREATE2 forwarders, EIP-1167 via OpenZeppelin `Clones` with immutable args (BitGo `ForwarderFactory` as reference pattern) | The treasury is each clone's only immutable argument instead of per-clone init |
 | Same address on every EVM chain | Arachnid deterministic deployment proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C`, plain CREATE2 salts | The factory has no constructor arguments, so its init code is the build |
 | Contract roles | None: public `flush` (BitGo's `flush()`), per-target failure isolation (Multicall3 `allowFailure`) | — |
-| Rate-locked deposits | Invoice model (BTCPay Server, Coinbase Commerce): unique address, fixed amount, expiry | Exception rules (§9) are this service's policy profile, not a processor standard |
+| Rate-locked deposits | Invoice model (BTCPay Server, Coinbase Commerce): fixed amount and expiry | One open price window per customer and route on the customer's persistent address, rather than a per-invoice address; exception rules (§9) are this service's policy profile |
 | Chain reads | JSON-RPC `latest`, `safe`, and `finalized` tags, `eth_getLogs`, receipts, two independent providers | Credit at a confirmation depth like exchanges and BTCPay's confirmation setting; watch to finality |
 | Price | Chainlink and independent public exchange observations | — |
 | Sanctions | Verified OFAC SDN snapshots + audited operator supplements | Direct list screening only; not KYT |
@@ -50,25 +50,28 @@ An API-only, multi-tenant crypto payments **software service**, in Stripe's shap
 ([design](design/multi-tenant.md)). The operator onboards each merchant as an account (`acct_…`)
 through the admin API; there is no dashboard, signup, or user. It is open-source, self-hosted
 software: each operator runs its own instance ([self-hosting](self-hosting.md)), and Phala's
-serves only Phala Cloud. For every account the service
+serves Phala's own products: RedPill (live) and Phala Cloud (planned), with no third-party merchants.
+For every account the service
 turns confirmed and screened deposits of configured tokens into USD-valued credits and tells the
 merchant what to credit with one signed webhook per deposit, which the merchant fulfills once. It
 holds no funds, sends no transactions, pays no merchant gas, and charges no fee (design §2):
 payments reach only the merchant's own treasury, and the merchant sweeps and refunds with its own
-wallet or Safe. Phala Cloud is an ordinary account. A deposit is credited at
+wallet or Safe. RedPill is an ordinary merchant account. A deposit is credited at
 the route's confirmation (two blocks on Ethereum, about 30 seconds after paying) and watched to
 finality; the rare deposit a reorganization proves replaced is reversed with a signed
 `deposit.reversed`, which the merchant handles like a refund (one whose transaction leaves the
 chain without positively proven replacement stays credited and not final, with an alert, §7). There are two ways to deposit. A
 **quote** fixes a price: the user states a USD amount, receives a locked price, an exact token
 amount, a fixed customer address, and a countdown, then pays. This is the checkout model of Coinbase
-Commerce and BitPay. A payment that does not match its quote (late, wrong amount, second
+Commerce and BitPay, adapted to a price window on the customer's persistent deposit address
+rather than a per-invoice address. One window is open per customer and route; a new quote closes
+the previous window. A payment that does not match its quote (late, wrong amount, second
 payment) is still credited, at the price observed when it is confirmed. A **deposit address**
 (§9, [design §5a](design/multi-tenant.md#5a-deposit-addresses-d16)) is the customer's
 persistent, rotatable address, one for every supported token on every supported chain, like the
 stable bank-transfer details of Stripe's customer balance: eligible transfers of supported tokens
 meeting the account’s minimum credit value and per-transfer token bounds, to an active or retired
-address, are credited at spot.
+address, are credited at spot unless they consume a quote's price window on that same address.
 
 A deposit's `amount` is a valuation: the USD value of the tokens at the locked or observed rate,
 which the merchant credits to its customer; the merchant receives the tokens themselves and
@@ -1827,23 +1830,18 @@ response when available.
 
 ## 17. Delivery
 
-The plan and its status are [docs/plan.md](plan.md); the design's PR plan is
+The launch set is shipped. RedPill was Phala's first live merchant; Phala Cloud onboarding and
+account closure (design PR 13) remain follow-ups. Production serves Ethereum USDC/USDT and Base
+USDC, with the factory deployed and verified on both mainnets. Current deployment and widening
+gates are in [post-launch status](plan.md); the original PR plan remains in
 [design §16](design/multi-tenant.md#16-plan).
 
-1. **Launch set** (design PRs 1–12): multi-tenant accounts, keys, modes, treasuries, webhook
-   endpoints, merchant sweeps and refunds, deposit addresses, restricted keys, launch hardening,
-   ledger correctness, and restore mode; then the deployment, these documents, and the staging
-   reset (PR 11).
-2. **Before mainnet**: the HUMAN-ONLY factory deployment on each chain (`deploy/CONTRACTS.md`).
-3. **Phala Cloud** is onboarded as the first live account and integrates like any merchant
-   (design §16, "Phala Cloud"). Acceptance on mainnet: an address recomputed by the merchant from
-   its pins; a quote paid exactly and credited at the amount shown, and a late or wrong-amount
-   payment at spot; a deposit recovered after restart and provider interruption; duplicates and
-   concurrency yield one ledger mutation; every forwarder's balance matches its deposits minus its
-   finalized `Flushed` events; one merchant sweep and one refund end to end; restore drill passed.
-4. **Later**: Base mainnet routes through route files, the same addresses wherever
-   the treasury is the same (staging already serves test routes on Base Sepolia); account closure
-   (design PR 13).
+Merchant acceptance on mainnet must prove an address recomputed from its pins; an exact payment
+credited at the quote and late or wrong-amount payments at spot; recovery after restart and
+provider interruption; one ledger mutation across duplicates and concurrency; forwarder balances
+equal to deposits minus finalized `Flushed` events; a merchant sweep and refund end to end; and a
+production restore drill. Record evidence in the
+[launch checklist](../deploy/runbooks/production-launch.md#13-sign-off-checklist).
 
 ## 18. Feature map
 
@@ -1867,7 +1865,7 @@ Ownership: **S** service, **M** merchant (its UI, billing, and support), **O** o
 | Sanctions screening of payers, refund destinations, and treasuries | S | ✓ | |
 | SDKs with webhook verification, address pinning, idempotent client, examples; versioning policy; local sandbox | S | ✓ | |
 | Account closure (design PR 13) | S+O | | ✓ |
-| Base mainnet routes (test routes on Base Sepolia run on staging) | S | | ✓ |
+| Base mainnet USDC route (test USDC on Base Sepolia runs on staging) | S | ✓ | |
 | Merchant dashboard, users, logins, self-serve onboarding, fees, custody | — | | never (design, owner ruling of 2026-09-28) |
 
 New snapshot activation also re-screens current treasuries, pending treasury changes and pending

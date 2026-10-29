@@ -24,14 +24,10 @@ production sets it to 2 and staging to 1. It atomically limits attached-pending 
 all accounts and modes in that environment; one new attachment per rolling 24 hours remains
 a fixed admission limit. Missing, zero or negative values fail configuration validation.
 
-CI resolves the latest stable release, currently v0.10.0, as N-1 for the next release's rollback
-rehearsal. v0.10.0 supports `rpc`, `max_attached_pending_refunds`, and the current R/N admission
-limits. Retain and use its verified configuration, kit and image digests when rolling back from
-a later compatible release; keep operational inventory and load controls in force.
-
-v0.10.0 is production's first release, so this launch has no earlier production rollback target.
-v0.9.2 cannot parse the current configuration, lacks the environment-wide R/N admission limits,
-and screens with the stale oracle. Never deploy it to production. See
+CI resolves the latest stable release other than the current ref as N-1 for rollback rehearsal.
+The rollback floor is v0.13.0; going below it requires [restore and reconciliation](RESTORE.md).
+Use the target's retained verified configuration, kit and image digests, and keep operational
+inventory and load controls in force. See
 [launch rollback](runbooks/production-launch.md#12-rollback) and
 [rollback compatibility](README.md#rollback-compatibility).
 
@@ -169,10 +165,10 @@ BlockPI fixed RU/payment chain: (432 + 48)×20 + 560×50 + 120C×20 = 37,600 + 2
 | Payment chain | Custody routes | Fixed Ankr calls/day | Fixed verify units/day |
 |---|---:|---:|---:|
 | Staging Sepolia | 3 | 1,464 | 116,160 Infura credits |
-| Staging Base Sepolia | 3 | 1,464 | 116,160 Infura credits |
+| Staging Base Sepolia | 1 | 1,224 | 96,960 Infura credits |
 | Production Ethereum | 2 | 1,344 | 42,400 BlockPI RU |
 | Production Base | 1 | 1,224 | 40,000 BlockPI RU |
-| **Per account** | **9** | **5,496 shared** | **232,320 Infura; 82,400 BlockPI** |
+| **Total** | **7** | **5,256 shared** | **213,120 Infura; 82,400 BlockPI** |
 
 Variable allowances before retries (the Infura column applies only to staging):
 
@@ -216,7 +212,7 @@ normal/L together permit only one full confirmation-evidence read per endpoint. 
 [confirmation schedule](../docs/design/chain-reads.md#confirmation-waits-and-slow-lane-l).
 
 Sanctions screening uses local OFAC/manual lists, with no RPC term; address derivation is local.
-Staging's two PHA routes share one TWAP pool and five-minute sampler: `86,400 / 300 = 288`
+Staging's one PHA route (Sepolia) uses one TWAP pool and five-minute sampler: `86,400 / 300 = 288`
 snapshots/day. Quotes have four price-chain/environment instances, so
 `288 + 2×60 staging + 2×150 production = 708` snapshots/day.
 Production has no periodic TWAP sampler in this pilot.
@@ -308,15 +304,15 @@ non-refund work uses the approved ten-percent allowance:
 
 ```text
 Shared Ankr non-refund:
-5,496 + 708 + 24×(115+20) + 12×(200+80) + 3×(150+20) + 3×12 + 300 + 688 + 172 = 14,510
+5,256 + 708 + 24×(115+20) + 12×(200+80) + 3×(150+20) + 3×12 + 300 + 688 + 172 = 14,270
 Shared Ankr refunds: 3×(684×2 + 96×3) = 4,968
-Shared Ankr total:   ceil(14,510×1.1 + 4,968) = 20,929 calls/day
+Shared Ankr total:   ceil(14,270×1.1 + 4,968) = 20,665 calls/day
 
 Staging-only Infura non-refund:
-232,320 + 240×408 + 2,000×20 + 640×80 + 240×20 + 160×2
-+ 255×150 + 320×86 + 80×86 = 499,210
+213,120 + 240×408 + 2,000×20 + 640×80 + 240×20 + 160×2
++ 255×150 + 320×86 + 80×86 = 480,010
 Staging-only Infura refunds: 3×(54,720×1 + 7,680×1) = 187,200
-Staging-only Infura total:   499,210×1.1 + 187,200 = 736,331 credits/day
+Staging-only Infura total:   480,010×1.1 + 187,200 = 715,211 credits/day
 
 Production-only BlockPI non-refund:
 82,400 + 60×300 + 875×115 + 280×200 + 70×150 + 40×10
@@ -333,15 +329,15 @@ BlockPI's two chain keys share one account quota; they do not each receive 50M R
 
 | Provider account | Roles | Modeled daily usage | Stop line/day | Headroom below stop | D permitted with ≥10% headroom |
 |---|---|---:|---:|---:|---|
-| Ankr | Production + staging read | 20,929 calls | 25,000 calls | 16.28% | Production ≤174 with staging D=20 |
-| Infura | Staging verify only | 736,331 credits | 1,500,000 credits | 50.91% | Staging ≤298; no production D constraint |
+| Ankr | Production + staging read | 20,665 calls | 25,000 calls | 17.34% | Production ≤184 with staging D=20 |
+| Infura | Staging verify only | 715,211 credits | 1,500,000 credits | 52.32% | Staging ≤308; no production D constraint |
 | BlockPI | Production verify only | 372,031 RU (rounded up) | 1,250,000 RU | 70.24% | Production ≤897 under conservative method weights |
 
 Holding every other allowance fixed, the equations before rounding are:
 
 ```text
-Ankr(D production, staging 20) = 17,893 + 26.4D;  ≤ 0.9×25,000       → D≤174
-Infura(D staging)             = 692,331 + 2,200D; ≤ 0.9×1,500,000    → D≤298
+Ankr(D production, staging 20) = 17,629 + 26.4D;  ≤ 0.9×25,000       → D≤184
+Infura(D staging)             = 671,211 + 2,200D; ≤ 0.9×1,500,000    → D≤308
 BlockPI(D production)         = 261,343 + 962.5D; ≤ 0.9×1,250,000    → D≤897
 ```
 

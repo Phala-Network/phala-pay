@@ -2,8 +2,8 @@
 
 Phala Pay is open-source, self-hosted software. An operator runs its own instance in its own
 dstack confidential VM (CVM) on Phala Cloud, for its own merchants, each an account (`acct_…`)
-that the operator creates. Phala runs an instance only for Phala Cloud and offers no hosted
-service to third parties; its staging instance and the demo at [pay.phala.com](https://pay.phala.com/)
+that the operator creates. Phala's instance serves RedPill (live) and Phala Cloud (planned),
+with no third-party merchants; its staging instance and the demo at [pay.phala.com](https://pay.phala.com/)
 are Phala's own, on Sepolia and Base Sepolia. Nothing in an instance depends on Phala's: you deploy
 a verified [release](https://github.com/Phala-Network/phala-pay/releases) of the software from a
 repository of your own that holds only your settings, to your own Phala Cloud workspace, serve your
@@ -20,7 +20,7 @@ DNS, or a secret, and are run by a person from their own machine, never by CI or
 | Operator | you: runs the instance, creates accounts, decides live access, handles incidents | this guide, [deploy/README.md](../deploy/README.md), [runbooks](../deploy/runbooks/README.md) |
 | Merchant | each account: its keys, treasuries, webhook endpoints, sweeps, refunds | [integration.md](integration.md) |
 
-An operator may also be a merchant of its own instance, as Phala is for Phala Cloud; it then does
+An operator may also be a merchant of its own instance, as Phala is for RedPill; it then does
 the merchant's steps with the account's keys, never with the admin key.
 
 ## One-command deploy
@@ -293,8 +293,8 @@ Deploy `upgrade`, never a runtime setting.
   reference deployment.
   Only where it is missing, deploy it (**HUMAN-ONLY**, a funded throwaway EOA) as in
   [deploy/CONTRACTS.md](../deploy/CONTRACTS.md); if anyone deployed it first, the broadcast sends
-  nothing. It is deployed on Sepolia and Base Sepolia; mainnet deployment remains in
-  [Phala's production plan](plan.md#before-mainnet).
+  nothing. Phala's factory is deployed and verified on Sepolia, Base Sepolia, Ethereum, and Base
+  ([mainnet evidence](../deploy/CONTRACTS.md#mainnet)).
 
 ## 4. Release and provision
 
@@ -556,12 +556,11 @@ merchants, deploy as this guide describes, where every one of them is attested.
 
 Allow outbound HTTPS to `sanctionslistservice.ofac.treas.gov` and
 `wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com`. A host or publication contract
-change fails verification and eventually holds negative decisions. v0.9.x uses the stale oracle
-and cannot read supplements: any rollback to it requires pausing **all screening-dependent fund
-processing, regardless of manual entries**, until N is restored and verified screening is healthy.
-Rollback below v0.10.0 is unsupported for this configuration.
+change fails verification and eventually holds negative decisions. The rollback floor is v0.13.0:
+going below it requires restore and reconciliation, as declared in the
+[v0.13.0 changelog](../CHANGELOG.md#0130---2026-10-27).
 
-A supported N-1 at v0.10.0 or later uses verified SDN snapshots and supplements. Use its retained
+A supported N-1 at v0.13.0 or later uses verified SDN snapshots and supplements. Use its retained
 verified configuration and kit; verify snapshot freshness, supplements and re-screening before
 resuming screening-dependent processing. See the
 [sanctions runbook](../deploy/runbooks/sanctions-list.md#n-1-rollback).
