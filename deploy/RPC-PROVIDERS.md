@@ -20,7 +20,7 @@ volumes. Use it to choose a `read` and `verify` pair for each environment.
 - **Allocation B (selected):** production keeps Ankr read and verifies with BlockPI on Ethereum
   and Base. Staging keeps Ankr + Infura on its two payment chains and two mainnet price chains.
   One account per company: Ankr is shared, Infura is staging-only, and the two BlockPI keys share
-  one account quota. Under the [per-account budget](RPC.md#worst-case-pilot-budget), shared Ankr
+  one account quota. Under the [total budget](RPC.md#worst-case-pilot-budget), shared Ankr
   permits production D≤184 with staging D=20 and ≥10% modeled headroom, holding all other
   approved allowances fixed. Production uses D=115/H=200/Q=150/factory=150/Safe=10; staging
   retains D=20/H=80/Q=60/factory=20/Safe=2. Raising them needs a separate reviewed PR.

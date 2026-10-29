@@ -794,8 +794,8 @@ before provisioning
 Each fresh quote snapshot costs one read call, 240 Infura verify credits in staging or 60
 BlockPI RU in production; the DB enforces the configured `quote_snapshots_per_day`
 (150 production, 60 staging) per price chain per UTC day.
-[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all nine
-chain/token routes (three production, six staging), refunds, unresolved finality stock, slow
+[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all seven
+chain/token routes (three production, four staging), refunds, unresolved finality stock, slow
 confirmation lane L and proof work. Parallel-mode production caps are D=115/day, H=200 hint
 tasks/UTC day and Q=150 fresh snapshots/price chain/UTC day, with factory=150/day and
 Safe=10/day. Staging

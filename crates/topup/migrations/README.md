@@ -341,14 +341,12 @@ time only in the transaction that commits the corresponding dual address markers
 `20261101000000_sanctions_lists` adds only verified OFAC snapshots, their digital-currency
 identifiers, and audited manual sanctions entries. The newest activation is active, and all
 snapshot evidence is retained. The down migration is a no-op; the compatibility floor and
-persisted `sanctioned` / `sanctions_inconclusive` values stay unchanged. v0.9.x ignores these tables
-and supplements and uses the stale oracle: any rollback to it requires pausing **all
-screening-dependent fund processing, regardless of manual entries**, until N is restored and
-verified screening is healthy. Rollback below v0.10.0 is unsupported for the current configuration.
-
-A supported N-1 at v0.10.0 or later uses verified SDN snapshots and supplements. Use its retained
-verified configuration and kit; verify snapshot freshness, supplements and re-screening before
-resuming screening-dependent processing. See the
+persisted `sanctioned` / `sanctions_inconclusive` values stay unchanged. v0.9.x ignored these tables
+and supplements and used the stale oracle; v0.10.0 introduced verified SDN screening.
+The later v0.13.0 schema break is now the
+[rollback floor](../../../deploy/README.md#rollback-compatibility); going below it requires restore.
+For supported rollback targets, verify snapshot freshness, supplements and re-screening before
+resuming screening-dependent processing, using the retained verified configuration and kit. See the
 [sanctions runbook](../../../deploy/runbooks/sanctions-list.md#n-1-rollback).
 
 `20261103000000_confirmation_bounds` adds default-zero normal head/receipt counters and nullable,

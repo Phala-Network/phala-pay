@@ -24,14 +24,10 @@ production sets it to 2 and staging to 1. It atomically limits attached-pending 
 all accounts and modes in that environment; one new attachment per rolling 24 hours remains
 a fixed admission limit. Missing, zero or negative values fail configuration validation.
 
-CI resolves the latest stable release, currently v0.10.0, as N-1 for the next release's rollback
-rehearsal. v0.10.0 supports `rpc`, `max_attached_pending_refunds`, and the current R/N admission
-limits. Retain and use its verified configuration, kit and image digests when rolling back from
-a later compatible release; keep operational inventory and load controls in force.
-
-v0.10.0 is production's first release, so this launch has no earlier production rollback target.
-v0.9.2 cannot parse the current configuration, lacks the environment-wide R/N admission limits,
-and screens with the stale oracle. Never deploy it to production. See
+CI resolves the latest stable release other than the current ref as N-1 for rollback rehearsal.
+The rollback floor is v0.13.0; going below it requires [restore and reconciliation](RESTORE.md).
+Use the target's retained verified configuration, kit and image digests, and keep operational
+inventory and load controls in force. See
 [launch rollback](runbooks/production-launch.md#12-rollback) and
 [rollback compatibility](README.md#rollback-compatibility).
 

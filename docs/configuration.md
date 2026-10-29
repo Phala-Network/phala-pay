@@ -17,8 +17,8 @@ is in [design/deploy-config.md](design/deploy-config.md).
 
 ## API admission limits
 
-The service sees only the gateway's WireGuard address through dstack-ingress,
-which forwards TCP traffic. There is no per-client-IP limiting. Protection comes from the
+Topup receives the client source address through gateway and dstack-ingress PROXY v2
+passthrough. There is no per-client-IP limiting. Protection comes from the
 authenticated account-and-mode limits (100 requests/s live, 25 test, and 500 test requests/s
 across accounts), the `client_secret` object limits (120 reads/minute), the pre-authentication
 database gate, the global limit of 256 concurrent API requests, and the Phala gateway's per-app
@@ -31,26 +31,29 @@ checksum-invalid keys return `401` before taking a slot. Anonymous `client_secre
 their own slots; `/healthz` and admin authentication do not use this gate. The service admission
 limits are built in, with no new configuration setting.
 
-The phase-1 release supports an optional private `--proxy-protocol-bind ADDR` listener, but
-shipped compose commands leave it disabled. It requires a PROXY v2 header on every connection,
+Topup's private `--proxy-protocol-bind ADDR` listener (8082 in the shipped compose) is enabled
+with gateway PROXY on 443; restore-check and the template leave it off.
+It requires a PROXY v2 header on every connection,
 reads each header concurrently with a five-second deadline (at most 256 pending headers), and
 passes the source socket address into Axum's `ConnectInfo<SocketAddr>` on the same router.
 LOCAL and unspecified-address headers use the peer socket address. Invalid, missing, and timed-out
 headers close the connection with a generic diagnostic; topup never records client addresses in
 tracing or Sentry. The existing plain HTTP listener and healthcheck on 8080 stay unchanged.
 
-Expose the optional listener only to a trusted ingress hop: PROXY headers assert an address
+Expose the private listener only to a trusted ingress hop: PROXY headers assert an address
 without authenticating it. Client-supplied `X-Real-IP` and `X-Forwarded-For` remain untrusted.
-The attested gateway `port_policy` explicitly keeps `pp:false` and `restrict_mode:false`; a later
-phase 2 must enable gateway PROXY v2 and ingress ACCEPT/SEND together in one app-compose update.
+The service's attested gateway `port_policy` enables `pp:true` on 443 with `restrict_mode:false`;
+gateway PROXY v2 and ingress ACCEPT/SEND must stay aligned in one app-compose update
+([Custom domain](../deploy/README.md#custom-domain)).
 Carrying the address introduces no per-IP admission or transaction-hint limits.
 
 Transaction-hash hints have no per-IP limit. Their controls are credential-gated per-object
-limits of 3/minute and 10/day, a hard cap of 80 tasks per environment per UTC day, and at most
+limits of 3/minute and 10/day, the configured `hints_per_day` cap per environment per UTC day
+(200 production, 80 staging; default 80), and at most
 four tasks in flight. Request bodies are read only after the shared 256-request concurrency gate
 admits the hint; overload returns `503 unavailable` with `Retry-After: 1`. Admitted hints retain
 quiet `202 received` responses. Merchant-key hints share the database authentication gate above.
-dstack-ingress uses HAProxy in TCP mode and forwards to `topup:8080` without PROXY protocol;
+dstack-ingress uses HAProxy in TCP mode and forwards to `topup:8082` with PROXY protocol;
 client-supplied forwarding headers are not trusted.
 
 ## Commands

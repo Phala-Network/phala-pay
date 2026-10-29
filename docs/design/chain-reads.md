@@ -1,6 +1,6 @@
 # Chain reads: final design
 
-Status: implemented in v0.10.0 (unreleased). This describes the adopted pilot design, not a
+Status: implemented in v0.10.0. This describes the adopted pilot design, not a
 verification of a live deployment. Supersedes
 [the RPC failover design](https://github.com/Phala-Network/phala-pay/blob/5f585cca2073b81fd7d016192940e906fef8c13e/docs/design/rpc-failover.md). Provider capabilities measured with the real keys on
 2026-10-07 (§5.1).
@@ -394,7 +394,7 @@ measurement record, separate from pricing-page claims.
 
 [RPC operations](../../deploy/RPC.md#worst-case-pilot-budget) is the authoritative budget:
 five-minute read discovery, ten-minute dual checkpoints, hourly dual coverage, six-hour
-19,200-block catch-up, all nine hourly custody routes, prices, deposits, hints, factory proofs,
+19,200-block catch-up, all seven hourly custody routes, prices, deposits, hints, factory proofs,
 Safe proofs, attached refunds, unresolved finality stock and extra operations. It assumes every
 payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and all 1,000
 historical addresses.
@@ -417,25 +417,11 @@ before retries. Staging uses half the rechecks, 27,520 Infura credits, and produ
 across both environments: **172 shared Ankr**, with 6,880 staging Infura credits and
 1,720 production BlockPI RU. Its final full evidence read is already in D.
 
-Production D=115 and staging D=20 give 135 deposits/day. Production H=200/Q=150,
-factory=150 and Safe=10; staging retains H=80/Q=60, factory=20 and Safe=2.
-The per-account arithmetic, including all existing proof/reserve allocations, is:
-
-```text
-Shared Ankr:         ceil(14,510×1.1 + 4,968) = 20,929 calls/day
-Staging-only Infura:  499,210×1.1 + 187,200 = 736,331 credits/day
-Production BlockPI:  284,455×1.1 + 59,130 = 372,030.5 RU/day (ceil: 372,031)
-```
-
 At 3,000-block windows, coverage uses 192 log requests per endpoint/payment chain/day;
-BlockPI's 1,000-block windows conservatively require 560. Headroom below stop lines is
-**16.28% shared Ankr / 50.91% staging Infura / 70.24% production BlockPI**. With staging D=20,
-shared Ankr permits production D≤174 at ≥10% modeled headroom; the conservative BlockPI budget
-permits D≤897. Infura is no longer a production constraint (its staging-only bound is D≤298).
-These D ceilings hold the other approved allowances fixed; they do not authorize increases.
-Before production launch §2, merge and preflight the
-production Ankr/BlockPI allocation and complete sealed mappings; staging stays Ankr + Infura,
-with no dRPC prerequisite. Non-refund reads use ×1.1; refunds reserve all
+BlockPI's 1,000-block windows conservatively require 560. Current route counts, provider totals,
+headroom, and approved operating limits are maintained only in the
+[RPC budget](../../deploy/RPC.md#worst-case-pilot-budget). Model ceilings do not authorize
+increases to approved limits. Non-refund reads use ×1.1; refunds reserve all
 three transport attempts. Logical method counts have hard bounds; each method can still make
 up to three physical sends. These totals do not guarantee ten-percent headroom if all
 non-refund requests exhaust retries. See the
