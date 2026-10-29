@@ -2689,13 +2689,16 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
     support::with_database(|database| Box::pin(async move {
         let pool=&database.app_pool;
         let (account,key)=seed_product(pool,"capacity merchant").await?;
+        let existing=seed_account(pool,account.id,"existing").await?;
+        let quotes: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
+        let first=create_lock(database,&quotes,&account,&existing,&test_route()).await?;
         let customer=seed_account(pool,account.id,"historical").await?;
-        for number in 1..=1000_u64 {
+        for number in 1..1000_u64 {
             seed::insert_address(pool,&seed::NewAddress {id:Uuid::new_v4(),customer_id:customer.id,
                 chain_id:1,route:test_route().route,salt:B256::from(U256::from(number)),
                 address:Address::from_word(B256::from(U256::from(number)))}).await?;
         }
-        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes WHERE status='cancelled'").fetch_one(pool).await?==1000);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes WHERE status='cancelled'").fetch_one(pool).await?==999);
         let admin=SigningKey::from_bytes(&[44;32]);
         let app=topup::api::router(AppState {
             pool:pool.clone(),routes:Arc::new(test_routes()),maintenance_keys:Vec::new(),
@@ -2708,6 +2711,13 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
             sanctions_rescreen: Arc::default(),
             contract_signatures:Arc::new(topup::treasuries::UnavailableContractSignatures),
         }).0;
+        let response=app.clone().oneshot(merchant_request(Method::POST,"/v1/quotes",serde_json::to_vec(&json!({
+            "client_reference_id":"existing","amount":100,"currency":"usd","chain_id":1,"asset":"pha",
+        }))?,&key)).await?;
+        ensure!(response.status()==StatusCode::OK,"existing network: {}",response.status());
+        let quote=response_json(response).await?;
+        ensure!(quote["address"]==format!("{:#x}",first.address));
+        ensure!(quote["deposit_address_version"]==1);
         for (path,body) in [("/v1/quotes",json!({"client_reference_id":"capacity-quote","amount":100,"currency":"usd","chain_id":1,"asset":"pha"})),
             ("/v1/deposit_addresses",json!({"client_reference_id":"capacity-address"}))] {
             let response=app.clone().oneshot(merchant_request(Method::POST,path,serde_json::to_vec(&body)?,&key)).await?;
@@ -2718,7 +2728,7 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
             ensure!(body["error"]["type"]=="invalid_request_error");
         }
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM addresses").fetch_one(pool).await?==1000);
-        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==1000);
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM quotes").fetch_one(pool).await?==1001);
         let metrics=topup::observability::metrics::render_chain_reads(pool).await?;
         ensure!(metrics.contains("topup_issued_addresses{chain_id=\"1\"} 1000"));
         ensure!(metrics.contains("topup_issued_address_cap{chain_id=\"1\"} 1000"));

@@ -783,7 +783,7 @@ def test_deposit_driver_submits_after_payment_and_keeps_scanner_fallback(
     api.account.side_effect = account
     monkeypatch.setattr(driver, "ProductApi", lambda *_: api)
     monkeypatch.setattr(driver, "Payer", lambda *_: payer)
-    monkeypatch.setattr(driver, "quote_address", lambda *_: "0x" + "66" * 20)
+    monkeypatch.setattr(driver, "deposit_address", lambda *_: "0x" + "66" * 20)
     actions = Mock()
     actions.attach_mock(payer.mint_and_transfer, "pay")
     actions.attach_mock(api.submit_transaction, "submit")

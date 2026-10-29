@@ -205,11 +205,6 @@ pub(crate) async fn create_quote(
     if !state.routes.chain_ready(route.chain.chain_id) {
         return Err(ApiError::chain_unavailable());
     }
-    if crate::db::chain_reads::issued_address_count(&state.pool, route.chain.chain_id).await?
-        >= crate::db::chain_reads::ISSUED_ADDRESS_CAP
-    {
-        return Err(ApiError::address_capacity_reached());
-    }
     let route_scopes = repository::route_paused_scopes(&state.pool, &route.route).await?;
     if has_quotes_pause(&merchant.account, &customer, &route_scopes) {
         return Err(ApiError::paused("quotes are paused"));
