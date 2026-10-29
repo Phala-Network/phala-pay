@@ -922,8 +922,10 @@ probes on each boot as well as the reconciliation calls. A missing receipt/log s
 finalized blocks is a warning, while failed endpoint checks still leave that chain unavailable.
 The freeze clamps surviving open quote windows to the restore point; lost windows are not
 reissued. This drill keeps production running, so its report is `rpo_basis: "unanchored"`:
-record the heartbeat's age when the first report arrives, not a claimed failure-time RPO against
-the creation time. Archived WAL can include commits made after creation. Full merchant-service
+record the restored heartbeat's offset from creation, which may be positive because archived WAL
+can include commits made after creation. Require it to be no more than 60 seconds before
+creation; its age when the report arrives also includes restore and reconciliation time and is
+informational only. Neither observation proves failure-time RPO. Full merchant-service
 RTO and failure-time RPO require the controlled/crash drills or an actual failure anchor;
 the one-hour bound below covers creation through the final read-only verification only.
 
@@ -1113,13 +1115,15 @@ verify_attestation_binding(
     {started_at: env.RESTORE_STARTED_AT, reported_at: env.RESTORE_REPORTED_AT,
      restore_ready_at: env.RESTORE_READY_AT,
      read_only_rto_seconds: ((env.RESTORE_READY_AT | fromdateiso8601) - (env.RESTORE_STARTED_AT | fromdateiso8601)),
+     restored_heartbeat_offset_seconds: (($initial[0].restore_check.restored_heartbeat_at
+       | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) - (env.RESTORE_STARTED_AT | fromdateiso8601)),
      observed_backup_age_seconds: ((env.RESTORE_REPORTED_AT | fromdateiso8601)
        - ($initial[0].restore_check.restored_heartbeat_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)),
      failure_time_rpo_verified: false, full_service_rto_verified: false,
      restore_check: .restore_check}' \
     restore-healthz-final.json > restore-drill-record.json || return 1
   jq -e '.read_only_rto_seconds >= 0 and .read_only_rto_seconds <= 3600
-    and .observed_backup_age_seconds >= 0 and .observed_backup_age_seconds <= 60
+    and .restored_heartbeat_offset_seconds >= -60
     and .restore_check.failures == [] and .restore_check.in_recovery == false
     and .restore_check.post_restore_reconciliation.failed_checks == []' \
     restore-drill-record.json >/dev/null || return 1
@@ -1155,8 +1159,10 @@ If Phala Cloud retains a deleted CVM record, the 404 check fails safely. Confirm
 - All three smoke deposits keep their recorded state.
 - `restore-drill-record.json` retains the full report (including failures, reconciliation, LSNs,
   `rpo_basis`, migration and row counts), the first report time, and the final restore-ready time.
-  Observed backup age at the first report is 0–60 seconds and total read-only recovery is at most
-  3600 seconds. Neither measurement claims failure-time RPO or full merchant-service RTO.
+  The restored heartbeat is no more than 60 seconds before creation (a positive offset is valid
+  while the source stays live); its age at the first report is informational. Total read-only
+  recovery is at most 3600 seconds. These measurements claim neither failure-time RPO nor full
+  merchant-service RTO.
 - The drill instance is deleted, the read-only token is revoked, and no read-write credential was
   ever sealed into the drill.
 

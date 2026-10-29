@@ -106,9 +106,11 @@ on `/healthz`:
 ```
 
 Preserve the complete report, including its reconciliation, failures, LSNs and RPO fields.
-A drill whose source stays live can replay WAL committed after instance creation: compare the
-heartbeat with the first report time to record observed backup age, without calling that
-failure-time RPO. Creation through the final read-only verification must fit one hour; it does
+A drill whose source stays live can replay WAL committed after instance creation: record the
+restored heartbeat's offset from creation (which may be positive), requiring it to be no more
+than 60 seconds before creation. Age at the first report also includes restore and reconciliation
+time, so it is informational only; neither observation proves failure-time RPO.
+Creation through the final read-only verification must fit one hour; it does
 not exercise merchant-service RTO through rescan and unfreeze. The bounded production example
 and evidence fields are in [production-launch.md §9](runbooks/production-launch.md#9-production-restore-drill).
 
