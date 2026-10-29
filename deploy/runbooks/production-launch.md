@@ -916,6 +916,17 @@ inherited gateway/KMS, public flags, secure time, and legacy features; no curren
 requires different values ([inheritance details](../RESTORE.md#why-the-sealed-names-match-the-service)).
 Preflight checks the Docker compose; verification after boot checks the inherited app-compose.
 
+Use the live release's verified kit and `images.json` (v0.13.1 includes #568). Both the
+`restore-check` process and the read-only API run RPC preflight in that release; allow for both
+probes on each boot as well as the reconciliation calls. A missing receipt/log sample in eight
+finalized blocks is a warning, while failed endpoint checks still leave that chain unavailable.
+The freeze clamps surviving open quote windows to the restore point; lost windows are not
+reissued. This drill keeps production running, so its report is `rpo_basis: "unanchored"`:
+record the heartbeat's age when the first report arrives, not a claimed failure-time RPO against
+the creation time. Archived WAL can include commits made after creation. Full merchant-service
+RTO and failure-time RPO require the controlled/crash drills or an actual failure anchor;
+the one-hour bound below covers creation through the final read-only verification only.
+
 ```sh
 live_isolated() {
   for _ in $(seq 20); do
@@ -942,8 +953,6 @@ restore_drill() {
   trap restore_cleanup RETURN
 
   live_isolated || { restore_cleanup; return 1; }
-  RESTORE_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
-  export RESTORE_STARTED_AT
   RESTORE_ENV_DIR="$(mktemp -d "$LAUNCH_WORK_DIR/restore-env.XXXXXX")" || return 1
   export RESTORE_ENV_DIR
   umask 077
@@ -953,12 +962,16 @@ restore_drill() {
   # TOPUP_RPC_ANKR_KEY, TOPUP_RPC_BLOCKPI_ETHEREUM_KEY and TOPUP_RPC_BLOCKPI_BASE_KEY.
   "$KIT_DIR/deploy/render.sh" --restore-check --images release/images.json --origin https://pending.invalid \
     "$ENV_DIR" > restore-check.yml || return 1
+  docker pull "$(jq -er '.["phala-pay"]' release/images.json)" || return 1
   "$KIT_DIR/deploy/preflight.sh" --env "$RESTORE_ENV_DIR/restore.env" --compose restore-check.yml \
     --environment-dir "$ENV_DIR" --restore-check --workspace "$PHALA_WORKSPACE" \
     --os-image dstack-0.6.1 --require-sentry || return 1
 
   # Restore step 1: create a new instance of the original app with its own read-only env.
   live_isolated || { restore_cleanup; return 1; }
+  RESTORE_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+  export RESTORE_STARTED_AT
+  RESTORE_RTO_DEADLINE=$((SECONDS + 3600))
   "$KIT_DIR/deploy/phala" instances add --app-id "$APP_ID" --compose-file restore-check.yml \
     --pre-launch-script "$KIT_DIR/deploy/phala-cloud-pre-launch.sh" --env-file "$RESTORE_ENV_DIR/restore.env" \
     --name phala-pay-production-restore --json > restore-instance.json || return 1
@@ -999,7 +1012,7 @@ restore_drill() {
   # Restore step 3: wait for the report, checking live isolation at least every five minutes.
   live_isolated || { restore_cleanup; return 1; }
   export RESTORE_URL="https://${APP_ID#0x}-8081.$RESTORE_GATEWAY_DOMAIN"
-  RESTORE_DEADLINE=$((SECONDS + 3600))
+  RESTORE_DEADLINE=$RESTORE_RTO_DEADLINE
   RESTORE_NEXT_ISOLATION=$SECONDS
   while (( SECONDS < RESTORE_DEADLINE )); do
     if (( SECONDS >= RESTORE_NEXT_ISOLATION )); then
@@ -1025,7 +1038,7 @@ restore_drill() {
     --pre-launch-script "$KIT_DIR/deploy/phala-cloud-pre-launch.sh" --no-public-logs --no-public-sysinfo --wait || return 1
 
   # The report is rerun after the origin change; keep the same one-hour bound and isolation checks.
-  RESTORE_DEADLINE=$((SECONDS + 3600))
+  RESTORE_DEADLINE=$RESTORE_RTO_DEADLINE
   RESTORE_NEXT_ISOLATION=$SECONDS
   while (( SECONDS < RESTORE_DEADLINE )); do
     if (( SECONDS >= RESTORE_NEXT_ISOLATION )); then
@@ -1093,8 +1106,23 @@ verify_attestation_binding(
       '({id,status,amount,amount_atomic,amount_refunded,amount_refunded_atomic,amount_reversed,replaces,replaced_by,revision}) == $expected[0]' \
       "restore-deposit-$INDEX.json" >/dev/null || return 1
   done
-  jq '{started_at: env.RESTORE_STARTED_AT, reported_at: env.RESTORE_REPORTED_AT, restore_check: .restore_check | {status, restored_heartbeat_at, latest_migration, row_counts}}' \
+  (( SECONDS <= RESTORE_RTO_DEADLINE )) || { echo "read-only recovery exceeded one hour" >&2; return 1; }
+  RESTORE_READY_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+  export RESTORE_READY_AT
+  jq --slurpfile initial restore-healthz.json '
+    {started_at: env.RESTORE_STARTED_AT, reported_at: env.RESTORE_REPORTED_AT,
+     restore_ready_at: env.RESTORE_READY_AT,
+     read_only_rto_seconds: ((env.RESTORE_READY_AT | fromdateiso8601) - (env.RESTORE_STARTED_AT | fromdateiso8601)),
+     observed_backup_age_seconds: ((env.RESTORE_REPORTED_AT | fromdateiso8601)
+       - ($initial[0].restore_check.restored_heartbeat_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)),
+     failure_time_rpo_verified: false, full_service_rto_verified: false,
+     restore_check: .restore_check}' \
     restore-healthz-final.json > restore-drill-record.json || return 1
+  jq -e '.read_only_rto_seconds >= 0 and .read_only_rto_seconds <= 3600
+    and .observed_backup_age_seconds >= 0 and .observed_backup_age_seconds <= 60
+    and .restore_check.failures == [] and .restore_check.in_recovery == false
+    and .restore_check.post_restore_reconciliation.failed_checks == []' \
+    restore-drill-record.json >/dev/null || return 1
   return 0
 }
 restore_drill
@@ -1125,8 +1153,10 @@ If Phala Cloud retains a deleted CVM record, the 404 check fails safely. Confirm
   "$RESTORE_URL"` render, with the pinned OS image.
 - The report is `ok`, with reconciliation `complete`, and the service is frozen.
 - All three smoke deposits keep their recorded state.
-- `restore-drill-record.json` records the RPO (`restored_heartbeat_at` against
-  `started_at`), the RTO (`reported_at` minus `started_at`), `latest_migration`, and row counts.
+- `restore-drill-record.json` retains the full report (including failures, reconciliation, LSNs,
+  `rpo_basis`, migration and row counts), the first report time, and the final restore-ready time.
+  Observed backup age at the first report is 0–60 seconds and total read-only recovery is at most
+  3600 seconds. Neither measurement claims failure-time RPO or full merchant-service RTO.
 - The drill instance is deleted, the read-only token is revoked, and no read-write credential was
   ever sealed into the drill.
 
