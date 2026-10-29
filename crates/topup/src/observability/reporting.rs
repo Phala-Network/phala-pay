@@ -185,7 +185,17 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         "TopupContractCodeMismatch"
         | "TopupFinalizedCheckpointConflict"
         | "TopupUnverifiedEvidenceMismatch" => "chain-frozen.md",
-        "TopupRpcEndpointUnavailable" => "rpc-health.md",
+        "TopupRpcEndpointUnavailable"
+        | "TopupRpcAddressBackfillLag"
+        | "TopupRpcCoverageLag"
+        | "TopupRpcConfirmationProviderLag"
+        | "TopupRpcConfirmationSlowStock"
+        | "TopupRpcConfirmationSlowEntries"
+        | "TopupRpcHintBudgetExhausted"
+        | "TopupRpcPriceSnapshotBudgetExhausted" => "rpc-health.md",
+        "TopupRpcUnresolvedDepositStock" | "TopupRpcUnresolvedDepositEntries" => {
+            "deposit-reversed.md"
+        }
         "TopupRpcDisagreement" | "TopupSanctionsHold" => "provider-disagreement.md",
         "TopupDepositReversalUnproven" => "deposit-reversed.md",
         "TopupDepositStateAgeExceeded" => match tag("state") {
@@ -470,6 +480,16 @@ mod tests {
             "TopupCertificateProbeFailed",
             "TopupBusinessProbeFailed",
             "TopupAddressCapacity",
+            "TopupRpcEndpointUnavailable",
+            "TopupRpcAddressBackfillLag",
+            "TopupRpcCoverageLag",
+            "TopupRpcUnresolvedDepositStock",
+            "TopupRpcUnresolvedDepositEntries",
+            "TopupRpcConfirmationSlowStock",
+            "TopupRpcConfirmationSlowEntries",
+            "TopupRpcConfirmationProviderLag",
+            "TopupRpcHintBudgetExhausted",
+            "TopupRpcPriceSnapshotBudgetExhausted",
         ];
         let events = with_captured_events_options(
             || {
@@ -489,6 +509,10 @@ mod tests {
                 "outbox-backlog.md"
             } else if alert == "TopupAddressCapacity" {
                 "address-capacity.md"
+            } else if alert.starts_with("TopupRpcUnresolvedDeposit") {
+                "deposit-reversed.md"
+            } else if alert.starts_with("TopupRpc") {
+                "rpc-health.md"
             } else if alert == "TopupRefundProgressAge" {
                 "rejected-funds-at-treasury.md#pending-refund-transaction-alert"
             } else {

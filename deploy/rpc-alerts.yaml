@@ -1,4 +1,11 @@
-# Import into the operator's Prometheus rule_files. Scrape the admin-signed metrics exporter.
+# Optional Prometheus equivalent: import into rule_files and scrape the admin-signed exporter.
+# The service's once-per-minute business monitor already evaluates endpoint readiness, backfill/
+# coverage lag, S/L stock and persisted rolling entries, H/Q budgets and address capacity.
+# It emits tagged Sentry alerts; Sentry owns delivery/routing. No collector/key/workflow is
+# required for those internal checks. Sanctions freshness has its own existing monitor.
+# The increase(...[1d/7d]) provider-quota rules below REQUIRE a real time-series collector.
+# Without one, check provider dashboards daily (shared Ankr includes staging), plus the manual
+# D/recovery, factory and Safe tallies. Do not estimate rolling quotas from isolated snapshots.
 groups:
   - name: phala-pay-rpc
     rules:

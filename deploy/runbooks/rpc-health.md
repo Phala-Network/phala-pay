@@ -7,6 +7,12 @@ BlockPI verify. Stop adding load at 25,000 Ankr calls/day (seven-day run rate), 
 credits/day or 1,250,000 BlockPI RU/day (seven-day run rate). Compare BlockPI with its account
 dashboard too: log responses above 200 KB incur surcharges that method counters cannot measure.
 
+The service evaluates readiness/backfill/coverage and S/L/H/Q in its existing business monitor;
+[production launch §11](production-launch.md#11-pilot-caps-monitoring-and-stop-actions) lists the
+`TopupRpc*` alerts and their thresholds. Sentry owns notification delivery. The `Rpc*` names in
+[rpc-alerts.yaml](../rpc-alerts.yaml) are the optional Prometheus equivalents. Rolling provider
+quotas still require a time-series collector or daily provider-dashboard checks.
+
 ## Confirmation provider lag
 
 Compare each endpoint's corresponding latest, safe or finalized head with the deposit's

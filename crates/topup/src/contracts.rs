@@ -147,8 +147,9 @@ pub async fn check_and_enforce(
             chain_id = chain,
             "contract evidence disagreed; chain not-ready"
         ),
+        // The business monitor owns the sustained readiness alert and its deduplication.
         Err(error) => {
-            tracing::warn!(tags.alert="TopupRpcEndpointUnavailable",chain_id=chain,%error,"dual contract check waits; chain not-ready")
+            tracing::warn!(chain_id=chain,%error,"dual contract check waits; chain not-ready")
         }
     }
     Ok(passed)

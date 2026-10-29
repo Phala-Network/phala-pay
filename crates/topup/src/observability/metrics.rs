@@ -291,13 +291,7 @@ async fn render_chain_reads_with_clock(
             .max(0);
         super::sanctions_metrics::snapshot(&snapshot, age, pool).await;
     }
-    let (coverage,budgets,issued,unresolved,slow)=tokio::try_join!(
-        sqlx::query_as::<_,(i64,i64,i64)>("SELECT c.chain_id,GREATEST(0,extract(epoch FROM now()-c.through_time)::bigint),(SELECT count(*) FROM addresses a WHERE a.chain_id=c.chain_id AND (a.dual_covered_through IS NULL OR a.dual_covered_through < c.through_block)) FROM chain_coverage c").fetch_all(pool),
-        sqlx::query_as::<_,(String,i32)>("SELECT name,used FROM daily_budgets WHERE day=(now() AT TIME ZONE 'UTC')::date").fetch_all(pool),
-        sqlx::query_as::<_,(i64,i64)>("SELECT chain_id,count(*) FROM addresses GROUP BY chain_id UNION ALL SELECT chain_id,0 FROM chain_coverage c WHERE NOT EXISTS(SELECT 1 FROM addresses a WHERE a.chain_id=c.chain_id)").fetch_all(pool),
-        sqlx::query_as::<_,(i64,i64,i64)>("SELECT chain_id,count(*) FILTER (WHERE first_unresolved_at IS NOT NULL AND deposit_finality_pending(deposits)),count(*) FILTER (WHERE first_unresolved_at > COALESCE($1::timestamptz, now()) - interval '24 hours') FROM deposits GROUP BY chain_id UNION ALL SELECT chain_id,0,0 FROM chain_checkpoints c WHERE NOT EXISTS(SELECT 1 FROM deposits d WHERE d.chain_id=c.chain_id)").bind(now).fetch_all(pool),
-        sqlx::query_as::<_,(i64,i64,i64)>("SELECT chain_id,count(*) FILTER (WHERE first_slow_at IS NOT NULL AND first_unresolved_at IS NULL AND state='detected' AND final_at IS NULL AND confirm_receipt_checks=0),count(*) FILTER (WHERE first_slow_at > COALESCE($1::timestamptz,now()) - interval '24 hours') FROM deposits GROUP BY chain_id UNION ALL SELECT chain_id,0,0 FROM chain_checkpoints c WHERE NOT EXISTS(SELECT 1 FROM deposits d WHERE d.chain_id=c.chain_id)").bind(now).fetch_all(pool)
-    )?;
+    let health = super::chain_health::snapshot(pool, now.unwrap_or_else(chrono::Utc::now)).await?;
     let lag = IntGaugeVec::new(
         Opts::new(
             "topup_coverage_lag_seconds",
@@ -319,12 +313,12 @@ async fn render_chain_reads_with_clock(
         ),
         &["name"],
     )?;
-    for (chain, seconds, count) in coverage {
+    for (chain, seconds, count) in health.coverage {
         let chain = chain.to_string();
         lag.with_label_values(&[&chain]).set(seconds);
         addresses.with_label_values(&[&chain]).set(count);
     }
-    for (name, count) in budgets {
+    for (name, count) in health.budgets {
         used.with_label_values(&[&name]).set(i64::from(count));
     }
     let issued_gauge = IntGaugeVec::new(
@@ -341,7 +335,7 @@ async fn render_chain_reads_with_clock(
         ),
         &["chain_id"],
     )?;
-    for (chain, count) in issued {
+    for (chain, count) in health.issued {
         let chain = chain.to_string();
         issued_gauge.with_label_values(&[&chain]).set(count);
         cap_gauge
@@ -362,7 +356,7 @@ async fn render_chain_reads_with_clock(
         ),
         &["chain_id"],
     )?;
-    for (chain, stock, entries) in unresolved {
+    for (chain, stock, entries) in health.unresolved {
         let chain = chain.to_string();
         unresolved_gauge.with_label_values(&[&chain]).set(stock);
         entries_gauge.with_label_values(&[&chain]).set(entries);
@@ -381,7 +375,7 @@ async fn render_chain_reads_with_clock(
         ),
         &["chain_id"],
     )?;
-    for (chain, stock, entries) in slow {
+    for (chain, stock, entries) in health.slow {
         let chain = chain.to_string();
         slow_gauge.with_label_values(&[&chain]).set(stock);
         slow_entries.with_label_values(&[&chain]).set(entries);

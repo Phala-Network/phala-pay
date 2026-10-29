@@ -3,7 +3,11 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
+
+use super::chain_health::{self, Snapshot};
+use crate::routes::RouteSet;
 use tokio_util::sync::CancellationToken;
 
 const STALL_SECONDS: i64 = 15 * 60;
@@ -31,9 +35,36 @@ pub fn emit_alert(alert: &str, component: &str, severity: &str, observed: i64, t
 #[derive(Default)]
 struct AlertState {
     active: BTreeMap<(&'static str, String), (&'static str, i64)>,
+    pending: BTreeMap<(&'static str, String), i64>,
 }
 
 impl AlertState {
+    /// Match the RPC rules' `for` durations using repeated observations, without extra timers.
+    fn observe_sustained(
+        &mut self,
+        now: i64,
+        alert: &'static str,
+        component: &str,
+        severity: Option<&'static str>,
+        after: i64,
+    ) {
+        let key = (alert, component.to_owned());
+        let elapsed = if severity.is_some() {
+            now.saturating_sub(*self.pending.entry(key).or_insert(now))
+        } else {
+            self.pending.remove(&key);
+            0
+        };
+        self.observe(
+            now,
+            alert,
+            component,
+            severity.filter(|_| elapsed >= after),
+            elapsed,
+            after,
+        );
+    }
+
     fn observe(
         &mut self,
         now: i64,
@@ -140,9 +171,6 @@ const OUTBOX_HEALTH_SQL: &str = "SELECT count(*) AS pending_count, \
     AND ((e.status = 'enabled' AND e.deleted_at IS NULL) OR d.url IS NOT NULL) \
     AND (e.last_attempt_at IS NULL OR e.last_attempt_status BETWEEN 200 AND 299)";
 
-const ADDRESS_COUNTS_SQL: &str =
-    "SELECT chain_id, count(*)::bigint FROM addresses GROUP BY chain_id";
-
 fn report_address_capacity(state: &mut AlertState, now: DateTime<Utc>, chain: i64, count: i64) {
     let cap = crate::db::chain_reads::ISSUED_ADDRESS_CAP;
     let (severity, threshold) = if count >= cap * 90 / 100 {
@@ -162,12 +190,113 @@ fn report_address_capacity(state: &mut AlertState, now: DateTime<Utc>, chain: i6
     );
 }
 
-async fn probe_database(pool: &PgPool, state: &mut AlertState) -> Result<(), sqlx::Error> {
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()").fetch_one(pool).await?;
-    let counts: Vec<(i64, i64)> = sqlx::query_as(ADDRESS_COUNTS_SQL).fetch_all(pool).await?;
-    for (chain, count) in counts {
+fn report_pilot(state: &mut AlertState, now: DateTime<Utc>, routes: &RouteSet, health: &Snapshot) {
+    for &(chain, lag, addresses) in &health.coverage {
+        let component = format!("chain:{chain}");
+        state.observe(
+            now.timestamp(),
+            "TopupRpcCoverageLag",
+            &component,
+            (lag > 7200).then_some("warning"),
+            lag,
+            7200,
+        );
+        state.observe_sustained(
+            now.timestamp(),
+            "TopupRpcAddressBackfillLag",
+            &component,
+            (addresses > 0).then_some("warning"),
+            3600,
+        );
+    }
+    for &(chain, count) in &health.issued {
         report_address_capacity(state, now, chain, count);
     }
+    for (alert, observed) in [
+        (
+            "TopupRpcUnresolvedDepositStock",
+            health.unresolved.iter().map(|row| row.1).sum(),
+        ),
+        (
+            "TopupRpcUnresolvedDepositEntries",
+            health.unresolved.iter().map(|row| row.2).sum(),
+        ),
+        (
+            "TopupRpcConfirmationSlowStock",
+            health.slow.iter().map(|row| row.1).sum(),
+        ),
+        (
+            "TopupRpcConfirmationSlowEntries",
+            health.slow.iter().map(|row| row.2).sum(),
+        ),
+    ] {
+        state.observe(
+            now.timestamp(),
+            alert,
+            "environment",
+            (observed > 1).then_some("critical"),
+            observed,
+            1,
+        );
+    }
+    let slow_stock: i64 = health.slow.iter().map(|row| row.1).sum();
+    state.observe_sustained(
+        now.timestamp(),
+        "TopupRpcConfirmationProviderLag",
+        "environment",
+        (slow_stock > 0).then_some("warning"),
+        600,
+    );
+    let used = |name: &str| {
+        health
+            .budgets
+            .iter()
+            .find(|(budget, _)| budget == name)
+            .map_or(0, |(_, used)| i64::from(*used))
+    };
+    let hints = used("hints");
+    let hint_limit = i64::from(routes.hints_per_day());
+    state.observe(
+        now.timestamp(),
+        "TopupRpcHintBudgetExhausted",
+        "hints",
+        (hints >= hint_limit).then_some("warning"),
+        hints,
+        hint_limit,
+    );
+    for chain in routes.rpc().keys() {
+        let component = format!("price:{chain}");
+        let used = used(&component);
+        let limit = i64::from(routes.quote_snapshots_per_day());
+        state.observe(
+            now.timestamp(),
+            "TopupRpcPriceSnapshotBudgetExhausted",
+            &component,
+            (used >= limit).then_some("warning"),
+            used,
+            limit,
+        );
+    }
+}
+
+fn report_rpc_endpoint(state: &mut AlertState, now: i64, chain: u64, provider: &str, ready: bool) {
+    state.observe_sustained(
+        now,
+        "TopupRpcEndpointUnavailable",
+        &format!("rpc:{chain}:{provider}"),
+        (!ready).then_some("critical"),
+        300,
+    );
+}
+
+async fn probe_database(
+    pool: &PgPool,
+    routes: &RouteSet,
+    state: &mut AlertState,
+) -> Result<(), sqlx::Error> {
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()").fetch_one(pool).await?;
+    let health = chain_health::snapshot(pool, now).await?;
+    report_pilot(state, now, routes, &health);
     let heartbeat = sqlx::query_scalar("SELECT max(recorded_at) FROM heartbeat")
         .fetch_one(pool)
         .await?;
@@ -261,7 +390,12 @@ async fn probe_certificate(client: &reqwest::Client, origin: &str) -> Result<i64
 /// Probe persisted business state and the public ingress certificate once per minute.
 /// Requests are bounded and cancellation stops probes. Local HTTP origins skip TLS.
 /// Alert on entry/severity change, then at most hourly; recovery is an INFO log only.
-pub async fn monitor_business(pool: PgPool, origin: String, cancellation: CancellationToken) {
+pub async fn monitor_business(
+    pool: PgPool,
+    routes: Arc<RouteSet>,
+    origin: String,
+    cancellation: CancellationToken,
+) {
     let client = reqwest::Client::builder()
         .no_proxy()
         .tls_info(true)
@@ -271,9 +405,24 @@ pub async fn monitor_business(pool: PgPool, origin: String, cancellation: Cancel
     let mut state = AlertState::default();
     loop {
         let probes = async {
+            let now = Utc::now().timestamp();
+            for (chain, pair) in routes.rpc() {
+                for client in [&pair.read, &pair.verify] {
+                    report_rpc_endpoint(
+                        &mut state,
+                        now,
+                        *chain,
+                        client.endpoint().provider().unwrap_or_default(),
+                        client.ready(),
+                    );
+                }
+            }
             let database_ok = matches!(
-                tokio::time::timeout(Duration::from_secs(20), probe_database(&pool, &mut state))
-                    .await,
+                tokio::time::timeout(
+                    Duration::from_secs(20),
+                    probe_database(&pool, &routes, &mut state)
+                )
+                .await,
                 Ok(Ok(()))
             );
             state.observe(
@@ -312,6 +461,190 @@ pub async fn monitor_business(pool: PgPool, origin: String, cancellation: Cancel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pilot_routes(hints: i32, quotes: i32) -> RouteSet {
+        use topup_adapters::chain::evm::EvmClient;
+        let client = Arc::new(EvmClient::new("http://127.0.0.1:1").unwrap());
+        RouteSet::with_rpc(
+            Vec::new(),
+            BTreeMap::from([(
+                1,
+                crate::chain_rpc::ChainRpc {
+                    read: client.clone(),
+                    verify: client,
+                },
+            )]),
+        )
+        .unwrap()
+        .with_daily_budgets(hints, quotes)
+        .unwrap()
+    }
+
+    fn healthy_pilot() -> Snapshot {
+        Snapshot {
+            coverage: vec![(1, 7200, 0)],
+            budgets: Vec::new(),
+            issued: vec![(1, 699)],
+            unresolved: vec![(1, 0, 0), (2, 0, 0)],
+            slow: vec![(1, 0, 0), (2, 0, 0)],
+        }
+    }
+
+    #[test]
+    fn pilot_stock_entries_and_coverage_alert_at_the_rule_boundaries_and_dedupe() {
+        let routes = pilot_routes(200, 150);
+        for (alert, kind) in [
+            ("TopupRpcUnresolvedDepositStock", 0),
+            ("TopupRpcUnresolvedDepositEntries", 1),
+            ("TopupRpcConfirmationSlowStock", 2),
+            ("TopupRpcConfirmationSlowEntries", 3),
+            ("TopupRpcCoverageLag", 4),
+        ] {
+            let events = sentry::test::with_captured_events(|| {
+                tracing::subscriber::with_default(
+                    super::super::log_subscriber(std::io::sink),
+                    || {
+                        let mut state = AlertState::default();
+                        let mut health = healthy_pilot();
+                        match kind {
+                            0 => health.unresolved[0].1 = 1,
+                            1 => health.unresolved[0].2 = 1,
+                            2 => health.slow[0].1 = 1,
+                            3 => health.slow[0].2 = 1,
+                            _ => {}
+                        }
+                        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+                        report_pilot(&mut state, now, &routes, &health);
+                        assert!(
+                            state.active.is_empty(),
+                            "{alert} must not fire below its threshold"
+                        );
+                        // Two different chains still consume one environment-wide S/L allowance.
+                        match kind {
+                            0 => health.unresolved[1].1 = 1,
+                            1 => health.unresolved[1].2 = 1,
+                            2 => health.slow[1].1 = 1,
+                            3 => health.slow[1].2 = 1,
+                            _ => health.coverage[0].1 = 7201,
+                        }
+                        report_pilot(&mut state, now, &routes, &health);
+                        report_pilot(
+                            &mut state,
+                            now + chrono::Duration::seconds(1),
+                            &routes,
+                            &health,
+                        );
+                        assert_eq!(state.active.len(), 1);
+                        report_pilot(
+                            &mut state,
+                            now + chrono::Duration::seconds(2),
+                            &routes,
+                            &healthy_pilot(),
+                        );
+                        assert!(state.active.is_empty());
+                    },
+                );
+            });
+            assert_eq!(events.len(), 1, "{alert} must be deduplicated");
+            assert_eq!(events[0].tags["alert"], alert);
+        }
+    }
+
+    #[test]
+    fn pilot_daily_budgets_use_the_configured_limits_and_resolve_after_utc_rollover() {
+        for (hints, quotes) in [(80, 60), (200, 150)] {
+            let routes = pilot_routes(hints, quotes);
+            let events = sentry::test::with_captured_events(|| {
+                tracing::subscriber::with_default(
+                    super::super::log_subscriber(std::io::sink),
+                    || {
+                        let mut state = AlertState::default();
+                        let mut health = healthy_pilot();
+                        health.budgets = vec![
+                            ("hints".to_owned(), hints - 1),
+                            ("price:1".to_owned(), quotes - 1),
+                        ];
+                        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+                        report_pilot(&mut state, now, &routes, &health);
+                        assert!(state.active.is_empty());
+                        health.budgets[0].1 = hints;
+                        health.budgets[1].1 = quotes;
+                        report_pilot(&mut state, now, &routes, &health);
+                        report_pilot(
+                            &mut state,
+                            now + chrono::Duration::seconds(1),
+                            &routes,
+                            &health,
+                        );
+                        assert_eq!(state.active.len(), 2);
+                        // The persisted snapshot has no rows before the new day's first claims.
+                        health.budgets.clear();
+                        report_pilot(
+                            &mut state,
+                            now + chrono::Duration::days(1),
+                            &routes,
+                            &health,
+                        );
+                        assert!(state.active.is_empty());
+                    },
+                );
+            });
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].tags["alert"], "TopupRpcHintBudgetExhausted");
+            assert_eq!(
+                events[1].tags["alert"],
+                "TopupRpcPriceSnapshotBudgetExhausted"
+            );
+        }
+    }
+
+    #[test]
+    fn pilot_sustained_alerts_wait_for_the_rule_duration_and_recovery_resets_the_clock() {
+        let routes = pilot_routes(200, 150);
+        for (alert, seconds) in [
+            ("TopupRpcEndpointUnavailable", 300),
+            ("TopupRpcAddressBackfillLag", 3600),
+            ("TopupRpcConfirmationProviderLag", 600),
+        ] {
+            let events = sentry::test::with_captured_events(|| {
+                tracing::subscriber::with_default(
+                    super::super::log_subscriber(std::io::sink),
+                    || {
+                        let mut state = AlertState::default();
+                        let mut observe = |now: i64, unhealthy: bool| {
+                            if alert == "TopupRpcEndpointUnavailable" {
+                                report_rpc_endpoint(&mut state, now, 1, "ankr-mainnet", !unhealthy);
+                            } else {
+                                let mut health = healthy_pilot();
+                                if alert == "TopupRpcAddressBackfillLag" {
+                                    health.coverage[0].2 = i64::from(unhealthy);
+                                } else {
+                                    health.slow[0].1 = i64::from(unhealthy);
+                                }
+                                report_pilot(
+                                    &mut state,
+                                    DateTime::from_timestamp(now, 0).unwrap(),
+                                    &routes,
+                                    &health,
+                                );
+                            }
+                        };
+                        observe(0, false);
+                        observe(1, true);
+                        observe(seconds, true); // one second short
+                        observe(seconds, false); // recovery before maturity clears pending state
+                        observe(seconds + 1, true);
+                        observe(2 * seconds, true);
+                        observe(2 * seconds + 1, true); // exact duration
+                        observe(2 * seconds + 2, true); // dedupe
+                        assert_eq!(state.active.len(), 1);
+                    },
+                );
+            });
+            assert_eq!(events.len(), 1, "{alert} must wait and deduplicate");
+            assert_eq!(events[0].tags["alert"], alert);
+        }
+    }
 
     #[test]
     fn hourly_reminders_recovery_and_reentry_use_the_supplied_clock() {
@@ -361,7 +694,7 @@ mod tests {
             return Ok(());
         };
         let mut conn = sqlx::PgConnection::connect(&url).await?;
-        sqlx::raw_sql("CREATE TEMP TABLE addresses (chain_id bigint, status text); INSERT INTO addresses SELECT 1,'closed' FROM generate_series(1,699)").execute(&mut conn).await?;
+        sqlx::raw_sql("CREATE TEMP TABLE chain_coverage (chain_id bigint); CREATE TEMP TABLE addresses (chain_id bigint, status text); INSERT INTO addresses SELECT 1,'closed' FROM generate_series(1,699)").execute(&mut conn).await?;
         let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
         let events = sentry::test::with_captured_events(|| {
             tracing::subscriber::with_default(super::super::log_subscriber(std::io::sink), || {
@@ -390,7 +723,7 @@ mod tests {
         sqlx::query("INSERT INTO addresses SELECT 1,'retired' FROM generate_series(1,301)")
             .execute(&mut conn)
             .await?;
-        let counts: Vec<(i64, i64)> = sqlx::query_as(ADDRESS_COUNTS_SQL)
+        let counts: Vec<(i64, i64)> = sqlx::query_as(chain_health::ADDRESS_COUNTS_SQL)
             .fetch_all(&mut conn)
             .await?;
         assert_eq!(counts, vec![(1, 1000)]);

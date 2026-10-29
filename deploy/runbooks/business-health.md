@@ -4,6 +4,10 @@ The independent business health monitor runs once per minute after restore unfre
 bounded to 20 seconds; failures raise `TopupBusinessProbeFailed` rather than implying health.
 Read-only restore servers do not run this monitor. One small process-local state map tracks each
 alert/component: entry and severity changes emit immediately, then reminders are at most hourly.
+Pilot RPC/coverage/S/L/budget observations share this loop and state; their thresholds and stop
+actions are in [production launch §11](production-launch.md#11-pilot-caps-monitoring-and-stop-actions).
+Sustained endpoint/backfill/slow-lane timers reset on process restart. No additional collector or
+admin credential is used. Sentry owns notification delivery and routing.
 Recovery logs INFO `business health alert resolved` once, without an alert tag or Sentry event.
 An empty treasury/refund queue resolves its age alert. Failed probes leave earlier measurements
 unknown, rather than resolving them. A restart can emit a new initial observation.

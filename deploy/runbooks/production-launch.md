@@ -405,7 +405,7 @@ Use only the project's error DSN (Settings > Client Keys) as `SENTRY_DSN`, seale
 stored as the §1.3 Environment secret. Sentry Uptime monitors are disabled for this project. Do not
 create one, per the owner's decision. For this pilot the owner accepts that external TLS, DNS,
 and ingress failures between manual checks may go undetected while the CVM still checks in.
-`pilot_watch` (§11) checks external health on the accepted cadence. Then complete the following
+`pilot_watch` (§11) checks external health during ad hoc diagnostics and daily manual tallies. Then complete the following
 ([Sentry](../README.md#sentry)):
 
 - Settings > Security & Privacy: keep *Data Scrubber* and *Use Default Scrubbers* on, and turn
@@ -1230,16 +1230,43 @@ credited and delivered.
 
 ## 11. Pilot caps, monitoring, and stop actions
 
-Sentry receives the service's alerts and Crons. The RPC, S, L, H, Q and quota rules in
-[rpc-alerts.yaml](../rpc-alerts.yaml) are Prometheus rules over the admin-signed metrics. A
-production CVM has no collector, and the admin key never leaves the operator, so the operator
-evaluates them with `pilot_watch`. Run it in the first 72 hours at least every two staffed hours
-and at each UTC day boundary, then at least twice a day. Also run it at once on any Sentry alert.
-The owner accepts this manual cadence for the pilot. For each later watch session, use the same
-private-directory/`umask 077` setup, derive a temporary `admin.pem` from the owner's stored seed,
-and shred the local key and seed copy after the check (§13). A metrics collector with a metrics-only
-key is the planned replacement and requires a reviewed implementation. Read the shared Ankr, staging Infura and production BlockPI
-dashboards daily:
+The service evaluates the pilot's durable health signals in its existing once-per-minute
+business health monitor, after restore unfreeze. It emits the usual tagged Sentry warnings;
+Sentry owns issue delivery and on-call routing. No metrics collector, extra admin credential, or
+GitHub schedule is needed for these alerts. The [RPC rules](../rpc-alerts.yaml) remain the
+Prometheus equivalent for operators that run a collector.
+
+| Service alert | Trigger |
+|---|---|
+| `TopupRpcEndpointUnavailable` | A configured endpoint remains not ready for five minutes, including quota halts |
+| `TopupRpcAddressBackfillLag` | Addresses still need dual backfill for one hour |
+| `TopupRpcCoverageLag` | Dual coverage is more than two hours behind |
+| `TopupRpcUnresolvedDepositStock`, `TopupRpcUnresolvedDepositEntries` | S stock or rolling 24-hour entries exceed one across the environment |
+| `TopupRpcConfirmationSlowStock`, `TopupRpcConfirmationSlowEntries` | L stock or rolling 24-hour entries exceed one across the environment |
+| `TopupRpcConfirmationProviderLag` | L stays nonempty for ten minutes |
+| `TopupRpcHintBudgetExhausted`, `TopupRpcPriceSnapshotBudgetExhausted` | Persisted UTC-day H or per-price-chain Q usage reaches the serving configuration's limit |
+| `TopupAddressCapacity` | Historical issued addresses reach 70% (warning) or 90% (critical) of the permanent per-chain cap |
+| `TopupSanctionsListStale` | Existing sanctions freshness alert; no second detector is added |
+
+Alerts fire on entry or severity change, with reminders at most hourly; recovery is an INFO log.
+A failed or timed-out database scan raises `TopupBusinessProbeFailed` and leaves previous
+observations unknown. It does not establish recovery. Restarting the service resets sustained
+condition timers and can emit fresh initial observations. These alerts never pause a route;
+the operator follows the stop actions below. Confirm warning and critical issue routing in
+Sentry before rollout, as in [business health](business-health.md).
+
+**Manual checks still required:** record D and recovery work, factory verifications, Safe proof
+sets, and provider-dashboard quotas daily and at the UTC day boundary. RPC counters restart with
+the service, and shared Ankr usage also includes staging. Seven-day Ankr/BlockPI run rates and
+Infura daily credits need the provider dashboards or a real time-series collector; internal
+snapshot alerts do not approximate those rolling windows. External `/healthz` availability
+remains an operator check (Sentry Uptime is disabled for this pilot).
+
+Use `pilot_watch` below ad hoc after an alert or recovery, as the fallback when investigating
+metrics and daily tallies. It reads diagnostics with the full admin key. Use the private-directory/
+`umask 077` setup, derive a temporary `admin.pem` from the owner's stored seed, and shred the
+local key and seed copy after each session (§13). Read the shared Ankr, staging Infura and
+production BlockPI dashboards daily:
 
 ```sh
 pilot_watch() {
@@ -1393,7 +1420,7 @@ recovery store, with non-secret run links in the deployment record.
 - [ ] §9 Restore drill passed; RPO and RTO recorded; deletion confirmed by 404 or retained deleted status for
       `restore-instance.json`'s `vm_uuid`; production still running; read-only token revoked.
 - [ ] §10 Merchant account onboarded, live, and confirmed; smoke account quotes paused.
-- [ ] §11 `pilot_watch` cadence, daily tallies, and on-call owner agreed.
+- [ ] §11 internal pilot alerts and Sentry routing verified; daily manual tallies, external health checks, and on-call owner agreed.
 - [ ] §12 Approved release tag/commit, kit, images, configuration commit, and deployment records retained as the future
       N-1.
 - [ ] Owner's final go-live approval.

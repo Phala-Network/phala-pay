@@ -1730,8 +1730,9 @@ which are stable across releases; a production CVM exposes no logs or shell. `to
 
 ## 16. Observability and tests
 
-A production CVM has no logs, no shell, and no metrics collector, so Sentry is the one monitoring
-pipeline. Errors and panics are events. An alert is a warning tagged with its name and
+A production CVM has no logs or shell. Its internal monitors evaluate health and emit tagged
+alerts through the existing Sentry integration; Sentry owns notification delivery and routing.
+Errors and panics are events. An alert is a warning tagged with its name and
 low-cardinality grouping tags (route, state, check, chain, scope), fingerprinted by them and
 linked to its runbook: `TopupDepositStateAgeExceeded` (age in state past the route's
 `alerts.stuck_after_s`), `TopupReconciliationMismatch`, `TopupLockExposureNearCap`,
@@ -1748,14 +1749,16 @@ are platform health only (design §13): an unswept balance or a `FlushFailed` ta
 merchant's, recorded for it, not an alert. Each loop checks in to a Sentry Crons
 monitor, which pages on scanner lag, backup age over 2 minutes, a failed reconciliation check, and
 any stopped loop. Phala's pilot disables Sentry Uptime at the owner's request; manual
-[`pilot_watch`](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions)
-checks external `/healthz` every two staffed hours for 72 h, then twice daily. The owner accepts
-the risk of external failures between checks. Business state (deposits by state and
+external `/healthz` checks remain an operator responsibility, including ad hoc
+[`pilot_watch`](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions).
+The owner accepts the risk of external failures between checks. Business state (deposits by
+state and
 age, unflushed balance, open lock exposure, undelivered `deposit.credited` events and their age,
 reconciliation) is in the daily admin
 report (`GET /v1/admin/reports/daily`); RPC calls per provider, chain, and method are counters in
-the admin-signed `GET /v1/admin/metrics` (Prometheus text), read on demand since no collector
-runs. The standard Prometheus client encodes HTTP request counters and latency histograms and
+the admin-signed `GET /v1/admin/metrics` (Prometheus text), read on demand. Internal pilot
+alerts read the same durable observations directly, without an admin credential or collector.
+The standard Prometheus client encodes HTTP request counters and latency histograms and
 RPC health snapshots. HTTP labels are matched route templates (or `unmatched`), a fixed method
 set (or `other`), and status class. No raw path, query, secret, customer, account, peer address or
 request id becomes a metric label. Metrics wrap authentication, ingress/load-shed rejection and
@@ -1777,14 +1780,24 @@ with recovery steps in [RPC health](../deploy/runbooks/rpc-health.md).
 
 These are operational targets, reviewed over 30 days; deliberate safety freezes, restore drills,
 merchant pauses and invalid client requests are recorded separately. Safety takes precedence over
-availability. Production has no deployed metrics collector, so Prometheus snapshots provide
-on-demand diagnostics, not automatic rolling SLO accounting or alert evaluation. Sentry is the
-only alert channel. HTTP percentages/percentiles below require an explicitly recorded observation
+availability. Production has no time-series collector. The once-per-minute business health loop
+evaluates
+pilot snapshots internally: RPC endpoint readiness (five minutes), address backfill lag (one
+hour), coverage lag (>2 hours), environment-wide S/L stock and rolling 24-hour entries (>1),
+nonempty L (ten minutes), and persisted UTC-day H/Q usage at the configured limits. Existing
+address-capacity and sanctions monitors remain authoritative. These conditions use the same
+durable SQL observations as the metrics exporter; stock and entry counts survive restarts.
+Sustained-condition timers reset on restart. Alerts enter immediately once their condition/duration
+is met, remind at most hourly, and resolve through an INFO log. Failed scans raise
+`TopupBusinessProbeFailed`, leaving previous measurements unknown. The loop waits for restore
+unfreeze; read-only restore instances never run it. Sentry is the only alert channel. HTTP
+percentages/percentiles below require an explicitly recorded observation
 interval and counter deltas from the same process; do not claim a continuous 30-day result from
 one snapshot. A restart ends that interval. Phala's pilot records manual external health checks;
 these do not establish continuous 30-day availability. Crons and issue history supply
-worker/incident evidence. A metrics collector with a metrics-only key is the planned replacement
-for manual metrics evaluation and requires a reviewed implementation.
+worker/incident evidence. The service does not automatically compute rolling RPC quota windows
+or 30-day SLOs. Provider dashboards (including shared Ankr usage), D/recovery, factory and Safe
+work tallies remain manual; rolling accounting needs a real time-series collector.
 
 | Objective | Target and evidence | Operational response |
 |---|---|---|
@@ -1794,8 +1807,11 @@ for manual metrics evaluation and requires a reviewed implementation.
 | Deposit progress | For unpaused, supported deposits, target 99% leaving `detected` and `confirmed` within 30 minutes after satisfying the configured confirmation policy (for example `depth2`, `depth3`, or `finalized`), rather than starting all clocks at finalization. Review the policy, daily report ages and deposit timelines; this target is not a measured percentile. | Route age alerts and scanner/finality Crons identify stalled work. Sanctions holds alert after the configured confirmation window. Fast and coverage scanner monitors expect 5-minute and 60-minute check-ins with 2-minute margins; checkpoints publish independently every 10 minutes. This is not an automatically computed percentile. |
 | Reconciliation and backup | Every scheduled reconciliation succeeds before its next round; backup success marker age ≤ 2 minutes. Inspect Sentry Crons and the daily report. | Existing reconciliation and backup monitors alert; backup requires three stale observations to avoid restart noise. |
 
-Configure Sentry issue rules by the above alert names and existing Crons monitors. No collector
-is deployed; evaluate the committed RPC Prometheus rules manually with `pilot_watch` for the pilot.
+Configure Sentry issue rules for the internal pilot alert names in
+[production launch §11](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions)
+and the existing Crons monitors. The committed RPC Prometheus rules are equivalent expressions
+for operators with a collector; their rolling provider-quota rules still require one. Manual
+`pilot_watch` remains an ad hoc diagnostic fallback and supplies daily tallies.
 Replay/coverage backlogs and HTTP latency remain diagnostic snapshots; ongoing incident review
 must confirm those backlogs drain after provider recovery. Log lines and their spans (`deposit_id`, `chain_id`,
 `state`, `attempt`) serve local stacks.

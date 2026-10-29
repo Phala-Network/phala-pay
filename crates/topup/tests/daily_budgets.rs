@@ -58,6 +58,17 @@ async fn snapshot_budget_is_atomic_scoped_and_resets_next_utc_day() -> Result<()
                 used == 60,
                 "refused attempts must leave the counter unchanged"
             );
+            // The internal pilot probe and exporter share this persisted snapshot. A fresh
+            // observation after restart still sees the exhausted day, and UTC rollover selects
+            // the new day's rows rather than carrying yesterday's exhaustion forward.
+            for (observed_day, expected) in [(day, 60), (day.succ_opt().unwrap(), 1)] {
+                let now = observed_day.and_hms_opt(0, 0, 0).unwrap().and_utc();
+                let text =
+                    topup::observability::metrics::render_chain_reads_at(&context.app_pool, now)
+                        .await?;
+                ensure!(text.lines().any(|line| line
+                    == format!("topup_daily_budget_used{{name=\"price:1\"}} {expected}")));
+            }
             Ok(())
         })
     })

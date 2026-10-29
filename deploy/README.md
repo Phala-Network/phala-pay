@@ -149,7 +149,7 @@ GitHub-hosted `ubuntu-latest` runners.
      `warning` events). Confirm that the Crons monitors are listed as connected.
    - Phala's pilot has Sentry Uptime disabled at the owner's request. External `/healthz` is
      checked by [`pilot_watch`](runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions)
-     every two staffed hours for 72 h, then twice daily. The owner accepts the risk between checks.
+     ad hoc and with the daily manual tallies. The owner accepts the risk between checks.
      Other operators choose their own external availability monitoring.
    - The project DSN (Settings > Client Keys) is sealed as `SENTRY_DSN` ([Sealing the
      secrets](#sealing-the-secrets)).
@@ -741,8 +741,12 @@ environment is `topup.yaml`'s `environment`, both attested.
 
 - **External health**: Phala's pilot uses manual
   [`pilot_watch`](runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions) rather
-  than Sentry Uptime, at the owner's request. A down CVM also misses Crons check-ins. A metrics
-  collector with a metrics-only key is the planned replacement for manual metrics evaluation.
+  than Sentry Uptime, at the owner's request. A down CVM also misses Crons check-ins. A
+  time-series collector is still needed for rolling SLO/provider-quota accounting. The existing
+  once-per-minute business monitor evaluates S/L, coverage/backfill, endpoint readiness and
+  persisted H/Q budgets internally, alongside address capacity. It sends tagged warnings through
+  the existing Sentry integration; Sentry owns notification delivery and routing. No additional
+  admin key or GitHub workflow is required. See [pilot stop actions](runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions).
 - **Egress**: `topup` sends HTTPS to the DSN's ingest host.
 
 A restore-check instance runs no loop and reports as `<environment>-restore`, so it never checks
@@ -1170,7 +1174,7 @@ The backup monitor sends Sentry-compatible alerts: `TopupDiskWarning` at >=75%,
 Configure `SENTRY_DSN` and route these issues to operations; with no DSN they remain local logs.
 These alerts are sampled from the running service. Crons detect missed check-ins when the service
 or host is down; external `/healthz` checks detect ingress failures. Phala's pilot uses the
-owner-accepted manual `pilot_watch` cadence above.
+operator's manual external checks above.
 
 1. At warning, inspect growth rates, filesystem free space, largest relations/indexes and
    observability files. Expand the CVM disk/filesystem before headroom is exhausted; estimate
