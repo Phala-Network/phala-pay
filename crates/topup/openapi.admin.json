@@ -468,6 +468,25 @@
         "type": "object"
       },
       "Alert": {
+        "example": {
+          "acknowledged_at": null,
+          "acknowledged_by": null,
+          "first_seen_at": 1790553600,
+          "grouping_key": "{\"component\":\"heartbeat\"}",
+          "id": "al_0123456789abcdef0123456789abcdef",
+          "last_seen_at": 1790553600,
+          "name": "TopupHeartbeatStale",
+          "object": "alert",
+          "resolved_at": null,
+          "runbook": "https://github.com/Phala-Network/phala-pay/blob/main/deploy/runbooks/business-health.md",
+          "severity": "critical",
+          "silenced_until": null,
+          "tags": {
+            "alert": "TopupHeartbeatStale",
+            "component": "heartbeat",
+            "severity": "critical"
+          }
+        },
         "properties": {
           "acknowledged_at": {
             "format": "int64",
@@ -505,6 +524,10 @@
             "type": "string"
           },
           "object": {
+            "description": "Always `alert`.",
+            "enum": [
+              "alert"
+            ],
             "type": "string"
           },
           "resolved_at": {
@@ -544,6 +567,32 @@
         "type": "object"
       },
       "AlertList": {
+        "example": {
+          "data": [
+            {
+              "acknowledged_at": null,
+              "acknowledged_by": null,
+              "first_seen_at": 1790553600,
+              "grouping_key": "{\"component\":\"heartbeat\"}",
+              "id": "al_0123456789abcdef0123456789abcdef",
+              "last_seen_at": 1790553600,
+              "name": "TopupHeartbeatStale",
+              "object": "alert",
+              "resolved_at": null,
+              "runbook": "https://github.com/Phala-Network/phala-pay/blob/main/deploy/runbooks/business-health.md",
+              "severity": "critical",
+              "silenced_until": null,
+              "tags": {
+                "alert": "TopupHeartbeatStale",
+                "component": "heartbeat",
+                "severity": "critical"
+              }
+            }
+          ],
+          "has_more": false,
+          "object": "list",
+          "url": "/v1/admin/alerts"
+        },
         "properties": {
           "data": {
             "items": {
@@ -555,6 +604,10 @@
             "type": "boolean"
           },
           "object": {
+            "description": "Always `list`.",
+            "enum": [
+              "list"
+            ],
             "type": "string"
           },
           "url": {
@@ -3881,6 +3934,9 @@
       },
       "SilenceRequest": {
         "additionalProperties": false,
+        "example": {
+          "until": 1790557200
+        },
         "properties": {
           "until": {
             "description": "Future Unix seconds, at most seven days from the request.",

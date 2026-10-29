@@ -48,6 +48,9 @@ const RUNTIME_PERMISSIONS: [&str; 8] = [
 /// The example of the component schema `name`, if it has one.
 pub(super) fn schema(name: &str) -> Option<Value> {
     Some(match name {
+        "Alert" => alert(),
+        "AlertList" => list("/v1/admin/alerts", alert()),
+        "SilenceRequest" => json!({"until": CREATED + 3600}),
         "SubmitQuoteTransactionRequest" => json!({"transaction_hash": TX}),
         "SubmitDepositAddressTransactionRequest" => {
             json!({"transaction_hash": TX, "chain_id":84532})
@@ -513,6 +516,24 @@ pub(super) fn schema(name: &str) -> Option<Value> {
             "delivered_events_imported": true,
         }),
         _ => return None,
+    })
+}
+
+fn alert() -> Value {
+    json!({
+        "id": "al_0123456789abcdef0123456789abcdef",
+        "object": "alert",
+        "name": "TopupHeartbeatStale",
+        "grouping_key": "{\"component\":\"heartbeat\"}",
+        "severity": "critical",
+        "tags": {"alert":"TopupHeartbeatStale", "component":"heartbeat", "severity":"critical"},
+        "runbook": "https://github.com/Phala-Network/phala-pay/blob/main/deploy/runbooks/business-health.md",
+        "first_seen_at": CREATED,
+        "last_seen_at": CREATED,
+        "resolved_at": null,
+        "acknowledged_at": null,
+        "acknowledged_by": null,
+        "silenced_until": null,
     })
 }
 

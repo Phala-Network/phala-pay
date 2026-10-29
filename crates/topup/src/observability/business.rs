@@ -60,14 +60,7 @@ impl AlertState {
         if severity.is_some() && elapsed < after {
             return;
         }
-        self.observe(
-            now,
-            alert,
-            component,
-            severity,
-            elapsed,
-            after,
-        );
+        self.observe(now, alert, component, severity, elapsed, after);
     }
 
     fn observe(

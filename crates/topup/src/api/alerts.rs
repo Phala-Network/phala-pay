@@ -42,6 +42,7 @@ struct Row {
 pub(crate) struct Alert {
     /// Alert instance id, `al_` followed by 32 lowercase hex digits.
     id: String,
+    /// Always `alert`.
     object: &'static str,
     name: String,
     /// Canonical JSON of grouping tags, excluding name and severity.
@@ -83,6 +84,7 @@ impl From<Row> for Alert {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct AlertList {
+    /// Always `list`.
     object: &'static str,
     url: &'static str,
     has_more: bool,
