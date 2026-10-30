@@ -658,7 +658,6 @@ window as daily steady state or assume recovery fits the reserve without measuri
 Restarts retain the stored lag and do not reset catch-up scheduling. The two-hour coverage-lag
 warning remains an early incident signal.
 
-
 Changes to covered address rows or covered unverified-deposit identities discard evidence and
 retry once; unrelated address insertions retain the covered rows' proof. Coverage commits only
 after every request succeeds. The locked commit recomputes the common complete boundary across
