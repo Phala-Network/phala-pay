@@ -2443,7 +2443,7 @@ async fn identical_dual_factory_logs_skip_receipts_and_disagreement_falls_back()
             read.factory_events = vec![event.clone()];
             verify.factory_events = read.factory_events.clone();
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(*read.factory_reads.lock().unwrap() == 0);
             ensure!(*verify.factory_reads.lock().unwrap() == 0);
             ensure!(
@@ -2468,7 +2468,7 @@ async fn identical_dual_factory_logs_skip_receipts_and_disagreement_falls_back()
             };
             read.factory = Some(receipt.clone());
             verify.factory = Some(receipt);
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(*read.factory_reads.lock().unwrap() == 1);
             ensure!(*verify.factory_reads.lock().unwrap() == 1);
             ensure!(marker(d, address.id).await? == Some(200));
