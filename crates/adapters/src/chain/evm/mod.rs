@@ -109,6 +109,20 @@ pub enum ReceiptLookup {
 }
 
 impl ReceiptLookup {
+    /// Represent a positive, complete transfer whose successful receipt was already verified.
+    #[must_use]
+    pub fn from_verified_transfer(transfer: TransferLog) -> Self {
+        Self::Included {
+            block_number: transfer.block_number,
+            block_hash: transfer.block_hash,
+            block_time: transfer.block_time,
+            status: true,
+            tx_from: transfer.tx_from,
+            tx_nonce: transfer.tx_nonce,
+            transfer: Some(Box::new(transfer)),
+        }
+    }
+
     /// The transfer at the requested position, when the transaction is included.
     #[must_use]
     pub fn transfer(&self) -> Option<&TransferLog> {
@@ -277,6 +291,24 @@ pub trait ChainReader: Send + Sync {
             ))
         }
     }
+    /// Complete coverage omitting transfer identities already backed by durable dual evidence.
+    fn coverage_logs_excluding(
+        &self,
+        factory: Address,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        proven: &BTreeSet<(B256, B256, u64)>,
+    ) -> impl Future<Output = Result<(Vec<TransferLog>, Vec<FactoryLog>), ChainError>> + Send {
+        async move {
+            Ok((
+                self.transfer_logs_to_excluding(addresses, from, to, proven)
+                    .await?,
+                self.factory_logs(factory, addresses, from, to).await?,
+            ))
+        }
+    }
+
     /// Independently decode finalized factory events from a transaction's receipt.
     fn factory_receipt(
         &self,
@@ -331,6 +363,25 @@ pub trait ChainReader: Send + Sync {
         from_block: u64,
         to_block: u64,
     ) -> impl Future<Output = Result<Vec<TransferLog>, ChainError>> + Send;
+
+    /// Omit proven `(transaction, block hash, block-wide log index)` identities. Production
+    /// readers filter decoded logs before fetching receipt, timestamp or origin facts.
+    fn transfer_logs_to_excluding(
+        &self,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        proven: &BTreeSet<(B256, B256, u64)>,
+    ) -> impl Future<Output = Result<Vec<TransferLog>, ChainError>> + Send {
+        async move {
+            Ok(self
+                .transfer_logs_to(addresses, from, to)
+                .await?
+                .into_iter()
+                .filter(|log| !proven.contains(&(log.tx_hash, log.block_hash, log.log_index)))
+                .collect())
+        }
+    }
 
     /// Returns transfers of `tokens` to any address in `recipients` in the inclusive block range.
     ///
@@ -490,6 +541,7 @@ pub struct EvmClient {
     http: reqwest::Client,
     state: Arc<endpoint::EndpointState>,
     max_log_blocks: u32,
+    facts: Arc<ImmutableFacts>,
 }
 
 impl fmt::Debug for EvmClient {
@@ -574,6 +626,7 @@ impl EvmClient {
             http,
             state,
             max_log_blocks: 3_000,
+            facts: Arc::new(ImmutableFacts::default()),
         })
     }
 
@@ -1048,14 +1101,19 @@ impl EvmClient {
 
 /// Chain-log reader for one consumer of a shared [`EvmClient`].
 ///
-/// Each consumer keeps its own finalized-head regression guard and caches, so one consumer's
-/// observations never change what another consumer reads. Every transfer it returns carries its
+/// Each consumer keeps its own finalized-head regression guard. Immutable block, transaction
+/// and receipt facts are shared only by consumers of this endpoint; numbered/canonical headers
+/// and finalized observations are always read independently. Every transfer it returns carries its
 /// receipt position and its transaction's sender and nonce, read once per transaction. Each
 /// request is bounded by the client's request timeout, so a provider that never answers fails the
 /// read with a transport error instead of stalling its caller.
 pub struct FinalizedReader {
     client: Arc<EvmClient>,
     finalized_guard: Mutex<FinalizedGuard>,
+}
+
+#[derive(Default)]
+struct ImmutableFacts {
     block_times: Mutex<BlockTimes>,
     /// What a receipt says about its transaction, by `(tx_hash, block_hash)`.
     receipt_facts: Mutex<FifoCache<(B256, B256), ReceiptFacts>>,
@@ -1079,7 +1137,7 @@ impl HintReceipt<'_> {
     pub fn block_hash(&self) -> B256 {
         self.block_hash
     }
-    /// Read this endpoint's header and nonce independently, without reader caches.
+    /// Read this endpoint's canonical header independently and reuse only immutable endpoint facts.
     pub async fn complete(
         self,
         recipient: Address,
@@ -1195,15 +1253,12 @@ impl DecodedTransfer {
 }
 
 impl FinalizedReader {
-    /// Creates a reader with a fresh regression guard and caches.
+    /// Creates a reader with a fresh regression guard and the client’s endpoint-local fact cache.
     #[must_use]
     pub fn new(client: Arc<EvmClient>) -> Self {
         Self {
             client,
             finalized_guard: Mutex::new(FinalizedGuard::default()),
-            block_times: Mutex::new(BlockTimes::default()),
-            receipt_facts: Mutex::new(FifoCache::default()),
-            origins: Mutex::new(FifoCache::default()),
         }
     }
 
@@ -1226,6 +1281,8 @@ impl FinalizedReader {
 
     async fn block_time(&self, block_hash: B256) -> Result<DateTime<Utc>, ChainError> {
         let cached = self
+            .client
+            .facts
             .block_times
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -1242,7 +1299,9 @@ impl FinalizedReader {
             .await?
             .ok_or(ChainError::MissingField("block"))?;
         let time = utc_timestamp(block.header.inner.timestamp)?;
-        self.block_times
+        self.client
+            .facts
+            .block_times
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(block_hash, time);
@@ -1267,6 +1326,8 @@ impl FinalizedReader {
         use alloy::network::TransactionResponse as _;
 
         let cached = self
+            .client
+            .facts
             .origins
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -1282,8 +1343,19 @@ impl FinalizedReader {
             )
             .await?
             .ok_or(ChainError::Reorganized("transaction fetch"))?;
+        if transaction.tx_hash() != tx_hash
+            || self
+                .client
+                .labels
+                .chain_id
+                .is_some_and(|chain| transaction.chain_id() != Some(chain))
+        {
+            return Err(ChainError::Reorganized("receipt transaction identity"));
+        }
         let origin = (transaction.from(), transaction.nonce());
-        self.origins
+        self.client
+            .facts
+            .origins
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(tx_hash, origin);
@@ -1299,6 +1371,8 @@ impl FinalizedReader {
         log_index: u64,
     ) -> Result<(u64, Option<(Address, u64)>), ChainError> {
         let cached = self
+            .client
+            .facts
             .receipt_facts
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -1325,7 +1399,9 @@ impl FinalizedReader {
                     log_indexes,
                     deposit_origin: deposit_origin(&receipt)?,
                 };
-                self.receipt_facts
+                self.client
+                    .facts
+                    .receipt_facts
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .insert((tx_hash, block_hash), facts.clone());
@@ -1360,11 +1436,12 @@ impl FinalizedReader {
         recipients: Recipients<'_>,
         from_block: u64,
         to_block: u64,
+        proven: &BTreeSet<(B256, B256, u64)>,
     ) -> Result<Vec<TransferLog>, ChainError> {
         let logs = self
             .raw_transfer_logs(tokens, recipients, from_block, to_block)
             .await?;
-        self.complete_logs(logs, recipients).await
+        self.complete_logs(logs, recipients, proven).await
     }
     async fn raw_transfer_logs(
         &self,
@@ -1396,6 +1473,7 @@ impl FinalizedReader {
         &self,
         logs: Vec<Log>,
         recipients: Recipients<'_>,
+        proven: &BTreeSet<(B256, B256, u64)>,
     ) -> Result<Vec<TransferLog>, ChainError> {
         let mut transfers = Vec::new();
         for log in logs {
@@ -1407,7 +1485,9 @@ impl FinalizedReader {
             {
                 continue;
             }
-            transfers.push(self.complete(decoded).await?);
+            if !proven.contains(&(decoded.tx_hash, decoded.block_hash, decoded.log_index)) {
+                transfers.push(self.complete(decoded).await?);
+            }
         }
         Ok(transfers)
     }
@@ -1417,6 +1497,7 @@ impl FinalizedReader {
         addresses: &[Address],
         from_block: u64,
         to_block: u64,
+        proven: &BTreeSet<(B256, B256, u64)>,
     ) -> Result<Vec<TransferLog>, ChainError> {
         if from_block > to_block {
             return Err(ChainError::InvalidRange {
@@ -1438,6 +1519,7 @@ impl FinalizedReader {
                         Recipients::Topic(batch),
                         window_from,
                         window_to,
+                        proven,
                     )
                     .await?,
                 );
@@ -1713,7 +1795,18 @@ impl ChainReader for FinalizedReader {
         from_block: u64,
         to_block: u64,
     ) -> Result<Vec<TransferLog>, ChainError> {
-        self.transfer_logs(addresses, from_block, to_block).await
+        self.transfer_logs(addresses, from_block, to_block, &BTreeSet::new())
+            .await
+    }
+
+    async fn transfer_logs_to_excluding(
+        &self,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        proven: &BTreeSet<(B256, B256, u64)>,
+    ) -> Result<Vec<TransferLog>, ChainError> {
+        self.transfer_logs(addresses, from, to, proven).await
     }
 
     async fn token_transfers(
@@ -1742,6 +1835,7 @@ impl ChainReader for FinalizedReader {
                     Recipients::Local(recipients),
                     window_from,
                     window_to,
+                    &BTreeSet::new(),
                 )
                 .await?,
             );
@@ -1879,44 +1973,24 @@ impl FinalizedReader {
         let block_hash = receipt
             .block_hash
             .ok_or(ChainError::MissingField("receipt.block_hash"))?;
-        let block = self
-            .client
-            .bounded(
-                "receipt block header",
-                self.client.provider.get_block_by_hash(block_hash),
-            )
-            .await?
-            .ok_or(ChainError::MissingField("receipt block header"))?;
-        if block.header.inner.number != block_number || block.header.hash != block_hash {
+        let (canonical_hash, block_time) = self.header(block_number).await?;
+        if canonical_hash != block_hash {
             return Err(ChainError::Reorganized("receipt block header"));
         }
-        let block_time = utc_timestamp(block.header.inner.timestamp)?;
+        self.client
+            .facts
+            .block_times
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(block_hash, block_time);
         let origin = match deposit_origin(receipt)? {
             Some(origin) => origin,
             None => {
-                use alloy::consensus::Transaction as _;
-                use alloy::network::TransactionResponse as _;
-                let transaction = self
-                    .client
-                    .bounded(
-                        "receipt transaction",
-                        self.client.provider.get_transaction_by_hash(tx_hash),
-                    )
-                    .await?
-                    .ok_or(ChainError::Reorganized("receipt transaction"))?;
-                if transaction.tx_hash() != tx_hash
-                    || transaction.from() != receipt.from()
-                    || transaction.block_hash != Some(block_hash)
-                    || transaction.block_number != Some(block_number)
-                    || self
-                        .client
-                        .labels
-                        .chain_id
-                        .is_some_and(|chain| transaction.chain_id() != Some(chain))
-                {
+                let origin = self.origin(tx_hash).await?;
+                if origin.0 != receipt.from() {
                     return Err(ChainError::Reorganized("receipt transaction identity"));
                 }
-                (transaction.from(), transaction.nonce())
+                origin
             }
         };
         Ok((block_time, origin))
@@ -2082,10 +2156,28 @@ mod tests {
         FinalizedReader,
         tokio::task::JoinHandle<std::io::Result<()>>,
     ) {
+        let (reader, server, _) = replay_counted_node(answers, finalized).await;
+        (reader, server)
+    }
+
+    async fn replay_counted_node(
+        answers: Vec<(&'static str, Value)>,
+        finalized: Vec<Value>,
+    ) -> (
+        FinalizedReader,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+        Arc<Mutex<Vec<String>>>,
+    ) {
         use axum::routing::post;
         use axum::{Json, Router};
 
-        let answers = Arc::new(answers.into_iter().collect::<HashMap<_, _>>());
+        let mut answers = answers.into_iter().collect::<HashMap<_, _>>();
+        if let Some(header) = answers.get("eth_getBlockByHash").cloned() {
+            answers.entry("eth_getBlockByNumber").or_insert(header);
+        }
+        let answers = Arc::new(answers);
+        let methods = Arc::new(Mutex::new(Vec::new()));
+        let observed = methods.clone();
         let finalized = Arc::new(Mutex::new(VecDeque::from(finalized)));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2095,6 +2187,7 @@ mod tests {
             "/rpc",
             post(move |Json(request): Json<Value>| async move {
                 let method = request["method"].as_str().unwrap_or_default();
+                observed.lock().unwrap().push(method.to_owned());
                 let result =
                     if method == "eth_getBlockByNumber" && request["params"][0] == "finalized" {
                         finalized.lock().expect("finalized answers").pop_front()
@@ -2115,7 +2208,155 @@ mod tests {
             .expect("production adapter accepts URL")
             .with_provider("base-sepolia-a")
             .with_chain_id(84532);
-        (FinalizedReader::new(Arc::new(client)), server)
+        (FinalizedReader::new(Arc::new(client)), server, methods)
+    }
+
+    #[tokio::test]
+    async fn proven_logs_skip_completion_and_endpoint_fact_caches_are_shared_without_caching_canonical_headers()
+     {
+        let answers = vec![
+            ("eth_getLogs", base_sepolia("transfer-logs")),
+            ("eth_getTransactionReceipt", base_sepolia("receipt")),
+            ("eth_getTransactionByHash", base_sepolia("transaction")),
+            ("eth_getBlockByHash", base_sepolia("block-47445875")),
+        ];
+        let (fast, server, methods) = replay_counted_node(answers.clone(), Vec::new()).await;
+        let recipient = address!("0xfa810b787da3f2ca13fc13082762e78c4104ab10");
+        let transfer = fast
+            .transfer_logs_to(&[recipient], 47_445_875, 47_445_875)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(methods.lock().unwrap().len(), 4);
+        // Every consumer on the same endpoint shares immutable facts.
+        for _ in 0..4 {
+            let reader = FinalizedReader::new(fast.client().clone());
+            let before = methods.lock().unwrap().len();
+            assert_eq!(
+                reader
+                    .transfer_logs_to(&[recipient], 47_445_875, 47_445_875)
+                    .await
+                    .unwrap(),
+                vec![transfer.clone()]
+            );
+            assert_eq!(methods.lock().unwrap().len(), before + 1);
+        }
+        let pump = FinalizedReader::new(fast.client().clone());
+        for _ in 0..2 {
+            pump.receipt_transfer(transfer.tx_hash, transfer.receipt_log_index)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            methods
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|method| *method == "eth_getBlockByNumber")
+                .count(),
+            2
+        );
+        assert_eq!(
+            methods
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|method| *method == "eth_getTransactionByHash")
+                .count(),
+            1
+        );
+        let verify = FinalizedReader::new(Arc::new(
+            EvmClient::new(fast.client().endpoint.expose().as_str())
+                .unwrap()
+                .with_chain_id(84532),
+        ));
+        let before = methods.lock().unwrap().len();
+        verify
+            .transfer_logs_to(&[recipient], 47_445_875, 47_445_875)
+            .await
+            .unwrap();
+        assert_eq!(
+            methods.lock().unwrap().len(),
+            before + 4,
+            "a separate endpoint borrowed immutable facts"
+        );
+        for mismatch in [0, 1, 2] {
+            let exact = mismatch == 0;
+            let (reader, node, calls) = replay_counted_node(answers.clone(), Vec::new()).await;
+            let proven = BTreeSet::from([(
+                transfer.tx_hash,
+                if mismatch == 1 {
+                    B256::ZERO
+                } else {
+                    transfer.block_hash
+                },
+                transfer.log_index + u64::from(mismatch == 2),
+            )]);
+            let logs = reader
+                .transfer_logs_to_excluding(&[recipient], 47_445_875, 47_445_875, &proven)
+                .await
+                .unwrap();
+            assert_eq!(logs.is_empty(), exact);
+            assert_eq!(calls.lock().unwrap().len(), if exact { 1 } else { 4 });
+            node.abort();
+            let _ = node.await;
+        }
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn warm_immutable_caches_never_hide_a_canonical_header_mismatch() {
+        let mut canonical = base_sepolia("block-47445875");
+        canonical["hash"] = serde_json::json!(B256::ZERO);
+        let (reader, server, methods) = replay_counted_node(
+            vec![
+                ("eth_getLogs", base_sepolia("transfer-logs")),
+                ("eth_getTransactionReceipt", base_sepolia("receipt")),
+                ("eth_getTransactionByHash", base_sepolia("transaction")),
+                ("eth_getBlockByHash", base_sepolia("block-47445875")),
+                ("eth_getBlockByNumber", canonical),
+            ],
+            Vec::new(),
+        )
+        .await;
+        let log = reader
+            .transfer_logs_to(
+                &[address!("0xfa810b787da3f2ca13fc13082762e78c4104ab10")],
+                47_445_875,
+                47_445_875,
+            )
+            .await
+            .unwrap()
+            .remove(0);
+        let pump = FinalizedReader::new(reader.client().clone());
+        assert!(matches!(
+            pump.receipt_transfer(log.tx_hash, log.receipt_log_index)
+                .await,
+            Err(ChainError::Reorganized("receipt block header"))
+        ));
+        assert_eq!(
+            methods
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|m| *m == "eth_getBlockByNumber")
+                .count(),
+            1
+        );
+        let before = methods.lock().unwrap().len();
+        assert!(matches!(
+            pump.receipt_position(log.tx_hash, B256::ZERO, log.log_index)
+                .await,
+            Err(ChainError::Reorganized("receipt fetch"))
+        ));
+        assert_eq!(
+            methods.lock().unwrap().len(),
+            before + 1,
+            "a changed inclusion hash reused old receipt facts"
+        );
+        server.abort();
+        let _ = server.await;
     }
 
     #[tokio::test]
@@ -2335,7 +2576,7 @@ mod tests {
             let _ = server.await;
             assert_eq!(result, Ok(()));
             let expected = if has_sample {
-                vec![8, 7]
+                vec![8, 7, 7] // Receipt completion independently rechecks its canonical header.
             } else {
                 (1..=8).rev().collect()
             };

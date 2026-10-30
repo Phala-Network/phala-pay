@@ -229,12 +229,12 @@ Variable allowances before retries (the Infura column applies only to staging):
 
 | Work | Ankr calls | Infura credits |
 |---|---:|---:|
-| Deposit: cold discovery 3, confirmation and first finality verification 13, coverage completion/re-verification 6, price snapshots 2 | 24 | 2,000 |
+| Deposit: retained conservative allowance (cold caches, confirmation/finality fallbacks and two snapshots; see deduplication below) | 24 | 2,000 |
 | Unresolved finality recheck, including at most one replacement candidate | 4 | 320 |
 | L stock/turnover: 86 head methods per environment/day | 86 | 6,880 |
 | Hint task | 12 | 640 |
 | Price snapshot, including verify's head and pin header | 1 | 240 |
-| Factory receipt verification | 3 | 240 |
+| Factory receipt fallback (matching dual logs need no receipt) | 3 | 240 |
 | Safe challenge/proof set | 3 | 160 |
 | Extra operation, conservatively priced as logs | 1 | 255 |
 
@@ -254,10 +254,10 @@ header and transaction, at most three methods. Recheck the actual receipt's incl
 applicable confirmation policy before crediting. Waiting for heads does not repeatedly read
 receipts. Normal logical bounds per endpoint are:
 
-| Mode | Head probes | Full evidence methods | First later finality verification | Total |
+| Mode | Head probes | Full evidence methods | First later finality fallback allowance | Total |
 |---|---:|---:|---:|---:|
-| Depth | 6 | 3 | 4 | 13 |
-| Safe | 3 | 3 | 4 | 10 |
+| Depth | 6 | 3 | 5 | 14 |
+| Safe | 3 | 3 | 5 | 11 |
 | Finalized | 7 | 3 | 0 | 10 |
 
 Finalized confirmation records finality without a duplicate first watcher check. Depth sets a
@@ -266,6 +266,56 @@ Safe probes immediately and every 384 s, at most three probes in a 768 s window;
 allows seven in a 2,304 s window. Missed slots are skipped, deadlines do not extend, and
 normal/L together permit only one full confirmation-evidence read per endpoint. See the
 [confirmation schedule](../docs/design/chain-reads.md#confirmation-waits-and-slow-lane-l).
+
+### Immutable facts and proof reuse
+
+The approved tables retain the conservative 24-call deposit and three-call factory allowances;
+this change does not raise caps or rely on cache hits for admission. Normal successful paths
+use these per-endpoint logical method counts (transport retries remain separately reserved):
+
+| Work | Methods per endpoint | Infura credits | BlockPI RU |
+|---|---:|---:|---:|
+| Complete a new raw transfer, cold immutable caches | 3 | 240 | 70 |
+| Complete a raw transfer whose immutable facts are already cached | 0 | 0 | 0 |
+| Complete an exact `(tx, block hash, block log index)` with active durable dual proof | 0 | 0 | 0 |
+| Confirm a valid persisted hint proof, after current identity/policy checks | 1 fresh numbered header | 80 | 20 |
+| First finality check of a dual-verified deposit at/below the checkpoint | 1 fresh numbered header | 80 | 20 |
+| Verify identical dual factory logs matching stored insert-only facts | 0 extra | 0 | 0 |
+| Factory receipt fallback, cold caches | 3 | 240 | 70 |
+
+Log queries and their block-window splitting still run on both coverage endpoints; omitting
+completion never establishes new coverage or uses a single-source absence. Fast discovery
+uses the same exact durable-proof exclusions. New or changed block hashes or log indexes
+are completed normally. Only active, dual-verified deposit identities qualify.
+
+Each endpoint's `EvmClient` shares bounded caches across its fast, coverage, hint, pump and
+finality readers: timestamp by block hash, signed transaction origin by transaction hash, and
+receipt positions/OP-deposit origin by `(transaction hash, block hash)`. Independently constructed
+clients never share facts. Full receipt reads still fetch the receipt and its current numbered
+canonical header, even with warm caches; a cached signed origin can save its transaction call.
+Header-by-number, canonical checks, confirmation heads and finalized regression guards are
+never shared as cached facts.
+
+Hints persist their independently decoded receipts and captured heads separately from terminal
+proof. The pump prefers terminal evidence, then validates hint identity, current confirmation
+policy and fresh matching dual inclusion headers. Depth/Safe evidence skips head/receipt
+reconfirmation and never establishes `final_at`: persisted finalized horizons are zero and the
+pump explicitly suppresses hint-sourced finality. Finalized-policy hints store no handoff proof;
+the pump uses its normal fresh dual probe, boundary-conflict check and full receipt path. Identity,
+inclusion or unresolved-state changes clear stored hint evidence in PostgreSQL; malformed,
+reorged or otherwise unusable proof falls back to the ordinary full dual read.
+
+The first finality ancestry shortcut applies only to dual-verified, not-yet-final deposits
+outside unresolved stock S. Header errors or mismatches use full receipt evidence, including
+replacement checks when needed; S/L schedules and their existing bounds remain unchanged.
+An attempted ancestry check adds one header before fallback: at most `1 + 4 = 5` methods
+for that first check, versus one on success. An invalid hint can similarly spend one header
+before ordinary confirmation; the retained deposit allowance absorbs these fallbacks instead
+of the eliminated repeated proven-log completion. Subsequent S rechecks remain bounded at four.
+Factory omissions, conflicting logs or a mismatch with stored facts likewise require fresh
+dual receipts. Stored insert-only contradictions still freeze the chain.
+
+### Remaining variable allowances
 
 Sanctions screening uses local OFAC/manual lists, with no RPC term; address derivation is local.
 Staging's one PHA route (Sepolia) uses one TWAP pool and five-minute sampler: `86,400 / 300 = 288`
@@ -289,8 +339,8 @@ or changed evidence, and RPC failures that cannot establish height-only lag ente
 `ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
 A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr call,
 80 staging Infura credits or 15 production BlockPI RU).
-A present ordinary EVM receipt also requires its block header and transaction: three methods
-per endpoint (3 Ankr calls, 240 staging Infura credits or 70 production BlockPI RU), even if
+A present ordinary EVM receipt also requires its block header and transaction: at most three methods
+per endpoint with cold caches (3 Ankr calls, 240 staging Infura credits or 70 production BlockPI RU), even if
 the evidence disagrees and remains unresolved.
 
 When both original receipts are missing, replacement lookup considers service-known candidates
@@ -304,8 +354,8 @@ release reservations to bypass this gate. Follow the
 
 The branches are mutually exclusive, so the complete per-endpoint recheck bound is
 `max(3, 1 + 3×K) = 4` methods at K=1: one original receipt plus the candidate's receipt,
-header and transaction. D includes four first-finality methods in its worst-case Depth
-allocation: 24 Ankr calls plus 2,000 staging Infura credits or 875 conservative production
+header and transaction. The retained D allocation includes the first ancestry attempt plus the four-method fallback:
+ 24 Ankr calls plus 2,000 staging Infura credits or 875 conservative production
 BlockPI RU per deposit in total. Charge four Ankr calls, 320 staging Infura credits or
 85 production BlockPI RU per subsequent recheck, before ×1.1:
 

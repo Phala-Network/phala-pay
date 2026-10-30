@@ -1385,7 +1385,13 @@ async fn watcher_does_not_report_final_when_handoff_does_not_persist_terminal_ev
                 }
                 set_clock(&r, next);
                 ensure!(watch.watch_once_at(1, next).await?.watched == 1);
-                ensure!(counts(&r) == [6, 6]);
+                // The fresh receipt and numbered canonical header are still required;
+                // this endpoint's signed origin is immutable and already cached.
+                ensure!(
+                    counts(&r) == [5, 5],
+                    "unexpected warm recheck calls: {:?}",
+                    counts(&r)
+                );
                 let repeated: Option<DateTime<Utc>> =
                     sqlx::query_scalar("SELECT first_unresolved_at FROM deposits WHERE id=$1")
                         .bind(f.id)

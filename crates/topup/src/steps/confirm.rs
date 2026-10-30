@@ -41,6 +41,9 @@ use crate::routes::RouteSet;
 
 #[async_trait]
 trait ConfirmationReader: Send + Sync {
+    async fn header(&self, _number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        Err(ChainError::MissingField("confirmation header"))
+    }
     async fn probe(
         &self,
         confirmations: Confirmations,
@@ -53,6 +56,9 @@ impl<R> ConfirmationReader for R
 where
     R: ChainReader + Send + Sync,
 {
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        ChainReader::header(self, number).await
+    }
     async fn probe(
         &self,
         confirmations: Confirmations,
@@ -476,7 +482,7 @@ impl ConfirmStep {
             );
         };
 
-        let supplied = match supplied {
+        let mut supplied = match supplied {
             Some(evidence) => Some(evidence),
             None => match self.context_lookup.terminal_evidence(deposit.id).await {
                 Ok(evidence) => evidence,
@@ -516,7 +522,78 @@ impl ConfirmStep {
             )
         };
         let confirmations = required(&context, deposit.route.as_deref());
-        let (canonical, is_final, complete_evidence) = match self
+        let mut hint_supplied = false;
+        if supplied.is_none() {
+            let cached = match self.context_lookup.hint_evidence(deposit.id).await {
+                Ok(value) => value,
+                Err(_) => {
+                    return retry(
+                        RetryError::Transient,
+                        json!({"stage":"finality","error":"hint_evidence_load_failed"}),
+                        TransitionEffects::default(),
+                    );
+                }
+            };
+            if let Some(cached) = cached {
+                let proof = serde_json::from_value::<ConfirmationEvidence>(cached).ok();
+                let valid = proof.as_ref().is_some_and(|proof| {
+                    confirmations != Confirmations::Finalized
+                        && !proof.terminal
+                        && proof.heads.iter().all(|head| head.finalized == 0)
+                        && proof.receipts[0] == proof.receipts[1]
+                        && proof
+                            .receipts
+                            .iter()
+                            .zip(proof.heads)
+                            .all(|(receipt, heads)| {
+                                matches!(receipt, ReceiptLookup::Included { status: true, .. })
+                                    && receipt.transfer().is_some_and(|log| {
+                                        log.tx_hash == deposit.tx_hash
+                                            && log.receipt_log_index == deposit.receipt_log_index
+                                            && log.log_index == deposit.log_index
+                                            && log.block_number == deposit.block_number
+                                            && log.block_hash == deposit.block_hash
+                                            && log.block_time == deposit.block_time
+                                            && confirmations.reached(log.block_number, heads)
+                                            && transfer_identity_matches(
+                                                log,
+                                                context.address,
+                                                deposit.asset_contract,
+                                                deposit.from_address,
+                                                deposit.amount_atomic,
+                                                (deposit.tx_from, deposit.tx_nonce),
+                                            )
+                                    })
+                            })
+                });
+                let canonical = if valid {
+                    let (a, b) = tokio::join!(
+                        chains.primary.header(deposit.block_number),
+                        chains.secondary.header(deposit.block_number)
+                    );
+                    matches!((a,b), (Ok(a),Ok(b)) if a == b && a == (deposit.block_hash, deposit.block_time))
+                } else {
+                    false
+                };
+                if canonical {
+                    supplied = proof;
+                    hint_supplied = true;
+                } else if self
+                    .context_lookup
+                    .clear_hint_evidence(deposit.id)
+                    .await
+                    .is_err()
+                {
+                    return retry(
+                        RetryError::Transient,
+                        json!({"stage":"finality","error":"hint_evidence_clear_failed"}),
+                        TransitionEffects::default(),
+                    );
+                }
+            }
+        }
+
+        let (canonical, mut is_final, mut complete_evidence) = match self
             .bounded_evidence(
                 chains,
                 confirmations,
@@ -544,6 +621,13 @@ impl ConfirmStep {
                 return retry(error, evidence, TransitionEffects::default());
             }
         };
+        if hint_supplied {
+            is_final = false;
+            complete_evidence.terminal = false;
+            for heads in &mut complete_evidence.heads {
+                heads.finalized = 0;
+            }
+        }
         let selected_route = self.selected_route(deposit, &canonical);
         context = match self
             .context_lookup
@@ -953,6 +1037,12 @@ fn settings_unconfirmed(effects: TransitionEffects) -> StepResult {
 
 #[async_trait]
 trait ContextLookup: Send + Sync {
+    async fn hint_evidence(&self, _id: Uuid) -> Result<Option<Value>, sqlx::Error> {
+        Ok(None)
+    }
+    async fn clear_hint_evidence(&self, _id: Uuid) -> Result<(), sqlx::Error> {
+        Ok(())
+    }
     async fn terminal_evidence(
         &self,
         _id: Uuid,
@@ -999,6 +1089,22 @@ struct PostgresContextLookup(PgPool);
 
 #[async_trait]
 impl ContextLookup for PostgresContextLookup {
+    async fn hint_evidence(&self, id: Uuid) -> Result<Option<Value>, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT hint_confirmation_evidence FROM deposits WHERE id=$1 AND state='detected'",
+        )
+        .bind(id)
+        .fetch_optional(&self.0)
+        .await
+        .map(Option::flatten)
+    }
+    async fn clear_hint_evidence(&self, id: Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE deposits SET hint_confirmation_evidence=NULL WHERE id=$1")
+            .bind(id)
+            .execute(&self.0)
+            .await?;
+        Ok(())
+    }
     async fn terminal_evidence(
         &self,
         id: Uuid,

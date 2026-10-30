@@ -58,6 +58,12 @@ An unhinted payment without a recent quote or deposit can take about 70 minutes 
 with healthy endpoints, an agreed checkpoint and caught-up coverage. Backlog/outages extend
 this target. R4 still requires both endpoints for every negative conclusion.
 
+Immutable completion facts are shared by readers of the same endpoint client: block time by
+hash, signed origin by tx hash, receipt positions and OP origin by `(tx, block hash)`. Caches
+are bounded and never cross endpoints. Numbered/canonical headers and heads are never cached;
+full receipt reads always check a fresh numbered canonical header. Each reader retains its own
+finalized regression guard.
+
 ### 2.2 Finalized dual coverage (both endpoints, hourly per payment chain)
 
 State: chain cursor `c = chain_coverage.through_block`; per address
@@ -101,7 +107,9 @@ Each round, staggered per chain:
    - new candidate → R1 by receipt, transaction and header on both: agreed present → record
      (`detected`, `rejected(unsupported_asset)`, `flushed`, `flush_failures`, `deployed_block`;
      `Evidence::Finalized`, `dual_verified_at` set); agreed absent → drop;
-   - existing deposit with `dual_verified_at` set → skip;
+   - an active deposit with `dual_verified_at` and the exact `(tx, block hash, block-wide log
+     index)` → skip raw-log completion and receipt resolution on both endpoints; changed
+     inclusion or positions are completed normally;
    - every deposit of the covered addresses in the covered range with `dual_verified_at` NULL,
      whether or not it is in the union (fast-path rows, N-1 rows) → R1 on every decision field
      including `block_time` and nonce: equal → set `dual_verified_at`; both agree on other
@@ -109,7 +117,9 @@ Each round, staggered per chain:
      chain (`reconciliation_blocks`, `check_name = 'unverified_evidence_mismatch'`); both agree
      the receipt or log is absent → left to the finality watch (the `detected` row keeps holding
      its quote);
-   - existing factory-event rows in range (insert-only tables, rare) → always re-verified;
+   - factory logs identical on both endpoints and matching all stored insert-only facts → use
+     that dual log evidence directly; omissions, conflicts or differing stored facts → full
+     independent factory receipts; contradictions still freeze;
    - any disagreement → no commit, alert.
 5. One transaction: records and markers; `chain_coverage` → `(e, hash(e), time(e))`; C's
    `dual_covered_through = e` for addresses whose own start is ≤ `e` (an issuance prefix ahead
@@ -145,6 +155,13 @@ Task (in process; deduplicated by `(chain, tx, object)`; insertion dedupes by re
    receipt, transaction and header evidence independently and compare every decision field (§2.4).
 4. Quiet stop unless successful evidence contains a routed transfer paying the object's address.
    Insert through the scanner's insert function (`Evidence::Confirmed`, `dual_verified_at` set).
+   Persist both completed receipts and captured heads as separate hint confirmation evidence.
+   The pump prefers terminal proof, then reuses a hint only after exact identity/current-policy
+   validation and fresh matching dual numbered inclusion headers. Otherwise clear it and use
+   full dual confirmation. Identity/inclusion/unresolved changes invalidate it in SQL. Depth
+   hints never establish finality: persisted finalized horizons are zero, terminal is false,
+   and the pump explicitly suppresses hint-sourced finality. Finalized-policy hints store no
+   handoff proof and the pump takes the normal fresh dual path.
    The normal pipeline follows.
 5. The whole task, head polls included, is bounded by **12 read calls, 8 verify calls and a
    deadline** (90 s Ethereum chains, 30 s Base chains); hitting either ends the task (scanning
@@ -175,6 +192,10 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
   `depositNonce`), confirmation reached on each. Read's detection values are never passed to
   verify (removes `KnownTransfer` reuse in `evm/mod.rs` `receipt_lookup` and
   `steps/confirm.rs` `confirmed_evidence`). Success sets `dual_verified_at`.
+- **First finality check**: for a dual-verified unfinal deposit outside unresolved stock S at or
+  below the agreed checkpoint, read its numbered inclusion header afresh on both endpoints.
+  Matching stored hash/time proves ancestry; any mismatch or error falls back to full dual
+  receipts. Subsequent S/L recovery and positive replacement requirements are unchanged.
 - **Sanctions**: verified local OFAC SDN snapshots and audited manual supplements at decision
   time, with no RPC call. An active-list hit denies even when stale or another list read fails;
   a negative answer clears only with a fresh snapshot and successful list reads. Evidence

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::{
-    ChainError, ChainReader, FinalizedHead, FinalizedReader, TransferLog,
+    ChainError, ChainReader, FactoryLog, FinalizedHead, FinalizedReader, TransferLog,
 };
 use topup_core::deposit::{DepositState, RejectReason};
 use topup_core::route::{ChainConfig, Confirmations};
@@ -301,7 +301,11 @@ pub async fn fast_once<R: ChainReader>(
             let recipients: Vec<_> = index.keys().copied().collect();
             let mut deposits = Vec::new();
             let mut pending = Vec::new();
-            for log in read.transfer_logs_to(&recipients, from, latest).await? {
+            let proven = db::scanner::proven_log_positions(pool, chain, &ids, from, latest).await?;
+            for log in read
+                .transfer_logs_to_excluding(&recipients, from, latest, &proven)
+                .await?
+            {
                 let Some(address) = index.get(&log.to) else {
                     return Err(ScannerError::UnknownRecipient(log.to));
                 };
@@ -454,6 +458,11 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     }
     let mut candidates = BTreeSet::new();
     let mut factory_candidates = BTreeSet::new();
+    let mut factory_logs = [
+        BTreeMap::<B256, BTreeMap<u64, FactoryLog>>::new(),
+        BTreeMap::new(),
+    ];
+    let mut conflicting_factory_logs = BTreeSet::new();
     let mut index: BTreeMap<_, _> = db::list_scan_addresses(pool, chain)
         .await?
         .into_iter()
@@ -464,18 +473,27 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             continue;
         }
         let recipients: Vec<_> = range.addresses.iter().map(|a| a.address.address).collect();
+        let ids: Vec<_> = range
+            .addresses
+            .iter()
+            .map(|address| address.address.id)
+            .collect();
+        let proven =
+            db::scanner::proven_log_positions(pool, chain, &ids, range.from, range.end).await?;
         let (a, b) = tokio::try_join!(
-            read.coverage_logs(
+            read.coverage_logs_excluding(
                 routes.chain.contracts.forwarder_factory,
                 &recipients,
                 range.from,
-                range.end
+                range.end,
+                &proven
             ),
-            verify.coverage_logs(
+            verify.coverage_logs_excluding(
                 routes.chain.contracts.forwarder_factory,
                 &recipients,
                 range.from,
-                range.end
+                range.end,
+                &proven
             )
         )?;
         for address in &range.addresses {
@@ -491,7 +509,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                 );
             }
         }
-        for (transfers, factory) in [a, b] {
+        for (endpoint, (transfers, factory)) in [a, b].into_iter().enumerate() {
             for log in transfers {
                 if range
                     .addresses
@@ -506,6 +524,15 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                     a.address.address == log.event.forwarder() && log.block_number >= range.start(a)
                 }) {
                     factory_candidates.insert(log.tx_hash);
+                    let hash = log.tx_hash;
+                    if let Some(previous) = factory_logs[endpoint]
+                        .entry(hash)
+                        .or_default()
+                        .insert(log.log_index, log.clone())
+                        && previous != log
+                    {
+                        conflicting_factory_logs.insert(hash);
+                    }
                 }
             }
         }
@@ -547,8 +574,20 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         }
         a.1
     };
-    let mut factory_receipts = Vec::new();
+    let mut factory_evidence = Vec::new();
     for hash in factory_candidates {
+        if let (Some(a), Some(b)) = (factory_logs[0].get(&hash), factory_logs[1].get(&hash))
+            && a == b
+            && !conflicting_factory_logs.contains(&hash)
+        {
+            let logs: Vec<_> = a.values().cloned().collect();
+            if db::sweeps::stored_factory_evidence_matches(pool, chain, hash, &logs).await? {
+                factory_evidence.push((hash, logs));
+                continue;
+            }
+        }
+        // Missing/disagreeing log responses need fresh dual receipts, including stored events
+        // that both log queries omit. Never use single-source absence as negative evidence.
         let (a, b) = tokio::try_join!(
             read.factory_receipt(hash, routes.chain.contracts.forwarder_factory),
             verify.factory_receipt(hash, routes.chain.contracts.forwarder_factory)
@@ -556,7 +595,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         if a != b {
             return Err(ScannerError::Disagreement);
         }
-        factory_receipts.push((hash, a.ok_or(ScannerError::Disagreement)?));
+        factory_evidence.push((hash, a.ok_or(ScannerError::Disagreement)?.logs));
     }
     let mut evidence = BTreeMap::new();
     // Only covered addresses and their own covered blocks belong to this round.
@@ -762,10 +801,8 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         }
     }
     let mut factory = Vec::new();
-    for (hash, receipt) in &factory_receipts {
-        if !db::sweeps::stored_factory_evidence_matches(&mut *tx, chain, *hash, &receipt.logs)
-            .await?
-        {
+    for (hash, logs) in &factory_evidence {
+        if !db::sweeps::stored_factory_evidence_matches(&mut *tx, chain, *hash, logs).await? {
             tx.rollback().await?;
             chain_reads::freeze(pool, chain, "unverified_evidence_mismatch").await?;
             tracing::error!(
@@ -776,9 +813,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             return Err(ScannerError::Disagreement);
         }
         factory.extend(
-            receipt
-                .logs
-                .iter()
+            logs.iter()
                 .filter(|log| log.block_number <= end && index.contains_key(&log.event.forwarder()))
                 .cloned(),
         );
