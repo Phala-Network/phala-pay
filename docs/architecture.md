@@ -643,7 +643,7 @@ caught-up addresses become `backfilled`. New issuance starts at agreed checkpoin
 `dual_covered_through=c`, `backfilled=true` and `backfilled_through=c`; funding at or before `c`
 is outside discovery and crediting and becomes the immutable custody opening below. Historical
 restore/reissue preserves its earlier inclusive boundary. Issuance requires initialized dual coverage and respects
-the configured `rpc[].max_issued_addresses` cap (currently 1,000 on every chain). Empty chains start at the agreed checkpoint; an upgraded or restored
+the configured `rpc[].max_issued_addresses` cap (12,000 production, 1,000 staging). Empty chains start at the agreed checkpoint; an upgraded or restored
 chain starts at `min(min(created_block).saturating_sub(1), checkpoint)`, with its header read on
 both endpoints. Startup rebases an old cursor above dual coverage. Lowering `created_block`
 atomically clears its dual marker, lowers the compatibility cursor as needed and clears its time.
@@ -768,7 +768,7 @@ Invoice model, with this service's exception profile:
   addresses and work within pilot allowances, expiry/cancel and unpaid reservation release
   target about 70 minutes after qualifying finality; backlog and outages can extend this.
 - Fresh quote price snapshots use the configured `quote_snapshots_per_day` DB daily budget
-  per price chain per environment per UTC day (default 60, production 150). Exhaustion returns retryable `503 price_unavailable`, with no stale price. Quote
+  per price chain per environment per UTC day (default 60, production 600). Exhaustion returns retryable `503 price_unavailable`, with no stale price. Quote
   reuse remains twelve seconds; confirmation always requests a fresh dual Multicall3 snapshot.
 - Exposure counters sum `credit_minor` across routes, which every route counts in USD cents
   (§6).

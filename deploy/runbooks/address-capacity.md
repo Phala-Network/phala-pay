@@ -1,11 +1,10 @@
 # Address capacity
 
-**Trigger:** `TopupAddressCapacity` (warning at 70%, critical at 90% of a chain's configured cap;
-700/900 with the shipped 1,000-address caps),
+**Trigger:** `TopupAddressCapacity` (warning at 70%, critical at 90% of a chain's configured cap),
 `RpcAddressCapacityWarning` / `RpcAddressCapacityCritical`, or `422 address_capacity_reached`.
 
 **Impact:** `rpc[].max_issued_addresses` limits historical issued addresses per chain across all accounts
-and modes (every shipped configuration uses 1,000). Every historical address counts, including closed quotes and retired deposit addresses.
+and modes (12,000 in production, 1,000 in staging). Every historical address counts, including closed quotes and retired deposit addresses.
 At the cap, issuing a missing network returns this non-retryable error. Quotes reuse an existing
 customer network without consuming capacity. Existing addresses remain watched. Closing,
 cancelling, or retiring an address does not release capacity.

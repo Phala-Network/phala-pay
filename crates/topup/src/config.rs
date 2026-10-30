@@ -213,6 +213,14 @@ impl Config {
         }
         RouteSet::check(&spec.routes)?;
         for route in &spec.routes {
+            if u64::from(spec.discovery.quote_window_hours) * 3_600
+                < route.merchant.quote_ttl_seconds.max
+            {
+                return Err(format!(
+                    "discovery.quote_window_hours must cover merchant.quote_ttl_seconds.max ({} seconds) on route `{}`",
+                    route.merchant.quote_ttl_seconds.max, route.route
+                ));
+            }
             route
                 .pricing
                 .validate_licensing(matches!(
@@ -310,6 +318,7 @@ impl Config {
         }
         RouteSet::with_rpc(self.routes.clone(), clients)?
             .with_environment(self.environment.clone())
+            .with_discovery(self.discovery)
             .with_daily_budgets(self.hints_per_day, self.quote_snapshots_per_day)
     }
 
@@ -468,17 +477,27 @@ mod tests {
                 assert!(Config::parse(&yaml).is_err(), "{name}: {invalid}");
             }
         }
-        for yaml in [
-            include_str!("../../../deploy/environments/phala-network/production/topup/topup.yaml"),
-            include_str!("../../../deploy/environments/phala-network/staging/topup/topup.yaml"),
+        for (yaml, refunds, addresses) in [
+            (
+                include_str!(
+                    "../../../deploy/environments/phala-network/production/topup/topup.yaml"
+                ),
+                10,
+                12_000,
+            ),
+            (
+                include_str!("../../../deploy/environments/phala-network/staging/topup/topup.yaml"),
+                1,
+                1_000,
+            ),
         ] {
             let parsed = Config::parse(yaml).unwrap();
-            assert_eq!(parsed.max_refund_attachments_per_day, 1);
+            assert_eq!(parsed.max_refund_attachments_per_day, refunds);
             assert!(
                 parsed
                     .rpc
                     .iter()
-                    .all(|rpc| rpc.max_issued_addresses == 1000)
+                    .all(|rpc| rpc.max_issued_addresses == addresses)
             );
         }
     }
@@ -522,6 +541,28 @@ mod tests {
             .unwrap()
             .discovery;
         assert_eq!(partial.deposit_window_days, 7);
+    }
+
+    #[test]
+    fn discovery_quote_window_covers_every_routes_maximum_ttl() {
+        let base = config(PROVIDERS, "https://pay.example");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&Config::parse(&base).unwrap().resolved_json().unwrap()).unwrap();
+        value["discovery"]["quote_window_hours"] = 1.into();
+        // The default remains one hour; an account can select the larger maximum.
+        value["routes"][0]["merchant"]["quote_ttl_seconds"]["max"] = 3_601.into();
+        let mut second = value["routes"][0].clone();
+        second["route"] = "second-route".into();
+        second["asset"]["contract"] = "0x0000000000000000000000000000000000000001".into();
+        value["routes"][0]["merchant"]["quote_ttl_seconds"]["max"] = 3_600.into();
+        value["routes"].as_array_mut().unwrap().push(second);
+        let error = Config::parse(&value.to_string()).unwrap_err();
+        assert!(error.contains("discovery.quote_window_hours"), "{error}");
+        assert!(error.contains("second-route"), "{error}");
+        value["discovery"]["quote_window_hours"] = 2.into();
+        assert!(Config::parse(&value.to_string()).is_ok());
+        value["routes"][1]["merchant"]["quote_ttl_seconds"]["max"] = 7_200.into();
+        assert!(Config::parse(&value.to_string()).is_ok(), "equal boundary");
     }
 
     #[test]
@@ -617,11 +658,11 @@ mod tests {
                 include_str!(
                     "../../../deploy/environments/phala-network/production/topup/topup.yaml"
                 ),
-                (200, 150),
+                (300, 600),
             ),
             (
                 include_str!("../../../deploy/environments/phala-network/staging/topup/topup.yaml"),
-                (80, 60),
+                (20, 30),
             ),
             (
                 include_str!("../../../deploy/environments/phala-cloud-template/topup/topup.yaml"),
@@ -714,7 +755,8 @@ mod tests {
             "../../../deploy/environments/phala-network/staging/topup/topup.yaml"
         ))
         .expect("staging");
-        assert_eq!(production.max_attached_pending_refunds.get(), 2);
+        assert_eq!(production.max_attached_pending_refunds.get(), 10);
+        assert_eq!(production.max_attached_pending_refunds_per_account.get(), 3);
         assert_eq!(staging.max_attached_pending_refunds.get(), 1);
     }
 

@@ -20,6 +20,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   Concurrent refund-cap verification retries unsaved overload responses with the same key,
   matching the existing bounded retry behavior verified in both official server SDKs.
 
+- DB-derived per-chain hot-recipient and rolling-24-hour issuance gauges and alerts. The free-tier
+  model budgets at most 2,000 hot recipients and 50 production/10 staging new addresses per
+  chain/day, with separate opening-capture and monthly recovery allowances.
+
 - Optional `replacement_transaction_hash` and `original_signed_transaction` on refund `mark_paid`,
   with matching JS/Python SDK
   inputs. One candidate can resolve an attachment as `transaction_dropped` only with identical
@@ -49,6 +53,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Replace per-address factory-history reads and coverage updates with set-based SQL and indexed
   address lookups. PostgreSQL regressions cover 50,000-address coverage and custody statement
   counts and duration; provider quotas and admission caps stay unchanged.
+- Raise production historical address capacity to 12,000 per chain, hints to 300/day, quote
+  snapshots to 600/price chain/day and refund allowances to 10 new/10 concurrent with 3 per
+  account. Trim staging to H20/Q30/refunds1/1 at 1,000 addresses. Operational D is 280 production
+  and 10 staging: the shared Ankr budget retains 10.36% modeled headroom, including unequal
+  finalized-head pinning, opening captures and a monthly recovery reserve.
+- Reject discovery quote windows shorter than any enabled route's maximum quote TTL, keeping
+  open quotes eligible for fast discovery. Capacity runbooks compare against configured caps.
 
 - Verify refunds from receipt inclusion and published checkpoint events. Receipt probes back
   off through two hours, hourly until day one, then every six hours; observed receipts make no

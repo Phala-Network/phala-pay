@@ -80,8 +80,8 @@ When lag is material, pause quotes:
 All three per-chain scanner monitors check in at their periods, independent checkpoints advance,
 coverage lag drains below two hours, address backfill completes, and payments appear once.
 Resume quotes only when pending inventory and daily work fit the
-[pilot limits](../RPC.md#pilot-limits-and-operating-modes), including production D=115, staging
-D=20 and each environment's independent L stock/rolling-entry limits of one. Confirm delayed
+[pilot limits](../RPC.md#pilot-limits-and-operating-modes), including production D=280, staging
+D=10 and each environment's independent L stock/rolling-entry limits of one. Confirm delayed
 expiry/cancel decisions
 complete only after the address catches up, dual coverage passes its expiry time, and no
 in-window deposit remains pending; elapsed wall-clock time alone never releases a reservation.

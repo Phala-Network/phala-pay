@@ -13,7 +13,7 @@ volumes. Use it to choose a `read` and `verify` pair for each environment.
 
 | Volume | Deposits/day | Recommended pair (read + verify) | Monthly cost |
 |---|---:|---|---:|
-| Pilot (allocation B) | 115 production + 20 staging | Production Ankr + BlockPI; staging Ankr + Infura | **$0** |
+| Pilot (allocation B) | 280 production + 10 staging | Production Ankr + BlockPI; staging Ankr + Infura | **$0** |
 | Growth | 2,800 | BlockPI + Chainstack Growth | **about $52** |
 | Scale | 15,000 | BlockPI + Chainstack Growth | **about $75–101** |
 
@@ -21,9 +21,10 @@ volumes. Use it to choose a `read` and `verify` pair for each environment.
   and Base. Staging keeps Ankr + Infura on its two payment chains and two mainnet price chains.
   One account per company: Ankr is shared, Infura is staging-only, and the two BlockPI keys share
   one account quota. Under the [total budget](RPC.md#worst-case-pilot-budget), shared Ankr
-  permits production D≤184 with staging D=20 and ≥10% modeled headroom, holding all other
-  approved allowances fixed. Production uses D=115/H=200/Q=150/factory=150/Safe=10; staging
-  retains D=20/H=80/Q=60/factory=20/Safe=2. Raising them needs a separate reviewed PR.
+  uses 89.64% of its stop line at D280/H300/Q600/refunds10/10, with 12,000 historical addresses
+  and at most 2,000 hot recipients per production chain. Staging uses D10/H20/Q30/refunds1/1
+  at 1,000 addresses/chain. The budget includes unbatched openings and monthly recovery; see
+  the authoritative formulas before changing load.
 - **Allocation C (next candidate, untested):** replace staging read with Chainstack free on
   all four configured chains and retain Infura verify, freeing Ankr for production. Its
   100-block log cap multiplies discovery/coverage requests; preflight, account-wide budgeting,
@@ -69,6 +70,38 @@ receipt-log equality and dual contract identity. The BlockPI URLs are
 Seal `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY` in production only.
 Measurements are from an operator host; they do not establish CVM egress behavior.
 
+## Capacity check 2026-10-30
+
+Read-only checks from the implementation host on October 30, 2026, 2:26–2:27 PM PDT. Both
+production providers on Ethereum and Base accepted one 1,000-call `aggregate3` of canonical
+USDC `balanceOf` calls at each endpoint's recent `finalized` block hash (`requireCanonical:true`).
+All 1,000 subcalls succeeded with a 32-byte balance result. Each also accepted one address-less
+Transfer `eth_getLogs` with 1,000 distinct synthetic recipient topics. No tokens/funds moved.
+
+| Provider | Chain | Finalized pin | aggregate3 latency/results | Log window (blocks) | getLogs latency/result |
+|---|---|---:|---|---:|---|
+| Ankr | Ethereum | 26,308,176 | 1,278 ms / 1,000 successes | 3,000 | 2,052 ms / empty success |
+| BlockPI | Ethereum | 26,308,176 | 345 ms / 1,000 successes | 1,000 | 1,962 ms / empty success |
+| Ankr | Base | 53,302,632 | 1,431 ms / 1,000 successes | 3,000 | 2,973 ms / empty success |
+| BlockPI | Base | 53,302,445 | 677 ms / 1,000 successes | 1,000 | 2,369 ms / empty success |
+
+The log ranges contain exactly the configured per-request maximum: 3,000 Ankr/1,000 BlockPI,
+ending at the recorded pin. A normal hourly Base range is about 1,800 blocks, so the production
+adapter issues two BlockPI requests. This check exercises a full supported slice rather than
+sending an unsupported 1,800-block BlockPI request. Transfer signature is topic0; topic1 is
+unrestricted; topic2 is the 1,000-recipient OR list, without a token-address filter.
+Synthetic recipients are the last 20 bytes of SHA-256 of `phala-pay-capacity-2026-10-30:<i>`
+for i=0..999. Multicall3 is `0xcA11bde05977b3631167028862bE2a173976CA11`, with
+`allowFailure:false`; Ethereum/Base USDC targets match the production config.
+
+Finalized pins were read independently (Base providers reported different heights); this is
+endpoint capacity evidence, not a dual-agreement or deployment preflight. Credentials were
+loaded locally, with no keys/credential-bearing URLs in output. The client supplied
+`User-Agent: phala-pay-rpc-check`; BlockPI rejected Python's default User-Agent at HTTP level
+before the successful checks. These single samples establish payload acceptance on this host,
+not sustained throughput, CVM egress behavior or a measured monthly budget. Full deployment
+preflight, including independent contract identity and common pins, remains required.
+
 ## Pricing-page usage estimates
 
 The earlier equal-window, combined-environment comparison used this approximate per-endpoint
@@ -88,8 +121,8 @@ calls/month ≈ 30 × calls/day
 
 The method mix is about 11% `eth_getLogs`, 15% `eth_call` and `eth_blockNumber`, and 74% header,
 receipt and transaction reads. Weighted billing below is blended with this mix. At Scale, the
-1,000 issued-address cap and the hint and quote caps must also rise; custody then adds about
-24 calls/day per route per 1,000 addresses on each endpoint (1,000-call custody chunks).
+configured issued-address, hot-set, hint and quote allowances need a new budget; six-hour
+custody adds four calls/day per route per 1,000 addresses per endpoint.
 
 ## From pricing pages: fee models
 

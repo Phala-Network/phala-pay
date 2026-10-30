@@ -4,6 +4,8 @@
 environment: staging
 max_attached_pending_refunds: 1
 max_refund_attachments_per_day: 1
+hints_per_day: 20
+quote_snapshots_per_day: 30
 discovery:
   quote_window_hours: 24
   deposit_window_days: 7
@@ -16,6 +18,7 @@ admin_key:
 maintenance_keys:
   - id: maintenance/staging-v1
     public_key: CtqyNNdC0DWZ/+TKeI+nvBvlV6Dq+A2/NXw5zDU7AFQ=
+# Operational caps: D=10/day, 10 new issuances/chain/day; see deploy/RPC.md.
 # Independent Ankr read and Infura verify endpoints, with both sealed keys (deploy/RPC.md).
 # Fast discovery uses read; coverage and money decisions require read/verify agreement.
 rpc:

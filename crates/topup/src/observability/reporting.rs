@@ -197,7 +197,9 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         | "TopupRpcConfirmationSlowStock"
         | "TopupRpcConfirmationSlowEntries"
         | "TopupRpcHintBudgetExhausted"
-        | "TopupRpcPriceSnapshotBudgetExhausted" => "rpc-health.md",
+        | "TopupRpcPriceSnapshotBudgetExhausted"
+        | "TopupRpcHotAddressBudget"
+        | "TopupRpcIssuanceBudget" => "rpc-health.md",
         "TopupRpcUnresolvedDepositStock" | "TopupRpcUnresolvedDepositEntries" => {
             "deposit-reversed.md"
         }
@@ -529,6 +531,8 @@ mod tests {
             "TopupRpcConfirmationProviderLag",
             "TopupRpcHintBudgetExhausted",
             "TopupRpcPriceSnapshotBudgetExhausted",
+            "TopupRpcHotAddressBudget",
+            "TopupRpcIssuanceBudget",
         ];
         let events = with_captured_events_options(
             || {

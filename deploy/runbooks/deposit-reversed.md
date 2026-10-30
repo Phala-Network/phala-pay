@@ -136,9 +136,10 @@ evidence retains watcher eligibility. Never clear due fields or infer proof from
 
 L budgets `2×(62 + 24) = 172` head methods per role across both environments daily:
 172 shared Ankr calls, 6,880 staging Infura credits and 1,720 production BlockPI RU before
-retries. The complete read is already in D's allocation: 24 Ankr calls plus 2,000 staging
-Infura credits or 875 conservative production BlockPI RU per deposit.
-Production D=115 and staging D=20 remain operational caps;
+retries. The complete read is already in D's allocation: 15 Ankr calls plus 1,520 staging
+Infura credits or 665 conservative production BlockPI RU per deposit; first-ancestry fallback
+uses the explicit recovery reserve.
+Production D=280 and staging D=10 remain operational caps;
 follow the [full arithmetic and retry caveat](../RPC.md#worst-case-pilot-budget).
 Resume new quotes only when L stock/entries, S and daily work fit. N-1 preserves compatible
 rows, but its binary does not obey the new scheduler budget; use the prior operating budget.

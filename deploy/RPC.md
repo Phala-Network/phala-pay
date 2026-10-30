@@ -16,20 +16,18 @@ Ethereum and Base price chains too. Both environments share `TOPUP_RPC_ANKR_KEY`
 `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY` from one BlockPI free account,
 with archive mode off and a separate key for each mainnet. Production verifies with BlockPI
 before provisioning; staging stays on Ankr + Infura. No dRPC adoption is required.
-Existing environment-wide pilot caps remain unchanged; a later increase needs a separately reviewed budget
+The environment-wide caps below use the reviewed steady-state and recovery budget
 ([launch procedure](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
 
-`topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:
-production sets it to 2 and staging to 1. It atomically limits attached-pending refunds across
-all accounts and modes in that environment. Optional positive
-`max_attached_pending_refunds_per_account` defaults to 1 across modes and prevents one account
-from occupying every slot when R is raised. Required top-level `max_refund_attachments_per_day`
-sets the rolling 24-hour attachment allowance (including resolved refunds); all shipped configs
-use 1. Each `rpc` entry also requires `max_issued_addresses`; all shipped configs use 1,000. Both
-new limits accept integers from 1 to 1,000,000 and appear in `topup config show`. Missing or invalid
-limits fail configuration validation. Capacity increases still require a reviewed provider budget
-and attested configuration upgrade. Older rollback targets need their retained config without
-these keys and must fit their fixed address/refund limits.
+`topup.yaml` requires positive `max_attached_pending_refunds` and
+`max_refund_attachments_per_day`: production uses 10/10 and staging 1/1. The rolling 24-hour
+attachment allowance includes resolved refunds. Optional
+`max_attached_pending_refunds_per_account` defaults to 1 across modes; production sets 3.
+Each `rpc` entry requires `max_issued_addresses`: production uses 12,000/payment chain and
+staging 1,000. Address and daily attachment limits accept integers from 1 to 1,000,000 and
+appear in `topup config show`; invalid or missing values fail validation. Retirement and expiry
+do not free historical capacity. Capacity increases need a reviewed budget and attested upgrade.
+Older rollback targets require their retained configuration and compatible inventory limits.
 
 CI resolves the latest stable release other than the current ref as N-1 for rollback rehearsal.
 The rollback floor is v0.13.0; going below it requires [restore and reconciliation](RESTORE.md).
@@ -79,7 +77,8 @@ halts that endpoint until UTC midnight (5:00 PM PDT, 4:00 PM PST).
 Read-only discovery runs every five minutes over each payment chain's hot addresses: any quote
 created in the last 24 hours, or any deposit with chain block time in the last seven days.
 Configure those defaults through `discovery.quote_window_hours` and
-`discovery.deposit_window_days`. All quote/deposit states qualify; no activity cache is used.
+`discovery.deposit_window_days`. The quote window must cover every route's maximum permitted
+quote TTL; validation rejects a shorter window. All quote/deposit states qualify; no activity cache is used.
 Cold addresses still receive hourly dual coverage, and hints work for every address. An unhinted
 cold payment can take about 70 minutes with healthy, caught-up coverage.
 Independent dual checkpoint
@@ -107,19 +106,22 @@ Both environments use Ankr read; production uses BlockPI verify, staging uses In
 
 | Limit | Production | Staging | Enforcement |
 |---|---:|---:|---|
-| Deposits handled/day, D | 115 | 20 | Operational |
-| Concurrent attached pending refunds, R | 2 | 1 | Atomic attachment admission |
-| New refund attachments/rolling 24 h, N | 1 | 1 | Atomic admission (`max_refund_attachments_per_day`) |
+| Deposits handled/day, D | 280 | 10 | Operational |
+| Concurrent attached pending refunds, R | 10 | 1 | Atomic attachment admission |
+| New refund attachments/rolling 24 h, N | 10 | 1 | Atomic admission (`max_refund_attachments_per_day`) |
 | Unresolved finality stock/environment, S | 1 | 1 | Operational; pause affected-chain quotes and escalate above S |
 | New unresolved entries/environment/rolling 24 h | 1 | 1 | Operational; same stock stop rule |
 | Current slow-confirmation stock, L/environment | 1 | 1 | Operational; pause affected-chain quotes above the limit |
 | New slow-confirmation entries/environment/rolling 24 h | 1 | 1 | Operational; same L capacity stop rule |
-| Hint tasks/environment/UTC day, H | 200 | 80 | Atomic daily budget (`hints_per_day`) |
-| Fresh quote snapshots/price chain/environment/UTC day, Q | 150 | 60 | Atomic daily budget (`quote_snapshots_per_day`) |
-| Factory receipt-verification instances/day | 150 | 20 | Operational |
+| Hint tasks/environment/UTC day, H | 300 | 20 | Atomic daily budget (`hints_per_day`) |
+| Fresh quote snapshots/price chain/environment/UTC day, Q | 600 | 30 | Atomic daily budget (`quote_snapshots_per_day`) |
+| Factory receipt-fallback instances/day | 150 | 20 | Operational |
 | Safe challenge/proof sets/day | 10 | 2 | Operational |
 | Extra RPC calls/endpoint/day | 150 | 150 | Operational reserve |
-| Historical issued addresses/payment chain | 1,000 | 1,000 | Atomic admission (`rpc[].max_issued_addresses`) |
+| New address issuances/chain/rolling 24 h, I | 50 | 10 | Operational; DB-derived alert above the allowance |
+| Hot discovery addresses/chain | 2,000 | ≤1,000 (address cap) | Operational; alert above 2,000 |
+| Recovery methods/account/month | 9,000 | 9,000 | Monthly reserve; shared once on Ankr |
+| Historical issued addresses/payment chain | 12,000 | 1,000 | Atomic admission (`rpc[].max_issued_addresses`) |
 
 D includes recovery work, not just payments made that day. Factory counts include historical
 re-verification, not only distinct transactions or newly committed events. Safe counts include
@@ -130,6 +132,12 @@ and continues verification until finalized evidence resolves it; never cancel it
 Production-only operation uses the same production caps and leaves additional provider headroom.
 During recovery or maintenance, count preflights, restarts, manual reconciliation, restore checks
 and extra range requests against the 150-call reserve on each endpoint in each environment.
+Opening captures have their own allowance, separate from those 150 calls: charge the unbatched
+cost of 50 issuances/production chain/day and 10/staging chain/day. RedPill currently admits at
+most 20 new crypto organizations/day; Phala Cloud is not live. Count all physical forwarders,
+including quote addresses, rotations and additional networks, rather than treating one
+organization as one issuance. Pause new issuance before the allowance is spent. Legacy
+captures, new-token captures and opening retries consume the extra/recovery reserve.
 Pause new tests and onboarding while backlog consumes operational allowances. New routes, pools, samplers or larger
 caps require a reviewed budget before adding load.
 
@@ -139,30 +147,21 @@ Stop lines are **25,000 Ankr calls/day** (75% of 1,000,000 monthly calls divided
 **1,500,000 staging-only Infura credits/day** (50% of the daily quota), and
 **1,250,000 production-only BlockPI RU/day** (75% of 50M monthly RU divided by 30).
 Charge one Ankr call per method, 80 Infura credits per non-log method and 255 per `eth_getLogs`.
-BlockPI weights are below. Assume every payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and full custody vectors on all
-1,000 historical addresses. Budget the entire issued set as hot; no idle savings are used.
+BlockPI charges `eth_chainId` 5; `eth_blockNumber` 10; `eth_getCode`/receipt 15;
+headers/`eth_call` 20; transaction 35; logs 50 RU
+([RU table](https://docs.blockpi.io/pricing/request-unit-ru/evm-ru-table)).
+[Log response surcharges](https://docs.blockpi.io/pricing/request-unit-ru) above 200 KB are
+excluded; reconcile billed usage and debit the reserve before adding load.
 
-An hour adds about 300 blocks on Ethereum/Sepolia or 1,800 on Base/Base Sepolia, within the
-configured 3,000-block log window. Coverage uses one address-less Transfer query per
-1,000-recipient chunk and one factory-address query with three event signatures, filtered
-locally to the tracked forwarders. This avoids Ankr's multi-topic alternatives limit.
-At `max_log_blocks: 3000`, a normal range needs two requests per recipient set; 19,200 blocks
-need fourteen. BlockPI uses `max_log_blocks: 1000` beneath its measured 1,024-block cap: budget
-three windows for the full 3,000-block normal allowance and twenty for catch-up, even when the
-chain is caught up and the actual normal range is shorter. An Infura
-10,000-result limit error aborts the round: the current adapter does not automatically split
-on that error. Extra requests must fit the reserve or
-be budgeted separately.
-
-For `N` historical addresses and `N_hot` active addresses on a chain, let
-`k = ceil(N / 1,000)` and `k_hot = ceil(N_hot / 1,000)` (zero when the hot set is empty).
-Under the approved normal five-minute log window, fast discovery costs
-`288 × (1 + k_hot)` read calls/day: one head per tick plus one recipient query per hot chunk.
-Provider block-window splitting multiplies the log term during backlog; those extra calls use
-the recovery reserve. Cold addresses do not add fast queries. Hourly coverage still scales with
-all historical chunks: `48 × (k + 3)` log calls/day on 3,000-block endpoints and
-`140 × (k + 3)` on BlockPI's 1,000-block endpoint, including the lagging chunk and factory reads.
-The tables below retain `k_hot = k = 1`, so this PR authorizes no increase in capacity.
+This is a steady-state model with an explicit monthly recovery allowance, not a daily full
+catch-up model. All four payment chains run continuously. Let `k = ceil(N/1,000)` for historical
+addresses and `h = ceil(N_hot/1,000)`. Production uses `k=12, h≤2` on each chain; staging uses
+`k=h=1`. The hot set is distinct addresses belonging to organizations quoting within 24 hours
+or receiving deposits within seven days, across every state. It is not bounded by snapshot Q:
+quotes can reuse snapshots. `TopupRpcHotAddressBudget` alerts above 2,000/chain. Lower the
+activity windows through a reviewed config change (quote window must still cover maximum TTL)
+or pause new quotes; continue existing funded work and dual coverage. See
+[hot-set and issuance response](runbooks/rpc-health.md#hot-set-and-issuance-budgets).
 
 Coverage's address work uses set-based SQL: one stored factory-history lookup and one guarded
 bulk progress update for the entire covered set, plus bounded snapshot/deposit reads. Query
@@ -176,7 +175,7 @@ uncovered address cannot supply expiry or cancellation evidence before coverage 
 
 For ranges r, the per-endpoint coverage log formula remains
 `sum_r(ceil(blocks_r / max_log_blocks) × (ceil(addresses_r / 1,000) + 1 factory query))`.
-This change reduces database round trips, without reducing required dual RPC or raising caps.
+These database changes reduce round trips while preserving required dual RPC.
 The 50,000-address PostgreSQL regressions compare statement counts against 1,000 addresses and
 bound each healthy synthetic coverage/custody round to 30 seconds. They validate local scaling,
 not provider latency or a live capacity increase. Custody retains its existing set-based SQL.
@@ -186,107 +185,82 @@ statements (about 0.08 s and 0.67 s).
 Fixture creation is excluded; external RPC is scripted, so these are database-scale evidence,
 not production latency measurements.
 
-Custody uses 1,000-call chunks and completes the full vector in each sweep. With N eligible
-forwarders and C chain/token routes, one sweep costs `2 × C × ceil(N / 1,000)` aggregate calls
-across both endpoints. At the default six-hour cadence, the daily cost is
-`4 × C × ceil(N / 1,000)` per endpoint; at interval T seconds, the average is
-`(86,400 / T) × C × ceil(N / 1,000)`. Budget N as all issued addresses, including expected-zero
-forwarders; forwarders with an unsettled deposit at the pin are deferred until settled.
-Custody also requires an immutable opening balance at `created_block-1` (zero for genesis
-discovery). New addresses start at current agreed checkpoint `c+1`; a background worker captures
-opening state at recent pin `c`, outside the quote request. Each successful batch of at most
-1,000 addresses sharing a chain/token/issuance pin costs four calls across both endpoints:
-one numbered header and one canonical-hash aggregate per endpoint. The worker claims up to
-1,000 jobs per route each minute. K addresses sharing a pin require `ceil(K/1,000)` batches
-when captured together; later arrivals at that pin can add batches. A single-address issuance
-costs two calls per endpoint per token (four across both); grouped addresses amortize this.
-Budget `2 × C × I` extra calls per endpoint for I newly issued addresses on a C-token chain as
-an unbatched bound, plus legacy/later-token captures and
-six-hour retries of unavailable/disagreeing pins. Charge this to the existing reserve; the
-approved capacity and daily tables do not increase. Existing addresses and later-added tokens
-require that original pin on both providers. Missing proof fails custody closed for the affected
-forwarder and alerts `TopupCustodyOpeningUnavailable`; no latest-balance fallback is allowed.
-Post-issuance unsupported-token transfers were already recorded and count when a route is added.
-The approved tables and totals below deliberately retain the prior five-batch allowance (120C at N=1,000) as a conservative bound; the saving does
-not authorize higher capacity. For each payment chain with C custody routes, that retained
-Ankr and staging-only Infura budget is:
+The fixed daily formulas per payment chain and endpoint are:
 
 ```text
-Fast discovery:      288 × (1 head + k_hot logs) ≤ 576 Ankr at the configured cap
-Checkpoint headers: 144 × 2 = 288 Ankr; 144 × 3 × 80 = 34,560 Infura
-Coverage headers:   24 × 2 = 48 calls per endpoint
-Coverage logs:      20 × 2 × 2 + 4 × 2 × 2 × ceil(19,200 / 3,000) = 192 per endpoint
-Six-hour custody:   C × 4 × ceil(1,000 / 1,000) = 4C per endpoint
-Retained allowance: 116C extra calls per endpoint; approved custody budget remains 120C
-
-Ankr:   576 + 288 + 48 + 192 + 120C = 1,104 + 120C
-Infura: (432 + 48)×80 + 192×255 + 120C×80 = 87,360 + 9,600C
+Fast read only:     288 × (1 head + h recipient-log queries)
+Checkpoint:        144 × (2 headers + up to 1 ahead-provider pin) ≤ 432
+Coverage:          24 × (k recipient-log queries + 1 factory query) on Ankr/Infura
+BlockPI coverage:  24 × (k+1) on Ethereum; 48 × (k+1) on Base
+Six-hour custody:  4 × C × ceil(N/1,000) aggregates, including expected-zero forwarders
+Opening captures:  2 × C × I methods (header + aggregate, unbatched bound)
 ```
 
-Checkpoint checks read the previous checkpoint on both endpoints, then both finalized headers.
-They compare at the lower finalized height: only the ahead endpoint needs one extra numbered
-header. At equal heights each endpoint costs `144 × 2 = 288` calls/day; with height lag, add
-one call to the ahead endpoint per round (at most 144/day, charged to the recovery reserve).
-Coverage reuses the published checkpoint's hash/time when `e` reaches it; intermediate `e`
-still costs one header per endpoint. A lagging common address boundary adds another pair.
-For one caught-up and one lagging recipient set, a normal range ending at the checkpoint
-with a shared common boundary uses four log calls and no boundary headers per endpoint;
-a full 19,200-block intermediate catch-up range uses `2 × 2 × 7 = 28` log calls plus at most
-two boundary headers on 3,000-block endpoints. Resolving an omitted unmarked deposit adds
-three cold evidence methods. These are the integration-test bounds; a restarted process
-selects the same catch-up range from persisted lag.
-Thus caught-up coverage saves 48 header calls/endpoint/day against the retained allowance
-above, and equal-height checkpoints save 144 verify calls/day. Those savings authorize no cap
-increase. The retained tables price the prior scheduled catch-up allowance; adaptive recovery
-is charged by actual backlog windows as described below, not by a six-round counter.
-Not-ready endpoint recovery costs at most `86,400 / 300 = 288` head probes/day per endpoint
-(down from 2,880). Its five-minute alert threshold is unchanged; recovery can take up to the
-next probe plus request time.
+An hourly Ethereum window is about 300 blocks and Base about 1,800. Both fit Ankr/Infura's
+3,000-block limit; BlockPI splits Base at its configured 1,000-block limit. This is the F3
+`24·(k+1)` steady-state coverage model, with provider splitting retained. New issuance starts
+at checkpoint+1 with coverage through the checkpoint, so no daily lagging chunk is charged.
+Coverage reaching the stored checkpoint reuses its timestamp/header. Intermediate boundaries,
+restored/reissued address backfill and common-boundary timestamp fills use the recovery reserve.
+Equal finalized heads need only two checkpoint headers/endpoint; the table reserves the third
+on every round so sustained unequal heads do not spend the recovery allowance.
 
-BlockPI's [EVM RU table](https://docs.blockpi.io/pricing/request-unit-ru/evm-ru-table), checked
-2026-10-13, charges `eth_chainId` 5; `eth_blockNumber` 10; `eth_getCode` and
-`eth_getTransactionReceipt` 15; both block-header methods and `eth_call` 20;
-`eth_getTransactionByHash` 35; `eth_getLogs` 50 RU. The
-[request-unit policy](https://docs.blockpi.io/pricing/request-unit-ru) adds log response-size
-charges above 200 KB. The budget assumes no such surcharge; reconcile counters with the
-account dashboard and charge any excess to the reserve before adding load.
+Not-ready endpoint recovery costs at most `86,400 / 300 = 288` head probes/day per endpoint.
+Its five-minute alert threshold is unchanged; recovery can take up to the next probe plus
+request time.
 
-```text
-BlockPI coverage logs/payment chain: 20×2×2×ceil(3,000/1,000)
-                                  + 4×2×2×ceil(19,200/1,000) = 560
-BlockPI fixed RU/payment chain: (432 + 48)×20 + 560×50 + 120C×20 = 37,600 + 2,400C
-```
+Catch-up is adaptive at 19,200 blocks for either the main cursor or a lagging range, retaining
+per-provider splitting. Recovery reserves **9,000 logical methods/provider account/month**
+(300/day averaged over 30 days), priced at 255 credits for Infura and 50 RU for BlockPI. Ankr's
+reserve is shared once by both environments. It covers extra range queries, checkpoint-boundary
+reads, five-minute not-ready probes, and first-finality fallbacks. A 24-hour backlog adds about
+`3·(k+1)` Ethereum and `15·(k+1)` Base log queries on 3,000-block providers, once, rather than
+four catch-up rounds every day. Including staging, that is about 270 Ankr queries before range
+boundary overhead. Nine thousand also covers a day of five-minute recovery probes on all six
+Ankr endpoints (1,728 methods) with room for those ranges. It does not authorize an indefinite
+outage/restart loop. Maintain a monthly reserve ledger and pause new load if the remaining
+reserve cannot cover the next operation; provider stop lines remain independently binding.
+The separate daily 150-call/endpoint/environment allowance covers planned preflights, manual
+reconciliation and operator recovery (refund candidates reserve all three transport sends).
 
-| Payment chain | Custody routes | Fixed Ankr calls/day | Fixed verify units/day |
+Custody reads the full vector in 1,000-call aggregates every six hours. Immutable opening
+balances at `created_block-1` are captured asynchronously in same-pin batches of at most 1,000;
+new issuance at checkpoint `c+1` uses recent pin `c`. Charge the full unbatched bound above:
+production `2·(2+1)·50=300` calls/endpoint/day and staging `2·(3+1)·10=80`.
+The worker claims up to 1,000 jobs/route/minute; shared pins can reduce the actual cost but do
+not raise the allowance. Missing historical/opening proof fails custody closed for the affected
+forwarder and alerts `TopupCustodyOpeningUnavailable`. Never substitute latest state.
+
+| Payment chain | C | h | Fixed Ankr calls/day | Fixed verify units/day |
+|---|---:|---:|---:|---:|
+| Staging Sepolia | 3 | 1 | 1,068 | 47,760 Infura credits |
+| Staging Base Sepolia | 1 | 1 | 1,060 | 47,120 Infura credits |
+| Production Ethereum | 2 | 2 | 1,704 | 26,160 BlockPI RU |
+| Production Base | 1 | 2 | 1,656 | 40,800 BlockPI RU |
+| **Total (openings separate)** | **7** | | **5,488 shared** | **94,880 Infura; 66,960 BlockPI** |
+
+Variable allowances before retries (Infura serves only staging):
+
+| Work | Ankr calls | Infura credits | BlockPI RU |
 |---|---:|---:|---:|
-| Staging Sepolia | 3 | 1,464 | 116,160 Infura credits |
-| Staging Base Sepolia | 1 | 1,224 | 96,960 Infura credits |
-| Production Ethereum | 2 | 1,344 | 42,400 BlockPI RU |
-| Production Base | 1 | 1,224 | 40,000 BlockPI RU |
-| **Total** | **7** | **5,256 shared** | **213,120 Infura; 82,400 BlockPI** |
+| Deposit: 3 cold discovery + 9 Depth confirmation + 1 first ancestry check + 2 fresh valuation snapshots | 15 | 1,520 (19 methods) | 665 (19×35 upper bound) |
+| Unresolved finality recheck, including at most one replacement candidate | 4 | 320 | 85 |
+| L stock/turnover: 86 head methods/environment/day | 86 | 6,880 | 1,720 |
+| Hint task | 12 | 640 | 280 |
+| Fresh quote/sampler snapshot | 1 | 240 | 60 |
+| Factory receipt fallback (identical matching dual logs add zero) | 3 | 240 | 70 |
+| Safe challenge/proof set | 3 | 160 | 40 |
+| Extra/recovery method, conservatively priced as logs | 1 | 255 | 50 |
 
-Variable allowances before retries (the Infura column applies only to staging):
-
-| Work | Ankr calls | Infura credits |
-|---|---:|---:|
-| Deposit: retained conservative allowance (cold caches, confirmation/finality fallbacks and two snapshots; see deduplication below) | 24 | 2,000 |
-| Unresolved finality recheck, including at most one replacement candidate | 4 | 320 |
-| L stock/turnover: 86 head methods per environment/day | 86 | 6,880 |
-| Hint task | 12 | 640 |
-| Price snapshot, including verify's head and pin header | 1 | 240 |
-| Factory receipt fallback (matching dual logs need no receipt) | 3 | 240 |
-| Safe challenge/proof set | 3 | 160 |
-| Extra operation, conservatively priced as logs | 1 | 255 |
-
-BlockPI variable allowances use the same pilot work limits, priced by its RU table. A complete
-receipt/header/transaction set costs 70 RU; an unresolved replacement check costs at most
-15 + 70 = 85; refund receipt/header/origin costs 15 + 20 + 35 = 70 RU per endpoint
-on its first complete verification (later receipt/header checks cost 35 RU). Price snapshots cost 3×20 = 60
-on verify. For the existing 2,000-credit deposit allowance and 640-credit hint allowance,
-conservatively charge all non-log methods at the highest used rate, 35 RU: **875/deposit**
-and **280/hint**. These are upper bounds, not a blended average. Each environment has 86 S
-rechecks and 86 L head methods. Factory verification costs 70 and a two-call Safe proof 40 RU.
-Extra operations reserve 50 RU each. Lower actual method weights do not authorize raising caps.
+Two valuation snapshots are reserved per D independently of Q (verify uses three methods per
+snapshot). H is charged separately in full, even when its valid proof reduces pump work.
+Normal cold confirmation remains the upper path: durable exact dual proofs skip completion;
+shared per-endpoint immutable caches remove repeated timestamp/origin/receipt-position work.
+No cache crosses endpoints or replaces a fresh canonical header. The first ancestry check
+uses one fresh numbered inclusion header/endpoint; mismatch/error falls back to a full read,
+at most four extra methods charged to recovery. S/L rechecks retain their separate stock and
+turnover allocations below. Unexpected cache churn/repeated unverified completion also consumes
+recovery; stop new intake if observed counters exceed the model.
 
 Confirmation first probes the required head independently on both endpoints. Once both reach
 the requirement, the same claim reads full evidence once per endpoint: receipt, canonical
@@ -294,10 +268,10 @@ header and transaction, at most three methods. Recheck the actual receipt's incl
 applicable confirmation policy before crediting. Waiting for heads does not repeatedly read
 receipts. Normal logical bounds per endpoint are:
 
-| Mode | Head probes | Full evidence methods | First later finality fallback allowance | Total |
+| Mode | Head probes | Full evidence methods | First later ancestry check | Normal total |
 |---|---:|---:|---:|---:|
-| Depth | 6 | 3 | 5 | 14 |
-| Safe | 3 | 3 | 5 | 11 |
+| Depth | 6 | 3 | 1 | 10 |
+| Safe | 3 | 3 | 1 | 7 |
 | Finalized | 7 | 3 | 0 | 10 |
 
 Finalized confirmation records finality without a duplicate first watcher check. Depth sets a
@@ -309,9 +283,8 @@ normal/L together permit only one full confirmation-evidence read per endpoint. 
 
 ### Immutable facts and proof reuse
 
-The approved tables retain the conservative 24-call deposit and three-call factory allowances;
-this change does not raise caps or rely on cache hits for admission. Normal successful paths
-use these per-endpoint logical method counts (transport retries remain separately reserved):
+Successful paths use these per-endpoint logical method counts; transport retries and
+recovery work retain their separate reserves:
 
 | Work | Methods per endpoint | Infura credits | BlockPI RU |
 |---|---:|---:|---:|
@@ -350,18 +323,19 @@ outside unresolved stock S. Header errors or mismatches use full receipt evidenc
 replacement checks when needed; S/L schedules and their existing bounds remain unchanged.
 An attempted ancestry check adds one header before fallback: at most `1 + 4 = 5` methods
 for that first check, versus one on success. An invalid hint can similarly spend one header
-before ordinary confirmation; the retained deposit allowance absorbs these fallbacks instead
-of the eliminated repeated proven-log completion. Subsequent S rechecks remain bounded at four.
+before ordinary confirmation. Charge these extra methods to the monthly recovery reserve;
+the normal deposit allowance includes a successful ancestry check. Subsequent S rechecks
+remain bounded at four.
 Factory omissions, conflicting logs or a mismatch with stored facts likewise require fresh
 dual receipts. Stored insert-only contradictions still freeze the chain.
 
 ### Remaining variable allowances
 
 Sanctions screening uses local OFAC/manual lists, with no RPC term; address derivation is local.
-Staging's one PHA route (Sepolia) uses one TWAP pool and five-minute sampler: `86,400 / 300 = 288`
-snapshots/day. Quotes have four price-chain/environment instances, so
-`288 + 2×60 staging + 2×150 production = 708` snapshots/day.
-Production has no periodic TWAP sampler in this pilot.
+Staging's one PHA route (Sepolia) retains its five-minute TWAP sampler: 288 snapshots/day.
+Quotes have two price-chain instances per environment: `288+2·30+2·600=1,548` snapshots/day.
+Production has no periodic TWAP sampler. Observation-only staging mainnets perform no payment
+discovery, checkpoints, coverage or custody; all staging verify traffic stays on Infura.
 
 A deposit enters S at its first unresolved check, persisted as `first_unresolved_at`. This
 includes a `detected` deposit whose transfer both endpoints agree is absent during confirmation,
@@ -376,13 +350,9 @@ stock/turnover allowance is separate from D and its initial finality allocation.
 alone stays in normal confirmation or L and does not enter S. Missing transfers, conflicting
 or changed evidence, and RPC failures that cannot establish height-only lag enter S.
 
-`ChainReader::finality_evidence` uses the stored checkpoint and calls `receipt_transfer`.
-A missing receipt costs one `eth_getTransactionReceipt` per endpoint (1 Ankr call,
-80 staging Infura credits or 15 production BlockPI RU).
-A present ordinary EVM receipt also requires its block header and transaction: at most three methods
-per endpoint with cold caches (3 Ankr calls, 240 staging Infura credits or 70 production BlockPI RU), even if
-the evidence disagrees and remains unresolved.
-
+For unresolved work, a missing receipt costs one method/endpoint; a present cold ordinary EVM
+receipt needs receipt, canonical header and transaction (three methods). Cache savings never
+remove the fresh receipt/header checks.
 When both original receipts are missing, replacement lookup considers service-known candidates
 with the same chain, sender and nonce but a different hash. **Exactly one candidate** permits
 independent evidence reads for that candidate, at most three methods per endpoint. **More than
@@ -394,10 +364,8 @@ release reservations to bypass this gate. Follow the
 
 The branches are mutually exclusive, so the complete per-endpoint recheck bound is
 `max(3, 1 + 3×K) = 4` methods at K=1: one original receipt plus the candidate's receipt,
-header and transaction. The retained D allocation includes the first ancestry attempt plus the four-method fallback:
- 24 Ankr calls plus 2,000 staging Infura credits or 875 conservative production
-BlockPI RU per deposit in total. Charge four Ankr calls, 320 staging Infura credits or
-85 production BlockPI RU per subsequent recheck, before ×1.1:
+header and transaction. Initial first-finality fallback uses the recovery allowance; later S
+rechecks cost four Ankr calls, 320 Infura credits or 85 BlockPI RU before ×1.1.
 
 | Stock age | Rechecks/deposit/endpoint/day | Ankr calls/deposit/day | Staging Infura credits/deposit/day |
 |---|---:|---:|---:|
@@ -475,60 +443,53 @@ in a 24-hour window overlapping the old and renewed epochs (240 transport attemp
 renewal adds at most 40. Charge this to the extra-operation reserve before submitting the
 initial or renewed candidate; original verification and its reservation continue.
 
-At Infura's conservative 80-credit method ceiling this is 6,400 credits on day one and 960
-per carried day. At BlockPI's conservative 35-RU method ceiling it is 2,800 RU and 420 RU.
-Reserve first-day cost for N new attachments plus later-day cost for all R pending attachments,
-including carry-over. Combined N=2, R=3. Refunds reserve all three allowed transport attempts;
-non-refund work uses the approved ten-percent allowance:
+At Infura's 80-credit method ceiling, refunds reserve 6,400 credits/new attachment and 960
+per carried day; BlockPI conservatively uses 2,800 RU and 420 RU. Count N new plus all R pending
+(including carried stock) each day. Combined N=11, R=11. Refunds reserve all three transport
+attempts; non-refund work uses ×1.1. The exact daily equations are:
 
 ```text
 Shared Ankr non-refund:
-5,256 + 708 + 24×(115+20) + 12×(200+80) + 3×(150+20) + 3×12 + 300 + 688 + 172 = 14,270
-Shared Ankr refunds: 3×(80×2 + 12×3) = 588
-Shared Ankr total:   ceil(14,270×1.1 + 588) = 16,285 calls/day
+5,488 fixed + 1,548 prices + 15×(280+10) D + 12×(300+20) H
++ 3×(150+20) factory + 3×12 Safe + 300 extra + 380 openings
++ 688 S + 172 L + 300 monthly-recovery average = 17,612
+Refunds: 3×(80×11 + 12×11) = 3,036
+Total: ceil(17,612×1.1 + 3,036) = 22,410 calls/day
 
 Staging-only Infura non-refund:
-213,120 + 240×408 + 2,000×20 + 640×80 + 240×20 + 160×2
-+ 255×150 + 320×86 + 80×86 = 480,010
-Staging-only Infura refunds: 3×(6,400×1 + 960×1) = 22,080
-Staging-only Infura total:   480,010×1.1 + 22,080 = 550,091 credits/day
+94,880 fixed + 240×348 prices + 1,520×10 D + 640×20 H
++ 240×20 factory + 160×2 Safe + 255×150 extra + 80×80 openings
++ 320×86 S + 80×86 L + 255×300 recovery = 367,070
+Refunds: 3×(6,400×1 + 960×1) = 22,080
+Total: 367,070×1.1 + 22,080 = 425,857 credits/day
 
 Production-only BlockPI non-refund:
-82,400 + 60×300 + 875×115 + 280×200 + 70×150 + 40×10
-+ 50×150 + 85×86 + 20×86 = 284,455
-Production-only BlockPI refunds: 3×(2,800×1 + 420×2) = 10,920
-Production-only BlockPI total:   284,455×1.1 + 10,920 = 323,820.5 RU/day (ceil: 323,821)
+66,960 fixed + 60×1,200 prices + 665×280 D + 280×300 H
++ 70×150 factory + 40×10 Safe + 50×150 extra + 20×300 openings
++ 85×86 S + 20×86 L + 50×300 recovery = 457,590
+Refunds: 3×(2,800×10 + 420×10) = 96,600
+Total: 457,590×1.1 + 96,600 = 599,949 RU/day
 ```
 
-Staging's two mainnet price chains do not run payment discovery, checkpoints, coverage or
-custody. They contribute quote snapshots and the PHA sampler: staging uses 288 + 2Q = 408
-snapshots/day at Q=60; production uses 2Q = 300 at Q=150. All of staging's verify traffic
-stays on Infura.
-BlockPI's two chain keys share one account quota; they do not each receive 50M RU.
+Staging's share of shared Ankr is `ceil(3,592×1.1+276)=4,228` calls/day before the shared
+monthly reserve: fixed 2,128; prices 348; D 150; H 240; factory 60; Safe 6; extra 150; openings
+80; S 344; L 86. The shared recovery allowance adds 330 after ×1.1. Production and staging do
+not receive separate Ankr quotas; BlockPI's two chain keys also share one account.
 
-| Provider account | Roles | Modeled daily usage | Stop line/day | Headroom below stop | D permitted with ≥10% headroom |
-|---|---|---:|---:|---:|---|
-| Ankr | Production + staging read | 16,285 calls | 25,000 calls | 34.86% | Production ≤350 with staging D=20 |
-| Infura | Staging verify only | 550,091 credits | 1,500,000 credits | 63.33% | Staging ≤383; no production D constraint |
-| BlockPI | Production verify only | 323,821 RU (rounded up) | 1,250,000 RU | 74.09% | Production ≤947 under conservative method weights |
+| Provider account | Modeled daily usage | Stop line/day | Usage of stop line | Headroom |
+|---|---:|---:|---:|---:|
+| Ankr (production + staging read) | 22,410 calls | 25,000 calls | **89.64%** | **10.36%** |
+| Infura (staging verify) | 425,857 credits | 1,500,000 credits | **28.39%** | **71.61%** |
+| BlockPI (production verify) | 599,949 RU | 1,250,000 RU | **48.00%** | **52.00%** |
 
-Holding every other allowance fixed, the equations before rounding are:
-
-```text
-Ankr(D production, staging 20) = 13,249 + 26.4D;  ≤ 0.9×25,000       → D≤350
-Infura(D staging)             = 506,091 + 2,200D; ≤ 0.9×1,500,000    → D≤383
-BlockPI(D production)         = 213,133 + 962.5D; ≤ 0.9×1,250,000    → D≤947
-```
-
-The shared Ankr account is the production capacity bound. BlockPI's D ceiling uses conservative
-35-RU non-log bounds for deposits and hints; actual billing may be lower.
-**Approved production caps: D=115, H=200, Q=150, factory=150 and Safe=10.** Staging
-remains D=20, H=80, Q=60, factory=20 and Safe=2. Production R=2/N=1 and the permanent
-1,000-address cap stay unchanged. Any further increase requires a separate reviewed budget.
-The launch gate is the production Ankr/BlockPI allocation
-and complete sealed mappings, with passing preflight before
-[production launch §2](runbooks/production-launch.md#2-provision-the-topup-cvm).
-Staging continues using Ankr + Infura.
+At all other stated allowances, shared Ankr is `17,789.2 + 16.5·D_production`:
+D=300 would cost 22,740/day (90.96%), missing ten-percent headroom. The mathematical ceiling
+is D=285 (22,492, 89.97%); the operational cap rounds down to **D=280**.
+**Production: D280/H300/Q600, refunds N10/R10, per-account R3, 12,000 addresses/chain.**
+**Staging: D10/H20/Q30, refunds N1/R1, 1,000 addresses/chain.** Factory remains 150/20 and Safe
+10/2. These are modeled allowances, not measured seven-day run rates. Watch the hot set,
+issuance, monthly recovery ledger and provider dashboards; stop lines bind even within the
+workload caps. See the [dated capacity check](RPC-PROVIDERS.md#capacity-check-2026-10-30).
 
 Non-refund reads use ×1.1; refunds reserve all three transport attempts. Logical method counts
 have hard bounds, while each method can make up to three physical sends. These totals do not
@@ -548,8 +509,8 @@ L uses the persisted `first_slow_at` age: 60 s until ten minutes, ten minutes un
 then hourly. The entry probe was already charged in the normal window; the first L probe is
 60 s later. Each due time reads only the corresponding head once per endpoint. As soon as both
 reach the requirement, read the one allowed full evidence set and continue confirmation and
-credit without waiting for the published checkpoint. Discovery/hint evidence does not substitute
-for that read. A failed or anomalous full read enters S and never restarts the normal window.
+credit without waiting for the published checkpoint. A valid Depth/Safe hint proof may serve confirmation after a fresh dual inclusion-header check;
+it never establishes final_at. Finalized policy keeps the full read. A failed or anomalous full read enters S and never restarts the normal window.
 
 Current L stock and rolling-24-hour first entries are each limited to one, summed across all
 payment chains per environment. `first_slow_at` is set once and retained; entries still count
@@ -697,11 +658,14 @@ window as daily steady state or assume recovery fits the reserve without measuri
 Restarts retain the stored lag and do not reset catch-up scheduling. The two-hour coverage-lag
 warning remains an early incident signal.
 
-A changed address/unverified-id snapshot abandons cached evidence and retries once with a fresh
-RPC round; a second change waits for the next tick. Coverage commits only after every request
-succeeds. Coverage and pending cleanup end at the scanned block even when the checkpoint is
-ahead; the compatibility cursor uses the common complete boundary across addresses. Never
-replace coverage-gated release with wall-clock expiry.
+
+Changes to covered address rows or covered unverified-deposit identities discard evidence and
+retry once; unrelated address insertions retain the covered rows' proof. Coverage commits only
+after every request succeeds. The locked commit recomputes the common complete boundary across
+all addresses; if a lowered boundary lacks a prefetched dual timestamp, compatibility time is
+NULL until a later round fills it. Expiry and unpaid reservation release wait for that time.
+Coverage/cleanup end at the scanned boundary even when the checkpoint is ahead. Never replace
+coverage-gated release with wall-clock expiry.
 
 Staging PHA samples every 300 seconds, with `max_sample_age_s: 900` and
 `max_sample_jump_bps: 1100`. Defaults remain 180 seconds and 500 bps for 60-second sampling.

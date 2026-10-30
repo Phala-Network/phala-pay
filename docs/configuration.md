@@ -55,7 +55,7 @@ Carrying the address introduces no per-IP admission or transaction-hint limits.
 
 Transaction-hash hints have no per-IP limit. Their controls are credential-gated per-object
 limits of 3/minute and 10/day, the configured `hints_per_day` cap per environment per UTC day
-(200 production, 80 staging; default 80), and at most
+(300 production, 20 staging; default 80), and at most
 four tasks in flight. Request bodies are read only after the shared 256-request concurrency gate
 admits the hint; overload returns `503 unavailable` with `Retry-After: 1`. Admitted hints retain
 quiet `202 received` responses. Merchant-key hints share the database authentication gate above.
@@ -86,7 +86,7 @@ One YAML file, parsed with unknown fields refused, holds every public setting of
 
 ```yaml
 environment: staging                       # the Sentry environment: also gates staging-only price licensing opt-in
-max_attached_pending_refunds: 1             # required positive deployment cap; production uses 2
+max_attached_pending_refunds: 1             # required positive deployment cap; production uses 10
 max_refund_attachments_per_day: 1           # required rolling 24-hour deployment cap
 # hints_per_day: 80                       # optional; environment-wide per UTC day
 # quote_snapshots_per_day: 60             # optional; per price chain per UTC day
@@ -117,17 +117,17 @@ routes:                                    # every enabled route version, as rou
 ```
 
 `max_attached_pending_refunds` is required and must be a positive integer. The shipped production
-configuration sets it to 2 and staging to 1. It applies atomically across all accounts and modes
+configuration sets it to 10 and staging to 1. Production also sets the per-account cap to 3
+(staging retains the default 1). It applies atomically across all accounts and modes
 in the deployment. Required `max_refund_attachments_per_day` limits new attachments over a
 rolling 24 hours, including already resolved refunds. It accepts integers from 1 to 1,000,000;
-all shipped configurations explicitly use 1.
+production uses 10 and staging, example and template use 1.
 Exhaustion returns non-retryable `422 refund_attachment_limit_exceeded`, preserving the refund
 reservation. Idempotent attachment retries do not consume quota; attached refunds keep being
 verified. Lowering either refund cap does not cancel attached refunds or reset their timestamps.
 
 Every `rpc` entry requires `max_issued_addresses`, an integer from 1 to 1,000,000, counting all
-historical addresses on that chain across accounts and modes. All shipped configurations use
-1,000. Retirement and expiry do not free capacity. Lowering the cap below historical usage blocks
+historical addresses on that chain across accounts and modes. Production uses 12,000; staging, example and template use 1,000. Retirement and expiry do not free capacity. Lowering the cap below historical usage blocks
 new issuance; existing networks remain watched and reusable. Warnings and critical alerts fire at
 70% and 90% of that chain's configured cap (rounded up). `topup config show` includes both new
 required limits. Missing, zero, negative, fractional or out-of-range values fail validation.
@@ -146,8 +146,7 @@ release's budget; a rollback never clears rolling attachment history.
   configuration change do not reset usage. Lowering a limit below current usage refuses further
   claims until the next UTC day. Hints fall back to scanning at exhaustion; quotes needing a
   fresh snapshot return retryable `503 price_unavailable`. Sampler and deposit-confirmation
-  snapshots are independent. Production sets 200/150; staging, example and template keep the
-  defaults. `topup config show` includes both resolved values.
+  snapshots are independent. Production sets 300/600, staging 20/30; example and template keep the defaults. `topup config show` includes both resolved values.
   These limits do not enforce the operational deposit, factory or Safe tallies; see
   [pilot limits](../deploy/RPC.md#pilot-limits-and-operating-modes).
   **Rollback:** releases before these keys reject them as unknown fields. Render an older kit
@@ -156,7 +155,9 @@ release's budget; a rollback never clears rolling attachment history.
   [PROXY rollback requirements](../deploy/README.md#custom-domain).
 - **`discovery`** optionally sets fast-discovery activity windows. `quote_window_hours` accepts
   integers 1–8,760 (default 24), and `deposit_window_days` accepts 1–365 (default 7). Either field
-  may be omitted. Every quote state qualifies by creation time; every deposit state qualifies
+  may be omitted. `quote_window_hours × 3600` must cover `merchant.quote_ttl_seconds.max`
+  on every enabled route/version; a shorter window fails config validation even if its default
+  TTL fits, because an account may choose the maximum. Every quote state qualifies by creation time; every deposit state qualifies
   by chain `block_time`, including the exact cutoff. No activity cache needs refreshing.
   The five-minute read path covers that hot set; hourly dual coverage still covers every
   historical address, and transaction hints work for cold addresses too. Without a hint, a cold

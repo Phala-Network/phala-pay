@@ -15,14 +15,14 @@ verified OFAC SDN snapshots with audited operator supplements.
   including screening supplements, three-route smoke evidence, and a production restore drill
   on the current release. An upgrade's health check or a staging drill does not establish these.
 - Decide admission before opening the organization allowlist. Each new quoting organization
-  permanently consumes one of the shared 1,000 addresses on each chain it uses. Keep a curated
+  permanently consumes one of the configured historical addresses on each chain it uses. Keep a curated
   allowlist or require paid history and bound new crypto customers per day; plan the
-  [capacity release](../deploy/runbooks/address-capacity.md#upgrade-paths) before 700 addresses.
-- Bound daily quote creation per organization and user. Production permits 150 fresh price
+  [capacity release](../deploy/runbooks/address-capacity.md#upgrade-paths) before 70% of the configured per-chain cap.
+- Bound daily quote creation per organization and user. Production permits 600 fresh price
   snapshots per price chain per UTC day, shared by all customers; exhausted snapshots return
   `503 price_unavailable`. Confirm the account's open-quote and amount caps with `GET /v1/config`.
 - Agree the [pilot monitoring cadence and stop actions](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions).
-  Production has no metrics collector; D=115 deposits/day is operational, and pausing quotes
+  Production has no metrics collector; D=280 deposits/day is operational, and pausing quotes
   does not stop transfers to existing addresses. Verify alert delivery and backup/restore evidence.
 
 ## Phala Cloud and follow-ups

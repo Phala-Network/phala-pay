@@ -790,23 +790,23 @@ cost per month = 30 × cost per day
 
 [Chain reads §5.2](../docs/design/chain-reads.md#52-worst-case-daily-budget-staging--production-combined)
 accounts for fixed 300-second discovery, independent 600-second checkpoints, 3,600-second
-coverage, bounded backfill and six-hour catch-up. Compare measured call counters with each
+coverage, bounded backfill and adaptive catch-up. Compare measured call counters with each
 provider's dashboard. Production reads with Ankr and verifies with BlockPI; staging stays on
 Ankr + Infura. Merge and preflight the production allocation and complete sealed mappings
 before launch §2; no dRPC move or staging upgrade is required by this allocation. Production
-uses the approved D=115/H=200/Q=150/factory=150/Safe=10 caps; staging keeps its existing caps.
+uses the approved D=280/H=300/Q=600/factory=150/Safe=10 caps; staging uses D10/H20/Q30/refunds1/1.
 Later increases require a separately reviewed budget. Production-attested comments are updated
 before provisioning
 ([launch §1.8](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
 Each fresh quote snapshot costs one read call, 240 Infura verify credits in staging or 60
 BlockPI RU in production; the DB enforces the configured `quote_snapshots_per_day`
-(150 production, 60 staging) per price chain per UTC day.
-[RPC operations](RPC.md#worst-case-pilot-budget) includes hourly dual custody on all seven
+(600 production, 30 staging) per price chain per UTC day.
+[RPC operations](RPC.md#worst-case-pilot-budget) includes six-hour full-vector dual custody on all seven
 chain/token routes (three production, four staging), refunds, unresolved finality stock, slow
-confirmation lane L and proof work. Parallel-mode production caps are D=115/day, H=200 hint
-tasks/UTC day and Q=150 fresh snapshots/price chain/UTC day, with factory=150/day and
+confirmation lane L and proof work. Parallel-mode production caps are D=280/day, H=300 hint
+tasks/UTC day and Q=600 fresh snapshots/price chain/UTC day, with factory=150/day and
 Safe=10/day. Staging
-retains D=20/H=80/Q=60/factory=20/Safe=2. H/Q default to 80/60 when unset.
+retains D=10/H=20/Q=30/factory=20/Safe=2. H/Q default to 80/60 when unset. Production refunds use N10/R10/per-account3; staging N1/R1.
 D, factory and Safe counts are operational caps with monitoring and stop actions.
 L accepts normal-window exhaustion solely from height lag, credits without a checkpoint wait
 and does not count toward S. Current L stock and rolling-24-hour entries are each ≤1 per
