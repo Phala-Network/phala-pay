@@ -328,7 +328,7 @@ pub async fn coverage_addresses(
     let query = if lagging {
         "SELECT id,address,created_block,backfilled,backfilled_through,dual_covered_through FROM addresses WHERE chain_id=$1 AND (dual_covered_through IS NULL OR dual_covered_through < $2) ORDER BY dual_covered_through NULLS FIRST,created_block,id LIMIT 1000"
     } else {
-        "SELECT id,address,created_block,backfilled,backfilled_through,dual_covered_through FROM addresses WHERE chain_id=$1 AND dual_covered_through=$2 ORDER BY id"
+        "SELECT id,address,created_block,backfilled,backfilled_through,dual_covered_through FROM addresses WHERE chain_id=$1 AND dual_covered_through >= $2 ORDER BY id"
     };
     use sqlx::Row;
     let rows = sqlx::query(query)

@@ -277,6 +277,40 @@ async fn compat(database: &TestDatabase) -> Result<(i64, Option<DateTime<Utc>>)>
     )
 }
 
+/// F10 may put a new address's empty prefix ahead of global coverage. Its first post-issuance
+/// transfer belongs to the next forward range, rather than an extra hourly backfill round.
+#[tokio::test]
+async fn new_issuance_ahead_of_global_coverage_is_scanned_on_the_next_round() -> Result<()> {
+    with_database(|d| Box::pin(async move {
+        let mut read = Reader::new(10);
+        let mut verify = Reader::new(10);
+        scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+        read.head = 100;
+        verify.head = 100;
+        topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
+        let address = address(d, 101).await?;
+        sqlx::query("UPDATE addresses SET dual_covered_through=100,backfilled=true,backfilled_through=100 WHERE id=$1")
+            .bind(address.id).execute(&d.app_pool).await?;
+        let post = transfer(&address, 101);
+        let mut pre = transfer(&address, 99);
+        pre.tx_hash = B256::repeat_byte(0xab);
+        for reader in [&mut read, &mut verify] {
+            reader.head = 200;
+            reader.logs = vec![pre.clone(), post.clone()];
+            reader.receipt = Some(post.clone());
+        }
+        topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
+        let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+        ensure!(stats.inserted == 1, "new issuance skipped its first post-start transfer: {stats:?}");
+        ensure!(marker(d, address.id).await? == Some(200));
+        let deposits: Vec<(i64, bool)> = sqlx::query_as(
+            "SELECT block_number,dual_verified_at IS NOT NULL FROM deposits WHERE address_id=$1",
+        ).bind(address.id).fetch_all(&d.app_pool).await?;
+        ensure!(deposits == [(101, true)], "pre-issuance transfer entered discovery: {deposits:?}");
+        Ok(())
+    })).await
+}
+
 /// Unsupported tokens are still covered from issuance. Route activation must not erase that
 /// history or mistake a previously recorded transfer for an unexplained custody balance.
 #[tokio::test]

@@ -592,7 +592,9 @@ A conflict freezes the chain; finality, reversal and refunds consume these publi
 checkpoint without repeating its advance. Coverage ends at `e = min(checkpoint, cursor + L)`,
 with `L = 3,000`, or 19,200 every sixth round (six-hour catch-up). Both endpoints must agree on
 `e`'s hash and time. The coverage-lag warning is two hours.
-Caught-up addresses scan `(cursor, e]`; at most 1,000 lagging addresses backfill from their own
+Addresses with `dual_covered_through >= cursor` join the forward scan `(cursor, e]`, filtering
+at their own discovery start and marker plus one. This includes a new issuance whose empty
+prefix is ahead of global coverage, without an extra backfill round. At most 1,000 lagging addresses backfill from their own
 `dual_covered_through + 1`, or `created_block` when NULL. Every log request must succeed.
 The union of both candidate sets is resolved independently by receipt, transaction and header.
 Active unmarked identities are read without trusting their stored block numbers. All receipt,

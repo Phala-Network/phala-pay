@@ -47,7 +47,9 @@ horizon are inserted as `detected` as today (`Evidence::Confirmed`, key
 
 State: chain cursor `c = chain_coverage.through_block`; per address
 `addresses.dual_covered_through` (NULL = nothing covered). An address is **caught up** when
-`dual_covered_through = c`.
+`dual_covered_through = c`. The forward-scan set also includes markers above `c`: a newly
+issued address may have an empty prefix through a newer checkpoint while global coverage lags.
+Each address still filters at `max(created_block, dual_covered_through+1)`.
 
 Initialisation: when `topup run` first starts with a chain, before the API can issue an address
 on it, `chain_coverage` is set to the agreed checkpoint (§2.5). A restored or upgraded database
@@ -64,7 +66,8 @@ Each round, staggered per chain:
    repeating its RPC checks. Range end `e = min(t, c + L)`, `L` = 3 000 blocks, or 19 200 on
    every sixth round (six-hour catch-up; §5.2 budgets it). Read the header of `e` on both
    endpoints (hash and time must agree).
-2. Snapshot address sets after step 1: caught-up set C; lagging set G = at most 1 000 addresses
+2. Snapshot address sets after step 1: forward set C with `dual_covered_through >= c`;
+   lagging set G = at most 1 000 addresses
    with `dual_covered_through IS NULL OR < c`, oldest progress first (new addresses, reissued
    addresses whose `created_block` was lowered by `deposit_addresses.rs` reissue, restored
    addresses). Addresses issued after the snapshot are paid above `t` (payments before issuance
@@ -91,7 +94,8 @@ Each round, staggered per chain:
    - existing factory-event rows in range (insert-only tables, rare) → always re-verified;
    - any disagreement → no commit, alert.
 5. One transaction: records and markers; `chain_coverage` → `(e, hash(e), time(e))`; C's
-   `dual_covered_through = e`; G's `dual_covered_through = g_end` for addresses whose start
+   `dual_covered_through = e` for addresses whose own start is ≤ `e` (an issuance prefix ahead
+   of `e` retains its marker); G's `dual_covered_through = g_end` for addresses whose start
    ≤ `g_end`; `backfilled = true, backfilled_through = e` only for addresses now caught up;
    pending-view rows ≤ `e` deleted. The N-1 compatibility cursor advances only to the common
    complete boundary across addresses. When it lags `e`, both endpoints supply an extra agreed
