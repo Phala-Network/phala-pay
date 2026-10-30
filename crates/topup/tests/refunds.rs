@@ -4177,7 +4177,7 @@ mod event_driven {
         support::with_database(|database| {
             Box::pin(async move {
                 let pool = &database.app_pool;
-                let (merchant, id, uuid, time) = attached(pool).await?;
+                let (merchant, id, uuid, _) = attached(pool).await?;
                 let original: (chrono::DateTime<Utc>, String) =
                     sqlx::query_as("SELECT paid_at,tx_hash FROM refunds WHERE id=$1")
                         .bind(uuid)
@@ -4205,6 +4205,9 @@ mod event_driven {
                         .fetch_one(pool)
                         .await?
                 );
+                // Attaching the candidate schedules it at database now(), after the original
+                // fixture clock. Anchor subsequent checks to the persisted due time.
+                let time = next(pool, uuid).await?;
                 let a = Endpoint::start().await?;
                 let b = Endpoint::start().await?;
                 let heads = test_heads(100);
