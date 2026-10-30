@@ -180,8 +180,9 @@ This change reduces database round trips, without reducing required dual RPC or 
 The 50,000-address PostgreSQL regressions compare statement counts against 1,000 addresses and
 bound each healthy synthetic coverage/custody round to 30 seconds. They validate local scaling,
 not provider latency or a live capacity increase. Custody retains its existing set-based SQL.
-The local PostgreSQL 18 debug-build check measured 22 coverage statements at both 1,000 and
-50,000 addresses (about 0.28 s and 6.94 s), and 11 custody statements (about 0.06 s and 0.72 s).
+The local PostgreSQL 18 debug-build check measured 23 coverage statements at both 1,000 and
+50,000 addresses (about 0.27 s and 6.78 s), including the durable-proof lookup, and 11 custody
+statements (about 0.08 s and 0.67 s).
 Fixture creation is excluded; external RPC is scripted, so these are database-scale evidence,
 not production latency measurements.
 
