@@ -90,7 +90,8 @@ Each round, staggered per chain:
    repeating its RPC checks. Range end `e = min(t, c + L)`, `L` = 19 200 blocks when
    `t-c > 3 000`, otherwise 3 000. Reuse the checkpoint header when `e=t`; otherwise read the
    header of `e` on both endpoints (hash and time must agree). Durable lag selects catch-up
-   immediately after a restart.
+   immediately after a restart. Lagging address history independently uses 19 200 when
+   `e - start > 3 000`, otherwise 3 000, so a caught-up global cursor never throttles backfill.
 2. Snapshot address sets after step 1: forward set C with `dual_covered_through >= c`;
    lagging set G = at most 1 000 addresses
    with `dual_covered_through IS NULL OR < c`, oldest progress first (new addresses, reissued

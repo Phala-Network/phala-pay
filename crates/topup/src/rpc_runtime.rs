@@ -513,17 +513,36 @@ mod recovery_tests {
         pair.read.contract_checked(false);
         probe_not_ready(&pair).await;
         assert!(!pair.read.ready());
+        pair.read.contract_checked(true);
+        let read = pair.read.clone();
+        for _ in 0..3 {
+            read.mark_not_ready();
+        }
+        assert!(!read.ready());
         let cancellation = tokio_util::sync::CancellationToken::new();
         tokio::time::pause();
         let count = requests.load(Ordering::SeqCst);
         let recovery = tokio::spawn(recover(pair, cancellation.clone()));
-        for _ in 0..10_000 {
-            if requests.load(Ordering::SeqCst) > count {
-                break;
-            }
+        for _ in 0..20 {
             tokio::task::yield_now().await;
         }
+        // Tokio's timer wheel needs one millisecond to release the initial interval tick.
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        let wait_until_ready = async || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !read.ready() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "recovery head request did not complete"
+                );
+                tokio::task::yield_now().await;
+            }
+        };
+        wait_until_ready().await;
         assert_eq!(requests.load(Ordering::SeqCst), count + 1);
+        for _ in 0..3 {
+            read.mark_not_ready();
+        }
         tokio::time::advance(std::time::Duration::from_secs(299)).await;
         for _ in 0..100 {
             tokio::task::yield_now().await;
@@ -533,13 +552,9 @@ mod recovery_tests {
             count + 1,
             "recovery probed before five minutes"
         );
+        assert!(!read.ready());
         tokio::time::advance(std::time::Duration::from_secs(1)).await;
-        for _ in 0..10_000 {
-            if requests.load(Ordering::SeqCst) > count + 1 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        wait_until_ready().await;
         assert_eq!(requests.load(Ordering::SeqCst), count + 2);
         cancellation.cancel();
         recovery.await.unwrap();

@@ -456,6 +456,12 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         })
         .min()
     {
+        // Address history can lag even while the global cursor is caught up.
+        let limit = if end.saturating_sub(start) > COVERAGE_LIMIT {
+            CATCHUP_LIMIT
+        } else {
+            COVERAGE_LIMIT
+        };
         ranges.push(Range {
             addresses: lagging,
             from: start,

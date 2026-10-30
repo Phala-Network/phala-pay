@@ -606,7 +606,8 @@ A conflict freezes the chain; finality, reversal and refunds consume these publi
 
 **Finalized dual coverage** runs every 3,600 seconds, staggered by chain, using the stored
 checkpoint without repeating its advance. Coverage ends at `e = min(checkpoint, cursor + L)`,
-with `L = 19,200` when persisted cursor lag exceeds 3,000 blocks, otherwise `L = 3,000`.
+with `L = 19,200` when persisted cursor lag exceeds 3,000 blocks, otherwise `L = 3,000`. Lagging address history selects its bound from its own backlog to `e`,
+independently of the global cursor.
 The stored checkpoint supplies `e`'s hash/time when equal; intermediate boundaries require fresh
 agreement on both endpoints. The coverage-lag warning is two hours.
 Addresses with `dual_covered_through >= cursor` join the forward scan `(cursor, e]`, filtering

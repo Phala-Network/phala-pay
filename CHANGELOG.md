@@ -74,7 +74,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Advance finalized checkpoints at the lower of the providers' finalized heights, so a lagging
   endpoint does not stall the chain. Equal-height finalized headers need no extra pin read.
   Coverage uses the stored checkpoint header and selects the 19,200-block catch-up bound
-  whenever durable coverage lag exceeds 3,000 blocks, including after restarts. Not-ready
+  whenever durable cursor or address-history lag exceeds 3,000 blocks, including after restarts. Not-ready
   endpoints receive recovery head probes every five minutes; readiness alerts retain their
   five-minute threshold.
 

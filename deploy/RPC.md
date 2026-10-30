@@ -85,7 +85,9 @@ cold payment can take about 70 minutes with healthy, caught-up coverage.
 Independent dual checkpoint
 checks run every ten minutes and publish agreed advances for finality, reversal and refunds.
 Full dual log coverage runs hourly: at most 3,000 blocks normally and 19,200 whenever the
-stored cursor is more than 3,000 blocks behind the checkpoint. Restarting preserves this choice. Address history is backfilled separately in chunks of at most 1,000 addresses.
+stored cursor is more than 3,000 blocks behind the checkpoint. Lagging address history uses
+its own backlog to select the same catch-up bound, even with a caught-up cursor. Restarting
+preserves both choices. Address history is backfilled separately in chunks of at most 1,000 addresses.
 Observation-only price chains retain a separate 60-second contract-recovery loop; it skips
 RPC when both endpoints' contracts are ready and does not perform payment discovery or coverage.
 Candidates remain provisional until both endpoints agree on receipt, transaction, inclusion,
@@ -647,7 +649,7 @@ later. Late, partial and persistent-address payments use fresh processing-time p
 can change spot credit and price-policy checks. Screening uses verified local lists at decision
 time; its hourly refresh and re-screening remain independent.
 
-Catch-up capacity per caught-up or lagging recipient chunk while cursor lag exceeds 3,000:
+Catch-up capacity per forward or lagging recipient chunk while its own backlog exceeds 3,000:
 
 ```text
 Per successful round: 19,200 blocks

@@ -651,8 +651,8 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
         Box::pin(async move {
             let address = address(d, 100).await?;
             db::initialize_cursor(&d.app_pool, 1, 10000, time(10000)).await?;
-            let read = Reader::new(4000);
-            let mut verify = Reader::new(4000);
+            let read = Reader::new(40000);
+            let mut verify = Reader::new(40000);
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             ensure!(
                 compat(d).await? == (99, Some(time(99))),
@@ -660,7 +660,8 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
             );
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
-            ensure!(compat(d).await? == (4000, Some(time(4000))));
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(compat(d).await? == (40000, Some(time(40000))));
             let mut reissue = d.app_pool.begin().await?;
             sqlx::query("UPDATE addresses SET created_block=10 WHERE id=$1")
                 .bind(address.id)
@@ -676,13 +677,13 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
                 "reissue did not atomically clear negative evidence"
             );
             ensure!(
-                compat(d).await? == (4000, Some(time(4000))),
+                compat(d).await? == (40000, Some(time(40000))),
                 "uncommitted reissue leaked"
             );
             reissue.commit().await?;
             ensure!(compat(d).await? == (9, None));
             // The partial backfill's common header must agree before any markers commit.
-            verify.forged_at = Some(3009);
+            verify.forged_at = Some(19209);
             ensure!(
                 scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                     .await
@@ -692,16 +693,16 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
             ensure!(compat(d).await? == (9, None));
             verify.forged_at = None;
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
-            ensure!(marker(d, address.id).await? == Some(3009));
+            ensure!(marker(d, address.id).await? == Some(19209));
             ensure!(
                 db::chain_reads::coverage(&d.app_pool, 1)
                     .await?
                     .unwrap()
                     .number
-                    == 4000
+                    == 40000
             );
             ensure!(
-                compat(d).await? == (3009, Some(time(3009))),
+                compat(d).await? == (19209, Some(time(19209))),
                 "partial history authorized the distant chain boundary"
             );
             // N-1 may move its cursor while N is rolled back; startup must repair it again.
@@ -712,11 +713,12 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
             .await?;
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             ensure!(
-                compat(d).await? == (3009, None),
+                compat(d).await? == (19209, None),
                 "existing coverage did not repair an N-1 cursor"
             );
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
-            ensure!(compat(d).await? == (4000, Some(time(4000))));
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(compat(d).await? == (40000, Some(time(40000))));
             Ok(())
         })
     })
@@ -1995,8 +1997,9 @@ async fn marked_reversed_revision_cannot_hide_an_unverified_current_revision() -
 #[tokio::test]
 async fn lowered_creation_clears_marker_and_backfills_before_quote_expiry() -> Result<()> {
     with_database(|d|Box::pin(async move {
-        let address=address(d,100).await?;let read=Reader::new(4000);let verify=Reader::new(4000);
+        let address=address(d,100).await?;let read=Reader::new(40000);let verify=Reader::new(40000);
         scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
         scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
         scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
         sqlx::query("UPDATE addresses SET created_block=10 WHERE id=$1").bind(address.id).execute(&d.app_pool).await?;
@@ -2004,13 +2007,14 @@ async fn lowered_creation_clears_marker_and_backfills_before_quote_expiry() -> R
         sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,expires_at=to_timestamp(200) WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).execute(&d.app_pool).await?;
         ensure!(topup::locks::expire_once(&d.app_pool,&routes()).await?==0);
         let partial=scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
-        ensure!(partial.backfilled_addresses==0 && marker(d,address.id).await?==Some(3009));
+        ensure!(partial.backfilled_addresses==0 && marker(d,address.id).await?==Some(19209));
         ensure!(topup::locks::expire_once(&d.app_pool,&routes()).await?==0);
         scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
-        ensure!(marker(d,address.id).await?==Some(4000));
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
+        ensure!(marker(d,address.id).await?==Some(40000));
         ensure!(topup::locks::expire_once(&d.app_pool,&routes()).await?==1);
-        ensure!(read.requests.lock().unwrap().iter().any(|(_,from,to)|*from==10 && *to==3009));
-        ensure!(verify.requests.lock().unwrap().iter().any(|(_,from,to)|*from==10 && *to==3009));
+        ensure!(read.requests.lock().unwrap().iter().any(|(_,from,to)|*from==10 && *to==19209));
+        ensure!(verify.requests.lock().unwrap().iter().any(|(_,from,to)|*from==10 && *to==19209));
         Ok(())
     })).await
 }
@@ -2121,6 +2125,37 @@ async fn coverage_uses_durable_lag_after_restart_and_reuses_the_checkpoint_heade
                 ensure!(
                     endpoint.header_reads.lock().unwrap().is_empty(),
                     "reread stored checkpoint"
+                );
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn caught_up_cursor_does_not_throttle_reissued_address_catch_up() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let read = Reader::new(50_000);
+            let verify = Reader::new(50_000);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let address = address(d, 40_000).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            sqlx::query("UPDATE addresses SET created_block=100 WHERE id=$1")
+                .bind(address.id)
+                .execute(&d.app_pool)
+                .await?;
+            for endpoint in [&read, &verify] {
+                endpoint.requests.lock().unwrap().clear();
+            }
+            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(stats.cursor == 50_000 && marker(d, address.id).await? == Some(19_299));
+            ensure!(compat(d).await? == (19_299, Some(time(19_299))));
+            for endpoint in [&read, &verify] {
+                ensure!(
+                    *endpoint.requests.lock().unwrap()
+                        == vec![(vec![address.address], 100, 19_299)]
                 );
             }
             Ok(())
