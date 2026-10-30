@@ -326,3 +326,12 @@ parse this section; retain the previous configuration for rollback.
 
 See the [sanctions runbook](../deploy/runbooks/sanctions-list.md) for verification failures,
 manual entries and rollback precautions.
+
+### Per-account refund admission
+
+`max_attached_pending_refunds_per_account` is an optional positive integer (default `1`).
+It limits attached-pending refunds of one account across live and test modes, alongside the
+required environment-wide `max_attached_pending_refunds` and rolling
+`max_refund_attachments_per_day` limits. A refusal preserves the refund's reservation and
+returns `422 refund_attachment_limit_exceeded`. Repeating an attachment or submitting its one
+replacement candidate consumes no additional quota. See the [refund rules](architecture.md#12-api-and-events).

@@ -765,6 +765,14 @@ pub struct MarkRefundPaidRequest {
     /// receipt (0 for the first), not the block-wide `logIndex`, which changes if the transaction
     /// is re-included in another block; any matching log when absent.
     pub receipt_log_index: Option<u64>,
+    /// Optional replacement candidate for the original transaction_hash. The original remains
+    /// reserved until both providers finalize this distinct transaction and prove the same
+    /// sender and nonce as the original. Nonce changes or missing receipts alone prove nothing.
+    /// At most eight automatic recovery passes per epoch. Before exhaustion or 24 hours,
+    /// identical re-POSTs are idempotent no-ops. After both, an explicit re-POST renews the same
+    /// candidate (or supplies another), at most once per 24 hours per attachment; never automatic.
+    #[schema(required = false)]
+    pub replacement_transaction_hash: Option<String>,
 }
 
 /// A refund of (part of) a deposit to the customer, which the merchant pays from the treasury of
@@ -794,8 +802,9 @@ pub struct Refund {
     pub status: String,
     /// Why the refund failed: `transaction_failed`, `transfer_not_found`, `sender_mismatch`,
     /// `destination_mismatch`, `amount_mismatch`, or `transfer_already_used`.
-    /// Historical refunds may retain `transaction_dropped` or `transaction_not_found`; missing
-    /// transactions now remain pending with their reservation and alert after 24 hours.
+    /// `transaction_dropped` requires a distinct replacement finalized on both providers with
+    /// the original transaction's dual-verified sender and nonce. Historical refunds may retain
+    /// `transaction_not_found`; missing transactions remain pending and alert after 24 hours.
     /// New values may be added.
     pub failure_reason: Option<String>,
     /// The attached refund transaction, once marked paid.

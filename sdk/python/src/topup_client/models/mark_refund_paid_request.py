@@ -29,10 +29,18 @@ class MarkRefundPaidRequest:
             the transaction's
             receipt (0 for the first), not the block-wide `logIndex`, which changes if the transaction
             is re-included in another block; any matching log when absent.
+        replacement_transaction_hash (None | str | Unset): Optional replacement candidate for the original
+            transaction_hash. The original remains
+            reserved until both providers finalize this distinct transaction and prove the same
+            sender and nonce as the original. Nonce changes or missing receipts alone prove nothing.
+            At most eight automatic recovery passes per epoch. Before exhaustion or 24 hours,
+            identical re-POSTs are idempotent no-ops. After both, an explicit re-POST renews the same
+            candidate (or supplies another), at most once per 24 hours per attachment; never automatic.
     """
 
     transaction_hash: str
     receipt_log_index: int | None | Unset = UNSET
+    replacement_transaction_hash: None | str | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         transaction_hash = self.transaction_hash
@@ -43,6 +51,12 @@ class MarkRefundPaidRequest:
         else:
             receipt_log_index = self.receipt_log_index
 
+        replacement_transaction_hash: None | str | Unset
+        if isinstance(self.replacement_transaction_hash, Unset):
+            replacement_transaction_hash = UNSET
+        else:
+            replacement_transaction_hash = self.replacement_transaction_hash
+
         field_dict: dict[str, Any] = {}
 
         field_dict.update(
@@ -52,6 +66,8 @@ class MarkRefundPaidRequest:
         )
         if receipt_log_index is not UNSET:
             field_dict["receipt_log_index"] = receipt_log_index
+        if replacement_transaction_hash is not UNSET:
+            field_dict["replacement_transaction_hash"] = replacement_transaction_hash
 
         return field_dict
 
@@ -69,9 +85,21 @@ class MarkRefundPaidRequest:
 
         receipt_log_index = _parse_receipt_log_index(d.pop("receipt_log_index", UNSET))
 
+        def _parse_replacement_transaction_hash(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        replacement_transaction_hash = _parse_replacement_transaction_hash(
+            d.pop("replacement_transaction_hash", UNSET)
+        )
+
         mark_refund_paid_request = cls(
             transaction_hash=transaction_hash,
             receipt_log_index=receipt_log_index,
+            replacement_transaction_hash=replacement_transaction_hash,
         )
 
         return mark_refund_paid_request

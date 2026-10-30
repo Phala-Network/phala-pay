@@ -576,17 +576,21 @@ fn refund_subject(refund_id: Uuid) -> String {
 /// Attaches the merchant's refund transaction to a pending refund; the verification worker checks
 /// it at finality. Repeating the same transaction is a no-op; another one is
 /// `refund_unexpected_state`, since only the verification outcome ends a refund with a
-/// transaction attached. Audited, and announced as `refund.updated`.
+/// transaction attached. An optional replacement candidate does not change the attachment or
+/// consume quota; only the worker's positive finalized proof can release it. Audited, and
+/// announced as `refund.updated`.
 #[allow(clippy::too_many_arguments)]
 pub async fn mark_refund_paid<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     routes: &RouteSet,
     max_attached_pending_refunds: std::num::NonZeroU32,
+    max_attached_pending_refunds_per_account: std::num::NonZeroU32,
     max_refund_attachments_per_day: u32,
     scope: Scope,
     refund_id: Uuid,
     tx_hash: B256,
     receipt_log_index: Option<u64>,
+    replacement_hash: Option<B256>,
     actor: &Actor,
 ) -> Result<(), ApiError> {
     let mut transaction = db.begin().await?;
@@ -594,11 +598,13 @@ pub async fn mark_refund_paid<'c>(
         &mut transaction,
         routes,
         max_attached_pending_refunds,
+        max_attached_pending_refunds_per_account,
         max_refund_attachments_per_day,
         scope,
         refund_id,
         tx_hash,
         receipt_log_index,
+        replacement_hash,
         actor,
     )
     .await;
@@ -610,11 +616,13 @@ async fn mark_refund_paid_in(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     routes: &RouteSet,
     max_attached_pending_refunds: std::num::NonZeroU32,
+    max_attached_pending_refunds_per_account: std::num::NonZeroU32,
     max_refund_attachments_per_day: u32,
     scope: Scope,
     refund_id: Uuid,
     tx_hash: B256,
     receipt_log_index: Option<u64>,
+    replacement_hash: Option<B256>,
     actor: &Actor,
 ) -> Result<(), ApiError> {
     let clear = crate::refunds::lock_refund_deposit(transaction, scope, refund_id)
@@ -638,6 +646,19 @@ async fn mark_refund_paid_in(
         let same =
             current == tx_hash && receipt_log_index.is_none_or(|index| current_log == Some(index));
         if same && status != "canceled" {
+            if let Some(replacement) = replacement_hash {
+                return attach_replacement(
+                    transaction,
+                    routes,
+                    scope,
+                    refund_id,
+                    &tx_hash,
+                    &status,
+                    replacement,
+                    actor,
+                )
+                .await;
+            }
             return Ok(());
         }
         return Err(ApiError::refund_unexpected_state(if status == "pending" {
@@ -649,17 +670,30 @@ async fn mark_refund_paid_in(
     if status != "pending" {
         return Err(ApiError::refund_unexpected_state(status));
     }
+    if replacement_hash.is_some() {
+        return Err(ApiError::invalid_param(
+            "replacement_transaction_hash",
+            "attach the original transaction first",
+        ));
+    }
     // Serialize admission across this environment. Idempotent attachments returned above do
     // not claim quota. Count after acquiring the lock so competing transactions see commits.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('refund-attachment-budget', 0))")
         .execute(&mut **transaction)
         .await?;
-    let (pending, recent): (i64, i64) = sqlx::query_as(
+    let (pending, recent, account_pending): (i64, i64, i64) = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE status = 'pending' AND tx_hash IS NOT NULL), \
-         count(*) FILTER (WHERE paid_at > statement_timestamp() - interval '24 hours') FROM refunds",
+         count(*) FILTER (WHERE paid_at > statement_timestamp() - interval '24 hours'), \
+         count(*) FILTER (WHERE status='pending' AND tx_hash IS NOT NULL AND account_id=$1) FROM refunds",
     )
+    .bind(scope.account_id())
     .fetch_one(&mut **transaction)
     .await?;
+    if account_pending >= i64::from(max_attached_pending_refunds_per_account.get()) {
+        return Err(ApiError::refund_attachment_limit_exceeded(
+            "the account's attached-pending refund limit is reached; contact the operator",
+        ));
+    }
     if pending >= i64::from(max_attached_pending_refunds.get()) {
         return Err(ApiError::refund_attachment_limit_exceeded(
             "the environment's attached-pending refund limit is reached; contact the operator",
@@ -701,6 +735,67 @@ async fn mark_refund_paid_in(
         "refund.mark_paid",
         &refund_subject(refund_id),
         &tx_hash,
+    )
+    .await?;
+    let event = crate::db::NewOutboxEvent::new("refund.updated", scope, object, actor);
+    crate::db::enqueue_in(transaction, routes, &event, Some(&before)).await?;
+    Ok(())
+}
+
+/// Stores one candidate without changing the attachment, reservation, or quota accounting.
+#[allow(clippy::too_many_arguments)]
+async fn attach_replacement(
+    transaction: &mut sqlx::Transaction<'_, Postgres>,
+    routes: &RouteSet,
+    scope: Scope,
+    refund_id: Uuid,
+    original: &str,
+    status: &str,
+    replacement: B256,
+    actor: &Actor,
+) -> Result<(), ApiError> {
+    let replacement = format!("{replacement:#x}");
+    if replacement == original {
+        return Err(ApiError::invalid_param(
+            "replacement_transaction_hash",
+            "replacement must differ from the original",
+        ));
+    }
+    let (existing, attempts, can_renew): (Option<String>, i16, bool) = sqlx::query_as(
+        "SELECT replacement_hash, replacement_attempts, \
+         COALESCE(replacement_started_at <= statement_timestamp() - interval '24 hours',false) \
+         FROM refunds WHERE id=$1",
+    )
+    .bind(refund_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if existing.as_deref() == Some(replacement.as_str()) {
+        // Repeats never interrupt an active epoch or silently create another before 24 h.
+        if status != "pending" || attempts < crate::refunds::MAX_REPLACEMENT_ATTEMPTS || !can_renew
+        {
+            return Ok(());
+        }
+    } else if existing.is_some()
+        && (attempts < crate::refunds::MAX_REPLACEMENT_ATTEMPTS || !can_renew)
+    {
+        return Err(ApiError::refund_unexpected_state(
+            "the replacement candidate's recovery epoch has not exhausted or is less than 24 hours old".to_owned(),
+        ));
+    }
+    if status != "pending" {
+        return Err(ApiError::refund_unexpected_state(status.to_owned()));
+    }
+    let object = crate::db::EventObject::Refund(refund_id);
+    let before = crate::db::render(transaction, routes, scope, object).await?;
+    sqlx::query("UPDATE refunds SET replacement_hash=$2, replacement_attempts=0, replacement_started_at=clock_timestamp(), observed_block=NULL, next_check_at=now(), updated_at=now() WHERE id=$1")
+        .bind(refund_id).bind(&replacement).execute(&mut **transaction).await?;
+    insert_audit_tx_with_reason(
+        transaction,
+        Some(scope.account_id()),
+        actor,
+        "refund.attach_replacement",
+        &refund_subject(refund_id),
+        &replacement,
     )
     .await?;
     let event = crate::db::NewOutboxEvent::new("refund.updated", scope, object, actor);

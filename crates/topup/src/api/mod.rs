@@ -78,6 +78,8 @@ pub struct AppState {
     pub pool: PgPool,
     /// Attested route configurations.
     pub routes: Arc<RouteSet>,
+    /// Account-wide admission cap across modes.
+    pub max_attached_pending_refunds_per_account: std::num::NonZeroU32,
     /// Positive deployment-wide admission cap; staging uses 1 and production 2.
     pub max_attached_pending_refunds: std::num::NonZeroU32,
     /// Required deployment-wide new attachment limit over a rolling 24 hours.
@@ -843,6 +845,8 @@ mod tests {
         let admin_key = SigningKey::from_bytes(&[1; 32]);
         AppState {
             pool,
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+                .expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
             max_refund_attachments_per_day: 1,

@@ -1396,12 +1396,30 @@ POST /v1/refunds/re_…/mark_paid
   it as `succeeded` or `failed` (above). Neither elapsed time nor a sender nonce change proves the
   transaction cannot pay it. If neither provider has ever returned it after 24 hours, the service
   alerts the operator and keeps it pending. **Do not create or pay a replacement refund** in this
-  state; contact your operator to investigate the attached transaction. There is currently no
-  API to release this reservation based on a claimed replacement or dropped transaction.
-  Historical failed refunds may still carry `transaction_not_found` or `transaction_dropped`.
-- Pending attached refunds are checked every 60 seconds for the first 30 minutes after
-  `mark_paid`, every 10 minutes until 24 hours, then every hour indefinitely until resolved.
-  Each check uses both endpoints. This cadence can delay the success event for an older payout.
+  state; contact your operator to investigate the attached transaction. To supply positive
+  replacement proof, repeat `mark_paid` with the original `transaction_hash` plus optional
+  `replacement_transaction_hash`. The service stores one candidate and keeps the reservation
+  until both providers finalize identical replacement receipts with the same sender and nonce
+  as the original's dual-verified origin. Then the original refund becomes `failed` with
+  `transaction_dropped`; unknown origins, missing receipts, nonce changes and disagreements
+  never release it. Inspect the replacement's transfers before paying a new refund: the
+  replacement may already have returned the funds. Each candidate has eight automatic recovery
+  passes on the normal backoff; exhaustion stops candidate reads and preserves the reservation.
+  Before exhaustion or 24 hours, repeating the same candidate is an idempotent no-op. After
+  both, an explicit re-POST with a fresh `Idempotency-Key` can renew the same hash or submit
+  another, at most once per rolling 24 hours per attachment. The worker never renews it.
+  Historical failed refunds may still carry
+  `transaction_not_found`.
+- Refund verification first polls read receipts at 0, 1, 2, 5, 10 minutes, then every ten minutes
+  through two hours, then hourly; verify probes hourly too. After 24 hours of absence, both
+  probe every six hours. Once a receipt is observed, no RPC is made until the agreed checkpoint
+  reaches its block; both endpoints then verify independently. Unresolved evidence retries after
+  ten minutes, then hourly, then every six hours after day one. A reorg returns to inclusion or
+  checkpoint waiting. Older payouts may take up to six hours to resolve.
+- The operator configures both environment-wide limits and an account-wide attached-pending
+  cap (default one, across live and test modes). A limit refusal is
+  `422 refund_attachment_limit_exceeded` and preserves the reservation. Repeating an attachment
+  or submitting its replacement candidate consumes no additional quota.
 - `POST /v1/refunds/{id}/cancel` cancels a pending refund that has no transaction attached and
   releases its reservation. `GET /v1/refunds/{id}` reads a refund.
 - When `deposit.refunded` arrives, apply its snapshot by the balance rule (§2.3): its

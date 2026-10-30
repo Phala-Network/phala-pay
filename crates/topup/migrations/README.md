@@ -372,3 +372,15 @@ and `replaced_by`, and backfills lock-priced deposits' `quote_id` (reversals inc
 Historically reissued quotes get empty windows so their unsigned prices cannot apply. New quotes reuse customer
 networks; historical addresses stay watched. The compatibility floor is raised to this migration.
 No rollback to 0.12.2 is supported; restore a verified pre-upgrade backup to run v0.12.x.
+
+## Event-driven refunds (`20261107000000`)
+
+Adds durable receipt inclusion hints, hourly verify probe times, original-origin attempt state,
+verification attempt counts and one optional replacement candidate with a bounded eight-pass
+counter and epoch timestamp. After exhaustion and 24 hours, only an explicit POST can renew
+that candidate or supply another, at most once per 24 hours per attachment. Earlier identical
+re-POSTs are idempotent no-ops; the worker never renews it. Existing pending refunds
+resume inclusion probing at their existing due time; no status or reservation is changed.
+Replacement resolution requires dual finalized receipt and sender/nonce proof. The down migration
+removes scheduling and candidate state only; terminal refund objects and evidence remain valid.
+The previous release can read the added columns but resumes its older polling cadence.

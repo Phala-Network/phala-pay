@@ -1812,6 +1812,12 @@ export const schemas: Record<string, Schema> = {
           "null"
         ]
       },
+      "replacement_transaction_hash": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "transaction_hash": {
         "type": "string"
       }

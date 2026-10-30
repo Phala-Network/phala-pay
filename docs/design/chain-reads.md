@@ -161,15 +161,23 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
   `(price chain)`; when exhausted, quotes needing that chain fail closed with a retryable
   `price_unavailable`. Staging PHA TWAP sampling: `uniswap_v2.rs` `SAMPLE_INTERVAL_S` 60 → 300
   (staging-only, production-ineligible route; continuity and jump limits re-derived for 300 s).
-- **Refunds** (`refunds.rs`): independent dual receipt, persisted-checkpoint header and receipt-height
-  header evidence, completed only under the agreed checkpoint, without finalized-tag RPC.
-  The receipt reader uses one method per endpoint for missing receipts, two for included but
-  not finalized receipts, and three for finalized receipts. Pending/missing worker branches
-  also read the transaction's origin until sender/nonce is persisted, so asymmetric evidence
-  costs at most four methods per endpoint; a never-seen transaction costs two. Checks run every 60 s
-  for 30 min, every 10 min until 24 h, then hourly; a never-seen transaction remains pending
-  with its reservation. The budget includes the complete four-method worker bound.
-  Atomic environment-wide concurrent and rolling-24-hour attachment caps are in §5.2.
+- **Refunds** (`refunds.rs`): persisted event-driven phases. Inclusion probes use read receipt
+  only at 0, 1, 2, 5, 10 minutes, every ten minutes through two hours, then hourly, with hourly
+  verify fallback. After 24 hours of absence both probe every six hours. An observed inclusion
+  waits without RPC for the shared `FinalizedHeads` checkpoint publication. Then each endpoint
+  independently reads receipt and header(b), plus original origin once; no checkpoint header
+  reread. Identical finalized receipts at/below the checkpoint are required. Reorgs return to
+  inclusion/checkpoint waiting; unresolved evidence retries after ten minutes, hourly, then
+  every six hours after day one. Reserve 80 logical methods/endpoint on day one, 12/carried day.
+  Missing receipts and nonce changes never release the reservation. One explicit replacement
+  candidate can resolve it only with dual finalized receipts and the original's dual-verified
+  sender/nonce; recovery proof reads use the extra-operation reserve. Each explicit candidate
+  has eight durable passes per epoch (at most 40 extra methods/endpoint), then stops. Only an
+  explicit POST after exhaustion and 24 hours renews the epoch, at most once per 24 hours per
+  attachment; the same late-finalized hash can be retried. Earlier identical POSTs are no-ops.
+  Conservatively reserve 80 extra methods/endpoint for a rolling day crossing two epochs. Environment-wide
+  concurrent/rolling attachment caps (§5.2) are joined by a per-account concurrency cap across
+  modes (default one). See [RPC accounting](../../deploy/RPC.md) for the complete bound.
 - **Treasury EIP-1271** (`treasuries/proof.rs`): dual calls at the same canonical pin.
 - **Flush records**: only from §2.2 step 4.
 
@@ -342,9 +350,9 @@ Staging also configures `84532` (`rpc.ankr.com/base_sepolia/{key}`, `base-sepoli
 Production seals `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` / `TOPUP_RPC_BLOCKPI_BASE_KEY`, with
 `max_log_blocks: 1000` for BlockPI's measured free 1,024-block cap.
 Hint and fresh quote snapshot budgets use the optional deployment fields above, defaulting to
-80/60; their resolved values appear in `topup config show`. Cadences, the address cap and
-new-refund attachment cap remain code constants; concurrent attached-pending refunds use the
-required positive deployment setting above. Older parsers reject the new H/Q keys, so rollback
+80/60; their resolved values appear in `topup config show`. Address and environment-wide
+refund attachment caps use required positive deployment settings. The optional per-account
+attached-pending concurrency cap defaults to one across modes. Cadences remain code constants. Older parsers reject the new H/Q keys, so rollback
 must render the older kit with that release's verified configuration and original alert rules.
 Deposit, factory and Safe limits are
 operational caps with monitoring and stop actions in §5.2. Removed: `rpc_companies`,

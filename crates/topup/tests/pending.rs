@@ -85,6 +85,8 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let product_key = seed_account(pool).await?;
     let app = topup::api::router(AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+            .expect("positive account refund limit"),
         max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         max_refund_attachments_per_day: 1,
         routes: Arc::clone(&route_set),

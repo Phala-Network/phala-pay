@@ -632,9 +632,17 @@ export interface paths {
          *     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
          *     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
          *     only when its transaction is proven not to pay it.
-         *     Each environment has a configured attached-pending refund limit (production 2, staging 1),
-         *     and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes. Repeating the same attachment consumes no
-         *     quota. A limit refusal preserves the reservation; contact the operator before another payout.
+         *     Environment-wide attached-pending and rolling 24-hour limits apply across accounts and modes.
+         *     An additional per-account concurrency cap (`max_attached_pending_refunds_per_account`,
+         *     default 1) also spans both modes. Repeating an
+         *     attachment consumes no quota. A refusal preserves the reservation; contact the operator.
+         *     To resolve a replaced attachment, repeat its original `transaction_hash` with optional
+         *     `replacement_transaction_hash`. One candidate is stored at a time, with at most eight recovery
+         *     passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
+         *     idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
+         *     at most once per 24 hours per attachment; never automatically. Only identical
+         *     finalized replacement receipts on both providers and the original's dual-verified sender and
+         *     nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
          */
         readonly post: operations["mark_refund_paid"];
         readonly delete?: never;
@@ -2763,6 +2771,15 @@ export interface components {
              *     is re-included in another block; any matching log when absent.
              */
             readonly receipt_log_index?: number | null;
+            /**
+             * @description Optional replacement candidate for the original transaction_hash. The original remains
+             *     reserved until both providers finalize this distinct transaction and prove the same
+             *     sender and nonce as the original. Nonce changes or missing receipts alone prove nothing.
+             *     At most eight automatic recovery passes per epoch. Before exhaustion or 24 hours,
+             *     identical re-POSTs are idempotent no-ops. After both, an explicit re-POST renews the same
+             *     candidate (or supplies another), at most once per 24 hours per attachment; never automatic.
+             */
+            readonly replacement_transaction_hash?: string | null;
             /** @description Hash of the transaction that pays the refund from the treasury of the deposit's address. */
             readonly transaction_hash: string;
         };
@@ -3379,8 +3396,9 @@ export interface components {
             /**
              * @description Why the refund failed: `transaction_failed`, `transfer_not_found`, `sender_mismatch`,
              *     `destination_mismatch`, `amount_mismatch`, or `transfer_already_used`.
-             *     Historical refunds may retain `transaction_dropped` or `transaction_not_found`; missing
-             *     transactions now remain pending with their reservation and alert after 24 hours.
+             *     `transaction_dropped` requires a distinct replacement finalized on both providers with
+             *     the original transaction's dual-verified sender and nonce. Historical refunds may retain
+             *     `transaction_not_found`; missing transactions remain pending and alert after 24 hours.
              *     New values may be added.
              */
             readonly failure_reason?: string | null;

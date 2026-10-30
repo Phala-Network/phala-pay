@@ -34,6 +34,7 @@ use uuid::Uuid;
 
 use crate::db::{EventObject, NewOutboxEvent};
 use crate::routes::RouteSet;
+use crate::scanner::FinalizedHeads;
 use crate::tenancy::Scope;
 
 sol! {
@@ -43,14 +44,20 @@ sol! {
 /// Alert age for an attached refund transaction neither provider has ever returned.
 pub const NOT_FOUND_AFTER: TimeDelta = TimeDelta::hours(24);
 
+/// Maximum automatic recovery passes per explicit replacement candidate.
+pub const MAX_REPLACEMENT_ATTEMPTS: i16 = 8;
+
 /// One provider's view of an attached refund transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RefundReceipt {
     /// No receipt: the transaction is in no block, pending, dropped, or unknown.
     Missing,
-    /// The receipt's block is above the provider's `finalized`.
-    Pending,
-    /// The receipt is at or below `finalized`.
+    /// The receipt's block is above the published agreed checkpoint.
+    Pending {
+        /// The receipt moved to this block above the agreed checkpoint.
+        block_number: u64,
+    },
+    /// The receipt has a canonical header at or below the published agreed checkpoint.
     Finalized {
         /// Including block number.
         block_number: u64,
@@ -83,9 +90,20 @@ pub enum RefundReadError {
 /// One provider's finality-aware reads of refund transactions.
 #[async_trait]
 pub trait RefundChainReader: Send + Sync {
-    /// Reads the transaction's receipt on `chain_id`.
-    async fn receipt(&self, chain_id: u64, tx_hash: B256)
-    -> Result<RefundReceipt, RefundReadError>;
+    /// Reads only the receipt's inclusion height as an untrusted scheduling hint.
+    async fn receipt_block(
+        &self,
+        chain_id: u64,
+        tx_hash: B256,
+    ) -> Result<Option<u64>, RefundReadError>;
+
+    /// Reads the receipt and its canonical header, trusting the published agreed checkpoint.
+    async fn receipt(
+        &self,
+        chain_id: u64,
+        tx_hash: B256,
+        checkpoint: u64,
+    ) -> Result<RefundReceipt, RefundReadError>;
 
     /// Reads the transaction's sender and nonce, pending or included; `None` when the provider
     /// does not know it.
@@ -99,16 +117,11 @@ pub trait RefundChainReader: Send + Sync {
 /// Refund reads through one provider of each chain.
 pub struct EvmRefundChainReader {
     clients: BTreeMap<u64, Arc<EvmClient>>,
-    pool: PgPool,
 }
 
 impl EvmRefundChainReader {
     /// Reads every configured chain through its provider at `index` (0 is A, 1 is B).
-    pub fn from_routes(
-        pool: PgPool,
-        routes: &RouteSet,
-        index: usize,
-    ) -> Result<Self, RefundReadError> {
+    pub fn from_routes(routes: &RouteSet, index: usize) -> Result<Self, RefundReadError> {
         let mut clients = BTreeMap::new();
         for chain_id in routes.chain_ids() {
             let client = routes
@@ -116,13 +129,13 @@ impl EvmRefundChainReader {
                 .map_err(|error| RefundReadError::Configuration(error.to_string()))?;
             clients.insert(chain_id, Arc::clone(client));
         }
-        Ok(Self::new(pool, clients))
+        Ok(Self::new(clients))
     }
 
     /// Reads through explicit per-chain clients.
     #[must_use]
-    pub const fn new(pool: PgPool, clients: BTreeMap<u64, Arc<EvmClient>>) -> Self {
-        Self { clients, pool }
+    pub const fn new(clients: BTreeMap<u64, Arc<EvmClient>>) -> Self {
+        Self { clients }
     }
 
     fn client(&self, chain_id: u64) -> Result<&EvmClient, RefundReadError> {
@@ -135,10 +148,30 @@ impl EvmRefundChainReader {
 
 #[async_trait]
 impl RefundChainReader for EvmRefundChainReader {
+    async fn receipt_block(
+        &self,
+        chain_id: u64,
+        tx_hash: B256,
+    ) -> Result<Option<u64>, RefundReadError> {
+        let receipt = self
+            .client(chain_id)?
+            .receipt(tx_hash)
+            .await
+            .map_err(|_| RefundReadError::Rpc("transaction receipt fetch"))?;
+        receipt
+            .map(|receipt| {
+                receipt
+                    .block_number
+                    .ok_or(RefundReadError::MissingField("receipt.block_number"))
+            })
+            .transpose()
+    }
+
     async fn receipt(
         &self,
         chain_id: u64,
         tx_hash: B256,
+        checkpoint: u64,
     ) -> Result<RefundReceipt, RefundReadError> {
         let client = self.client(chain_id)?;
         let receipt = client
@@ -154,25 +187,15 @@ impl RefundChainReader for EvmRefundChainReader {
         let block_hash = receipt
             .block_hash
             .ok_or(RefundReadError::MissingField("receipt.block_hash"))?;
-        let checkpoint = crate::db::chain_reads::checkpoint(&self.pool, chain_id)
-            .await
-            .map_err(|_| RefundReadError::Rpc("checkpoint persistence"))?
-            .ok_or(RefundReadError::MissingField("checkpoint"))?;
-        let pin = client
-            .price_block(alloy::eips::BlockNumberOrTag::Number(checkpoint.number))
-            .await
-            .map_err(|_| RefundReadError::Rpc("checkpoint header"))?;
-        if pin.1 != checkpoint.hash {
-            return Err(RefundReadError::Rpc("checkpoint conflict"));
-        }
-        if block_number > checkpoint.number {
-            return Ok(RefundReceipt::Pending);
+        if block_number > checkpoint {
+            return Ok(RefundReceipt::Pending { block_number });
         }
         let header = client
             .price_block(alloy::eips::BlockNumberOrTag::Number(block_number))
             .await
             .map_err(|_| RefundReadError::Rpc("receipt header"))?;
-        if header.1 != block_hash || receipt.transaction_hash != tx_hash {
+        if header.0 != block_number || header.1 != block_hash || receipt.transaction_hash != tx_hash
+        {
             return Err(RefundReadError::Rpc("receipt identity"));
         }
         let mut transfers = Vec::new();
@@ -242,9 +265,6 @@ impl DestinationScreener for UnavailableDestinationScreener {
 pub struct RefundVerificationConfig {
     /// Delay between empty polls.
     pub poll_interval: Duration,
-    /// Minimum retry delay. Checks wait at least 60 s for the first 30 min after attachment,
-    /// 10 min until 24 h, then 1 h indefinitely.
-    pub retry_interval: Duration,
     /// Maximum duration of both providers' reads.
     pub observe_timeout: Duration,
 }
@@ -253,7 +273,6 @@ impl Default for RefundVerificationConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(5),
-            retry_interval: Duration::from_secs(60),
             observe_timeout: Duration::from_secs(20),
         }
     }
@@ -279,6 +298,7 @@ pub struct RefundVerificationWorker<A, B> {
     primary: A,
     secondary: B,
     config: RefundVerificationConfig,
+    heads: FinalizedHeads,
 }
 
 impl<A, B> RefundVerificationWorker<A, B>
@@ -294,6 +314,7 @@ where
         primary: A,
         secondary: B,
         config: RefundVerificationConfig,
+        heads: FinalizedHeads,
     ) -> Self {
         Self {
             pool,
@@ -301,6 +322,7 @@ where
             primary,
             secondary,
             config,
+            heads,
         }
     }
 
@@ -316,15 +338,63 @@ where
     }
 
     async fn check_at(&self, now: DateTime<Utc>) -> Result<Verification, sqlx::Error> {
-        let retry_seconds = i32::try_from(self.config.retry_interval.as_secs()).unwrap_or(i32::MAX);
-        let Some(row) = claim_due_refund(&self.pool, retry_seconds, now).await? else {
+        let published: BTreeMap<_, _> = self
+            .heads
+            .subscribe()
+            .borrow()
+            .iter()
+            .map(|(&chain, head)| (chain.to_string(), head.number))
+            .collect();
+        let Some(row) = claim_due_refund(&self.pool, &json!(published), now).await? else {
             return Ok(Verification::Idle);
         };
         let mut check = row.into_check()?;
+        let checkpoint = self.heads.get(check.chain_id).map(|head| head.number);
+        if check.observed_block.is_none() {
+            // Phase A uses receipts only. Verify is an hourly fallback, even if read fails.
+            let (a, b) = tokio::join!(self.probe(&self.primary, &check), async {
+                if check.poll_verify {
+                    self.probe(&self.secondary, &check).await
+                } else {
+                    None
+                }
+            });
+            let block = [a, b].into_iter().flatten().min();
+            let Some(block) = block else {
+                let overdue = now.signed_duration_since(check.paid_at) >= NOT_FOUND_AFTER;
+                persist_evidence(
+                    &self.pool,
+                    &check,
+                    &json!({
+                        "result": if overdue { "not_found_overdue" } else { "not_included" },
+                        "reversal": "unproven",
+                    }),
+                )
+                .await?;
+                if overdue {
+                    tracing::warn!(tags.alert="TopupRefundProgressAge",chain_id=check.chain_id,refund_id=%check.refund_id,
+                        "refund receipt is still absent after 24 hours; reservation remains pending");
+                }
+                return Ok(Verification::Waiting);
+            };
+            observe_block(&self.pool, &check, Some(block), now).await?;
+            check.observed_block = Some(block);
+            // Phase B makes no RPC while the inclusion height exceeds the published checkpoint.
+            if checkpoint.is_none_or(|checkpoint| block > checkpoint) {
+                return Ok(Verification::Waiting);
+            }
+            schedule_verification(&self.pool, &check, now).await?;
+        }
+        let Some(checkpoint) = checkpoint else {
+            return Ok(Verification::Waiting);
+        };
+        // Phase C: each endpoint independently verifies receipt + header(b), and origin once.
         let reads = async {
             tokio::join!(
-                self.primary.receipt(check.chain_id, check.tx_hash),
-                self.secondary.receipt(check.chain_id, check.tx_hash)
+                self.primary
+                    .receipt(check.chain_id, check.tx_hash, checkpoint),
+                self.secondary
+                    .receipt(check.chain_id, check.tx_hash, checkpoint)
             )
         };
         let (primary, secondary) = match tokio::time::timeout(self.config.observe_timeout, reads)
@@ -332,15 +402,15 @@ where
         {
             Ok((Ok(primary), Ok(secondary))) => (primary, secondary),
             Ok((Err(error), _) | (_, Err(error))) => {
-                tracing::warn!(refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), %error, "refund verification chain read failed");
+                tracing::warn!(refund_id=%check.refund_id,%error,"refund verification chain read failed");
                 return Ok(Verification::Waiting);
             }
             Err(_) => {
-                persist_evidence(&self.pool, &check, &json!({"result": "observe_timeout"})).await?;
-                tracing::warn!(refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "refund verification timed out");
+                persist_evidence(&self.pool, &check, &json!({"result":"observe_timeout"})).await?;
                 return Ok(Verification::Waiting);
             }
         };
+        self.remember_origin(&mut check).await?;
         let (block_number, block_hash, succeeded, transfers) = match (&primary, &secondary) {
             (
                 RefundReceipt::Finalized {
@@ -350,20 +420,51 @@ where
                     transfers,
                 },
                 _,
-            ) if primary == secondary => (*block_number, *block_hash, *succeeded, transfers),
-            (RefundReceipt::Missing, RefundReceipt::Missing) => {
-                return self.not_included(&mut check, now).await;
-            }
-            (RefundReceipt::Pending | RefundReceipt::Missing, _)
-            | (_, RefundReceipt::Pending | RefundReceipt::Missing) => {
-                self.remember_origin(&mut check).await?;
-                persist_evidence(&self.pool, &check, &json!({"result": "pending"})).await?;
-                return Ok(Verification::Waiting);
+            ) if primary == secondary && *block_number <= checkpoint => {
+                (*block_number, *block_hash, *succeeded, transfers)
             }
             _ => {
-                persist_evidence(&self.pool, &check, &json!({"result": "providers_disagree"}))
-                    .await?;
-                tracing::warn!(tags.alert="TopupRpcDisagreement",chain_id=check.chain_id,refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "providers disagree on a finalized refund transaction");
+                let replacement = self.resolve_replacement(&check, checkpoint).await?;
+                if matches!(replacement, ReplacementVerification::Resolved) {
+                    return Ok(Verification::Failed);
+                }
+                let moved = [&primary, &secondary]
+                    .into_iter()
+                    .filter_map(|receipt| match receipt {
+                        RefundReceipt::Pending { block_number } => Some(*block_number),
+                        _ => None,
+                    })
+                    .min()
+                    .or(match replacement {
+                        ReplacementVerification::Moved(block) => Some(block),
+                        _ => None,
+                    });
+                if let Some(block) = moved {
+                    observe_block(&self.pool, &check, Some(block), now).await?;
+                } else if primary == RefundReceipt::Missing
+                    && secondary == RefundReceipt::Missing
+                    && (check.replacement_hash.is_none()
+                        || matches!(replacement, ReplacementVerification::Missing))
+                {
+                    observe_block(&self.pool, &check, None, now).await?;
+                    let overdue = now.signed_duration_since(check.paid_at) >= NOT_FOUND_AFTER;
+                    persist_evidence(&self.pool, &check, &json!({"result":if overdue {"not_found_overdue"} else {"not_included"},"reversal":"unproven"})).await?;
+                    if overdue {
+                        tracing::warn!(tags.alert="TopupRefundProgressAge",chain_id=check.chain_id,refund_id=%check.refund_id,
+                            "refund receipt is still absent after 24 hours; reservation remains pending");
+                    }
+                    return Ok(Verification::Waiting);
+                }
+                persist_evidence(
+                    &self.pool,
+                    &check,
+                    &json!({"result":"unresolved","reversal":"unproven"}),
+                )
+                .await?;
+                if primary != secondary {
+                    tracing::warn!(tags.alert="TopupRpcDisagreement",chain_id=check.chain_id,refund_id=%check.refund_id,
+                        "providers disagree on a refund transaction");
+                }
                 return Ok(Verification::Waiting);
             }
         };
@@ -427,40 +528,90 @@ where
         }
     }
 
-    /// Missing receipts keep the reservation. Neither absence nor elapsed time proves that a
-    /// transaction cannot pay; alert after 24 hours without ever observing its origin.
-    async fn not_included(
-        &self,
-        check: &mut RefundCheck,
-        now: DateTime<Utc>,
-    ) -> Result<Verification, sqlx::Error> {
-        if !self.remember_origin(check).await? {
-            return Ok(Verification::Waiting);
-        }
-        if check.origin.is_none() {
-            let overdue = now.signed_duration_since(check.paid_at) >= NOT_FOUND_AFTER;
-            persist_evidence(
-                &self.pool,
-                check,
-                &json!({
-                    "result": if overdue { "not_found_overdue" } else { "not_found" },
-                    "paid_at": check.paid_at.timestamp(),
-                    "reversal": "unproven",
-                }),
-            )
-            .await?;
-            if overdue {
-                tracing::warn!(tags.alert="TopupRefundProgressAge",chain_id=check.chain_id,refund_id = %crate::ids::format(crate::ids::REFUND, check.refund_id), "no provider has returned the refund transaction for 24 hours; reservation remains pending");
+    async fn probe(&self, reader: &dyn RefundChainReader, check: &RefundCheck) -> Option<u64> {
+        let reads = async {
+            if let Ok(Some(block)) = reader.receipt_block(check.chain_id, check.tx_hash).await {
+                return Some(block);
             }
-            return Ok(Verification::Waiting);
+            if let Some(replacement) = check.replacement_hash {
+                return reader
+                    .receipt_block(check.chain_id, replacement)
+                    .await
+                    .ok()
+                    .flatten();
+            }
+            None
+        };
+        tokio::time::timeout(self.config.observe_timeout, reads)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// A positively identified finalized replacement proves the attachment cannot be included.
+    async fn resolve_replacement(
+        &self,
+        check: &RefundCheck,
+        checkpoint: u64,
+    ) -> Result<ReplacementVerification, sqlx::Error> {
+        let (Some(replacement), Some(origin)) = (check.replacement_hash, check.origin) else {
+            return Ok(ReplacementVerification::Waiting);
+        };
+        let reads = async {
+            tokio::join!(
+                self.primary
+                    .receipt(check.chain_id, replacement, checkpoint),
+                self.secondary
+                    .receipt(check.chain_id, replacement, checkpoint),
+                self.primary.origin(check.chain_id, replacement),
+                self.secondary.origin(check.chain_id, replacement),
+            )
+        };
+        let Ok((Ok(a), Ok(b), origin_a, origin_b)) =
+            tokio::time::timeout(self.config.observe_timeout, reads).await
+        else {
+            return Ok(ReplacementVerification::Waiting);
+        };
+        if let Some(block) = [&a, &b]
+            .into_iter()
+            .filter_map(|receipt| match receipt {
+                RefundReceipt::Pending { block_number } => Some(*block_number),
+                _ => None,
+            })
+            .min()
+        {
+            return Ok(ReplacementVerification::Moved(block));
         }
-        persist_evidence(
-            &self.pool,
-            check,
-            &json!({"result":"not_included","reversal":"unproven"}),
-        )
-        .await?;
-        Ok(Verification::Waiting)
+        if a == RefundReceipt::Missing && b == RefundReceipt::Missing {
+            return Ok(ReplacementVerification::Missing);
+        }
+        let (Ok(Some(from_a)), Ok(Some(from_b))) = (origin_a, origin_b) else {
+            return Ok(ReplacementVerification::Waiting);
+        };
+        if from_a != origin || from_b != origin || a != b {
+            return Ok(ReplacementVerification::Waiting);
+        }
+        let RefundReceipt::Finalized {
+            block_number,
+            block_hash,
+            ..
+        } = a
+        else {
+            return Ok(ReplacementVerification::Waiting);
+        };
+        if block_number > checkpoint {
+            return Ok(ReplacementVerification::Waiting);
+        }
+        let changed=fail(&self.pool, &self.routes, check, "transaction_dropped", &json!({
+            "result":"replacement_finalized", "replacement_transaction_hash":format!("{replacement:#x}"),
+            "block_number":block_number, "block_hash":format!("{block_hash:#x}"),
+            "sender":format!("{:#x}",origin.0), "nonce":origin.1,
+        })).await?;
+        Ok(if changed {
+            ReplacementVerification::Resolved
+        } else {
+            ReplacementVerification::Waiting
+        })
     }
 
     /// Keeps the sender and nonce when both providers agree, for operator investigation.
@@ -469,6 +620,16 @@ where
         if check.origin.is_some() {
             return Ok(true);
         }
+        if check.origin_checked && check.replacement_hash.is_none() {
+            return Ok(false);
+        }
+        // Origin is immutable by transaction hash. Ordinary verification attempts it once;
+        // an operator's replacement proof may retry an origin that was unavailable.
+        sqlx::query("UPDATE refunds SET origin_checked=true WHERE id=$1 AND tx_hash=$2")
+            .bind(check.refund_id)
+            .bind(format!("{:#x}", check.tx_hash))
+            .execute(&self.pool)
+            .await?;
         let reads = async {
             tokio::join!(
                 self.primary.origin(check.chain_id, check.tx_hash),
@@ -504,7 +665,9 @@ where
 
     /// Runs until cancellation, retrying database and chain failures indefinitely.
     pub async fn run(&self, cancellation: CancellationToken) {
+        let mut advances = self.heads.subscribe();
         loop {
+            advances.borrow_and_update();
             if cancellation.is_cancelled() {
                 return;
             }
@@ -523,10 +686,19 @@ where
                 tokio::select! {
                     () = cancellation.cancelled() => return,
                     () = tokio::time::sleep(self.config.poll_interval) => {}
+                    _ = advances.changed() => {}
                 }
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum ReplacementVerification {
+    Resolved,
+    Waiting,
+    Missing,
+    Moved(u64),
 }
 
 struct RefundCheck {
@@ -537,13 +709,17 @@ struct RefundCheck {
     chain_id: u64,
     tx_hash: B256,
     receipt_log_index: Option<u64>,
+    observed_block: Option<u64>,
+    replacement_hash: Option<B256>,
+    poll_verify: bool,
+    origin_checked: bool,
     paid_at: DateTime<Utc>,
     /// The transaction's sender and nonce, once a provider returned it.
     origin: Option<(Address, u64)>,
     expected: ExpectedRefund,
 }
 
-#[derive(FromRow)]
+#[derive(Clone, FromRow)]
 struct RefundCheckRow {
     refund_id: Uuid,
     account_id: Uuid,
@@ -552,6 +728,11 @@ struct RefundCheckRow {
     chain_id: i64,
     tx_hash: String,
     receipt_log_index: Option<i64>,
+    observed_block: Option<i64>,
+    replacement_hash: Option<String>,
+    replacement_attempts: i16,
+    poll_verify: bool,
+    origin_checked: bool,
     paid_at: DateTime<Utc>,
     tx_from: Option<String>,
     tx_nonce: Option<String>,
@@ -575,6 +756,21 @@ impl RefundCheckRow {
                 .map(u64::try_from)
                 .transpose()
                 .map_err(decode_error)?,
+            observed_block: self
+                .observed_block
+                .map(u64::try_from)
+                .transpose()
+                .map_err(decode_error)?,
+            replacement_hash: if self.replacement_attempts < MAX_REPLACEMENT_ATTEMPTS {
+                self.replacement_hash
+                    .map(|hash| hash.parse())
+                    .transpose()
+                    .map_err(decode_error)?
+            } else {
+                None
+            },
+            poll_verify: self.poll_verify,
+            origin_checked: self.origin_checked,
             paid_at: self.paid_at,
             origin: match (self.tx_from, self.tx_nonce) {
                 (Some(from), Some(nonce)) => Some((
@@ -613,11 +809,11 @@ pub(crate) async fn lock_refund_deposit(
     .await
 }
 
-/// Claims the refund due first and schedules the next check from its attachment age. The expected
+/// Claims the refund due first; published checkpoints gate phase B without chain reads. The expected
 /// sender is the treasury of the deposit's own address, fixed when the address was issued.
 async fn claim_due_refund(
     pool: &PgPool,
-    retry_seconds: i32,
+    published: &Value,
     now: DateTime<Utc>,
 ) -> Result<Option<RefundCheckRow>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
@@ -628,10 +824,13 @@ async fn claim_due_refund(
          JOIN deposits AS deposit ON deposit.id = refund.deposit_id \
          WHERE refund.status = 'pending' AND refund.tx_hash IS NOT NULL \
            AND refund.next_check_at <= $1 AND deposit.sanctions_hit_at IS NULL \
+           AND (refund.observed_block IS NULL OR refund.observed_block <= \
+                COALESCE(($2::jsonb ->> refund.chain_id::text)::bigint, -1)) \
          ORDER BY refund.next_check_at, refund.id \
          FOR UPDATE OF deposit SKIP LOCKED LIMIT 1",
     )
     .bind(now)
+    .bind(published)
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(candidate) = candidate else {
@@ -641,30 +840,88 @@ async fn claim_due_refund(
     let claimed = sqlx::query_as::<_, RefundCheckRow>(
         r#"
         UPDATE refunds AS refund
-        SET next_check_at = $3 + make_interval(secs => GREATEST($1, CASE
-                WHEN $3 < refund.paid_at + interval '30 minutes' THEN 60
-                WHEN $3 < refund.paid_at + interval '24 hours' THEN 600
-                ELSE 3600
-            END)), updated_at = now()
+        SET next_check_at = $2 + interval '1 hour', updated_at = now()
         FROM deposits AS deposit, addresses AS address
-        WHERE refund.id = $2 AND refund.status = 'pending' AND refund.tx_hash IS NOT NULL
-          AND refund.next_check_at <= $3
+        WHERE refund.id = $1 AND refund.status = 'pending' AND refund.tx_hash IS NOT NULL
+          AND refund.next_check_at <= $2
           AND deposit.id = refund.deposit_id AND deposit.sanctions_hit_at IS NULL
           AND address.id = deposit.address_id
         RETURNING refund.id AS refund_id, refund.account_id, refund.livemode, refund.deposit_id,
                   refund.chain_id, refund.tx_hash, refund.receipt_log_index, refund.paid_at,
                   refund.tx_from, refund.tx_nonce::text AS tx_nonce,
+                  refund.observed_block, refund.replacement_hash, refund.replacement_attempts, refund.origin_checked,
+                  ($2 >= refund.paid_at + interval '1 hour' AND
+                    (refund.verify_checked_at IS NULL OR $2 >= refund.verify_checked_at + interval '1 hour')) AS poll_verify,
                   deposit.asset_contract AS token, address.treasury,
                   refund.destination_address, refund.amount_atomic::text AS amount_atomic
         "#,
     )
-    .bind(retry_seconds)
     .bind(candidate)
     .bind(now)
     .fetch_optional(&mut *transaction)
     .await?;
+    if let Some(row) = &claimed {
+        let check = row.clone().into_check()?;
+        if check.replacement_hash.is_some() {
+            sqlx::query(
+                "UPDATE refunds SET replacement_attempts=replacement_attempts+1 WHERE id=$1",
+            )
+            .bind(check.refund_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        if check.observed_block.is_some() {
+            schedule_verification(&mut *transaction, &check, now).await?;
+        } else {
+            sqlx::query("UPDATE refunds SET next_check_at=$2, verify_checked_at=CASE WHEN $3 THEN $4 ELSE verify_checked_at END WHERE id=$1")
+                .bind(check.refund_id).bind(next_probe(check.paid_at, now)).bind(check.poll_verify).bind(now)
+                .execute(&mut *transaction).await?;
+        }
+    }
     transaction.commit().await?;
     Ok(claimed)
+}
+
+/// Next inclusion probe, without replaying missed ticks after downtime.
+fn next_probe(paid_at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+    let age = now.signed_duration_since(paid_at).num_seconds();
+    let seconds = [60, 120, 300, 600]
+        .into_iter()
+        .find(|&tick| tick > age)
+        .unwrap_or_else(|| {
+            if age < 7200 {
+                age.saturating_div(600)
+                    .saturating_add(1)
+                    .saturating_mul(600)
+            } else {
+                age.saturating_add(if age >= 86400 { 21600 } else { 3600 })
+            }
+        });
+    paid_at + TimeDelta::seconds(seconds)
+}
+
+async fn observe_block(
+    pool: &PgPool,
+    check: &RefundCheck,
+    block: Option<u64>,
+    now: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE refunds SET observed_block=$3, next_check_at=$4 WHERE id=$1 AND status='pending' AND tx_hash=$2")
+        .bind(check.refund_id).bind(format!("{:#x}",check.tx_hash))
+        .bind(block.map(to_i64).transpose()?).bind(if block.is_some() {now} else {next_probe(check.paid_at,now)})
+        .execute(pool).await?;
+    Ok(())
+}
+
+/// Advance before I/O, so failures and process restarts do not reset retry accounting.
+async fn schedule_verification<'c>(
+    db: impl sqlx::Executor<'c, Database = sqlx::Postgres>,
+    check: &RefundCheck,
+    now: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE refunds SET next_check_at=$3 + CASE WHEN $3 >= paid_at + interval '24 hours' THEN interval '6 hours' WHEN verification_attempts=0 THEN interval '10 minutes' ELSE interval '1 hour' END, verification_attempts=verification_attempts+1 WHERE id=$1 AND status='pending' AND tx_hash=$2")
+        .bind(check.refund_id).bind(format!("{:#x}",check.tx_hash)).bind(now).execute(db).await?;
+    Ok(())
 }
 
 /// Logs of the transaction that pay or are named by another live refund.

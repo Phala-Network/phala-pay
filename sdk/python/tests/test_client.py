@@ -381,7 +381,12 @@ def test_refunds_are_marked_paid_and_canceled_by_id() -> None:
     marked = {**REFUND, "transaction_hash": "0x" + "dd" * 32, "receipt_log_index": 1}
     service = FakeService(lambda request, _: httpx.Response(200, json=marked))
     with _client(service) as client:
-        refund = client.mark_refund_paid(REFUND_ID, "0x" + "dd" * 32, receipt_log_index=1)
+        refund = client.mark_refund_paid(
+            REFUND_ID,
+            "0x" + "dd" * 32,
+            receipt_log_index=1,
+            replacement_transaction_hash="0x" + "ee" * 32,
+        )
         client.mark_refund_paid(REFUND_ID, "0x" + "dd" * 32)
         client.cancel_refund(REFUND_ID)
     assert refund.transaction_hash == "0x" + "dd" * 32
@@ -391,6 +396,7 @@ def test_refunds_are_marked_paid_and_canceled_by_id() -> None:
     assert json.loads(paid.content) == {
         "transaction_hash": "0x" + "dd" * 32,
         "receipt_log_index": 1,
+        "replacement_transaction_hash": "0x" + "ee" * 32,
     }
     assert json.loads(unnamed.content) == {"transaction_hash": "0x" + "dd" * 32}
     assert canceled.method == "POST"

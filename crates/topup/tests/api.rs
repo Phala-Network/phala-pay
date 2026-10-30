@@ -1401,6 +1401,8 @@ fn app_state_with_attestor(
     route.validate().expect("route fixture validates");
     AppState {
         pool,
+        max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+            .expect("positive account refund limit"),
         max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         max_refund_attachments_per_day: 1,
         routes: Arc::new(topup::routes::RouteSet::new(vec![route]).expect("route loads")),

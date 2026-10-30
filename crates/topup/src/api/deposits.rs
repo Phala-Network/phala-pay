@@ -639,9 +639,17 @@ pub(crate) async fn update_refund(
 /// `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
 /// transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
 /// only when its transaction is proven not to pay it.
-/// Each environment has a configured attached-pending refund limit (production 2, staging 1),
-/// and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes. Repeating the same attachment consumes no
-/// quota. A limit refusal preserves the reservation; contact the operator before another payout.
+/// Environment-wide attached-pending and rolling 24-hour limits apply across accounts and modes.
+/// An additional per-account concurrency cap (`max_attached_pending_refunds_per_account`,
+/// default 1) also spans both modes. Repeating an
+/// attachment consumes no quota. A refusal preserves the reservation; contact the operator.
+/// To resolve a replaced attachment, repeat its original `transaction_hash` with optional
+/// `replacement_transaction_hash`. One candidate is stored at a time, with at most eight recovery
+/// passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
+/// idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
+/// at most once per 24 hours per attachment; never automatically. Only identical
+/// finalized replacement receipts on both providers and the original's dual-verified sender and
+/// nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
 pub(crate) async fn mark_refund_paid(
     State(state): State<AppState>,
     Extension(merchant): Extension<Merchant>,
@@ -659,16 +667,33 @@ pub(crate) async fn mark_refund_paid(
                 "transaction_hash must be 0x and 32 bytes of hex",
             )
         })?;
+    let replacement = request
+        .replacement_transaction_hash
+        .as_deref()
+        .map(|hash| {
+            B256::from_str(hash)
+                .ok()
+                .filter(|candidate| hash.len() == 66 && *candidate != tx_hash)
+                .ok_or_else(|| {
+                    ApiError::invalid_param(
+                        "replacement_transaction_hash",
+                        "replacement_transaction_hash must be a distinct 0x-prefixed 32-byte hash",
+                    )
+                })
+        })
+        .transpose()?;
     let mut transaction = idempotent.begin(&state.pool).await?;
     repository::mark_refund_paid(
         &mut *transaction,
         &state.routes,
         state.max_attached_pending_refunds,
+        state.max_attached_pending_refunds_per_account,
         state.max_refund_attachments_per_day,
         merchant.scope,
         id,
         tx_hash,
         request.receipt_log_index,
+        replacement,
         &merchant.actor(),
     )
     .await?;

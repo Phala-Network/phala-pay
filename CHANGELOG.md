@@ -14,7 +14,25 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added
+
+- Optional `replacement_transaction_hash` on refund `mark_paid`, with matching JS/Python SDK
+  inputs. One candidate can resolve an attachment as `transaction_dropped` only with identical
+  finalized receipts on both providers and the original's dual-verified sender and nonce.
+  Candidates get eight persisted recovery passes; exhaustion stops their RPC. Before exhaustion
+  or 24 hours, identical re-POSTs are idempotent no-ops. After both, an explicit POST can renew
+  the same candidate or supply another at most once per 24 hours per attachment; never automatic.
+- Optional `max_attached_pending_refunds_per_account` (default 1 across modes), enforced
+  atomically alongside the existing environment-wide R/N limits; R/N values stay unchanged.
+
 ### Changed
+
+- Verify refunds from receipt inclusion and published checkpoint events. Receipt probes back
+  off through two hours, hourly until day one, then every six hours; observed receipts make no
+  RPC until the checkpoint reaches them. Dual verification reads receipt/header plus origin
+  once, without rereading the checkpoint header. Unresolved evidence retries at ten minutes,
+  hourly, then six hours. Durable cadence survives restarts; refunds retain their reservation
+  while missing, reorged or disputed and cannot be canceled after attachment.
 
 - Require reviewed `rpc[].max_issued_addresses` and top-level
   `max_refund_attachments_per_day` configuration. Shipped values stay at 1,000 historical
