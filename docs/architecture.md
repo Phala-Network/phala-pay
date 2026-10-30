@@ -588,7 +588,9 @@ coverage or making a negative decision. Both receipts and captured heads are per
 separate hint proof. After terminal proof, the pump may reuse this proof for confirmation with
 current-policy/identity checks and fresh dual canonical inclusion headers; invalid proof is
 cleared and falls back to full dual reads. Identity/inclusion/unresolved changes invalidate it
-in SQL. `final_at` requires captured finalized heads covering inclusion. Read's head reaches
+in SQL. Hint evidence never establishes `final_at`: stored finalized horizons are zero and the
+pump suppresses hint-sourced finality. Finalized-policy hints store no handoff proof and the
+pump uses its normal fresh dual path. Read's head reaches
 depth before verify is polled.
 RPC runs outside the chain lock; insertion strictly rechecks the address snapshot and inspects
 all receipt-position history under that lock. Any reversed history defers the hint to scanning:

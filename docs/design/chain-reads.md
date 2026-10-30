@@ -159,7 +159,9 @@ Task (in process; deduplicated by `(chain, tx, object)`; insertion dedupes by re
    The pump prefers terminal proof, then reuses a hint only after exact identity/current-policy
    validation and fresh matching dual numbered inclusion headers. Otherwise clear it and use
    full dual confirmation. Identity/inclusion/unresolved changes invalidate it in SQL. Depth
-   hints cannot establish finality unless their captured finalized heads cover inclusion.
+   hints never establish finality: persisted finalized horizons are zero, terminal is false,
+   and the pump explicitly suppresses hint-sourced finality. Finalized-policy hints store no
+   handoff proof and the pump takes the normal fresh dual path.
    The normal pipeline follows.
 5. The whole task, head polls included, is bounded by **12 read calls, 8 verify calls and a
    deadline** (90 s Ethereum chains, 30 s Base chains); hitting either ends the task (scanning

@@ -406,7 +406,9 @@ The down migration preserves both tables for binary rollback and future recaptur
 ## Hint confirmation handoff
 
 `20261109000000_hint_confirmation` adds optional JSON evidence holding both independently
-completed hint receipts and captured confirmation heads. It never establishes `final_at`.
+completed Depth/Safe hint receipts and confirmation heads (finalized horizons are zero;
+terminal is false). It never establishes `final_at`; the pump explicitly suppresses hint-sourced
+finality. Finalized-policy hints store no proof and use normal fresh dual confirmation.
 A trigger clears the hint when deposit identity/inclusion changes, unresolved state changes,
 or the row leaves `detected`. The pump validates current policy and fresh dual canonical
 headers before reuse and falls back to full dual reads on invalid proof. The down migration

@@ -174,6 +174,23 @@ async fn harness_with_hint_budget(
     verify_rpc: Rpc,
     hints_per_day: i32,
 ) -> Result<Harness> {
+    harness_with_policy_and_hint_budget(
+        pool,
+        read_rpc,
+        verify_rpc,
+        hints_per_day,
+        Confirmations::Depth(2),
+    )
+    .await
+}
+
+async fn harness_with_policy_and_hint_budget(
+    pool: &sqlx::PgPool,
+    read_rpc: Rpc,
+    verify_rpc: Rpc,
+    hints_per_day: i32,
+    policy: Confirmations,
+) -> Result<Harness> {
     let read_label = format!("hint-read-{}", Uuid::new_v4());
     let verify_label = format!("hint-verify-{}", Uuid::new_v4());
     let (read, read_task) = node(read_rpc, &read_label).await?;
@@ -186,7 +203,7 @@ async fn harness_with_hint_budget(
         feed: "BASE_SEQUENCER_UPTIME".into(),
         grace_s: 3600,
     });
-    route.chain.confirmations = Confirmations::Depth(2);
+    route.chain.confirmations = policy;
     route.asset.contract = TOKEN.parse()?;
     let routes = Arc::new(
         RouteSet::with_rpc(
@@ -799,6 +816,8 @@ async fn pump_reuses_durable_hint_confirmation_but_falls_back_on_reorg_or_identi
             let proof: Value = sqlx::query_scalar("SELECT hint_confirmation_evidence FROM deposits")
                 .fetch_one(&db.app_pool).await?;
             ensure!(proof["terminal"] == false, "a depth hint asserted finality");
+            ensure!(proof["heads"].as_array().context("hint heads")?.iter()
+                .all(|head| head["finalized"] == 0), "hint retained a finality horizon");
             ensure!(proof["receipts"][0] == proof["receipts"][1]);
             if change == "reorg" {
                 verify.block.lock().unwrap()["hash"] = json!(B256::repeat_byte(0xe9));
@@ -839,6 +858,89 @@ async fn pump_reuses_durable_hint_confirmation_but_falls_back_on_reorg_or_identi
         })).await?;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn finalized_policy_hints_leave_finality_to_the_pumps_full_dual_path() -> Result<()> {
+    support::with_database(|db| {
+        Box::pin(async move {
+            let read = Rpc::new();
+            let verify = Rpc::new();
+            let h = harness_with_policy_and_hint_budget(
+                &db.app_pool,
+                read.clone(),
+                verify.clone(),
+                topup::hints::HINTS_PER_DAY,
+                Confirmations::Finalized,
+            )
+            .await?;
+            h.submit(
+                &format!("/v1/quotes/{}/transactions", h.quote_id),
+                Some(&h.key),
+                json!({"transaction_hash":TX}),
+            )
+            .await?;
+            let (cancel, _worker) = h.worker(&db.app_pool);
+            wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+            cancel.cancel();
+            ensure!(
+                sqlx::query_scalar::<_, bool>(
+                    "SELECT hint_confirmation_evidence IS NULL AND final_at IS NULL FROM deposits"
+                )
+                .fetch_one(&db.app_pool)
+                .await?,
+                "Finalized hint stored a finality proof"
+            );
+            for rpc in [&read, &verify] {
+                rpc.methods.lock().unwrap().clear();
+            }
+            let route = h.routes.routes().first().context("hint route")?.clone();
+            let confirm = topup::steps::confirm::ConfirmStep::single(
+                db.app_pool.clone(),
+                route,
+                FinalizedReader::new(h.read.clone()),
+                FinalizedReader::new(h.verify.clone()),
+                Arc::new(UnavailablePrice),
+                None,
+                None,
+            );
+            let pump = topup::pump::Pump::new(
+                db.app_pool.clone(),
+                h.routes.clone(),
+                Arc::new(topup::pump::StepSet::new(
+                    Box::new(confirm),
+                    Box::new(Paused),
+                )),
+                topup::pump::PumpConfig::default(),
+            )?;
+            ensure!(matches!(
+                pump.run_once().await?,
+                topup::pump::RunOnceResult::Applied { .. }
+            ));
+            for rpc in [&read, &verify] {
+                let methods = rpc.methods.lock().unwrap();
+                ensure!(
+                    methods
+                        .iter()
+                        .any(|method| method == "eth_getTransactionReceipt")
+                        && methods
+                            .iter()
+                            .filter(|method| *method == "eth_getBlockByNumber")
+                            .count()
+                            == 2,
+                    "Finalized policy bypassed fresh probe/canonical evidence: {methods:?}"
+                );
+            }
+            ensure!(
+                sqlx::query_scalar::<_, bool>("SELECT final_at IS NOT NULL FROM deposits")
+                    .fetch_one(&db.app_pool)
+                    .await?,
+                "normal dual Finalized confirmation did not persist finality"
+            );
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[tokio::test]

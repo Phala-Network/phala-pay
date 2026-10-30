@@ -522,6 +522,7 @@ impl ConfirmStep {
             )
         };
         let confirmations = required(&context, deposit.route.as_deref());
+        let mut hint_supplied = false;
         if supplied.is_none() {
             let cached = match self.context_lookup.hint_evidence(deposit.id).await {
                 Ok(value) => value,
@@ -536,7 +537,10 @@ impl ConfirmStep {
             if let Some(cached) = cached {
                 let proof = serde_json::from_value::<ConfirmationEvidence>(cached).ok();
                 let valid = proof.as_ref().is_some_and(|proof| {
-                    proof.receipts[0] == proof.receipts[1]
+                    confirmations != Confirmations::Finalized
+                        && !proof.terminal
+                        && proof.heads.iter().all(|head| head.finalized == 0)
+                        && proof.receipts[0] == proof.receipts[1]
                         && proof
                             .receipts
                             .iter()
@@ -573,6 +577,7 @@ impl ConfirmStep {
                 };
                 if canonical {
                     supplied = proof;
+                    hint_supplied = true;
                 } else if self
                     .context_lookup
                     .clear_hint_evidence(deposit.id)
@@ -588,7 +593,7 @@ impl ConfirmStep {
             }
         }
 
-        let (canonical, is_final, complete_evidence) = match self
+        let (canonical, mut is_final, mut complete_evidence) = match self
             .bounded_evidence(
                 chains,
                 confirmations,
@@ -616,6 +621,13 @@ impl ConfirmStep {
                 return retry(error, evidence, TransitionEffects::default());
             }
         };
+        if hint_supplied {
+            is_final = false;
+            complete_evidence.terminal = false;
+            for heads in &mut complete_evidence.heads {
+                heads.finalized = 0;
+            }
+        }
         let selected_route = self.selected_route(deposit, &canonical);
         context = match self
             .context_lookup

@@ -376,17 +376,33 @@ async fn process(
             if log.block_number < hint.address.created_block {
                 continue;
             }
-            let proof = crate::steps::confirm::ConfirmationEvidence {
-                policy: chain.chain.confirmations,
-                terminal: heads.iter().all(|head| log.block_number <= head.finalized),
-                heads,
-                receipts: [
-                    topup_adapters::chain::evm::ReceiptLookup::from_verified_transfer(log.clone()),
-                    topup_adapters::chain::evm::ReceiptLookup::from_verified_transfer(independent),
-                ],
+            // Hints confirm only. Finalized policy uses the pump's fresh probe and
+            // checkpoint-conflict checks; hint evidence never establishes final_at.
+            let proof = if chain.chain.confirmations == topup_core::route::Confirmations::Finalized
+            {
+                None
+            } else {
+                let heads = heads.map(|mut head| {
+                    head.finalized = 0;
+                    head
+                });
+                Some(
+                    serde_json::to_value(crate::steps::confirm::ConfirmationEvidence {
+                        policy: chain.chain.confirmations,
+                        terminal: false,
+                        heads,
+                        receipts: [
+                            topup_adapters::chain::evm::ReceiptLookup::from_verified_transfer(
+                                log.clone(),
+                            ),
+                            topup_adapters::chain::evm::ReceiptLookup::from_verified_transfer(
+                                independent,
+                            ),
+                        ],
+                    })
+                    .map_err(|error| sqlx::Error::Encode(error.into()))?,
+                )
             };
-            let proof =
-                serde_json::to_value(proof).map_err(|error| sqlx::Error::Encode(error.into()))?;
             let deposit = scanner::resolve_log(log, &hint.address, &chain, chrono::Utc::now());
             // Inspect the full position history after RPC and under the chain lock. Hints
             // have confirmation evidence only: identical reversed evidence is dropped,

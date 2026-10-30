@@ -298,8 +298,10 @@ never shared as cached facts.
 
 Hints persist their independently decoded receipts and captured heads separately from terminal
 proof. The pump prefers terminal evidence, then validates hint identity, current confirmation
-policy and fresh matching dual inclusion headers. Valid depth evidence skips head/receipt
-reconfirmation and cannot set `final_at` unless its captured heads prove finality. Identity,
+policy and fresh matching dual inclusion headers. Depth/Safe evidence skips head/receipt
+reconfirmation and never establishes `final_at`: persisted finalized horizons are zero and the
+pump explicitly suppresses hint-sourced finality. Finalized-policy hints store no handoff proof;
+the pump uses its normal fresh dual probe, boundary-conflict check and full receipt path. Identity,
 inclusion or unresolved-state changes clear stored hint evidence in PostgreSQL; malformed,
 reorged or otherwise unusable proof falls back to the ordinary full dual read.
 
