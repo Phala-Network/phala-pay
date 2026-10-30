@@ -398,7 +398,7 @@ async fn coverage_method_counts_match_normal_and_catchup_budget() -> Result<()> 
                     let chains = topup::scanner::chain_routes(
                         &RouteSet::new(vec![f.route.clone()]).map_err(anyhow::Error::msg)?,
                     );
-                    topup::scanner::coverage_once(pool, &read, &verify, &chains[0], round).await?;
+                    topup::scanner::coverage_once(pool, &read, &verify, &chains[0]).await?;
                     // RPC.md's fixed coverage line: two boundary headers and two recipient
                     // sets, each split into ceil(L/3000) windows with one Transfer query and
                     // one factory query. This omitted unmarked deposit additionally needs one

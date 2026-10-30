@@ -556,7 +556,7 @@ impl<'a> Chain<'a> {
             &self.reader,
         )
         .await?;
-        Ok(coverage_once(self.pool(), &self.reader, &self.reader, &self.routes, 1).await?)
+        Ok(coverage_once(self.pool(), &self.reader, &self.reader, &self.routes).await?)
     }
 
     async fn deposit_of(&self, address: &SeededAddress) -> Result<Uuid> {

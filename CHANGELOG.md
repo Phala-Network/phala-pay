@@ -71,6 +71,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- Advance finalized checkpoints at the lower of the providers' finalized heights, so a lagging
+  endpoint does not stall the chain. Equal-height finalized headers need no extra pin read.
+  Coverage uses the stored checkpoint header and selects the 19,200-block catch-up bound
+  whenever durable coverage lag exceeds 3,000 blocks, including after restarts. Not-ready
+  endpoints receive recovery head probes every five minutes; readiness alerts retain their
+  five-minute threshold.
+
 - Account for tokens sent to deterministic forwarders before issuance using immutable opening
   balances verified on both RPC providers. New addresses start after the current agreed
   checkpoint and capture the opening asynchronously in Multicall3 batches. Custody still

@@ -516,7 +516,7 @@ impl Scenario {
     async fn finalized_scan(&self) -> Result<u64> {
         topup::checkpoint::advance(&self.pool, CHAIN_ID, &self.chain, &self.chain).await?;
         Ok(
-            coverage_once(&self.pool, &self.chain, &self.chain, &self.routes, 1)
+            coverage_once(&self.pool, &self.chain, &self.chain, &self.routes)
                 .await?
                 .inserted,
         )

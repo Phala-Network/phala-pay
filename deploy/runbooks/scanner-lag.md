@@ -8,7 +8,7 @@
 (the configured hot set). Cold addresses remain in hourly dual coverage and may normally take
 about 70 minutes without hints; this alone is not fast-scanner lag. A separate dual checkpoint check
 runs every 600 seconds; full dual log coverage runs every 3,600 seconds, with 19,200-block
-catch-up every sixth round (six hours). Admitted checkout hints use their independent instant
+catch-up whenever the persisted cursor is more than 3,000 blocks behind the checkpoint. Admitted checkout hints use their independent instant
 processing path. Missing fast discovery delays unhinted credits until coverage discovers the
 payment. Failed coverage delays negative decisions: quote expiry/cancel completion and hourly
 custody checks require complete coverage. Expiry/cancel has a conditional target of about
@@ -51,7 +51,7 @@ When lag is material, pause quotes:
 ## Decide
 
 - Endpoint unavailable or throttled: follow [RPC health](rpc-health.md). Three consecutive final
-  request failures mark it not-ready; short head probes run at most every 30 seconds to recover.
+  request failures mark it not-ready; short head probes run at most every five minutes to recover.
   Infura 402 waits until UTC midnight. Never select a substitute endpoint in process.
 - Evidence disagrees: follow [provider disagreement](provider-disagreement.md). A round cannot
   advance coverage until both sources verify every candidate and the actual scanned end.
@@ -64,7 +64,7 @@ When lag is material, pause quotes:
 - Chain frozen: follow [Chain frozen](chain-frozen.md); a code, checkpoint or verified-evidence
   conflict requires cause repair and an audited lift. Repeated requests do not lift it.
 - Historical backfill: each successful round advances at most 3,000 blocks normally or 19,200
-  every six hours, in provider-sized log windows, and processes at most 1,000 lagging addresses.
+  when cursor lag exceeds 3,000 blocks, in provider-sized log windows, and processes at most 1,000 lagging addresses.
   New, reissued and restored addresses remain lagging until their own history catches up.
   Let the bounded rounds finish; never bulk-mark them. The target for at most 24 hours of
   equivalent backlog is recovery within 12 hours of continuous healthy operation, subject to
@@ -72,7 +72,7 @@ When lag is material, pause quotes:
 - Healthy endpoints but missing check-ins: escalate the worker issue. **HUMAN-ONLY:** restart
   the CVM only after preserving Sentry evidence (`deploy/phala cvms restart "$TOPUP_CVM_ID"`).
   Durable checkpoints and coverage survive a restart; interrupted rounds do not advance them.
-  Restarting resets the catch-up round counter, so repeated restarts extend recovery.
+  Catch-up selection uses durable cursor lag and survives restarts.
 
 ## Done when
 

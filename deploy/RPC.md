@@ -84,8 +84,8 @@ Cold addresses still receive hourly dual coverage, and hints work for every addr
 cold payment can take about 70 minutes with healthy, caught-up coverage.
 Independent dual checkpoint
 checks run every ten minutes and publish agreed advances for finality, reversal and refunds.
-Full dual log coverage runs hourly: at most 3,000 blocks normally and 19,200 every sixth round,
-now every six hours. Address history is backfilled separately in chunks of at most 1,000 addresses.
+Full dual log coverage runs hourly: at most 3,000 blocks normally and 19,200 whenever the
+stored cursor is more than 3,000 blocks behind the checkpoint. Restarting preserves this choice. Address history is backfilled separately in chunks of at most 1,000 addresses.
 Observation-only price chains retain a separate 60-second contract-recovery loop; it skips
 RPC when both endpoints' contracts are ready and does not perform payment discovery or coverage.
 Candidates remain provisional until both endpoints agree on receipt, transaction, inclusion,
@@ -199,9 +199,19 @@ Ankr:   576 + 288 + 48 + 192 + 120C = 1,104 + 120C
 Infura: (432 + 48)×80 + 192×255 + 120C×80 = 87,360 + 9,600C
 ```
 
-Checkpoint checks include both previous-checkpoint headers, both finalized heads and verify's
-header at read's finalized height. Coverage uses the published checkpoint without repeating
-those checks. Its header term includes the extra common-boundary read when that boundary lags.
+Checkpoint checks read the previous checkpoint on both endpoints, then both finalized headers.
+They compare at the lower finalized height: only the ahead endpoint needs one extra numbered
+header. At equal heights each endpoint costs `144 × 2 = 288` calls/day; with height lag, add
+one call to the ahead endpoint per round (at most 144/day, charged to the recovery reserve).
+Coverage reuses the published checkpoint's hash/time when `e` reaches it; intermediate `e`
+still costs one header per endpoint. A lagging common address boundary adds another pair.
+Thus caught-up coverage saves 48 header calls/endpoint/day against the retained allowance
+above, and equal-height checkpoints save 144 verify calls/day. Those savings authorize no cap
+increase. The retained tables price the prior scheduled catch-up allowance; adaptive recovery
+is charged by actual backlog windows as described below, not by a six-round counter.
+Not-ready endpoint recovery costs at most `86,400 / 300 = 288` head probes/day per endpoint
+(down from 2,880). Its five-minute alert threshold is unchanged; recovery can take up to the
+next probe plus request time.
 
 BlockPI's [EVM RU table](https://docs.blockpi.io/pricing/request-unit-ru/evm-ru-table), checked
 2026-10-13, charges `eth_chainId` 5; `eth_blockNumber` 10; `eth_getCode` and
@@ -637,22 +647,25 @@ later. Late, partial and persistent-address payments use fresh processing-time p
 can change spot credit and price-policy checks. Screening uses verified local lists at decision
 time; its hourly refresh and re-screening remain independent.
 
-Catch-up capacity per caught-up or lagging recipient chunk:
+Catch-up capacity per caught-up or lagging recipient chunk while cursor lag exceeds 3,000:
 
 ```text
-Per six hours: 5×3,000 + 19,200 = 34,200 blocks
-Per day:      20×3,000 + 4×19,200 = 136,800 blocks
-Net Ethereum/Sepolia recovery: 136,800 − 7,200  = 129,600 blocks/day
-Net Base/Base Sepolia recovery: 136,800 − 43,200 = 93,600 blocks/day
-Base net recovery in 12 h: 2×(34,200 − 6×1,800) = 46,800 blocks
+Per successful round: 19,200 blocks
+Per six hours:       6 × 19,200 = 115,200 blocks
+Per day:             24 × 19,200 = 460,800 blocks
+Net Ethereum/Sepolia recovery: 460,800 − 7,200  = 453,600 blocks/day
+Net Base/Base Sepolia recovery: 460,800 − 43,200 = 417,600 blocks/day
 ```
 
-Target recovery of at most 24 h of equivalent backlog within **12 h of continuous healthy
-operation** after both endpoints are ready, to the current published checkpoint. Base's
-46,800-block net capacity covers a 43,200-block day. Recovery work must fit D/factory allowances
-and extra requests must fit the reserve. Restarts reset the in-process round counter; repeated
-restarts, failures or larger backlog require a revised estimate. The two-hour coverage-lag
-warning is an early incident signal, not a replacement for the twelve-hour recovery target.
+A 24-hour backlog needs about one Ethereum round or three Base rounds, plus blocks arriving
+during recovery, rather than waiting for every sixth round. The existing target of at most
+24 h of equivalent backlog within **12 h of continuous healthy operation** remains conditional
+on D/factory allowances and the extra-operation reserve. Log RPCs for B backlog blocks cost
+`ceil(B / max_log_blocks) × (recipient chunks + factory ranges)` per endpoint, with additional
+calls for lagging-address history and per-log evidence. Do not charge the maximum catch-up
+window as daily steady state or assume recovery fits the reserve without measuring it.
+Restarts retain the stored lag and do not reset catch-up scheduling. The two-hour coverage-lag
+warning remains an early incident signal.
 
 A changed address/unverified-id snapshot abandons cached evidence and retries once with a fresh
 RPC round; a second change waits for the next tick. Coverage commits only after every request
